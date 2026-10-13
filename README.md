@@ -1025,10 +1025,10 @@ placeholder in a shipped template is the usual cause: a key named `token`, `secr
 When it cannot read the tree it scans it says so rather than failing a scan it never made (#1146).
 The tree is listed and copied while other processes write in it, so a file can be listed and gone
 before the copy reaches it; the copy is then listed and made again, three attempts in all. A tree
-that still cannot be listed or copied prints `SCAN-UNMEASURED <what, and why>` and the suite exits
+that still cannot be listed or copied prints `SUITE-UNMEASURED <what, and why>` and the suite exits
 3, which the pre push scanner gate reports as a fault in its own run, with that reason, and holds
-the push (nothing was scanned), never as a scanner that found something. Any whole tree scanner
-can say the same in the same line.
+the push (nothing was scanned), never as a scanner that found something. `run-all-tests.sh` reads
+the same line (see Tests). Any suite can say the same in the same line.
 
 The same suite refuses a test that gets a token past the scan by how it is WRITTEN rather than by
 what it is: a key in one place and its value in a variable, a value printed from two halves, or
@@ -1054,7 +1054,10 @@ Three other outcomes are told apart rather than folded into pass or fail. A suit
 that does not exist adds no pass and no fail, so it otherwise reads as one that passed (#1044). A
 suite refused its lock because another run of it holds it prints `SUITE-LOCK-REFUSED <holder>` and
 is reported as NOT RUN with that holder, not as FAIL; under CI, where nothing else should hold it,
-it fails (#1083). And every failure carries the load average when the suite finished, saying when
+it fails (#1083). A suite that ran but could not read what it judges (the secret scan, when it
+cannot list or copy the tree) prints `SUITE-UNMEASURED <why>` and is reported the same way, NOT RUN
+with that reason here and a failure under CI, unless its own score counts failures, which then
+decide (#1146). And every failure carries the load average when the suite finished, saying when
 it was more than the machine has cores, as do `tools/check-mods.sh`'s engine refusals, so a failure
 caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`).
 

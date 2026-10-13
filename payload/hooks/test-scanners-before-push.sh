@@ -194,7 +194,7 @@ o32="$(lockfire "$R32" "git push")"; c32=$?
 #     this gate's run and not a finding about the push (claude-config#1146). On 2026-10-13 the
 #     secret scan, run here, could not copy the tree it scans (a file listed and gone before tar
 #     reached it), and the gate blocked with "a scanner that reads the WHOLE repository fails" over
-#     "(0 files)". Such a scanner now prints SCAN-UNMEASURED with its reason and exits 3; the push
+#     "(0 files)". Such a scanner now prints SUITE-UNMEASURED with its reason and exits 3; the push
 #     is still held, since nothing was checked, but the block says what happened, with the reason.
 add_unmeasured_scanner(){   # $1 = repo  $2 = name  $3 = also print a FAIL line (1) or not (0)
   cat > "$1/payload/hooks/test-$2.sh" <<EOF
@@ -202,7 +202,7 @@ add_unmeasured_scanner(){   # $1 = repo  $2 = name  $3 = also print a FAIL line 
 git ls-files '*.sh' >/dev/null
 echo "scanner $2 ran"
 [ $3 -eq 0 ] || echo "FAIL: scanner $2 found something"
-echo "SCAN-UNMEASURED scanner $2 could not copy the tree: tar: payload/gone.txt: Cannot stat"
+echo "SUITE-UNMEASURED scanner $2 could not copy the tree: tar: payload/gone.txt: Cannot stat"
 exit 3
 EOF
   chmod +x "$1/payload/hooks/test-$2.sh"
@@ -229,8 +229,8 @@ o34="$(fire "$R34" "git push")"; c34=$?
   || check "#1146 a real failure beside an unmeasured scanner is still reported as failing" "exit=$c34 out=$o34"
 fail_part="$(sed -n '/WHOLE repository fails/,/measured nothing/p' <<< "$o34")"
 grep -q 'gamma' <<< "$fail_part" && grep -q 'psi found something' <<< "$fail_part" && ! grep -q 'omega' <<< "$fail_part" \
-  && check "#1146 and the failing part names the failures, a FAIL line outranking SCAN-UNMEASURED" ok \
-  || check "#1146 and the failing part names the failures, a FAIL line outranking SCAN-UNMEASURED" "out=$o34"
+  && check "#1146 and the failing part names the failures, a FAIL line outranking SUITE-UNMEASURED" ok \
+  || check "#1146 and the failing part names the failures, a FAIL line outranking SUITE-UNMEASURED" "out=$o34"
 grep -q 'omega could not copy the tree' <<< "$o34" && grep -q 'measured nothing' <<< "$o34" \
   && check "#1146 and the unmeasured one is named apart, with its reason" ok \
   || check "#1146 and the unmeasured one is named apart, with its reason" "out=$o34"
@@ -255,7 +255,7 @@ o36="$(H="$FAKEHOOKS/scanners-before-push.sh" SCANNERS_STATE_DIR="$UNREAD_STATE"
   && check "#1146 and no pass is remembered while the uncommitted files went unread" ok \
   || check "#1146 and no pass is remembered while the uncommitted files went unread" "it wrote: $(cat "$UNREAD_STATE"/* 2>/dev/null)"
 
-# A scanner that fails with no FAIL line and no SCAN-UNMEASURED line is a failure, and its detail is
+# A scanner that fails with no FAIL line and no SUITE-UNMEASURED line is a failure, and its detail is
 # the end of what it printed, never an empty one: the block over #642 had nothing under the name.
 R35="$(mkrepo nofailline)"
 printf '#!/usr/bin/env bash\ngit ls-files >/dev/null\necho "kappa broke: tar: x: Cannot stat" >&2\nexit 1\n' > "$R35/payload/hooks/test-kappa.sh"

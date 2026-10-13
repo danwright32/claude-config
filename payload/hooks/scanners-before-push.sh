@@ -34,7 +34,7 @@
 # Fails OPEN in every direction it cannot see: not a repository, no scanners found, a suite that
 # could not be executed. It blocks on a scanner that ran and failed, and, in its own words, on a
 # scanner that could not run because another suite run held its lock past the wait (#642), and on
-# a scanner that ran and said, in a SCAN-UNMEASURED line, that it could not read what it judges,
+# a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
 # which it calls a fault in its own run rather than a finding (#1146). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
@@ -381,7 +381,7 @@ fi
 # and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean
 # one (L98).
 #
-# A scanner that RAN but could not read what it judges says so in one agreed line, `SCAN-UNMEASURED
+# A scanner that RAN but could not read what it judges says so in one agreed line, `SUITE-UNMEASURED
 # <what, and why>`, and exits non zero with no FAIL line (claude-config#1146). On 2026-10-13 the
 # secret scan could not copy the tree it scans, because a file was listed and gone before tar reached
 # it, and this gate blocked with "a scanner that reads the WHOLE repository fails" over a count of
@@ -408,7 +408,7 @@ this scanner never reported an exit code, so its verdict is missing rather than 
 "
   elif [ "$_sc_rc_now" != "0" ]; then
     _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
-    _sc_unm="$(awk '/^SCAN-UNMEASURED / { if (n++ < 5) print substr($0, 17) }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    _sc_unm="$(awk '/^SUITE-UNMEASURED / { if (n++ < 5) print substr($0, 18) }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
     if [ -z "$_sc_fails" ] && [ -n "$_sc_unm" ]; then
       unmeasured="$unmeasured=== $_sc_what ===
 $_sc_unm

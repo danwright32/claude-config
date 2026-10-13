@@ -106,7 +106,7 @@ copy_tree(){
 # this run as one that measured less than it should have (claude-config#1146, L411).
 unmeasured_n=0
 unmeasured(){
-  printf 'SCAN-UNMEASURED %s, so it was not scanned: %s\n' "$1" "$2"
+  printf 'SUITE-UNMEASURED %s, so it was not scanned: %s\n' "$1" "$2"
   unmeasured_n=$(( unmeasured_n + 1 ))
 }
 # judge_tree <git root> <dest>: copies what <root> publishes into <dest> and judges it. Returns 3,
@@ -201,7 +201,7 @@ printf '#!/usr/bin/env bash\necho "repo-files: git could not list the files unde
 jt="$( pass=0; fail=0; TREE_LISTER="$FL"; judge_tree "$VT" "$TMPROOT/unlisted-copy"; printf 'JT-RC=%s failed=%s\n' "$?" "$fail" )"
 case "$jt" in
   *FAIL:*) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" "got: $(printf '%s' "$jt" | tr '\n' ' ')" ;;
-  *'SCAN-UNMEASURED '*'git could not list the files under'*'JT-RC=3 failed=0'*) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" ok ;;
+  *'SUITE-UNMEASURED '*'git could not list the files under'*'JT-RC=3 failed=0'*) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" ok ;;
   *) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" "got: $(printf '%s' "$jt" | tr '\n' ' ')" ;;
 esac
 
@@ -622,7 +622,7 @@ printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 # A run that could not scan part of what it scans is not a pass: exit 3, apart from a failure, so
 # the pre push gate holds the push as a fault in its own run and CI stays red (#1146).
 if [ "$unmeasured_n" -gt 0 ]; then
-  echo "UNMEASURED: $unmeasured_n part(s) of this scan could not be made; the SCAN-UNMEASURED lines above say why."
+  echo "UNMEASURED: $unmeasured_n part(s) of this scan could not be made; the SUITE-UNMEASURED lines above say why."
   exit 3
 fi
 exit 0
