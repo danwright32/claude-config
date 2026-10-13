@@ -1,5 +1,15 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ScopeModes, ScopeModesHeld, ScopeModesLeftAsIs, ScopeModesOpened, ScopeModesPlace, ScopeModesScope, ScopeModesTarget } from '../types/index.d.ts'
+import type {
+  ScopeModes,
+  ScopeModesCleanup,
+  ScopeModesHeld,
+  ScopeModesLeftAsIs,
+  ScopeModesLeftBranch,
+  ScopeModesOpened,
+  ScopeModesPlace,
+  ScopeModesScope,
+  ScopeModesTarget,
+} from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
 import { ghWords, helperWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
@@ -55,7 +65,24 @@ import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, r
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
-import { choiceFor, isLeftClosed, newWork, outstanding, settledByDan, type DeployState, type Reading } from './winddown.ts'
+import {
+  branchChoiceFor,
+  branchesTouched,
+  choiceFor,
+  CLEANUP_TOOL,
+  filesSaid,
+  isLeftClosed,
+  LEAVE_BRANCH_TOOL,
+  NEW_WORK,
+  newBranchOf,
+  newWork,
+  outstanding,
+  porcelainFiles,
+  settledByBranchChoice,
+  settledByDan,
+  type DeployState,
+  type Reading,
+} from './winddown.ts'
 
 // Scope modes (#616) and away and home (#621), one mod because they share one state: the status
 // bar holds ONE list of modes for the band's amber line (no build or winding down, and away, can be
@@ -89,16 +116,22 @@ const targetRef = { plugin: 'scope-modes', key: 'target' } as const
 const justHomeRef = { plugin: 'scope-modes', key: 'justHome' } as const
 const openedRef = { plugin: 'scope-modes', key: 'opened' } as const
 const leftOpenRef = { plugin: 'scope-modes', key: 'leftOpen' } as const
+const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
+const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
+const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
 let ticking = false
 let statusNoted = false
-// One finish check at a time: the turn end and the minute's tick share whichever is running.
+// One finish check at a time: the turn end and the minute's tick share whichever is running, except
+// that a turn end, which asks GitHub afresh (#1037), never takes a minute's check that may not have.
 let checking: Promise<Checked | null> | undefined
-// What the finish check found: what is still to do, and the PRs settled by being left as they are
-// on Dan's own choice, open (#917) or closed (#1033), said apart from what is outstanding.
-type Checked = { left: string[]; kept: ScopeModesLeftAsIs[] }
+let checkingFresh = false
+// What the finish check found: what is still to do, the PRs settled by being left as they are on
+// Dan's own choice, open (#917) or closed (#1033), and the branches he chose to leave as they are
+// (#1074), each said apart from what is outstanding.
+type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[] }
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
 
@@ -979,7 +1012,8 @@ const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${
 // /sleep (#840). The record, its workers, the night's merge and deploy lists (#843) and the before
 // bed questions on the queue's issues (#836) here: paging (phase 2, #841) and the overnight driver
 // (phase 8, #844) build on this record.
-const startSleep = async ($: EngineInterface): Promise<string> => {
+// `began` is set once this call placed the record, so the command acknowledges only a sleep it started (#1086).
+const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
   // The session is kept beside the start when it can be read; without it the record is judged by
@@ -1110,6 +1144,7 @@ const startSleep = async ($: EngineInterface): Promise<string> => {
       return `Sleep mode did not start: the record could not be put in place (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}).`
     }
     placed = true
+    began.is = true
   } catch (err) {
     return `Sleep mode did not start: ${msg(err)}.`
   } finally {
@@ -1235,9 +1270,10 @@ const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: 
 // acts. Phase 9 (#837): that session alone opens the report, asks the other workers for their
 // summaries, and comes back with the morning prompt (its summary and the pickers) for its caller to
 // start: a turn of its own after /wake, the turn already starting after "I'm up".
-type Woke = { said: string; morning: string | null }
+// `off` is whether this call turned sleep mode off, so only that is acknowledged as a switch (#1086).
+type Woke = { said: string; morning: string | null; off: boolean }
 const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null> => {
-  const said = (s: string): Woke => ({ said: s, morning: null })
+  const said = (s: string): Woke => ({ said: s, morning: null, off: false })
   const reading = await sleepNow($)
   if (reading.state === 'none') {
     // A preparing marker with no sleep behind it is one a session left when it died mid question.
@@ -1255,7 +1291,7 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   await releaseAwake($, (await sleepPaths($)).dir)
   await showModes($)
   await showHeld($)
-  if (reading.state === 'unreadable') return said(`Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`)
+  if (reading.state === 'unreadable') return { ...said(`Sleep mode is off. Its record could not be read (${reading.why}), so where each session delivers is left as it is.`), off: true }
   const placed = await restorePlace($, record)
   // The overnight check's notes go in before the report is finished, so they are at its top (#834).
   const checked = await overnightCheck($, record, moved.to)
@@ -1271,7 +1307,7 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   }
   const asked = await askSummaries($, record, self)
   if (asked) s += ` ${asked}`
-  return { said: s, morning: await morningFor($, record, self) }
+  return { said: s, morning: await morningFor($, record, self), off: true }
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
@@ -1761,8 +1797,36 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 // folder, so a finished session was refused for ever, told gh could not start. Gone, the folder is
 // wind down's own end state: GitHub is read by the repository's name from a folder that is there,
 // the branch and worktree lists from the main working tree, and the uncommitted work went with it.
-const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, elsewhere = false): Promise<{ reading: Reading; found?: Found }> => {
-  const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: false }
+//
+// How often GitHub is asked (#1037): each read spends the GraphQL allowance every gh command on the
+// Mac shares (#1014), and the minute's check read every PR the session opened, plus one issue view
+// per closing issue of each. So only what can still change is asked again: a merged PR read by its
+// number never changes, so it is read once; a closing issue decides nothing until its PR merges, so
+// it is read only then,
+// and once closed is not read again while winding down stays on. A PR's reading is kept with when it
+// was asked: a turn end (`fresh`) always asks again, while the minute's check asks again only once
+// `wait` has passed, which starts at a minute and doubles, up to ten, each time the answer has not
+// moved (an unchanged PR is waiting on its checks or on Dan). An answer that moved starts it at a
+// minute again, and a read that failed keeps nothing, so the next minute asks again.
+type PrSeen = { pr: PrJson | null; issues: Map<number, 'OPEN' | 'CLOSED'>; askedAt: number; wait: number }
+const prSeen = new Map<string, PrSeen>()
+const IDLE_MAX_MS = 10 * MIN
+const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(x => x.number).filter((n): n is number => typeof n === 'number')
+// Nothing about it can change: merged, with every issue it closes closed. Only a PR read by its
+// number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
+const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
+const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) => JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues]])
+
+/** The files uncommitted in a checkout, by git status (#1051), or why they could not be read. */
+const uncommittedIn = async ($: EngineInterface, root: string): Promise<string[] | { unreadable: string }> => {
+  const st = await run($, ['git', '-C', root, 'status', '--porcelain', '--untracked-files=all'])
+  return st.exitCode === 0 ? porcelainFiles(st.stdout) : { unreadable: st.stderr.trim() || `git status exited ${st.exitCode}` }
+}
+
+type WindOpts = { repo?: string; elsewhere?: boolean; fresh?: boolean; inherited?: boolean }
+const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {}): Promise<{ reading: Reading; found?: Found }> => {
+  const { repo, elsewhere = false, fresh = false, inherited = false } = o
+  const r: Reading = { branch: t.branch, isDefault: t.isDefault, pr: null, branchHere: false, branchOnGitHub: false, worktreeOnBranch: false, deploy: null, dirty: [], ...(inherited ? { inherited } : {}) }
   const gone = !(await isThere($, t.root))
   // Gone, the main working tree, where one is there, holds the branch and worktree lists.
   let main: string | undefined
@@ -1783,33 +1847,59 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
   // git reads the session's folder while it is there, and the main working tree once it is gone.
   const git = async (args: string[]) =>
     gone ? $.process.run(['git', ...(main ? ['-C', main] : []), ...args], { timeoutMs: RUN_MS, ...(cwd ? { cwd } : {}) }).catch(startFailed) : run($, ['git', '-C', t.root, ...args])
-  if (gone && !slug && (t.branch || t.pr)) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
-  if (t.branch || t.pr) {
-    const res = t.pr
-      ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
-      : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
-    if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
-    let pr: PrJson | undefined
-    try {
-      const j = JSON.parse(res.stdout) as PrJson | PrJson[]
-      pr = Array.isArray(j) ? j[0] : j
-    } catch {
-      return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+  // A branch that is not the session's (#1074) has no PR of the session's to read, and the default
+  // branch is not a PR's branch, so neither is looked up on GitHub (#1037); a PR already found is.
+  const readsPr = !!t.pr || (!inherited && !t.isDefault && !!t.branch)
+  if (gone && !slug && readsPr) return { reading: { ...r, pr: { unreadable: `${goneSaid}, and no repository is named to read its PR in` } } }
+  if (readsPr) {
+    const now = await $.clock.now()
+    const key = `${(slug ?? '').toLowerCase()}|${t.pr ? `#${t.pr}` : `@${t.branch}`}`
+    const seen = prSeen.get(key)
+    let pr: PrJson | null
+    let issues: Map<number, 'OPEN' | 'CLOSED'>
+    if (seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
+      pr = seen.pr
+      issues = seen.issues
+    } else {
+      if (t.pr && seen?.pr?.state === 'MERGED') pr = seen.pr
+      else {
+        const res = t.pr
+          ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
+          : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
+        if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
+        try {
+          const j = JSON.parse(res.stdout) as PrJson | PrJson[]
+          const one = Array.isArray(j) ? j[0] : j
+          pr = one && typeof one.number === 'number' ? one : null
+        } catch {
+          return { reading: { ...r, pr: { unreadable: 'gh answered something that is not JSON' } } }
+        }
+      }
+      issues = new Map(seen?.issues)
+      // Its issues decide nothing until it has merged (outstanding reads them only then).
+      if (pr?.state === 'MERGED')
+        for (const n of closesOf(pr)) {
+          if (issues.get(n) === 'CLOSED') continue
+          const v = await gh(['issue', 'view', String(n), ...where, '--json', 'state'])
+          if (v.exitCode !== 0) return { reading: { ...r, pr: { unreadable: `issue #${n}: ${v.stderr.trim()}` } } }
+          const s = (JSON.parse(v.stdout) as { state?: string }).state
+          issues.set(n, s === 'CLOSED' ? 'CLOSED' : 'OPEN')
+        }
+      const moved = !seen || seenSaid(seen) !== seenSaid({ pr, issues })
+      prSeen.set(key, { pr, issues, askedAt: now, wait: moved ? MIN : Math.min((seen?.wait ?? MIN) * 2, IDLE_MAX_MS) })
     }
-    if (pr && typeof pr.number === 'number') {
+    if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
       const state = pr.state === 'MERGED' || pr.state === 'CLOSED' ? pr.state : 'OPEN'
-      const issues: { number: number; state: 'OPEN' | 'CLOSED' }[] = []
-      for (const ref of pr.closingIssuesReferences ?? []) {
-        if (typeof ref.number !== 'number') continue
-        const v = await gh(['issue', 'view', String(ref.number), ...where, '--json', 'state'])
-        if (v.exitCode !== 0) return { reading: { ...r, pr: { unreadable: `issue #${ref.number}: ${v.stderr.trim()}` } } }
-        const s = (JSON.parse(v.stdout) as { state?: string }).state
-        issues.push({ number: ref.number, state: s === 'CLOSED' ? 'CLOSED' : 'OPEN' })
+      const closes = closesOf(pr)
+      r.pr = {
+        number: pr.number as number,
+        state,
+        ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}),
+        issues: state === 'MERGED' ? closes.map(n => ({ number: n, state: issues.get(n) === 'CLOSED' ? ('CLOSED' as const) : ('OPEN' as const) })) : [],
       }
-      r.pr = { number: pr.number, state, ...(typeof pr.headRefOid === 'string' && pr.headRefOid ? { head: pr.headRefOid } : {}), issues }
       prUrl = typeof pr.url === 'string' ? pr.url : undefined
-      found = { number: pr.number, closes: issues.map(i => i.number), url: prUrl }
+      found = { number: pr.number as number, closes, url: prUrl }
     }
   }
   // The deploy and the cleanup are read only once the PR is merged, so an open PR costs one gh call a check.
@@ -1841,10 +1931,7 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, repo?: string, 
     r.worktreeOnBranch = wt.exitCode === 0 ? wt.stdout.split('\n').includes(`branch refs/heads/${r.branch}`) : { unreadable: wt.stderr.trim() }
   }
   // Gone, the folder took its uncommitted work with it: nothing is left there to commit.
-  if (t.isDefault && r.pr === null && !gone) {
-    const st = await run($, ['git', '-C', t.root, 'status', '--porcelain'])
-    r.dirty = st.exitCode === 0 ? st.stdout.trim() !== '' : { unreadable: st.stderr.trim() }
-  }
+  if ((t.isDefault || inherited) && r.pr === null && !gone) r.dirty = await uncommittedIn($, t.root)
   return { reading: r, found }
 }
 
@@ -1883,47 +1970,67 @@ const keptSaid = (kept: readonly ScopeModesLeftAsIs[], whose: string): string =>
   return `${open.length ? ` Left open by ${whose} choice: ${open.join('; ')}.` : ''}${closed.length ? ` Left closed by ${whose} choice: ${closed.join('; ')}.` : ''}`
 }
 
-// What is still to do and what Dan chose to leave open, or null when winding down is not on.
-const check = ($: EngineInterface): Promise<Checked | null> => {
-  if (checking) return checking
+// The branches this session made its own (#1074): created, committed to or pushed.
+const branchesOf = async ($: EngineInterface) => (await $.state.get(branchesRef)).value ?? []
+const leftBranchOf = async ($: EngineInterface) => (await $.state.get(leftBranchRef)).value ?? []
+const cleanupOf = async ($: EngineInterface) => (await $.state.get(cleanupRef)).value ?? []
+// A branch the checkout is on that this session neither created, committed to nor pushed (#1074): its
+// checkout sitting on it says nothing about whose it is, so it has nothing of the session's to finish.
+const inheritedBranch = (t: ScopeModesTarget, mine: readonly string[]) => !t.isDefault && !!t.branch && t.pr === null && !mine.includes(t.branch)
+
+// What is still to do and what Dan chose to leave as it is, or null when winding down is not on.
+// `fresh` asks GitHub again about everything that can still change (a turn end); the minute's check
+// asks only once a PR's wait has passed (#1037).
+const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
+  if (checking && (checkingFresh || !fresh)) return checking
+  // A turn end waits for a minute's check under way, then asks afresh.
+  if (checking) return checking.then(() => check($, true))
+  checkingFresh = fresh
   checking = (async (): Promise<Checked | null> => {
     if ((await scopeOf($)) !== 'WINDING DOWN') return null
     let t = (await $.state.get(targetRef)).value ?? null
     if (t && 'unreadable' in t) {
       const again = await readTarget($)
       await $.state.set(targetRef, again)
-      if (again && 'unreadable' in again) return { left: [`what this session is working on could not be read (${again.unreadable})`], kept: [] }
+      if (again && 'unreadable' in again) return { left: [`what this session is working on could not be read (${again.unreadable})`], kept: [], keptBranches: [] }
       t = again
     }
     // Outside a repository there is no PR, branch or deploy to finish.
-    if (!t) return { left: [], kept: [] }
+    if (!t) return { left: [], kept: [], keptBranches: [] }
     // A check that throws must refuse the turn end: a Stop hook that fails is skipped, which would
     // let the turn end unfinished (L42).
     try {
-      // On its default branch with no PR, the session may have moved onto a branch since winding
-      // down turned on (#702): follow it there.
-      if (t.isDefault && t.pr === null) {
+      const mine = await branchesOf($)
+      // On its default branch, or a branch that is not its own (#1074), with no PR, the session may
+      // have moved onto a branch since winding down turned on (#702): follow it there.
+      if ((t.isDefault || inheritedBranch(t, mine)) && t.pr === null) {
         const now = await readTarget($)
         if (now && !('unreadable' in now) && now.branch !== t.branch) {
           t = now
           await $.state.set(targetRef, t)
         }
       }
-      const { reading, found } = await readWind($, t)
+      const { reading, found } = await readWind($, t, { fresh, inherited: inheritedBranch(t, mine) })
       t = await keepFound($, t, found)
       // A PR is left as it is only on Dan's own answer to leave_pr_open, recorded against its
       // repository and number: open at its head (#917), or closed without merging (#1033). With none
-      // recorded, #856's default holds and it is outstanding.
+      // recorded, #856's default holds and it is outstanding. A branch is left as it is only on his
+      // answer to leave_branch, by repository and name (#1074).
       const choices = await leftOpenOf($)
+      const branchChoices = await leftBranchOf($)
       const kept: ScopeModesLeftAsIs[] = []
+      const keptBranches: ScopeModesLeftBranch[] = []
       const toDo = (r: Reading, repo: string | undefined) => {
         const pr = r.pr
         const d = repo && pr && !('unreadable' in pr) ? choiceFor(choices, repo, pr.number) : undefined
-        const withChoice = d ? { ...r, choice: d } : r
+        const b = repo && r.branch ? branchChoiceFor(branchChoices, repo, r.branch) : undefined
+        const withChoice: Reading = { ...r, ...(d ? { choice: d } : {}), ...(b ? { branchLeft: b } : {}) }
         if (d && settledByDan(withChoice)) kept.push(d)
+        // Said as kept by his choice only where his answer settled something (lessons review).
+        if (b && settledByBranchChoice(withChoice) && !keptBranches.includes(b)) keptBranches.push(b)
         return outstanding(withChoice)
       }
-      const left = toDo(reading, (await repoOfLink($, found?.url)) ?? (choices.length ? await sessionSlug($) : undefined))
+      const left = toDo(reading, (await repoOfLink($, found?.url)) ?? (choices.length || branchChoices.length ? await sessionSlug($) : undefined))
       // Winding down finalizes everything the session has open, so every PR this session opened is
       // outstanding until merged, whether or not the session's own branch has a PR (#856: a session
       // whose branch PR was finished parked three PRs it had opened "waiting on you"). An agent's in a
@@ -1940,7 +2047,7 @@ const check = ($: EngineInterface): Promise<Checked | null> => {
         // The branch's own PR by its link, or, where GitHub gave none, by its number in this repository.
         const isBranchPr = ownLink ? ownLink === `https://github.com/${o.repo}/pull/${o.number}`.toLowerCase() : !!found && !elsewhere && found.number === o.number
         if (isBranchPr) continue
-        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, o.repo, elsewhere)
+        const one = await readWind($, { root: t.root, branch: '', isDefault: false, issues: [], pr: o.number, ...(t.main ? { main: t.main } : {}) }, { repo: o.repo, elsewhere, fresh })
         if (one.found && !sameList(o.closes, one.found.closes)) {
           const closes = one.found.closes
           await $.state.set(openedRef, (await openedOf($)).map(x => (x.repo === o.repo && x.number === o.number ? { ...x, closes } : x)))
@@ -1948,21 +2055,26 @@ const check = ($: EngineInterface): Promise<Checked | null> => {
         left.push(...toDo(one.reading, o.repo))
       }
       // One unreadable GitHub answers every read the same way, said once.
-      return { left: [...new Set(left)], kept }
+      return { left: [...new Set(left)], kept, keptBranches }
     } catch (err) {
-      return { left: [`the finish check failed (${msg(err)})`], kept: [] }
+      return { left: [`the finish check failed (${msg(err)})`], kept: [], keptBranches: [] }
     }
   })().finally(() => {
     checking = undefined
+    checkingFresh = false
   })
   return checking
 }
 
-const finish = async ($: EngineInterface, kept: readonly ScopeModesLeftAsIs[]) => {
+// How the branches Dan chose to leave as they are (#1074) are listed, apart from the PRs.
+const keptBranchesSaid = (kept: readonly ScopeModesLeftBranch[], whose: string): string =>
+  kept.length ? ` Left as it is by ${whose} choice: ${kept.map(b => `the branch ${b.branch} in ${b.repo} (${b.why})`).join('; ')}.` : ''
+
+const finish = async ($: EngineInterface, c: Checked) => {
   await $.state.set(scopeRef, null)
   await $.state.set(targetRef, null)
   await showModes($)
-  $.ui.toast(`Wind down finished: safe to close this session.${keptSaid(kept, 'your')}`)
+  $.ui.toast(`Wind down finished: safe to close this session.${keptSaid(c.kept, 'your')}${keptBranchesSaid(c.keptBranches, 'your')}`)
 }
 
 // leave_pr_open (#917, #1033): asks Dan whether a PR stays as it is rather than being merged, in the
@@ -2038,13 +2150,8 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   const head = typeof read.headRefOid === 'string' ? read.headRefOid : ''
   if (asIs.needsHead && !head) return unread('GitHub gave no head commit')
   const question = asIs.question(pr, why)
-  const sleeping = await sleepNow($)
-  if (sleeping.state === 'asleep') {
-    const failed = await noteQuestion($, [question])
-    return `Dan is asleep (sleep mode), so he was not asked and nothing was recorded: winding down still waits on ${pr}. ${
-      failed === null ? 'The question is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
-    }`
-  }
+  const asleep = await askedWhileAsleep($, await sleepNow($), question, `winding down still waits on ${pr}`)
+  if (asleep) return asleep
   let answer: string
   try {
     answer = await $.ui.ask(question, [asIs.keep, asIs.other])
@@ -2063,6 +2170,108 @@ const leavePrOpen = async ($: EngineInterface, input: Record<string, unknown>): 
   return `Dan did not choose to leave ${pr} ${asIs.as}, so winding down still waits on it. He wrote: ${answer}`
 }
 
+// A name git takes for a branch, as far as these tools need: never an option, nor a path climbing out.
+const isBranchName = (s: string) => /^[\w][\w./-]*$/.test(s) && !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock')
+// A question for Dan while he sleeps is noted for his morning report, never asked (#841). Each caller
+// reads the sleep predicate itself and hands it in, so the route that asks names it where
+// tests/test-sleep-silence.sh reads it.
+const askedWhileAsleep = async ($: EngineInterface, sleeping: SleepReading, question: string, still: string): Promise<string | null> => {
+  if (sleeping.state !== 'asleep') return null
+  const failed = await noteQuestion($, [question])
+  return `Dan is asleep (sleep mode), so he was not asked and nothing was recorded: ${still}. ${
+    failed === null ? 'The question is noted for his morning report.' : `It could not be noted for his morning report (${failed}), so put it in your final message.`
+  }`
+}
+
+// leave_branch (#1074): asks Dan whether a branch stays as it is rather than being cleaned up. On
+// 2026-10-11 he answered "leave it as is" twice about a branch a shared checkout sat on, and nothing
+// could record it, so every stop was refused again. Only his "Leave it as it is" is recorded, by the
+// branch's repository and name: winding down then stops waiting for the branch to be deleted here or
+// a worktree on it to go, and, when this session's checkout is on it, for the files uncommitted there
+// as he answered (named in the question, so a change to any other file asks again). The branch on
+// GitHub is not covered: it holds no checkout, so deleting it moves nobody's work. Any other answer
+// withdraws an earlier one. Nothing is asked while Dan is asleep (#841).
+const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): Promise<string> => {
+  const branch = String(input.branch ?? '').trim()
+  if (!isBranchName(branch)) return `"${branch}" is not a branch name git takes, so Dan was not asked and nothing was recorded.`
+  const named = String(input.repo ?? '').trim()
+  if (named && !/^[\w.-]+\/[\w.-]+$/.test(named)) return `"${named}" is not a repository (owner/name), so Dan was not asked and nothing was recorded.`
+  const repo = named || (await sessionSlug($))
+  if (!repo) return "This session's repository could not be read, so name the branch's repository (owner/name). Dan was not asked and nothing was recorded."
+  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
+  if (!why) return `Say why the branch ${branch} would be left as it is (another session stands on it, say), so Dan can decide. He was not asked and nothing was recorded.`
+  // The files his answer leaves uncommitted: this session's checkout's, when it is on that branch.
+  let files: string[] = []
+  let at
+  try {
+    at = await $.modkit.branch({ path: await $.session.cwd() })
+  } catch (err) {
+    return `Where this session's checkout stands could not be read (${msg(err)}), so Dan was not asked and nothing was recorded.`
+  }
+  if (at && !('unreadable' in at) && at.branch === branch && (!named || named.toLowerCase() === (await sessionSlug($))?.toLowerCase())) {
+    const now = await uncommittedIn($, at.root)
+    if (!Array.isArray(now)) return `Whether anything is uncommitted in ${at.root} could not be read (${now.unreadable}), so Dan was not asked and nothing was recorded.`
+    files = now
+  }
+  const question = `Leave the branch ${branch} in ${repo} as it is (${why})? Winding down stops waiting for it to be deleted here or for a worktree on it to go${
+    files.length ? `, and for ${files.join(', ')} to be committed. A change to any other file asks again.` : '.'
+  }`
+  const asleep = await askedWhileAsleep($, await sleepNow($), question, `winding down still waits on the branch ${branch}`)
+  if (asleep) return asleep
+  let answer: string
+  try {
+    answer = await $.ui.ask(question, ['Leave it as it is', 'Clean it up'])
+  } catch (err) {
+    return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still waits on the branch ${branch}.`
+  }
+  // One answer per branch: a new one replaces whatever he said about it before.
+  const others = (await leftBranchOf($)).filter(d => !(d.branch === branch && d.repo.toLowerCase() === repo.toLowerCase()))
+  if (answer === 'Leave it as it is') {
+    await $.state.set(leftBranchRef, [...others, { repo, branch, files, why }])
+    return `Dan chose to leave the branch ${branch} in ${repo} as it is: winding down counts it settled${files.length ? `, with ${filesSaid(files)} uncommitted` : ''}.`
+  }
+  await $.state.set(leftBranchRef, others)
+  if (answer === 'Clean it up') return `Dan said clean it up: winding down waits for the branch ${branch} to be deleted here and any worktree on it to go.`
+  return `Dan did not choose to leave the branch ${branch} as it is, so winding down still waits on it. He wrote: ${answer}`
+}
+
+// open_cleanup_branch (#1051): while winding down, a new branch is new work, yet uncommitted changes
+// are unfinished, so work that finishing itself needs committed (a reading a monthly job appended to a
+// committed record, on 2026-10-09) had no way through but Dan turning winding down off. He is asked,
+// with the files git status names in this session's checkout and the reason; only his "Open it" is
+// recorded, and lets that one branch start by checkout or switch (which carry the changes onto it),
+// once, while nothing beyond those files is uncommitted. Any other branch is still refused.
+const openCleanupBranch = async ($: EngineInterface, input: Record<string, unknown>): Promise<string> => {
+  if ((await scopeOf($)) !== 'WINDING DOWN') return "Winding down is not on, so no branch needs Dan's answer: make it as usual. He was not asked."
+  const branch = String(input.branch ?? '').trim()
+  if (!isBranchName(branch)) return `"${branch}" is not a branch name git takes, so Dan was not asked.`
+  const why = String(input.why ?? '').trim().replace(/[.?]+$/, '')
+  if (!why) return `Say why the branch ${branch} is needed (what the uncommitted change is), so Dan can decide. He was not asked.`
+  const t = (await $.state.get(targetRef)).value ?? null
+  if (!t) return 'This session is in no repository, so there is no branch to open. Dan was not asked.'
+  if ('unreadable' in t) return `What this session is working on could not be read (${t.unreadable}), so Dan was not asked.`
+  const files = await uncommittedIn($, t.root)
+  if (!Array.isArray(files)) return `Whether anything is uncommitted in ${t.root} could not be read (${files.unreadable}), so Dan was not asked.`
+  if (!files.length) return `Nothing is uncommitted in ${t.root}, so there is no cleanup for a branch to commit. Dan was not asked.`
+  // Every file is named: what Dan agrees to is exactly what the branch may carry (L64).
+  const question = `Open the branch ${branch} to commit ${files.join(', ')} (${why})? Winding down lets it start for these files only, and finishes it like any other PR.`
+  const asleep = await askedWhileAsleep($, await sleepNow($), question, `winding down still refuses the branch ${branch}`)
+  if (asleep) return asleep
+  let answer: string
+  try {
+    answer = await $.ui.ask(question, ['Open it', 'Do not'])
+  } catch (err) {
+    return `Dan was not asked (${msg(err)}), so nothing was recorded: winding down still refuses the branch ${branch}.`
+  }
+  const others = (await cleanupOf($)).filter(c => c.branch !== branch)
+  if (answer === 'Open it') {
+    await $.state.set(cleanupRef, [...others, { root: t.root, branch, files, why }])
+    return `Dan agreed: make the branch ${branch} now, with git switch -c ${branch} in ${t.root}, commit only ${filesSaid(files)} on it, and open its PR. Winding down lets it start once, while nothing else is uncommitted.`
+  }
+  await $.state.set(cleanupRef, others)
+  return `Dan did not agree to the branch ${branch}, so winding down still refuses it.${answer === 'Do not' ? '' : ` He wrote: ${answer}`}`
+}
+
 // Answers the scope mode that was on, which the acknowledgement of the switch names (#1055).
 const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Promise<ScopeModesScope | null> => {
   const was = await scopeOf($)
@@ -2071,9 +2280,39 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Prom
   // afresh dropped a PR once the session had left its branch. An unreadable target is read again
   // at the next check.
   if (scope !== 'WINDING DOWN') await $.state.set(targetRef, null)
-  else if (was !== 'WINDING DOWN') await $.state.set(targetRef, await readTarget($))
+  else if (was !== 'WINDING DOWN') {
+    await $.state.set(targetRef, await readTarget($))
+    // Each time it turns on, GitHub is read afresh: nothing kept from an earlier wind down (#1037).
+    prSeen.clear()
+  }
   await showModes($)
   return was
+}
+
+// The branches a Bash call made this session's own (#1074), whatever mode is on, from the session or
+// any of its agents: one it created or pushed by name, and for a commit or a push naming none, the
+// branch checked out where it ran. That is known only for the session's own call with no `cd` before
+// it (an agent works in a folder of its own), in its folder or the absolute one `git -C` names. A
+// note that cannot be made is said, since winding down would then not finish that branch.
+const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) => {
+  try {
+    const cmds = await readCommands($, raw)
+    const { named, current } = branchesTouched(cmds)
+    const add = [...named]
+    const moved = cmds.some(c => c.words[0] === 'cd' || c.words[0] === 'pushd')
+    if (current && agentId === undefined && !moved) {
+      const dir = cmds.find(c => c.git?.dir !== undefined)?.git?.dir
+      const path = dir === undefined ? await $.session.cwd() : dir.startsWith('/') ? dir : undefined
+      const at = path ? await $.modkit.branch({ path }) : null
+      if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
+      if (at && !('unreadable' in at) && at.branch) add.push(at.branch)
+    }
+    const mine = await branchesOf($)
+    const fresh = [...new Set(add)].filter(b => !mine.includes(b))
+    if (fresh.length) await $.state.set(branchesRef, [...mine, ...fresh])
+  } catch (err) {
+    $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
+  }
 }
 
 // The PR a `gh pr create` opened, from the link gh prints, noted for winding down whatever mode is
@@ -2154,10 +2393,13 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
   return s
 }
 
-// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run.
+// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
+// or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
 type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
-const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | undefined> => {
+type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[] } | undefined
+const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   const { tool, input, toolUseId, scope, away, asleep } = j
+  let cleanupsLet: ScopeModesCleanup[] = []
   const raw = tool === 'Bash' ? String(input.command ?? '') : ''
   const commands = raw ? await readCommands($, raw) : []
 
@@ -2174,17 +2416,40 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
   if (scope === 'WINDING DOWN') {
     let t = (await $.state.get(targetRef)).value ?? null
     const opened = await openedOf($)
-    let r = newWork({ tool, input, commands, issues: ownNumbers(t, opened) })
+    // The cleanup branches Dan agreed to for this checkout (#1051), and of those, the ones whose files
+    // cover everything uncommitted now: read only for a call that starts a branch it moves onto.
+    const root = t && 'root' in t ? t.root : undefined
+    const agreed = root ? (await cleanupOf($)).filter(c => c.root === root) : []
+    let now: string[] | { unreadable: string } | undefined
+    if (root && agreed.length && commands.some(c => newBranchOf(c)?.moves)) now = await uncommittedIn($, root)
+    // Nothing uncommitted is no cleanup to carry, so an answer left over covers nothing (lessons review).
+    const covered = Array.isArray(now) && now.length ? agreed.filter(c => (now as string[]).every(f => c.files.includes(f))) : []
+    const cleanBranches = covered.map(c => c.branch)
+    let r = newWork({ tool, input, commands, issues: ownNumbers(t, opened), cleanBranches })
     // An agent named after this branch's PR or an issue it closes is this issue's work, so a PR not
-    // looked up yet is looked up before the agent is refused (#702).
-    if (r && (tool === 'Agent' || tool === 'Task') && t && 'issues' in t && !t.isDefault && t.pr === null) {
+    // looked up yet is looked up before the agent is refused (#702). A branch that is not the
+    // session's (#1074) has no PR of its own to look up.
+    if (r && (tool === 'Agent' || tool === 'Task') && t && 'issues' in t && !t.isDefault && t.pr === null && !inheritedBranch(t, await branchesOf($))) {
       t = await keepFound($, t, (await readWind($, t)).found)
-      r = newWork({ tool, input, commands, issues: ownNumbers(t, opened) })
+      r = newWork({ tool, input, commands, issues: ownNumbers(t, opened), cleanBranches })
     }
     if (r) {
+      // A branch Dan agreed to that is refused says why his answer did not cover it.
+      const asked = r.branch ? agreed.find(c => c.branch === r?.branch) : undefined
+      let why = ''
+      if (asked && now && !Array.isArray(now)) why = ` Dan agreed to ${asked.branch}, but what is uncommitted could not be read (${now.unreadable}).`
+      else if (asked && Array.isArray(now) && !now.length) why = ` Dan agreed to ${asked.branch} to commit ${filesSaid(asked.files)}, and nothing is uncommitted now.`
+      else if (asked && Array.isArray(now)) {
+        const beyond = now.filter(f => !asked.files.includes(f))
+        why = ` Dan agreed to ${asked.branch} for ${filesSaid(asked.files)} only, and ${filesSaid(beyond)} ${beyond.length === 1 ? 'is' : 'are'} uncommitted too.`
+      } else if (asked) why = ` Dan agreed to ${asked.branch} only by git checkout -b or git switch -c, which carry the uncommitted changes onto it.`
+      else if (r.what === NEW_WORK.branch) why = ` If the branch is only to commit uncommitted changes winding down lists, ask Dan first with ${CLEANUP_TOOL}.`
       await $.modkit.blocked({ toolUseId, guard: 'Winding down', reason: `Winding down, so this would not ${r.what}.`, safeWay: 'Claude finishes this issue and files anything else.' })
-      return { deny: `Blocked: winding down, so this did not ${r.what}. Finish this issue; file anything new as an issue instead of working on it.` }
+      return { deny: `Blocked: winding down, so this did not ${r.what}.${why} Finish this issue; file anything new as an issue instead of working on it.` }
     }
+    // The cleanup answers this call starts a branch on, used up once it has run (useCleanups).
+    const used = covered.filter(c => commands.some(cmd => newBranchOf(cmd)?.name === c.branch))
+    if (used.length) cleanupsLet = used
   }
   if (away) {
     // A Bash call by what its commands do on the Mac; another tool by what it opens (#702).
@@ -2206,14 +2471,31 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
       return { deny: overnightDeny(what) }
     }
   }
-  return undefined
+  return cleanupsLet.length ? { cleanups: cleanupsLet } : undefined
+}
+
+// Dan's cleanup answer (#1051) is used up, and that said, only once the checkout is on its branch
+// after the call ran, read from the checkout itself: a call refused beneath this mod, or a switch
+// that failed, leaves his answer to be used. A read that fails leaves it too, and is logged.
+const useCleanups = async ($: EngineInterface, cleanups: readonly ScopeModesCleanup[]) => {
+  for (const c of cleanups) {
+    let at
+    try {
+      at = await $.modkit.branch({ path: c.root })
+    } catch (err) {
+      $.ui.log(`scope-modes: whether the cleanup branch ${c.branch} started could not be read (${msg(err)}), so Dan's answer is kept`, { to: 'debug' })
+      continue
+    }
+    if (!at || 'unreadable' in at || at.branch !== c.branch) continue
+    await $.state.set(cleanupRef, (await cleanupOf($)).filter(x => !(x.root === c.root && x.branch === c.branch)))
+    $.ui.toast(`Winding down let the branch ${c.branch} start, for the cleanup Dan agreed to (${filesSaid(c.files)}).`)
+  }
 }
 
 // What winding down means, said the same way in its note, its command's context and the Stop
 // reason (#856): a session read "start nothing new" as permission to park a PR needing Dan.
 // #917: the one way a PR stays open, and only on Dan's own answer, never Claude's reading of one.
-const FINALIZE_ALL =
-  "Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed (its work merged in another PR, say)."
+const FINALIZE_ALL = `Winding down finalizes everything this session has open: every PR it opened is merged, never left open waiting on Dan. A PR stays open only on Dan's own answer to mcp__scope-modes__leave_pr_open, asked when he may want it left (for a reviewer outside this session, say), and a push after he answers asks again. A PR closed without merging is settled only on his answer to the same tool, which then asks whether to leave it closed (its work merged in another PR, say). A branch, a worktree on it or uncommitted work stays as it is only on his answer to ${LEAVE_BRANCH_TOOL}, and a new branch to commit uncommitted work starts only on his answer to ${CLEANUP_TOOL}.`
 const ASK_THEN_MERGE = 'When a decision or sign off is needed, ask Dan right then with an AskUserQuestion picker, one question at a time, and merge once he answers; never end the turn waiting on him.'
 
 // Each mode's note opens with its one definition (hooks/modes.ts), the same words the
@@ -2311,13 +2593,43 @@ export const register: Register = on => {
         required: ['pr', 'why'],
       },
     })
+    await $.tool.register({
+      name: 'leave_branch',
+      description:
+        "Ask Dan whether a branch stays as it is rather than being cleaned up while winding down: kept here, a worktree on it kept, and, when this session's checkout is on it, the files uncommitted there left uncommitted. For when another session stands on it, or he has said to leave it. Only his \"Leave it as it is\" is recorded; a change to any other uncommitted file asks again, and the branch on GitHub is still deleted once its PR merges. Never call this to end a turn sooner.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'The branch name' },
+          repo: { type: 'string', description: "The branch's repository as owner/name; this session's own when left out" },
+          why: { type: 'string', description: 'Why it would be left as it is, as a short phrase ("another session stands on it")' },
+        },
+        required: ['branch', 'why'],
+      },
+    })
+    await $.tool.register({
+      name: 'open_cleanup_branch',
+      description:
+        "While winding down, ask Dan to let one new branch start whose only purpose is to commit the uncommitted changes the finish check lists (a reading a job appended to a committed file, say). The files are read from git status and named to him. Only his \"Open it\" is recorded, and it lets that branch start once, by git switch -c or git checkout -b, while nothing beyond those files is uncommitted. Never for new work.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'The branch to start' },
+          why: { type: 'string', description: 'What the uncommitted change is and why finishing needs it committed, as a short phrase' },
+        },
+        required: ['branch', 'why'],
+      },
+    })
     if (!ticking) {
       ticking = true
       // Winding down ends itself once it is live, watched each minute rather than only at turn end.
       $.clock.every(MIN, async () => {
         try {
-          const c = await check($)
-          if (c && c.left.length === 0) await finish($, c.kept)
+          // A kept reading may be minutes old (#1037), so one that looks finished is read afresh
+          // before winding down ends: only GitHub's answer now finishes it (lessons review).
+          const kept = await check($)
+          const c = kept && kept.left.length === 0 ? await check($, true) : kept
+          if (c && c.left.length === 0) await finish($, c)
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })
         }
@@ -2366,7 +2678,12 @@ export const register: Register = on => {
     await setScope($, null)
     return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
   })
-  on('command.run', { command: 'sleep' }, async $ => ({ text: await startSleep($) }))
+  // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
+  on('command.run', { command: 'sleep' }, async $ => {
+    const began = { is: false }
+    const text = await startSleep($, began)
+    return began.is ? { text, context: [ackOn('sleep')] } : { text }
+  })
   on('command.run', { command: 'wake' }, async ($, e) => {
     const woke = await wake($, e.origin.kind === 'bridge')
     if (!woke) return { text: 'Sleep mode was not on.' }
@@ -2374,7 +2691,7 @@ export const register: Register = on => {
     // wait on the turn this hook holds (as /handoff found).
     const morning = woke.morning
     if (morning) $.clock.after(0, () => void $.prompt.submit({ text: morning }).catch(err => $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}`)))
-    return { text: woke.said }
+    return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
   on('command.run', { command: 'away' }, async $ => {
     await setPlace($, 'away')
@@ -2436,6 +2753,8 @@ export const register: Register = on => {
             )
           // This turn is the morning one (#837): its summary and pickers ride along.
           if (woke?.morning) notes.push(woke.morning)
+          // Waking is acknowledged as any other switch is (#1086), right after waking's own line.
+          if (woke?.off) acks.push(ackOnSaid('wake'))
         } else {
           await setPlace($, t.place)
           const told = await tellOthers($, t.place)
@@ -2552,13 +2871,25 @@ export const register: Register = on => {
       return { result: text, text }
     }
 
-    // A call that may open a PR is watched whatever mode is on, so winding down later knows what this
-    // session opened. The words are a cheap first look; the reader decides.
+    // Dan's answers about a branch (#1074, #1051), asked after mod-kit's screen as leave_pr_open is.
+    if (tool === 'mcp__scope-modes__leave_branch' || tool === 'mcp__scope-modes__open_cleanup_branch') {
+      const refused = await $.modkit.screen(e)
+      if (refused) return refused
+      const text = tool === 'mcp__scope-modes__leave_branch' ? await leaveBranch($, input) : await openCleanupBranch($, input)
+      return { result: text, text }
+    }
+
+    // A call that may open a PR, or make a branch the session's own (#1074), is watched whatever mode
+    // is on, so winding down later knows what this session opened and touched. The words are a cheap
+    // first look; the reader decides.
     const raw = tool === 'Bash' ? String(input.command ?? '') : ''
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
-    const go = async () => {
+    const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
+    const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
       const r = await next(e)
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
+      if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
+      if (cleanups.length && !r.deny) await useCleanups($, cleanups)
       return r
     }
 
@@ -2597,14 +2928,15 @@ export const register: Register = on => {
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
     // fails is skipped, which would run the very thing the mode is on to stop (L42).
-    let refused: { deny: string } | undefined
+    let verdict: Verdict
     try {
-      refused = await judge($, { tool, input, toolUseId, scope, away, asleep })
+      verdict = await judge($, { tool, input, toolUseId, scope, away, asleep })
     } catch (err) {
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
-      refused = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
+      verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
-    return refused ?? go()
+    if (verdict && 'deny' in verdict) return verdict
+    return go(verdict?.cleanups ?? [])
   })
 
   // A held row's button: asks Claude to do that one thing, now that Dan is here and chose it. Pressed
@@ -2698,14 +3030,16 @@ export const register: Register = on => {
     // An enrolled session while the Mac sleeps is the overnight driver's (#844): kept working, or let go with a note.
     const driven = await driveStop($)
     if (driven !== 'not-driven') return driven ?? next(e)
-    const c = await check($)
+    // A turn end asks GitHub afresh about everything that can still change (#1037).
+    const c = await check($, true)
     if (c === null) return next(e)
     if (c.left.length === 0) {
-      await finish($, c.kept)
+      await finish($, c)
       return next(e)
     }
-    // A PR Dan chose to leave open (#917) or closed (#1033) is said apart, never as outstanding.
-    const kept = keptSaid(c.kept, "Dan's")
+    // A PR Dan chose to leave open (#917) or closed (#1033), and a branch he chose to leave as it is
+    // (#1074), are said apart, never as outstanding.
+    const kept = `${keptSaid(c.kept, "Dan's")}${keptBranchesSaid(c.keptBranches, "Dan's")}`
     return {
       block: `Winding down is not finished: ${c.left.join('; ')}.${kept} ${FINALIZE_ALL} Keep watching CI and the deploy, fix only what blocks a merge or deploy, and file anything else. ${ASK_THEN_MERGE}`,
     }
@@ -2729,6 +3063,10 @@ export const register: Register = on => {
     await $.state.set(targetRef, null)
     await $.state.set(openedRef, [] as ScopeModesOpened[])
     await $.state.set(leftOpenRef, [] as ScopeModesLeftAsIs[])
+    await $.state.set(branchesRef, [] as string[])
+    await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
+    await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
+    prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
     await $.state.set(heldRef, [] as ScopeModesHeld[])

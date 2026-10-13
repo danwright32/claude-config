@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { choiceFor, newWork, outstanding, settledByDan, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
@@ -51,7 +51,7 @@ const merged: Reading = {
   branchOnGitHub: false,
   worktreeOnBranch: false,
   deploy: { state: 'live' },
-  dirty: false,
+  dirty: [],
 }
 
 describe('outstanding: finished means merged, live, cleaned and closed', () => {
@@ -94,7 +94,7 @@ describe('outstanding: finished means merged, live, cleaned and closed', () => {
   })
   test('on the default branch with no PR and nothing uncommitted, there is nothing to finish', () => {
     expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null })).toEqual([])
-    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null, dirty: true })).toEqual(['there are uncommitted changes'])
+    expect(outstanding({ ...merged, branch: 'main', isDefault: true, pr: null, deploy: null, dirty: ['app.ts'] })).toEqual([UNCOMMITTED('app.ts')])
   })
   test('a reading that failed is never read as done (L215)', () => {
     expect(outstanding({ ...merged, pr: { unreadable: 'gh: HTTP 502' } })).toEqual(['the PR could not be read (gh: HTTP 502)'])
@@ -178,5 +178,99 @@ describe('a PR Dan chose to leave closed (#1033)', () => {
     expect(choiceFor(all, 'o/r', 13)).toBeUndefined()
     const other: Reading = { ...merged, pr: { number: 13, state: 'CLOSED', issues: [] }, deploy: null, choice: choiceFor(all, 'o/r', 13) }
     expect(outstanding(other)).toEqual(['PR #13 was closed without merging: ask Dan whether to leave it closed (mcp__scope-modes__leave_pr_open)'])
+  })
+})
+
+// The finish check names the two ways out of uncommitted work while winding down: a cleanup branch
+// Dan agrees to (#1051), or his answer to leave it as it is (#1074).
+function UNCOMMITTED(files: string) {
+  return `there are uncommitted changes (${files}): commit them on a branch Dan agrees to (mcp__scope-modes__open_cleanup_branch), or ask him whether to leave them (mcp__scope-modes__leave_branch)`
+}
+
+describe('uncommitted changes, by the files git status names (#1051)', () => {
+  test('each line of git status --porcelain is one file, renamed and quoted ones included', () => {
+    expect(porcelainFiles(' M tests/section-time-readings.tsv\n?? notes/new.md\nR  old.ts -> new.ts\n M "with space.ts"\n')).toEqual([
+      'tests/section-time-readings.tsv',
+      'notes/new.md',
+      'new.ts',
+      'with space.ts',
+    ])
+    expect(porcelainFiles('')).toEqual([])
+  })
+  test('the finish check names the files, at most five, then how many more', () => {
+    const r: Reading = { ...merged, branch: 'main', isDefault: true, pr: null, deploy: null }
+    expect(outstanding({ ...r, dirty: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toEqual([UNCOMMITTED('a, b, c, d, e and 2 more')])
+    expect(outstanding({ ...r, dirty: { unreadable: 'fatal: bad index' } })).toEqual(['whether anything is uncommitted could not be read (fatal: bad index)'])
+  })
+})
+
+describe('a cleanup branch Dan agreed to is the one branch winding down lets start (#1051)', () => {
+  const words = (...lines: string[][]) => lines.map(w => ({ words: w, git: gitOf(w), gh: ghArgs(w) }))
+  const begin = (cleanBranches: string[], ...lines: string[][]) => newWork({ tool: 'Bash', input: {}, commands: words(...lines), issues: [616], cleanBranches })
+  test('a branch he agreed to starts, by checkout or switch, which carry the uncommitted changes onto it', () => {
+    expect(begin(['chore/readings'], ['git', 'switch', '-c', 'chore/readings'])).toBeUndefined()
+    expect(begin(['chore/readings'], ['git', 'checkout', '-b', 'chore/readings'])).toBeUndefined()
+  })
+  test('any other branch is still new work, and the refusal names it', () => {
+    expect(begin(['chore/readings'], ['git', 'checkout', '-b', 'feature-x'])).toEqual({ what: 'start a new branch', branch: 'feature-x' })
+    expect(begin([], ['git', 'switch', '-c', 'chore/readings'])).toEqual({ what: 'start a new branch', branch: 'chore/readings' })
+    // One allowed start never carries another one with it.
+    expect(begin(['chore/readings'], ['git', 'switch', '-c', 'chore/readings'], ['git', 'switch', '-c', 'feature-x'])?.branch).toBe('feature-x')
+  })
+  test('a branch made without moving onto it, or in a new worktree, leaves the changes behind, so is never the cleanup', () => {
+    expect(begin(['chore/readings'], ['git', 'branch', 'chore/readings'])?.what).toBe('start a new branch')
+    expect(begin(['chore/readings'], ['git', 'worktree', 'add', '-b', 'chore/readings', '../x'])?.what).toBe('start a new branch')
+  })
+})
+
+describe('the branches a session made its own: created, committed to or pushed (#1074)', () => {
+  const touched = (...lines: string[][]) => branchesTouched(lines.map(w => ({ words: w, git: gitOf(w) })))
+  test("a branch it created, by any of git's ways", () => {
+    expect(touched(['git', 'checkout', '-b', 'a'], ['git', 'switch', '-c', 'b'], ['git', 'branch', 'c'], ['git', 'worktree', 'add', '-b', 'd', '../d'])).toEqual({ named: ['a', 'b', 'c', 'd'], current: false })
+  })
+  test('a branch it pushed by name, the destination of a refspec included; a deletion or a tag is none', () => {
+    expect(touched(['git', 'push', '-u', 'origin', 'fix-700'])).toEqual({ named: ['fix-700'], current: false })
+    expect(touched(['git', 'push', 'origin', '+HEAD:refs/heads/fix-701'])).toEqual({ named: ['fix-701'], current: false })
+    expect(touched(['git', 'push', '-o', 'ci.skip', 'origin', 'local:fix-702'])).toEqual({ named: ['fix-702'], current: false })
+    expect(touched(['git', 'push', 'origin', '--delete', 'old'])).toEqual({ named: [], current: false })
+    expect(touched(['git', 'push', 'origin', ':old'])).toEqual({ named: [], current: false })
+    expect(touched(['git', 'push', 'origin', 'refs/tags/v1.2'])).toEqual({ named: [], current: false })
+    expect(touched(['git', 'push', '--tags'])).toEqual({ named: [], current: false })
+  })
+  test('a commit, or a push naming no branch, is of the branch checked out where it ran', () => {
+    expect(touched(['git', 'commit', '-m', 'fix'])).toEqual({ named: [], current: true })
+    expect(touched(['git', 'push'])).toEqual({ named: [], current: true })
+    expect(touched(['git', 'push', '-u', 'origin', 'HEAD'])).toEqual({ named: [], current: true })
+  })
+  test('reading branches touches nothing else', () => {
+    expect(touched(['git', 'checkout', 'main'], ['git', 'status'], ['git', 'branch', '-D', 'old'], ['git', 'branch', '--list', 'x'])).toEqual({ named: [], current: false })
+  })
+})
+
+describe("a branch that is not this session's, and Dan's answer to leave a branch as it is (#1074)", () => {
+  const inherited: Reading = { ...merged, branch: 'fix/2210-corrected-number-wins', isDefault: false, inherited: true, pr: null, deploy: null, branchHere: true, worktreeOnBranch: true }
+  test('a branch the checkout already sat on has nothing of this session to finish: no PR, no cleanup', () => {
+    expect(outstanding(inherited)).toEqual([])
+  })
+  test('uncommitted changes there are still counted, as on the default branch', () => {
+    expect(outstanding({ ...inherited, dirty: ['notes.md'] })).toEqual([UNCOMMITTED('notes.md')])
+  })
+  const left: LeftBranch = { repo: 'o/r', branch: 'scope-modes-616', files: [], why: 'another session stands on it' }
+  test('his answer settles the branch here and a worktree on it, never the branch on GitHub', () => {
+    expect(outstanding({ ...merged, branchHere: true, worktreeOnBranch: true, branchLeft: left })).toEqual([])
+    expect(outstanding({ ...merged, branchHere: true, branchOnGitHub: true, branchLeft: left })).toEqual(['the branch scope-modes-616 still exists on GitHub'])
+  })
+  test('his answer is said as what kept a branch only where it settled something (lessons review)', () => {
+    expect(settledByBranchChoice({ ...merged, branchHere: true, branchLeft: left })).toBe(true)
+    // The branch went anyway: his answer kept nothing, so nothing is said of it.
+    expect(settledByBranchChoice({ ...merged, branchLeft: left })).toBe(false)
+    // A file changed since he answered: what is outstanding is the same with or without it.
+    expect(settledByBranchChoice({ ...inherited, branch: left.branch, branchHere: false, worktreeOnBranch: false, dirty: ['new.ts'], branchLeft: left })).toBe(false)
+    expect(settledByBranchChoice({ ...merged, branchHere: true })).toBe(false)
+  })
+  test('it settles the uncommitted files he was asked about, and a file changed since asks again', () => {
+    const asked: Reading = { ...inherited, branch: left.branch, branchLeft: { ...left, files: ['notes.md'] } }
+    expect(outstanding({ ...asked, dirty: ['notes.md'] })).toEqual([])
+    expect(outstanding({ ...asked, dirty: ['notes.md', 'new.ts'] })).toEqual([UNCOMMITTED('new.ts')])
   })
 })

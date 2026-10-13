@@ -9,10 +9,14 @@ import { FINISHED, NEW_WORK } from './winddown.ts'
 //
 // Each part is a phrase after "I will" and "I will not", in words that read the same whoever says
 // them: Claude to Dan in the acknowledgement, and the mod to Claude in the note.
-export type Mode = ScopeModesScope | ScopeModesPlace
+// Sleep and waking get the same acknowledgement (#1086, Dan 2026-10-12). Waking is a definition of
+// its own, as home is beside away: what Claude does once sleep mode is off.
+export type Mode = ScopeModesScope | ScopeModesPlace | 'sleep' | 'wake'
 export type ModeDef = {
   /** The mode's name as the band and the commands say it. */
   name: string
+  /** The sentence saying the switch, where "<name> is on." does not (waking turns sleep mode off). */
+  on?: string
   /** What Claude does now. */
   will: string
   /** What Claude does not do now, which the mode refuses or holds. */
@@ -50,6 +54,21 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
     will: 'deliver results on the Mac as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview)',
     willNot: 'run anything held while away until its button in the held card is pressed',
   },
+  // What sleep mode does in every session (#840 to #844): quiet as away, questions noted for the
+  // morning, the enrolled sessions working the night's queue, merges and deploys only as the night's
+  // lists allow.
+  sleep: {
+    name: 'Sleep mode',
+    will: "keep every session on this Mac quiet as when you are away, note every question for your morning report, and have the enrolled sessions work the overnight queue",
+    willNot: "ask you anything, open anything on the Mac, or merge or deploy beyond what the night's lists allow",
+    ends: 'It ends by itself at noon ET, and /wake or "I\'m up" ends it sooner.',
+  },
+  wake: {
+    name: 'Wake',
+    on: 'Sleep mode is off.',
+    will: 'ask you questions and deliver where each session did before sleep again',
+    willNot: 'work the overnight queue or keep questions for a morning report',
+  },
 }
 
 /** What the mode does, in two or three sentences: what Claude will do, will not do, and how it ends. */
@@ -81,7 +100,8 @@ export const acknowledge = (said: readonly string[], opts: { after?: string } = 
  */
 export const ackOnSaid = (mode: Mode, opts: { replaced?: Mode | null; first?: string } = {}): string => {
   const replaced = opts.replaced && opts.replaced !== mode ? ` It replaces ${MODE_DEF[opts.replaced].name.toLowerCase()}.` : ''
-  return `${opts.first ?? `${MODE_DEF[mode].name} is on.`}${replaced} ${modeDoes(mode)}`
+  const d = MODE_DEF[mode]
+  return `${opts.first ?? d.on ?? `${d.name} is on.`}${replaced} ${modeDoes(mode)}`
 }
 
 /** What is said when a scope mode turns off: what it no longer stops. */
