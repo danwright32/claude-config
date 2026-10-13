@@ -330,6 +330,8 @@ test("the skip question's plain sentence is required, one sentence long, and nam
   expect(onScreenProblem('Changes register.tsx', files)).toContain('names a file (register.tsx)')
   expect(onScreenProblem('Restyles app/globals.css', files)).toContain('globals.css')
   expect(onScreenProblem('y'.repeat(301), files)).toContain('at most 300')
+  // A file named with no name of its own (a folder's path) never makes every sentence name it.
+  expect(onScreenProblem('The steps card in the band gets an amber edge.', ['app/', ''])).toBeUndefined()
   for (const t of [onScreenProblem('', files), onScreenProblem('Changes register.tsx', files)]) expect(DASHES.test(String(t))).toBe(false)
 })
 

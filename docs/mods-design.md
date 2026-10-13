@@ -2294,7 +2294,8 @@ we have the question presented in plain terms so I actually know what is going t
   and he is now told so in a toast; Claude is told to say so in one line, answer what he said, and
   ask the same question again. Before, Claude was told to act on what he said, and Dan was told
   nothing.
-- **A mod's own hook files, judged by what they draw.** `mods/<mod>/hooks/*.tsx` (or `.jsx`) still
+- **A mod's own hook files, judged by what they draw.** `mods/<mod>/hooks/*.tsx` (or `.jsx`), in a
+  folder holding `.claude-plugin/plugin.json` (an app's own hooks folder under mods has none), still
   count: five of the six draw Claude Code's panels through JSX, and manual steps draws through
   mod-kit's frames. But an edit whose changed lines, before and after, hold no JSX element and,
   comments aside, name no word a mod draws with (Ink's props such as color, bold, dim, border,

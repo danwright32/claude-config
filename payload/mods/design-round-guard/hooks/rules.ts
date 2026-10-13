@@ -411,6 +411,12 @@ export const dataOnlyChange = (before: string, after: string): boolean => {
  */
 export const isModHook = (rel: string): boolean => /(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(tsx|jsx)$/i.test(rel)
 
+/**
+ * The plugin.json that makes a mod hook file's folder a Claude Code mod: an app's own hooks folder
+ * under a folder named mods has none, and is judged as any screen file (lessons review of #1138).
+ */
+export const modManifestOf = (path: string): string => `${path.slice(0, path.lastIndexOf('/hooks/'))}/.claude-plugin/plugin.json`
+
 type Span = readonly [number, number]
 
 /**
@@ -759,7 +765,7 @@ export const onScreenProblem = (onScreen: unknown, files: readonly string[]): st
   if (typeof onScreen !== 'string' || !onScreen.trim()) return `Nothing was asked: the question leads with what Dan will see change, and a file name tells him nothing. ${ask}`
   const text = onScreen.trim()
   if (text.length > ON_SCREEN_MAX) return `Nothing was asked: "onScreen" is ${text.length} characters, and the question leads with it, so keep it to one sentence of at most ${ON_SCREEN_MAX}. ${ask}`
-  const bases = files.map(f => (f.split('/').pop() ?? f).toLowerCase())
+  const bases = files.map(f => (f.split('/').pop() ?? '').toLowerCase()).filter(Boolean)
   const lower = text.toLowerCase()
   const named = [...mentionedLookFiles(text), ...bases.filter(b => lower.includes(b))]
   if (named.length) return `Nothing was asked: "onScreen" names a file (${listed([...new Set(named)])}), which tells Dan nothing; the guard names the file itself, after your sentence. ${ask}`

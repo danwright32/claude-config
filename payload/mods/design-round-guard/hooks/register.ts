@@ -40,6 +40,7 @@ import {
   mentionedLookFiles,
   mentionsStore,
   modHookLogicOnly,
+  modManifestOf,
   onScreenProblem,
   pathsOf,
   predates,
@@ -243,7 +244,10 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, tool
   }
   const after = editedText(before, tool, input)
   if (after === undefined) return false
-  return dataOnlyChange(before, after) || (isModHook(relTo(path, tree)) && modHookLogicOnly(before, after))
+  if (dataOnlyChange(before, after)) return true
+  if (!isModHook(relTo(path, tree)) || !modHookLogicOnly(before, after)) return false
+  // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
+  return $.fs.exists(modManifestOf(path)).catch(() => false)
 }
 
 type Verdict =

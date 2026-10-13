@@ -1216,7 +1216,7 @@ export const register: Register = on => {
 `
 
 test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its JSX, its colours and frames, and the same edit in an app's page are asked", withKit, async ($, on) => {
-  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, '/w/slate/app/page.tsx': MOD_TEXT } })
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, '/w/slate/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }', '/w/slate/app/page.tsx': MOD_TEXT, '/w/slate/src/mods/shop/hooks/useCart.tsx': MOD_TEXT } })
   const edit = (old_string: string, new_string: string, file_path = MOD_HOOK) => ({ tool: 'Edit', file_path, old_string, new_string })
   // Logic: what a function decides, a comment, a value a condition compares.
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a.trim().toLowerCase() === b.trim().toLowerCase()')))).toBe('')
@@ -1234,6 +1234,9 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
   for (const [from, to] of drawn) expect(refusalOf(await call($, edit(from, to)))).toContain(SKIP_QUESTION)
   // The same logic edit in an app's screen file is still asked: only a mod's hook file is read so.
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
+  // So is an app's own hooks folder under a folder named mods, which no plugin.json beside it makes a
+  // Claude Code mod (lessons review).
+  expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b', '/w/slate/src/mods/shop/hooks/useCart.tsx')))).toContain(SKIP_QUESTION)
   // A mod hook file whose text the reader cannot follow is asked about, never passed.
   w.files[MOD_HOOK] = MOD_TEXT.replace('// Whether the reply is the one offered.', 'const unclosed = <Box>')
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b')))).toContain(SKIP_QUESTION)
