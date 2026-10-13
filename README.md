@@ -626,6 +626,19 @@ short commit otherwise. And the base it diffs from is fetched from origin first,
 checkout's copy, which can be far behind (a merge from a primary checkout 130 commits stale diffed
 305 KB against the 300 KB cap). When origin cannot be reached the review says its base may be stale.
 
+Each new head of a pull request is reviewed afresh, and since claude-config#1063 that review is
+given what earlier reviews of the same pull request raised: every finding, each with what has
+happened since to the lines it cites (unchanged, changed by this branch's own commits, named, or
+changed only by the base merged in), and this branch's own commit messages since, where a point
+declined in words is answered. The reviewer is asked not to reopen a settled point or to undo a
+change made to answer one, while still reading every change in full. On 2026-10-09 and 10 updates
+onto main drew reviews that reopened settled points, once asking to reverse what the review before
+had asked for, each costing a CI cycle. It is context and never a filter: whatever the new review
+returns is reported and refuses as before, so no new finding is let through for resembling an old
+one. The same pull request means a review labelled with the same branch, of a head this one
+descends from, so a reused branch name or a rewritten branch starts with no history. The history
+is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way first, saying so.
+
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`

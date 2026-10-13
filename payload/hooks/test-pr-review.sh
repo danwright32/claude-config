@@ -67,6 +67,12 @@ else
   rm -f "$FAKE_LOG/stdin.$$"
 fi
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
+# FAKE_CLAUDE_HOLD=<file>: answer only once that file exists (bounded), so a case decides when its
+# reviewer finishes instead of guessing with a sleep (claude-config#1097, L290).
+if [ -n "${FAKE_CLAUDE_HOLD:-}" ]; then
+  t0=$SECONDS
+  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ $((SECONDS - t0)) -lt 60 ]; do sleep 0.1; done
+fi
 [ -n "${FAKE_CLAUDE_STDERR_FILE:-}" ] && cat "$FAKE_CLAUDE_STDERR_FILE" >&2
 [ -n "${FAKE_CLAUDE_EXIT:-}" ] && { echo "fake claude: simulated failure" >&2; exit "$FAKE_CLAUDE_EXIT"; }
 [ -n "${FAKE_CLAUDE_EMPTY:-}" ] && exit 0
@@ -173,7 +179,25 @@ wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed
   while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
   [ -e "$f" ]
 }
-reset_state(){ rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"; }
+# A reviewer runner still going from the case before writes its answer into the NEXT case's fresh
+# state when it finishes: claude-config#1097, where section 3g2's runner, asleep 5 s, finished just
+# as 3h's check had made the state folder, so 3h read 3g2's review with one finding instead of its
+# own "could not run" (once in three runs under load, 2026-10-12, and on demand since by holding
+# that runner until 3h's check had made the folder). wait_final returns once the review FILE lands, and a runner goes on after
+# that to write the ledger and remove its input, so the state is wiped only once no runner holds an
+# input (its .diff, removed last however it ends), waited on and bounded rather than slept (L290).
+runners_done(){
+  local t0=$SECONDS
+  while [ $((SECONDS - t0)) -lt 40 ]; do
+    compgen -G "$AI_REVIEW_STATE_DIR/*.diff" >/dev/null || compgen -G "$AI_REVIEW_STATE_DIR/parts/*/*.diff" >/dev/null || return 0
+    sleep 0.1
+  done
+  return 1
+}
+reset_state(){
+  runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
+  rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"
+}
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }
 
 # ===========================================================================================
@@ -541,7 +565,10 @@ check "an abandoned review is in the outcome ledger" $'\tabandoned\t' "$(cat "$A
 # 3g2. The nudge's own abandoned conversion records the repository directory as well, from the
 #      pending marker, so both abandoned paths write the same ledger row (found by the review of #571).
 reset_state
-FAKE_CLAUDE_SLEEP=5 prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+# Held, not slept: the runner must still be running when the nudge looks, and is let go below, so
+# the next case's reset waits for it rather than meeting it (claude-config#1097).
+HOLD="$WORKDIR/hold-3g2"; rm -f "$HOLD"
+FAKE_CLAUDE_HOLD="$HOLD" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 check "the pending marker names the repository directory" "dir=$(git -C "$REPO" rev-parse --show-toplevel)" "$(cat "$(final_of "$HEAD_SHA").pending" 2>/dev/null)"
 python3 - "$(final_of "$HEAD_SHA").pending" <<'PYEOF'
 import re, sys
@@ -551,6 +578,7 @@ open(p, "w").write(re.sub(r"started=\d+", "started=1000", s))
 PYEOF
 printf '{"session_id":"n9","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 check "the nudge's abandoned row carries the repository directory" $'\t'"$(git -C "$REPO" rev-parse --show-toplevel)"$'\t' "$(grep -F $'\tabandoned\t' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
+: > "$HOLD"
 
 # 3h. could not run: no claude on PATH. A PATH built from every tool but claude, so the case is
 #     produced on a machine that has one installed, which this suite used to report as UNMEASURED.
@@ -1196,6 +1224,101 @@ FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$HEAD_SHA" >/d
 wait_final "$HEAD_SHA" || bad "#601 the review beside the sweep finished"
 [ ! -e "$AI_REVIEW_STATE_DIR/parts/old-pr-dead" ] && ok || bad "#601 a stale group folder is swept"
 [ -e "$AI_REVIEW_STATE_DIR/parts/new-pr-live" ] && ok || bad "#601 and a recent one is left alone"
+
+# ===========================================================================================
+# 13. The review of a new head is given what earlier reviews of the SAME pull request raised, and
+#     what has happened to each since (claude-config#1063). On 2026-10-09 and 10 every update of a
+#     branch onto main drew a fresh review with no record of the last: on #1049 the second review
+#     asked to reverse what the first had asked for, and #1053 and #1056 drew new points on lines
+#     an earlier review had settled, each a full CI cycle. The history is context for the reviewer,
+#     never a filter: whatever the new review finds is reported and refuses as before.
+# ===========================================================================================
+reset_state
+MAIN0="$(G rev-parse main)"
+G checkout -q -b feat/hist main
+mkdir -p "$REPO/Docs"
+seq 1 120 | sed 's/^/hist line /; s/$/ carrying enough text to give each file some weight/' > "$REPO/App/Hist.swift"
+seq 1 120 | sed 's/^/note /; s/$/ carrying enough text to give each file some weight too/' > "$REPO/Docs/notes.md"
+G add App/Hist.swift Docs/notes.md
+G commit -q -m "add hist"
+H_A="$(G rev-parse HEAD)"
+HF1='App/Hist.swift:2: the second line is wrong (L11). Should be: fixed. [severity: major]'
+HF2='App/Hist.swift:90: the ninetieth line is wrong (L12). Should be: fixed. [severity: minor]'
+HF3='Docs/notes.md:3: the third note is unclear (L21). Should be: clearer. [severity: minor]'
+HF4='README.md:1: the heading is wrong (L22). Should be: right. [severity: minor]'
+FAKE_CLAUDE_OUT="$HF1"$'\n'"$HF2"$'\n'"$HF3"$'\n'"$HF4" prr start --dir "$REPO" --sha "$H_A" --base-ref main --branch feat/hist >/dev/null
+wait_final "$H_A" || bad "#1063 the review of the first head finished"
+check_not "#1063 the first review of a pull request has no earlier reviews to be given" "EARLIER REVIEWS" "$(cat "$FAKE_LOG/stdin")"
+# Answered: one point fixed in a commit, one declined in words, and main moved on README.md, then
+# merged into the branch as merge-when-ready's update does.
+awk 'NR == 2 { print "hist line 2 fixed"; next } { print }' "$REPO/App/Hist.swift" > "$WORKDIR/hist.tmp" && mv "$WORKDIR/hist.tmp" "$REPO/App/Hist.swift"
+G commit -q -am "Fix the second line the review raised" -m "Hist line 2 now says what it means."
+G commit -q --allow-empty -m "Decline Docs/notes.md:3: the wording is intended" -m "The note is quoted from the spec, so it stays as written."
+G checkout -q main
+printf '# fixture moved on\n' > "$REPO/README.md"
+G commit -q -am "main moves README"
+G checkout -q feat/hist
+G merge -q --no-edit main
+H_B="$(G rev-parse HEAD)"
+# Neither of these is this pull request's history: another branch's review of an ancestor, and a
+# review labelled with this branch of a head this one does not descend from (a branch name reused).
+printf 'repo=repo\nbranch=feat/other\nsha=%s\nstarted=1\nfinished=5\nstatus=ok\nkind=pr\nfindings=1\n\nREADME.md:1: ANOTHER PULL REQUEST FINDING (L1). Should be: x. [severity: minor]\n' "$MAIN0" > "$(final_of "$MAIN0")"
+printf 'repo=repo\nbranch=feat/hist\nsha=%s\nstarted=1\nfinished=6\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:1: NOT AN ANCESTOR FINDING (L1). Should be: x. [severity: minor]\n' "$HEAD_SHA" > "$(final_of "$HEAD_SHA")"
+FAKE_CLAUDE_OUT="$HF3" prr start --dir "$REPO" --sha "$H_B" --base-ref main --branch feat/hist >/dev/null
+wait_final "$H_B" || bad "#1063 the review of the updated head finished"
+hin="$(cat "$FAKE_LOG/stdin")"
+after(){ awk -v f="$1" 'prev == f && !n++ { print } { prev = $0 }' <<<"$hin"; }
+hist_block(){ awk '/EARLIER REVIEWS OF THIS PULL REQUEST/ { on = 1 } on && !done { print } /END OF EARLIER REVIEWS/ { done = on }' <<<"$1"; }
+A7="${H_A:0:7}"
+check "#1063 the new head's review is given the earlier review of the same pull request" "EARLIER REVIEWS OF THIS PULL REQUEST" "$hin"
+check "#1063 naming the head it reviewed" "the review of $A7" "$hin"
+for f in "$HF1" "$HF2" "$HF3" "$HF4"; do check "#1063 with every finding it raised: ${f%%:*}" "$f" "$hin"; done
+# What has happened to the lines each one cites, measured both ways (L497).
+check "#1063 lines a commit of this branch changed are said to have changed" "lines 1 to 5 of App/Hist.swift changed" "$(after "$HF1")"
+check "#1063 naming the commit that changed them" "Fix the second line the review raised" "$(after "$HF1")"
+check "#1063 lines nothing touched are said to be unchanged" "lines 87 to 93 of App/Hist.swift are unchanged" "$(after "$HF2")"
+check "#1063 in another file too" "lines 1 to 6 of Docs/notes.md are unchanged" "$(after "$HF3")"
+check "#1063 lines only the base changed say so, not that this branch changed them" "base branch merged in" "$(after "$HF4")"
+# An answer given in words, from this branch's own commits since, never main's.
+check "#1063 a point declined in a commit message carries its reason" "The note is quoted from the spec" "$hin"
+check_not "#1063 the base's own commits are not offered as this branch's answers" "main moves README" "$(hist_block "$hin")"
+check_not "#1063 another pull request's review is not this one's history" "ANOTHER PULL REQUEST FINDING" "$hin"
+check_not "#1063 nor a review of a head this one does not descend from" "NOT AN ANCESTOR FINDING" "$hin"
+# Between the file list and the diff, so the list still opens the input.
+pos(){ awk -v p="$1" 'index($0, p) && !n { n = NR } END { print n + 0 }' <<<"$hin"; }
+[ "$(pos 'END OF FILE LIST')" -lt "$(pos 'EARLIER REVIEWS OF')" ] && [ "$(pos 'END OF EARLIER REVIEWS')" -lt "$(pos 'diff --git')" ] && ok \
+  || bad "#1063 the earlier reviews sit between the file list and the diff"
+check "#1063 the reviewer is told what the history is for" "EARLIER REVIEWS OF THIS PULL REQUEST" "$(cat "$FAKE_LOG/args")"
+# Never a filter: a point raised again is reported, counted and refuses until read like any other.
+HFB="$(final_of "$H_B")"
+check_eq "#1063 a finding raised again is still counted" "1" "$(meta "$HFB" findings)"
+out="$(prr check --dir "$REPO" --sha "$H_B" --base-ref main --branch feat/hist)"; rc=$?
+check_eq "#1063 and still refuses the merge until read" "1" "$rc"
+check "#1063 carrying the finding" "the third note is unclear" "$out"
+# Over its cap the OLDEST reviews give way, saying how many, and the newest is always given, so a
+# cap can never leave the history out without a word.
+G commit -q --allow-empty -m "one more head"
+H_C="$(G rev-parse HEAD)"
+PR_REVIEW_HISTORY_MAX_BYTES=10 FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$H_C" --base-ref main --branch feat/hist >/dev/null
+wait_final "$H_C" || bad "#1063 the capped review finished"
+cin="$(cat "$FAKE_LOG/stdin")"
+check "#1063 over the cap the newest earlier review is still given" "the review of ${H_B:0:7}" "$cin"
+check "#1063 with the point it raised" "$HF3" "$cin"
+check_not "#1063 and the older one gives way" "the review of $A7" "$cin"
+check "#1063 saying so" "1 older review(s) left out" "$cin"
+G reset -q --hard "$H_B"
+# A review read in groups (#601) gives every group the history, inside each group's size.
+hb="$(hist_block "$hin" | wc -c | tr -d '[:space:]')"
+d1="$(G diff -U20 "$(G merge-base main "$H_B")" "$H_B" -- App/Hist.swift | wc -c | tr -d '[:space:]')"
+d2="$(G diff -U20 "$(G merge-base main "$H_B")" "$H_B" -- Docs/notes.md | wc -c | tr -d '[:space:]')"
+HCAP=$(( (d1 > d2 ? d1 : d2) + hb + 1800 ))
+out="$(PR_REVIEW_MAX_BYTES=$HCAP FAKE_CLAUDE_OUT='No issues found.' prr restart --dir "$REPO" --sha "$H_B" --base-ref main --branch feat/hist)"
+check "#1063 the grouped case is produced (cap $HCAP)" "in 2 groups" "$out"
+wait_final "$H_B" || bad "#1063 the grouped review finished"
+check "#1063 group 1 is given the earlier reviews" "the review of $A7" "$(cat "$FAKE_LOG/stdin.g1" 2>/dev/null)"
+check "#1063 and group 2" "the review of $A7" "$(cat "$FAKE_LOG/stdin.g2" 2>/dev/null)"
+G checkout -q feat/sync
+G branch -f main "$MAIN0"
 
 echo
 echo "passed: $pass, failed: $fail"
