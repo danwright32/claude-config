@@ -11196,6 +11196,9 @@ check "#513 a band with no room refuses instead of minting past it" "[ \"\$_spil
 check "#513 and the refusal names the band and the number in the way" \
   "line_has \"\$_spill_out\" '501 to 1000' 'highest in use 1000'"
 check "#513 and it mints nothing at all"  "! grep -qE '^L[0-9]+\$' <<< \"\$_spill_out\""
+# The words #1140 asserts are ABSENT when the payload fills a band, proved present here, so that
+# absence check is not satisfied by a refusal reworded out from under it.
+check "#513 and says the band has no room" "grep -q 'has no room in it' <<< \"\$_spill_out\""
 check "#513 and it names the call that should have been made instead" \
   "grep -q 'lesson_band_with_room' <<< \"\$_spill_out\""
 # The second refusal: what the merge does with a number that did not come back as a number. That is
