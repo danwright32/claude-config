@@ -3359,9 +3359,10 @@ printf '{"url":"PLACEHOLDER"}\n' > "$LJHA/skills/tracker/config.example.json.bak
 out_ljsend="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 CLAUDE_HOME="$LJHA" SYNC_REPO="$LJA" SYNC_HOSTNAME=lbMacA bash "$SCRIPT" send 2>&1 || true)"
 dbg "#1089 send: $out_ljsend"
 lj_tree="$(git -C "$LJB" ls-tree -r --name-only main -- payload 2>/dev/null || true)"
-check "#1089 the skill beside the local files is sent" "grep -qx 'payload/skills/tracker/SKILL.md' <<< \"\$lj_tree\""
+check "#1089 the skill beside the local files is sent" \
+  "git -C '$LJB' show main:payload/skills/tracker/SKILL.md 2>/dev/null | grep -q 'a skill that keeps a token beside it'"
 check "#1089 and so is a backup of a file that is not a local one" \
-  "grep -qx 'payload/skills/tracker/config.example.json.bak' <<< \"\$lj_tree\""
+  "[ \"\$(git -C '$LJB' show main:payload/skills/tracker/config.example.json.bak 2>/dev/null)\" = '{\"url\":\"PLACEHOLDER\"}' ]"
 for lj in "${LJ_SHAPES[@]}"; do
   check "#1089 $lj is not sent" "[ -n \"\$lj_tree\" ] && ! grep -qxF 'payload/skills/tracker/$lj' <<< \"\$lj_tree\""
 done
