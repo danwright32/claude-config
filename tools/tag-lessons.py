@@ -112,6 +112,11 @@ def main(argv):
         return 1
     if a.host:
         lessons = {n: t for n, t in lessons.items() if band_owner(n, bands) == a.host}
+        if not lessons:
+            # Said before the skip file is read, so a Mac that wrote nothing is never told its
+            # lessons are all tagged, which nothing measured (L11).
+            print(f"NOTHING TO TAG: {a.host} has written no lesson in {a.index_dir}")
+            return 0
     if a.skip_tagged:
         try:
             with open(a.skip_tagged, encoding="utf-8") as f:
@@ -124,9 +129,6 @@ def main(argv):
             whose = f"lesson of {a.host}'s " if a.host else "lesson "
             print(f"NOTHING TO TAG: every {whose}is already tagged in {a.skip_tagged}")
             return 0
-    if not lessons:
-        print(f"NOTHING TO TAG: {a.host} has written no lesson in {a.index_dir}")
-        return 0
     tags, problems = {}, []
     items = sorted(lessons.items())
 

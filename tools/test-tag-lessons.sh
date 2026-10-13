@@ -115,6 +115,12 @@ check "and says whose, in a sentence that reads" "NOTHING TO TAG: every lesson o
 [ ! -f "$FAKE_LOG/args" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: another Mac's untagged lesson was sent to the reader"; }
 # A host holding no band cannot be told its lessons, so it is refused, never read as owning none
 # (which would report NOTHING TO TAG for ever) or all (which would tag the other Mac's).
+# A Mac that has written no lesson is told so, never that its lessons are all tagged (L11).
+printf '900\n' > "$BANDS/mac-c"
+out="$(FAKE_MODE=good run --host mac-c --bands-dir "$BANDS" --skip-tagged "$WORK/have2.tsv")"; rc=$?
+check_rc "a Mac with no lessons has nothing to tag" 0 "$rc"
+check "and is told it has written none" "mac-c has written no lesson" "$out"
+rm -f "$BANDS/mac-c"
 out="$(FAKE_MODE=good run --host mac-z --bands-dir "$BANDS")"; rc=$?
 check_rc "a host with no band is refused" 1 "$rc"
 check "naming it" "mac-z" "$out"
