@@ -68,7 +68,9 @@ under a longer name: `*.local.json.*` (a backup such as `config.local.json.bak-2
 half written `.writing` copy) and an editor's `*.local.json~` (#1089). The shapes are one list in
 `claude-sync` (`LOCAL_FILE_GLOBS`), and the repository's and the tracker skill's `.gitignore` name
 the same ones, which the suite checks. The secret scan still runs on every send, for a copy named
-any other way.
+any other way. The tracker's `--scan` keeps its ignore list in `scan-state.local.json`, beside
+`config.local.json` and kept local the same way, and the copy of the sheet it saves before writing
+in `~/.claude-tracker-snapshots`, outside `~/.claude`, so no copy of the sheet ever travels (#1032).
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`

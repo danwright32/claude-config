@@ -5,6 +5,9 @@
 #   tracker.sh update '<link>' '<project name>' '{"Status":"Z"}'
 #                                                   # change named cells of the row with that Link
 #   tracker.sh new-token                            # write a fresh token into config.local.json
+#   tracker.sh sheet-id                             # the id of the sheet SKILL.md names
+#   tracker.sh scan | set-authors | ignore-repo | unignore-repo | authors-found | reconcile |
+#              snapshot | scan-cells                # /tracker --scan, SKILL.md "Scanning git work"
 #
 # The write token lives ONLY in config.local.json beside this script. That file is ignored by
 # git and left out of claude-sync's mirror, so it never leaves the Mac that holds it
@@ -17,42 +20,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$DIR/config.local.json"
 EXAMPLE="$DIR/config.example.json"
 SCRIPT_GS="$DIR/apps-script.gs"
+LIB="$DIR/tracker_lib.py"
 
-# new-token: a fresh random token, written straight into config.local.json (created from the
-# example when absent, keeping any url already there). Only the path is printed: the person
-# copies the token from that file into the Apps Script, so it never passes through a terminal.
-if [ "${1:-}" = "new-token" ]; then
-  python3 - "$CONFIG" "$EXAMPLE" <<'PY'
-import json, os, secrets, string, sys
-config, example = sys.argv[1], sys.argv[2]
-src = config if os.path.exists(config) else example
-try:
-    with open(src) as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        raise ValueError("not a JSON object")
-except Exception as e:
-    # Never overwrite a file that cannot be read: it may hold the only copy of the URL.
-    sys.stderr.write("Refusing to write a token: %s could not be read (%s). Fix or remove it, then run new-token again.\n" % (src, type(e).__name__))
-    sys.exit(1)
-import tempfile
-alphabet = string.ascii_letters + string.digits
-data["token"] = "".join(secrets.choice(alphabet) for _ in range(40))
-# The half written copy is named *.local.json, which the skill's .gitignore and claude-sync's
-# mirror both leave out, so a run killed before the rename below can never leave the token in
-# a file that syncs or commits. mkstemp creates it readable by its owner only.
-fd, tmp = tempfile.mkstemp(dir=os.path.dirname(config), prefix=".new-token.", suffix=".local.json")
-with os.fdopen(fd, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-os.chmod(tmp, 0o600)
-if os.environ.get("TRACKER_TEST_STOP_BEFORE_RENAME") == "1":
-    os._exit(9)   # test seam: stands in for a run killed between the write and the rename
-os.replace(tmp, config)
-print("Wrote a new token to %s (not shown here). Copy it from that file into the TOKEN line of the Apps Script, then deploy a new version." % config)
-PY
-  exit $?
-fi
+# The commands that never reach the web app run in tracker_lib.py, which needs no web app link or
+# token: new-token writes the token into config.local.json without ever showing it, and sheet-id
+# prints the id of the sheet SKILL.md names. The /tracker --scan commands (claude-config#1032) run
+# there too: none of them needs the web app, so none of them requires its link or token.
+case "${1:-}" in
+  new-token|sheet-id|scan|set-authors|ignore-repo|unignore-repo|authors-found|reconcile|snapshot|scan-cells)
+    exec python3 "$LIB" "$@" ;;
+esac
 
 if [ ! -f "$CONFIG" ]; then
   echo "Not configured: $CONFIG is missing. Run setup (see SKILL.md)." >&2
@@ -115,15 +92,21 @@ PY
 )"
 URL="${CHECKED%%$'\n'*}"
 TOKEN="${CHECKED#*$'\n'}"
+# The sheet the web app must answer for: the one SKILL.md links to, its single declared home
+# (claude-config#1080). Read before anything is sent, so a SKILL.md naming no sheet or two sends
+# nothing.
+SHEET_ID="$(python3 "$LIB" sheet-id)" || exit 1
 
 # Every request is a POST with the key in its JSON body, never the address (claude-config#675):
 # Google logs addresses, and a token in one is recorded there. The field is "key", which the
 # matching apps-script.gs reads; the first version of the script read "token", so this caller
 # and that deployment refuse each other ("bad token") rather than half understanding.
 # The body is built by python with the token from its environment, and reaches curl on stdin.
-post(){   # $1 = the request body without its key, as a JSON object; $2 = "update" or "preview" for those
+# Every body also names the sheet SKILL.md links to, as "sheetId": a script attached to any other
+# sheet refuses it before reading or writing anything (claude-config#1080).
+post(){   # $1 = the request body without its key, as a JSON object; $2 = "sheet" for the sheet check, "update" or "preview" for those
   local payload
-  payload=$(TRACKER_TOKEN="$TOKEN" python3 -c "import json,os,sys;b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];print(json.dumps(b))" "$1")
+  payload=$(TRACKER_TOKEN="$TOKEN" TRACKER_SHEET_ID="$SHEET_ID" python3 -c "import json,os,sys;b=json.loads(sys.argv[1]);b['key']=os.environ['TRACKER_TOKEN'];b['sheetId']=os.environ['TRACKER_SHEET_ID'];print(json.dumps(b))" "$1")
   # NOTE: no -X POST. --data makes the first request a POST; Apps Script 302-redirects
   # to a googleusercontent URL that only serves GET, so curl must switch to GET on the
   # redirect. -X POST would force a re-POST there and return 405.
@@ -137,18 +120,30 @@ post(){   # $1 = the request body without its key, as a JSON object; $2 = "updat
   # failure naming the web app's own error (claude-config#677).
   python3 -c '
 import json, sys
-body, expect = sys.argv[1], sys.argv[2]
+body, expect, want = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     reply = json.loads(body)
 except ValueError:
     sys.stderr.write("tracker.sh: the answer was not the JSON the web app sends, so nothing is known to have happened. It began: %r\n" % body[:200])
     sys.exit(1)
+def other_sheet(got):
+    sys.stderr.write("tracker.sh: the web app link in config.local.json belongs to an Apps Script attached to a different sheet (id %s), not the sheet SKILL.md names (id %s). Nothing was written. Open the sheet by the link in SKILL.md, then Extensions, Apps Script, Deploy, Manage deployments, and copy that deployment'"'"'s Web app URL into config.local.json (SKILL.md, Turning on the sheet check).\n" % (got, want))
+    sys.exit(1)
+got = reply.get("spreadsheetId") if isinstance(reply, dict) else None
+if got is not None and got != want:
+    if reply.get("ok") is not True:
+        sys.stderr.write("tracker.sh: the web app refused: %s\n" % reply.get("error"))
+    other_sheet(got)
 if not isinstance(reply, dict) or reply.get("ok") is not True:
     why = reply.get("error") if isinstance(reply, dict) else None
+    # A script older than update refuses an update body with "nothing to append", but it is also
+    # older than the sheet check, so the sheet check refuses it first and no update reaches it.
     sys.stderr.write("tracker.sh: the web app refused: %s\n" % (why or body[:200]))
-    if expect in ("update", "preview") and "nothing to append" in str(why):
-        # The deployed script has no update, and refused the body because it carries no data.
-        sys.stderr.write("tracker.sh: the deployed web app predates update, so nothing was changed. Deploy the current apps-script.gs as a new version (SKILL.md, Turning on update).\n")
+    sys.exit(1)
+if expect == "sheet" and got is None:
+    # A script older than the sheet check answers without the id, and an old script is what the
+    # wrong sheet held on 2026-10-12, so silence is refused, never taken as the right sheet.
+    sys.stderr.write("tracker.sh: the web app did not say which sheet it is attached to, so it is a script older than the sheet check, and may be attached to another sheet. Nothing was written. Deploy the current apps-script.gs in the sheet SKILL.md links to as a new version, and check config.local.json holds that deployment'"'"'s Web app URL (SKILL.md, Turning on the sheet check).\n")
     sys.exit(1)
 if expect in ("update", "preview") and reply.get("action") != "update":
     sys.stderr.write("tracker.sh: the answer was ok but not an update'"'"'s, so what changed in the sheet is unknown; check the sheet. It began: %r\n" % body[:200])
@@ -160,16 +155,23 @@ if expect == "update" and reply.get("preview") is True:
     sys.stderr.write("tracker.sh: asked to update but the answer is only a preview, so nothing was written.\n")
     sys.exit(1)
 print(body)
-' "$answer" "${2:-}"
+' "$answer" "${2:-}" "$SHEET_ID"
 }
+
+# The sheet check every web app command starts with: a headers request whose answer must name the sheet
+# SKILL.md links to. A write goes only after it passes, so a script that cannot say which sheet it
+# writes is refused before it could append a row there.
+sheet_check(){ post '{"action":"headers"}' sheet > /dev/null; }
 
 case "${1:-}" in
   headers)
-    post '{"action":"headers"}'
+    # The headers request IS the sheet check.
+    post '{"action":"headers"}' sheet
     ;;
   append)
     DATA="${2:?usage: tracker.sh append '<json object of header:value>'}"
     BODY=$(python3 -c "import json,sys;print(json.dumps({'data':json.loads(sys.argv[1])}))" "$DATA")
+    sheet_check
     post "$BODY"
     ;;
   update)
@@ -227,10 +229,11 @@ if restore:
 print(json.dumps(body))
 PY
 )" || exit 1
+    sheet_check
     post "$BODY" "$MODE"
     ;;
   *)
-    echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token}" >&2
+    echo "usage: tracker.sh {headers | append '<json>' | update '<link>' '<project name>' '<json>' | new-token | sheet-id | scan and the rest of /tracker --scan (SKILL.md)}" >&2
     exit 1
     ;;
 esac
