@@ -141,10 +141,11 @@ echo "NOTE: #1128 open decision: a key spelled PASSWD in capitals is not matched
 # that no line of code invokes.
 unbacked_tool_claim(){
   local text="$1" tool code
-  code="$(printf '%s\n' "$text" | grep -v '^[[:space:]]*#' || true)"
+  code="$(grep -v '^[[:space:]]*#' <<< "$text" || true)"
+  # Here strings, never a pipe into grep -q, which can leave early and read as a failure (L183).
   for tool in gitleaks trufflehog detect-secrets; do
-    printf '%s\n' "$text" | grep -qi "$tool" || continue
-    printf '%s\n' "$code" | grep -qE "(^|[^A-Za-z_-])$tool([[:space:]]|\$)" || printf '%s\n' "$tool"
+    grep -qi -- "$tool" <<< "$text" || continue
+    grep -qE -- "(^|[^A-Za-z_-])$tool([[:space:]]|\$)" <<< "$code" || printf '%s\n' "$tool"
   done
 }
 SCAN_DOC="$(awk '/^#/ { buf = buf $0 "\n"; next } /^scan_secrets\(\)\{/ { printf "%s", buf; exit } { buf = "" }' "$SCRIPT")"
