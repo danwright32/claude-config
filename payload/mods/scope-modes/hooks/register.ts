@@ -2265,9 +2265,10 @@ const leaveBranch = async ($: EngineInterface, input: Record<string, unknown>): 
 // open_cleanup_branch (#1051): while winding down, a new branch is new work, yet uncommitted changes
 // are unfinished, so work that finishing itself needs committed (a reading a monthly job appended to a
 // committed record, on 2026-10-09) had no way through but Dan turning winding down off. He is asked,
-// with the files git status names in this session's checkout and the reason; only his "Open it" is
-// recorded, and lets that one branch start by checkout or switch (which carry the changes onto it),
-// once, while nothing beyond those files is uncommitted. Any other branch is still refused.
+// with the files git status names in this session's checkout that this session wrote (#1108) and the
+// reason; only his "Open it" is recorded, and lets that one branch start by checkout or switch (which
+// carry the changes onto it), once, while nothing else this session wrote is uncommitted. Any other
+// branch is still refused.
 const openCleanupBranch = async ($: EngineInterface, input: Record<string, unknown>): Promise<string> => {
   if ((await scopeOf($)) !== 'WINDING DOWN') return "Winding down is not on, so no branch needs Dan's answer: make it as usual. He was not asked."
   const branch = String(input.branch ?? '').trim()
@@ -2649,7 +2650,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'leave_branch',
       description:
-        "Ask Dan whether a branch stays as it is rather than being cleaned up while winding down: kept here, a worktree on it kept, and, when this session's checkout is on it, the files uncommitted there left uncommitted. For when another session stands on it, or he has said to leave it. Only his \"Leave it as it is\" is recorded; a change to any other uncommitted file asks again, and the branch on GitHub is still deleted once its PR merges. Never call this to end a turn sooner.",
+        "Ask Dan whether a branch stays as it is rather than being cleaned up while winding down: kept here, a worktree on it kept, and, when this session's checkout is on it, the files this session wrote that are uncommitted there left uncommitted. For when another session stands on it, or he has said to leave it. Only his \"Leave it as it is\" is recorded; a change to any other uncommitted file asks again, and the branch on GitHub is still deleted once its PR merges. Never call this to end a turn sooner.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -2663,7 +2664,7 @@ export const register: Register = on => {
     await $.tool.register({
       name: 'open_cleanup_branch',
       description:
-        "While winding down, ask Dan to let one new branch start whose only purpose is to commit the uncommitted changes the finish check lists (a reading a job appended to a committed file, say). The files are read from git status and named to him. Only his \"Open it\" is recorded, and it lets that branch start once, by git switch -c or git checkout -b, while nothing beyond those files is uncommitted. Never for new work.",
+        "While winding down, ask Dan to let one new branch start whose only purpose is to commit the uncommitted changes the finish check lists (a reading a job appended to a committed file, say). The files are the ones git status names that this session wrote, named to him. Only his \"Open it\" is recorded, and it lets that branch start once, by git switch -c or git checkout -b, while nothing else this session wrote is uncommitted. Never for new work.",
       inputSchema: {
         type: 'object',
         properties: {

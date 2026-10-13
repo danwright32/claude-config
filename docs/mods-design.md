@@ -890,6 +890,19 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   is used up, and the start toasted, only once the checkout is on that branch after the call ran, so
   a call refused beneath this mod or a switch that failed keeps it. Any other branch is refused as
   before, and one he agreed to with other files changed since is refused naming them.
+- Whose uncommitted files they are (#1108). #1074 settled whose branch it is, yet every uncommitted
+  file in the checkout still counted as the session's own, so in a shared primary checkout another
+  session's untracked files blocked every stop until Dan answered `leave_branch`. Now the mod notes,
+  after each call that ran (never one refused here or beneath), the files it wrote, whatever mode is
+  on, from the session or any of its agents (`written` in its state): the file an Edit, Write,
+  MultiEdit or NotebookEdit names, and for a Bash call what mod-kit's one write reader names (its
+  files, its other changes such as a removal, and a program's named targets; a folder reached whole
+  stands for everything under it). Only those count as the session's uncommitted work, in the finish
+  check, the `open_cleanup_branch` question and its coverage, and the `leave_branch` question. A file
+  it cannot attribute (another session's, a job's, or written by a route the reader cannot name, such
+  as a patch or `git mv`) never blocks, and the finish toast names it once: "Left uncommitted, since
+  this session did not write them: ...". A note that cannot be made is toasted, as a branch note is.
+  The #1051 case itself, a line a monthly job appended, is now not the session's and does not hold it.
 - How often GitHub is asked (#1037). The minute's check read every PR the session opened, plus one
   `gh issue view` per closing issue of each, every minute: about 2N GraphQL points a minute for N
   PRs, from the 5,000 an hour every gh command on the Mac shares (#1014). Measured on 2026-10-12
