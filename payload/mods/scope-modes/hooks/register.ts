@@ -1296,13 +1296,20 @@ const readReviews = async ($: EngineInterface): Promise<MorningReview[] | { unre
   if (!(await $.fs.exists(path))) return []
   return reviewsIn(await $.fs.read(path))
 }
-// Changed and written whole. A file that cannot be read holds only these reminders' bookkeeping, so
-// it is written afresh, and that is logged.
+// Changed and written whole. A file that cannot be read is never written over (lessons review): it
+// is moved aside, kept for whoever reads it, and a new one started, which is logged; a move that
+// fails refuses the change.
 const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => MorningReview[]): Promise<string | null> => {
   try {
+    const path = await reviewsPath($)
     const all = await readReviews($)
-    if (!Array.isArray(all)) $.ui.log(`scope-modes: the record of the morning reviews could not be read (${all.unreadable}), so it is written afresh`, { to: 'debug' })
-    return await writeWhole($, await reviewsPath($), JSON.stringify(fn(Array.isArray(all) ? all : [])))
+    if (!Array.isArray(all)) {
+      const aside = `${path}.unreadable-${await $.clock.now()}`
+      const mv = await run($, ['mv', path, aside])
+      if (mv.exitCode !== 0) return `the record of the morning reviews could not be read (${all.unreadable}) nor moved aside (${mv.stderr.trim() || `mv exited ${mv.exitCode}`})`
+      $.ui.log(`scope-modes: the record of the morning reviews could not be read (${all.unreadable}), so it was moved to ${aside} and a new one started`, { to: 'debug' })
+    }
+    return await writeWhole($, path, JSON.stringify(fn(Array.isArray(all) ? all : [])))
   } catch (err) {
     return msg(err)
   }
@@ -1327,15 +1334,16 @@ const pinMorning = async ($: EngineInterface): Promise<string> => {
 }
 
 // The step off this session's card, by its night's title; the mod not loaded holds no card. Anything
-// else is said by the caller.
+// else is said by the caller, and the night is tried again at the next minute (lessons review): it is
+// marked done here only once the call answered.
 const takeOff = async ($: EngineInterface, r: { generation: string; night: string }): Promise<string | undefined> => {
-  takenOff.add(r.generation)
   try {
     await ($ as unknown as { manualSteps: ManualStepsNoun }).manualSteps.finish({ title: morningStep(r.night).title })
-    return undefined
   } catch (err) {
-    return isAbsentNoun(err) ? undefined : msg(err)
+    if (!isAbsentNoun(err)) return msg(err)
   }
+  takenOff.add(r.generation)
+  return undefined
 }
 
 // The night's review happened: noted on disk for every session's card, taken off this one's, and said.

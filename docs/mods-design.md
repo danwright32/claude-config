@@ -1378,14 +1378,15 @@ morning offers what the night proposed, filing nothing he has not picked.
   any card already pinned, or a card of its own headed "The morning after sleep mode". It is shown
   at once, though Dan cannot do it until morning, because he asked for it to pop up then. The night
   is first noted as waiting on its review in `~/.claude/state/sleep/morning-review.json` (the latest
-  14 nights), so the step never stands where nothing could take it off. It comes off by the review
+  14 nights; one that cannot be read is moved aside, never written over), so the step never stands
+  where nothing could take it off. It comes off by the review
   having happened, never by time: at wake, by the session that woke, when the night proposed nothing
   and every note was read (said in the wake reply, a phone wake included); otherwise once the morning
   turn (the first main turn after waking) ends answered with at least one picker answered and none
   dismissed, failed or closed by itself (a picker another guard refused counts neither way). A
   phone wake whose pickers were never answered leaves it. The night is then noted reviewed, and
   every session's minute check takes the step off its own card, so a card in another session, or one
-  carried into the next session, follows. Dan's Done on the step still works as on any other.
+  carried into the next session, follows; one that fails is tried again the next minute. Dan's Done on the step still works as on any other.
 
 ### Sleep mode phase 10: the night run by the real engine (#838), built
 

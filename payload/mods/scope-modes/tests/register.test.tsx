@@ -158,8 +158,10 @@ const stepsNoun: { name: string; register: Register } = {
             built.ui.log('STEPS add ' + JSON.stringify(x))
             return { isShown: true }
           },
+          // Fails while the world holds /Users/x/finish-fails, as a card that cannot be written would.
           finish: async (x: unknown) => {
             built.ui.log('STEPS finish ' + JSON.stringify(x))
+            if (await built.fs.exists('/Users/x/finish-fails')) throw new Error('the steps card changed under every one of 10 attempts to update it')
             return { isFinished: true }
           },
         },
@@ -4132,6 +4134,30 @@ test('a session whose card holds the step takes it off once the night reads revi
   await clock.advance(MIN)
   expect(stepsCalls(w)).toEqual([`finish ${JSON.stringify({ title: NIGHT_STEP.title })}`])
   await clock.advance(3 * MIN)
+  expect(stepsCalls(w).length).toBe(1)
+})
+
+test('a step that could not be taken off is tried again at the next minute, and then left alone (#1107 lessons review)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'pickers-answered' } }]), '/Users/x/finish-fails': '' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w).length).toBe(1)
+  expect(w.logs.some(l => l.includes("could not be taken off this session's card (the steps card changed under every one of 10 attempts to update it)"))).toBe(true)
+  delete w.files['/Users/x/finish-fails']
+  await clock.advance(MIN)
+  expect(stepsCalls(w).length).toBe(2)
+  await clock.advance(2 * MIN)
+  expect(stepsCalls(w).length).toBe(2)
+})
+
+test('/sleep over a record of the nights that cannot be read keeps it aside rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: '{' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(reviewsOf(w)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
+  const aside = Object.keys(w.files).filter(f => f.startsWith(`${REVIEWS}.unreadable-`))
+  expect(aside.length).toBe(1)
+  expect(w.files[aside[0] as string]).toBe('{')
   expect(stepsCalls(w).length).toBe(1)
 })
 
