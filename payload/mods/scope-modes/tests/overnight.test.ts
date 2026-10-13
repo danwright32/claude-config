@@ -361,7 +361,7 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   })
   test('claude-sync send, sync, apply-only and install, by any path to it', async () => {
     for (const sub of ['send', 'sync', 'apply-only', 'install-autosync', 'install-schedule'])
-      for (const c of [`claude-sync ${sub}`, `~/claude-config-sync/claude-sync ${sub}`, `bash ~/claude-config-sync/claude-sync ${sub}`, `cd ~/claude-config-sync && ./claude-sync ${sub}`])
+      for (const c of [`claude-sync ${sub}`, `~/claude-config-sync/claude-sync ${sub}`, `bash ~/claude-config-sync/claude-sync ${sub}`, `cd ~/claude-config-sync && ./claude-sync ${sub}`, `bash -x ~/claude-config-sync/claude-sync ${sub}`, `zsh -e -o pipefail ~/claude-config-sync/claude-sync ${sub}`, `bash --norc -- ~/claude-config-sync/claude-sync ${sub}`])
         expect({ c, r: await bash(c) }).toEqual({ c, r: `run claude-sync ${sub}` })
     // Reads go ahead.
     expect(await bash('~/claude-config-sync/claude-sync lesson L174')).toBeUndefined()
@@ -372,7 +372,7 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
   // a development checkout), and one whose environment the line changes (SYNC_REPO, CLAUDE_HOME,
   // which the reader takes off the words) installs from or into somewhere the words do not show.
   test('claude-sync pull: the live sync clone is left to the merge and deploy lists; every other copy, or a changed environment, is refused (#1106)', async () => {
-    for (const c of ['~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -20', 'bash ~/claude-config-sync/claude-sync pull', 'cd ~/claude-config-sync && ./claude-sync pull', 'nohup ~/claude-config-sync/claude-sync pull'])
+    for (const c of ['~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -20', 'bash ~/claude-config-sync/claude-sync pull', 'cd ~/claude-config-sync && ./claude-sync pull', 'nohup ~/claude-config-sync/claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
     const elsewhere = 'run claude-sync pull from a copy other than the live sync clone, ~/claude-config-sync'
     for (const c of ['claude-sync pull', 'bash claude-sync pull', '/Users/x/repo/claude-sync pull', './claude-sync pull', '$HOME/claude-config-sync/claude-sync pull'])
@@ -380,6 +380,12 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
     const changed = 'run claude-sync pull with its environment changed, so what it installs cannot be told'
     for (const c of ['SYNC_REPO=/Users/x/repo ~/claude-config-sync/claude-sync pull', 'env CLAUDE_HOME=/tmp/h ~/claude-config-sync/claude-sync pull', 'export SYNC_REPO=/x; ~/claude-config-sync/claude-sync pull', 'env -i ~/claude-config-sync/claude-sync pull', 'source ./vars && ~/claude-config-sync/claude-sync pull', 'sudo ~/claude-config-sync/claude-sync pull'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: changed })
+    // A shell option known to take a value is read past with it; one this does not know might take
+    // the script as its value, and a script of the shell's own runs first, so neither can be read.
+    expect(await bash('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull')).toBeUndefined()
+    const unread = 'run claude-sync through a shell whose options or script could not be read'
+    for (const c of ['bash --weird /tmp/x ~/claude-config-sync/claude-sync pull', 'bash ./other.sh ~/claude-config-sync/claude-sync pull', 'zsh --unknown /tmp/x ~/claude-config-sync/claude-sync send'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unread })
   })
 })
 

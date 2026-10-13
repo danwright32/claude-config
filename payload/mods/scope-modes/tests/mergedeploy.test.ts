@@ -306,7 +306,7 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
   }
   const lists = (j: object) => nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [], ...j })), [])
   test('a pull is a deploy, by any path to the script, and only a pull among the reads', () => {
-    for (const c of ['~/claude-config-sync/claude-sync pull', 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -5', 'claude-sync pull'])
+    for (const c of ['~/claude-config-sync/claude-sync pull', 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -5', 'claude-sync pull', 'bash -x ~/claude-config-sync/claude-sync pull', 'sh -o errexit ~/claude-config-sync/claude-sync pull'])
       expect({ c, k: kinds(c) }).toEqual({ c, k: ['deploy'] })
     for (const c of ['~/claude-config-sync/claude-sync status', '~/claude-config-sync/claude-sync lesson L174', 'git pull'])
       expect({ c, k: kinds(c) }).toEqual({ c, k: [] })
@@ -316,6 +316,10 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
     expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE, CLONE])
     expect(dirsOf(cmds('bash /Users/x/Apps/claude-config/claude-sync pull'), '/Users/x/repo', HOME)).toEqual(['/Users/x/Apps/claude-config'])
     expect(dirsOf(cmds('claude-sync pull'), '/Users/x/repo', HOME)).toEqual([null])
+    // A shell's own options before the script, a value taking one included, are read past.
+    expect(dirsOf(cmds('bash -e -o pipefail ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('bash --rcfile /tmp/rc ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('bash ./other.sh ~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([null])
   })
   test('allowed exactly when the night says the config repository may deploy, from any session folder', () => {
     const night = lists({ mayDeploy: [CONFIG] })

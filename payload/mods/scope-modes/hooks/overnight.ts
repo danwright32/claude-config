@@ -309,13 +309,28 @@ const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'typ
 /**
  * The claude-sync a command runs, by its own name or as a shell's script: the script as written
  * and its subcommand; undefined when it runs none. Shared with phase 7 (mergedeploy.ts), which
- * judges the pull as a deploy of the repository the clone it runs from is (#1106).
+ * judges the pull as a deploy of the repository the clone it runs from is (#1106). A shell's own
+ * options before its script (`bash -x`, `zsh -o pipefail`, `--`) are read past, an option known to
+ * take a value with its value. A claude-sync the shell names anywhere else (after an option this
+ * does not know, which may take a value, or a script of its own) is `unread`: where it runs, and
+ * whether it runs at all, cannot be said, so phase 3 refuses it whatever its subcommand.
  */
-export const syncCall = (words: readonly string[]): { script: string; sub: string | undefined } | undefined => {
+export const syncCall = (words: readonly string[]): { script: string; sub: string | undefined; unread?: true } | undefined => {
   if (name(words[0]) === 'claude-sync') return { script: words[0] as string, sub: words[1] }
-  if (SHELLS.has(name(words[0])) && name(words[1]) === 'claude-sync') return { script: words[1] as string, sub: words[2] }
-  return undefined
+  if (!SHELLS.has(name(words[0]))) return undefined
+  let i = 1
+  while (i < words.length && /^[-+]/.test(words[i] as string)) {
+    const w = words[i] as string
+    i += SHELL_VALUED.has(w) ? 2 : 1
+    if (w === '--') break
+  }
+  if (name(words[i]) === 'claude-sync') return { script: words[i] as string, sub: words[i + 1] }
+  const j = words.findIndex((w, k) => k > 0 && name(w) === 'claude-sync')
+  return j < 0 ? undefined : { script: words[j] as string, sub: words[j + 1], unread: true }
 }
+// A shell's options that take the next word as their value: bash's and zsh's set options by name,
+// bash's startup file, zsh's emulation.
+const SHELL_VALUED: ReadonlySet<string> = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file', '--emulate'])
 // Every claude-sync write but a pull: each changes the shared repository or this Mac's schedule.
 const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'sync' || sub === 'send' || sub === 'apply-only' || sub.startsWith('install'))
 // The environment a pull runs with, changed where the words do not show it: an assignment (the
@@ -410,6 +425,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       continue
     }
     const sync = syncCall(words)
+    if (sync?.unread) return 'run claude-sync through a shell whose options or script could not be read'
     if (sync?.sub === 'pull') {
       const why = pullRefusal(sync.script, dir, call)
       if (why) return why

@@ -375,7 +375,7 @@ export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | nu
     // (#1106); a bare name is whichever copy PATH finds, which cannot be told.
     const sync = syncCall(c.words)
     if (sync) {
-      out.push(sync.script.includes('/') ? resolveDir(sync.script.replace(/\/[^/]*$/, '') || '/', dir, home) : null)
+      out.push(!sync.unread && sync.script.includes('/') ? resolveDir(sync.script.replace(/\/[^/]*$/, '') || '/', dir, home) : null)
       continue
     }
     if (cmd === 'git') {

@@ -1181,7 +1181,9 @@ the ban list knowing that an action it does not name is approved.
   Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
   branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
   included); `claude-sync` send, sync, apply-only and install (install-autosync, install-schedule),
-  by any path to the script. `claude-sync pull` is not on this list when it is the live sync
+  by any path to the script, a shell's own options before it read past (`bash -x`, `-o pipefail`,
+  `--rcfile F`); a claude-sync a shell names after an option this cannot read or a script of its
+  own is refused whatever its subcommand. `claude-sync pull` is not on this list when it is the live sync
   clone's (`~/claude-config-sync/claude-sync`, by that path, `bash` and the path, or `./claude-sync`
   after a `cd` there): that pull is claude-config's deploy step, judged by phase 7 below (#1106).
   Any other pull is refused here: a bare `claude-sync` (whichever copy PATH finds), another clone
