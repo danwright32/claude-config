@@ -7,6 +7,12 @@
 # arrives by any other route still cannot be committed and travel between Macs.
 __pycache__/
 *.pyc
+# A Mac's own file, often holding a secret, and any copy of one (claude-config#675, #1089). The same
+# second line: claude-sync's excludes (LOCAL_FILE_GLOBS) keep these out of payload/, and this keeps
+# one that arrives by any other route out of a commit to this public repository.
+*.local.json
+*.local.json.*
+*.local.json~
 .last-success
 .sync-lock/
 state/

@@ -3123,6 +3123,43 @@ check "#1009 the deletion really did reach the shared repo" \
 # them is back in its home, unchanged: the pair the incident commit shows.
 env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull >/dev/null 2>&1
 check "#1009 the pull applied the deletion on the other Mac" "[ ! -e '$RDHB/$RDREL' ]"
+
+# THE APPLY ASKS THE SAME QUESTION (claude-config#1013). The same leftover met by a PULL rather than
+# a send: the applied marker is already past the deletion, so unapplied_paths does not list it, and
+# the apply used to keep it as an unsent local addition, promise it would go up on the next send,
+# and record HEAD as applied. The send then refuses it (#1009), so that sentence was false for
+# exactly this file and the copy sat in ~/.claude until some send happened (L625). Aged, as below,
+# so it is a copy nobody here has written since the deletion arrived (L290).
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+# Beside it, in the same pull, a file the repo never held: unsent work, which must still be kept and
+# promised to the next send, or this passes by deleting everything the payload lacks (L159).
+printf 'export const mine = "made on B, not yet sent"\n' > "$RDHB/$RDMOD/hooks/pulled-own.ts"
+out_rdpull="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#1013 pull meeting a leftover: $out_rdpull"
+check "#1013 a pull removes a leftover of a file the shared repo deleted" "[ ! -e '$RDHB/$RDREL' ]"
+check "#1013 and says so, naming the file and the commit that removed it" \
+  "line_has \"\$out_rdpull\" 'removed' 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted'"
+check "#1013 and never promises that leftover to the next send" \
+  "! line_has \"\$out_rdpull\" 'go up on the next send' 'ghargs\.ts'"
+check "#1013 while a file the repo never held is still kept" "[ -f '$RDHB/$RDMOD/hooks/pulled-own.ts' ]"
+check "#1013 and still promised to the next send" \
+  "line_has \"\$out_rdpull\" 'go up on the next send' 'pulled-own\.ts'"
+# The way out #331 gives the send, honoured by the apply too: with SYNC_ACCEPT_DELETIONS=0 the copy
+# stays, and the apply says a send will NOT carry it rather than that it will.
+printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDREL"
+out_rdpull0="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#1013 pull with deletions not accepted: $out_rdpull0"
+check "#1013 with SYNC_ACCEPT_DELETIONS=0 the apply keeps the leftover" "[ -f '$RDHB/$RDREL' ]"
+check "#1013 and says a send will not carry it, rather than that it goes up" \
+  "line_has \"\$out_rdpull0\" 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted' 'will not carry' && ! line_has \"\$out_rdpull0\" 'go up on the next send' 'ghargs\.ts'"
+# Kept, it is met by every apply, so it is said once per copy, as the send says it (L36).
+out_rdpull0b="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
+check "#1013 and the next apply does not say it again" \
+  "[ -f '$RDHB/$RDREL' ] && ! line_has \"\$out_rdpull0b\" 'ghargs\.ts' 'will not carry'"
+rm -f "$RDHB/$RDREL" "$RDHB/$RDMOD/hooks/pulled-own.ts" "$RDR/.resurrected-reported"
+
 printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
 # Untouched since B last received it, which was before the deletion reached B's clone. Aged rather
 # than waited for, so both ends of the comparison are pinned (L130, L290): a day ago is before the
@@ -3248,7 +3285,7 @@ git -C "$RGR" rm -q payload/hooks/x.sh; git -C "$RGR" -c user.name=t -c user.ema
 printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks"; cp "$RGH/hooks/x.sh" "$RGR/payload/hooks/x.sh"
 RG_FN="$WORK/once-fn.sh"
 { printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
-  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
+  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
 rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
 rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
 dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
@@ -3297,6 +3334,64 @@ check "#1009 the pull brings the real skill" "[ -f '$TRHB/skills/real-skill/SKIL
 check "#1009 but not a .trash folder the payload holds" "[ ! -e '$TRHB/skills/.trash/stray' ]"
 check "#1009 and leaves this Mac's own .trash folder where it is" \
   "[ -f '$TRHB/skills/.trash/1791477119124-1742-63QYDV/deep-research/SKILL.md' ]"
+
+section "== a backup copy of a Mac's own *.local.json is never sent, and a pull leaves it alone (#1089) =="
+# On 2026-10-12 a session backed up the tracker's token file as
+# skills/tracker/config.local.json.bak-2026-10-12, beside the original, and the next pull on the
+# work MacBook listed it as a local edit going up on the next send. The exclusion matched names
+# ENDING in .local.json, and a backup's suffix is past that end. The shapes are the ones actually
+# made: that session wrote .bak-<date>, .bak and .writing copies, and an editor leaves a trailing ~.
+# Each is the Mac's own copy of its own secret, so it is left out by the send AND by the apply: the
+# apply mirrors with --delete, and an exclusion on one side alone would have each pull delete the
+# receiving Mac's own backup (claude-config#675).
+LJB="$WORK/localbak-bare.git"; git init -q --bare -b main "$LJB"
+LJA="$WORK/localbak-repoA"; git clone -q "$LJB" "$LJA" 2>/dev/null
+LJR="$WORK/localbak-repoB"; git clone -q "$LJB" "$LJR" 2>/dev/null
+LJHA="$WORK/localbak-homeA"; LJHB="$WORK/localbak-homeB"
+mkdir -p "$LJHA/hooks" "$LJHB"; echo '{"hooks":{}}' > "$LJHA/settings.json"; echo '{"hooks":{}}' > "$LJHB/settings.json"
+mkskill "$LJHA/skills/tracker/SKILL.md" 'a skill that keeps a token beside it'
+LJ_SHAPES=(config.local.json config.local.json.bak-2026-10-12 config.local.json.bak config.local.json.writing 'config.local.json~')
+for lj in "${LJ_SHAPES[@]}"; do printf '{"token":"MAC-A-ONLY %s"}\n' "$lj" > "$LJHA/skills/tracker/$lj"; done
+# Outside skills too: the exclusion is for every mirrored tree, at any depth.
+printf '{}\n' > "$LJHA/hooks/settings.local.json.bak"
+# The control: a backup of a file that is NOT a local one travels like any other file (L159).
+printf '{"url":"PLACEHOLDER"}\n' > "$LJHA/skills/tracker/config.example.json.bak"
+out_ljsend="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 CLAUDE_HOME="$LJHA" SYNC_REPO="$LJA" SYNC_HOSTNAME=lbMacA bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1089 send: $out_ljsend"
+lj_tree="$(git -C "$LJB" ls-tree -r --name-only main -- payload 2>/dev/null || true)"
+check "#1089 the skill beside the local files is sent" "grep -qx 'payload/skills/tracker/SKILL.md' <<< \"\$lj_tree\""
+check "#1089 and so is a backup of a file that is not a local one" \
+  "grep -qx 'payload/skills/tracker/config.example.json.bak' <<< \"\$lj_tree\""
+for lj in "${LJ_SHAPES[@]}"; do
+  check "#1089 $lj is not sent" "[ -n \"\$lj_tree\" ] && ! grep -qxF 'payload/skills/tracker/$lj' <<< \"\$lj_tree\""
+done
+check "#1089 nor a backup of a local file outside skills" \
+  "[ -n \"\$lj_tree\" ] && ! grep -qxF 'payload/hooks/settings.local.json.bak' <<< \"\$lj_tree\""
+check "#1089 nor is any of their content anywhere in what was sent" \
+  "! git -C '$LJB' grep -q 'MAC-A-ONLY' main -- payload 2>/dev/null"
+# The receiving side: this Mac's own copies survive a pull that mirrors with --delete. It already
+# holds the skill, as a Mac with a configured skill does (a folder with no SKILL.md is the separate
+# unloadable skill case), and the content proves the pull really applied over it.
+mkskill "$LJHB/skills/tracker/SKILL.md" 'an older copy on this Mac'
+for lj in "${LJ_SHAPES[@]}"; do printf '{"token":"MAC-B-ONLY %s"}\n' "$lj" > "$LJHB/skills/tracker/$lj"; done
+out_ljpull="$(SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 CLAUDE_HOME="$LJHB" SYNC_REPO="$LJR" SYNC_HOSTNAME=lbMacB bash "$SCRIPT" pull 2>&1 || true)"
+dbg "#1089 pull: $out_ljpull"
+check "#1089 the pull brings the skill" "grep -q 'a skill that keeps a token beside it' '$LJHB/skills/tracker/SKILL.md'"
+for lj in "${LJ_SHAPES[@]}"; do
+  check "#1089 the pull leaves this Mac's own $lj where it is" "grep -qF 'MAC-B-ONLY $lj' '$LJHB/skills/tracker/$lj'"
+done
+check "#1089 and does not call any of them unsent work" \
+  "! line_has \"\$out_ljpull\" 'go up on the next send' 'local\.json'"
+# The second line, git's own ignore files, names the same shapes as the tool's one list, so a shape
+# added to one cannot be missing from the others (L41). Read from the tool, never copied here.
+lj_globs="$(sed -n "s/^LOCAL_FILE_GLOBS=(\(.*\))$/\1/p" "$SCRIPT" | tr ' ' '\n' | tr -d "'")"
+lj_root="$(cd "$(dirname "$SCRIPT")" && pwd)"
+check "#1089 the tool's list of local file shapes is readable here" "[ \"\$(printf '%s\n' \"\$lj_globs\" | grep -c .)\" -ge 3 ]"
+while IFS= read -r lj; do
+  [ -n "$lj" ] || continue
+  check "#1089 the repository's .gitignore names $lj" "grep -qxF -- '$lj' '$lj_root/.gitignore'"
+  check "#1089 and so does the tracker skill's" "grep -qxF -- '$lj' '$lj_root/payload/skills/tracker/.gitignore'"
+done <<< "$lj_globs"
 
 section "== auto-commit is scoped to payload; uncommitted tool edits aren't swept (issue 1.1) =="
 WB11="$WORK/w11bare.git"; git init -q --bare "$WB11"
@@ -13649,8 +13744,13 @@ pi_runner(){ # pi_runner <the body of the stub runner>
 # first looks never reaches the sleep at all, so a zero cost stub measures the poll interval as
 # nought whatever it is set to, and both a two second poll and a tenth of a second one pass (L165:
 # a fixture that finishes before the case under test can occur).
+#
+# Its LAST act is to mark the moment it ends, with a builtin that starts no process, so the file's
+# time is that moment (claude-config#1084). The pull marks the moment it noticed the same way, and
+# the difference between the two times is the wait itself, with none of the pull's own work in it.
 pi_runner 'sleep 0.05
 echo "ALL 1 SUITES PASSED"
+[ -z "${PI_END_FILE:-}" ] || : > "$PI_END_FILE"
 exit 0'
 # Milliseconds, because the whole claim is about a tenth of a second and `date +%s` cannot see it.
 # perl rather than a newer date: BSD date has no %N, and CI already prints perl's version in the
@@ -13664,11 +13764,23 @@ pi_ms(){ perl -MTime::HiRes -e 'printf "%.0f", Time::HiRes::time()*1000'; }
 pi_run(){   # pi_run <poll interval> <marker> -> milliseconds that pull took
   local _pi_t0 _pi_t1
   pi_arrive "$2"
+  rm -f "$WORK/poll-end-$2" "$WORK/poll-noticed-$2"
   _pi_t0="$(pi_ms)"
   CLAUDE_HOME="$PIH" SYNC_REPO="$PIR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    PI_END_FILE="$WORK/poll-end-$2" SYNC_TEST_SUITE_NOTICED_FILE="$WORK/poll-noticed-$2" \
     SYNC_POLL_INTERVAL="$1" bash "$SCRIPT" pull > "$WORK/poll-out.txt" 2>&1
   _pi_t1="$(pi_ms)"
   printf '%s' "$(( _pi_t1 - _pi_t0 ))"
+}
+# How long that pull's wait went on after its runner ended, in milliseconds: the time the pull
+# marked noticing it, less the time the runner marked ending, both read off the two files' own
+# modification times, which one kernel clock wrote (claude-config#1084). Nothing when either mark
+# is missing, so a run that never reached the wait cannot read as one that noticed at once (L98).
+pi_gap(){   # pi_gap <marker> -> milliseconds, or nothing
+  perl -MTime::HiRes=stat -e '
+    my @e = stat($ARGV[0]); my @n = stat($ARGV[1]);
+    exit 0 unless @e && @n;
+    printf "%.0f", ($n[9] - $e[9]) * 1000;' "$WORK/poll-end-$1" "$WORK/poll-noticed-$1"
 }
 # The control that makes every number below mean anything: the timed pulls must actually REACH the
 # wait. A pull that applied no hook skips it, costs nothing either way, and would satisfy a
@@ -13711,65 +13823,38 @@ check "#205 the fast samples measured real pulls (fastest ${pi_fast}ms, spread $
 check "#205 the poll interval is honoured (4s poll took ${pi_slow}ms, 0.1s poll took ${pi_fast}ms)" \
   "[ \"\$(( pi_slow - pi_fast ))\" -ge 2000 ]"
 # And the difference the issue was opened about, said as the number it promised: a runner that
-# finishes in 50 milliseconds is noticed within a fifth of a second of doing so. Bounded against
-# the SLOW run's own overhead rather than against a bare 200, because a pull does real work either
-# way and only the wait is under test here (L146, L224).
+# finishes in 50 milliseconds is noticed within a fifth of a second of doing so.
 #
-# AND AGAINST THIS RUN'S OWN NOISE (claude-config#308). The overhead subtracted above is measured
-# once, on the slow run, and stands in for the fast runs' overhead; under load the fast samples
-# inflate by more than it accounts for. On 2026-09-03 this went red at 594ms fastest against a
-# 364ms overhead, so 230 against a ceiling of 200, while the SPREAD between the three samples was
-# 142ms. A margin of 30ms cannot be asserted with a measurement whose own noise is 142ms: that is
-# not a finding about the code, it is a reading of what else the machine was doing.
+# MEASURED WHERE IT HAPPENS (claude-config#1084). This used to time the WHOLE pull and subtract an
+# overhead measured once on the slow run, which made the pull's own work part of the reading. A
+# loaded runner inflates that work by hundreds of milliseconds and by a different amount on every
+# pull, so the subtraction left a residue as large as the claim: CI went red at 633ms fastest
+# against a 403ms overhead with a spread of only 57ms (run 38093053952, 2026-10-10), and 48 CPU
+# spinners on a 12 core Mac reproduced it once in five runs (967ms against 692ms). Two noise
+# allowances (#308, #506) had already been added to the same subtraction and each was overtaken by
+# the next loaded run, because the noise was in what was measured, not in how it was judged (L290,
+# L293). So the runner marks the moment it ends and the pull marks the moment it notices, both by a
+# file's own time with no process started between the event and the mark, and the gap between the
+# two marks is the wait and nothing else.
 #
-# So when the spread is larger than the claim, the tight claim is not made, and the check SAYS
-# which of the two it made rather than passing quietly on the loose one (L11, L98). The gross
-# regression is still caught either way by the "poll interval is honoured" check above, which
-# compares four seconds against a tenth of one and is nowhere near this noise.
-pi_overhead=$(( pi_slow - 4000 ))
-[ "$pi_overhead" -ge 0 ] || pi_overhead=0
-# The decision, in a function, so BOTH branches can be driven with numbers rather than only the
-# one this machine happens to produce today (L1, L101: the branch a fixture never reaches is the
-# one that ships untested).
-pi_within(){   # pi_within <fast> <overhead> <spread> <ceiling> -> 0 when the wait is within bounds
-  # TWICE the observed spread, because the range of three samples UNDERSTATES the noise it stands
-  # for (claude-config#506). Three draws rarely include both tails of the distribution they came
-  # from, and the overhead subtracted here is a FOURTH measurement, taken on the slow run, whose
-  # own noise is not in that range at all. On 2026-09-19 this turned CI red at 443ms fastest
-  # against a 237ms overhead, so 206 against a ceiling of 200, with a measured spread of 106, and
-  # passed on a re-run with nothing changed. A 6ms margin is not a finding about the code when the
-  # measurement's own observed range is 106ms; it is a reading of what else the machine was doing
-  # (L224), and a flake retried is a cost hidden rather than removed (L293).
-  #
-  # The gross regression this section exists for is still caught: a poll that stopped being
-  # honoured costs seconds, which the "poll interval is honoured" check measures against a 2000ms
-  # margin, nowhere near this noise.
-  local _w=$(( $1 - $2 )) _ceiling="$4" _noise=$(( $3 * 2 ))
-  [ "$_w" -ge 0 ] || _w=0
-  [ "$_noise" -gt "$_ceiling" ] && _ceiling="$_noise"
-  [ "$_w" -le "$_ceiling" ]
-}
-check "#308 the noise aware bound holds a quiet run to the tight claim" \
-  "pi_within 300 100 20 200 && ! pi_within 500 100 20 200"
-check "#308 and lets a noisy run through only up to its own measured noise" \
-  "pi_within 550 100 250 200 && ! pi_within 700 100 250 200"
-# THE RANGE OF THREE SAMPLES UNDERSTATES THE NOISE (claude-config#506). On 2026-09-19 this turned
-# CI red at 443ms fastest against a 237ms overhead, so 206 against a ceiling of 200, and passed on
-# a re-run with nothing changed. The spread that run measured was 106ms: a 6ms margin cannot be
-# asserted with a measurement whose own observed range is 106ms, and the true spread is wider than
-# the range of three draws from it. The overhead subtracted is a FOURTH measurement, taken on the
-# slow run, whose noise is not in that range at all. So the allowance is twice the observed spread,
-# and these are the exact numbers from that run (L224, L293, L395).
-check "#506 the run that turned CI red is inside this machine's own noise" \
-  "pi_within 443 237 106 200"
-# And the control, or the line above is satisfied by a bound that accepts anything (L159). A poll
-# that stopped being honoured costs seconds, not milliseconds, and is still refused.
-check "#506 while a runner noticed seconds late is still refused" \
-  "! pi_within 4300 237 106 200"
-pi_claim="within 200ms"
-[ $(( pi_spread * 2 )) -gt 200 ] && pi_claim="within this run's own $(( pi_spread * 2 ))ms of measurement noise (twice a spread of ${pi_spread}ms), which was wider than 200ms, so the tighter claim was NOT made"
-check "#205 and a runner finishing in 50ms is noticed $pi_claim (fastest ${pi_fast}ms, spread ${pi_spread}ms, of which ${pi_overhead}ms is the pull itself)" \
-  "pi_within \"\$pi_fast\" \"\$pi_overhead\" \"\$pi_spread\" 200"
+# The quickest of the three, as above: one sample is a sample of what else the machine was doing
+# (L656), and a poll that stopped being honoured makes EVERY gap long, so the minimum still catches it.
+pi_gap_slow="$(pi_gap one)"
+pi_gap_a="$(pi_gap two)"; pi_gap_b="$(pi_gap two_b)"; pi_gap_c="$(pi_gap two_c)"
+dbg "#1084 gaps between the runner ending and the pull noticing: 4s poll ${pi_gap_slow}ms, 0.1s poll ${pi_gap_a}ms ${pi_gap_b}ms ${pi_gap_c}ms"
+# Both marks on every timed pull, or a missing one would read as a wait of nothing (L98).
+check "#1084 the runner's end and the pull's notice were both marked on every timed pull" \
+  "[ -n \"\$pi_gap_slow\" ] && [ -n \"\$pi_gap_a\" ] && [ -n \"\$pi_gap_b\" ] && [ -n \"\$pi_gap_c\" ]"
+pi_gap_min="${pi_gap_a:-999999}"
+[ "${pi_gap_b:-999999}" -lt "$pi_gap_min" ] && pi_gap_min="$pi_gap_b"
+[ "${pi_gap_c:-999999}" -lt "$pi_gap_min" ] && pi_gap_min="$pi_gap_c"
+# The control that makes the gap mean anything: with the poll at four seconds the same measurement
+# sees the runner's end go unnoticed for most of a poll, so it is the wait that is being measured,
+# not a constant that happens to be small (L1, L159).
+check "#1084 and the gap is the wait: with a 4s poll the end went unnoticed for ${pi_gap_slow}ms" \
+  "[ -n \"\$pi_gap_slow\" ] && [ \"\$pi_gap_slow\" -ge 2000 ]"
+check "#205 and a runner finishing in 50ms is noticed within 200ms of ending (${pi_gap_a}ms ${pi_gap_b}ms ${pi_gap_c}ms after it ended, quickest ${pi_gap_min}ms)" \
+  "[ \"\$pi_gap_min\" -ge 0 ] && [ \"\$pi_gap_min\" -le 200 ]"
 
 # The deadline is against the CLOCK. A runner that never ends, and a ceiling of three seconds: if
 # the deadline counted polls it would fire after three TENTHS of a second at the default interval,
@@ -20415,6 +20500,8 @@ printf 'declare module "x" {}\n' > "$E27HB/agents/.claude-plugin/types/x.d.ts"
 printf 'cache\n' > "$E27HB/hooks/__pycache__/notes.txt"
 # Nor is a per Mac *.local.json (#675): the send leaves it out, so a tree holding only one is empty.
 printf '{}\n' > "$E27HB/hooks/settings.local.json"
+# Nor a backup copy of one (#1089), which the send leaves out the same way.
+printf '{}\n' > "$E27HB/hooks/settings.local.json.bak-2026-10-12"
 out_627="$(CLAUDE_HOME="$E27HB" SYNC_REPO="$E27C" SYNC_NO_NOTIFY=1 bash "$SCRIPT" send 2>&1 || true)"
 dbg "#627 the fresh Mac's send: $out_627"
 check "#627 a fresh Mac's empty hooks folder does not clear hooks from the shared repo" "git -C '$E27B' show main:payload/hooks/a.sh >/dev/null 2>&1"

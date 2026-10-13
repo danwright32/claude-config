@@ -247,14 +247,28 @@ TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md LESSONS-CORE.txt)
 # .pyc by comparing a timestamp against its source, and rsync between two Macs is
 # exactly what makes that timestamp lie. A travelling cache can shadow an edited
 # hook. Regenerating one locally costs nothing.
+# A Mac's own files, by name: a *.local.json and any copy of one (claude-config#675, #1089). Matched
+# against the file NAME at any depth, as rsync matches a pattern with no slash, and read from here by
+# every reader that asks whether a file is one (tree_holds_files below), so the two can never list
+# different shapes (L41, L370).
+LOCAL_FILE_GLOBS=('*.local.json' '*.local.json.*' '*.local.json~')
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-* \
   --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc \
-  --exclude=.claude-plugin/types/ --exclude=*.local.json)
+  --exclude=.claude-plugin/types/)
+for _lg in "${LOCAL_FILE_GLOBS[@]}"; do COMMON_EXCLUDES+=(--exclude="$_lg"); done
+unset _lg
 # *.local.json is a file one Mac keeps for itself, often holding a secret: the tracker skill's
 # config.local.json carries its Apps Script write token, and the repository is public
 # (claude-config#675). Excluded here, at any depth in every mirrored tree, so the send never stages
 # it into the payload and the apply's --delete never removes the receiving Mac's own copy. A skill's
 # .gitignore alone would keep it out of a commit but not out of either rsync.
+# A COPY of one holds the same secret under a longer name, and is excluded the same way (#1089). On
+# 2026-10-12 a session backed the tracker's token file up as config.local.json.bak-2026-10-12 beside
+# the original, and the next pull listed it as a local edit due to go up on the next send; only the
+# secret scan stood between it and the public repo, by refusing every send until it was found. The
+# shapes are the ones actually made: that session wrote .bak-<date>, .bak and .writing copies, which
+# *.local.json.* covers whatever the suffix, and an editor's backup ends in ~. The secret scan stays
+# as the second line, for a copy named some other way.
 # .claude-plugin/types/ is written by Claude Code itself into every plugin folder it loads, on every
 # load, describing THAT Mac's build and connected MCP tools (measured 2026-10-03, claude-config#606).
 # It is per Mac output, not config: carried, the two Macs would overwrite each other's on every
@@ -3913,7 +3927,7 @@ record_mods_seen(){
 # this Mac held files in that tree before (L5).
 TREES_SEEN_FILE="$SYNC_REPO/.trees-seen"
 # Does this tree hold a file a send would carry? Placeholders, OS litter, bytecode, the engine's
-# generated plugin types and a Mac's own *.local.json (#675) are not content. $2.. are the --exclude= values the send uses for the tree
+# generated plugin types and a Mac's own *.local.json or a copy of one (#675, #1089) are not content. $2.. are the --exclude= values the send uses for the tree
 # (the plugin managed skills), matched against each file's first path component.
 tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
   local dir="$1" f rel top e n skip; shift
@@ -3923,8 +3937,14 @@ tree_holds_files(){   # $1 = a directory  $2.. = rsync --exclude values
     [ -n "$f" ] || continue
     rel="${f#"$dir"/}"; top="${rel%%/*}"
     # At the top of the tree as well as below it (review of #785).
-    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*|*.local.json) continue ;; esac
+    case "$rel" in .gitkeep|.DS_Store|*/.DS_Store|*.pyc|__pycache__/*|*/__pycache__/*|.claude-plugin/types/*|*/.claude-plugin/types/*|*.conflict-*) continue ;; esac
+    # A Mac's own file or a copy of one, by name, from the one list the send excludes (#1089).
     skip=""
+    for e in "${LOCAL_FILE_GLOBS[@]}"; do
+      # shellcheck disable=SC2254 # the pattern is meant to match as a glob
+      case "${rel##*/}" in $e) skip=1; break ;; esac
+    done
+    [ -n "$skip" ] && continue
     for e in "$@"; do
       n="${e#--exclude=}"
       case "$n" in
@@ -4090,48 +4110,70 @@ commit_holding_version(){   # $1 = path relative to the repo  $2 = blob -> a ful
   [ -n "$found" ] || return 0
   git -C "$SYNC_REPO" rev-parse -q --verify "$found^{commit}" 2>/dev/null || true
 }
+# THE ONE QUESTION, asked by the send and by the apply (claude-config#1013): is this copy of a path
+# the shared repo deleted a LEFTOVER, or this Mac's own work? Written once so the two can never
+# disagree about the same file (L41, L370). The apply used to ask nothing: a local file the payload
+# lacked was kept as an unsent addition and promised to the next send, which then refused it here.
+#
+# $1 = the path relative to the repo (payload/...)  $2 = the blob of its stored (tokenized) form
+# $3 = this Mac's copy, whose mtime is read. Prints one verdict, or nothing when the repo has never
+# deleted the path or holds it again now (an ordinary file):
+#   readded               content the repo never held: this Mac's own work
+#   rewritten             an EARLIER version, written here after the deletion reached this clone
+#   leftover <v> <d>      a copy the repo held (commit <v> holds it), untouched since <d> deleted it
+deleted_path_verdict(){
+  local p="$1" h="$2" local_copy="$3" delcommit vcommit arrived lt
+  # Has the shared repo ever DELETED this path? Asked of the whole history rather than of the
+  # range since this Mac last applied, because the marker is routinely already up to date by the
+  # time the leftover is noticed: the run that merged the deletion recorded it as applied, and
+  # the file is still here. A range keyed on that marker is empty exactly when this is needed.
+  # `-1` stops git at the most recent deletion, so this costs one walk per file asked about, and
+  # such files are rare.
+  delcommit="$(git -C "$SYNC_REPO" log --format=%H --diff-filter=D -1 HEAD -- "$p" 2>/dev/null || true)"
+  [ -n "$delcommit" ] || return 0
+  # And is it still deleted? A path deleted and later re-added deliberately is an ordinary file
+  # again, and blocking it would make one old deletion a permanent ban on the name (L362).
+  git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null && return 0
+  vcommit="$(commit_holding_version "$p" "$h")"
+  if [ -z "$vcommit" ]; then
+    printf 'readded\n'
+    return 0
+  fi
+  # An EARLIER version than the one deleted is a leftover only while nothing here has written it
+  # since the deletion reached this clone. The version deleted is a leftover whenever it was
+  # written, as #331 decided.
+  if [ "$h" != "$(git -C "$SYNC_REPO" rev-parse -q --verify "$delcommit^:$p" 2>/dev/null || true)" ]; then
+    arrived="$(deletion_reached_clone_at "$delcommit")"
+    lt="$(file_mtime "$local_copy")"
+    case "$arrived" in ''|*[!0-9]*) arrived="" ;; esac
+    case "$lt" in ''|*[!0-9]*) lt="" ;; esac
+    if [ -z "$arrived" ] || [ -z "$lt" ] || [ "$lt" -ge "$arrived" ]; then
+      printf 'rewritten\n'
+      return 0
+    fi
+  fi
+  printf 'leftover %s %s\n' "$vcommit" "$delcommit"
+}
 refuse_resurrected_deletions(){
-  local p delcommit restored="" removed="" readded="" rewritten="" where="" h vcommit arrived lt
+  local p delcommit restored="" removed="" readded="" rewritten="" where="" h vcommit verdict _v
   have_git || return 0
   git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    # Has the shared repo ever DELETED this path? Asked of the whole history rather than of the
-    # range since this Mac last applied, because the marker is routinely already up to date by the
-    # time the leftover is noticed: the run that merged the deletion recorded it as applied, and
-    # the file is still here. A range keyed on that marker is empty exactly when this is needed.
-    # `-1` stops git at the most recent deletion, so this costs one walk per untracked file and
-    # untracked files in the payload are rare.
-    delcommit="$(git -C "$SYNC_REPO" log --format=%H --diff-filter=D -1 HEAD -- "$p" 2>/dev/null || true)"
-    [ -n "$delcommit" ] || continue
-    # And is it still deleted? A path deleted and later re-added deliberately is an ordinary file
-    # again, and blocking it would make one old deletion a permanent ban on the name (L362).
-    git -C "$SYNC_REPO" cat-file -e "HEAD:$p" 2>/dev/null && continue
     # The staged copy as git would store it. Already tokenized (tokenize_payload ran before this),
     # which is the form every blob in the history is in. If it cannot be read the file is LEFT
     # ALONE: refusing to publish on the strength of a comparison that could not be made would
     # discard somebody's work on a guess (L50).
     h="$(git -C "$SYNC_REPO" hash-object -- "$SYNC_REPO/$p" 2>/dev/null)" || continue
     [ -n "$h" ] || continue
-    vcommit="$(commit_holding_version "$p" "$h")"
-    if [ -z "$vcommit" ]; then
+    verdict="$(deleted_path_verdict "$p" "$h" "$CLAUDE_HOME/${p#payload/}")"
+    case "$verdict" in
       # Content the repo never held: this Mac's own work, so it publishes, and says so below.
-      readded="${readded:+$readded }${p#payload/}"
-      continue
-    fi
-    # An EARLIER version than the one deleted is a leftover only while nothing here has written it
-    # since the deletion reached this clone. The version deleted is a leftover whenever it was
-    # written, as #331 decided.
-    if [ "$h" != "$(git -C "$SYNC_REPO" rev-parse -q --verify "$delcommit^:$p" 2>/dev/null || true)" ]; then
-      arrived="$(deletion_reached_clone_at "$delcommit")"
-      lt="$(file_mtime "$CLAUDE_HOME/${p#payload/}")"
-      case "$arrived" in ''|*[!0-9]*) arrived="" ;; esac
-      case "$lt" in ''|*[!0-9]*) lt="" ;; esac
-      if [ -z "$arrived" ] || [ -z "$lt" ] || [ "$lt" -ge "$arrived" ]; then
-        rewritten="${rewritten:+$rewritten }${p#payload/}"
-        continue
-      fi
-    fi
+      readded) readded="${readded:+$readded }${p#payload/}"; continue ;;
+      rewritten) rewritten="${rewritten:+$rewritten }${p#payload/}"; continue ;;
+      'leftover '*) read -r _v vcommit delcommit <<< "$verdict" ;;
+      *) continue ;;
+    esac
     rm -f "$SYNC_REPO/$p" 2>/dev/null || true
     # The LOCAL copy goes too, which completes the deletion in one step and ends the matter. That
     # is a product decision and not one this tool got to pick, so it was put to Dan and it is his
@@ -5086,7 +5128,10 @@ apply_payload_to_local(){
   # because stage_local_to_payload already mirrored these edits into the payload.
   # A file merged just above is held back the same way, so the apply does not
   # overwrite the merge, and the next send publishes it to the other Mac.
-  local ahead; ahead="$(locally_ahead_paths)"
+  # Leftovers of a deletion are asked about first, with the send's own question, so they are not
+  # held back as unsent work the send would then refuse (claude-config#1013).
+  local leftovers; leftovers="$(deleted_leftovers_here)"
+  local ahead; ahead="$(locally_ahead_paths "$leftovers")"
   local keep; keep="$ahead${MERGED_RULE_FILES:-}"
   # For the closing summary (claude-config#638): an apply that wrote nothing because it left files
   # alone did not find "nothing on this Mac needed changing", and saying so beside the line naming
@@ -5176,10 +5221,49 @@ KEEP
   # sentence, per entry with the reason the send will give, because "kept and will go up" and
   # "kept and will not go up" are different outcomes and a shared sentence can be true of only one
   # (L11). Judged against THIS Mac's skills folder, the same directory the send judges.
+  #
+  # A LEFTOVER of a deletion is the third outcome (claude-config#1013): removed by this apply, or,
+  # with SYNC_ACCEPT_DELETIONS=0, kept and NOT going up, because the send refuses it (#1009). Each
+  # gets its own sentence, and "removed" is said only of a file that is really gone (L11).
   local unsendable="" sendable="" _ap _ue _ur _hit
+  local lo_removed="" lo_kept="" lo_where_removed="" lo_where_kept="" _lp _lv _ld _lw
+  local leftover_pad="
+$(printf '%s\n' "$leftovers" | cut -f1)
+"
+  local _lstamp
+  while IFS="$(printf '\t')" read -r _lp _lv _ld; do
+    [ -n "${_lp:-}" ] || continue
+    _lw="$_lp is in ${_lv:0:8}, and ${_ld:0:8} is the commit that removed it"
+    if [ -e "$CLAUDE_HOME/$_lp" ]; then
+      # Kept, it is met again on every apply, so it is said once per path and content, through the
+      # record the send keeps for the same copy, so whichever meets it first speaks for both (L36).
+      _lstamp="$(printf '%s %s' "$_lp" "$(shasum "$CLAUDE_HOME/$_lp" 2>/dev/null | awk 'NR==1{print $1}')")"
+      grep -qxF -- "$_lstamp" "$RESURRECTED_REPORTED_FILE" 2>/dev/null && continue
+      printf '%s\n' "$_lstamp" >> "$RESURRECTED_REPORTED_FILE" 2>/dev/null || true
+      lo_kept+="$_lp "
+      lo_where_kept="${lo_where_kept:+$lo_where_kept; }$_lw"
+    else
+      lo_removed+="$_lp "
+      lo_where_removed="${lo_where_removed:+$lo_where_removed; }$_lw"
+    fi
+  done <<LEFTOVERS
+$leftovers
+LEFTOVERS
+  if [ -n "$lo_removed" ]; then
+    echo "claude-sync: removed ${lo_removed% } from this Mac: the shared config deleted it, and this copy was one the shared config itself once held, unchanged since, so it was a leftover rather than unsent work, and a send would have refused to publish it. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from git: $lo_where_removed." >&2
+    sync_log_line "removed ${lo_removed% }, a leftover copy of a file the shared config deleted"
+  fi
+  if [ -n "$lo_kept" ]; then
+    local lo_why="this apply could not remove it"
+    [ "${SYNC_ACCEPT_DELETIONS:-1}" = "0" ] && lo_why="SYNC_ACCEPT_DELETIONS=0"
+    echo "claude-sync: left ${lo_kept% } alone because $lo_why, but a send will not carry it: the shared config deleted it, and this copy is one the shared config itself once held, unchanged. Delete it yourself to accept the deletion, or change it and it publishes as your own. If you want the shared copy back: $lo_where_kept." >&2
+  fi
   local unloadable_here; unloadable_here="$(unloadable_skill_entries "$CLAUDE_HOME/skills")"
   while IFS= read -r _ap; do
     [ -n "$_ap" ] || continue
+    case "$leftover_pad" in *"
+$_ap
+"*) continue ;; esac
     _hit=""
     while IFS="$(printf '\t')" read -r _ue _ur; do
       [ -n "${_ue:-}" ] || continue
@@ -5633,6 +5717,44 @@ UNLOADABLE
   return 0
 }
 
+# LEFTOVERS OF A DELETION, as the apply meets them (claude-config#1013). Every file under the
+# mirrored trees that this Mac holds and the payload lacks, asked deleted_path_verdict, the question
+# the send asks of the same file (#1009). One line per leftover: "<path>\t<commit holding that
+# copy>\t<commit that deleted it>", the path relative to the payload. A file whose stored form
+# cannot be read is not listed, so it stays where it is: removing work on the strength of a
+# comparison that could not be made is the wrong direction to fail (L5, L50).
+deleted_leftovers_here(){
+  local d line change path h verdict _v vcommit delcommit
+  have_git || return 0
+  git -C "$SYNC_REPO" rev-parse --verify -q HEAD >/dev/null 2>&1 || return 0
+  for d in "${MIRROR_DIRS[@]}" skills; do
+    [ -d "$PAYLOAD/$d" ] || continue
+    [ -d "$CLAUDE_HOME/$d" ] || continue
+    local ex=()
+    [ "$d" = skills ] && { local s; for s in $(skill_excludes); do ex+=("$s"); done; }
+    while IFS= read -r line; do
+      change="${line%%[[:space:]]*}"
+      path="${line#"$change"}"
+      path="${path#"${path%%[![:space:]]*}"}"
+      [ "$change" = '*deleting' ] || continue
+      [ -n "$path" ] || continue
+      case "$path" in */|.|./) continue ;; esac
+      [ -f "$CLAUDE_HOME/$d/$path" ] || continue
+      if tokenized_path "$d/$path"; then
+        h="$(tok < "$CLAUDE_HOME/$d/$path" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)" || continue
+      else
+        h="$(git -C "$SYNC_REPO" hash-object -- "$CLAUDE_HOME/$d/$path" 2>/dev/null)" || continue
+      fi
+      [ -n "$h" ] || continue
+      verdict="$(deleted_path_verdict "payload/$d/$path" "$h" "$CLAUDE_HOME/$d/$path")"
+      case "$verdict" in 'leftover '*) ;; *) continue ;; esac
+      read -r _v vcommit delcommit <<< "$verdict"
+      printf '%s\t%s\t%s\n' "$d/$path" "$vcommit" "$delcommit"
+    done < <(rsync -ainc --delete "${COMMON_EXCLUDES[@]}" ${ex[@]+"${ex[@]}"} "$(apply_source_dir "$d")/" "$CLAUDE_HOME/$d/" 2>/dev/null || true)
+  done
+  return 0
+}
+
 # Paths where THIS Mac's copy differs from the payload while the repo has NOT
 # touched them since our last apply: a local edit that was never sent, because
 # the watcher was down or the edit is seconds old. Applying the payload over
@@ -5641,14 +5763,25 @@ UNLOADABLE
 # restored so the loss was invisible). The apply skips them and the next send
 # publishes them. Repo-changed paths are deliberately NOT listed here: those
 # are stale or conflicted, and preserve_local_conflicts owns the conflicts.
+#
+# $1 is what deleted_leftovers_here found (claude-config#1013): a local file the shared repo
+# DELETED, still here, and a copy the repo itself once held that nothing here has written since.
+# That is not unsent work, because the send refuses to publish it (#1009), so it is not held back:
+# the apply's own --delete removes it, as applying the deletion should have done. With
+# SYNC_ACCEPT_DELETIONS=0 it is kept, as the send keeps it, and the apply says why in its own words.
 locally_ahead_paths(){
-  local last unapplied d line change path
+  local last unapplied d line change path leftover_paths=""
   have_git || return 0
   last="$(cat "$LAST_APPLIED_FILE" 2>/dev/null || true)"
   [ -n "$last" ] || return 0
   unapplied="
 $(unapplied_paths)
 "
+  if [ "${SYNC_ACCEPT_DELETIONS:-1}" != "0" ] && [ -n "${1:-}" ]; then
+    leftover_paths="
+$(printf '%s\n' "$1" | cut -f1)
+"
+  fi
   for d in "${MIRROR_DIRS[@]}" skills; do
     [ -d "$PAYLOAD/$d" ] || continue
     [ -d "$CLAUDE_HOME/$d" ] || continue
@@ -5678,6 +5811,10 @@ $d/$path
         continue
       fi
       [ -f "$CLAUDE_HOME/$d/$path" ] || continue
+      # A leftover of a deletion is not unsent work, so the apply removes it (#1013).
+      case "$leftover_paths" in *"
+$d/$path
+"*) continue ;; esac
       # A version the repo has since replaced is stale, not ahead, so the apply replaces it
       # (claude-config#638).
       local_copy_is_past_release "$d/$path" && continue
@@ -7954,6 +8091,11 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
     fi
     sleep "$SYNC_POLL_INTERVAL"
   done
+  # THE MOMENT THE END WAS NOTICED, for the suite's #205 check only (claude-config#1084). Timing the
+  # whole pull measured the pull's own work as well, which a loaded runner inflates by hundreds of
+  # milliseconds against a claim of two hundred, so the check flaked on CI (L290, L293). Marked with a
+  # shell builtin, which starts no process, so the file's time is this instant and nothing later.
+  [ -n "${SYNC_TEST_SUITE_NOTICED_FILE:-}" ] && : > "$SYNC_TEST_SUITE_NOTICED_FILE"
   if [ "$killed" -eq 1 ]; then
     stop_suite_tree "$pid" || true
   else
