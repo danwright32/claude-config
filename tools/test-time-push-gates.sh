@@ -76,8 +76,41 @@ case "$out" in
   *"slow.sh"*"timed out"*|*"slow.sh"*"KILLED"*) check "a gate past its declared timeout is killed and named as such" ok ;;
   *) check "a gate past its declared timeout is killed and named as such" "out=$out" ;;
 esac
-# A total, because what a push waits on is the sum, and that is the number the issue is about.
-case "$out" in *TOTAL*) check "it reports the total a push waits" ok ;; *) check "it reports the total a push waits" "out=$out" ;; esac
+# Claude Code runs every matching hook in PARALLEL ("All matching hooks run in parallel", the hooks
+# reference), so a push waits for the slowest gate, not for their sum, and the table summed them
+# while running them one after another (claude-config#1122). The closing line is the wall clock.
+case "$out" in
+  *"WALL CLOCK"*) check "it reports the wall clock a push waits, not a sum" ok ;;
+  *) check "it reports the wall clock a push waits, not a sum" "out=$out" ;;
+esac
+_wall_s="$(printf '%s\n' "$out" | awk '/WALL CLOCK/ { print $1 + 0 }')"
+_max_s="$(printf '%s\n' "$out" | awk '/[.]sh/ && $1 + 0 > m { m = $1 + 0 } END { print m + 0 }')"
+awk -v w="${_wall_s:-0}" -v m="${_max_s:-0}" 'BEGIN { exit !(w >= m && w > 0) }' \
+  && check "the wall clock is no shorter than the slowest gate" ok \
+  || check "the wall clock is no shorter than the slowest gate" "wall=$_wall_s slowest=$_max_s out=$out"
+
+# And it RUNS them in parallel, as Claude Code does, or the times it reports are of a push nobody
+# makes: gates compete for the machine when they run together. Two fixture gates each wait for the
+# other to have started, a rendezvous, so run one after another the first can only be killed at its
+# declared bound, and run together both pass at once. Waited on as a condition, never a sleep (L290).
+PAR_HOME="$TMPROOT/par-home"; mkdir -p "$PAR_HOME/hooks" "$TMPROOT/rv"
+mkpar(){ printf '#!/usr/bin/env bash\ncat >/dev/null\ntouch "%s/%s"\ni=0\nwhile [ ! -e "%s/%s" ]; do i=$((i + 1)); [ "$i" -gt 400 ] && exit 1; sleep 0.05; done\nexit 0\n' \
+  "$TMPROOT/rv" "$2" "$TMPROOT/rv" "$3" > "$PAR_HOME/hooks/$1"; chmod +x "$PAR_HOME/hooks/$1"; }
+mkpar ping.sh ping pong
+mkpar pong.sh pong ping
+cat > "$PAR_HOME/settings.json" <<'JSON'
+{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/ping.sh", "timeout": 3 },
+  { "type": "command", "command": "__CLAUDE_HOME__/hooks/pong.sh", "timeout": 3 }
+] } ] } }
+JSON
+par="$(GATE_TIMING_HOME="$PAR_HOME" bash "$T" --repo "$TMPROOT" 2>&1)"
+case "$par" in
+  *KILLED*) check "the gates run in parallel, as Claude Code runs them" "one was killed waiting for the other: $par" ;;
+  *) [ "$(printf '%s\n' "$par" | awk '/(ping|pong)[.]sh/ && $2 == "0"' | grep -c .)" = "2" ] \
+       && check "the gates run in parallel, as Claude Code runs them" ok \
+       || check "the gates run in parallel, as Claude Code runs them" "out=$par" ;;
+esac
 # Every duration is a real reading: the fixture's slow gate must be the slowest of the three.
 _slow_s="$(printf '%s\n' "$out" | awk '/slow[.]sh/ { print $1 + 0 }')"
 _quick_s="$(printf '%s\n' "$out" | awk '/quick[.]sh/ { print $1 + 0 }')"

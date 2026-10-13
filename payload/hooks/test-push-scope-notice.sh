@@ -89,6 +89,33 @@ out="$(run "git push; cd $W/other && git push")"; rc=$?
 [ "$rc" -eq 2 ] && check "a push from the session repository and one from another are refused" ok \
   || check "a push from the session repository and one from another are refused" "exit $rc"
 
+echo "push scope notice: every push a judged gate stands down on is refused here (claude-config#1122)"
+
+# require-tests-before-push.sh and simplify-before-push.sh exit 0 when ps_repo_dir refuses with exit
+# 2. The library's sentence still reaches their stderr, but Claude Code shows a hook's stderr only on
+# a nonzero exit, so on exit 0 the session is told nothing, and that is right ONLY because this hook
+# refuses the same push, once, for every gate. Asked of the real gates, so a gate that starts asking its own question, or this
+# hook that stops refusing one of these shapes, fails here rather than letting a push out unjudged
+# by both (L450). The gates' records go to a throwaway, and none of them reaches a judge.
+gate() { # gate <hook> <command> -> exit code; stderr in $W/gate.err
+  python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' \
+    "$2" "$W/session" | PUSH_GATE_LEDGER_DIR="$W/ledger" bash "$DIR/$1" >/dev/null 2>"$W/gate.err"
+}
+for shape in "cd $W/target && git push; cd $W/other && git push" \
+             "cd $W/no-such-dir && git push" \
+             "git -C \"\$WT\" push"; do
+  run "$shape" >/dev/null; nrc=$?
+  for g in require-tests-before-push.sh simplify-before-push.sh; do
+    gate "$g" "$shape"; grc=$?
+    if [ "$grc" -eq 0 ]; then
+      [ "$nrc" -eq 2 ] && check "#1122 $g stands down silently on [$shape], and this hook refuses it" ok \
+        || check "#1122 $g stands down silently on [$shape], and this hook refuses it" "the gate said nothing and this hook exited $nrc, so the push goes out judged by neither"
+    else
+      check "#1122 $g stands down silently on [$shape], and this hook refuses it" "the gate exited $grc and said [$(head -c 300 "$W/gate.err")]: if it now judges or speaks here, revisit this coupling"
+    fi
+  done
+done
+
 echo "push scope notice: silent where there is nothing to announce"
 
 # Since #589 the hook refuses with exit 2 and speaks on STDERR, so "silent" means all three: exit 0,
