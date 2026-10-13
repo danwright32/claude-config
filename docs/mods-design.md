@@ -893,7 +893,9 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   starts again at a minute when it moves); a merged PR is read once; its closing issues are read
   only once it has merged (an open or closed PR's issues decide nothing) and not again once closed;
   the default branch, and a branch that is not the session's, are not looked up at all; a read that
-  failed keeps nothing, so the next minute asks again. For three open PRs with two issues each that
+  failed keeps nothing, so the next minute asks again. A minute's check that finds nothing left
+  reads afresh before winding down ends, so a kept reading (a push since Dan chose to leave a PR
+  open, say) never finishes it. For three open PRs with two issues each that
   is 4 reads per PR in the first ten minutes instead of 30 (`tests/register.test.tsx` counts them),
   and nothing at all once each is merged with its issues closed.
 - Held while away: opening anything (`open`, BBEdit), AppleScript that types, clicks or brings an app

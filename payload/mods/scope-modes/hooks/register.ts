@@ -2625,7 +2625,10 @@ export const register: Register = on => {
       // Winding down ends itself once it is live, watched each minute rather than only at turn end.
       $.clock.every(MIN, async () => {
         try {
-          const c = await check($)
+          // A kept reading may be minutes old (#1037), so one that looks finished is read afresh
+          // before winding down ends: only GitHub's answer now finishes it (lessons review).
+          const kept = await check($)
+          const c = kept && kept.left.length === 0 ? await check($, true) : kept
           if (c && c.left.length === 0) await finish($, c)
         } catch (err) {
           $.ui.log(`scope-modes: the wind down check failed: ${msg(err)}`, { to: 'debug' })

@@ -3814,6 +3814,21 @@ test('winding down backs off reading open PRs that have not moved, never reads t
   expect(ghOf(w).slice(done)).toEqual([])
 })
 
+test("the minute's check never ends winding down on a kept reading: a push since Dan chose to leave a PR open is read before it finishes (#1037)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: null, others: [openPr(31, 'aaa1111')], issues: {} }, ask: 'Leave it open' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  // Read at the first minute and again at the second, unchanged, so it is kept for two minutes.
+  await clock.advance(2 * MIN)
+  await call($ as never, leave(31, { repo: 'o/r' }))
+  // Pushed to since he answered, while the minute's check holds the reading from before.
+  w.o.gh = { pr: null, others: [openPr(31, 'bbb2222')], issues: {} }
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+})
+
 test('a PR read GitHub did not answer is asked again the next minute, never backed off (#1037)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: { ...merged('OPEN'), fails: 'HTTP 502' } })
   await start($ as never, clock)
