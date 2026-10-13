@@ -80,10 +80,15 @@ recurring update, exactly as for PET. Section 2, "First appearance", says how.
   run for it, and never silently pretend it had nothing.
 - More than one repo means the post gets a top-level section per project, with categories
   nested under each. One repo means no project heading at all.
+- **The products appear in the order `repos.json` lists them**, which is Slate, PET, Sonar
+  (Dan, 2026-10-13: "put Slate first"). That one order sets the product line in the opener
+  (section 6) and the order of the product sections, and `lint-post.js` reads it from this file,
+  so reordering a product means reordering `repos.json`, never only the draft.
 
 ### Adding a repo
 
-Add an entry to `repos.json`. That is the entire process.
+Add an entry to `repos.json`. That is the entire process. Put a newly launched product at the
+top, so its launch section leads the post (section 6), and move it only when Dan asks.
 
 **Add it when you want it appearing in these updates**, which is not the same day its repo is
 created and not the same day it launches. A repo absent from this file is invisible to the
@@ -132,7 +137,8 @@ general." So no date is asked for, and the product's merged PRs are never listed
 The introduction is the product's own section, placed first (section 6, the launch rules): what
 it is, who uses it, when to open it, what it checks, and how to share a result, plus where it is
 bookmarked. Write it from the product as it stands in production (its README, its live pages,
-what it shows a manager), never from its PR titles. A launch also gets the second opener line.
+what it shows a manager), never from its PR titles. A launch also gets the launch line in the
+opener, after the product line (section 6).
 
 Then set that repo's `lastEnd` to the `merged_at` of its newest merged PR that reached
 production (section 4), so the next run reports changes only, from after the introduction. A
@@ -371,7 +377,8 @@ these on the first draft:
 - He rewrote the opener as `Updates for September 15 to 28 :thread:`, with the detail going in
   the thread, and deleted the line saying some items are backend only. Both are in the structure
   rules below.
-- A product being LAUNCHED goes first, above PET. Its section explains what it is, when to
+- A product being LAUNCHED goes first, above PET (it sits at the top of `repos.json` for
+  that). Its section explains what it is, when to
   open it, what it checks and how to share a result. Dan added where it is bookmarked and
   that agents should start with it.
 - He cut: the count of corrected history rows, "closed months keep their rankings", the Sonar
@@ -387,12 +394,82 @@ Note the shape of the visible bullets above: a PR whose Changelog block carried 
 facts (the two-tier goal) became four bullets, one per fact, with the detail kept and the
 connective prose dropped. That is the target for the FIRST draft, not a rewrite.
 
+**What Dan changed before posting on 2026-10-13** (the first post with three products). His
+draft went from 29 Slate lines to 17 and from 20 PET lines to 15. Apply
+these on the first draft:
+- **Cut what managers never see.** Lead-only edge cases went: a link with no routing code, a
+  lead re-picking a time that was just taken, a mistyped email. Rules that only touch admins
+  went too (admins can no longer approve their own time off). Ask of each line: does a sales
+  manager see this, act on it, or get asked about it by a rep?
+- **Cut alert mechanics unless managers receive and act on the alert.** The whole SLACK
+  ALERTS section went (coverage retries, alert wording, the below tier alert), and so did "the
+  alerts channel hears only if neither acts" and "those waits are shorter when...".
+- **Cut the safety-net follow-ons once the headline is there.** "The nightly sync can no longer
+  do it either", "the weekly data check no longer wipes days worked", "September and earlier
+  keep their goals", and the shortened time off waiting for approval all went. One line for the
+  rule; the guards that protect it are behind the scenes at most.
+- **Cut who-moved detail once the rule is stated**, even as counts ("three reps move from 22
+  to 15"). This is not the impact number rule below: an error in their numbers stays, a list
+  of who a rule change touched goes.
+- **Explain a technical term in the manager's words where the line uses it.** After "routed on
+  their latest application's score" he added "Now we check to make sure their debt level is the
+  most up to date amount we have." Score, tier and bucket mean debt level to a manager.
+- **Use a current example.** He changed "Low with Beyond" to "Low with Achieve", because Beyond
+  is winding down. Pick examples from what is live now.
+- **Point managers at a tool they may not have opened.** He headed Slate's console section
+  "THE CONSOLE (if you haven't looked at it yet, go check it out!)". A product or page new to
+  managers can carry a short invitation in its heading.
+- **Behind the scenes can be fuller** ("think we can add more to the technical section"): one
+  line per area per product, prefixed with the product and area (`Slate releases:`,
+  `PET backups:`), about 12 lines, each saying what it protects or speeds up. Leave out the
+  dependency updates line, lines about monitoring that only alerts Dan (log shipping, a database
+  memory alert), and work that is built but switched off ("coming next"): all four went.
+- **No vendor or internal tool names a manager does not know.** "Restored from the Snowflake
+  copy" became "restored from the copy". Say what the thing does, not what it is called.
+- **Never a bare @channel, @here or @everyone.** Pasting the post would ping the whole channel,
+  so he wrote "@ channel" with a space. `lint-post.js` refuses the bare form.
+
 **Structure**
 - **No title line.** The first line is the opener, `Updates for <period> :thread:`, and the
   detail goes in the thread (Dan, 2026-09-28).
 - The period comes from the actual window: "the week of September 8" for roughly a week,
   "September" for roughly a month, otherwise a range such as "September 15 to 28".
-- A launch gets a second opener line: "Including the launch of a new tool, Sonar!".
+- **The product line (Dan, 2026-10-13).** A post covering two or more products puts, on the
+  line straight after the opener, the products it covers joined with ` | `, in the `repos.json`
+  order: `Slate | PET | Sonar`. A product with nothing to report is left off the line, as it is
+  left out of the post. A post covering one product has no product heading and so no product
+  line.
+- **Product layout (Dan, 2026-10-13, both deliberate).** The first product's heading sits on
+  the line straight under the product line, with no blank line. Each product's section starts
+  with its name in uppercase on its own line (`SLATE`), its first category heading on the very
+  next line, then that category's items. **Two blank lines** separate one product from the
+  next; one blank line separates categories inside a product, and the behind the scenes section.
+  The 2026-10-13 post, trimmed:
+
+  ```
+  Updates for September 29 to October 13 :thread:
+  Slate | PET | Sonar
+  SLATE
+  ROUTING AND BOOKING
+  Leads who open the booker after 6pm Eastern now see the next three open days instead of two.
+
+  THE CONSOLE (if you haven't looked at it yet, go check it out!)
+  Pools now show in words, such as "Low with Achieve", instead of bucket codes like 112.
+
+
+  PET
+  GOALS
+  Rookie goals now count from the floor date, not the date the Salesforce account was created.
+
+
+  SONAR
+  Agents now get a larger "Share this result" button in the result panel.
+
+  BEHIND THE SCENES (technical, skip unless curious)
+  Slate releases: each release now goes to 10% of traffic first, with a tested one step rollback
+  ```
+- A launch gets a launch line after the product line, before the first product heading:
+  "Including the launch of a new tool, Sonar!".
 - **No line saying some items are backend only.** Dan deleted it on 2026-09-28.
 - Headings are **bare uppercase**, no bold markers, first item on the very next line, blank
   line between sections.
@@ -476,7 +553,10 @@ node ~/.claude/skills/pennie-dev-update/lint-post.js <file>
 It refuses (exit 1, one `line N:` per finding) a dash as punctuation, an item prefix, bold, an
 emoji or a shortcode other than the opener's `:thread:`, a heading that is not bare uppercase or
 ends in a colon or has no item under it, an opener that is not `Updates for <period> :thread:`,
-and the deleted "backend only" line. Fix every finding before Dan sees the draft. A hyphenated
+a bare @channel, @here or @everyone, a multi product post whose product line is missing or does not match its product sections, a
+product line on a one product post, product sections out of the `repos.json` order, and the
+deleted "backend only" line. It reads the products from the `repos.json` beside it (`--config`
+points it at another), and refuses to run if that cannot be read. Fix every finding before Dan sees the draft. A hyphenated
 word is only a warning: keep it if it is the literal name of something on screen, such as the
 Top-out column. Then open it:
 

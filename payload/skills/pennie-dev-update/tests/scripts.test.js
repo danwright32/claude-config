@@ -558,6 +558,15 @@ expectFinding('Markdown bold is refused', swap(5, 'The goal is **two tiers**.'),
 expectFinding('Slack bold is refused', swap(5, 'The goal is *two tiers*.'), 5, 'bold');
 expectFinding('an emoji character is refused', swap(5, 'The goal is two tiers ' + ROCKET), 5, 'emoji');
 expectFinding('an emoji shortcode in the body is refused', swap(5, 'The goal is two tiers ' + SHORTCODE), 5, 'emoji');
+// A bare @channel, @here or @everyone pings the whole channel when the post is pasted (Dan wrote
+// "@ channel" on 2026-10-13 so it would not).
+expectFinding('a bare @channel is refused', swap(5, 'Aliases can no longer set off an @channel ping.'), 5, 'ping');
+expectFinding('a bare @here is refused', swap(5, 'Aliases can no longer set off an @here ping.'), 5, 'ping');
+expectFinding('a bare @everyone is refused', swap(5, 'Aliases can no longer set off an @everyone ping.'), 5, 'ping');
+{
+  const r = lint(swap(5, 'Aliases can no longer set off an @ channel ping.'));
+  check(r.code === 0, 'the spaced @ channel Dan writes passes', r.all);
+}
 expectFinding('a heading not in uppercase is refused', swap(4, 'Goals'), 4, 'uppercase');
 expectFinding('a heading ending in a colon is refused', swap(4, 'GOALS:'), 4, 'colon');
 expectFinding('a bold heading is refused', swap(4, '*GOALS*'), 4, 'bold');
@@ -572,6 +581,85 @@ expectFinding('a heading with no item on the next line is refused', CLEAN.replac
 {
   const r = lint(swap(5, 'The Top' + HY + 'out column now shows the cap.'));
   check(r.code === 0 && /line 5\b[^\n]*Top.out/.test(r.out), 'a hyphenated word is a warning to confirm, not a refusal', r.all);
+}
+// The product line (Dan, 2026-10-13): a post covering two or more products opens with
+// "Updates for <period> :thread:" and then the products it covers, joined with " | ", in the
+// order repos.json lists them, which is also the order of their sections below.
+const LINT_CONFIG = path.join(SCRATCH, 'lint repos.json');
+fs.writeFileSync(LINT_CONFIG, JSON.stringify({ repos: [
+  { name: 'Slate', repo: 'acme/slate' }, { name: 'PET', repo: PET }, { name: 'Sonar', repo: SONAR },
+] }));
+function lintWith(text) {
+  const file = path.join(SCRATCH, 'post ' + (++caseNo) + ' Dan' + APOS + 's.txt');
+  fs.writeFileSync(file, text);
+  return run(LINT, ['--config', LINT_CONFIG, file], { scenario: '', ghLog: '' });
+}
+// Dan's layout (2026-10-13): the first product's heading sits on the line straight under the
+// opener, and two blank lines separate one product from the next. Sections inside a product,
+// and the behind the scenes section, keep one blank line.
+function multi(opener, order, gapAfterOpener, gapBetween) {
+  const sections = {
+    Slate: ['SLATE', 'ROUTING AND BOOKING', 'Leads after 6pm see three open days.', '', 'THE CONSOLE', 'Pools now show in words.'],
+    PET: ['PET', 'GOALS', 'Rookie goals count from the floor date.'],
+    Sonar: ['SONAR', 'Agents now get a larger Share button.'],
+  };
+  const between = gapBetween === undefined ? '\n\n\n' : gapBetween;
+  const after = gapAfterOpener === undefined ? '\n' : gapAfterOpener;
+  return opener.join('\n') + after + order.map(function (p) { return sections[p].join('\n'); }).join(between)
+    + '\n\nBEHIND THE SCENES (technical, skip unless curious)\nSlate releases: each release goes to 10% first\n';
+}
+const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Slate | PET | Sonar'], ['Slate', 'PET', 'Sonar']));
+  check(r.code === 0 && !/line \d/.test(r.out), 'a three product post with its product line in order passes clean', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Slate | Sonar'], ['Slate', 'Sonar']));
+  check(r.code === 0 && !/line \d/.test(r.out), 'a product with nothing to report is left off the line and the post', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'PET | Sonar', 'Including the launch of a new tool, Sonar!'], ['PET', 'Sonar']));
+  check(r.code === 0 && !/line \d/.test(r.out), 'a launch line after the product line passes', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER], ['Slate', 'PET', 'Sonar']));
+  check(r.code === 1 && /line 1\b[^\n]*Slate \| PET \| Sonar/.test(r.out), 'a multi product post with no product line is refused, naming the line it needs', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Including the launch of a new tool, Sonar!'], ['PET', 'Sonar']));
+  check(r.code === 1 && /line 2\b[^\n]*PET \| Sonar/.test(r.out), 'a launch line where the product line belongs is refused', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'PET | Slate | Sonar'], ['Slate', 'PET', 'Sonar']));
+  check(r.code === 1 && /line 2\b[^\n]*Slate \| PET \| Sonar/.test(r.out), 'a product line that disagrees with the sections is refused', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'PET | Slate | Sonar'], ['PET', 'Slate', 'Sonar']));
+  check(r.code === 1 && /order/i.test(r.out) && /Slate, PET, Sonar/.test(r.out), 'product sections out of the repos.json order are refused', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Slate | PET | Sonar'], ['Slate', 'PET', 'Sonar'], '\n\n'));
+  check(r.code === 1 && /line 4\b[^\n]*straight/i.test(r.out), 'a blank line between the product line and the first product is refused', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Slate | PET | Sonar'], ['Slate', 'PET', 'Sonar'], '\n', '\n\n'));
+  check(r.code === 1 && /line 10\b[^\n]*two blank/i.test(r.out) && /line 14\b[^\n]*two blank/i.test(r.out), 'one blank line between two products is refused, for each product after the first', r.all);
+}
+{
+  const r = lintWith(multi([MULTI_OPENER, 'Slate | PET'], ['Slate', 'PET', 'Sonar']));
+  check(r.code === 1 && /line 2\b/.test(r.out), 'a product line missing a product that has a section is refused', r.all);
+}
+{
+  const r = lintWith(['Updates for the week of October 6 :thread:', 'PET', '', 'GOALS', 'Rookie goals count from the floor date.', ''].join('\n'));
+  check(r.code === 1 && /line 2\b[^\n]*one product/i.test(r.out), 'a one product post carries no product line', r.all);
+}
+{
+  const r = lintWith(CLEAN);
+  check(r.code === 0 && !/line \d/.test(r.out), 'a one product post with no product sections still passes with a config', r.all);
+}
+{
+  const r = run(LINT, ['--config', path.join(SCRATCH, 'no such repos.json'), path.join(SCRATCH, 'x.txt')], { scenario: '', ghLog: '' });
+  check(r.code === 2 && /repos\.json/.test(r.err), 'a config that cannot be read is refused, never read as no products', r.all);
 }
 {
   const r = run(LINT, [path.join(SCRATCH, 'no such draft.txt')], { scenario: '', ghLog: '' });
