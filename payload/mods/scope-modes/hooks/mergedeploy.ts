@@ -1,5 +1,5 @@
 import { deployWith, hasFlag, operations, runnerScript, runsHelper, type Cmd } from './nobuild.ts'
-import { resolveDir } from './overnight.ts'
+import { resolveDir, syncCall } from './overnight.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
 //
@@ -272,6 +272,10 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
       }
     }
   }
+  // The config repository's deploy step (#1106): the install that makes a merge live, judged in the
+  // repository the clone it runs from is (dirsOf), as any deploy is. Phase 3 refuses a pull from any
+  // copy but the live sync clone, and every other claude-sync write.
+  if (syncCall(words)?.sub === 'pull') out.push({ kind: 'deploy', what: 'run claude-sync pull, which installs the config' })
   const deploys = deployWith(words)
   if (deploys) out.push({ kind: 'deploy', what: deploys })
   else {
@@ -352,7 +356,8 @@ export type Place = Where & { own: string | undefined }
 /**
  * The folder each command runs in, as phase 3 (overnight.ts) and the #892 push hook follow it: the
  * session's folder, moved by each `cd` or `pushd` before it, kept apart inside a subshell, and by a
- * git command's own -C, each through phase 3's one resolver (`resolveDir`). Null where it cannot be
+ * git command's own -C, each through phase 3's one resolver (`resolveDir`); a claude-sync command's
+ * is the folder its script lives in, the clone it acts on (#1106). Null where it cannot be
  * followed (a variable, a pattern, `cd -`, `popd`, or --git-dir and --work-tree, which name a
  * repository apart from any folder), which is a repository that cannot be told (L75).
  */
@@ -366,6 +371,13 @@ export const dirsOf = (commands: Cmd[], cwd: string, home: string): (string | nu
     else if (cmd === ')') dir = stack.length ? (stack.pop() as string | null) : dir
     else if (cmd === 'cd' || cmd === 'pushd') dir = resolveDir(c.words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, home)
     else if (cmd === 'popd') dir = null
+    // claude-sync acts on the clone it lives in (its SYNC_REPO), whatever the folder it is run from
+    // (#1106); a bare name is whichever copy PATH finds, which cannot be told.
+    const sync = syncCall(c.words)
+    if (sync) {
+      out.push(sync.script.includes('/') ? resolveDir(sync.script.replace(/\/[^/]*$/, '') || '/', dir, home) : null)
+      continue
+    }
     if (cmd === 'git') {
       // git's own options, before its subcommand, as mod-kit's git reader reads them (each option
       // that takes a value, -c included, takes it): its -C moves the folder; --git-dir and

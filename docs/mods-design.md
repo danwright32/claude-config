@@ -1120,7 +1120,15 @@ the ban list knowing that an action it does not name is approved.
   whose name has no read word is refused too, which fails closed);
   Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
   branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
-  included); `claude-sync` pull, sync and install.
+  included); `claude-sync` send, sync, apply-only and install (install-autosync, install-schedule),
+  by any path to the script. `claude-sync pull` is not on this list when it is the live sync
+  clone's (`~/claude-config-sync/claude-sync`, by that path, `bash` and the path, or `./claude-sync`
+  after a `cd` there): that pull is claude-config's deploy step, judged by phase 7 below (#1106).
+  Any other pull is refused here: a bare `claude-sync` (whichever copy PATH finds), another clone
+  or a development checkout (which installs whatever branch it is on), and a pull whose
+  environment the line changes where the words do not show it (any assignment, since the reader
+  takes it off the words and claude-sync reads `SYNC_REPO` and `CLAUDE_HOME`; `env` with a flag;
+  `sudo`; a file sourced in the line).
   Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
   managed settings file (#876) nothing is approved overnight.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
@@ -1235,12 +1243,17 @@ is still asked once at bedtime and closed if unanswered.
 - While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by mod-kit's `$.modkit.gh`, commands through
   mod-kit's reader): merges (`gh pr merge` and `--auto`, `merge-when-ready.sh`, the REST merge
   endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
-  deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or
-  by a body that deploys), and a push reaching a default branch, refused in every repository. The
+  deploy tool list, shared, `gh workflow run`, a workflow dispatch, a package script by name or
+  by a body that deploys, and `claude-sync pull`, claude-config's deploy step, #1106), and a push
+  reaching a default branch, refused in every repository. The
   repository is the one a command names (`--repo`, a `repos/` endpoint), else the one in the folder
   it runs in, followed as the #892 push hook does (a `cd` or `pushd` before it, a git `-C`); a folder
   it cannot follow (a variable, a pattern, `popd`, `--git-dir` or `--work-tree`) is a repository it
-  cannot tell, closed. This check runs first whenever the Mac is asleep, before any other mode's
+  cannot tell, closed. A claude-sync command runs in the clone its script lives in, whatever the
+  session's folder, so the live clone's pull is judged by the repository that clone's remotes name
+  (claude-config): it installs a night's merges exactly when that repository is `mayDeploy`
+  tonight, and waits for the morning when it is merge only, on neither list, closed, or the record
+  carries no lists. A bare `claude-sync`, found on PATH, is a repository that cannot be told. This check runs first whenever the Mac is asleep, before any other mode's
   route, so no merge reaches GitHub unjudged.
   The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
   (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.

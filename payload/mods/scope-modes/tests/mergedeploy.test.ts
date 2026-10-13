@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { actsOf, addAnswer, HOLD_MERGES, isListed, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Scripts, type Where } from '../hooks/mergedeploy.ts'
+import { actsOf, addAnswer, dirsOf, HOLD_MERGES, isListed, judgeNight, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Place, type Scripts, type Where } from '../hooks/mergedeploy.ts'
 import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { readCommands } from './read.ts'
 
@@ -288,5 +288,50 @@ describe('what a command does, by effect', () => {
     // Read, a default other than main or master is the only one.
     expect(kinds('git push origin feature-1', { ...unread, defaultBranch: 'develop' })).toEqual([])
     expect(kinds('gh api -X PATCH repos/o/r/git/refs/heads/feature-1 -f sha=abc', { ...unread, defaultBranch: 'develop' })).toEqual([])
+  })
+})
+
+// #1106: claude-sync pull is claude-config's deploy step, the install that makes a merge live. It
+// is judged as a deploy of the repository the sync clone it runs from is, by this phase's own rule
+// (policyOf, refusalOf), never a second copy of it (L263); phase 3 refuses every other claude-sync
+// write, and a pull from anywhere but the live sync clone.
+describe('claude-sync pull, the config repository deploy step (#1106)', () => {
+  const HOME = '/Users/x'
+  const CLONE = '/Users/x/claude-config-sync'
+  const CONFIG = 'danwright32/claude-config'
+  const place: Place = { ...ON_BRANCH, own: CONFIG }
+  const judge = (night: unknown, command: string, cwd = '/Users/x/repo') => {
+    const commands = cmds(command)
+    return judgeNight(night, commands, dirsOf(commands, cwd, HOME).map(d => (d === CLONE ? place : d === null ? null : { ...ON_BRANCH, own: 'o/r' })))
+  }
+  const lists = (j: object) => nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [], ...j })), [])
+  test('a pull is a deploy, by any path to the script, and only a pull among the reads', () => {
+    for (const c of ['~/claude-config-sync/claude-sync pull', 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/claude-config-sync/claude-sync pull 2>&1 | tail -5', 'claude-sync pull'])
+      expect({ c, k: kinds(c) }).toEqual({ c, k: ['deploy'] })
+    for (const c of ['~/claude-config-sync/claude-sync status', '~/claude-config-sync/claude-sync lesson L174', 'git pull'])
+      expect({ c, k: kinds(c) }).toEqual({ c, k: [] })
+  })
+  test('the folder a claude-sync command reaches is the clone its script lives in, never the session folder; a bare name is one that cannot be told', () => {
+    expect(dirsOf(cmds('~/claude-config-sync/claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE])
+    expect(dirsOf(cmds('cd ~/claude-config-sync && ./claude-sync pull'), '/Users/x/repo', HOME)).toEqual([CLONE, CLONE])
+    expect(dirsOf(cmds('bash /Users/x/Apps/claude-config/claude-sync pull'), '/Users/x/repo', HOME)).toEqual(['/Users/x/Apps/claude-config'])
+    expect(dirsOf(cmds('claude-sync pull'), '/Users/x/repo', HOME)).toEqual([null])
+  })
+  test('allowed exactly when the night says the config repository may deploy, from any session folder', () => {
+    const night = lists({ mayDeploy: [CONFIG] })
+    expect(judge(night, '~/claude-config-sync/claude-sync pull')).toBeUndefined()
+    expect(judge(night, 'bash ~/claude-config-sync/claude-sync pull', '/Users/x/elsewhere')).toBeUndefined()
+  })
+  test('refused when the config repository is merge only, on neither list, closed, or under an owner that waits, and when the record carries no lists', () => {
+    const why = (night: unknown, command = '~/claude-config-sync/claude-sync pull') => judge(night, command)?.why
+    expect(why(lists({ mergeOnly: [{ repo: CONFIG, mergeDeploys: false }] }))).toBe(`${CONFIG} may merge overnight but never deploy`)
+    expect(why(lists({ mergeOnly: [{ repo: CONFIG, mergeDeploys: true }] }))).toBe(`${CONFIG} may merge overnight but never deploy`)
+    // Another repository allowed to deploy is not the config repository.
+    expect(why(lists({ mayDeploy: ['o/r'] }))).toBe(`${CONFIG} is on neither list in mods/sleep-repos.json, so tonight it neither merges nor deploys`)
+    expect(why(nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [CONFIG] })), [{ repo: CONFIG, why: 'GitHub does not know it' }]))).toBe('GitHub does not know it, so tonight it neither merges nor deploys')
+    expect(why(lists({ mayDeploy: [CONFIG], waitOwners: ['danwright32'] }))).toMatch(/^every repository owned by danwright32 waits overnight/)
+    expect(why(undefined)).toBe('the sleep record carries no merge and deploy lists, so tonight it neither merges nor deploys')
+    // A clone whose repository cannot be told (a bare name, found on PATH) is closed, whatever the lists.
+    expect(why(lists({ mayDeploy: [CONFIG] }), 'claude-sync pull')).toBe('which repository this reaches could not be told, so tonight it neither merges nor deploys')
   })
 })

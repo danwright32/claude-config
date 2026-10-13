@@ -18,7 +18,9 @@ import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, op
 //   Supabase and psql writes;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes;
-// - claude-sync pull and install.
+// - claude-sync send, sync, apply-only and install, and a pull from anywhere but the live sync clone
+//   or with its environment changed. The live clone's pull is the config repository's deploy step
+//   (#1106), judged against the night's lists by phase 7 (mergedeploy.ts), never here.
 //
 // Pure but for the two questions only the disk can answer, asked through `Look`; an answer it
 // cannot give is null, which refuses. A text match always has a way around it, so the wake check
@@ -301,7 +303,37 @@ const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestatio
 const runsGh = (next: string | undefined): boolean => next !== undefined && (next.startsWith('-') || GH_SUBCOMMANDS.has(next))
 // The commands that name a program without running it: printing its name, or finding where it is.
 const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
-const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'pull' || sub === 'sync' || sub === 'apply-only' || sub.startsWith('install'))
+
+// ---- claude-sync ----
+
+/**
+ * The claude-sync a command runs, by its own name or as a shell's script: the script as written
+ * and its subcommand; undefined when it runs none. Shared with phase 7 (mergedeploy.ts), which
+ * judges the pull as a deploy of the repository the clone it runs from is (#1106).
+ */
+export const syncCall = (words: readonly string[]): { script: string; sub: string | undefined } | undefined => {
+  if (name(words[0]) === 'claude-sync') return { script: words[0] as string, sub: words[1] }
+  if (SHELLS.has(name(words[0])) && name(words[1]) === 'claude-sync') return { script: words[1] as string, sub: words[2] }
+  return undefined
+}
+// Every claude-sync write but a pull: each changes the shared repository or this Mac's schedule.
+const SYNC_REFUSED = (sub: string | undefined) => sub !== undefined && (sub === 'sync' || sub === 'send' || sub === 'apply-only' || sub.startsWith('install'))
+// The environment a pull runs with, changed where the words do not show it: an assignment (the
+// reader takes it off the words, and claude-sync reads SYNC_REPO and CLAUDE_HOME among others), env
+// with a flag, sudo, or a file sourced in the line. Read on the line as written, quotes included,
+// which fails closed.
+const ENV_CHANGED = /(?:^|[\s;&|(`])(?:[A-Za-z_]\w*=|env\s+-|sudo\b)/
+/**
+ * Why a claude-sync pull is refused overnight, or undefined for the live sync clone's own, which is
+ * the config repository's deploy step and left to phase 7 (#1106). Any other copy installs whatever
+ * it holds (a development checkout's feature branch), and a bare name is whichever copy PATH finds.
+ */
+const pullRefusal = (script: string, dir: string | null, call: OvernightCall): string | undefined => {
+  if (ENV_CHANGED.test(call.raw) || call.commands.some(c => ['source', '.'].includes(name(c.words[0]))))
+    return 'run claude-sync pull with its environment changed, so what it installs cannot be told'
+  const at = script.includes('/') ? resolveDir(script, dir, call.home) : null
+  return at === `${call.home}/claude-config-sync/claude-sync` ? undefined : 'run claude-sync pull from a copy other than the live sync clone, ~/claude-config-sync'
+}
 
 /**
  * What the call would have done, when it is on the overnight list ("run gh issue create", "force
@@ -377,8 +409,11 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       }
       continue
     }
-    const syncSub = cmd === 'claude-sync' ? words[1] : SHELLS.has(cmd) && name(words[1]) === 'claude-sync' ? words[2] : undefined
-    if (SYNC_REFUSED(syncSub)) return `run claude-sync ${syncSub}`
+    const sync = syncCall(words)
+    if (sync?.sub === 'pull') {
+      const why = pullRefusal(sync.script, dir, call)
+      if (why) return why
+    } else if (sync && SYNC_REFUSED(sync.sub)) return `run claude-sync ${sync.sub}`
     if (cmd === 'supabase' && DEPLOYERS.supabase?.(words.slice(1))) return 'change a database with supabase'
     // The one list of database clients no build reads too (L370), sqlite3 included.
     const sql = databaseRefusal({ ...c, words })
