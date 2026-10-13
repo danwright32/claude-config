@@ -228,6 +228,18 @@ export const keepFinished = (card: StepsCard, prior: StepsCard | null | undefine
   return { ...card, steps }
 }
 
+/**
+ * `card`, just pinned through the steps tool, with every unfinished step another mod added to `prior`
+ * (#1107) kept at its end: pinning replaces the card, and those steps are not Claude's to drop. One
+ * the new card already holds, by its title, is not listed twice.
+ */
+export const keepAdded = (card: StepsCard, prior: StepsCard | null | undefined): StepsCard => {
+  if (!prior || !Array.isArray(prior.steps)) return card
+  const titles = new Set(card.steps.map(s => s.title))
+  const kept = prior.steps.filter(s => s && s.isAdded && !s.finished && !titles.has(s.title)).map(({ isSent: _sent, ...s }) => s)
+  return kept.length ? { ...card, steps: [...card.steps, ...kept] } : card
+}
+
 // A finished step's line (#886): its title, then how and when it finished. Grey, struck through, only
 // for a step finished before this card: found already done (when, unknown), or in an earlier session
 // (the card itself held from one, or a step pinned again from it). One finished in this session is
