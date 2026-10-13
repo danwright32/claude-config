@@ -696,7 +696,11 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       const named = c.verdict.does === 'write files' && c.language && p && 'text' in p ? codeTargets(c.language, p.text) : undefined
       const targets = named?.map(abs)
       const known = targets?.every((t): t is string => t !== undefined) ? { targets } : {}
-      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known })
+      // Its text and the folder it runs in (#1151), so a guard reads the names in the program it runs,
+      // never another command's heredoc data, and places a bare one where the program is, never in
+      // the session's folder. The folder is left out where a cd before it cannot be followed.
+      const read = p && 'text' in p ? { program: p.text } : {}
+      unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(dir ? { folder: dir } : {}) })
     }
     else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
     // A command given its operands by xargs changes files no word names (#730).
