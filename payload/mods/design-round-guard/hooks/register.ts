@@ -144,6 +144,19 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       for (const t of u.targets) targets.push({ path: t, word: t })
       continue
     }
+    // A program the reader read is judged by its own text, in the folder it runs in (#1151): the
+    // command's other heredocs are another command's data (a design round's spec naming its
+    // stylesheet), and a bare name lands where the program runs, never in the session's folder.
+    // After a cd the reader cannot follow, a bare name's place is unknown, and is held as such.
+    if (u.program !== undefined) {
+      // Its own words count too: a file handed to it as an argument (`python3 - app/site.css <<EOF`,
+      // read as sys.argv) is one it may write (lessons review of #1151).
+      for (const m of mentionedLookFiles([u.program, ...u.words].join('\n'))) {
+        const placed = /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m) || u.folder !== undefined
+        targets.push(placed ? { path: resolvePath(m, u.folder ?? '/', at.home), word: m } : { word: m })
+      }
+      continue
+    }
     // Otherwise what the command, and any patch or script file it reads, mentions is the guess.
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
@@ -323,8 +336,11 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (kind === null) {
       // A destination the reader could not follow, spelled with no look changing name, may still be
       // one when the command names a look changing file anywhere: held, as ask before saving holds
-      // lasting memory (lessons review of #991). A command naming none runs.
-      const named = !t.path && tool === 'Bash' ? mentionedLookFiles(String(input.command ?? '')) : []
+      // lasting memory (lessons review of #991). A command naming none runs. Only a name the shell
+      // fills in itself (a variable or a command's output in its last part) may be one: `$D/spec.json`
+      // is a spec wherever $D is, so what its heredoc's data names is data (#1151).
+      const unknownName = /[$`]/.test(t.word.split('/').pop() ?? '')
+      const named = !t.path && tool === 'Bash' && unknownName ? mentionedLookFiles(String(input.command ?? '')) : []
       if (named.length) {
         unsureFiles.push(t.word)
         why ||= `where the command writes ${t.word} could not be followed, and the command names ${listed(named)}`

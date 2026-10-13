@@ -318,9 +318,29 @@ describe('writes: what the words do not name', () => {
   })
   test('an inline script that writes a file is a write the words do not name', () => {
     expect(read(`python3 -c "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"`).unnamed).toEqual([
-      { what: 'an inline python3 script', words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"], inputs: [], targets: ['/Users/dan/.claude/CLAUDE.md'] },
+      {
+        what: 'an inline python3 script',
+        words: ['python3', '-c', "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')"],
+        inputs: [],
+        targets: ['/Users/dan/.claude/CLAUDE.md'],
+        program: "open('/Users/dan/.claude/CLAUDE.md', 'a').write('rule')",
+        folder: CWD,
+      },
     ])
     expect(read(`node -e "require('fs').appendFileSync('AGENTS.md', 'x')"`).unnamed.map(u => u.what)).toEqual(['an inline node script'])
+  })
+  // #1151: a program's text and the folder it runs in, a cd before it followed, so a guard reads the
+  // names in the program it runs, never another command's heredoc data, and places a bare one there.
+  test('a program the reader read carries its text and the folder it runs in, or no folder after a cd it cannot follow', () => {
+    const fed = "cat > spec.json <<'EOF'\n{ \"styles\": \"screen.css\" }\nEOF\npython3 - <<'EOF'\nf = 'out.css'\nopen(f, 'w').write('x')\nEOF"
+    expect(read(`cd /tmp/round && ${fed}`).unnamed).toEqual([
+      { what: 'a python3 script on standard input', words: ['python3', '-', '<<EOF'], inputs: [], targets: ['/tmp/round/out.css'], program: "f = 'out.css'\nopen(f, 'w').write('x')", folder: '/tmp/round' },
+    ])
+    expect(read(`D=/tmp/round; cd $D && ${fed}`).unnamed[0]?.folder).toBe('/tmp/round')
+    expect(read(fed).unnamed[0]?.folder).toBe(CWD)
+    const lost = read(`cd $UNSET_ROUND && ${fed}`).unnamed[0]
+    expect(lost?.program).toContain("f = 'out.css'")
+    expect(lost && 'folder' in lost).toBe(false)
   })
   test('an inline script that only reads is not a write', () => {
     expect(read(`python3 -c "print(open('CLAUDE.md').read())"`).unnamed).toEqual([])
