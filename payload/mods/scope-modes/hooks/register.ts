@@ -1282,7 +1282,9 @@ type ManualStepsNoun = {
 }
 // The noun is called in place (the engine refuses one bound or passed), so its absence (the mod not
 // loaded) arrives as a TypeError, as manual steps reads this mod's own noun.
-const isAbsentNoun = (err: unknown) => err instanceof TypeError && /undefined|not a function|null/.test(msg(err))
+// Only a TypeError naming the noun call itself ("evaluating '$.manualSteps.add'", or "reading 'add'"
+// of undefined) is the mod not loaded (lessons review): any other is a failure, said and tried again.
+const isAbsentNoun = (err: unknown) => err instanceof TypeError && /manualSteps|\(reading '(?:add|finish)'\)/.test(msg(err))
 const STEP_SAID = "The reminder to review the night's proposed issues"
 
 // The morning turn of the session that woke, and its pickers counted, while it runs.
