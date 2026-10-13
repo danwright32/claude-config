@@ -530,7 +530,7 @@ does not catch.
 | `check-deferrals.sh` | An added comment or doc line that defers work ("for now", "separate effort", "deferred to", "follow up" and the rest of `lib/deferral-phrases.txt`) with no `#NNNN` on that line or within two lines. `deferral-edit-check.sh` says the same thing at the moment the text is written. | `SKIP_DEFERRAL_CHECK=1` |
 | `check-doc-issue-refs.sh` | A touched doc whose sentence claims an issue is still pending ("#N is the issue for", "once #N lands") when GitHub says that issue is closed or that pull merged. Anchored to the reference and blind to past tense, because 96 percent of the issues Slate's docs cite are closed. Fails open out loud without `gh`. | `SKIP_DOC_REFS_CHECK=1` |
 | `check-bundle-budget.sh` | The gzipped client bundle (Next `.next/static/chunks`, Vite `dist/assets`) grew past both 3 percent and 10 KB over the recorded total, when the build output is newer than the commit. A stale or absent build is said and not judged. The record follows every total that passes, so it never drifts behind main (#586), and a repository committing its own `bundle-budget.txt` is left to judge itself. | `ACCEPT_BUNDLE_GROWTH=1` records the new total; `SKIP_BUNDLE_BUDGET_CHECK=1` |
-| `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
+| `ai-review-on-push.sh` | Nothing. It is advisory, and runs only on a push the lessons review gate does not hold (a push of the default branch, or one carrying `SKIP_PR_REVIEW=1`; see below): after a successful push it hands the diff, plus the full text of the changed files and the complete list of every file the push changed, to `claude -p` in a detached process and returns at once, with the lessons index in its prompt and the rest of the global config switched off; `ai-review-nudge.sh` prints the answer on a later prompt, once per session, marking it shown only once the whole message is out, so a prompt whose hook is cut off at its timeout loses nothing. It exists for the class no scan can see, a sibling left unchanged. | `SKIP_AI_REVIEW_CHECK=1` |
 
 What each one measured, and what it does not catch, is in the hook's own header. Two worth knowing
 without opening them. The duplication guard does not catch a copied two line block under 160
@@ -564,10 +564,13 @@ the review in the background when `gh pr create` succeeds, and again for the new
 lands on a branch whose pull request is open; `pr-review-gate.sh` refuses a merge until
 the review of that pull request's head has finished and its findings have been READ. Printing them
 is not reading them (claude-config#788: another hook can refuse the same merge and only its message
-is shown, and the nudge reaches whichever session prompts next), so the gate's refusal and the
-`ai-review-nudge.sh` message both carry a read key, and the merge is allowed once a merge command
+is shown), so the gate's refusal carries a read key, and the merge is allowed once a merge command
 presents it as `PR_REVIEW_READ=<key> <the merge command>`; until then every attempt is refused
-with the findings again. A head
+with the findings again. The refusal is the one place these findings are shown:
+`ai-review-nudge.sh`, which shows push reviews on a later prompt, does not show a whole branch
+review (claude-config#1090). It reached whichever session prompted next, rarely the one merging,
+and walking these reviews (2,008 of 2,010 on 2026-10-12) timed it out on the first prompt of every
+new session. A head
 with no review gets one started by the gate. A repo whose own script merges inside it asks the same
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
@@ -645,8 +648,8 @@ own file by adding the mark), a data file (json, csv, xml, txt and the like) und
 folder, and a file under `mods/<mod>/tests/mod-kit/` whose content is byte for byte that of the
 same path in `mods/mod-kit/`, compared blob to blob. Any that still fit are put back, smallest
 first. The review goes ahead when the rest fits. Every file left out is named, with why and its
-size, in the start line, the reviewer's own file list, every verdict the gate prints, and the
-nudge, so none is unread without saying so. A branch under the cap leaves out nothing.
+size, in the start line, the reviewer's own file list, and every verdict the gate prints, so none
+is unread without saying so. A branch under the cap leaves out nothing.
 
 When the rest is still over the cap, the branch is read in groups of files that each fit
 (claude-config#601), packed in path order, every group by the same reviewer with the same deadline,

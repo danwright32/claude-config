@@ -74,9 +74,10 @@ sys.stdout.write("\x1f".join([s(d.get("cwd")), s(d.get("session_id")), s(r.get("
 # A finished review's text, capped (claude-config#560). A hook's output reaches the session through
 # additionalContext or a refusal reason, and anything past 10,000 characters is cut by the platform
 # with nothing said, so a review with two hundred findings would arrive as its first forty and read
-# as the whole of it (L351). Both readers, the nudge and the merge gate, print through this one
-# function: at most as many lines of the review as its second argument allows, each cut at the
-# length its third allows, then how many were left out and the file holding all of them.
+# as the whole of it (L351). Both readers, the nudge (push reviews) and the merge gate (whole branch
+# reviews), print through this one function: at most as many lines of the review as its second
+# argument allows, each cut at the length its third allows, then how many were left out and the
+# file holding all of them.
 #
 # Every line passes through ar_redact first, before it is cut to length, because a cut JWT no
 # longer looks like one (claude-config#581).
@@ -88,12 +89,13 @@ ar_capped_body() {   # $1 = finished review file, $2 = max lines, $3 = max chars
   ' 2>/dev/null
 }
 
-# The READ KEYS of one pull request review's findings (claude-config#788). Every message that
-# shows the findings (the merge gate's refusal, the nudge) ISSUES a fresh random key and prints it,
-# and only its sha256 is kept, one per line, in <file>.readkeys-<finished stamp>. A merge presenting
-# PR_REVIEW_READ=<key> then proves the findings reached the session doing the merge, because the
-# plain key exists nowhere but in a message that carried them: a session that never saw them cannot
-# read it off the disk (lessons review of #795). Before this the gate judged findings read because
+# The READ KEYS of one pull request review's findings (claude-config#788). The one message that
+# shows the findings, the merge gate's refusal, ISSUES a fresh random key each time it shows them and
+# prints it, and only its sha256 is kept, one per line, in <file>.readkeys-<finished stamp>. (The
+# nudge issued one too while it showed these reviews; it stopped showing them in
+# claude-config#1090.) A merge presenting PR_REVIEW_READ=<key> then proves the findings reached
+# the session doing the merge, because the plain key exists nowhere but in a message that carried
+# them: a session that never saw them cannot read it off the disk (lessons review of #795). Before this the gate judged findings read because
 # it had PRINTED them, and on #774 another hook refused the same merge, only that hook's message
 # was shown, and the retry merged unread. The stamp in the name means a review written again for
 # the same head starts with no valid key. A line under PIPE_BUF is appended atomically, so
@@ -228,9 +230,10 @@ ar_size_text() {   # $1 = bytes
 # files, then how many more and the file holding them all: a branch with hundreds of fixtures must
 # not push a refusal past the 10,000 character hook output cap, which cuts it silently so the first
 # names read as the whole list (L351). Prints nothing when nothing was left out. Every surface that
-# reports a review prints it (the gate's verdicts, the start line, the nudge), so none reports a
-# review without saying what it did not read. A review refused as too large never ran, so for that
-# outcome ($2) it says what WOULD have been left out, never that a review left it out (L11).
+# reports a review prints it (the gate's verdicts and the start line; the nudge no longer reports
+# these reviews, claude-config#1090), so none reports a review without saying what it did not
+# read. A review refused as too large never ran, so for that outcome ($2) it says what WOULD have
+# been left out, never that a review left it out (L11).
 ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
   [ -s "$1" ] || return 0
   LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'

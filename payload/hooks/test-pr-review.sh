@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for the lessons review of a whole branch before a pull request merges (claude-config#560):
 # lib/pr-review.sh (start, check), ai-review-on-pr.sh (PostToolUse on `gh pr create`),
-# pr-review-gate.sh (PreToolUse on every merge route), the shared runner's pr mode, the nudge's
-# cap, and the citation ledger.
+# pr-review-gate.sh (PreToolUse on every merge route), the shared runner's pr mode, the nudge leaving
+# these reviews to the gate (claude-config#1090), and the citation ledger.
 #
 # Every outcome the design names has a test here that PRODUCES it (L151): finished with findings,
 # finished clean, still running, failed, did not finish, came back empty, abandoned, could not run
@@ -689,8 +689,10 @@ out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"
 
 # ===========================================================================================
-# 5. The nudge shows a pr review under the 10,000 char hook cap, with a read key; showing it there
-#    does not allow the merge (#788).
+# 5. The nudge does not show a whole branch review (claude-config#1090, Dan 2026-10-12). It reached
+#    whichever session prompted next, which was rarely the one merging, and walking these reviews
+#    timed it out on the first prompt of every new session. The merge gate shows the findings on its
+#    own, under the 10,000 char hook cap, and issues the read key the merge needs (#788).
 # ===========================================================================================
 reset_state
 big="$WORKDIR/big.txt"; : > "$big"
@@ -698,44 +700,34 @@ for i in $(seq 1 200); do printf 'App/Sync.swift:%d: finding number %d with enou
 FAKE_CLAUDE_OUT_FILE="$big" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA" || bad "the big review finished"
 out="$(printf '{"session_id":"n1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "the nudge names it as the pull request review" "Lessons review of the whole branch" "$out"
-check "with the total count" "200 findings" "$out"
-check "and where the full list is" "$(final_of "$HEAD_SHA")" "$out"
-[ "${#out}" -lt 10000 ] && ok || bad "the nudge stays under the 10,000 char hook cap (was ${#out})"
-# The nudge reaches whichever session prompts next in this repository, which need not be the one
-# merging (on #774 the nudge marked them delivered in the coordinating session while a subagent
-# merged), so showing them there is not proof the merger read them (#788). It carries the read key,
-# so the session that saw them can merge with it.
-nk="$(key_in "$out")"
-[ -n "$nk" ] && ok || bad "the nudge names the read key"
+check_eq "the nudge shows nothing of a whole branch review with findings" "" "$out"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "findings the nudge showed still refuse a merge without the key" "1" "$rc"
-[ "${#out}" -lt 10000 ] && ok || bad "the gate's own message stays under the cap too"
-out="$(PR_REVIEW_READ="$nk" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
-check_eq "and the nudge's key allows it" "0" "$rc"
+check_eq "the merge gate refuses it" "1" "$rc"
+check "showing the findings itself, with the total count" "200 findings" "$out"
+check "and where the full list is" "$(final_of "$HEAD_SHA")" "$out"
+[ "${#out}" -lt 10000 ] && ok || bad "the gate's message stays under the 10,000 char hook cap (was ${#out})"
+gk5="$(key_in "$out")"
+[ -n "$gk5" ] && ok || bad "and issues the read key on its own, with no nudge involved"
+out="$(PR_REVIEW_READ="$gk5" prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
+check_eq "and its key allows the merge" "0" "$rc"
 
-# 5a. With no read key to give (the review records no finish time), the nudge says so and names
-#     the remedy, rather than saying the merge waits on a key it never shows (L11).
+# 5a. Nor a review that could not be given a read key, or one that found nothing: the gate says
+#     each of those itself (3a2 and the clean case above), so the nudge has nothing to add.
 reset_state
 mkdir -p "$AI_REVIEW_STATE_DIR"
 printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstatus=ok\nkind=pr\nfindings=1\n\nApp/Sync.swift:3: x (L1). Should be: y.\n' "$HEAD_SHA" > "$(final_of "$HEAD_SHA")"
 out="$(printf '{"session_id":"k1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "the nudge says no read key could be made" "No read key could be made" "$out"
-check "and names the restart" "pr-review.sh restart" "$out"
-
-# 5b. The nudge's sentence fits the count: one finding is singular, and a clean review says it is
-#     clean rather than that the merge waits on findings it does not have (L21).
+check_eq "the nudge shows nothing of a review with no read key to give" "" "$out"
 reset_state
 FAKE_CLAUDE_OUT="No issues found." prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA"
 out="$(printf '{"session_id":"c1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "a clean review says so" "found nothing" "$out"
-check_not "and does not say the merge waits on it" "merge waits" "$out"
+check_eq "nor of a clean one" "" "$out"
 reset_state
 prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA"
-out="$(printf '{"session_id":"c2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "one finding is singular" "with 1 finding " "$out"
+out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
+check "the gate's sentence fits the count: one finding is singular" "with 1 finding." "$out"
 
 # 6. The ledger outlives the 14 day sweep: the nudge's sweep leaves it alone.
 touch -t 202601010000 "$AI_REVIEW_STATE_DIR/citations.tsv"
@@ -991,29 +983,10 @@ named="$(printf '%s\n' "$note" | grep -o 'many/f[0-9]*\.json' | sort -u | wc -l 
 check "#583 the largest are the ones named" "payload/mods/demo/tests/mod-kit/hooks/reader.ts" "$note"
 [ "${#note}" -lt 2500 ] && ok || bad "#583 the left out note stays short (${#note} chars)"
 check "#583 the start line is capped the same way" "more, all listed in" "$start_out"
-# The nudge shows a finished review too, so it names what that review did not read (#1003).
+# The nudge no longer reports a whole branch review at all (claude-config#1090), so the verdict
+# above is where what it left out is named.
 nout="$(printf '{"session_id":"lo1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "#583 the nudge's report of the review names the files it left out" "scripts/fixtures/big.json" "$nout"
-# And counts that note against its own output budget, so three long reviews cannot push it past the
-# 10,000 character hook cap (lessons review of #1003, L351).
-reset_state
-mkdir -p "$AI_REVIEW_STATE_DIR"
-long="$(printf 'x%.0s' $(seq 1 110))"
-for n in 1 2 3; do
-  lf="$(final_of "fake$n")"
-  {
-    printf 'repo=repo\nbranch=b%s\nsha=fake%s\nstarted=1\nfinished=2\nstatus=ok\nkind=pr\nfindings=15\n\n' "$n" "$n"
-    for l in $(seq 1 15); do printf 'App/F%s.swift:%s: %s (L1). Should be: y.\n' "$n" "$l" "$long"; done
-  } > "$lf"
-  for l in $(seq 1 12); do printf '%s\tscripts/fixtures/%s/%s%s.json\tfixture\tfixture data\n' "$((5000 - l))" "$long" "$long" "$l"; done > "$lf.leftout"
-done
-nout="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-[ "${#nout}" -lt 10000 ] && ok || bad "#583 the nudge stays under the hook cap with left out notes counted (${#nout} chars)"
-check "#583 holding back what does not fit, and saying so" "not shown" "$nout"
-# And keeps that promise: the next prompt takes the full path and shows what was held, rather than
-# the fast path, which would hide it until something else wrote to the state folder (review of #601).
-nout2="$(printf '{"session_id":"lo2","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"again"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
-check "#583 a review held back is shown on the next prompt" "Lessons review of the whole branch" "$nout2"
+check_eq "#583 the nudge says nothing of the review, left out files included" "" "$nout"
 # A review with findings names them as well, in the refusal that carries the findings.
 reset_state
 PR_REVIEW_MAX_BYTES=$DCAP prr start --dir "$REPO" --sha "$DATA_SHA" --base-ref "$DATA_BASE" >/dev/null
