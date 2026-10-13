@@ -444,6 +444,12 @@ if [ -f "$REAL/payload/hooks/run-all-tests.sh" ]; then
       && check "and $_want is among them" ok \
       || check "and $_want is among them" "got=$_sel"
   done
+  # The secret scan over every file a push publishes is a scanner by the same rule, and it is the
+  # one check that stands between a credential anywhere in the tree and GitHub (claude-config#1128).
+  # Nothing in this gate names it, so this is what says it is still picked.
+  grep -q '^SUITE tests/test-payload-secret-scan\.sh$' <<< "$_sel" \
+    && check "and the whole tree secret scan is among them" ok \
+    || check "and the whole tree secret scan is among them" "got=$_sel"
   grep -q '^SECTION .*#145' <<< "$_sel" \
     && check "and the section that scans comments for undated numbers is selected" ok \
     || check "and the section that scans comments for undated numbers is selected" "got=$_sel"

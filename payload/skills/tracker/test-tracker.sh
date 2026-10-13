@@ -283,7 +283,9 @@ export FAKE_HEADERS_ANSWER="{\"ok\":true,\"headers\":[\"Project Name\",\"Link\"]
 export FAKE_ANSWER="{\"ok\":true,\"spreadsheetId\":\"$SHEET_ID\"}"
 
 GOOD_URL="https://script.google.com/macros/s/FAKEDEPLOYMENT/exec"
-GOOD_TOKEN="test_token_0123456789_abcdef_not_real"
+# At least TOKEN_MIN_LENGTH long, and written with spaces so the secret scan, which matches a key
+# such as GOOD_TOKEN in any letter case, reads it as the fake it is (claude-config#1128).
+GOOD_TOKEN="test token 0123456789 abcdef, not real"
 write_local(){ # write_local <url> <token>
   python3 -c 'import json,sys; json.dump({"url":sys.argv[2],"token":sys.argv[3]}, open(sys.argv[1],"w"))' "$SK/config.local.json" "$1" "$2"
 }
