@@ -2705,6 +2705,21 @@ export CLAUDE_HOME="$CH" SYNC_REPO="$REPO" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 PSH="$WORK/ps-home"; PSR="$WORK/ps-repo"
 mkdir -p "$PSH" "$PSR/payload"; echo '{"hooks":{}}' > "$PSH/settings.json"
 
+# A settings.json registering the given commands, for the sections about hook registrations (#300,
+# #359, #360). Here rather than in the first of them, because a sharded run puts the later two in
+# shards that never run #300, and there each call said `command not found` and its case never ran
+# while the suite stayed green (claude-config#1044).
+sh_settings(){ # sh_settings <home> <command...>   -> a settings.json registering those commands
+  local home="$1"; shift
+  python3 - "$home/settings.json" "$@" <<'PY_SET'
+import json, sys
+out, cmds = sys.argv[1], sys.argv[2:]
+json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash",
+          "hooks": [{"type": "command", "command": c} for c in cmds]}]}},
+          open(out, "w"), indent=2)
+PY_SET
+}
+
 
 section "== push =="
 bash "$SCRIPT" push >/dev/null 2>&1
@@ -5561,7 +5576,6 @@ ZDIR="$WORK/zsh"; mkdir -p "$ZDIR"
 # (claude-config#105).
 ALDIR="$WORK/alias-la"; mkdir -p "$ALDIR"
 ALFS="$WORK/alias-fswatch"; printf '#!/usr/bin/env bash\ntrue\n' > "$ALFS"; chmod +x "$ALFS"
-ALIAS_LINE="alias claudesync='"'"'$HOME/claude-config-sync/claude-sync pull'"'"'"
 
 # 1. a zshrc with no alias gets one appended, and existing content is preserved
 ZRC="$ZDIR/rc-plain"
@@ -18043,16 +18057,8 @@ SHA_H="$WORK/sendhooks-homeA"; mkdir -p "$SHA_H/hooks"
 SHB_R="$WORK/sendhooks-repoB"
 SHB_H="$WORK/sendhooks-homeB"; mkdir -p "$SHB_H/hooks"
 
-sh_settings(){ # sh_settings <home> <command...>   -> a settings.json registering those commands
-  local home="$1"; shift
-  python3 - "$home/settings.json" "$@" <<'PY_SET'
-import json, sys
-out, cmds = sys.argv[1], sys.argv[2:]
-json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash",
-          "hooks": [{"type": "command", "command": c} for c in cmds]}]}},
-          open(out, "w"), indent=2)
-PY_SET
-}
+# sh_settings is defined in the preamble: three sections call it, and two of them ran in shards
+# that never ran this one (claude-config#1044).
 sh_registers(){ # sh_registers <settings-or-fragment file> <command> -> 0 when it names it
   grep -qF "$2" "$1" 2>/dev/null
 }
