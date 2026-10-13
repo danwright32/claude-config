@@ -2820,8 +2820,12 @@ lesson_core_state(){   # $1 = tree, $2 = the split rendering of its lessons file
   n="$(printf '%s\n' "$ids" | grep -c '^L' || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   [ "$n" -gt 0 ] || { echo "fallback empty"; return 0; }
+  # Every two file awk in this script tells its first file by NAME (FILENAME == ARGV[1]). The
+  # count test it replaced, NR == FNR, stays true through the second file when the first is empty,
+  # which let core-set accept numbers that are not lessons when the library rendered nothing
+  # (claude-config#1028). test-two-file-awk.sh fails on a new one.
   unknown="$(printf '%s\n' "$ids" | awk -F'\t' '
-    NR == FNR { if (match($3, /^- L[0-9]+\./)) have[substr($3, 3, RLENGTH - 3)] = 1; next }
+    FILENAME == ARGV[1] { if (match($3, /^- L[0-9]+\./)) have[substr($3, 3, RLENGTH - 3)] = 1; next }
     NF && !($1 in have) { printf "%s ", $1 }' "$2" -)"
   [ -z "$unknown" ] || { echo "fallback unknown ${unknown% }"; return 0; }
   declared="$(lesson_core_declared "$list")"
@@ -2859,7 +2863,7 @@ lesson_core_toc(){   # $1 = the listed ids, one Lnnn per line, $2 = the split re
   printf '`~/claude-config-sync/claude-sync lesson L174`, or a whole section in\n'
   printf '~/.claude/LESSONS-INDEX-<section>.md.\n\n'
   printf '%s\n' "$1" | awk -F'\t' '
-    NR == FNR { if ($1 != "") want["- " $1 "."] = 1; next }
+    FILENAME == ARGV[1] { if ($1 != "") want["- " $1 "."] = 1; next }
     !match($3, /^- L[0-9]+\./) { next }
     { if (!($1 in title)) { title[$1] = $2; order[++n] = $1 }
       total[$1]++
@@ -2882,7 +2886,7 @@ write_lesson_core_files(){   # $1 = tree, $2 = split rendering, $3 = library nam
       while IFS="$(printf '\t')" read -r slug title; do
         [ -n "$slug" ] || continue
         lines="$(printf '%s\n' "$ids" | awk -F'\t' -v s="$slug" '
-          NR == FNR { want["- " $1 "."] = 1; next }
+          FILENAME == ARGV[1] { want["- " $1 "."] = 1; next }
           $1 == s && match($3, /^- L[0-9]+\./) && (substr($3, 1, RLENGTH) in want) { print $3 }' - "$2")"
         [ -n "$lines" ] || continue
         name="$LESSON_CORE_PREFIX-$slug.md"
@@ -2944,9 +2948,9 @@ do_core_set(){   # $1 = a file of lesson numbers
   [ "$n" -gt 0 ] || die "core-set: $1 names no lesson. Nothing was written."
   idx="$(scratch_file)" || die "core-set could not make a scratch file. Nothing was written."
   lesson_entries_render "$src" index > "$idx" 2>/dev/null
-  unknown="$(printf '%s\n' "$ids" | awk 'NR == FNR { if (match($0, /^- L[0-9]+\./)) have[substr($0, 3, RLENGTH - 3)] = 1; next } NF && !($1 in have) { printf "%s ", $1 }' "$idx" -)"
+  unknown="$(printf '%s\n' "$ids" | awk 'FILENAME == ARGV[1] { if (match($0, /^- L[0-9]+\./)) have[substr($0, 3, RLENGTH - 3)] = 1; next } NF && !($1 in have) { printf "%s ", $1 }' "$idx" -)"
   if [ -n "$unknown" ]; then rm -f "$idx"; die "core-set: these are not lessons in $src: ${unknown% }. Nothing was written."; fi
-  chars="$(printf '%s\n' "$ids" | awk 'NR == FNR { want["- " $1 "."] = 1; next } match($0, /^- L[0-9]+\./) && (substr($0, 1, RLENGTH) in want) { c += length($0) + 1 } END { print c + 0 }' - "$idx")"
+  chars="$(printf '%s\n' "$ids" | awk 'FILENAME == ARGV[1] { want["- " $1 "."] = 1; next } match($0, /^- L[0-9]+\./) && (substr($0, 1, RLENGTH) in want) { c += length($0) + 1 } END { print c + 0 }' - "$idx")"
   rm -f "$idx"
   cap="${SYNC_CORE_CAP:-20000}"
   case "$cap" in ''|*[!0-9]*) cap=20000 ;; esac
@@ -5623,7 +5627,7 @@ unapplied_paths(){
       # -m so a merge commit the shared repo holds names what it changed too: over counting holds
       # back more, which is the safe direction.
       if theirs="$(git -C "$SYNC_REPO" log -m --format= --name-only "${base_list[@]}" --not "$last" -- payload 2>/dev/null)"; then
-        changed="$(printf '%s\n' "$changed" | awk 'NR == FNR { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$theirs") -)"
+        changed="$(printf '%s\n' "$changed" | awk 'FILENAME == ARGV[1] { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$theirs") -)"
       fi
     fi
   fi
@@ -7866,7 +7870,7 @@ pull_from_repo_or_die(){
   if [ "$behind" -gt 0 ]; then
     if pending="$(uncommitted_paths)" && [ -n "$pending" ] \
        && incoming="$(git -C "$SYNC_REPO" -c core.quotePath=false diff --name-only --no-renames HEAD "origin/$branch" 2>/dev/null)"; then
-      clashes="$(printf '%s\n' "$pending" | awk 'NR == FNR { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$incoming") -)"
+      clashes="$(printf '%s\n' "$pending" | awk 'FILENAME == ARGV[1] { if ($0 != "") t[$0] = 1; next } ($0 in t)' <(printf '%s\n' "$incoming") -)"
       clashing="$(printf '%s\n' "$clashes" | awk '/^payload\//')"
       outside="$(printf '%s\n' "$clashes" | awk 'NF && !/^payload\//')"
     fi

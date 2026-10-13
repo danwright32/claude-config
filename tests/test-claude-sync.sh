@@ -19537,6 +19537,22 @@ printf 'L1\nL77\n' > "$WORK/lcore-bad.txt"
 out_lcbad="$(CLAUDE_HOME="$LCH" SYNC_REPO="$LCR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-bad.txt" 2>&1)"; rc_lcbad=$?
 check "#564 core-set refuses a lesson that does not exist, naming it" "[ \$rc_lcbad -ne 0 ] && case \"\$out_lcbad\" in *L77*) true ;; *) false ;; esac"
 
+# AN EMPTY LIBRARY KNOWS NO LESSON (claude-config#1028). core-set checked that each listed number
+# is a real lesson by reading the rendered library as the FIRST of two files and telling the files
+# apart with NR == FNR, which stays true through the second file when the first is empty. So a
+# library that rendered nothing read every listed number as the library itself, found none of them
+# unknown, measured 0 chars, and wrote the list. A lessons file holding no entry is how a render
+# comes back empty. (The send's own check of the list never sees an empty render: the index is
+# refused before it is asked, so its copy of the same test was not reachable that way.)
+LCE="$WORK/lcore-empty"; mkdir -p "$LCE" "$WORK/lcore-empty-repo"
+echo '{"hooks":{}}' > "$LCE/settings.json"; printf '# rules\n' > "$LCE/CLAUDE.md"
+printf '# Lessons\n\n## Proof over green\n\n' > "$LCE/LESSONS.md"
+printf 'L1\nL2\n' > "$WORK/lcore-empty-want.txt"
+out_lce="$(CLAUDE_HOME="$LCE" SYNC_REPO="$WORK/lcore-empty-repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" core-set "$WORK/lcore-empty-want.txt" 2>&1)"; rc_lce=$?
+dbg "#1028 core-set against an empty library said ($rc_lce): $out_lce"
+check "#1028 core-set against a library with no lessons refuses every number, naming them" \
+  "[ \$rc_lce -ne 0 ] && case \"\$out_lce\" in *'not lessons'*'L1 L2'*) true ;; *) false ;; esac && [ ! -f '$LCE/LESSONS-CORE.txt' ]"
+
 # 8. TWO MACS. The list travels, a removal travels, and a Mac that never had a list does not delete
 #    the other Mac's (L625, L381).
 LCB="$WORK/lcore-bare.git"; git init -q --bare -b main "$LCB"
