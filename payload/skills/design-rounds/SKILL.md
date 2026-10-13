@@ -184,6 +184,7 @@ nothing on screen changes, build no switcher, and close one of two ways.
   and the question "Skip design rounds for this issue?". The guard words it, and its answer
   **Not a look change** lets that one edit through, recorded as his word, while every
   other look changing edit stays held. Then send the refused call again, unchanged.
+- **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 
 ## What Dan reads first: what changes on screen
 
@@ -200,7 +201,6 @@ with the line the refusal gave it, and the main session asks with it.
 A Claude Code mod's own hook file (`mods/<mod>/hooks/<file>.tsx`) counts as a screen file, because
 it draws Claude Code's panels, but an edit to one that touches none of its JSX and names none of
 the words a mod draws with (a colour, a frame, a border, a row) is logic and goes through unasked.
-- **Nothing is waiting**: there is nothing to unblock, so ask nothing and carry on.
 
 ## The last step: is this design settled?
 
