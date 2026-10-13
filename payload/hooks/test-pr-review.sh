@@ -187,7 +187,17 @@ wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed
   # for and the absence is the answer.
   local f; f="$(final_of "$1")"; local t0=$SECONDS
   while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
-  [ -e "$f" ]
+  [ -e "$f" ] || return 1
+  # The review file is not the runner's last act: it then appends the outcome ledger row and only
+  # then removes its input (ai-review-run.py; a review in groups removes its run's parts folder after
+  # the row). A check reading the ledger as soon as the file appeared raced that row, and lost it on
+  # CI (run 38463673498: "#1168 recorded as no pull request", expected none, got nothing; reproduced
+  # on 2026-10-13 with a 2 s pause put in front of ar_pr_ledger, which failed 18 checks of this
+  # suite). So the wait ends on the input being gone.
+  local n="${f##*/}"; n="${n%.txt}"
+  while { [ -e "$AI_REVIEW_STATE_DIR/$n.diff" ] || compgen -G "$AI_REVIEW_STATE_DIR/parts/$n.*" >/dev/null; } \
+    && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
+  return 0
 }
 # Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
 # under one (claude-config#1097); shared with test-pr-review-push.sh, the story is in the library.
