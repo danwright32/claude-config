@@ -84,6 +84,23 @@ printf '%s\n' "$out" | grep 'redtest-mod' | grep -q '1 fail' \
 ! grep -q "plugin test $M3/untested" "$LOG" && check "a mod with no tests is not run through the test runner" ok \
   || check "a mod with no tests is not run through the test runner" "$(cat "$LOG")"
 
+# 3a. A refusal from the engine carries how busy the machine was (claude-config#1083, L356). On a
+#     loaded Mac mods were reported as "the file did not load" and passed alone minutes later, and
+#     nothing on the line said the machine was loaded. The figure is set through the shared reader's
+#     seam (payload/hooks/lib/load-average.sh), so it is this case's number and not this Mac's.
+LA_HIGH="$TMPROOT/loadavg-high"; printf '#!/bin/sh\necho 41.5\n' > "$LA_HIGH"; chmod +x "$LA_HIGH"
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" LOAD_AVERAGE_CMD="$LA_HIGH" LOAD_AVERAGE_CORES=8 bash "$CHECK" "$M3" 2>&1)"
+printf '%s\n' "$out" | grep 'redtest-mod' | grep -q 'load average 41.5 on 8 cores, more than this machine has cores' \
+  && check "#1083 a failing mod test carries the load average and says the machine was busier than its cores" ok \
+  || check "#1083 a failing mod test carries the load average and says the machine was busier than its cores" "$out"
+out="$(STUB_LOG="$LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC_PASS" LOAD_AVERAGE_CMD="$LA_HIGH" LOAD_AVERAGE_CORES=8 bash "$CHECK" "$M2" 2>&1)"
+printf '%s\n' "$out" | grep 'broken-mod' | grep -q 'load average 41.5 on 8 cores' \
+  && check "#1083 a mod validate refuses carries the load average too" ok \
+  || check "#1083 a mod validate refuses carries the load average too" "$out"
+printf '%s\n' "$out" | grep ' ok ' | grep -q 'load average' \
+  && check "#1083 while a mod that passed carries none" "$out" \
+  || check "#1083 while a mod that passed carries none" ok
+
 # 3b. Every mod ships its own tsconfig.json (Dan, 2026-10-04, after #638): one without it gets the
 #     copy Claude Code generates, which the sync then sends up as a local edit.
 M3B="$TMPROOT/m3b"; mkmod "$M3B" bare-mod; rm "$M3B/bare-mod/tsconfig.json"; mkmod "$M3B" dressed

@@ -181,14 +181,17 @@ default_ambient(){
 # processes wanting the processor. A reading taken while four daemons are reading the disk shows an
 # honest, modest ambient CPU and a load average in the nineties, and only the second one says why
 # the suite took twice as long (L356).
+# Read through the one shared reader (payload/hooks/lib/load-average.sh, claude-config#1083), with
+# this tool's own seam handed through. Missing, it reads nothing, which every caller already treats
+# as no reading rather than as an idle machine, and says so once.
 LOADAVG_CMD="${MEASURE_LOADAVG_CMD:-}"
-read_loadavg(){
-  local v
-  if [ -n "$LOADAVG_CMD" ]; then v="$($LOADAVG_CMD 2>/dev/null)"
-  else v="$(sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{ print $1 + 0 }')"; fi
-  case "$v" in ''|*[!0-9.]*) return 0 ;; esac
-  printf '%s' "$v"
-}
+if [ -f "$REPO/payload/hooks/lib/load-average.sh" ]; then
+  . "$REPO/payload/hooks/lib/load-average.sh"
+else
+  printf 'measure-section-time: %s is missing, so no load average will be recorded beside the reading.\n' "$REPO/payload/hooks/lib/load-average.sh" >&2
+  load_average_one_minute(){ :; }
+fi
+read_loadavg(){ load_average_one_minute "$LOADAVG_CMD"; }
 AMBIENT_CMD="${MEASURE_AMBIENT_CMD:-}"
 read_ambient(){
   local v

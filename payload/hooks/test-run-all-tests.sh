@@ -2448,6 +2448,172 @@ case "$n_shown" in ''|*[!0-9]*) n_shown=0 ;; esac
   || check "#505 a suite marking many lines is capped rather than allowed to flood" "it printed $n_shown"
 
 # ---------------------------------------------------------------------------
+# A SUITE THAT CALLED SOMETHING THAT DOES NOT EXIST (claude-config#1044).
+#
+# A case calling a helper before it is defined makes bash print `command not found` on stderr and
+# carry on: the case adds no pass and no fail, the suite prints a clean result line, and the run is
+# green. Three update refusal cases in the tracker suite never ran this way during #1031. A check
+# that never ran reads exactly like one that passed (L98), so the runner fails the suite and names
+# the line, whatever its own result line says.
+# ---------------------------------------------------------------------------
+mk_helper_suite() { # mk_helper_suite <dir> <name> <define the helper first: 1 or 0> <exit>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'pass=0\n'
+    [ "$3" -eq 1 ] && printf 'helper_from_later(){ pass=$((pass + 1)); }\n'
+    printf 'helper_from_later "a case that has to run to count"\n'
+    printf 'printf %s\\\\n "%s passed=1 failed=0"\n' "'%s'" "$MARK"
+    printf 'exit %s\n' "$4"
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+CNF_OK="$TMPROOT/dir-helper-defined"
+mk_helper_suite "$CNF_OK" helper-defined 1 0
+out_cnf_ok="$(bash "$RUNNER" "$CNF_OK" 2>&1)"; code_cnf_ok=$?
+# The control: the same suite with its helper defined passes, so the red below is about the missing
+# command and nothing else in the fixture (L1).
+[ "$code_cnf_ok" -eq 0 ] \
+  && check "#1044 the control: the same suite with its helper defined passes" ok \
+  || check "#1044 the control: the same suite with its helper defined passes" "exit=$code_cnf_ok out=$out_cnf_ok"
+CNF="$TMPROOT/dir-helper-undefined"
+mk_helper_suite "$CNF" helper-undefined 0 0
+out_cnf="$(HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$CNF" 2>&1)"; code_cnf=$?
+[ "$code_cnf" -ne 0 ] \
+  && check "#1044 a suite whose output says command not found fails the run, though it exited 0 with no failures" ok \
+  || check "#1044 a suite whose output says command not found fails the run, though it exited 0 with no failures" "exit=$code_cnf out=$out_cnf"
+printf '%s\n' "$out_cnf" | grep -E '^ +FAIL +test-helper-undefined\.sh' > /dev/null \
+  && check "#1044 and the FAIL line names the suite" ok \
+  || check "#1044 and the FAIL line names the suite" "out=$out_cnf"
+printf '%s\n' "$out_cnf" | grep -F 'helper_from_later: command not found' > /dev/null \
+  && check "#1044 and the line that said it is printed" ok \
+  || check "#1044 and the line that said it is printed" "out=$out_cnf"
+# A second run says the same thing, so it is not a flake, and calling it FLAKY because the second
+# run exited 0 would send the reader looking for randomness that is not there (L11).
+case "$out_cnf" in
+  *FLAKY*) check "#1044 and a recheck that exits 0 but says it again is not called FLAKY" "out=$out_cnf" ;;
+  *) check "#1044 and a recheck that exits 0 but says it again is not called FLAKY" ok ;;
+esac
+
+# The same class one step over: a recheck whose own result line still counts failures exited 0 too,
+# and is no more a flake than the first run was (L30).
+FLK="$TMPROOT/dir-tally-recheck"
+mk_result_suite "$FLK" tallied 4 2 0
+out_flk="$(HOOK_TESTS_FLAKE_RECHECK=1 bash "$RUNNER" "$FLK" 2>&1)"
+case "$out_flk" in
+  *FLAKY*) check "#1044 a recheck whose result line still counts failures is not called FLAKY" "out=$out_flk" ;;
+  *) check "#1044 a recheck whose result line still counts failures is not called FLAKY" ok ;;
+esac
+
+# ---------------------------------------------------------------------------
+# A SUITE REFUSED ITS LOCK DID NOT RUN, AND DID NOT FAIL (claude-config#1083).
+#
+# The sync suite takes a lock so two runs cannot share the machine, and refuses when another run
+# holds it. The runner counted that refusal as FAIL, so a busy afternoon of agents read as broken
+# code. A refusal is said in one agreed line carrying who holds the lock, and reported as NOT RUN.
+# ---------------------------------------------------------------------------
+LOCK_MARK="SUITE""-LOCK-REFUSED"
+mk_locked_suite() { # mk_locked_suite <dir> <name> <holder> [also print a result line: 1]
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "test suite: another run is already going" >&2\n'
+    printf 'printf %s\\\\n "%s %s"\n' "'%s'" "$LOCK_MARK" "$3"
+    [ "${4:-0}" = 1 ] && printf 'printf %s\\\\n "%s passed=0 failed=3"\n' "'%s'" "$MARK"
+    printf 'exit 5\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+LK="$TMPROOT/dir-locked"
+mk_suite "$LK" beside 0
+mk_locked_suite "$LK" locked "process 4242 on a-mac, started 31s ago"
+out_lk="$(env -u CI bash "$RUNNER" "$LK" 2>&1)"; code_lk=$?
+[ "$code_lk" -eq 0 ] \
+  && check "#1083 a suite refused its lock does not fail the run" ok \
+  || check "#1083 a suite refused its lock does not fail the run" "exit=$code_lk out=$out_lk"
+printf '%s\n' "$out_lk" | grep -E '^ +NOT RUN +test-locked\.sh' > /dev/null \
+  && check "#1083 and it is reported as NOT RUN" ok \
+  || check "#1083 and it is reported as NOT RUN" "out=$out_lk"
+printf '%s\n' "$out_lk" | grep -E '^ +FAIL +test-locked\.sh' > /dev/null \
+  && check "#1083 and never as FAIL" "out=$out_lk" \
+  || check "#1083 and never as FAIL" ok
+printf '%s\n' "$out_lk" | grep -E 'test-locked\.sh.*suite lock.*process 4242 on a-mac, started 31s ago' > /dev/null \
+  && check "#1083 and its line names the lock and who holds it" ok \
+  || check "#1083 and its line names the lock and who holds it" "out=$out_lk"
+case "$out_lk" in
+  *"ALL "*" SUITES PASSED"*) check "#1083 and the verdict does not read as a run where everything passed" "out=$out_lk" ;;
+  *) check "#1083 and the verdict does not read as a run where everything passed" ok ;;
+esac
+# The verdict keeps the one shape claude-sync reads its coverage from (hook_suite_coverage), so a
+# pull that met a held lock reports the suite as not run rather than as an unreadable report.
+printf '%s\n' "$out_lk" | grep -E '^ALL 1 SUITES THAT COULD RUN PASSED, and 1 could not run here$' > /dev/null \
+  && check "#1083 and the verdict keeps the shape claude-sync reads" ok \
+  || check "#1083 and the verdict keeps the shape claude-sync reads" "out=$out_lk"
+case "$out_lk" in
+  *"They audit the repository"*) check "#1083 and the summary does not give the no repository reason for a held lock" "out=$out_lk" ;;
+  *) check "#1083 and the summary does not give the no repository reason for a held lock" ok ;;
+esac
+
+# Not a way out of being judged. A suite that printed the refusal and ALSO a score ran, and is
+# judged by the score (L70).
+LK2="$TMPROOT/dir-locked-and-scored"
+mk_locked_suite "$LK2" scored "process 4242 on a-mac, started 31s ago" 1
+out_lk2="$(env -u CI bash "$RUNNER" "$LK2" 2>&1)"; code_lk2=$?
+[ "$code_lk2" -ne 0 ] \
+  && check "#1083 a suite that claims the lock refusal and prints failures still fails" ok \
+  || check "#1083 a suite that claims the lock refusal and prints failures still fails" "exit=$code_lk2 out=$out_lk2"
+
+# And in CI, where one job owns the runner and nothing else should be holding the lock, a refusal
+# means the suite never ran on the one run that decides the merge, so it fails there (L98).
+out_lk3="$(CI=true bash "$RUNNER" "$LK" 2>&1)"; code_lk3=$?
+[ "$code_lk3" -ne 0 ] \
+  && check "#1083 under CI a lock refusal fails the run" ok \
+  || check "#1083 under CI a lock refusal fails the run" "exit=$code_lk3 out=$out_lk3"
+printf '%s\n' "$out_lk3" | grep -E '^ +FAIL +test-locked\.sh.*suite lock' > /dev/null \
+  && check "#1083 and says it was the lock" ok \
+  || check "#1083 and says it was the lock" "out=$out_lk3"
+
+# ---------------------------------------------------------------------------
+# HOW BUSY THE MACHINE WAS when a suite failed (claude-config#1083, L356).
+#
+# On 2026-10-10 one pull reported 32 of 94 suites failing and a rerun minutes later passed them all, on a Mac
+# carrying several suite runs, a backup and iCloud. Nothing in the failure said the machine was
+# loaded. The load average when the suite finished is printed beside its failure, read through a
+# seam so the figure here is set rather than whatever this Mac happens to be doing (L290).
+# ---------------------------------------------------------------------------
+LA="$TMPROOT/dir-load"
+mk_result_suite "$LA" loadfail 3 1 1
+LA_CMD="$TMPROOT/loadavg-high"; printf '#!/bin/sh\necho 37.5\n' > "$LA_CMD"; chmod +x "$LA_CMD"
+out_la="$(LOAD_AVERAGE_CMD="$LA_CMD" LOAD_AVERAGE_CORES=8 HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$LA" 2>&1)"
+printf '%s\n' "$out_la" | grep -E 'load average 37\.5 on 8 cores' > /dev/null \
+  && check "#1083 a failing suite carries the load average beside it" ok \
+  || check "#1083 a failing suite carries the load average beside it" "out=$out_la"
+printf '%s\n' "$out_la" | grep -E 'more than this machine has cores' > /dev/null \
+  && check "#1083 and says when the machine was busier than its cores" ok \
+  || check "#1083 and says when the machine was busier than its cores" "out=$out_la"
+LA_LOW="$TMPROOT/loadavg-low"; printf '#!/bin/sh\necho 1.25\n' > "$LA_LOW"; chmod +x "$LA_LOW"
+out_la2="$(LOAD_AVERAGE_CMD="$LA_LOW" LOAD_AVERAGE_CORES=8 HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$LA" 2>&1)"
+printf '%s\n' "$out_la2" | grep -E 'load average 1\.25 on 8 cores' > /dev/null \
+  && check "#1083 a quiet machine's figure is printed too" ok \
+  || check "#1083 a quiet machine's figure is printed too" "out=$out_la2"
+case "$out_la2" in
+  *"more than this machine has cores"*) check "#1083 and is not called busy" "out=$out_la2" ;;
+  *) check "#1083 and is not called busy" ok ;;
+esac
+# A passing suite carries none, or every line of a green run grows a number nobody needs.
+out_la3="$(LOAD_AVERAGE_CMD="$LA_CMD" LOAD_AVERAGE_CORES=8 bash "$RUNNER" "$R" 2>&1)"
+case "$out_la3" in
+  *"load average"*) check "#1083 a passing suite carries no load average" "out=$out_la3" ;;
+  *) check "#1083 a passing suite carries no load average" ok ;;
+esac
+# Unreadable is said, never printed as a zero (L90).
+LA_BAD="$TMPROOT/loadavg-bad"; printf '#!/bin/sh\necho nonsense\n' > "$LA_BAD"; chmod +x "$LA_BAD"
+out_la4="$(LOAD_AVERAGE_CMD="$LA_BAD" LOAD_AVERAGE_CORES=8 HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$LA" 2>&1)"
+printf '%s\n' "$out_la4" | grep -E 'load average could not be read' > /dev/null \
+  && check "#1083 a load average that could not be read is said, not shown as a number" ok \
+  || check "#1083 a load average that could not be read is said, not shown as a number" "out=$out_la4"
+
+# ---------------------------------------------------------------------------
 # No suite the runner starts can reach a real Claude Code through claude-sync (#828 review, L2).
 # `claude-sync status` asks the claude command which model settings.json runs, and finds it on PATH
 # when SYNC_CLAUDE_BIN is unset. A suite that forgot to set it (test-sync-stuck-notice.sh did, with

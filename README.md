@@ -922,6 +922,15 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
+Three other outcomes are told apart rather than folded into pass or fail. A suite whose output says
+`command not found` fails, naming the line, whatever its own score says: a case calling a helper
+that does not exist adds no pass and no fail, so it otherwise reads as one that passed (#1044). A
+suite refused its lock because another run of it holds it prints `SUITE-LOCK-REFUSED <holder>` and
+is reported as NOT RUN with that holder, not as FAIL; under CI, where nothing else should hold it,
+it fails (#1083). And every failure carries the load average when the suite finished, saying when
+it was more than the machine has cores, as do `tools/check-mods.sh`'s engine refusals, so a failure
+caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`).
+
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
 through `hooks/lib/skill-python-tests.py`, found from disk. To run one skill's alone:

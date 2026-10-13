@@ -22,6 +22,17 @@
 # CHECK_MODS_TS_DIR moves where the pin, the pinned Claude Code types (claude-code-types/) and the
 # record of known type errors are read from, for tests. Nothing is read from an installed copy of a
 # mod (#953), so the same tree gives the same verdict on any machine and in CI.
+# A refusal from the engine carries how busy the machine was (claude-config#1083, L356). On a loaded
+# Mac, mods were reported as "the file did not load" and passed alone minutes later, and nothing on
+# the line said so. Read through the one shared reader (LOAD_AVERAGE_CMD and LOAD_AVERAGE_CORES set
+# it for tests). Missing, every failure says the figure is missing rather than leaving it out.
+_cm_load_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/load-average.sh"
+if [ -f "$_cm_load_lib" ]; then
+  . "$_cm_load_lib"
+else
+  load_average_note(){ printf 'load average could not be read: %s is missing' "$_cm_load_lib"; }
+fi
+
 dir="${1:-}"
 if [ -z "$dir" ] || [ ! -d "$dir" ]; then
   echo "check-mods: '${dir:-<none given>}' is not a folder, so nothing was checked." >&2
@@ -469,7 +480,7 @@ for i in "${!mods[@]}"; do
     continue
   fi
   if [ "$rc" -ne 0 ]; then
-    echo "check-mods: $name refused by claude plugin validate: $(reason "$out" "$rc")"
+    echo "check-mods: $name refused by claude plugin validate: $(reason "$out" "$rc") ($(load_average_note))"
     failed=1
     continue
   fi
@@ -484,7 +495,7 @@ for i in "${!mods[@]}"; do
       continue
     fi
     if [ "$rc" -ne 0 ]; then
-      echo "check-mods: $name failed claude plugin test: $(reason "$out" "$rc")"
+      echo "check-mods: $name failed claude plugin test: $(reason "$out" "$rc") ($(load_average_note))"
       failed=1
       continue
     fi
