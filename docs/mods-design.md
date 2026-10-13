@@ -2363,6 +2363,15 @@ the NurseDex checkout.
   `$D/spec.json` is a spec, whatever its data names.
 - Look edits in the project are held as before: a program writing a stylesheet there, by a bare or
   a written name, and a stylesheet written by heredoc.
+- **Ask before saving reads a program the same way (#1155).** Its guess at a program's writes came
+  from every lasting file the whole command mentioned, another command's heredoc data included, so
+  a spec naming `~/.claude/CLAUDE.md` as data beside a script writing elsewhere was asked about.
+  Now a program the reader read is judged by its own text (as the #940 reading leaves it, a
+  sentence in a python program still text) and its arguments, a bare name placed in its folder (a
+  CLAUDE.md written in a temporary folder outside any checkout is no lasting memory), and kept as
+  written, so asked about, after a cd that cannot be followed. Whether a variable can be set is
+  still read from the whole command. A write the reader followed through a variable is still
+  judged by everything the command mentions (#743), which this leaves as it was.
 
 ## Picker manners (#615), built 2026-10-04
 

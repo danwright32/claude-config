@@ -229,6 +229,20 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
       for (const t of u.targets) if ((await lastingMemory(t, home, inCheckout)) && !out.includes(display(t, home))) out.push(display(t, home))
       continue
     }
+    // A program the reader read is guessed at from its own text and arguments, a bare name placed in
+    // the folder it runs in (#1155, mod-kit's `program` and `folder` since #1151): never from another
+    // command's heredoc data in the same call, nor from the session's folder. Its text is read as
+    // mentionText left it, so a sentence in a python program naming lasting memory stays text (#940).
+    if (u.program !== undefined) {
+      const own = text.includes(u.program) ? u.program : withoutPythonText(u.program)
+      const said = [own, ...u.words.filter(x => x !== u.program)].join('\n')
+      for (const m of await mentioned(said, home, inCheckout, isSet, u.folder, command))
+        if (!out.includes(m)) {
+          out.push(m)
+          guessed.push(m)
+        }
+      continue
+    }
     // What the command mentions is a guess at the file; what a patch it reads names is what it writes.
     for (const m of await mentioned(text, home, inCheckout, isSet))
       if (!out.includes(m)) {
