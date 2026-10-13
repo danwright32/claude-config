@@ -33,7 +33,9 @@
 #
 # Fails OPEN in every direction it cannot see: not a repository, no scanners found, a suite that
 # could not be executed. It blocks on a scanner that ran and failed, and, in its own words, on a
-# scanner that could not run because another suite run held its lock past the wait (#642). Finding NO
+# scanner that could not run because another suite run held its lock past the wait (#642), and on
+# a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
+# which it calls a fault in its own run rather than a finding (#1146). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -93,7 +95,15 @@ cd "$repo_dir" 2>/dev/null || exit 0
 REPO_FILES="$HOOK_DIR/lib/repo-files.sh"
 SCANS='ls-files|repo-files[.]sh'
 suites="$(bash "$REPO_FILES" . '*test-*.sh' 2>/dev/null)"
-uncommitted_n="$(bash "$REPO_FILES" --uncommitted . 2>/dev/null | grep -c . || true)"
+# The uncommitted files, listed once and kept for the key below. A listing that fails leaves their
+# number UNKNOWN, said in those words, never a zero that reads as a clean tree of drafts (#1146, L90).
+_sc_uncommitted_unread=""
+if _sc_uncommitted_list="$(bash "$REPO_FILES" --uncommitted . 2>/dev/null)"; then
+  uncommitted_n="$(printf '%s' "$_sc_uncommitted_list" | grep -c . || true)"
+else
+  _sc_uncommitted_list=""; _sc_uncommitted_unread=1
+  uncommitted_n="an unknown number of"
+fi
 scanners=""
 while IFS= read -r s; do
   [ -n "$s" ] || continue
@@ -229,11 +239,17 @@ _sc_n=0
 _sc_state_dir="${SCANNERS_STATE_DIR:-$HOME/.claude/state/scanners-passed}"
 _sc_key=""
 _sc_tree="$(git rev-parse HEAD^{tree} 2>/dev/null || true)"
-if [ -n "$_sc_tree" ]; then
-  _sc_uncommitted_digest="$( { bash "$REPO_FILES" --uncommitted . 2>/dev/null | while IFS= read -r _u; do
+# Read from the one listing made above. When that listing failed the uncommitted files are unknown,
+# and a key without them would remember a pass that a later push with different drafts could skip
+# on, so there is no key at all: nothing is skipped and nothing remembered (#1146).
+if [ -n "$_sc_tree" ] && [ -z "$_sc_uncommitted_unread" ]; then
+  _sc_uncommitted_digest="$( { while IFS= read -r _u; do
         [ -n "$_u" ] || continue
         printf '%s ' "$_u"; shasum -a 256 "$_u" 2>/dev/null | awk '{print $1}'
-      done; } | shasum -a 256 2>/dev/null | awk '{print $1}')"
+      done <<UNCOMMITTED
+$_sc_uncommitted_list
+UNCOMMITTED
+      } | shasum -a 256 2>/dev/null | awk '{print $1}')"
   _sc_key="$_sc_tree-${_sc_uncommitted_digest:-none}"
 fi
 _sc_repo_key="$(printf '%s' "$(git remote get-url origin 2>/dev/null || pwd -P)" | shasum -a 256 2>/dev/null | awk '{print $1}')"
@@ -364,7 +380,17 @@ fi
 # Read every result back. A run whose exit code was never written did not finish saying anything,
 # and that is not a pass: it is a scanner whose verdict is missing, which must not read as a clean
 # one (L98).
+#
+# A scanner that RAN but could not read what it judges says so in one agreed line, `SUITE-UNMEASURED
+# <what, and why>`, and exits non zero with no FAIL line (claude-config#1146). On 2026-10-13 the
+# secret scan could not copy the tree it scans, because a file was listed and gone before tar reached
+# it, and this gate blocked with "a scanner that reads the WHOLE repository fails" over a count of
+# "(0 files)": a secret scan accusing a push of nothing it had looked at. Such a run measured
+# nothing, so it is neither a pass, which would publish an unscanned tree, nor a failure of the code
+# (L11, L411). It is held apart and said as a fault in this gate's own run, with the scanner's reason.
+# A FAIL line outranks it: a scanner that found something is judged by what it found.
 failed=""
+unmeasured=""
 ran=0
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
@@ -380,20 +406,56 @@ while [ "$_sc_i" -le "$_sc_n" ]; do
     failed="$failed=== $_sc_what ===
 this scanner never reported an exit code, so its verdict is missing rather than clean
 "
-  elif [ "$(cat "$_sc_work/$_sc_i.rc" 2>/dev/null)" != "0" ]; then
-    failed="$failed=== $_sc_what ===
-$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)
+  elif [ "$_sc_rc_now" != "0" ]; then
+    _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    _sc_unm="$(awk '/^SUITE-UNMEASURED / { if (n++ < 5) print substr($0, 18) }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    if [ -z "$_sc_fails" ] && [ -n "$_sc_unm" ]; then
+      unmeasured="$unmeasured=== $_sc_what ===
+$_sc_unm
 "
+    else
+      # No FAIL line at all is a failure whose reason is somewhere else in what it printed, so the
+      # end of that is shown rather than an empty detail (#642 was found behind one).
+      [ -n "$_sc_fails" ] || _sc_fails="it exited $_sc_rc_now with no FAIL line; the end of what it printed:
+$(tail -5 "$_sc_work/$_sc_i.out" 2>/dev/null | sed 's/^/  /')"
+      failed="$failed=== $_sc_what ===
+$_sc_fails
+"
+    fi
   fi
   _sc_i=$(( _sc_i + 1 ))
 done
 
-# What passed on this key, written only when nothing failed, so a run with a failure in it never
-# lets a sibling be skipped on the strength of a push that was blocked.
-if [ -z "$failed" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
+# What passed on this key, written only when nothing failed or went unmeasured, so a run with
+# either in it never lets a sibling be skipped on the strength of a push that was blocked.
+if [ -z "$failed" ] && [ -z "$unmeasured" ] && [ -n "$_sc_key" ] && [ -n "$_sc_passed_now" ]; then
   if mkdir -p "$_sc_state_dir" 2>/dev/null; then
     printf '%s' "$_sc_passed_now" > "$_sc_passed_file" 2>/dev/null || true
   fi
+fi
+
+# What the unmeasured scanners said, written once, for the block below whichever form it takes.
+_sc_unmeasured_note(){
+  echo "These scanners ran and measured nothing: each could not read what it judges, which is a"
+  echo "fault in this gate's own run, not a finding about your change. Nothing was found, and"
+  echo "nothing was checked either. Each said why:"
+  echo ""
+  printf '%s' "$unmeasured"
+}
+
+if [ -z "$failed" ] && [ -n "$unmeasured" ]; then
+  {
+    echo "PUSH BLOCKED: a whole tree scanner measured nothing, so this push was not scanned."
+    echo ""
+    _sc_unmeasured_note
+    echo ""
+    echo "Retry the push. If it says this again, run the scanner directly to see the whole of it:"
+    echo "    bash <the suite named above>"
+    echo ""
+    echo "OVERRIDE, this one push: SKIP_SCANNERS_CHECK=1 <your original git push command>"
+    echo "Explain to the user first why skipping is legitimate. Never override silently."
+  } >&2
+  exit 2
 fi
 
 if [ -z "$failed" ]; then
@@ -425,6 +487,10 @@ fi
   echo "These scans read ${uncommitted_n:-0} uncommitted file(s) as well as the committed ones. A failure"
   echo "in one of those is about a file this push does not carry: commit it fixed, or move it aside."
   echo ""
+  if [ -n "$unmeasured" ]; then
+    _sc_unmeasured_note
+    echo ""
+  fi
   echo "Reproduce any of them directly:"
   echo "    bash <the suite named above>"
   echo ""

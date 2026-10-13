@@ -43,8 +43,10 @@
 #                             (lib/load-average.sh)
 #
 # Agreed lines a suite may print, each read exactly: `SUITE-RESULT passed=<n> failed=<n>` (its
-# score), `SUITE-NOT-RUN <reason>` (it cannot run in a copy with no repository), and
-# `SUITE-LOCK-REFUSED <who holds it>` (another run of it holds its lock, reported as NOT RUN). Any
+# score), `SUITE-NOT-RUN <reason>` (it cannot run in a copy with no repository),
+# `SUITE-LOCK-REFUSED <who holds it>` (another run of it holds its lock, reported as NOT RUN),
+# and `SUITE-UNMEASURED <why>` (it ran but could not read what it judges, reported as NOT RUN, #1146);
+# under CI=true either of the last two fails the suite. Any
 # line saying `command not found` fails the suite whatever else it printed (#1044).
 
 set -uo pipefail
@@ -989,6 +991,9 @@ notrun_names=""
 # The subset of those refused their lock (#1083), whose remedy is different from having no repository.
 lock_names=""
 lock_count=0
+# And those that ran but could not measure what they judge (#1146), whose remedy is different again.
+blind_names=""
+blind_count=0
 divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
@@ -1053,6 +1058,33 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       lock_names="$lock_names $name"
       lock_count=$((lock_count + 1))
       printf '  NOT RUN %-37s %s\n' "$name" "refused the suite lock, held by $lock_holder"
+      continue
+    fi
+    # A suite that RAN BUT COULD NOT MEASURE what it judges (claude-config#1146): the secret scan
+    # when it cannot list or copy the tree it scans. Its passes are over controls, never over the
+    # thing it exists to judge, so it is not a pass (L98), and nothing about the code failed, so it
+    # is not a FAIL either (L11, L411). Read as the lock refusal is read: NOT RUN with its reason
+    # here, a failure under CI. The pre push scanner gate reads the same line the same way.
+    #
+    # A score with failures in it outranks the line: a suite that found something is judged by it.
+    blind_line="$(printf '%s\n' "$out" | grep -E '^SUITE-UNMEASURED ' | sed -n 1p)"
+    blind_score="$(suite_result_line "$out")"
+    if [ -n "$blind_line" ] && [ -z "$cnf_lines" ] && { [ -z "$blind_score" ] || [ "${blind_score#*failed=}" = "0" ]; }; then
+      blind_why="${blind_line#SUITE-UNMEASURED }"
+      blind_more="$(printf '%s\n' "$out" | grep -cE '^SUITE-UNMEASURED ' || true)"
+      [ "${blind_more:-1}" -gt 1 ] && blind_why="$blind_why (and $(( blind_more - 1 )) more)"
+      if [ "${CI:-}" = "true" ]; then
+        failed=$((failed + 1))
+        failed_names="$failed_names $name"
+        printf '  FAIL  %-38s %-26s %s\n' "$name" "could not measure" "$dur"
+        printf '          %s. Under CI a run must measure what it judges, so this fails.\n' "$blind_why"
+        continue
+      fi
+      notrun=$((notrun + 1))
+      notrun_names="$notrun_names $name"
+      blind_names="$blind_names $name"
+      blind_count=$((blind_count + 1))
+      printf '  NOT RUN %-37s %s\n' "$name" "could not measure: $blind_why"
       continue
     fi
     # A suite that could not run HERE, said in one agreed shape exactly as the score is
@@ -1492,13 +1524,17 @@ if [ "$notrun" -gt 0 ]; then
   # the names from it. The REASON below it is said per cause, since the two need different remedies
   # and the repository one is wrong for a suite that only met a held lock (claude-config#1083, L11).
   echo "$notrun SUITE(S) COULD NOT RUN HERE:$notrun_names"
-  if [ "$(( notrun - lock_count ))" -gt 0 ]; then
+  if [ "$(( notrun - lock_count - blind_count ))" -gt 0 ]; then
     echo "  They audit the repository, and this is a copy with no repository above it."
     echo "  Run them from the checkout to have them verified."
   fi
   if [ "$lock_count" -gt 0 ]; then
     echo "  Refused the suite lock, because another run of the same suite held it:$lock_names"
     echo "  Nothing about their code was judged. Run them again once that run has finished."
+  fi
+  if [ "$blind_count" -gt 0 ]; then
+    echo "  Ran but could not read what they judge, so they measured nothing:$blind_names"
+    echo "  Nothing about their code was judged. The NOT RUN line above gives each one's reason."
   fi
   echo
 fi

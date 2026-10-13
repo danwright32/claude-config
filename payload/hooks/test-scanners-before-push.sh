@@ -190,6 +190,81 @@ o32="$(lockfire "$R32" "git push")"; c32=$?
   && check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" ok \
   || check "a scanner that waits for the lock and then FAILS is reported as failing, with its detail" "exit=$c32 out=$o32"
 
+# --- a scanner that RAN but could not read what it judges measured nothing, which is a fault in
+#     this gate's run and not a finding about the push (claude-config#1146). On 2026-10-13 the
+#     secret scan, run here, could not copy the tree it scans (a file listed and gone before tar
+#     reached it), and the gate blocked with "a scanner that reads the WHOLE repository fails" over
+#     "(0 files)". Such a scanner now prints SUITE-UNMEASURED with its reason and exits 3; the push
+#     is still held, since nothing was checked, but the block says what happened, with the reason.
+add_unmeasured_scanner(){   # $1 = repo  $2 = name  $3 = also print a FAIL line (1) or not (0)
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo "scanner $2 ran"
+[ $3 -eq 0 ] || echo "FAIL: scanner $2 found something"
+echo "SUITE-UNMEASURED scanner $2 could not copy the tree: tar: payload/gone.txt: Cannot stat"
+exit 3
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R33="$(mkrepo unmeasured)"; add_scanner "$R33" alpha 0; add_unmeasured_scanner "$R33" omega 0; commit_all "$R33"
+o33="$(fire "$R33" "git push")"; c33=$?
+[ "$c33" -eq 2 ] && check "#1146 a scanner that could not read the tree still holds the push" ok \
+  || check "#1146 a scanner that could not read the tree still holds the push" "exit=$c33 out=$o33"
+grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o33" \
+  && check "#1146 and never reports it as a failing scanner" "out=$o33" || check "#1146 and never reports it as a failing scanner" ok
+grep -q 'measured nothing' <<< "$o33" && grep -q "fault in this gate's own run" <<< "$o33" \
+  && check "#1146 and says it measured nothing, as a fault in the gate's own run" ok \
+  || check "#1146 and says it measured nothing, as a fault in the gate's own run" "out=$o33"
+grep -q 'omega could not copy the tree: tar: payload/gone.txt: Cannot stat' <<< "$o33" \
+  && check "#1146 and gives the scanner's own reason" ok || check "#1146 and gives the scanner's own reason" "out=$o33"
+grep -q 'alpha' <<< "$o33" \
+  && check "#1146 and does not name the scanner that passed" "out=$o33" || check "#1146 and does not name the scanner that passed" ok
+# Beside a scanner that really failed, each is reported as what it is, and a scanner printing a
+# FAIL line is judged by it even if it also said it could not measure something.
+R34="$(mkrepo unmeasuredandfail)"; add_scanner "$R34" gamma 1; add_unmeasured_scanner "$R34" omega 0; add_unmeasured_scanner "$R34" psi 1; commit_all "$R34"
+o34="$(fire "$R34" "git push")"; c34=$?
+[ "$c34" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o34" \
+  && check "#1146 a real failure beside an unmeasured scanner is still reported as failing" ok \
+  || check "#1146 a real failure beside an unmeasured scanner is still reported as failing" "exit=$c34 out=$o34"
+fail_part="$(sed -n '/WHOLE repository fails/,/measured nothing/p' <<< "$o34")"
+grep -q 'gamma' <<< "$fail_part" && grep -q 'psi found something' <<< "$fail_part" && ! grep -q 'omega' <<< "$fail_part" \
+  && check "#1146 and the failing part names the failures, a FAIL line outranking SUITE-UNMEASURED" ok \
+  || check "#1146 and the failing part names the failures, a FAIL line outranking SUITE-UNMEASURED" "out=$o34"
+grep -q 'omega could not copy the tree' <<< "$o34" && grep -q 'measured nothing' <<< "$o34" \
+  && check "#1146 and the unmeasured one is named apart, with its reason" ok \
+  || check "#1146 and the unmeasured one is named apart, with its reason" "out=$o34"
+# The gate's OWN listing of the uncommitted files is the same kind of read: when it fails, the count
+# is unknown, never zero, and with the uncommitted files unread there is no key a pass can be
+# remembered on, or a later push would skip a scan over files nobody had read (#1146, L90). Run from
+# a copy of the gate whose repo-files.sh refuses the uncommitted listing and nothing else.
+FAKEHOOKS="$TMPROOT/fakehooks"; mkdir -p "$FAKEHOOKS/lib"
+cp "$H" "$FAKEHOOKS/scanners-before-push.sh"; cp "$DIR/lib/push-scope.sh" "$FAKEHOOKS/lib/push-scope.sh"
+cat > "$FAKEHOOKS/lib/repo-files.sh" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = --uncommitted ] && { echo "repo-files: git could not list the uncommitted files under \$2." >&2; exit 1; }
+exec bash "$DIR/lib/repo-files.sh" "\$@"
+EOF
+R36="$(mkrepo uncommittedunread)"; add_scanner "$R36" alpha 0; commit_all "$R36"
+UNREAD_STATE="$TMPROOT/unread-state"
+o36="$(H="$FAKEHOOKS/scanners-before-push.sh" SCANNERS_STATE_DIR="$UNREAD_STATE" fire "$R36" "git push")"; c36=$?
+[ "$c36" -eq 0 ] && grep -q 'reading an unknown number of uncommitted file(s)' <<< "$o36" \
+  && check "#1146 an uncommitted listing that fails is counted as unknown, never as zero" ok \
+  || check "#1146 an uncommitted listing that fails is counted as unknown, never as zero" "exit=$c36 out=$o36"
+[ -z "$(ls -A "$UNREAD_STATE" 2>/dev/null)" ] \
+  && check "#1146 and no pass is remembered while the uncommitted files went unread" ok \
+  || check "#1146 and no pass is remembered while the uncommitted files went unread" "it wrote: $(cat "$UNREAD_STATE"/* 2>/dev/null)"
+
+# A scanner that fails with no FAIL line and no SUITE-UNMEASURED line is a failure, and its detail is
+# the end of what it printed, never an empty one: the block over #642 had nothing under the name.
+R35="$(mkrepo nofailline)"
+printf '#!/usr/bin/env bash\ngit ls-files >/dev/null\necho "kappa broke: tar: x: Cannot stat" >&2\nexit 1\n' > "$R35/payload/hooks/test-kappa.sh"
+commit_all "$R35"
+o35="$(fire "$R35" "git push")"; c35=$?
+[ "$c35" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o35" && grep -q 'kappa broke: tar: x: Cannot stat' <<< "$o35" \
+  && check "#1146 a scanner failing with no FAIL line shows the end of what it printed" ok \
+  || check "#1146 a scanner failing with no FAIL line shows the end of what it printed" "exit=$c35 out=$o35"
+
 # --- the override, which exists for the same one time reason as every other gate here.
 o6="$(fire "$R2" "SKIP_SCANNERS_CHECK=1 git push")"; c6=$?
 [ "$c6" -eq 0 ] \
