@@ -73,7 +73,7 @@ runo(){ # runo <args...>; sets OUT to stdout only, ERR to stderr, and RC
 # of what came back, so a crash is never read as an empty field.
 jq(){ python3 -c 'import json,sys
 try:
-    d=json.loads(sys.argv[1])
+    d = json.loads(sys.argv[1])
 except ValueError:
     print("JSON-UNREADABLE: %r" % sys.argv[1][:300]); sys.exit(0)
 print(json.dumps(eval(sys.argv[2]), separators=(",",":"), sort_keys=True))' "$1" "$2" 2>&1; }
