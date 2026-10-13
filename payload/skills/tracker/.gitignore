@@ -1,1 +1,5 @@
 *.local.json
+# A copy of one holds the same token under a longer name (claude-config#1089): a backup such as
+# config.local.json.bak-2026-10-12, a half written .writing copy, or an editor backup ending in ~.
+*.local.json.*
+*.local.json~
