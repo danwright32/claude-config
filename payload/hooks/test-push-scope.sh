@@ -178,6 +178,8 @@ users="$(grep -l 'ps_parse_payload' "$DIR"/*.sh 2>/dev/null | grep -c . || true)
 # ---------------------------------------------------------------------------
 E2E="$(mktemp -d)"
 trap 'rm -rf "$E2E"' EXIT
+# The gate records every push it reaches (claude-config#1075); these are not real pushes.
+export PUSH_GATE_LEDGER_DIR="$E2E/ledger"
 (
   cd "$E2E" || exit 1
   git init -q .

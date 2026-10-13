@@ -756,6 +756,33 @@ scans as a clean run.
 The readings are of the INSTALLED hooks, which is what a push waits on. A gate edited in this
 checkout costs nothing until it is installed (L423).
 
+### The two model judged push gates, and their record
+
+`require-tests-before-push.sh` (a sonnet judge of whether each change carries a test) and
+`simplify-before-push.sh` (a haiku judge of whether the source should be simplified first) work out
+what a push carries, and call their judge, through one library, `hooks/lib/push-changes.sh`
+(#1076). Each kept its own copy before, and the copies had drifted in two silent ways: a test
+written in the same `git add ... && git commit ... && git push` reached the test judge as a file
+name with none of its text, and a push run from a subdirectory showed both judges nothing outside
+that subdirectory, so it went through unjudged. `test-push-changes.sh` fails if either gate grows
+its own copy again.
+
+Every push either gate reaches is recorded, overrides included (#1075), one line each in
+`~/.claude/state/push-gates/push-gates.tsv`: never synced, never swept, so it outlives temp
+cleaning (the lessons review keeps its outcome ledger beside it for the same reason). Read it with:
+
+```bash
+python3 ~/.claude/hooks/lib/push-gate-report.py [--days 30]
+```
+
+It prints, per gate, how often its judge was called, passed, blocked or could not decide (and why),
+how often the gate was overridden on a commit it had just blocked (the nearest the record comes to
+a false positive rate, and what decides whether the simplify judge should move from haiku to
+sonnet), the judge's time and cost, and on how many pushes both judges were called and whether the
+two calls ran at the same time (#1077). A rate over fewer than five pushes prints as UNMEASURED. The
+suites point the gates at a throwaway ledger (`PUSH_GATE_LEDGER_DIR`, which `run-all-tests.sh` and
+`tools/time-push-gates.sh` also set), so no test push is ever counted.
+
 ## Lesson numbers
 
 Each Mac mints lesson numbers from a band it owns, so two lessons written between syncs can never

@@ -720,6 +720,13 @@ if [ "$ran" -gt 0 ]; then
   mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
   export CLAUDE_ISSUE_SPOOL_DIR
 
+  # The same seam for the push gate ledger (claude-config#1075): a suite that drives a model judged
+  # push gate without pointing it elsewhere writes its fake pushes here, never into the record the
+  # gates' accuracy is read from. Not bracketed like the stores below, because real pushes from
+  # other sessions legitimately append to the live one during a run.
+  PUSH_GATE_LEDGER_DIR="$WORK/push-gates"
+  export PUSH_GATE_LEDGER_DIR
+
   # ---- and the other live stores (claude-config#216) ----
   # The bracket above covers the store the incident happened in. The same class of mistake reaches
   # the rule files every session loads, the settings, the clone registry and the shell rc, and
