@@ -1464,9 +1464,9 @@ if denied "$out" && holds "$out" "HTTP 403"; then pass; else fail "#1081 a runs 
 if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a refusal (403) was asked again ($(sleeps) waits)"; fi
 rm -f "$f"
 
-# The retries live inside the gate's own budget, well inside the 30 seconds the harness gives it: a
-# gate killed for overrunning says nothing, which is no refusal at all. With no budget left, a
-# transient failure is not asked again and the read refuses.
+# The retries live inside the gate's own budget, well inside the 30 seconds the harness gives it (a
+# setting, not a measurement): a gate killed for overrunning says nothing, which is no refusal at all.
+# With no budget left, a transient failure is not asked again and the read refuses.
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
 out=$(BRM_READ_BUDGET_SECONDS=0 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")

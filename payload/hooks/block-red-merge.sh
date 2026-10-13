@@ -110,10 +110,11 @@ esac
 # refuses exactly as before: nothing merges on an unconfirmed read.
 #
 # The retries have a BUDGET, measured from the start of this hook in the shell's own SECONDS, because
-# the harness gives this gate 30 seconds and a gate killed for overrunning says nothing at all, which
-# is no refusal. A retry whose wait would end past the budget is not made. Seams, for the tests and
-# nothing else: BRM_READ_TRIES (3 in all), BRM_READ_RETRY_SECONDS (2), BRM_READ_BUDGET_SECONDS (12)
-# and BRM_SLEEP (sleep). None can let a merge through: the fewest tries is one, as before.
+# the harness gives this gate 30 seconds (a setting, not a measurement) and a gate killed for
+# overrunning says nothing at all, which is no refusal. A retry whose wait would end past the budget
+# is not made. Seams, for the tests and nothing else: BRM_READ_TRIES (3 in all), BRM_READ_RETRY_SECONDS
+# (2), BRM_READ_BUDGET_SECONDS (12) and BRM_SLEEP (sleep), all chosen, not measured. None can let a
+# merge through: the fewest tries is one, as before.
 brm_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(brm_num "${BRM_READ_TRIES:-}" 3)"
 READ_WAIT="$(brm_num "${BRM_READ_RETRY_SECONDS:-}" 2)"

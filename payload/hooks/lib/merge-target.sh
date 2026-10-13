@@ -1107,8 +1107,8 @@ mt_gh_transient() {  # $1 = the error text gh printed
 }
 
 # Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient), up to
-# $1 tries in all with $2 seconds between them, slept through the command $3 so a test never waits
-# on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
+# $1 tries in all with $2 seconds between them (both the caller's settings, not measured), slept
+# through the command $3 so a test never waits on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
 # recognised: believed the first time, since asking again cannot turn a refusal into a yes) or 2. It
 # is called in this shell, never a subshell, so the globals it sets reach the caller.
 #

@@ -626,7 +626,7 @@ A GitHub read that fails in transit or on GitHub's server (a timeout, a reset co
 5xx) is asked again, four times over about a minute, before it stops naming the last error; an
 answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a
 read it could not confirm (claude-config#1061). The gate's own reads are asked again the same way,
-three times within a budget well inside its 30 second hook timeout (claude-config#1081).
+three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081).
 
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (Slate's CI waits on a
