@@ -27,7 +27,9 @@
 # definition, because bash keeps the last one without a word (claude-config#440).
 #
 # Every function is pure: it reads its arguments and echoes or returns, touching
-# no globals, so a caller can use one without inheriting the others.
+# no globals, so a caller can use one without inheriting the others. The one
+# exception is the reading of a command (ps__read, claude-config#1040), kept per
+# command so one hook asking several questions reads it once; see its comment.
 
 # True when the command runs a git push, judged by the LEADING TOKENS of each
 # shell segment. Substring matching is wrong here: a command whose payload
@@ -153,53 +155,170 @@ ps_is_git_commit() { ps__runs_git_sub "$1" commit; }
 ps_is_git_add() { ps__runs_git_sub "$1" add; }
 
 ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
-  local cmd="$1" sub="$2" seg segs
+  local cmd="$1" sub="$2" seg rc i end
   # Most commands never mention it, and this runs before every Bash call, so they leave here
   # without starting anything.
   case "$cmd" in *"$sub"*) ;; *) return 1 ;; esac
   # Split where the SHELL would, outside quotes and heredoc bodies (claude-config#532). The old
   # split cut on every separator in the text, so a push quoted inside an argument (an issue body, a
-  # commit message) started a segment of its own and read as a push. Read whole before walking, so
-  # a split that fails part way is not half trusted: with no reader, or a reader that fails, the
-  # crude split below still runs, because missing a real push ships unjudged work (L42).
-  if segs="$(ps__shell_segments "$cmd")"; then
-    while IFS= read -r -d $'\x1e' seg; do
-      ps__segment_git_sub "$seg" "$sub" && return 0
-    done < <(printf '%s' "$segs")
+  # commit message) started a segment of its own and read as a push. Read whole, once, in THIS shell
+  # (ps__read, claude-config#1040), with every command's words in the same reading: the words used
+  # to be asked of python one command at a time, 43 starts for a heredoc commit then a push. A
+  # command whose text does not hold the subcommand cannot run it, so it is not walked at all. With
+  # no reader the crude cut below still runs, because missing a real push ships unjudged work (L42).
+  ps__read "$cmd"; rc=$?
+  if [ "$rc" -ne 1 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      case "${PS__R_TEXT[$i]}" in
+        *"$sub"*) ps__words_git_sub "${PS__R_WORDS[$i]}" "${PS__R_TEXT[$i]}" "$sub" && return 0 ;;
+      esac
+      i=$((i + 1))
+    done
     return 1
   fi
   while IFS= read -r seg; do
-    ps__segment_git_sub "$seg" "$sub" && return 0
-  done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+    case "$seg" in *"$sub"*) ps__segment_git_sub "$seg" "$sub" && return 0 ;; esac
+  done < <(ps__crude_cut "$cmd")
+  return 1
+}
+
+# The cut every reader falls back to when nothing can read the command (no python3, no
+# lib/shell-words.py, or a reader that crashed): one segment per line, cut at every separator, quotes
+# and heredoc bodies included. It can only see MORE commands than are there, the direction a gate
+# that must not miss a push or a merge needs (L42). One cut for both libraries (claude-config#1040).
+ps__crude_cut() {   # $1 = command
+  printf '%s\n' "$1" | sed -E 's/(&&|\|\||;|\|)/\n/g'
+}
+
+# ---- the one reading of a command (claude-config#1017, #1040) ----
+# Every question this file and lib/merge-target.sh ask of a command (does it push, commit, add,
+# merge, where does each run) is answered from ONE reading by lib/shell-words.py's read mode, kept
+# in THIS shell for the command it was made from. A hook asks several questions of one command,
+# and each used to read it again, and to ask python for the words of each of its commands one at a
+# time: 48 python starts for a heredoc commit then a push, in every push hook (measured 2026-10-12).
+#
+# The reading is kept in shell arrays, so it is the one thing in this file that is not pure: a
+# question asked in a command substitution reads in that subshell and keeps nothing, which costs a
+# start and never an answer. It is found by its command's whole text, compared exactly, so it can
+# never answer for another command, and dropped whenever PATH or the reader's path changes, so a
+# reader taken away (a test, a reinstall) is never answered for by the one before it.
+#
+# Each record: PS__R_DIR, the directory the cds before it moved its shell to (empty for none);
+# PS__R_TEXT, the command as written; PS__R_WORDS, its words as the shell reads them, 0x1f between;
+# PS__R_GITDIR, the directory its `git -C` options name; PS__R_CMD, the command from its own name on,
+# past leading reserved words (then, do, {, !, time) and assignments, as written; PS__R_ASSIGNS, those
+# assignments, one per line, outer quotes removed. A command that read on its own is exactly
+# that one command (no substitution in it) is kept as a reading of its own as well, so a question
+# about one command of the line, the push itself, is answered with no second start.
+PS_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+PS__M_ENV=""
+PS__HIT=0
+PS__REC=0
+PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
+PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=()
+# How many readings are kept before they are all dropped, which bounds what a lookup compares.
+PS__M_MAX=256
+
+ps__forget() {
+  PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
+  PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=()
+}
+
+# Reads $1 unless this shell already holds its reading, and points PS__HIT at it. Returns 0 for a
+# reading that can be trusted, 3 for one taken from the crude cut at every separator because a quote
+# or substitution never closed (its records are kept all the same), and 1 when nothing could read it:
+# no python3, no lib/shell-words.py, or a reader that failed or printed nothing for a command that is
+# not blank. Never call it in a command substitution where the answer matters: what it keeps would
+# stay in the subshell.
+ps__read() {   # $1 = command
+  local env="$PATH"$'\x1f'"$PS_SHELL_WORDS" k n out rc rec dir text words gitdir alone first count cmd assigns
+  if [ "$env" != "$PS__M_ENV" ]; then ps__forget; PS__M_ENV="$env"; fi
+  n=${#PS__M_KEY[@]}
+  k=0
+  while [ "$k" -lt "$n" ]; do
+    if [ "${PS__M_KEY[$k]}" = "$1" ]; then PS__HIT=$k; return "${PS__M_RC[$k]}"; fi
+    k=$((k + 1))
+  done
+  command -v python3 >/dev/null 2>&1 || return 1
+  [ -f "$PS_SHELL_WORDS" ] || return 1
+  # The command goes in on stdin, never the environment, which a heredoc commit message can outgrow.
+  out="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" read 2>/dev/null)"; rc=$?
+  case "$rc" in 0|3) ;; *) return 1 ;; esac
+  # A reader that printed nothing for a command holding words has not read it: answering "it runs
+  # nothing" would stand every gate down on a reader's crash (L42, L490).
+  if [ -z "$out" ]; then case "$1" in *[![:space:]]*) return 1 ;; esac; fi
+  [ "$n" -lt "$PS__M_MAX" ] || { ps__forget; n=0; }
+  first=${#PS__R_TEXT[@]}; count=0
+  local -a alone_at=()
+  while IFS= read -r -d $'\x1e' rec; do
+    # Split by read, never by pattern removal, which tries every prefix of a 26 KB command.
+    IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns <<< "$rec"
+    assigns="${assigns%$'\n'}"
+    PS__R_DIR+=("$dir"); PS__R_TEXT+=("$text"); PS__R_WORDS+=("$words"); PS__R_GITDIR+=("$gitdir")
+    PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns")
+    [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
+    count=$((count + 1))
+  done < <(printf '%s' "$out")
+  PS__M_KEY+=("$1"); PS__M_RC+=("$rc"); PS__M_FIRST+=("$first"); PS__M_COUNT+=("$count")
+  PS__HIT=$n
+  # Each command that is alone is its own reading too: one record, in no directory of its own.
+  for k in ${alone_at[@]+"${alone_at[@]}"}; do
+    PS__R_DIR+=(""); PS__R_TEXT+=("${PS__R_TEXT[$k]}")
+    PS__R_WORDS+=("${PS__R_WORDS[$k]}"); PS__R_GITDIR+=("${PS__R_GITDIR[$k]}")
+    PS__R_CMD+=("${PS__R_CMD[$k]}"); PS__R_ASSIGNS+=("${PS__R_ASSIGNS[$k]}")
+    PS__M_KEY+=("${PS__R_TEXT[$k]}"); PS__M_RC+=(0)
+    PS__M_FIRST+=($((${#PS__R_TEXT[@]} - 1))); PS__M_COUNT+=(1)
+  done
+  return "$rc"
+}
+
+# Sets PS__REC to the index of a record whose text is exactly $1, in any reading this shell holds,
+# and fails when there is none. A question about one command handed in as text (ps__seg_words,
+# ps_git_c_target) answers from the reading that command came from rather than asking python again.
+ps__record_of() {   # $1 = one command's text
+  local i=0 n=${#PS__R_TEXT[@]}
+  [ "${PS__M_ENV}" = "$PATH"$'\x1f'"$PS_SHELL_WORDS" ] || return 1
+  while [ "$i" -lt "$n" ]; do
+    if [ "${PS__R_TEXT[$i]}" = "$1" ]; then PS__REC=$i; return 0; fi
+    i=$((i + 1))
+  done
   return 1
 }
 
 # The command's segments, each ended by a record separator (0x1e, because a NUL cannot survive the
 # command substitution that captures them): every simple command the shell would run, read by
-# ps__shell_commands below, so outside quotes, heredoc bodies and comments, with a command
-# substitution's commands read as commands of their own (claude-config#532, #1017). Fails, so the
-# caller falls back to the crude split, when there is no reader or the reading could not be trusted
-# (a quote never closed), because missing a real push ships unjudged work (L42).
+# ps__read, so outside quotes, heredoc bodies and comments, with a command substitution's commands
+# read as commands of their own (claude-config#532, #1017). Fails with 1, printing nothing, when there
+# is no reader, so the caller falls back to the crude split, because missing a real push ships
+# unjudged work (L42); exit 3, with the segments of the crude cut printed all the same, when the
+# reading could not be trusted (a quote never closed). A caller that will ask about each segment
+# calls ps__read on the command first, in its own shell, so the questions find the words read here.
 ps__shell_segments() {   # $1 = command
-  local recs rec out=""
-  recs="$(ps__shell_commands "$1")" || return 1
-  while IFS= read -r -d $'\x1e' rec; do
-    out+="${rec#*$'\x1f'}"$'\x1e'
-  done <<< "$recs"
+  local i end out="" rc
+  ps__read "$1"; rc=$?
+  [ "$rc" -eq 1 ] && return 1
+  i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+  while [ "$i" -lt "$end" ]; do out+="${PS__R_TEXT[$i]}"$'\x1e'; i=$((i + 1)); done
   printf '%s' "$out"
+  return "$rc"
 }
 
 # Every simple command in the command and the directory it runs in, as "<dir>" 0x1f "<command>"
-# 0x1e records, from lib/shell-words.py's commands reader: the ONE reading of a command behind both
-# what it runs and where (claude-config#1017). <dir> is where the cds before that command, in its own
-# shell, moved it, empty when none did. Exit 3 means the reading could not be trusted and the records
-# come from the crude cut at every separator; exit 1, that nothing could read it at all. The command
-# goes in on stdin, never the environment, which a heredoc commit message can outgrow.
-PS_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+# 0x1e records, from ps__read: the ONE reading of a command behind both what it runs and where
+# (claude-config#1017). <dir> is where the cds before that command, in its own shell, moved it, empty
+# when none did. Exit 3 means the reading could not be trusted and the records come from the crude
+# cut at every separator; exit 1, that nothing could read it at all.
 ps__shell_commands() {   # $1 = command
-  command -v python3 >/dev/null 2>&1 || return 1
-  [ -f "$PS_SHELL_WORDS" ] || return 1
-  printf '%s' "$1" | python3 "$PS_SHELL_WORDS" commands 2>/dev/null
+  local rc i end
+  ps__read "$1"; rc=$?
+  [ "$rc" -eq 1 ] && return 1
+  i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+  while [ "$i" -lt "$end" ]; do
+    printf '%s\x1f%s\x1e' "${PS__R_DIR[$i]}" "${PS__R_TEXT[$i]}"
+    i=$((i + 1))
+  done
+  return "$rc"
 }
 
 # One segment's words as the shell reads them, quotes removed and a quoted word holding a space
@@ -209,30 +328,47 @@ ps__shell_commands() {   # $1 = command
 # the direction that still lets a push be seen and the gates fire.
 #
 # Leading reserved words (then, do, else, elif, if, while, until, {, !, time) are looked past, so the
-# first word is the command's own (#1017): read by lib/shell-words.py's words mode from the RESERVED
-# list its commands reader already uses, so one list says which word is the command.
+# first word is the command's own (#1017): read by lib/shell-words.py from the RESERVED list its
+# commands reader already uses, so one list says which word is the command. A segment that is a
+# command of a reading this shell holds is answered from that reading (claude-config#1040).
 ps__seg_words() {   # $1 = one segment
-  local words
-  if [ -f "$PS_SHELL_WORDS" ] \
-    && words="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" words 2>/dev/null)" && [ -n "$words" ]; then
-    printf '%s' "$words"
-  else
-    printf '%s\n' "$1" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
+  local words=""
+  if ps__record_of "$1"; then
+    words="${PS__R_WORDS[$PS__REC]}"
+  elif [ -f "$PS_SHELL_WORDS" ]; then
+    words="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" words 2>/dev/null)" || words=""
+  fi
+  ps__words_or_split "$words" "$1"
+}
+
+# The words, or when there are none the segment split on whitespace: the reading that still lets a
+# push be seen when python had nothing to say about it.
+ps__words_or_split() {   # $1 = words joined by 0x1f, possibly empty  $2 = the segment
+  if [ -n "$1" ]; then printf '%s' "$1"
+  else printf '%s\n' "$2" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
   fi
 }
 
 ps__segment_is_push() { ps__segment_git_sub "$1" push; }
 
 ps__segment_git_sub() {   # $1 = one segment, $2 = the git subcommand
+  ps__words_git_sub "" "$1" "$2" read
+}
+
+ps__words_git_sub() {   # $1 = the segment's words (0x1f between)  $2 = the segment  $3 = the git subcommand  [$4 = read]
   # Tokenize the way the shell does, quotes and all (claude-config#589). This used to split on
   # whitespace on the grounds that quoting only matters for arguments it skips, and it matters for
   # exactly those: `git -C "/a b/wt" push` became -C, "/a, b/wt", push, the skip after -C landed on
   # b/wt" as if it were the subcommand, and the push was not seen as a push at all, so every global
   # push gate stood down on it. The crude split is kept only for when python3 cannot read the
-  # segment (an unbalanced quote), which is the direction that still fires the gates.
-  local seg="$1"
+  # segment (an unbalanced quote), which is the direction that still fires the gates. The words come
+  # from the reading the caller already holds; with $4 set they are read here instead.
+  local seg="$2" sub="$3" words
   local -a tok
-  IFS=$'\x1f' read -r -a tok <<< "$(ps__seg_words "$seg")"
+  if [ "${4:-}" = read ]; then words="$(ps__seg_words "$seg")"
+  elif [ -n "$1" ]; then words="$1"
+  else words="$(ps__words_or_split "" "$seg")"; fi
+  IFS=$'\x1f' read -r -a tok <<< "$words"
   local i=0 n=${#tok[@]} t
 
   # A subshell or group opening the segment, `(git push)` or `( cd x && git push )`, is
@@ -283,7 +419,7 @@ ps__segment_git_sub() {   # $1 = one segment, $2 = the git subcommand
       -*) i=$((i+1)) ;;
       [A-Za-z_]*=*) i=$((i+1)) ;;
       # `(cd x && git push)` leaves `push)` as the last word of its segment.
-      "$2"|"$2)"*|"$2}"*) return 0 ;;
+      "$sub"|"$sub)"*|"$sub}"*) return 0 ;;
       *) return 1 ;;   # some other subcommand
     esac
   done
@@ -296,17 +432,20 @@ ps__segment_git_sub() {   # $1 = one segment, $2 = the git subcommand
 # command substitution holding spaces, `GH_TOKEN=$(gh auth token -u name) gh pr create`, which is
 # how a session scopes a call to one of Dan's accounts; `rtk` in front is the same command.
 ps_is_gh_pr_create() {   # $1 = command
-  local cmd="$1" seg segs
+  local cmd="$1" seg i end
   case "$cmd" in *create*) ;; *) return 1 ;; esac
-  if segs="$(ps__shell_segments "$cmd")"; then
-    while IFS= read -r -d $'\x1e' seg; do
-      ps__segment_is_pr_create "$seg" && return 0
-    done < <(printf '%s' "$segs")
+  # The one reading, in this shell, so each command's words are the ones it holds (#1040).
+  if ps__read "$cmd" || [ "$?" -eq 3 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      case "${PS__R_TEXT[$i]}" in *create*) ps__segment_is_pr_create "${PS__R_TEXT[$i]}" && return 0 ;; esac
+      i=$((i + 1))
+    done
     return 1
   fi
   while IFS= read -r seg; do
-    ps__segment_is_pr_create "$seg" && return 0
-  done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;|\|)/\n/g')
+    case "$seg" in *create*) ps__segment_is_pr_create "$seg" && return 0 ;; esac
+  done < <(ps__crude_cut "$cmd")
   return 1
 }
 
@@ -400,6 +539,7 @@ ps__segment_command_words() {   # $1 = one segment
 # each repository in turn reads ps_repo_dirs below instead.
 ps_repo_dir() {
   local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" dirs rc what
+  ps__read "$cmd" || :
   dirs="$(ps_repo_dirs "$cmd" "$cwd" "$pred")"; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   case "$dirs" in
@@ -421,6 +561,8 @@ ps_repo_dir() {
 ps_repo_dirs() {
   local cmd="$1" cwd="${2:-}" pred="${3:-ps_is_git_push}" recs rec rc names=0 d drc
   local -a found=()
+  # Read here first, so the subshell below and every question after it find the reading (#1040).
+  ps__read "$cmd" || :
   recs="$(ps__action_records "$cmd" "$pred")"; rc=$?
   grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
   if [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
@@ -546,6 +688,7 @@ ps__is_worktree() {
 # same reading ps_is_git_push falls back to, so the action it saw is the one found here.
 ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_git_push)
   local rec
+  ps__read "$1" || :
   rec="$(ps__action_record "$1" "${2:-}")" || return 0
   printf '%s' "${rec%%$'\x1f'*}"
 }
@@ -565,12 +708,18 @@ ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_gi
 # stays (lessons review of #1062). A bare reading that cannot run keeps the record, the direction
 # that leaves an action judged.
 ps__action_records() {   # $1 = command  $2 = the action's predicate
-  local pred="${2:-ps_is_git_push}" recs rec rc out="" text b
-  recs="$(ps__shell_commands "$1")"; rc=$?
+  local pred="${2:-ps_is_git_push}" rc out="" text b i end j
+  local -a dirs=() texts=()
+  # Read in THIS shell (#1040), and the records copied out before any predicate runs: a predicate
+  # reads its own command, and a reading can drop the ones it holds (PS__M_MAX).
+  ps__read "$1"; rc=$?
   [ "$rc" -eq 1 ] && return 2
-  [ -n "$recs" ] || return 1
-  while IFS= read -r -d $'\x1e' rec; do
-    text="${rec#*$'\x1f'}"
+  i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+  while [ "$i" -lt "$end" ]; do dirs+=("${PS__R_DIR[$i]}"); texts+=("${PS__R_TEXT[$i]}"); i=$((i + 1)); done
+  [ "${#texts[@]}" -gt 0 ] || return 1
+  j=0
+  while [ "$j" -lt "${#texts[@]}" ]; do
+    text="${texts[$j]}"; j=$((j + 1))
     "$pred" "$text" </dev/null || continue
     case "$text" in
       *'$('*|*'`'*)
@@ -579,8 +728,8 @@ ps__action_records() {   # $1 = command  $2 = the action's predicate
           continue
         fi ;;
     esac
-    out+="$rec"$'\x1e'
-  done <<< "$recs"
+    out+="${dirs[$((j - 1))]}"$'\x1f'"$text"$'\x1e'
+  done
   [ -n "$out" ] || return 1
   printf '%s' "$out"
 }
@@ -605,6 +754,8 @@ ps__action_record() {   # $1 = command  $2 = the action's predicate
 # path with a space whole, and composes several -C the way git does. Only a leading tilde is
 # expanded; a variable is printed as written, so the caller refuses it.
 ps_git_c_target() {   # $1 = one command; prints the path, or nothing
+  # A command of a reading this shell holds already carries its -C directory (#1040).
+  if ps__record_of "$1"; then printf '%s' "${PS__R_GITDIR[$PS__REC]}"; return 0; fi
   command -v python3 >/dev/null 2>&1 || return 0
   [ -f "$PS_SHELL_WORDS" ] || return 0
   printf '%s' "$1" | python3 "$PS_SHELL_WORDS" gitdir 2>/dev/null

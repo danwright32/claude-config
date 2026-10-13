@@ -20,9 +20,17 @@
 #
 # Nothing to override: an interval of a minute or more always passes.
 #
-# With no python3 the command cannot be read; it says so on stderr and lets the command run (a
-# watcher costs points, it does not harm anything).
+# When it cannot judge (no python3, lib/push-scope.sh or lib/shell-words.py missing, a payload
+# nothing can read) it lets the command run, since a watcher costs points and harms nothing, and says
+# so in one line with exit 1 (claude-config#1065): a non-blocking error, the one code for which Claude
+# Code shows stderr, so the guard being off is never silent (L98). Exit 0 would throw the line away.
 MIN_INTERVAL=60
+
+# Allow the command, saying in one line why it was not judged.
+not_judged() {   # $1 = what went wrong, as a clause
+  echo "GH WATCH INTERVAL CHECK DID NOT RUN: $1, so whether this runs a gh watcher at gh's own short default was not judged." >&2
+  exit 1
+}
 
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none mention a watch: answer those at once,
@@ -30,13 +38,13 @@ payload="$(cat)"
 case "$payload" in *watch*) ;; *) exit 0 ;; esac
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
-. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
-command -v python3 >/dev/null 2>&1 || {
-  echo "GH WATCH INTERVAL CHECK DID NOT RUN: python3 is not on PATH, and the command's words are read with it, so whether this runs a gh watcher at gh's own short default was not judged." >&2
-  exit 0
-}
+. "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
+  || not_judged "$HOOK_DIR/lib/push-scope.sh, the reader of the command, could not be loaded (reinstall the hooks with claude-sync pull)"
+command -v python3 >/dev/null 2>&1 \
+  || not_judged "python3 is not on PATH, and the command's words are read with it"
 
-parsed="$(ps_parse_payload "$payload" segmented)" || exit 0
+parsed="$(ps_parse_payload "$payload" segmented)" \
+  || not_judged "it could not read the hook payload (neither jq nor python3 could parse it as JSON)"
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 
@@ -88,7 +96,16 @@ too_fast() {   # $1 = one segment
   return 0
 }
 
-segs="$(ps__shell_segments "$cmd")" || exit 0
+# Read once, here, so each command's words come from this reading rather than a python start apiece
+# (claude-config#1040). Exit 3 is a reading from the crude cut, which still holds every command.
+ps__read "$cmd"
+case $? in
+  0|3) ;;
+  *)
+    if [ -f "$PS_SHELL_WORDS" ]; then not_judged "$PS_SHELL_WORDS could not read the command"; fi
+    not_judged "$PS_SHELL_WORDS, the reader of the command, is missing (reinstall the hooks with claude-sync pull)" ;;
+esac
+segs="$(ps__shell_segments "$cmd")"
 while IFS= read -r -d $'\x1e' seg; do
   case "$seg" in *watch*) ;; *) continue ;; esac
   too_fast "$seg" && exit 2
