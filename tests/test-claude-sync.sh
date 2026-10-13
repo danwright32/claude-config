@@ -2955,7 +2955,10 @@ check "notification mentions conflict"  "grep -qi 'merge\\|conflict\\|reconcile'
 section "== secret scan blocks sending a credential (issue #3) =="
 SS="$WORK/sshome"; mkdir -p "$SS/hooks"
 echo '{"hooks":{}}' > "$SS/settings.json"
-echo 'export AWS_KEY=AKIAIOSFODNN7EXAMPLE' > "$SS/hooks/leak.sh"
+# An AWS shaped key made here from a hash, so this file holds none for the whole tree secret scan
+# to refuse (claude-config#1128).
+ss_key="AKIA$(printf 'secret scan blocks sending' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)"
+echo "export AWS_KEY=$ss_key" > "$SS/hooks/leak.sh"
 SR="$WORK/ssrepo"; mkdir -p "$SR"
 out="$(CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc=$?
 check "push aborts on detected secret"   "[ $rc -ne 0 ]"
@@ -2971,9 +2974,11 @@ check "clean payload pushes fine"        "[ -f '$SR2/payload/hooks/ok.sh' ]"
 
 section "== allowlist accepts a known secret by fingerprint; new ones still blocked (issue #3) =="
 SA="$WORK/sahome"; mkdir -p "$SA/hooks"; echo '{"hooks":{}}' > "$SA/settings.json"
-echo 'KEY=AKIAIOSFODNN7EXAMPLE' > "$SA/hooks/known.sh"
+# Made here from a hash, as above (claude-config#1128).
+sa_key="AKIA$(printf 'allowlist accepts a known secret' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)"
+echo "KEY=$sa_key" > "$SA/hooks/known.sh"
 SAR="$WORK/sarepo"; mkdir -p "$SAR"
-fp="$(printf '%s' 'AKIAIOSFODNN7EXAMPLE' | shasum -a 256 | cut -d' ' -f1)"
+fp="$(printf '%s' "$sa_key" | shasum -a 256 | cut -d' ' -f1)"
 printf '%s  # accepted test key\n' "$fp" > "$SAR/.secret-allowlist"
 CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
 check "allowlisted secret passes"        "[ -f '$SAR/payload/hooks/known.sh' ]"
@@ -12538,7 +12543,8 @@ echo '{"model":"opus","hooks":{}}' > "$RFHB/settings.json"
 env "${rs_env[@]}" CLAUDE_HOME="$RFHB" SYNC_REPO="$RFRB" bash "$SCRIPT" pull >/dev/null 2>&1
 check "#947 the fixture delivers a pull that works (positive control)" "grep -q 'shared base' '$RFHB/agents/shared.md'"
 # Read whole, never piped into grep -q, so a match cannot become a SIGPIPE that reads as absence (L183).
-rs_secret='AKIAIOSFODNN7EXAMPLE'
+# Made here from a hash, so this file holds no AWS shaped key for the whole tree scan to refuse (#1128).
+rs_secret="AKIA$(printf 'a refused send does not stop receiving' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)"
 rs_shared_has_secret(){ local _rs_log; _rs_log="$(git -C "$RFB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_rs_log"; }
 rs_clone_has_secret(){ local _rs_log; _rs_log="$(git -C "$RFRB" log --all -p 2>/dev/null)"; grep -q "$rs_secret" <<< "$_rs_log"; }
 

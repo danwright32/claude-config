@@ -947,9 +947,18 @@ answer as nothing wrong.
 
 ## Secret scan
 
-Every push/sync scans the payload and aborts if it finds a credential shape.
-Accept a known string by adding the sha256 of the matched text to
+Every send scans the payload, the only thing it commits, and aborts if it finds a credential
+shape. Every `git push` of this repository and every CI run scans the WHOLE tree with the same
+rules (#1128): `tests/test-payload-secret-scan.sh` is a whole tree scanner, so the pre push scanner
+gate runs it. Accept a known string by adding the sha256 of the matched text to
 `.secret-allowlist`, or bypass once with `SYNC_SKIP_SECRET_SCAN=1`.
+
+The rules are claude-sync's own, in `scan_secrets`, and nothing else: no external scanner is
+called. They are distinctive token shapes (an AWS key id, GitHub, Slack, Google and Stripe
+tokens, a private key header) and a key named `secret`, `token`, `api_key` or `password`, in any
+letter case, followed by 24 or more identifier characters. `passwd` is matched in lower case only:
+a capital `PASSWD` would refuse the sudoers line the bug-bash suite expects (`NOPASSWD:` followed by
+a path), and whether to accept that line is an open decision for Dan.
 
 ### A refused send does not stop this Mac receiving
 
@@ -977,10 +986,12 @@ edit OUTSIDE the payload is somebody's own work on the repository: a pull leaves
 reports git's refusal.
 
 `tests/test-payload-secret-scan.sh` runs that same scan, cut out of `claude-sync` by name, over
-the payload git would carry, so a file that would block every send fails CI before it merges. A
+every file git would carry anywhere in the repository (tests, tools and `claude-sync` included), so
+a file that would block every send, or publish a credential with a push, fails before it merges. A
 placeholder in a shipped template is the usual cause: a key named `token`, `secret`, `password` or
-`api_key` followed by 24 or more letters, digits, `_`, `+`, `/` or `-` reads as a credential, so
-write placeholders with spaces or angle brackets (`<set by tracker.sh new-token>`).
+`api_key`, in any case (`TOKEN` and `GOOD_TOKEN` too), followed by 24 or more letters, digits, `_`,
+`+`, `/` or `-` reads as a credential, so write placeholders with spaces or angle brackets
+(`<set by tracker.sh new-token>`).
 
 The same suite refuses a test that gets a token past the scan by how it is WRITTEN rather than by
 what it is: a key in one place and its value in a variable, a value printed from two halves, or

@@ -44,7 +44,7 @@ chat. Walk the user through this once:
    name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
    Then **Extensions, Apps Script**.
 4. Delete any boilerplate and paste the entire contents of `apps-script.gs` (in this skill dir).
-5. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING` with the `token` value from
+5. In the pasted code, replace `REPLACE WITH A LONG RANDOM STRING` with the `token` value from
    `config.local.json` in BBEdit, keeping the single quotes around it.
 6. Click **Deploy, New deployment, Web app**.
    - *Execute as*: **Me**
@@ -80,7 +80,7 @@ update. Do this once, on one Mac; the `/exec` URL and the token stay the same:
 2. Select all the code there and paste the entire contents of the current `apps-script.gs`
    over it.
 3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
-   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   command in setup step 2. In the pasted code, replace `REPLACE WITH A LONG RANDOM STRING`
    with the `token` value from that file, keeping the single quotes around it, and save.
 4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
 5. Check it, without changing anything, by asking to update a Link no row has:
@@ -108,7 +108,7 @@ token stay the same:
 2. Select all the code there and paste the entire contents of the current `apps-script.gs`
    over it.
 3. Tell the user BBEdit is about to come forward, then open `config.local.json` with the
-   command in setup step 2. In the pasted code, replace `REPLACE_WITH_A_LONG_RANDOM_STRING`
+   command in setup step 2. In the pasted code, replace `REPLACE WITH A LONG RANDOM STRING`
    with the `token` value from that file, keeping the single quotes around it, and save.
 4. **Deploy, Manage deployments**, the pencil (Edit), **Version: New version**, **Deploy**.
    Never **New deployment**: that makes a new `/exec` link, which `config.local.json` does not
