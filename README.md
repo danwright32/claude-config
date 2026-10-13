@@ -328,14 +328,24 @@ counts are missing, unstamped, dated in the future or older than 14 days is name
 the age, and nothing is proposed: its counts are never read as zero. The 14 days come from the
 schedules: each Mac recounts once its counts are 7 days old and the job runs daily, so while both
 Macs are in use the other Mac's counts are at worst 8 days old, and 14 leaves about six days for a
-Mac that is asleep or off. A lesson with no tag refuses the whole re-rank by name, with the command
-that tags only the new ones: `python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv`. The
-settled tags live in `lesson-tags.tsv` at the repo root (and `lesson-tags-second.tsv`, the second
-pass, where disputes are kept), committed by hand after review, since a tag decides whether a
-lesson can ever leave the core.
+Mac that is asleep or off.
+
+**How new lessons get their tags.** The settled tags live in `lesson-tags.tsv` at the repo root
+(sonnet) and `lesson-tags-second.tsv` (opus, the second pass, where disputes show), one `Lnnn<TAB>tag`
+row per lesson in number order. Before it re-ranks, the daily job tags the untagged lessons in this
+Mac's own band (`tools/tag-lessons.py --host`, both passes) and records each pass with
+`claude-sync record-lesson-tags first|second <file>`, which adds the rows under the sync lock and
+commits them, so the next sync carries them. A tag decides whether a lesson can ever leave the core,
+so it is never defaulted: a tagger that fails records nothing, and `record-lesson-tags` refuses an
+output cut short, a tag outside diff, design and operate, and a different tag for a lesson already
+tagged. A lesson missing from either pass then refuses the whole re-rank by name, unless it is in the
+other Mac's band, which is UNMEASURED until that Mac's job has tagged it and synced. To tag by hand,
+in `~/claude-config-sync`: `python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv > first.txt`,
+then `./claude-sync record-lesson-tags first first.txt`, and the same with
+`--skip-tagged lesson-tags-second.tsv --model opus` and `second`.
 
 **The job.** `tools/run-lessons-core-rerank.sh` runs daily and delivers monthly: it recounts when due,
-then, unless this month's proposal is already out, re-ranks and writes
+then, unless this month's proposal is already out, tags this Mac's new lessons, re-ranks and writes
 `~/.claude/state/lessons-core-rerank/rerank-<YYYY-MM>.html`, with the moves, the list to apply
 (`core-<YYYY-MM>.txt`) and the seats to commit with it (`seats-<YYYY-MM>.txt`) beside it. It posts one notification per month per outcome (a proposal,
 refused, not measured), which opens the page in Chrome when clicked, and records it as given only

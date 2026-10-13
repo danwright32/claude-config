@@ -302,10 +302,51 @@ check "naming it" "UNTAGGED L13" "$out"
 check "and naming the command that tags only the untagged" "--skip-tagged" "$out"
 check "the page lists it too" "L13" "$(cat "$OUT/rerank.html")"
 [ ! -s "$OUT/core.txt" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a refused re-rank writes no list to apply"; }
+check "the remedy says the daily job tags the lesson itself" "daily" "$out"
 printf 'L13\tdiff\n' >> "$REPO/lesson-tags.tsv"
+# Tagged by the first pass only: the second pass is where a dispute would show, and a lesson it never
+# read can never be disputed, so it refuses too rather than reading the first pass as agreed (L113).
+out="$(rerank)"; rc=$?
+check_rc "a lesson the second pass never tagged refuses" 1 "$rc"
+check "naming it and the pass" "UNTAGGED L13 in the second pass" "$out"
+printf 'L13\tdiff\n' >> "$REPO/lesson-tags-second.tsv"
 out="$(rerank)"; rc=$?
 check_rc "once tagged it is judged" 0 "$rc"
 [ -z "$(move "$OUT/moves.tsv" L13)" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a new uncited lesson starts in the library (got $(move "$OUT/moves.tsv" L13))"; }
+
+# 8b. WHOSE LESSON IT IS. Each Mac's daily job tags the lessons in its own band, so a new lesson in
+#     the OTHER Mac's band is waiting for that Mac's job and its next sync, like counts not arrived
+#     yet: UNMEASURED, naming the Mac, not a refusal. A lesson in this Mac's own band, or in no band,
+#     is this Mac's tagger failing, which refuses (exit 1). Without --host nothing can be told, so
+#     every untagged lesson refuses as before.
+cp "$IDX/LESSONS-INDEX-proof.md" "$WORK/index-aside.md"; cp "$WORK/ages.txt" "$WORK/ages-aside.txt"
+printf -- '- L502. A lesson the other Mac wrote yesterday, long enough to look like a real one.\n' >> "$IDX/LESSONS-INDEX-proof.md"
+printf 'L502\t2026-10-08\t1\n' >> "$WORK/ages.txt"
+out="$(rerank --host mac-a)"; rc=$?
+check_rc "the other Mac's untagged lesson is not measured yet" 2 "$rc"
+check "naming the lesson and whose it is" "UNMEASURED: L502 is mac-b's lesson" "$out"
+check "the page says so too" "mac-b" "$(cat "$OUT/rerank.html")"
+# Its remedy is about tags, never the recount remedy for missing counts (found by the PR lessons
+# review of this change: both kinds of UNMEASURED shared one remedy).
+check_not "and it is not told to recount citations" "record-lesson-counts" "$out"
+check "it is told how the tags arrive" "record-lesson-tags" "$out"
+out="$(rerank --host mac-b)"; rc=$?
+check_rc "this Mac's own untagged lesson refuses" 1 "$rc"
+check "naming it" "UNTAGGED L502" "$out"
+out="$(rerank)"; rc=$?
+check_rc "with no host given every untagged lesson refuses" 1 "$rc"
+# A lesson in NO band (below every band start, written before bands existed) is tagged by neither
+# Mac's job, so it refuses with a remedy that says so, never one pointing at a job that will never
+# tag it (found by the PR lessons review of this change).
+cp "$WORK/index-aside.md" "$IDX/LESSONS-INDEX-proof.md"; cp "$WORK/ages-aside.txt" "$WORK/ages.txt"
+cp "$REPO/lesson-tags.tsv" "$WORK/tags-nb.tsv"; grep -v $'^L2\t' "$WORK/tags-nb.tsv" > "$REPO/lesson-tags.tsv"
+printf '7\n' > "$REPO/lesson-bands/mac-a"
+out="$(rerank --host mac-a)"; rc=$?
+check_rc "an untagged lesson below every band refuses" 1 "$rc"
+check "naming it as in no Mac's band" "UNTAGGED L2 (in no Mac's band" "$out"
+check "with a remedy to tag it by hand, since no daily job will" "no daily job tags it" "$out"
+cp "$WORK/tags-nb.tsv" "$REPO/lesson-tags.tsv"; printf '1\n' > "$REPO/lesson-bands/mac-a"
+cp "$WORK/index-aside.md" "$IDX/LESSONS-INDEX-proof.md"; cp "$WORK/ages-aside.txt" "$WORK/ages.txt"
 
 # No tag file at all is its own refusal, not 13 UNTAGGED lines.
 out="$(rerank --tags "$WORK/no-such-tags.tsv")"; rc=$?
@@ -348,8 +389,30 @@ EOS
 cat > "$FAKES/sync" <<'EOS'
 #!/usr/bin/env bash
 echo "sync $*" >> "$FAKE_LOG"
-[ "$1" = record-lesson-counts ] || exit 9
-cp "$2" "$FAKE_REPO/lesson-counts/$FAKE_HOST.tsv"
+case "$1" in
+  record-lesson-counts) cp "$2" "$FAKE_REPO/lesson-counts/$FAKE_HOST.tsv" ;;
+  record-lesson-tags)
+    [ "${FAKE_SYNC_TAGS_RC:-0}" = 0 ] || { echo "claude-sync: record-lesson-tags: refused"; exit 1; }
+    case "$2" in first) f=lesson-tags.tsv ;; second) f=lesson-tags-second.tsv ;; *) exit 9 ;; esac
+    grep -E '^L[0-9]+	' "$3" >> "$FAKE_REPO/$f" ;;
+  *) exit 9 ;;
+esac
+EOS
+cat > "$FAKES/tagger" <<'EOS'
+#!/usr/bin/env bash
+# Stands in for tools/tag-lessons.py: tags every lesson of FAKE_TAG_LESSONS the skip file lacks.
+echo "tagger $*" >> "$FAKE_LOG"
+skip=""; while [ $# -gt 0 ]; do [ "$1" = --skip-tagged ] && skip="$2"; shift; done
+case "${FAKE_TAG_MODE:-good}" in
+  fail) printf 'UNTAGGED L14\n'; exit 1 ;;
+esac
+n=0
+for l in ${FAKE_TAG_LESSONS:-}; do
+  grep -q "^$l	" "$skip" 2>/dev/null && continue
+  printf '%s\tdiff\n' "$l"; n=$((n + 1))
+done
+[ "$n" -eq 0 ] && { echo "NOTHING TO TAG: every lesson is already tagged in $skip"; exit 0; }
+echo "END $n lessons tagged"
 EOS
 cat > "$FAKES/ages" <<'EOS'
 #!/usr/bin/env bash
@@ -368,7 +431,7 @@ job(){ # job <now ISO>: one daily run
   : > "$FAKE_LOG"
   FAKE_AT="$1" RERANK_NOW="$1" RERANK_REPO="$REPO" RERANK_HOST=mac-a RERANK_STATE="$STATE" RERANK_LOG="$WORK/job.log" \
   RERANK_COUNTER="$FAKES/counter" RERANK_SYNC="$FAKES/sync" RERANK_AGES="$FAKES/ages" RERANK_NOTIFIER="$FAKES/notifier" \
-  CLAUDE_HOME="$CH" bash "$JOB" 2>&1
+  RERANK_TAGGER="${RERANK_TAGGER-$FAKES/tagger}" CLAUDE_HOME="$CH" bash "$JOB" 2>&1
 }
 notices(){ grep -c '^notify' "$FAKE_LOG" 2>/dev/null || true; }
 
@@ -440,7 +503,66 @@ rm -rf "$STATE"; mv "$IDX/LESSONS-CORE.txt" "$WORK/core-aside.txt"
 out="$(job "2026-10-09T15:00:00Z")"
 check "with no core list nothing is posted" "0" "$(notices)"
 check "and the log says the core is not in use" "INACTIVE" "$(cat "$WORK/job.log")"
+check_not "and no lesson is tagged for a core that is not in use" "tagger" "$(cat "$FAKE_LOG")"
 mv "$WORK/core-aside.txt" "$IDX/LESSONS-CORE.txt"
+
+# G. A NEW LESSON OF THIS MAC'S IS TAGGED BY THE JOB ITSELF (claude-config#566, reopened). The re-rank
+#    refuses while any lesson is untagged and lessons arrive weekly, so before re-ranking the job tags
+#    this Mac's untagged lessons, one pass per tags file (sonnet, then opus), and records each through
+#    claude-sync, which commits it so the other Mac receives it. Then the re-rank proposes.
+cp "$IDX/LESSONS-INDEX-proof.md" "$WORK/index-aside.md"; cp "$WORK/ages.txt" "$WORK/ages-aside.txt"
+cp "$REPO/lesson-tags.tsv" "$WORK/tags-aside.tsv"; cp "$REPO/lesson-tags-second.tsv" "$WORK/tags2-aside.tsv"
+untag(){ cp "$WORK/tags-aside.tsv" "$REPO/lesson-tags.tsv"; cp "$WORK/tags2-aside.tsv" "$REPO/lesson-tags-second.tsv"; }
+printf -- '- L14. A lesson this Mac wrote yesterday, long enough to look like a real one here.\n' >> "$IDX/LESSONS-INDEX-proof.md"
+printf 'L14\t2026-10-08\t1\n' >> "$WORK/ages.txt"
+export FAKE_TAG_LESSONS=L14
+rm -rf "$STATE"; fresh_counts
+out="$(job "2026-10-09T15:00:00Z")"
+check "the job asks the tagger about this Mac's lessons only" "--host mac-a" "$(grep '^tagger' "$FAKE_LOG")"
+check "the first pass reads sonnet against lesson-tags.tsv" "lesson-tags.tsv --host mac-a --bands-dir $REPO/lesson-bands --model sonnet" "$(grep '^tagger' "$FAKE_LOG")"
+check "the second pass reads opus against lesson-tags-second.tsv" "lesson-tags-second.tsv --host mac-a --bands-dir $REPO/lesson-bands --model opus" "$(grep '^tagger' "$FAKE_LOG")"
+check "the first pass is recorded through claude-sync" "sync record-lesson-tags first" "$(cat "$FAKE_LOG")"
+check "and so is the second" "sync record-lesson-tags second" "$(cat "$FAKE_LOG")"
+check "the log says what was tagged" "tagged" "$(grep 'L14' "$WORK/job.log")"
+check "and then the re-rank proposes, rather than refusing on the new lesson" "move" "$(grep '^notify' "$FAKE_LOG")"
+# Nothing of this Mac's left to tag: the tagger says so and nothing is recorded.
+rm -rf "$STATE"
+out="$(job "2026-10-09T15:00:00Z")"
+check_not "with nothing to tag nothing is recorded" "record-lesson-tags" "$(cat "$FAKE_LOG")"
+check "and the proposal still goes out" "move" "$(grep '^notify' "$FAKE_LOG")"
+
+# H. TAGGING THAT FAILS records nothing and the re-rank still refuses, by name: a tag is never
+#    defaulted (L113), and Dan is told once that month why nothing was proposed.
+untag; rm -rf "$STATE"
+out="$(FAKE_TAG_MODE=fail job "2026-10-09T15:00:00Z")"
+check_not "a tagger that failed records nothing" "record-lesson-tags" "$(cat "$FAKE_LOG")"
+check "the log says the tagging failed" "tagging" "$(grep -i 'fail' "$WORK/job.log" | tail -3)"
+check "the re-rank refuses, naming the lesson" "UNTAGGED L14" "$(grep '^notify' "$FAKE_LOG")"
+check_not "and no list to apply is left" "core-2026-10.txt" "$(ls "$STATE" 2>/dev/null)"
+# A record claude-sync refuses is the same: logged, and the re-rank refuses on the untagged lesson.
+untag; rm -rf "$STATE"
+out="$(FAKE_SYNC_TAGS_RC=1 job "2026-10-09T15:00:00Z")"
+check "a record claude-sync refused is logged" "would not record" "$(cat "$WORK/job.log")"
+check "and the re-rank refuses on the lesson" "UNTAGGED L14" "$(grep '^notify' "$FAKE_LOG")"
+
+# I. The real tagger finds claude where its native installer puts it, ~/.local/bin, which launchd's
+#    PATH does not hold. A fake claude there answers; the job's PATH is launchd's.
+untag; rm -rf "$STATE"
+FH="$WORK/fakehome"; mkdir -p "$FH/.local/bin"
+cat > "$FH/.local/bin/claude" <<'EOS'
+#!/usr/bin/env bash
+echo "claude $*" >> "$FAKE_LOG.claude"
+printf 'L14\tdesign\n'
+EOS
+chmod +x "$FH/.local/bin/claude"
+: > "$FAKE_LOG.claude"
+out="$(HOME="$FH" PATH="/usr/bin:/bin:/usr/sbin:/sbin" RERANK_TAGGER= job "2026-10-09T15:00:00Z")"
+check "the real tagger reached claude in ~/.local/bin" "disableAllHooks" "$(cat "$FAKE_LOG.claude")"
+check "and its tags were recorded" "sync record-lesson-tags first" "$(cat "$FAKE_LOG")"
+check "then the re-rank proposes" "move" "$(grep '^notify' "$FAKE_LOG")"
+
+cp "$WORK/index-aside.md" "$IDX/LESSONS-INDEX-proof.md"; cp "$WORK/ages-aside.txt" "$WORK/ages.txt"; untag
+unset FAKE_TAG_LESSONS
 
 # ---------------------------------------------------------------------------------------------------
 # THE INSTALLER writes a DAILY launch agent running the job from this checkout, and loads nothing

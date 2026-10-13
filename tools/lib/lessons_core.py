@@ -8,6 +8,8 @@ the ranking live here once: two copies of a rule's code drift even while they sh
 
   read_index(dir)        every `- Lnnn. ...` line of the LESSONS-INDEX files, and each one's section
   read_tsv(path, cols)   `Lnnn<TAB>...` rows, any other line ignored (headers, END, notes)
+  read_bands(dir)        each Mac's lesson number band start, from lesson-bands/
+  band_owner(n, bands)   which Mac wrote lesson n, so only that Mac tags it (#566)
   line_chars(line)       a lesson's size in the core, the unit `claude-sync core-set` caps (L81)
   read_counts(path)      one Mac's counts from tools/lesson-citations.py: host, window, stamp, rows
   review_class(...)      disputed, unreviewable or diff: whether a PR review can stand in for it
@@ -52,6 +54,35 @@ def read_tsv(path, cols):
             if len(parts) >= cols and ROW.fullmatch(parts[0]):
                 out[int(parts[0][1:])] = parts[1:]
     return out
+
+
+def read_bands(bands_dir):
+    """{host: band start} from lesson-bands/, one file per Mac holding the first number it mints.
+    A file that does not hold a number is left out, and claude-sync refuses to mint from it."""
+    out = {}
+    if not bands_dir or not os.path.isdir(bands_dir):
+        return out
+    for host in sorted(os.listdir(bands_dir)):
+        path = os.path.join(bands_dir, host)
+        if host.startswith(".") or not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as f:
+            first = f.readline().strip()
+        if first.isdigit():
+            out[host] = int(first)
+    return out
+
+
+def band_owner(n, bands):
+    """The Mac whose band holds lesson n: the one with the greatest band start at or below n, or None
+    for a number below every band (the lessons written before bands existed). Derived from the starts
+    alone, so it needs no copy of claude-sync's band size (L370): the bands are contiguous and a Mac
+    that outgrows its band claims the next one up."""
+    best = None
+    for host, start in bands.items():
+        if start <= n and (best is None or start > bands[best]):
+            best = host
+    return best
 
 
 def line_chars(line):

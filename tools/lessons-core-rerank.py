@@ -41,11 +41,12 @@ only when it ranks more than --band places (5) below the seats, so two lessons w
 counts do not trade places every month.
 
 Refuses rather than guessing, each with its own exit code so the job can tell them apart (L11):
-  1  REFUSED: a lesson with no tag (or no tags file), no age, a tag outside diff, design and operate,
+  1  REFUSED: a lesson with no tag in either pass (or no tags file) that is this Mac's own, no age, a tag outside diff, design and operate,
      a core list naming no lesson, no seats file or a seat outside the core, or two Macs that
      counted over different windows (L711);
   2  UNMEASURED: a Mac whose counts are missing, carry no time stamp, name another Mac, are dated in
-     the future, or are older than --stale-days. Never read as zero (L90, L530);
+     the future, or are older than --stale-days. Never read as zero (L90, L530). And, with --host, a
+     lesson in the OTHER Mac's band not tagged yet: that Mac's daily job tags it (#566);
   3  INACTIVE: there is no core list, so the core is not in use and there is nothing to re-rank.
 The Macs expected are those holding a lesson band (lesson-bands/), the Macs that write lessons,
 derived rather than listed by hand (L41).
@@ -61,8 +62,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from lessons_core import (UNREVIEWABLE, html_page, line_chars, parse_stamp, rank_order, rate,  # noqa: E402
-                          read_counts, read_index, read_tsv, review_class)
+from lessons_core import (UNREVIEWABLE, band_owner, html_page, line_chars, parse_stamp, rank_order,  # noqa: E402
+                          rate, read_bands, read_counts, read_index, read_tsv, review_class)
 
 DEFAULT_MAX_MOVES = 10
 DEFAULT_BAND = 5
@@ -119,6 +120,9 @@ def main(argv):
     ap.add_argument("--seats", default="")
     ap.add_argument("--out-seats", default="")
     ap.add_argument("--seed-seats", type=int, default=0)
+    # The Mac this runs on, so an untagged lesson in the OTHER Mac's band reads as waiting for that
+    # Mac's daily job rather than as this Mac's tagging failing (#566).
+    ap.add_argument("--host", default="")
     a = ap.parse_args(argv)
     if a.seed_seats and not a.out_seats:
         print("--seed-seats needs --out-seats, the file to write the seats into")
@@ -199,13 +203,41 @@ def main(argv):
     bad = sorted(n for d in (tags, tags2) for n in d if d[n] not in TAG_VALUES)
     if bad:
         problems.append("BADTAG " + ", ".join(f"L{n}" for n in bad) + ": a tag must be diff, design or operate.")
-    if os.path.exists(a.tags):
-        untagged = [n for n in sorted(lines) if n not in tags]
-        problems += [f"UNTAGGED L{n}" for n in untagged]
-        if untagged:
-            remedies.append(f"Tag them, in ~/claude-config-sync: python3 tools/tag-lessons.py --skip-tagged {a.tags} "
-                            f"> new-tags.txt, then add its lines to {os.path.basename(a.tags)} and commit it. "
-                            "The tag decides whether a lesson can ever leave the core, so it is never defaulted (L113).")
+    # A lesson missing from EITHER pass is untagged: the second pass is where a dispute would show,
+    # and a lesson it never read could never be disputed, so it is not read as agreeing (L113). Each
+    # Mac's daily job tags the lessons in its own band (#566), so one in the OTHER Mac's band is
+    # waiting for that Mac's job and its next sync, like counts not arrived yet (UNMEASURED); one in
+    # this Mac's band means this Mac's tagging failed, which refuses. One in NO band (below every band
+    # start, written before bands existed) is tagged by neither Mac's job, so it refuses with a remedy
+    # that says so rather than pointing at a job that will never tag it.
+    bands = read_bands(a.bands_dir)
+    waiting_tags, untagged_own, untagged_nobody = {}, [], []
+    for path, have, which in ((a.tags, tags, ""), (a.second_tags, tags2, " in the second pass")):
+        if not path or not os.path.exists(path):
+            continue
+        for n in sorted(lines):
+            if n in have:
+                continue
+            owner = band_owner(n, bands) if a.host else None
+            if owner is not None and owner != a.host:
+                waiting_tags.setdefault(owner, set()).add(n)
+            elif a.host and owner is None:
+                problems.append(f"UNTAGGED L{n}{which} (in no Mac's band, so no daily job tags it)")
+                untagged_nobody.append(n)
+            else:
+                problems.append(f"UNTAGGED L{n}{which}")
+                untagged_own.append(n)
+    if untagged_nobody:
+        remedies.append("A lesson in no Mac's band was written before bands existed, and no daily job tags it, so tag it by "
+                        "hand, in ~/claude-config-sync: python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv > first.txt, "
+                        "then ./claude-sync record-lesson-tags first first.txt, and the same for the second pass.")
+    if untagged_own:
+        remedies.append("The daily re-rank job tags this Mac's new lessons itself before it re-ranks, so its tagging "
+                        "failed or has not run: its log (~/.claude-lessons-core-rerank.log) says why. To tag by hand, "
+                        "in ~/claude-config-sync: python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv > first.txt, "
+                        "then ./claude-sync record-lesson-tags first first.txt; and for the second pass the same with "
+                        "--skip-tagged lesson-tags-second.tsv --model opus and record-lesson-tags second. The tag decides "
+                        "whether a lesson can ever leave the core, so it is never defaulted (L113).")
     ages = {n: int(v[1]) for n, v in read_tsv(a.ages, 3).items()} if os.path.exists(a.ages) else {}
     problems += [f"UNDATED L{n}" for n in sorted(lines) if n not in ages]
 
@@ -246,13 +278,25 @@ def main(argv):
         for f in sorted(os.listdir(a.counts_dir)):
             if f.endswith(".tsv") and f[:-4] not in hosts:
                 notes.append(f"NOTE: counts from {f[:-4]} are left out: that Mac holds no lesson band, so it is not one of the Macs expected.")
+    # Each kind of UNMEASURED carries its own remedy: the recount one says nothing about tags (L111).
+    if unmeasured:
+        remedies.append("Counts reach this Mac when the Mac named above runs the re-rank job (it recounts weekly) and syncs. "
+                        "To recount by hand there: python3 tools/lesson-citations.py > c.tsv, then claude-sync record-lesson-counts c.tsv.")
+    for owner, ns in sorted(waiting_tags.items()):
+        ns = sorted(ns)
+        named = ", ".join(f"L{n}" for n in ns)
+        unmeasured.append(f"UNMEASURED: {named} {'is' if len(ns) == 1 else 'are'} {owner}'s "
+                          f"lesson{'' if len(ns) == 1 else 's'} and not tagged yet. Each Mac tags its own new lessons, "
+                          f"so the tags arrive when {owner}'s daily re-rank job has tagged them and synced.")
+    if waiting_tags:
+        remedies.append("Tags reach this Mac when the Mac named above runs the re-rank job (it tags its own new lessons "
+                        "daily, before re-ranking) and syncs. If that Mac's log (~/.claude-lessons-core-rerank.log) shows "
+                        "its tagging failing, tag there by hand: python3 tools/tag-lessons.py --skip-tagged lesson-tags.tsv "
+                        "> first.txt, then ./claude-sync record-lesson-tags first first.txt, and the same for the second pass.")
     windows = sorted({g["days"] for g in used})
     if len(windows) > 1:
         problems.append("WINDOWS DIFFER: " + ", ".join(f"{g['host']} counted {g['days']} days" for g in used)
                         + "; citations over different windows cannot be added into one rate.")
-    if unmeasured:
-        remedies.append("Counts reach this Mac when the Mac named above runs the re-rank job (it recounts weekly) and syncs. "
-                        "To recount by hand there: python3 tools/lesson-citations.py > c.tsv, then claude-sync record-lesson-counts c.tsv.")
     for n in notes:
         print(n)
     if problems or unmeasured:

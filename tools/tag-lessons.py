@@ -3,7 +3,7 @@
 (claude-config#563).
 
     python3 tools/tag-lessons.py [--index-dir payload] [--batch 120] [--model sonnet]
-                                 [--skip-tagged lesson-tags.tsv]
+                                 [--skip-tagged lesson-tags.tsv] [--host H --bands-dir lesson-bands]
 
 Reads every `- Lnnn. ...` line of the LESSONS-INDEX files and asks a reader to tag each one:
   diff     the mistake shows in a branch's diff, so the PR lessons review can catch it;
@@ -25,6 +25,9 @@ import os
 import re
 import subprocess
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from lessons_core import band_owner, read_bands  # noqa: E402
 
 LINE = re.compile(r"^- L([0-9]+)\. (.+)$")
 ANSWER = re.compile(r"^L([0-9]+)\t(\S+)\s*$")
@@ -88,12 +91,32 @@ def main(argv):
     # monthly re-rank names as the remedy when new lessons arrive untagged. A file that is not there is
     # refused, never read as tagging nothing, which would re-ask about every lesson (L320).
     ap.add_argument("--skip-tagged", default="")
+    # Ask only about the lessons in this Mac's band (claude-config#566): the daily re-rank job on each
+    # Mac tags the lessons that Mac wrote, so two Macs never tag one lesson, never disagree about it,
+    # and never write beside each other in the tags files. A host the bands do not name is refused,
+    # never read as owning nothing (NOTHING TO TAG for ever) or everything (the other Mac's lessons).
+    ap.add_argument("--host", default="")
+    ap.add_argument("--bands-dir", default="")
     a = ap.parse_args(argv)
+    bands = {}
+    if a.host:
+        bands = read_bands(a.bands_dir)
+        if a.host not in bands:
+            print(f"NO BAND: {a.host} holds no lesson band in {a.bands_dir or '(no --bands-dir given)'}, "
+                  "so which lessons are its own cannot be told, and nothing was tagged")
+            return 1
 
     lessons = lesson_lines(a.index_dir)
     if not lessons:
         print(f"NO LESSONS: no `- Lnnn.` line in {a.index_dir}/LESSONS-INDEX-*.md")
         return 1
+    if a.host:
+        lessons = {n: t for n, t in lessons.items() if band_owner(n, bands) == a.host}
+        if not lessons:
+            # Said before the skip file is read, so a Mac that wrote nothing is never told its
+            # lessons are all tagged, which nothing measured (L11).
+            print(f"NOTHING TO TAG: {a.host} has written no lesson in {a.index_dir}")
+            return 0
     if a.skip_tagged:
         try:
             with open(a.skip_tagged, encoding="utf-8") as f:
@@ -103,7 +126,8 @@ def main(argv):
             return 1
         lessons = {n: t for n, t in lessons.items() if n not in have}
         if not lessons:
-            print(f"NOTHING TO TAG: every lesson is already tagged in {a.skip_tagged}")
+            whose = f"lesson of {a.host}'s " if a.host else "lesson "
+            print(f"NOTHING TO TAG: every {whose}is already tagged in {a.skip_tagged}")
             return 0
     tags, problems = {}, []
     items = sorted(lessons.items())

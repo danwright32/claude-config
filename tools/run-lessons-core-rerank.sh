@@ -8,7 +8,9 @@
 #      in the future, recount its prose citations (tools/lesson-citations.py) and record them with
 #      `claude-sync record-lesson-counts`, which commits them under the sync lock so the next sync
 #      carries them to the other Mac. A counter that read nothing records nothing (L98).
-#   2. Unless this month's proposal has already been delivered, re-rank (tools/lessons-core-rerank.py)
+#   2. Unless this month's proposal has already been delivered, tag the untagged lessons in this Mac's
+#      own band (tools/tag-lessons.py, both passes) and record the tags with `claude-sync
+#      record-lesson-tags`, which commits them for the other Mac; then re-rank (tools/lessons-core-rerank.py)
 #      against both Macs' counts, writing the page, the moves and the list to apply into the state
 #      folder, one set per month.
 #   3. Tell Dan with ONE notification per month per outcome (a proposal, refused, not measured), which
@@ -32,7 +34,7 @@
 #   RERANK_NOW        the UTC instant to act as (default: now)
 #   RERANK_STATE      where the pages go (default: ~/.claude/state/lessons-core-rerank)
 #   RERANK_LOG        the log (default: ~/.claude-lessons-core-rerank.log)
-#   RERANK_COUNTER, RERANK_AGES, RERANK_SYNC, RERANK_NOTIFIER   the four outside programs
+#   RERANK_COUNTER, RERANK_AGES, RERANK_SYNC, RERANK_NOTIFIER, RERANK_TAGGER   the five outside programs
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # before any cd (L372)
@@ -78,6 +80,38 @@ if grep -qx "$MONTH proposal" "$DELIVERED" 2>/dev/null; then
   exit 0
 fi
 PAGE="$STATE/rerank-$MONTH.html"
+
+# 2a. THIS MAC'S NEW LESSONS, TAGGED (claude-config#566). The re-rank refuses while any lesson is
+# untagged, and a new lesson arrives most weeks, so before re-ranking the job tags the untagged
+# lessons in this Mac's own band, one pass per tags file: sonnet for lesson-tags.tsv, opus for
+# lesson-tags-second.tsv, as the files were seeded (#1036). Each Mac tags only what it wrote, so the
+# two never tag one lesson or write beside each other. A pass is recorded through claude-sync, under
+# the lock, only when the tagger tagged everything it was asked (exit 0 with an END line); anything
+# else is logged and recorded as nothing, and the re-rank below then refuses on the untagged lesson
+# by name. A tag is never defaulted, because it decides whether a lesson can ever leave the core
+# (L113). Skipped while the core is not in use, which costs nothing and asks no model anything.
+tagger(){ if [ -n "${RERANK_TAGGER:-}" ]; then "$RERANK_TAGGER" "$@"; else python3 "$HERE/tag-lessons.py" "$@"; fi; }
+if [ -f "$REPO/payload/LESSONS-CORE.txt" ]; then
+  # launchd's PATH holds no ~/.local/bin, where Claude Code's own installer puts claude, and the
+  # tagger's reader is `claude -p`. Added only when claude is not already found.
+  [ -n "${RERANK_TAGGER:-}" ] || command -v claude >/dev/null 2>&1 || PATH="$HOME/.local/bin:$PATH"
+  for pass in first:lesson-tags.tsv:sonnet second:lesson-tags-second.tsv:opus; do
+    name="${pass%%:*}"; rest="${pass#*:}"; file="${rest%%:*}"; model="${rest#*:}"
+    [ -f "$REPO/$file" ] || continue
+    tagger --index-dir "$REPO/payload" --skip-tagged "$REPO/$file" --host "$HOST" --bands-dir "$REPO/lesson-bands" \
+      --model "$model" > "$TMP/tags-$name.txt" 2>&1; trc=$?
+    if [ "$trc" -ne 0 ]; then
+      say "tagging this Mac's new lessons failed ($name pass, $model, exit $trc: $(head -c 400 "$TMP/tags-$name.txt" | tr '\n' ' ')), so no tag was recorded and the re-rank refuses on them."
+    elif grep -q '^NOTHING TO TAG' "$TMP/tags-$name.txt"; then
+      :
+    elif ! rec="$(sync_tool record-lesson-tags "$name" "$TMP/tags-$name.txt" 2>&1)"; then
+      say "claude-sync would not record the $name pass tags for $HOST: $rec"
+    else
+      say "tagged $(grep -E "^L[0-9]+$(printf '\t')" "$TMP/tags-$name.txt" | cut -f1 | tr '\n' ' ')in the $name pass ($model): $rec"
+    fi
+  done
+fi
+
 if ! ages --repo "$REPO" --today "${NOW:0:10}" > "$TMP/ages.txt" 2>&1; then
   out="REFUSED: the lesson ages could not be read from the history of $REPO: $(head -c 300 "$TMP/ages.txt" | tr '\n' ' ')"
   rc=1
@@ -86,7 +120,7 @@ else
   [ -f "$REPO/lesson-tags-second.tsv" ] && second=(--second-tags "$REPO/lesson-tags-second.tsv")
   out="$(python3 "$HERE/lessons-core-rerank.py" --index-dir "$REPO/payload" --core "$REPO/payload/LESSONS-CORE.txt" \
     --counts-dir "$REPO/lesson-counts" --bands-dir "$REPO/lesson-bands" --ages "$TMP/ages.txt" \
-    --tags "$REPO/lesson-tags.tsv" ${second[@]+"${second[@]}"} --now "$NOW" \
+    --tags "$REPO/lesson-tags.tsv" ${second[@]+"${second[@]}"} --host "$HOST" --now "$NOW" \
     --seats "$REPO/lesson-core-seats.txt" --out-seats "$STATE/seats-$MONTH.txt" \
     --out-tsv "$STATE/moves-$MONTH.tsv" --out-html "$PAGE" --out-list "$STATE/core-$MONTH.txt" 2>&1)"; rc=$?
 fi

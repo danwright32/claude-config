@@ -584,6 +584,19 @@ does NOT do is drop anything. A nonce probe on 2026-09-23 loaded 250,000 charact
 files and every code planted at the start, middle and end arrived, so crossing either figure costs a
 warning on screen and the context it takes, never a rule.
 
+**How long the room lasts is measured, not remembered (#1060).** The total note after every pull
+used to divide the room left by a constant, 1,100 characters a day, measured on 2026-09-11 while
+every session loaded the whole library. Once the lessons core loaded (2026-10-09) a new lesson
+entered the library rather than the loaded set, so the constant projected a deadline the loaded set
+was not heading for. Now the suite reads the growth of exactly the files loaded now from git history:
+the newest commit against the tree of 30 days earlier, or against the commit that last changed WHICH
+files load (an import line added or removed) when that is more recent, because the growth of a
+different set says nothing about this one. Under 14 days of history at the current shape, no history
+here and no checkout handed in (the installed copy is measured through the clone a pull passes in
+`RUN_ALL_TESTS_CHECKOUT`), or an installed copy loading a different set from that clone's history,
+it says UNMEASURED and why. A set that did not grow is said to be flat, with no date. The 30 and the
+14 are chosen: a re-rank moves the core at most monthly, and two weeks is the least worth a rate.
+
 Three things this had to get right. The set of files is a LIST that changes whenever a section is
 added, renamed or removed, so `CLAUDE.md` gets its import block generated from the same list rather
 than maintained beside it (a file nothing imports neither loads nor travels, since the synced set is
@@ -1393,7 +1406,30 @@ a search on 2026-10-09 (the temp folders, Spotlight, the #563 and #575 threads) 
 decided on 2026-10-09 to re-run both passes over every lesson rather than reconstruct them, with his
 2026-09-24 rule for disputes unchanged (a lesson the passes disagree on stays in the core), so
 nothing waits on him. `lesson-tags.tsv` (sonnet) and `lesson-tags-second.tsv` (opus) are that
-re-run, exactly as `tools/tag-lessons.py` printed them.
+re-run, exactly as `tools/tag-lessons.py` printed them, less the END line (see the next paragraph).
+
+**New lessons are tagged by the Mac that wrote them, by the daily job (2026-10-12).** Seeded tags
+went stale the week they were committed: L759 to L761 arrived after the seed and the first re-rank
+with both Macs' counts refused on them, and every later month would have refused the same way, since
+tagging was a manual model run nothing scheduled. So the daily job tags before it re-ranks, both
+passes as seeded (sonnet into `lesson-tags.tsv`, opus into `lesson-tags-second.tsv`), and records
+each through `claude-sync record-lesson-tags`, under the sync lock, as the counts travel. Considered:
+each Mac tagging every untagged lesson (rejected: both Macs run at 11:07 and see the same new lesson,
+so two model answers for one lesson land as a rebase conflict, or as two different tags); tags kept
+in the state folder (rejected: a model re-asked every day gives a lesson's tag a chance to flip, and
+the tag decides whether it can ever leave the core). So a Mac tags only the lessons in its own band
+(`lesson-bands/`, the owner being the Mac with the greatest band start at or below the number, which
+needs no copy of the band size), and the rows are kept in number order, so each Mac's additions land
+beside its own band rather than both at the end. That is why the END line went: it carried a count
+every addition would make false and sat where both Macs would write. Ownership also tells the
+re-rank what an untagged lesson means: in the other Mac's band it is waiting for that Mac's job and
+sync, UNMEASURED like counts not arrived yet; in this Mac's band or in none, this Mac's tagging
+failed, and it refuses by name. A lesson the second pass never tagged refuses too, because a lesson
+the second pass never read can never be disputed. Nothing is ever defaulted: a tagger that fails, an
+output cut short, a tag outside the three and a different tag for a lesson already tagged all record
+nothing (L113), and launchd's PATH, which lacks `~/.local/bin` where `claude` lives, is extended by
+the job only when `claude` is not already found. L759 to L761 were tagged by both passes by hand on
+2026-10-12 (both said operate, diff, diff) and recorded through the same command.
 
 The re-run does not reproduce the old split. On 2026-09-24 the passes put 201 lessons as agreed
 unreviewable, 134 disputed and 400 agreed diff; on 2026-10-09, over 776 lessons, 223, 131 and 422.

@@ -19661,6 +19661,71 @@ lk_refused "counts carrying sampled sentences" "$WORK/lk-sample.txt" "SAMPLE"
 out_lkno="$(lk_record "$WORK/lk-absent.txt")"; rc_lkno=$?
 check "#566 a counts file that is not there is refused" "[ \$rc_lkno -ne 0 ]"
 
+section "== the daily re-rank job commits the tags of this Mac's new lessons (claude-config#566) =="
+# The monthly re-rank refuses while any lesson is untagged, and lessons arrive weekly, so the daily
+# job tags this Mac's new ones itself (tools/tag-lessons.py) and records each pass through this
+# command, which holds the sync lock and commits, exactly as the counts travel. A tag decides whether
+# a lesson can ever leave the core, so what this cannot vouch for it refuses whole: a tag outside
+# diff, design and operate, a tagger output cut short (no END), one holding no tag, and above all a
+# DIFFERENT tag for a lesson already tagged, which is never overwritten (L113). The rows are kept in
+# lesson number order, so each Mac's additions land beside its own band and two Macs recording the
+# same day touch different lines.
+LTR="$WORK/ltags-repo"; git init -q -b main "$LTR" 2>/dev/null || { mkdir -p "$LTR"; git -C "$LTR" init -q; }
+mkdir -p "$LTR/payload"; printf 'seed\n' > "$LTR/payload/seed.txt"
+printf 'L1\tdiff\nL2\tdesign\nL12\toperate\nEND 3 lessons tagged\n' > "$LTR/lesson-tags.tsv"
+printf 'L1\tdiff\nL2\tdesign\nL12\toperate\n' > "$LTR/lesson-tags-second.tsv"
+git -C "$LTR" add -A && git -C "$LTR" -c user.name=t -c user.email=t@e commit -q -m seed
+LTH="$WORK/ltags-home"; mkdir -p "$LTH"
+lt_record(){ SYNC_HOSTNAME=MacTag SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LTH" SYNC_REPO="$LTR" bash "$SCRIPT" record-lesson-tags "$@" 2>&1; }
+printf 'L5\tdiff\nL3\tdesign\nEND 2 lessons tagged\n' > "$WORK/lt-good.txt"
+out_lt="$(lt_record first "$WORK/lt-good.txt")"; rc_lt=$?
+dbg "#566 record-lesson-tags said: $out_lt"
+check "#566 the first pass's new tags are added to lesson-tags.tsv" \
+  "[ \$rc_lt -eq 0 ] && grep -qx \"\$(printf 'L5\tdiff')\" '$LTR/lesson-tags.tsv' && grep -qx \"\$(printf 'L3\tdesign')\" '$LTR/lesson-tags.tsv'"
+check "#566 in lesson number order, not text order" \
+  "[ \"\$(cut -f1 '$LTR/lesson-tags.tsv' | tr '\n' ' ')\" = 'L1 L2 L3 L5 L12 ' ]"
+check "#566 the rows already there are kept as they were, and the stale END count is not carried" \
+  "grep -qx \"\$(printf 'L12\toperate')\" '$LTR/lesson-tags.tsv' && ! grep -q '^END' '$LTR/lesson-tags.tsv'"
+check "#566 the second pass's file is not touched by the first" \
+  "[ \"\$(grep -c . '$LTR/lesson-tags-second.tsv')\" = 3 ]"
+check "#566 and the tags are committed, so the next sync carries them" \
+  "case \"\$(git -C '$LTR' log -1 --format=%s -- lesson-tags.tsv)\" in *'L3 L5'*) true ;; *) false ;; esac"
+check "#566 recording tags leaves the working tree clean" "[ -z \"\$(git -C '$LTR' status --porcelain 2>/dev/null)\" ]"
+check "#566 and it says which tags file it recorded into" "case \"\$out_lt\" in *lesson-tags.tsv*) true ;; *) false ;; esac"
+lt_commits(){ git -C "$LTR" log --oneline | grep -c .; }
+lt_before="$(lt_commits)"
+out_lt2="$(lt_record first "$WORK/lt-good.txt")"; rc_lt2=$?
+check "#566 recording the same tags again is a success that makes no second commit" "[ \$rc_lt2 -eq 0 ] && [ \"\$(lt_commits)\" = '$lt_before' ]"
+out_lts="$(lt_record second "$WORK/lt-good.txt")"; rc_lts=$?
+check "#566 the second pass goes to lesson-tags-second.tsv" \
+  "[ \$rc_lts -eq 0 ] && [ \"\$(cut -f1 '$LTR/lesson-tags-second.tsv' | tr '\n' ' ')\" = 'L1 L2 L3 L5 L12 ' ]"
+cp "$LTR/lesson-tags.tsv" "$WORK/lt-before.tsv"
+lt_refused(){ # lt_refused <description> <pass> <file> <word the refusal must name>
+  out_ltr="$(lt_record "$2" "$3")"; rc_ltr=$?
+  dbg "#566 $1: $out_ltr"
+  check "#566 $1 is refused" "[ \$rc_ltr -ne 0 ]"
+  check "#566 $1: the refusal names $4" "case \"\$out_ltr\" in *'$4'*) true ;; *) false ;; esac"
+  check "#566 $1 leaves the tags as they were" "cmp -s '$WORK/lt-before.tsv' '$LTR/lesson-tags.tsv'"
+}
+printf 'L2\tdiff\nL7\tdiff\nEND 2 lessons tagged\n' > "$WORK/lt-clash.txt"
+lt_refused "a different tag for a lesson already tagged" first "$WORK/lt-clash.txt" "L2"
+printf 'L7\tmaybe\nEND 1 lessons tagged\n' > "$WORK/lt-bad.txt"
+lt_refused "a tag outside the three" first "$WORK/lt-bad.txt" "maybe"
+printf 'L7\tdiff\nUNTAGGED L8\n' > "$WORK/lt-short.txt"
+lt_refused "a tagger output with no END line" first "$WORK/lt-short.txt" "END"
+printf 'NOTE the reader timed out after 600s on a batch of 2 lessons\nEND 0 lessons tagged\n' > "$WORK/lt-none.txt"
+lt_refused "an output holding no tag" first "$WORK/lt-none.txt" "no tag"
+lt_refused "a pass that is neither first nor second" third "$WORK/lt-good.txt" "third"
+lt_refused "a tags file that is not there" first "$WORK/lt-absent.txt" "lt-absent"
+# An EMPTY settled file is still the settled side: the new tags are added to it, never mistaken for
+# tags already there (found by the PR lessons review of this change: awk's FNR == NR stays true past
+# an empty first file, so the tagger's rows were read as settled and nothing was recorded).
+: > "$LTR/lesson-tags-second.tsv"
+out_lte="$(lt_record second "$WORK/lt-good.txt")"; rc_lte=$?
+dbg "#566 an empty second pass file: $out_lte"
+check "#566 tags recorded into an empty tags file land there" \
+  "[ \$rc_lte -eq 0 ] && [ \"\$(cut -f1 '$LTR/lesson-tags-second.tsv' | tr '\n' ' ')\" = 'L3 L5 ' ]"
+
 section "== mods travel to the other Mac and are wired into settings.json (#606) =="
 # A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code
 # loads one from a folder named in CLAUDE_CODE_PLUGIN_DIRS, read from the env block of
