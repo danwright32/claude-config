@@ -185,6 +185,18 @@ ratchet_ceiling() {  # $1 = recorded bytes
 # recursively. The platform allows four hops; this walk has no depth limit of its own and
 # guards against a cycle by not revisiting a file, which is the same protection with no
 # second number to keep in step.
+#
+# The same walk reads a file from disk or, with LF_REPO and LF_REV set, as it stood at a commit of the
+# checkout's history, which is how the growth reading below measures the loaded set in the past. One
+# walk for both, so the set measured then is decided by the rule that decides it now (L370).
+rule_file_text() {  # $1 = payload relative path; prints it, nothing when it is not there
+  if [ -n "${LF_REV:-}" ]; then
+    git -C "$LF_REPO" show "$LF_REV:payload/$1" 2>/dev/null
+  elif [ -f "$PAYLOAD/$1" ]; then
+    cat "$PAYLOAD/$1"
+  fi
+  return 0
+}
 loaded_files() {
   local queue="CLAUDE.md" seen="" current rest target
   while [ -n "$queue" ]; do
@@ -195,11 +207,10 @@ loaded_files() {
     case "|$seen|" in *"|$current|"*) continue ;; esac
     seen="${seen:+$seen|}$current"
     printf '%s\n' "$current"
-    [ -f "$PAYLOAD/$current" ] || continue
     while IFS= read -r target; do
       [ -n "$target" ] || continue
       queue="${queue:+$queue|}$target"
-    done < <(grep -oE '^@[^[:space:]]+' "$PAYLOAD/$current" 2>/dev/null | sed 's/^@//')
+    done < <(rule_file_text "$current" | grep -oE '^@[^[:space:]]+' 2>/dev/null | sed 's/^@//')
   done
 }
 
@@ -297,28 +308,126 @@ fi
 # THE TOTAL, reported and never refused (claude-config#546). Claude Code shows its large-memory-files
 # banner for the SUM of the loaded instruction files as well as for any one of them: the larger of
 # 120,000 and the per file figure, which is 150,000 on a 1M window (read out of the 2.1.281 binary;
-# see the header). This set measured 144,957 on 2026-09-23 and the lessons index grows about 1,100
-# characters a day, so it crosses that within days and stays over it. A refusal was considered and
-# declined by Dan on 2026-09-23: the banner drops no rule, and this suite also runs inside every
-# pull, so a refusal here would stall the config syncing between the Macs for a warning. So it is a
-# SUITE-NOTE, which the runner prints for a passing suite and the pull carries into its summary,
-# stating the total, the room left or the amount over, and the days that growth rate leaves.
+# see the header). This set measured 144,957 on 2026-09-23. A refusal was considered and declined by
+# Dan on 2026-09-23: the banner drops no rule, and this suite also runs inside every pull, so a
+# refusal here would stall the config syncing between the Macs for a warning. So it is a SUITE-NOTE,
+# which the runner prints for a passing suite and the pull carries into its summary, stating the
+# total, the room left or the amount over, and how long the room lasts at the rate the set grows.
 # The project's own CLAUDE.md is loaded as well and counts toward the same sum, so the room shown
 # is an upper bound.
 TOTAL_WARN=150000
 TOTAL_WARN_SMALL_WINDOW=120000
-DAILY_GROWTH=1100
-total_note() {  # $1 = total bytes -> the one line note
-  local t="$1"
+
+# HOW FAST THE LOADED SET GROWS, measured from its own git history every run (claude-config#1060).
+# It used to be a constant, 1,100 characters a day, measured on 2026-09-11 while every session
+# loaded the whole library, so every new lesson grew the loaded set. Since the lessons core went
+# live (#565, imports switched 2026-10-09) a session loads a fixed core: a new lesson enters the
+# library, not the loaded set, which grows only when the core list or CLAUDE.md changes. The
+# constant went on projecting a deadline for a total that was not on that path, and a stale
+# projection can prompt pruning lessons for nothing. So the premise is re-measured rather than
+# recorded (L316): the growth of exactly the files loaded now, over the last GROWTH_WINDOW_DAYS of
+# history, and never across the commit that last changed WHICH files load (switching the core on or
+# off, a section added), because the growth of a different set says nothing about this one.
+#
+# The end point is the newest commit and the start is a commit's tree, so the reading is decided by
+# history alone and never by the clock (L713). A reading that cannot be made says UNMEASURED and why,
+# never a number (L460): no git history here and no checkout handed in, a set that took its current
+# shape fewer than GROWTH_MIN_DAYS ago, history that does not reach back, or an installed copy that
+# loads a different set from the checkout's history (a Mac with no core set loads the library).
+#
+# The 30 days and the 14 are CHOSEN: a re-rank moves the core at most once a month, so a window
+# shorter than a month can read a growing core as flat, and two weeks is the least history worth a
+# rate at all. Re-measure the rate itself by running this suite in a checkout.
+GROWTH_WINDOW_DAYS=30
+GROWTH_MIN_DAYS=14
+# The checkout whose history describes $1: the git work tree it sits in as payload/, else the one a
+# pull hands the runner in RUN_ALL_TESTS_CHECKOUT (the installed copy in ~/.claude has no history of
+# its own). Nothing when neither.
+growth_repo() {  # $1 = payload directory
+  local top
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || top=""
+  if [ -n "$top" ] && [ "$top/payload" -ef "$1" ]; then printf '%s' "$top"; return 0; fi
+  top="${RUN_ALL_TESTS_CHECKOUT:-}"
+  if [ -n "$top" ] && [ -f "$top/payload/CLAUDE.md" ] && git -C "$top" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    printf '%s' "${top%/}"; return 0
+  fi
+  return 0
+}
+loaded_total_at() {  # $1 = repo  $2 = revision -> bytes of the set loaded at that revision
+  local rel n sum=0
+  while IFS= read -r rel; do
+    n="$(git -C "$1" cat-file -s "$2:payload/$rel" 2>/dev/null)" || n=0
+    sum=$(( sum + ${n:-0} ))
+  done < <(LF_REPO="$1" LF_REV="$2" loaded_files)
+  printf '%s' "$sum"
+}
+# One line: RATE <grown> <days> <newest date> | FLAT <days> <newest date> | UNMEASURED <why>.
+growth_reading() {  # $1 = payload directory
+  local repo now_set head_set end start shape shape_at base days grown paths=() rel
+  repo="$(growth_repo "$1")"
+  if [ -z "$repo" ]; then
+    printf 'UNMEASURED %s has no git history and no checkout was handed in (RUN_ALL_TESTS_CHECKOUT), so how fast the set grows cannot be read' "$1"; return 0
+  fi
+  now_set="$(PAYLOAD="$1" loaded_files | LC_ALL=C sort | tr '\n' ' ')"
+  head_set="$(LF_REPO="$repo" LF_REV=HEAD loaded_files | LC_ALL=C sort | tr '\n' ' ')"
+  if [ "$now_set" != "$head_set" ]; then
+    printf 'UNMEASURED this Mac loads %sand the checkout at %s loads %s, so the checkout'"'"'s history is not the history of this set' "$now_set" "$repo" "${head_set% }"; return 0
+  fi
+  end="$(git -C "$repo" log -1 --format=%ct HEAD 2>/dev/null)"
+  case "$end" in ''|*[!0-9]*) printf 'UNMEASURED the newest commit of %s has no readable date' "$repo"; return 0 ;; esac
+  while IFS= read -r rel; do paths+=("payload/$rel"); done < <(LF_REPO="$repo" LF_REV=HEAD loaded_files)
+  # The newest commit that added or removed an import line in a loaded file: where this set began.
+  shape="$(git -C "$repo" log -1 --format='%H %ct' -G'^@[^[:space:]]' HEAD -- "${paths[@]}" 2>/dev/null)"
+  start=$(( end - GROWTH_WINDOW_DAYS * 86400 ))
+  shape_at="${shape#* }"
+  if [ -n "$shape" ] && [ "$shape_at" -ge "$start" ]; then
+    start="$shape_at"; base="${shape%% *}"
+  else
+    base="$(git -C "$repo" rev-list -1 --first-parent --before="$start" HEAD 2>/dev/null)"
+  fi
+  days=$(( (end - start) / 86400 ))
+  if [ "$days" -lt "$GROWTH_MIN_DAYS" ]; then
+    printf 'UNMEASURED the files loaded now took their current shape on %s, %s days before the newest commit, under the %s days of history a rate needs' \
+      "$(git -C "$repo" log -1 --format=%cd --date=short "$base" 2>/dev/null)" "$days" "$GROWTH_MIN_DAYS"; return 0
+  fi
+  if [ -z "$base" ]; then
+    printf 'UNMEASURED the history of %s does not reach back %s days' "$repo" "$GROWTH_WINDOW_DAYS"; return 0
+  fi
+  grown=$(( $(loaded_total_at "$repo" HEAD) - $(loaded_total_at "$repo" "$base") ))
+  if [ "$grown" -gt 0 ]; then
+    printf 'RATE %s %s %s' "$grown" "$days" "$(git -C "$repo" log -1 --format=%cd --date=short HEAD)"
+  else
+    printf 'FLAT %s %s' "$days" "$(git -C "$repo" log -1 --format=%cd --date=short HEAD)"
+  fi
+}
+total_note() {  # $1 = total bytes  $2 = a growth_reading line -> the one line note
+  local t="$1" g="${2:-UNMEASURED no growth reading was taken}" grown days to room
   if [ "$t" -gt "$TOTAL_WARN" ]; then
     printf 'the rule files every session loads total %s characters, %s past the %s at which Claude Code shows its size warning on a 1M window (%s on a 200k one). Nothing is dropped; each session carries the warning and the context it costs.' \
       "$t" "$(( t - TOTAL_WARN ))" "$TOTAL_WARN" "$TOTAL_WARN_SMALL_WINDOW"
-  else
-    printf 'the rule files every session loads total %s characters, %s under the %s at which Claude Code shows its size warning on a 1M window, about %s days at %s a day (already past the %s of a 200k window).' \
-      "$t" "$(( TOTAL_WARN - t ))" "$TOTAL_WARN" "$(( (TOTAL_WARN - t) / DAILY_GROWTH ))" "$DAILY_GROWTH" "$TOTAL_WARN_SMALL_WINDOW"
+    return 0
   fi
+  room=$(( TOTAL_WARN - t ))
+  # The 200k window's own figure, read against the total rather than asserted: the sentence used to
+  # say "already past" it whatever the total, which stopped being true once the core loaded 94,464.
+  local small
+  if [ "$t" -gt "$TOTAL_WARN_SMALL_WINDOW" ]; then small="already past the $TOTAL_WARN_SMALL_WINDOW of a 200k window"
+  else small="$(( TOTAL_WARN_SMALL_WINDOW - t )) under the $TOTAL_WARN_SMALL_WINDOW of a 200k window"; fi
+  printf 'the rule files every session loads total %s characters, %s under the %s at which Claude Code shows its size warning on a 1M window (%s)' \
+    "$t" "$room" "$TOTAL_WARN" "$small"
+  case "$g" in
+    RATE\ *)
+      read -r _ grown days to <<< "$g"
+      printf ', about %s days at the rate they grew, %s characters over the last %s days of their history to %s.' \
+        "$(( room * days / grown ))" "$grown" "$days" "$to" ;;
+    FLAT\ *)
+      read -r _ days to <<< "$g"
+      printf ', and they did not grow over the last %s days of their history to %s, so no date is projected.' "$days" "$to" ;;
+    *)
+      printf '. How fast they grow is UNMEASURED: %s.' "${g#UNMEASURED }" ;;
+  esac
 }
-printf 'SUITE-NOTE %s\n' "$(total_note "$total")"
+printf 'SUITE-NOTE %s\n' "$(total_note "$total" "$(growth_reading "$PAYLOAD")")"
 
 echo "rule file budget: no single index entry is longer than the cap"
 
@@ -418,9 +527,68 @@ fi
 if [ 150830 -gt "$BUDGET" ]; then ok; else
   bad "the index size that actually produced the platform warning, 150830, sits inside the budget, so the budget cannot be what catches it"
 fi
-# The total note, both readings, so neither can quietly stop saying what it measured (L151).
-case "$(total_note 140000)" in *"10000 under the 150000"*"about 9 days"*) ok ;; *) bad "the total note under the warning does not give the room left and the days: $(total_note 140000)" ;; esac
-case "$(total_note 151000)" in *"1000 past the 150000"*"Nothing is dropped"*) ok ;; *) bad "the total note past the warning does not say how far past, or that nothing is dropped: $(total_note 151000)" ;; esac
+# The total note, every reading, so none can quietly stop saying what it measured (L151).
+case "$(total_note 140000 "RATE 2000 20 2026-01-21")" in *"10000 under the 150000"*"about 100 days"*"2000 characters over the last 20 days"*) ok ;; *) bad "the total note under the warning does not give the room left, the days, and the growth they come from: $(total_note 140000 "RATE 2000 20 2026-01-21")" ;; esac
+case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"10000 under the 150000"*"did not grow over the last 20 days"*) ok ;; *) bad "the total note for a set that is not growing does not say so: $(total_note 140000 "FLAT 20 2026-01-21")" ;; esac
+case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"days at"*|*"about "*" days"*) bad "a set that is not growing was still given a number of days: $(total_note 140000 "FLAT 20 2026-01-21")" ;; *) ok ;; esac
+case "$(total_note 140000 "UNMEASURED there is no history")" in *"10000 under the 150000"*"UNMEASURED"*"there is no history"*) ok ;; *) bad "the total note with no measured growth does not say UNMEASURED and why: $(total_note 140000 "UNMEASURED there is no history")" ;; esac
+case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"already past the 120000"*) ok ;; *) bad "a total over the 200k window's figure does not say it is past it: $(total_note 140000 "FLAT 20 2026-01-21")" ;; esac
+case "$(total_note 100000 "FLAT 20 2026-01-21")" in *"already past"*) bad "a total under the 200k window's figure is said to be past it: $(total_note 100000 "FLAT 20 2026-01-21")" ;; *"20000 under the 120000"*) ok ;; *) bad "a total under the 200k window's figure does not give the room left under it: $(total_note 100000 "FLAT 20 2026-01-21")" ;; esac
+case "$(total_note 151000 "RATE 2000 20 2026-01-21")" in *"1000 past the 150000"*"Nothing is dropped"*) ok ;; *) bad "the total note past the warning does not say how far past, or that nothing is dropped: $(total_note 151000 "RATE 2000 20 2026-01-21")" ;; esac
+
+# THE GROWTH RATE, derived from the loaded set's own git history (claude-config#1060), never a
+# constant. It was 1,100 a day, measured on 2026-09-11 while every session loaded the whole library;
+# with a lessons core set, a session loads a fixed core and grows only when the core changes, so the
+# constant projected a deadline for a total that was not on that path (L316). Driven against fixture
+# histories with committed dates, so nothing here reads the clock.
+if ! command -v git >/dev/null 2>&1; then
+  echo "UNMEASURED: git is not installed here, so the growth readings were not checked"
+else
+  GH_EPOCH=1767225600   # 2026-01-01T00:00:00Z
+  gh_commit(){ # gh_commit <repo> <day> <message>: commit the whole tree as of that day
+    local when=$(( GH_EPOCH + $2 * 86400 ))
+    git -C "$1" add -A >/dev/null 2>&1
+    GIT_AUTHOR_DATE="$when +0000" GIT_COMMITTER_DATE="$when +0000" git -C "$1" -c user.name=t -c user.email=t@e commit -q -m "$3" >/dev/null 2>&1
+  }
+  gh_bytes(){ head -c "$1" /dev/zero | tr '\0' 'x'; }
+  GH="$probe/history"; mkdir -p "$GH/payload"; git -C "$GH" init -q >/dev/null 2>&1
+  # No core: the whole library loads, and it grows by 1,000 characters every ten days.
+  printf '@LESSONS-INDEX-a.md\nrules\n' > "$GH/payload/CLAUDE.md"
+  gh_bytes 1000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 0 "library"
+  gh_bytes 2000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 10 "a lesson"
+  gh_bytes 3000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 20 "a lesson"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
+  case "$reading" in "RATE 2000 20 "*) ok ;; *) bad "with no core, the library's growth over its 20 days of history was not measured as 2000 over 20 days: $reading" ;; esac
+  # A lesson added to the LIBRARY after a core is set does not count: the core is what loads.
+  printf '@LESSONS-CORE-a.md\nrules\n' > "$GH/payload/CLAUDE.md"
+  gh_bytes 500 > "$GH/payload/LESSONS-CORE-a.md"; gh_commit "$GH" 25 "the core is set"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
+  case "$reading" in "UNMEASURED "*"2026-01-26"*) ok ;; *) bad "a core set the same day was given a growth rate from the library's history before it: $reading" ;; esac
+  gh_bytes 9000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 35 "library lessons the core does not load"
+  printf '@LESSONS-CORE-a.md\nRULES\n' > "$GH/payload/CLAUDE.md"; gh_commit "$GH" 45 "an edit that imports nothing new"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
+  case "$reading" in "FLAT 20 "*) ok ;; *) bad "with a core set 20 days ago and unchanged since, the loaded set was not read as not growing over those 20 days: $reading" ;; esac
+  # The core grows when a re-rank moves lessons in: measured over the window, from the core's start.
+  gh_bytes 900 > "$GH/payload/LESSONS-CORE-a.md"; gh_commit "$GH" 50 "a re-rank adds lessons"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
+  case "$reading" in "RATE 400 25 "*) ok ;; *) bad "a core that grew 400 characters in the 25 days since it was set was not measured so: $reading" ;; esac
+  # The window: with history older than it, only the last GROWTH_WINDOW_DAYS count. From day 40 to
+  # day 70 the core went from 500 (as it stood on day 40) to 1,300, both re-ranks.
+  gh_bytes 1300 > "$GH/payload/LESSONS-CORE-a.md"; gh_commit "$GH" 70 "another re-rank"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
+  case "$reading" in "RATE 800 $GROWTH_WINDOW_DAYS "*) ok ;; *) bad "growth was not measured over the last $GROWTH_WINDOW_DAYS days only (expected 800 over $GROWTH_WINDOW_DAYS): $reading" ;; esac
+  # A payload with no history of its own is read through the checkout a pull hands the runner.
+  INST="$probe/installed"; mkdir -p "$INST"; cp "$GH/payload/CLAUDE.md" "$GH/payload/LESSONS-CORE-a.md" "$INST/"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$INST")"
+  case "$reading" in "UNMEASURED "*) ok ;; *) bad "a payload with no git history and no checkout handed in was given a rate: $reading" ;; esac
+  reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
+  case "$reading" in "RATE 800 $GROWTH_WINDOW_DAYS "*) ok ;; *) bad "an installed copy was not measured from the checkout handed in RUN_ALL_TESTS_CHECKOUT: $reading" ;; esac
+  # But only while it loads the same set as that checkout's history: a Mac with no core set loads
+  # the library, and the checkout's core history says nothing about it.
+  printf '@LESSONS-INDEX-a.md\nrules\n' > "$INST/CLAUDE.md"; cp "$GH/payload/LESSONS-INDEX-a.md" "$INST/"
+  reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
+  case "$reading" in "UNMEASURED "*"LESSONS-INDEX-a.md"*) ok ;; *) bad "an installed copy loading a different set from the checkout was given the checkout's rate: $reading" ;; esac
+fi
 if [ "$ENTRY_CAP" -lt 550 ]; then ok; else
   bad "the entry cap is at or above the longest rule sentence in the file, so it cannot shorten anything"
 fi

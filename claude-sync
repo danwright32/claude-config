@@ -26,6 +26,7 @@
 #   claude-sync lesson L174       # one lesson in full, with its provenance
 #   claude-sync cite-scan L2      # which synced files cite that lesson number
 #   claude-sync record-lesson-counts F # commit this Mac's lesson citation counts for the core re-rank
+#   claude-sync record-lesson-tags first|second F # commit the tags of this Mac's new lessons for the re-rank
 #   claude-sync check-skills      # fail if a plugin and the skills folder provide the same skill
 #   claude-sync install-autosync  # background: fswatch watcher + periodic receive-timer
 #   claude-sync help
@@ -3017,6 +3018,71 @@ do_record_lesson_counts(){   # $1 = a counts file written by tools/lesson-citati
     fi
   fi
   echo "claude-sync: recorded this Mac's lesson citation counts in $rel. The next sync carries them to the other Mac."
+}
+
+# THE TAGS OF THIS MAC'S NEW LESSONS (claude-config#566). The monthly re-rank refuses while any lesson
+# is untagged, and a new lesson arrives most weeks, so the daily re-rank job tags the lessons in this
+# Mac's own band (tools/tag-lessons.py --host) and records each pass here: `first` is the sonnet pass
+# in lesson-tags.tsv, `second` the opus pass in lesson-tags-second.tsv. Under the lock and committed,
+# for the same reasons as the counts above. Rows are written in lesson number order and nothing else
+# is kept in the file (the seeded END line carried a count that every addition would make false), so
+# each Mac's additions land beside its own band and two Macs recording the same day touch different
+# lines rather than both appending at the end.
+#
+# A tag decides whether a lesson can ever leave the core, so what this cannot vouch for it refuses
+# whole, writing nothing: a tagger output cut short (no END line, which tag-lessons.py prints only
+# when every lesson it was asked about was tagged), one holding no tag, a tag outside diff, design
+# and operate, and a tag for a lesson already tagged differently, which is never overwritten here
+# (L113). The same tag again is not a change.
+do_record_lesson_tags(){   # $1 = first|second  $2 = what tools/tag-lessons.py printed
+  local pass="${1:-}" src="${2:-}" rel host tmp merged problems added
+  host="$(sync_hostname)"
+  case "$pass" in
+    first) rel="lesson-tags.tsv" ;;
+    second) rel="lesson-tags-second.tsv" ;;
+    *) echo "claude-sync: record-lesson-tags: '$pass' is not a tagging pass; it is first (lesson-tags.tsv) or second (lesson-tags-second.tsv). Nothing was recorded." >&2; return 1 ;;
+  esac
+  refuse_tags(){ echo "claude-sync: record-lesson-tags: $1 Nothing was recorded; $rel is as it was." >&2; return 1; }
+  [ -n "$src" ] && [ -f "$src" ] && [ -r "$src" ] || { refuse_tags "'$src' is not a tagger output this can read."; return 1; }
+  [ -f "$SYNC_REPO/$rel" ] || { refuse_tags "there is no $rel in $SYNC_REPO to add to. It was seeded by hand (#1036) and is never created here."; return 1; }
+  local last; last="$(tail -n 1 "$src")"
+  case "$last" in END*) ;; *) refuse_tags "the last line of $src is not END, so the tagger refused or was cut short, and a partial set of tags is not recorded."; return 1 ;; esac
+  # One awk pass over the settled tags then the new ones: every problem named, and the merged rows
+  # printed only when there are none. Lines of the tagger's that are not rows (END, NOTE) are skipped;
+  # a row with a tag outside the three, or any other line starting with L, is a problem.
+  merged="$(awk -F '\t' -v rel="$rel" '
+    FNR == NR { if ($0 ~ /^L[0-9]+\t/) have[$1] = $2; next }
+    /^(END|NOTE)/ { next }
+    /^L[0-9]+\t(diff|design|operate)$/ {
+      if (($1 in have) && have[$1] != $2) { bad = bad sprintf("%s is already tagged %s in %s and this says %s, and a settled tag is never overwritten. ", $1, have[$1], rel, $2); next }
+      if (!($1 in have)) { have[$1] = $2; added = added " " $1; n++ }
+      seen++; next
+    }
+    { bad = bad sprintf("the line \"%s\" is not a lesson and one of diff, design or operate. ", $0) }
+    END {
+      if (bad != "") { printf "BAD %s\n", bad; exit }
+      if (!seen) { print "BAD the output holds no tag at all. "; exit }
+      printf "ADDED%s\n", added
+      for (k in have) printf "%s\t%s\n", k, have[k]
+    }' "$SYNC_REPO/$rel" "$src")" || { refuse_tags "the tags could not be read."; return 1; }
+  problems="$(printf '%s\n' "$merged" | sed -n 's/^BAD //p')"
+  [ -z "$problems" ] || { refuse_tags "$problems"; return 1; }
+  added="$(printf '%s\n' "$merged" | sed -n 's/^ADDED *//p' | tr ' ' '\n' | awk 'NF' | LC_ALL=C sort -k1.2,1n | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $0 }')"
+  if [ -z "$added" ]; then
+    echo "claude-sync: every tag in $src is already in $rel, so there was nothing to record."
+    return 0
+  fi
+  tmp="$SYNC_REPO/.$rel.$$"
+  printf '%s\n' "$merged" | grep -E "^L[0-9]+$(printf '\t')" | LC_ALL=C sort -t "$(printf '\t')" -k1.2,1n > "$tmp" \
+    && mv -f "$tmp" "$SYNC_REPO/$rel" || { rm -f "$tmp"; refuse_tags "the file could not be written."; return 1; }
+  if have_git && git -C "$SYNC_REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    git -C "$SYNC_REPO" add -- "$rel" >/dev/null 2>&1 || { refuse_tags "git would not stage $rel."; return 1; }
+    if ! git -C "$SYNC_REPO" diff --cached --quiet -- "$rel" 2>/dev/null; then
+      git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" commit -q -m "$host records lesson tags ($pass pass): $added" -- "$rel" >/dev/null 2>&1 \
+        || { echo "claude-sync: record-lesson-tags wrote $rel but git would not commit it, so it will not travel until it is committed." >&2; return 1; }
+    fi
+  fi
+  echo "claude-sync: recorded the $pass pass tags of $added in $rel. The next sync carries them to the other Mac."
 }
 
 # Writes the index beside the lessons file, and ONLY when it differs. CLAUDE.md and everything it
@@ -11726,6 +11792,7 @@ case "$cmd" in
   lesson) do_lesson "${2:-}" ;;         # read-only: one lesson in full, with its provenance
   core-set) with_lock do_core_set "${2:-}" ;;   # the one way the lessons core list is edited (#564)
   record-lesson-counts) with_lock do_record_lesson_counts "${2:-}" ;;   # this Mac's citation counts, committed for the re-rank (#566)
+  record-lesson-tags) with_lock do_record_lesson_tags "${2:-}" "${3:-}" ;;   # the tags of this Mac's new lessons, committed for the re-rank (#566)
   check-skills) do_check_skills ;;      # read-only: is any skill provided by a plugin AND locally
   # Read only, LOCK FREE, and silent when there is nothing wrong: what a hook runs the moment a
   # lesson is written, so the session that wrote it is still there to fix it (claude-config#374).

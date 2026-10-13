@@ -95,6 +95,32 @@ check "and says so" "NOTHING TO TAG" "$out"
 out="$(FAKE_MODE=good run --skip-tagged "$WORK/no-such.tsv")"; rc=$?
 check_rc "a skip file that is not there is refused, never read as tagging nothing" 1 "$rc"
 
+# --host H --bands-dir D asks only about the lessons in H's band (claude-config#566): the daily job on
+# each Mac tags the lessons that Mac wrote, so the two Macs never write a tag for the same lesson and
+# never collide in the tags files. Here L1 is below every band (written before bands existed), L2 is
+# mac-a's and L3 mac-b's.
+BANDS="$WORK/bands"; mkdir -p "$BANDS"; printf '2\n' > "$BANDS/mac-a"; printf '3\n' > "$BANDS/mac-b"
+out="$(FAKE_MODE=good run --host mac-b --bands-dir "$BANDS")"; rc=$?
+check_rc "tagging one Mac's lessons succeeds" 0 "$rc"
+check "its lesson is tagged" $'L3\toperate' "$out"
+args="$(tr '\036' '\n' < "$FAKE_LOG/args")"
+check "and it is the only lesson the reader is asked about" "Judge a command by its exit code" "$args"
+case "$args" in *"A test is only real"*|*"State the data volume"*) fail=$((fail + 1)); echo "FAIL: another Mac's lesson, or one in no band, was sent to the reader" ;; *) pass=$((pass + 1)) ;; esac
+check "the end line counts only what was asked" "END 1 lessons tagged" "$out"
+# Combined with --skip-tagged: mac-a's only lesson is tagged, and mac-b's is not mac-a's to tag.
+printf 'L2\tdesign\n' > "$WORK/have2.tsv"
+out="$(FAKE_MODE=good run --host mac-a --bands-dir "$BANDS" --skip-tagged "$WORK/have2.tsv")"; rc=$?
+check_rc "nothing of this Mac's left to tag is a success" 0 "$rc"
+check "and says whose" "NOTHING TO TAG" "$out"
+[ ! -f "$FAKE_LOG/args" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: another Mac's untagged lesson was sent to the reader"; }
+# A host holding no band cannot be told its lessons, so it is refused, never read as owning none
+# (which would report NOTHING TO TAG for ever) or all (which would tag the other Mac's).
+out="$(FAKE_MODE=good run --host mac-z --bands-dir "$BANDS")"; rc=$?
+check_rc "a host with no band is refused" 1 "$rc"
+check "naming it" "mac-z" "$out"
+out="$(FAKE_MODE=good run --host mac-a)"; rc=$?
+check_rc "--host without a bands folder is refused" 1 "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
