@@ -3633,6 +3633,17 @@ test('the cleanup branch Dan agreed to is refused once anything beyond his files
   )
 })
 
+test('a cleanup branch Dan agreed to is refused once nothing is uncommitted, since there is no cleanup left for it to carry (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/readings'))
+  w.o.dirty = []
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(
+    /^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings to commit tests\/section-time-readings\.tsv, and nothing is uncommitted now\./,
+  )
+})
+
 test('any answer but Open it records nothing, and the branch stays refused (#1051)', withDeps, async ($, on) => {
   const { w, clock } = world(on, onMainDirty({ ask: 'Do not' }))
   await start($ as never, clock)

@@ -1799,8 +1799,9 @@ const PR_FIELDS = 'number,state,url,closingIssuesReferences,headRefName,headRefO
 //
 // How often GitHub is asked (#1037): each read spends the GraphQL allowance every gh command on the
 // Mac shares (#1014), and the minute's check read every PR the session opened, plus one issue view
-// per closing issue of each. So only what can still change is asked again: a merged PR never changes,
-// so it is read once; a closing issue decides nothing until its PR merges, so it is read only then,
+// per closing issue of each. So only what can still change is asked again: a merged PR read by its
+// number never changes, so it is read once; a closing issue decides nothing until its PR merges, so
+// it is read only then,
 // and once closed is not read again while winding down stays on. A PR's reading is kept with when it
 // was asked: a turn end (`fresh`) always asks again, while the minute's check asks again only once
 // `wait` has passed, which starts at a minute and doubles, up to ten, each time the answer has not
@@ -1810,8 +1811,9 @@ type PrSeen = { pr: PrJson | null; issues: Map<number, 'OPEN' | 'CLOSED'>; asked
 const prSeen = new Map<string, PrSeen>()
 const IDLE_MAX_MS = 10 * MIN
 const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(x => x.number).filter((n): n is number => typeof n === 'number')
-// Nothing about it can change: merged, with every issue it closes closed.
-const allSettled = (s: PrSeen) => s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
+// Nothing about it can change: merged, with every issue it closes closed. Only a PR read by its
+// number: a lookup by branch asks which PR a branch has, which a new PR on that name changes.
+const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
 const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) => JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues]])
 
 /** The files uncommitted in a checkout, by git status (#1051), or why they could not be read. */
@@ -1854,11 +1856,11 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     const seen = prSeen.get(key)
     let pr: PrJson | null
     let issues: Map<number, 'OPEN' | 'CLOSED'>
-    if (seen && (allSettled(seen) || (!fresh && now < seen.askedAt + seen.wait))) {
+    if (seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
     } else {
-      if (seen?.pr?.state === 'MERGED') pr = seen.pr
+      if (t.pr && seen?.pr?.state === 'MERGED') pr = seen.pr
       else {
         const res = t.pr
           ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
@@ -2415,7 +2417,8 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
     const agreed = root ? (await cleanupOf($)).filter(c => c.root === root) : []
     let now: string[] | { unreadable: string } | undefined
     if (root && agreed.length && commands.some(c => newBranchOf(c)?.moves)) now = await uncommittedIn($, root)
-    const covered = Array.isArray(now) ? agreed.filter(c => (now as string[]).every(f => c.files.includes(f))) : []
+    // Nothing uncommitted is no cleanup to carry, so an answer left over covers nothing (lessons review).
+    const covered = Array.isArray(now) && now.length ? agreed.filter(c => (now as string[]).every(f => c.files.includes(f))) : []
     const cleanBranches = covered.map(c => c.branch)
     let r = newWork({ tool, input, commands, issues: ownNumbers(t, opened), cleanBranches })
     // An agent named after this branch's PR or an issue it closes is this issue's work, so a PR not
@@ -2430,6 +2433,7 @@ const judge = async ($: EngineInterface, j: Judged): Promise<{ deny: string } | 
       const asked = r.branch ? agreed.find(c => c.branch === r?.branch) : undefined
       let why = ''
       if (asked && now && !Array.isArray(now)) why = ` Dan agreed to ${asked.branch}, but what is uncommitted could not be read (${now.unreadable}).`
+      else if (asked && Array.isArray(now) && !now.length) why = ` Dan agreed to ${asked.branch} to commit ${filesSaid(asked.files)}, and nothing is uncommitted now.`
       else if (asked && Array.isArray(now)) {
         const beyond = now.filter(f => !asked.files.includes(f))
         why = ` Dan agreed to ${asked.branch} for ${filesSaid(asked.files)} only, and ${filesSaid(beyond)} ${beyond.length === 1 ? 'is' : 'are'} uncommitted too.`
