@@ -126,7 +126,7 @@ sync_one() {  # $1 = directory, $2 = repo flag or empty, $3 = pr number or empty
 # than acting on the first.
 merges="$(mt_merge_each "$cmd" "$cwd")"
 if [ $? -eq 2 ]; then
-  say "this command ran more than one merge and nothing here could read which pull request each was ($(mt_reader_absent_why)), so main was NOT merged into dev for any of them. For each one that merged into main in a repository listed in $REPOS_FILE, run: gh api -X POST repos/<owner>/<name>/merges -f base=dev -f head=main -f commit_message='Merge main into dev'"
+  say "this command ran more than one merge and nothing here could read which pull request each was ($(mt_reader_absent_why)), so main was NOT merged into dev for any of them. For each one that merged into main in a repository listed in $REPOS_FILE, merge main into dev by hand through GitHub's merges API, base dev and head main."
   speak
 fi
 # Read on its own descriptor, so nothing sync_one runs (gh above all) can swallow the remaining lines.
