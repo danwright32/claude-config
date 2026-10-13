@@ -292,7 +292,9 @@ run(){ # run <args...>; sets OUT and RC
 }
 curl_calls(){ grep -c '^ARGS:' "$CURL_LOG" 2>/dev/null || true; }
 # The body of the last request: a write is the request after the sheet check.
-last_body(){ grep '^STDIN:' "$CURL_LOG" | tail -n 1; }
+# Read whole, never cut short by a pipe (test-pipefail-shortcircuit.sh).
+last_body(){ awk '/^STDIN:/ { l = $0 } END { print l }' "$CURL_LOG"; }
+first_body(){ awk '/^STDIN:/ && !seen { print; seen = 1 }' "$CURL_LOG"; }
 EX_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$DIR/config.example.json")"
 EX_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DIR/config.example.json")"
 GS_TOKEN="$(sed -n "s/^const TOKEN = '\\(.*\\)';.*/\\1/p" "$DIR/apps-script.gs")"
@@ -318,7 +320,7 @@ write_local "$GOOD_URL" "$GOOD_TOKEN"
 run append '{"Project Name":"x"}'
 check_eq "a configured skill's append succeeds" 0 "$RC"
 check_eq "and reaches curl twice: the sheet check, then the write" 2 "$(curl_calls)"
-check "and the first request is the sheet check" '"action": "headers"' "$(grep '^STDIN:' "$CURL_LOG" | head -n 1)"
+check "and the first request is the sheet check" '"action": "headers"' "$(first_body)"
 check "and sends the key in the request body" "\"key\": \"$GOOD_TOKEN\"" "$(last_body)"
 check "and the row with it" '"data": {"Project Name": "x"}' "$(last_body)"
 check_not "and never under the old field name the first script read" '"token"' "$(grep '^STDIN:' "$CURL_LOG")"
@@ -329,8 +331,8 @@ FAKE_ANSWER='{"ok":true,"action":"update","rowNumber":2}' run update "https://gi
 check_eq "a configured skill's update succeeds" 0 "$RC"
 check "and prints the web app's answer" '"rowNumber":2' "$OUT"
 check_eq "and reaches curl twice: the sheet check, then the write" 2 "$(curl_calls)"
-check "and the first request is the sheet check" '"action": "headers"' "$(grep '^STDIN:' "$CURL_LOG" | head -n 1)"
-update_body="$(sed -n 's/^STDIN://p' "$CURL_LOG" | tail -n 1 | python3 -c 'import json,sys; b=json.load(sys.stdin); k=b.pop("key",None); print(json.dumps(b, sort_keys=True)); print("key-sent" if k else "no-key")' 2>&1)"
+check "and the first request is the sheet check" '"action": "headers"' "$(first_body)"
+update_body="$(last_body | sed 's/^STDIN://' | python3 -c 'import json,sys; b=json.load(sys.stdin); k=b.pop("key",None); print(json.dumps(b, sort_keys=True)); print("key-sent" if k else "no-key")' 2>&1)"
 # Built by python: bash 3.2 splits escaped quotes inside a quoted command substitution.
 want_update_body="$(python3 -c 'import json,sys; print(json.dumps({"action": "update", "cells": {"My Actions": "x"}, "link": "https://github.com/example/alpha", "projectName": "Alpha", "sheetId": sys.argv[1]}, sort_keys=True)); print("key-sent")' "$SHEET_ID")"
 check_eq "and sends the action, Link, Project Name, cells and the sheet it means, and the key, in the body" "$want_update_body" "$update_body"
