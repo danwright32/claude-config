@@ -5607,6 +5607,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Security and privacy
 
+- **L1026. An access check in a shared layout does not protect the pages beneath it, because the
+  framework renders a layout and its page at the same time and may not re-run the layout on navigation;
+  every protected page or its data loader must check access itself, with a test that fails when one
+  does not.** (nursedex#1169, 2026-10-13)
+  SHORT: A layout's access check does not guard its pages; every protected page checks access itself, with a test.
+
 - **L761. A pattern that keeps a secret-bearing file out of git or a sync (an ignore rule, an exclude
   list) must also match that file's copies, such as .bak, .orig and ~ backups, because a backup is the
   first thing anyone makes before editing it, and the copy carries the same secret past a pattern that
