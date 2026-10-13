@@ -3224,6 +3224,27 @@ check "#1009 and names the commit that copy is in, so it can be recovered" \
   "[ -n '$rd_v1' ] && line_has \"\$out_olddel\" 'mods/scope-modes/hooks/ghargs\.ts' '${rd_v1:0:8}'"
 check "#1009 the local copy goes too, as #331 decided for a copy that carries nothing of this Mac's" \
   "[ ! -e '$RDHB/$RDREL' ]"
+# EACH FILE NAMED WHOLE (claude-config#1028 group, after #1093). The send joined the files it held
+# back with spaces and walked them with an unquoted `for`, so a name holding a space was split: the
+# message named fragments, the held back list named files that do not exist, and the once per file
+# record was keyed on the fragments, so it could never match the apply's record for the same copy.
+rd_send_named=0
+case "$out_olddel" in *"NOT publishing $RDREL; $RDODD: "*|*"NOT publishing $RDODD; $RDREL: "*) rd_send_named=1 ;; esac
+check "#1009 the send names each file it held back whole, a space and a non ASCII letter and all" \
+  "[ '$rd_send_named' -eq 1 ]"
+# KEPT, it is recorded once per path and content under the whole name: the record the apply reads
+# for the same copy, so whichever meets it first speaks for both (#1013).
+printf 'export const odd = "named the way git quotes"\n' > "$RDHB/$RDODD"
+touch -t "$(date_minus_days_stamp 1)" "$RDHB/$RDODD"
+rm -f "$RDR/.resurrected-reported"
+out_rdkeep="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1009 kept leftover with an odd name: $out_rdkeep"
+rd_odd_stamp="$RDODD $(shasum "$RDHB/$RDODD" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+check "#1009 a kept leftover whose name holds a space is recorded under its whole name and content" \
+  "[ -f \"\$RDHB/\$RDODD\" ] && grep -qxF -- \"\$rd_odd_stamp\" '$RDR/.resurrected-reported'"
+check "#1009 and the send names it whole" \
+  "case \"\$out_rdkeep\" in *\"NOT publishing \$RDODD: \"*) true ;; *) false ;; esac"
+rm -f "$RDHB/$RDODD" "$RDR/.resurrected-reported"
 
 # The same earlier version WRITTEN BACK after the deletion reached this Mac is a decision, not a
 # leftover (putting an older version back on purpose), so the content alone does not decide it: it
@@ -3246,8 +3267,18 @@ check "#1009 (the shared repo is back to the deleted state for the next case)" \
 # but never in silence: the send says it is putting back a file the shared repo deleted, so a
 # re-add like bab3a15a is read where it happens rather than found by a red main.
 printf 'export const ghargs = "version one"\n// changed on B after it last received\n' > "$RDHB/$RDREL"
+# And the file whose name git quotes, changed the same way, so the two are put back in one send.
+printf 'export const odd = "changed on B after it last received"\n' > "$RDHB/$RDODD"
+rm -f "$RDR/.resurrected-reported"
 out_olddel2="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
 dbg "#1009 edited copy send: $out_olddel2"
+rd_put_named=0
+case "$out_olddel2" in *"publishing $RDREL; $RDODD although"*|*"publishing $RDODD; $RDREL although"*) rd_put_named=1 ;; esac
+check "#1009 a send putting back two deleted files names each whole, a space and all" \
+  "[ '$rd_put_named' -eq 1 ]"
+rd_odd_blob="$(git -C "$RDB" rev-parse "main:payload/$RDODD" 2>/dev/null || true)"
+check "#1009 and records the one whose name holds a space under its whole name and content" \
+  "[ -n \"\$rd_odd_blob\" ] && grep -qxF -- \"publishing \$RDODD \$rd_odd_blob\" '$RDR/.resurrected-reported'"
 rd_main_copy="$(git -C "$RDB" show "main:payload/$RDREL" 2>/dev/null || true)"
 check "#1009 a copy this Mac changed after its last receive is published" \
   "case \"\$rd_main_copy\" in *'changed on B after it last received'*) true ;; *) false ;; esac"
@@ -3330,7 +3361,7 @@ git -C "$RGR" rm -q payload/hooks/x.sh; git -C "$RGR" -c user.name=t -c user.ema
 printf 'old\nchanged here\n' > "$RGH/hooks/x.sh"; mkdir -p "$RGR/payload/hooks"; cp "$RGH/hooks/x.sh" "$RGR/payload/hooks/x.sh"
 RG_FN="$WORK/once-fn.sh"
 { printf 'have_git(){ return 0; }\nsync_log_line(){ :; }\nnote_held_back(){ :; }\n'
-  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
+  sed -n '/^file_mtime(){/,/^}/p;/^deletion_reached_clone_at(){/,/^}/p;/^commit_holding_version(){/,/^}/p;/^deleted_path_verdict(){/,/^}/p;/^refuse_resurrected_deletions(){/,/^}/p;/^semicolon_list(){/,/^}/p' "$SCRIPT"; } > "$RG_FN"
 rg_run(){ SYNC_REPO="$RGR" CLAUDE_HOME="$RGH" RESURRECTED_REPORTED_FILE="$WORK/once-reported" bash -c 'set -euo pipefail; . "$1"; refuse_resurrected_deletions' _ "$RG_FN" 2>&1; }
 rg_out1="$(rg_run)"; rg_out2="$(rg_run)"
 dbg "#1022 once: first [$rg_out1] second [$rg_out2]"
