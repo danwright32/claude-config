@@ -3555,12 +3555,15 @@ write_lesson_index(){   # $1 = tree holding LESSONS.md
 # is no registry for two Macs to disagree about and no state a merge can lose. A renumber does not
 # touch the rule text, so the id survives it; editing the rule text changes the id, which is
 # correct, because that is the lesson itself changing rather than its presentation.
-lesson_rule_text(){   # $1 = lessons file  $2 = number, e.g. L174 -> the rule sentence, one line
+# $3 picks WHICH entry under the number, counting from 1, because a number two lessons share has two
+# rule sentences and two ids, and answering with the first for both is how a duplicate made the fan
+# out file the wrong rule (claude-config#1140).
+lesson_rule_text(){   # $1 = lessons file  $2 = number, e.g. L174  $3 = which entry (default 1) -> the rule sentence, one line
   # The rule runs to the closing `**`, which is usually SEVERAL lines down: almost every entry in
   # the real file wraps. Reading only the first line would give two entries whose openings happen
   # to match the same id, and would move an id whenever a line was re-wrapped.
-  awk -v want="$2" '
-    $0 ~ ("^- \\*\\*" want "\\.") {
+  awk -v want="$2" -v nth="${3:-1}" '
+    $0 ~ ("^- \\*\\*" want "\\.") && ++seen == nth {
       buf = $0
       sub("^- \\*\\*" want "\\. *", "", buf)
       while (buf !~ /\*\*/) {
@@ -3583,26 +3586,55 @@ lesson_id_of_text(){   # rule text on stdin -> a short stable id
     | awk '{ print substr($1, 1, 10) }'
 }
 
-lesson_id(){   # $1 = lessons file  $2 = number -> the id, or nothing when there is no such entry
-  local text; text="$(lesson_rule_text "$1" "$2")"
+lesson_id(){   # $1 = lessons file  $2 = number  $3 = which entry (default 1) -> the id, or nothing when there is no such entry
+  local text; text="$(lesson_rule_text "$1" "$2" "${3:-1}")"
   [ -n "$text" ] || return 1
   printf '%s' "$text" | lesson_id_of_text
 }
 
-# The number a given id currently sits at. Every entry is hashed rather than a registry consulted,
-# because a registry is state two Macs can disagree about and this is a pure function of the file.
-lesson_number_for_id(){   # $1 = lessons file  $2 = id -> the number, or nothing
-  local n
+# How many entries claim a number, in ANY shape, which is what the duplicate check counts too: one
+# readable entry beside an unreadable one under the same number is still two lessons (#164).
+lesson_claim_count(){   # $1 = lessons file  $2 = number, e.g. L174
+  lesson_numbers_in "$1" | awk -v n="${2#L}" '$0 == n { c++ } END { print c + 0 }'
+}
+
+# The readable entries under a number, counted from 1. Only the canonical form, which is all any
+# reader here can print.
+lesson_entry_count(){   # $1 = lessons file  $2 = number
+  awk -v want="$2" '$0 ~ ("^- \\*\\*" want "\\.") { c++ } END { print c + 0 }' "$1" 2>/dev/null
+}
+
+# One entry in full: its first line and every line up to the next entry or section, for the nth
+# entry under the number.
+lesson_entry_text(){   # $1 = lessons file  $2 = number  $3 = which entry (default 1)
+  awk -v want="$2" -v nth="${3:-1}" '
+    printing && /^- \*\*L[0-9]+\./ { exit }
+    printing && /^## / { exit }
+    printing { print; next }
+    $0 ~ ("^- \\*\\*" want "\\.") && ++seen == nth { printing = 1; print }
+  ' "$1"
+}
+
+# The number a given id currently sits at, and WHICH entry under it, as "Lnnn k". Every entry is
+# hashed rather than a registry consulted, because a registry is state two Macs can disagree about
+# and this is a pure function of the file. Every entry under a shared number is tried, so the id of
+# the second lesson under a duplicated number finds that lesson rather than nothing.
+lesson_number_for_id(){   # $1 = lessons file  $2 = id -> "Lnnn k", or nothing
+  local n k total
   while IFS= read -r n; do
     [ -n "$n" ] || continue
-    if [ "$(lesson_id "$1" "L$n")" = "$2" ]; then printf 'L%s' "$n"; return 0; fi
+    total="$(lesson_entry_count "$1" "L$n")"; k=1
+    while [ "$k" -le "$total" ]; do
+      if [ "$(lesson_id "$1" "L$n" "$k")" = "$2" ]; then printf 'L%s %s' "$n" "$k"; return 0; fi
+      k=$((k + 1))
+    done
   done < <(lesson_numbers_in "$1" | sort -un)
   return 1
 }
 
 # One entry, in full, with its provenance: what the index sends you to.
 do_lesson(){   # $1 = a number (L174) or an id, which survives a renumber
-  local num="${1:-}" src out
+  local num="${1:-}" src out nth=1 byid="" claims readable k
   src="$CLAUDE_HOME/LESSONS.md"
   [ -f "$src" ] || die "no LESSONS.md at $src, so nothing can be looked up."
   case "$num" in
@@ -3612,15 +3644,27 @@ do_lesson(){   # $1 = a number (L174) or an id, which survives a renumber
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
       local found; found="$(lesson_number_for_id "$src" "$num")"
       [ -n "$found" ] || die "no lesson in $src has the id '$num'. Ids are printed beside the number by 'claude-sync lesson'."
-      num="$found" ;;
+      byid="$num"; num="${found%% *}"; nth="${found##* }" ;;
     *) die "lesson needs a number, e.g. lesson L174, or an id (got '${num:-<nothing>}')" ;;
   esac
-  out="$(awk -v want="$num" '
-    $0 ~ ("^- \\*\\*" want "\\.") { printing = 1; print; next }
-    printing && /^- \*\*L[0-9]+\./ { exit }
-    printing && /^## / { exit }
-    printing { print }
-  ' "$src")"
+  # A NUMBER TWO LESSONS SHARE (claude-config#1140). This answered with the first entry's id and
+  # exit 0, so every reader took one of two rules for THE rule: on 2026-10-13 lesson-fanout.sh filed
+  # twelve sweep issues for L762 carrying the other project's lesson. Asked by number, it now prints
+  # every readable entry under it, each with its own id, and refuses (non zero), naming the
+  # duplicate, so no caller can act on one of them unknowingly. Asked by id, the id names exactly
+  # one entry, so that one is the answer, and the shared number is still said out loud.
+  claims="$(lesson_claim_count "$src" "$num")"
+  readable="$(lesson_entry_count "$src" "$num")"
+  if [ "$claims" -gt 1 ] && [ -z "$byid" ] && [ "$readable" -gt 0 ]; then
+    k=1
+    while [ "$k" -le "$readable" ]; do
+      printf 'id: %s (entry %s of %s under %s)\n' "$(lesson_id "$src" "$num" "$k")" "$k" "$claims" "$num"
+      lesson_entry_text "$src" "$num" "$k"
+      k=$((k + 1))
+    done
+    die "$num names $claims lessons in $src, so it cannot be answered with one: every entry under it that can be read is printed above, each with its own id. A citation of $num could mean any of them. Renumber the later entry to the number 'claude-sync next-lesson' prints, and look a lesson up by its id meanwhile."
+  fi
+  out="$(lesson_entry_text "$src" "$num" "$nth")"
   # An empty answer is a REFUSAL, not a lesson with nothing in it: printing nothing and exiting 0
   # would read exactly like a lesson that says nothing (L98).
   if is_blank "$out"; then
@@ -3636,8 +3680,11 @@ do_lesson(){   # $1 = a number (L174) or an id, which survives a renumber
   fi
   # The id is printed WITH the entry, so the stable reference is in front of whoever is reading it
   # rather than in a document they would have to know about (claude-config#199).
-  printf 'id: %s (this survives a renumber; %s may not)\n' "$(lesson_id "$src" "$num")" "$num"
+  printf 'id: %s (this survives a renumber; %s may not)\n' "$(lesson_id "$src" "$num" "$nth")" "$num"
   printf '%s\n' "$out"
+  if [ "$claims" -gt 1 ]; then
+    echo "claude-sync: this is the lesson with id $byid, but $num names $claims lessons in $src, so a citation of $num may mean another one. Renumber the later entry to the number 'claude-sync next-lesson' prints." >&2
+  fi
   return 0
 }
 
@@ -3833,10 +3880,25 @@ lesson_files_in(){   # $1 = tree
   return 0
 }
 
-# Whether band $2 still holds a number that tree $1 has not used.
+# THE FILES A NUMBER IS MINTED AGAINST: the tree asked about AND the payload (claude-config#1140).
+# A number either copy holds is taken. The local tree alone missed a number the payload holds and
+# this Mac's copy does not, which is a number already PUBLISHED: on 2026-10-13 L762 was minted twice,
+# and lesson-fanout.sh filed twelve sweep issues carrying the wrong lesson's text. The payload alone
+# would miss a lesson written here and not sent yet, which is every lesson while a send is stuck.
+# One definition for the minter and the room check, because two readings of which numbers are taken
+# disagree about whether a band is full, and the backstop in next_lesson_number then refuses where
+# the band should have rolled over (L41).
+minting_lesson_files(){   # $1 = tree
+  lesson_files_in "$1"
+  [ "$1" = "$PAYLOAD" ] && return 0
+  [ -d "$PAYLOAD" ] || return 0
+  lesson_files_in "$PAYLOAD"
+}
+
+# Whether band $2 still holds a number that tree $1 (or the payload) has not used.
 lesson_band_has_room(){   # $1 = tree  $2 = band start
   local f files=() highest
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
   # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
   # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
   [ "${#files[@]}" -gt 0 ] || return 0
@@ -3896,7 +3958,7 @@ lesson_band_with_room(){   # $1 = tree
 
 next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
   local f highest=0 n band="${2:-}" files=()
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
   if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
     highest="$(highest_lesson_in_band "$band" "${files[@]}")"
     if [ "$((highest + 1))" -gt "$((band + LESSON_BAND_SIZE - 1))" ]; then
@@ -6555,7 +6617,7 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
 
 # The highest lesson number visible in the given files, 0 when there are none.
 # The renumber must clear every number in use anywhere, not just the contested
-# one: next_lesson_number covers the local tree, this covers the two merge inputs.
+# one: next_lesson_number covers the local tree and the payload, this covers the two merge inputs.
 highest_lesson_in(){   # $@ = files
   local n
   n="$(grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"

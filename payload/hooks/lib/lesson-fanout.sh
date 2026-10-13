@@ -28,6 +28,9 @@
 # once every target repo has the issue, so a lesson that failed anywhere is offered again by the
 # notice hook and a rerun fills only the gaps (L368).
 #
+# A NUMBER NAMING TWO LESSONS is refused before anything is filed, saying which, because the rule
+# read for it would be whichever entry comes first (claude-config#1140).
+#
 # Exit codes: 0 every repo covered; 1 something was not covered (each named with its reason);
 # 2 usage.
 #
@@ -56,6 +59,46 @@ for a in "$@"; do [[ "$a" =~ ^L[0-9]+$ ]] || usage; done
 for tool in gh jq; do
   command -v "$tool" >/dev/null 2>&1 || { echo "REFUSED: $tool is not installed, so nothing was filed." >&2; exit 1; }
 done
+
+# ---- a number naming two lessons is refused before anything reaches GitHub (claude-config#1140) ----
+# `claude-sync lesson Lnnn` used to answer with the FIRST entry under a number, so a number two lessons
+# shared filed the first one's rule: on 2026-10-13 L762 was minted twice on one Mac and twelve sweep
+# issues went out carrying another project's lesson. The reader now refuses a shared number too, but
+# this asks first, so the refusal names the duplicate before any account or repo is touched. The question is asked of `lesson-faults`, the same list
+# the send refuses on, rather than a second copy of the duplicate rule here (L41), and of the same
+# home `lesson` reads below. SYNC_NO_NOTIFY because the tool notifies on a non interactive failure,
+# and this prints the fault itself.
+#
+# Only two answers are taken as answers: exit 0 (nothing is wrong, so no number is shared), or a
+# report that carries the duplicate sentence (every fault kind is reported together, so a number
+# absent from it is not shared). Any other failure, an older clone without the command, a lock or
+# home error, or a report of other faults only, cannot be told apart from the check not having run,
+# so every number is refused with what the tool said: the question is whether twelve issues, some
+# in public repos, carry the right rule, and not knowing is not a yes (L42, L11).
+overall=0
+faults_rc=0
+faults="$(CLAUDE_HOME="$CLAUDE_HOME" SYNC_NO_NOTIFY=1 "$SYNC_TOOL" lesson-faults 2>&1)" || faults_rc=$?
+dup_reported=0
+case "$faults" in *"the same lesson number is used"*) dup_reported=1 ;; esac
+sound=()
+for num in "$@"; do
+  if [ "$faults_rc" -ne 0 ] && [ "$dup_reported" -eq 0 ]; then
+    echo "REFUSED $num: could not check whether $num names two lessons, because '$SYNC_TOOL lesson-faults' exited $faults_rc without reporting on duplicates, which reads the same whether it found other faults or could not run at all. What it said: ${faults:-<nothing>} Fix what it names, or pull that clone of claude-sync if it does not know the command, then run this again."
+    overall=1
+    continue
+  fi
+  if [ "$faults_rc" -ne 0 ] && grep -qE "(^|[^0-9A-Za-z])$num used [0-9]+ times" <<<"$faults"; then
+    echo "REFUSED $num: $num names more than one lesson in $CLAUDE_HOME/LESSONS.md, so which rule the sweep issues should carry cannot be known from the number. What lesson-faults said: ${faults#claude-sync: } Then fan out each lesson under its own number."
+    overall=1
+    continue
+  fi
+  sound+=("$num")
+done
+if [ "${#sound[@]}" -eq 0 ]; then
+  echo "NOT COMPLETE: the lines marked FAILED or REFUSED above were not filed. Rerunning files only those."
+  exit 1
+fi
+set -- "${sound[@]}"
 
 # ---- accounts ----
 accounts="$(gh auth status --json hosts 2>/dev/null \
@@ -116,10 +159,10 @@ while IFS=' ' read -r r label; do
 done <<<"$repos"
 
 # ---- one lesson ----
-overall=0
+# overall was set above, and is already 1 when a duplicated number was refused there.
 fan_out(){   # $1 = Lnnn
   local num="$1" entry id rule short title body_file source_names r tok existing hit url err ok=0
-  if ! entry="$("$SYNC_TOOL" lesson "$num" 2>&1)"; then
+  if ! entry="$(CLAUDE_HOME="$CLAUDE_HOME" "$SYNC_TOOL" lesson "$num" 2>&1)"; then
     echo "REFUSED $num: could not read it: $entry"
     return 1
   fi
