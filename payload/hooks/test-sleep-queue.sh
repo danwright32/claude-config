@@ -55,6 +55,7 @@ case "\$1" in
   issue) cat "$FX/issue-\$3.json" ;;
   prs) cat "$FX/prs.json" ;;
   branches) cat "$FX/branches" ;;
+  closer) cat "$FX/closer-\$3" ;;
   *) echo "the stub does not know \$1" >&2; exit 2 ;;
 esac
 EOF
@@ -570,6 +571,92 @@ session s8 "$((NOW - 1000))" null
 out="$(sleep_next "$ROOT" s8)"; rc=$?
 check_eq "with nothing left, next says none" 1 "$rc"
 check_has "plainly" "none" "$out"
+
+# ---- the claim's work, whoever did it (#1119) ----
+# The overnight driver's circuit breaker counts a new commit as progress. On 2026-10-12 it ended
+# #1106 as failed while a subagent of the claiming session was committing in the claim's own
+# worktree on a branch of its own, so the reading is the claim's branch and whatever its reserved
+# worktree has checked out, read from git, never from who made the commit.
+session s10 "$((NOW - 1000))" null
+sleep_claim "$ROOT" 41 s10 >/dev/null
+out="$(sleep_work "$ROOT" 41)"; rc=$?
+check_eq "with no branch and no worktree yet, the work reads as nothing, not as unreadable" 0 "$rc"
+check_eq "both readings empty" "$(printf 'branch\t\nworktree\t')" "$out"
+wt41="$(sleep_worktree "$ROOT" 41 2>&1)"
+before="$(sleep_work "$ROOT" 41)"
+check_has "the claim's branch is read" "$(printf 'branch\t%s' "$(git -C "$ROOT" rev-parse refs/heads/sleep/41)")" "$before"
+check_has "and the worktree's checkout" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$before"
+# A subagent switches the reserved worktree to a branch of its own and commits there.
+git -C "$wt41" switch -q -c fix/41-by-a-subagent
+git -C "$wt41" -c user.email=sub@t -c user.name=sub commit -q --allow-empty -m "the subagent's work"
+after="$(sleep_work "$ROOT" 41)"
+check_not "a commit in the reserved worktree on another branch is the claim's work" "$before" "$after"
+check_has "read as that worktree's checkout" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$after"
+# A commit on the claim's branch made from anywhere else is its work too.
+git -C "$ROOT" -c user.email=x@t -c user.name=x commit-tree -m elsewhere "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse refs/heads/sleep/41)" > "$WORK/c41"
+git -C "$ROOT" update-ref refs/heads/sleep/41 "$(cat "$WORK/c41")"
+check_has "a commit on the claim's branch from anywhere is read" "$(printf 'branch\t%s' "$(cat "$WORK/c41")")" "$(sleep_work "$ROOT" 41)"
+# From inside the reserved worktree the same claim reads the same.
+check_eq "asked from the reserved worktree, the reading is the same" "$(sleep_work "$ROOT" 41)" "$(sleep_work "$wt41" 41)"
+# Something at the reserved path that is not this repository's worktree is nobody's work: git
+# would otherwise walk up from it to the primary checkout and read that.
+out="$(sleep_work "$ROOT" 5)"
+check_eq "a stranger folder at the reserved path is not read as the primary checkout" "$(printf 'branch\t\nworktree\t')" "$out"
+out="$(sleep_work "$WORK/no-such-folder" 41)"; rc=$?
+check_eq "a folder that is no checkout is refused" 3 "$rc"
+check_has "saying so" "$(printf 'refused\t-\t')" "$out"
+check_eq "an issue that is no number is refused" 3 "$(sleep_work "$ROOT" 4x >/dev/null; echo $?)"
+out="$(bash "$LIB" work "$ROOT" 41)"; rc=$?
+check_eq "run as a command, the work reading answers" 0 "$rc"
+check_has "the same reading" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$out"
+
+# ---- done after the driver ended a claim (#1119) ----
+# The breaker ends the claim as failed while the work goes on; when GitHub then shows the issue
+# closed by a merged pull request, the holder's release of done lands over that end, so the
+# report shows the issue done rather than failed. Only then, and only for the session that held it.
+sleep_claim "$ROOT" 42 s10 >/dev/null
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 42 s10 failed "circuit breaker: 22 minutes of active time with no new commit, claim or note" >/dev/null
+printf '1111\n' > "$FX/closer-42"
+out="$(sleep_release "$ROOT" 42 s10 done "merged PR #1111")"; rc=$?
+check_eq "done lands over the breaker's failed once a merged pull request closed the issue" 0 "$rc"
+check_eq "said as released" "$(printf 'released\t42\tdone')" "$out"
+check_has "GitHub was asked which pull request closed it" "closer danwright32/demo 42" "$(cat "$WORK/source.log")"
+last42="$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/42/3" 2>/dev/null)"
+check_has "the claim's newest entry is done" '"kind": "done"' "$last42"
+check_has "naming the pull request and the end it replaced" "closed by merged PR #1111 after it was ended failed" "$last42"
+check_has "the end it replaced stays in the history" '"kind": "failed"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/42/2" 2>/dev/null)"
+check_eq "done is the end: a second done is refused" 1 "$(sleep_release "$ROOT" 42 s10 done >/dev/null; echo $?)"
+# Not closed by a merged pull request: the end stands.
+sleep_claim "$ROOT" 43 s10 >/dev/null
+sleep_release "$ROOT" 43 s10 failed "circuit breaker: 3 blocks in a row" >/dev/null
+: > "$FX/closer-43"
+out="$(sleep_release "$ROOT" 43 s10 done)"; rc=$?
+check_eq "with no merged pull request closing it, done does not replace failed" 1 "$rc"
+check_has "saying why" "is not closed by a merged pull request" "$out"
+check_eq "and nothing is written" "1 2 " "$(claims_of 43)"
+# GitHub that cannot be read refuses, never reads as not closed.
+printf 'HTTP 502\n' > "$FX/fail-closer"
+out="$(sleep_release "$ROOT" 43 s10 done)"; rc=$?
+rm -f "$FX/fail-closer"
+check_eq "a failed read of GitHub refuses" 3 "$rc"
+check_has "with the source's reason" "HTTP 502" "$out"
+# Another session's ended claim is not this one's to call done, even when it was merged.
+printf '1112\n' > "$FX/closer-43"
+out="$(sleep_release "$ROOT" 43 s2 done)"; rc=$?
+check_eq "another session cannot mark someone else's ended claim done" 1 "$rc"
+check_eq "and nothing is written for it" "1 2 " "$(claims_of 43)"
+# Only an end the driver can make over live work is replaced: one given back stays given back.
+sleep_claim "$ROOT" 44 s10 >/dev/null
+sleep_release "$ROOT" 44 s10 free >/dev/null
+printf '1113\n' > "$FX/closer-44"
+check_eq "a claim given back free is not marked done" 1 "$(sleep_release "$ROOT" 44 s10 done >/dev/null; echo $?)"
+# Parked by the driver while a subagent finished it is the same case as failed.
+sleep_claim "$ROOT" 45 s10 >/dev/null
+SLEEP_NOTE_BY_DRIVER=1 sleep_release "$ROOT" 45 s10 parked "held for 2 hours of active time" >/dev/null
+printf '1114\n' > "$FX/closer-45"
+check_eq "done lands over a park too once a merged pull request closed it" 0 "$(sleep_release "$ROOT" 45 s10 done >/dev/null; echo $?)"
+# Any end but done over an ended claim is still refused.
+check_eq "failed over failed is refused" 1 "$(sleep_release "$ROOT" 43 s10 failed again >/dev/null; echo $?)"
 
 # ---- the report's read of every claim (phase 4, #835) ----
 out="$(sleep_claims_json)"

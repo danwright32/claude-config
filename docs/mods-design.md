@@ -1111,6 +1111,17 @@ changing it:
   the reason as text, and `released` for a claim given back (`free`, `unstarted`). The report says
   a claim given back was given back, never that it ended unexpectedly, judging the order by each
   note's `at`. A note that cannot be written is said on stderr and never undoes the claim.
+- An end the overnight driver wrote while the work went on (the breaker's `failed`, or a park) is
+  replaced by the holder's own `release ... done` once GitHub shows the issue's last close was a
+  merged pull request's (#1119): the issue was finished, and the report showed it as failed. Only
+  this session's own failed or parked end, only when the issue's last closed event names a merged
+  pull request as its closer (one GraphQL read, `closer` in the issue source), and a read that
+  fails refuses. The `done` entry and note name the pull request and the end they replaced, which
+  stays in the history; the report lists such an issue as done and never also as failed.
+- `work REPO_ROOT ISSUE` prints the claim's work for the driver's breaker (phase 8): `branch` with
+  the tip of `sleep/N` and `worktree` with what the reserved worktree has checked out, each empty
+  when there is none. A folder at the reserved path that is not this repository's worktree reads
+  as none, since git would otherwise walk up from it and read the primary checkout.
 
 ### Sleep mode phase 8: keeping enrolled sessions working, safely (#844), built
 
@@ -1126,8 +1137,11 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
   stops the session with a `stopped` note rather than loop on a count it cannot keep.
 - Progress is recorded state only: this session's notes that are not bookkeeping (heartbeat, wait,
-  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the tip of the
-  `sleep/N` branch of the issue it holds (`git for-each-ref`), never another worker's branch. A
+  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the work on
+  the issue it holds as `sleep-queue.sh work` reads it: the tip of its `sleep/N` branch and what its
+  reserved worktree has checked out, on whatever branch, so a commit there counts whoever made it
+  (#1119: on 2026-10-12 the breaker ended #1106 as failed while a subagent of the claiming session
+  committed it in that worktree on a branch of its own). Never another worker's claim. A
   reading that cannot be taken is no progress. The Stop, the API error and the minute's tick take
   turns, so none writes back a stale counter over another's, and every stop, a stop whose counter
   could not be saved included, ends the claim in hand through the queue rather than leave it held. The circuit breaker lets the session stop, with a `failed` note (the

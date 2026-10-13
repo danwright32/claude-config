@@ -414,8 +414,17 @@ def build(record, notes, bad, final, now, github):
             done.insert(0, "As the sessions noted it; checked against GitHub at wake.")
         section("Done", done)
 
+    # A park or a failure a later done of the same issue replaced is not one (#1119): the queue
+    # lets the holder's done land over the driver's own end once a merged pull request closed the
+    # issue, so the issue is listed as done and never also as failed.
+    def replaced(n):
+        key = (n.get("repo"), n.get("issue"))
+        return n.get("issue") is not None and num(n.get("at")) and any(
+            d["kind"] == "done" and (d.get("repo"), d.get("issue")) == key and num(d.get("at")) and d["at"] > n["at"] for d in notes)
     pf = []
     for n in notes:
+        if n["kind"] in ("parked", "failed") and replaced(n):
+            continue
         if n["kind"] == "parked":
             pf.append("Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n)))
         elif n["kind"] == "failed":
