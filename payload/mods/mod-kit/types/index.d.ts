@@ -143,8 +143,23 @@ export type ModKit = {
    *
    * `substitution` marks a command a command substitution runs (#974), given before the command it
    * sits in, so a guard can tell it from one on the command line where that matters.
+   *
+   * `asWritten` marks a command whose program text the shell left exactly as written (#1171): on
+   * standard input from a quoted heredoc that no later redirect replaces, or holding no `$` or
+   * backtick, and never one a substitution runs. Only there may a guard read the text as the
+   * interpreter does; the reader's own `targets` and `code` (writes) are given by the same answer,
+   * so no mod works it out from `heredocs` itself.
    */
   pipeline: (input: { command: string }) => Promise<ModKitCommand[]>
+  /**
+   * Where a python program holds text rather than code (#1171): each comment after its `#`, and
+   * each string literal between its quotes, `formatted` for an f-string or a t-string, whose braces
+   * hold code; `from` and `to` index `code`. Read as python reads it: a backslash keeps a string
+   * open (in a raw string too), one with a single quote ends at its line, one never closed runs to
+   * the end. The one scanner of python's strings and comments, so no mod scans them itself
+   * (tools/check-mod-shared-parts.sh); what a span means to a guard is the guard's own rule.
+   */
+  pythonText: (input: { code: string }) => Promise<ModKitPythonText[]>
   /**
    * The git working tree an absolute path sits in: the nearest folder at or above it holding a
    * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
@@ -278,12 +293,15 @@ export type ModKitCommand = {
   script?: { files: string[]; stdin?: true }
   verdict?: ModKitCodeVerdict
   substitution?: true
+  asWritten?: true
 }
 
 /** The languages whose inline code the reader judges. */
 export type ModKitLanguage = 'python' | 'node' | 'ruby' | 'perl' | 'osascript' | 'awk' | 'sed'
 /** A command's program: its text (`stdin` when it came on standard input), or why it cannot be read. */
 export type ModKitProgram = { text: string; stdin?: true } | { unreadable: string }
+/** A stretch of a python program that holds text, as `pythonText` gives it. */
+export type ModKitPythonText = { kind: 'comment' | 'string' | 'formatted'; from: number; to: number }
 /** What a program can do that only reading does not, and the words that showed it. */
 export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
@@ -352,7 +370,8 @@ export type ModKitChange = { word: string; path?: string; folder?: string; does:
  * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs;
  * `targets`, for a program whose text names every file it writes, those files, absolute, so a reader
  * judges them rather than every path the text quotes, absent where the file of any write cannot be
- * named (#830)). `byGit`, present when there are any, is what git itself changes (#1123): git mv's
+ * named (#830) or the shell may have changed the text (#1171: as for `code`, a quoted heredoc may
+ * hold any $ or backtick)).  `byGit`, present when there are any, is what git itself changes (#1123): git mv's
  * destination written (onto one name, also the source's own name inside it) and each source
  * removed, git rm's paths removed (also with --cached, which leaves each changed in git status), a
  * checkout of a path and a restore of the working tree writing what they name; `tree` where all
@@ -369,8 +388,8 @@ export type ModKitWrites = {
    * `code`, for such a program whose files are not all named (no `targets`), is its text with what
    * it holds only as data blanked to spaces: each comment and each plain string literal spanning
    * lines but for a last word its closing quote ends (#1165). Given only for python the shell cannot
-   * have changed (from a quoted heredoc, or holding no $ or backtick) that runs no process and builds
-   * no code at run time; absent, data cannot be told from code, and the whole `program` is the guess.
+   * have changed (from a quoted heredoc, or holding no $ or backtick, never in a substitution) that
+   * runs no process and builds no code at run time; absent, data cannot be told from code, and the whole `program` is the guess.
    */
   unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; code?: string; folder?: string }[]
   /**

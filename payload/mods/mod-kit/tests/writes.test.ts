@@ -366,7 +366,12 @@ describe('writes: what the words do not name', () => {
   // names it can open, never those its replacement text quotes as test data.
   test('a python program the shell cannot have changed carries its code, with what it holds as data blanked', () => {
     const data = "  expect(byGit('git checkout -- app/page.tsx')).toEqual([{ path: `${CWD}/app/page.tsx` }])\n"
-    const program = `p='tests/x.test.ts'\ns=open(p).read()\nnew='''${data}'''\nopen(p,'w').write(s+new)`
+    // Importing os leaves its files unnamed, so its code is what a guard reads. Without it, since
+    // #1171 the file it writes is named, whatever $ or backtick its quoted heredoc holds, and a
+    // program whose files are named carries no code.
+    const named = `p='tests/x.test.ts'\ns=open(p).read()\nnew='''${data}'''\nopen(p,'w').write(s+new)`
+    expect(read(`python3 - <<'EOF'\n${named}\nEOF`).unnamed.map(x => [x.targets, 'code' in x])).toEqual([[[`${CWD}/tests/x.test.ts`], false]])
+    const program = `import os\n${named}`
     const u = read(`python3 - <<'EOF'\n${program}\nEOF`).unnamed[0]
     expect(u?.program).toBe(program)
     // All of its block but the last word, which is no name here.
@@ -650,6 +655,27 @@ describe('writes: the files an inline python program names as its writes (#830)'
     expect(targets("python3 - <<'EOF'\nfrom pathlib import Path\nq = Path('b.md')\ns = open('a.md').read()\nq.write_text(s.replace('x', 'y'))\nEOF")).toEqual([[`${CWD}/b.md`]])
     // A cd before it moves where a relative path lands.
     expect(targets(`cd sub && python3 -c "open('a.md','w')"`)).toEqual([[`${CWD}/sub/a.md`]])
+  })
+  // #1171: a $ or a backtick anywhere in the text left the files unnamed, even under a quoted
+  // delimiter, where the shell expands nothing, so a heredoc editing a TypeScript test (template
+  // literals, `${CWD}`) was judged by every name its text quoted. Whether the shell left the text as
+  // written is the reader's one answer, the one the code a guard reads is given by (#1165).
+  test('a program on standard input from a quoted heredoc names its files whatever $ or backtick its text holds', () => {
+    const edit = "p='tests/a.test.ts'\ns=open(p).read()\nnew='''  expect(x(`${CWD}/app/page.tsx`)).toBe($y)\n'''\nopen(p,'w').write(s+new)"
+    expect(targets(`python3 - <<'EOF'\n${edit}\nEOF`)).toEqual([[`${CWD}/tests/a.test.ts`]])
+    expect(targets(`python3 - <<"EOF"\n${edit}\nEOF`)).toEqual([[`${CWD}/tests/a.test.ts`]])
+    expect(targets(`python3 - <<\\EOF\n${edit}\nEOF`)).toEqual([[`${CWD}/tests/a.test.ts`]])
+    // Unquoted, the shell may have made the text any code: unnamed, as before.
+    expect(targets(`python3 - <<EOF\n${edit}\nEOF`)).toEqual([undefined])
+    // A quoted heredoc a later redirect replaces is not what python reads.
+    expect(targets(`python3 - <<'EOF' < other.py\n${edit}\nEOF`)).toEqual([undefined])
+  })
+  // The write reader never marked a command a substitution runs, so a program there was given its
+  // files and its code as if the shell had left it alone (#974 says it may not have).
+  test('a program a command substitution runs names no files and carries no code', () => {
+    const u = read(`echo "$(python3 -c "open('a.md','w').write('''x\ny''')")"`).unnamed
+    expect(u.map(x => [x.targets, 'code' in x])).toEqual([[undefined, false]])
+    expect(read(`python3 -c "open('a.md','w').write('''x\ny''')"`).unnamed.map(x => x.targets)).toEqual([[`${CWD}/a.md`]])
   })
   test('a program with a write whose file its text cannot name gives no targets', () => {
     const none = [undefined]

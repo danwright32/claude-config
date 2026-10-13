@@ -56,6 +56,7 @@ const modKit: { name: string; register: Register } = {
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+        pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1145: a typed answer, said with the copy. One typed as BREAKS stands for a mod-kit loaded
         // before it had the member (a reload can leave one, standing rule 5).
         typedAnswer: async (input: { guard: string; typed: string; still: string; again: string }) => {

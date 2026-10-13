@@ -1077,6 +1077,21 @@ for m in typed-toast typed-claude; do
     || check "and names $m, pointing it at modkit.typedAnswer" "$out"
 done
 case "$out" in *clean-asks-typed*) check "a mod asking the kit to say a typed answer was not recorded passes" "$out" ;; *) check "a mod asking the kit to say a typed answer was not recorded passes" ok ;; esac
+# #1171: ask before saving scanned a python program's comments and strings itself, the same code as
+# mod-kit's (#1165), a triple quote and an f prefix read by hand. Each shape fails the run, pointed at
+# $.modkit.pythonText; a mod asking the kit, or one naming a quote in a comment, passes.
+M9Y="$TMPROOT/m9y"
+mkmodsrc "$M9Y" clean-asks-text "const spans = await \$.modkit.pythonText({ code }) // a ''' block or an f'' string is the kit's to read"
+mkmodsrc "$M9Y" text-repeat "const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch"
+mkmodsrc "$M9Y" text-triple "if (code.startsWith('\"\"\"', i) || code.startsWith(\"'''\", i)) j += 3"
+mkmodsrc "$M9Y" text-prefix "const formatted = /[fFtT]/.test(prefix)"
+out="$(bash "$SHARED" "$M9Y" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod scanning python's strings and comments itself fails the run" ok || check "a mod scanning python's strings and comments itself fails the run" "exit=$code out=$out"
+for m in text-repeat text-triple text-prefix; do
+  printf '%s\n' "$out" | grep "$m keeps its own python-text" | grep -q 'modkit.pythonText(' && check "and names $m, pointing it at modkit.pythonText" ok \
+    || check "and names $m, pointing it at modkit.pythonText" "$out"
+done
+case "$out" in *clean-asks-text*) check "a mod asking the kit where python holds text passes" "$out" ;; *) check "a mod asking the kit where python holds text passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.
