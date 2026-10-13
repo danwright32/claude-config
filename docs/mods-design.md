@@ -1252,8 +1252,18 @@ the ban list knowing that an action it does not name is approved.
   is not read at all, as before. Inline code that can run a process is refused for git only where
   git would run: starting a quoted string or a shell command inside one (`['git', ...]`,
   `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or followed by a git subcommand or option;
-  a git repository, the .gitignore or `--git-dir` in prose runs nothing. gh, the database clients
-  and claude-sync are still refused by the word in such code.
+  a git repository, the .gitignore or `--git-dir` in prose runs nothing. gh in such code is judged
+  the same way, by the same reading with gh's subcommands (#1132); the database clients and
+  claude-sync are still refused by the word in such code.
+- A line that sources a file is judged by where gh would run in it, never by the word anywhere in
+  it (#1132). On 2026-10-12 and 13 sleep mode refused `source ~/.claude/hooks/lib/sleep.sh &&
+  sleep_note '{...}'` calls whose JSON text named `gh run rerun` and `gh pr edit`. The file can
+  still set where a gh in the line goes, so a gh the line runs is refused as before; and text the
+  line runs as code is still refused when it names gh at all (what `eval` or `source` is given,
+  the string `env -S` splits). A word handed to any other command counts only when mod-kit's
+  reader, reading it as a command line of its own, finds gh in command position (`retry "gh pr
+  merge 5"`, `retry 'cd /x && sudo gh issue close 5'`), since a function the file defines may run
+  it; a note or JSON naming gh in prose runs nothing, as it does in a line that sources nothing.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
   created (events and search, since either can lag), milestones touched and deploy runs in each
   repository with an event overnight, each repository the night's notes name (a private one the
