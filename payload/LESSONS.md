@@ -3255,6 +3255,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L1027. A local env file that holds production's error reporting address makes every error on a
+  developer's machine or test server page the live alert channel, so local dev and test servers must
+  report nowhere or to a separate environment, and the alert must act only on production.**
+  (nursedex#1170, 2026-10-13)
+  SHORT: Local dev and test servers must not report to production's error tracker, and alerts act only on production.
+
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
   assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
   parser hands back EMPTY input, and every predicate over empty input reads as nothing to refuse, so
