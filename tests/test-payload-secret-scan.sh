@@ -71,38 +71,73 @@ run_scan(){
 # --- everything a push or a send publishes (claude-config#1128) -------------------
 # copy_tree <git root> <dest>: copies exactly the files git would carry from anywhere in <root>
 # into <dest>, so an ignored local file (a skill's config.local.json, which the sync also leaves
-# out) neither fails nor passes this. Prints how many it copied, and nothing when it could not
-# list or copy them, so a run that read nothing cannot pass as clean (L98).
+# out) neither fails nor passes this. Prints how many it copied. When it could not list or copy
+# them it prints WHY instead and returns 1, so a run that read nothing cannot pass as clean (L98)
+# and cannot read as a scan that failed either (claude-config#1146, L411).
+#
+# The list is a moment's picture of a tree other processes are writing in, so a file can be listed
+# and gone before the archive reaches it, and tar then fails on that one file having copied the
+# rest (measured 2026-10-13, below). A fresh listing no longer names it, so a failed copy is listed
+# and made again, three attempts in all, with no wait between them: what changes between attempts
+# is the listing, not the clock.
+TREE_LISTER="$ROOT/payload/hooks/lib/repo-files.sh"   # a variable, set here, so a control can stand in for it
 copy_tree(){
-  local root="$1" dest="$2" list
-  list="$(mktemp "$TMPROOT/tree-list.XXXXXX")" || return 1
-  bash "$ROOT/payload/hooks/lib/repo-files.sh" "$root" > "$list" || return 1
-  mkdir -p "$dest" || return 1
-  # One archive in and one out, rather than a copy per file: the tree is several hundred files.
-  tar -C "$root" -cf - -T "$list" | tar -C "$dest" -xf - || return 1
-  grep -c . "$list"
+  local root="$1" dest="$2" list err attempt=1 why=""
+  list="$(mktemp "$TMPROOT/tree-list.XXXXXX")" || { echo "no scratch file to hold the list of files in"; return 1; }
+  err="$list.err"
+  while [ "$attempt" -le 3 ]; do
+    if ! bash "$TREE_LISTER" "$root" > "$list" 2> "$err"; then
+      echo "the files under $root could not be listed: $(head -3 "$err" | tr '\n' ' ')"; return 1
+    fi
+    grep -q . "$list" || { echo "the listing of $root came back empty"; return 1; }
+    rm -rf "$dest" && mkdir -p "$dest" || { echo "could not make $dest to copy into"; return 1; }
+    # One archive in and one out, rather than a copy per file: the tree is several hundred files.
+    if tar -C "$root" -cf - -T "$list" 2> "$err" | tar -C "$dest" -xf - 2>> "$err"; then
+      grep -c . "$list"; return 0
+    fi
+    why="$(head -3 "$err" | tr '\n' ' ')"
+    attempt=$(( attempt + 1 ))
+  done
+  echo "the files under $root could not be copied in 3 attempts, listing afresh each time: ${why:-tar gave no reason}"
+  return 1
 }
-TREE="$TMPROOT/tree"
-n="$(copy_tree "$ROOT" "$TREE")" || n=0
-outside="$(cd "$TREE" 2>/dev/null && find . -type f ! -path './payload/*' | grep -c . || true)"
-[ "${n:-0}" -ge 300 ] && check "the scan reads every file the repository publishes ($n files)" ok \
-  || check "the scan reads every file the repository publishes (${n:-0} files)" "too few to be this repository"
-[ "${outside:-0}" -ge 20 ] && [ -f "$TREE/claude-sync" ] && [ -f "$TREE/README.md" ] \
-  && check "and they include the files outside payload/, claude-sync and the README among them ($outside)" ok \
-  || check "and they include the files outside payload/, claude-sync and the README among them (${outside:-0})" "the scan would see the payload only, which is the gap #1128 closed"
-[ -f "$TREE/payload/skills/tracker/config.example.json" ] && check "and the tracker's example config is among them" ok \
-  || check "and the tracker's example config is among them" "missing, so the case that blocked sync is not being judged"
+# unmeasured <what> <why>: says a part of the scan could not be made, in the one line
+# scanners-before-push.sh reads as a fault in its own run rather than a scan that failed, and marks
+# this run as one that measured less than it should have (claude-config#1146, L411).
+unmeasured_n=0
+unmeasured(){
+  printf 'SUITE-UNMEASURED %s, so it was not scanned: %s\n' "$1" "$2"
+  unmeasured_n=$(( unmeasured_n + 1 ))
+}
+# judge_tree <git root> <dest>: copies what <root> publishes into <dest> and judges it. Returns 3,
+# having judged nothing, when the files could not be copied.
+judge_tree(){
+  local root="$1" TREE="$2" n outside out
+  if ! n="$(copy_tree "$root" "$TREE")"; then
+    unmeasured "everything $root publishes" "$n"
+    return 3
+  fi
+  outside="$(cd "$TREE" 2>/dev/null && find . -type f ! -path './payload/*' | grep -c . || true)"
+  [ "${n:-0}" -ge 300 ] && check "the scan reads every file the repository publishes ($n files)" ok \
+    || check "the scan reads every file the repository publishes (${n:-0} files)" "too few to be this repository"
+  [ "${outside:-0}" -ge 20 ] && [ -f "$TREE/claude-sync" ] && [ -f "$TREE/README.md" ] \
+    && check "and they include the files outside payload/, claude-sync and the README among them ($outside)" ok \
+    || check "and they include the files outside payload/, claude-sync and the README among them (${outside:-0})" "the scan would see the payload only, which is the gap #1128 closed"
+  [ -f "$TREE/payload/skills/tracker/config.example.json" ] && check "and the tracker's example config is among them" ok \
+    || check "and the tracker's example config is among them" "missing, so the case that blocked sync is not being judged"
 
-# The copy is its own repository root as well, holding the repository's .secret-allowlist among the
-# files it copied: an allowlist entry names the file it accepts by its path in the repository
-# (#1133), so the copy must sit where the repository does for that path to read the same.
-[ -f "$TREE/.secret-allowlist" ] && check "and the repository's .secret-allowlist is among them" ok \
-  || check "and the repository's .secret-allowlist is among them" "missing, so the scan below would judge against no allowlist"
-out="$(run_scan "$TREE" "$TREE")"
-case "$out" in
-  *'SCAN-RC=0') check "everything the repository publishes passes claude-sync's secret scan" ok ;;
-  *) check "everything the repository publishes passes claude-sync's secret scan" "a push would publish, or a send would refuse: $(printf '%s' "$out" | tr '\n' ' ')" ;;
-esac
+  # The copy is its own repository root as well, holding the repository's .secret-allowlist among
+  # the files it copied: an allowlist entry names the file it accepts by its path in the repository
+  # (#1133), so the copy must sit where the repository does for that path to read the same.
+  [ -f "$TREE/.secret-allowlist" ] && check "and the repository's .secret-allowlist is among them" ok \
+    || check "and the repository's .secret-allowlist is among them" "missing, so the scan below would judge against no allowlist"
+  out="$(run_scan "$TREE" "$TREE")"
+  case "$out" in
+    *'SCAN-RC=0') check "everything the repository publishes passes claude-sync's secret scan" ok ;;
+    *) check "everything the repository publishes passes claude-sync's secret scan" "a push would publish, or a send would refuse: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+}
+judge_tree "$ROOT" "$TMPROOT/tree"
 
 # --- the controls (L1) -----------------------------------------------------------
 # The whole tree run finds a credential planted OUTSIDE payload/, where nothing looked before #1128.
@@ -112,11 +147,62 @@ mkdir -p "$PT/payload" "$PT/tools"
 git -C "$PT" init -q 2>/dev/null
 printf 'nothing secret\n' > "$PT/payload/clean.txt"
 printf '{ "token": "%s" }\n' "$(printf 'whole tree planted control' | shasum -a 256 | cut -c1-40)" > "$PT/tools/leak.json"
-pn="$(copy_tree "$PT" "$TMPROOT/planted-tree-copy")" || pn=0
-out="$(run_scan "$TMPROOT/planted-tree-copy" "$TMPROOT/planted-tree")"
-case "$pn:$out" in
-  2:*'possible secret found in: tools/leak.json'*'SCAN-RC=1') check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" ok ;;
-  *) check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" "copied $pn, got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+if pn="$(copy_tree "$PT" "$TMPROOT/planted-tree-copy")"; then
+  out="$(run_scan "$TMPROOT/planted-tree-copy" "$TMPROOT/planted-tree")"
+  case "$pn:$out" in
+    2:*'possible secret found in: tools/leak.json'*'SCAN-RC=1') check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" ok ;;
+    *) check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" "copied $pn, got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+else
+  unmeasured "the #1128 control's planted tree" "$pn"
+fi
+
+# --- a tree it could not read is UNMEASURED, never a scan failure (claude-config#1146) ------
+# On 2026-10-13 the pre push gate ran this suite and it failed "the scan reads every file the
+# repository publishes (0 files)" with every other check green, and run directly a minute later it
+# passed 51 of 51. Reproduced since: a file listed and then gone before the archive reaches it
+# (another process removing a file it had just written) makes tar fail on that one file, so the copy
+# reports failure with every other file copied, and the count reads as zero. What tar said went
+# to output the gate threw away, so which file it was is not known. Driven here with a lister
+# standing in for repo-files.sh, so the race is SET rather than waited for (L290).
+VT="$TMPROOT/vanish-tree"; mkdir -p "$VT/payload"; git -C "$VT" init -q 2>/dev/null
+printf 'one\n' > "$VT/payload/a.txt"; printf 'two\n' > "$VT/payload/b.txt"
+# vanish_lister <n>: writes a lister that gives the real list, plus a file that no longer exists in
+# its first <n> listings, and prints its path. It counts its own calls in a file beside it.
+vanish_lister(){
+  local f="$TMPROOT/vanish-lister.$1"
+  rm -f "$f.calls"
+  cat > "$f" <<EOF
+#!/usr/bin/env bash
+n=\$(( \$(cat "$f.calls" 2>/dev/null || echo 0) + 1 )); printf '%s' "\$n" > "$f.calls"
+bash "$ROOT/payload/hooks/lib/repo-files.sh" "\$1" || exit \$?
+[ "\$n" -le $1 ] && printf 'payload/written-then-removed.txt\n'
+exit 0
+EOF
+  printf '%s' "$f"
+}
+vl="$(vanish_lister 1)"
+vn="$(TREE_LISTER="$vl" copy_tree "$VT" "$TMPROOT/vanish-copy")"; vrc=$?
+[ "$vrc" -eq 0 ] && [ "$vn" = 2 ] && [ -f "$TMPROOT/vanish-copy/payload/a.txt" ] && [ -f "$TMPROOT/vanish-copy/payload/b.txt" ] \
+  && check "#1146 a file gone before it was copied is listed again and the copy made whole" ok \
+  || check "#1146 a file gone before it was copied is listed again and the copy made whole" "exit $vrc, said: $vn"
+[ "$(cat "$vl.calls" 2>/dev/null)" = 2 ] && check "#1146 and it listed exactly twice, once more than the race needed" ok \
+  || check "#1146 and it listed exactly twice, once more than the race needed" "listed $(cat "$vl.calls" 2>/dev/null || printf 'never')"
+vn="$(TREE_LISTER="$(vanish_lister 99)" copy_tree "$VT" "$TMPROOT/vanish-copy-2")"; vrc=$?
+case "$vrc:$vn" in
+  0:*) check "#1146 a file that keeps vanishing fails the copy, naming the file tar could not read" "it succeeded: $vn" ;;
+  *written-then-removed.txt*) check "#1146 a file that keeps vanishing fails the copy, naming the file tar could not read" ok ;;
+  *) check "#1146 a file that keeps vanishing fails the copy, naming the file tar could not read" "exit $vrc, said: $vn" ;;
+esac
+# And a tree that cannot be read is said to be UNMEASURED, in the line scanners-before-push.sh
+# reads as a fault in its own run, never as a scan that failed (L411).
+FL="$TMPROOT/failing-lister"
+printf '#!/usr/bin/env bash\necho "repo-files: git could not list the files under $1." >&2\nexit 1\n' > "$FL"
+jt="$( pass=0; fail=0; TREE_LISTER="$FL"; judge_tree "$VT" "$TMPROOT/unlisted-copy"; printf 'JT-RC=%s failed=%s\n' "$?" "$fail" )"
+case "$jt" in
+  *FAIL:*) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" "got: $(printf '%s' "$jt" | tr '\n' ' ')" ;;
+  *'SUITE-UNMEASURED '*'git could not list the files under'*'JT-RC=3 failed=0'*) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" ok ;;
+  *) check "#1146 a tree that cannot be listed is UNMEASURED with the reason, not a failing scan" "got: $(printf '%s' "$jt" | tr '\n' ' ')" ;;
 esac
 
 # A key written in capitals is still a key (#1128): API_TOKEN, CLIENT_SECRET, DB_PASSWORD, X_API_KEY
@@ -470,15 +556,20 @@ PY
   printf '%s\n' "$listing"
 }
 
-# Every test in this repository: tracked or not yet, under tests/ or named test-* anywhere.
-bash "$ROOT/payload/hooks/lib/repo-files.sh" "$ROOT" | grep -E '(^|/)test-[^/]*$|^tests/' > "$TMPROOT/test-files" || true
-out="$(assembled_lines "$ROOT" "$TMPROOT/test-files")"
-read_files="$(printf '%s\n' "$out" | sed -n 's/^READ files=\([0-9]*\).*/\1/p')"
-[ "${read_files:-0}" -ge 100 ] && check "#1125 the assembly check reads every test file ($read_files)" ok \
-  || check "#1125 the assembly check reads every test file (${read_files:-none})" "too few to be this repository's tests: $out"
-found="$(printf '%s\n' "$out" | grep -v '^READ ' || true)"
-[ -z "$found" ] && check "#1125 no test assembles a token the secret scan would refuse" ok \
-  || check "#1125 no test assembles a token the secret scan would refuse" "write the fixture so the scan accepts it as written (see the comment above this check): $(printf '%s' "$found" | tr '\n' ' ')"
+# Every test in this repository: tracked or not yet, under tests/ or named test-* anywhere. A listing
+# that fails is said to be one, rather than read as a repository with too few tests (#1146).
+if all_files="$(bash "$TREE_LISTER" "$ROOT" 2> "$TMPROOT/test-files.err")"; then
+  printf '%s\n' "$all_files" | grep -E '(^|/)test-[^/]*$|^tests/' > "$TMPROOT/test-files" || true
+  out="$(assembled_lines "$ROOT" "$TMPROOT/test-files")"
+  read_files="$(printf '%s\n' "$out" | sed -n 's/^READ files=\([0-9]*\).*/\1/p')"
+  [ "${read_files:-0}" -ge 100 ] && check "#1125 the assembly check reads every test file ($read_files)" ok \
+    || check "#1125 the assembly check reads every test file (${read_files:-none})" "too few to be this repository's tests: $out"
+  found="$(printf '%s\n' "$out" | grep -v '^READ ' || true)"
+  [ -z "$found" ] && check "#1125 no test assembles a token the secret scan would refuse" ok \
+    || check "#1125 no test assembles a token the secret scan would refuse" "write the fixture so the scan accepts it as written (see the comment above this check): $(printf '%s' "$found" | tr '\n' ' ')"
+else
+  unmeasured "the #1125 assembly check over every test file" "the files under $ROOT could not be listed: $(head -3 "$TMPROOT/test-files.err" | tr '\n' ' ')"
+fi
 
 # The controls, both ways (L1, L497). The token shaped values are a hash, made here, so this file
 # holds none of them; each fixture is a file of its own, read the same way as the tests above.
@@ -527,4 +618,11 @@ fi
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
-[ "$fail" -eq 0 ]
+[ "$fail" -eq 0 ] || exit 1
+# A run that could not scan part of what it scans is not a pass: exit 3, apart from a failure, so
+# the pre push gate holds the push as a fault in its own run and CI stays red (#1146).
+if [ "$unmeasured_n" -gt 0 ]; then
+  echo "UNMEASURED: $unmeasured_n part(s) of this scan could not be made; the SUITE-UNMEASURED lines above say why."
+  exit 3
+fi
+exit 0
