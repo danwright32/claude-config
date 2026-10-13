@@ -792,10 +792,11 @@ case "$MT_PATH_MODE" in
   timeout) echo 'Get "https://api.github.com/repos/acme/widget/contents/x": net/http: TLS handshake timeout' >&2; exit 1 ;;
   forbidden) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
   silent) exit 1 ;;
+  chatty) { echo; echo 'gh: Resource not accessible by integration (HTTP 403)'; awk 'BEGIN { for (i = 1; i <= 20000; i++) print "more detail " i }'; } >&2; exit 1 ;;
 esac
 EOS
 chmod +x "$ghstub/gh"
-for mode in present absent timeout forbidden silent; do
+for mode in present absent timeout forbidden silent chatty; do
   MT_PATH_MODE="$mode" PATH="$ghstub:$PATH" mt_remote_path acme/widget tools/x ""; rc=$?
   case "$mode" in
     present) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "0|present|" "a path that is there is present" ;;
@@ -803,6 +804,9 @@ for mode in present absent timeout forbidden silent; do
     timeout) eq "$rc|$MT_REMOTE_STATE" "2|unknown" "a timeout is unknown and worth asking again" ;;
     forbidden) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a refusal is unknown, believed at once, with GitHub's words" ;;
     silent) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh exited 1" "a failure gh says nothing about is unknown and not asked again" ;;
+    # Its first non blank line, read from an error text far past a pipe buffer: the reader keeps
+    # that line and reads on to the end rather than leaving at it (claude-config#1042, L183).
+    chatty) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a long error is reported by its first non blank line" ;;
   esac
 done
 rm -rf "$ghstub"

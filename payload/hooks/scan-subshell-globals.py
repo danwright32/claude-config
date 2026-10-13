@@ -66,6 +66,83 @@ def assignments_on(line):
     return names
 
 
+def split_declaration(rest):
+    """-> (names a declaration declares, the text of the next command on its line or "").
+
+    A declaration ends where its COMMAND does (claude-config#1045): at the first `;`, `&&`, `||`,
+    `|` or `&` that is outside quotes, backticks and $( ). Splitting the whole line on spaces made
+    `local a b skip; shift` declare `skip;` and `shift`, so a later `skip=` read as a global, and
+    the same split made `local a; leak=1` declare `leak`. What follows `;`, `&&` or `||` is handed
+    back to be judged as the command it is; what follows `|` or `&` runs in a subshell and sets
+    nothing here. Each word is cut at `=` and at `[`, so `n=0` and `arr[1]=x` declare `n` and
+    `arr`, and option words like `-a` declare nothing.
+    """
+    stack = ["top"]
+    i, end, after = 0, len(rest), ""
+    while i < len(rest):
+        c = rest[i]
+        ctx = stack[-1]
+        if c == "\\":
+            i += 2
+            continue
+        if ctx == "dq":
+            if c == '"':
+                stack.pop()
+            elif rest.startswith("$(", i):
+                stack.append("cmd")
+                i += 1
+            elif c == "`":
+                j = rest.find("`", i + 1)
+                i = len(rest) if j < 0 else j
+            i += 1
+            continue
+        if c == "'":
+            j = rest.find("'", i + 1)
+            i = len(rest) if j < 0 else j + 1
+            continue
+        if c == "`":
+            j = rest.find("`", i + 1)
+            i = len(rest) if j < 0 else j + 1
+            continue
+        if c == '"':
+            stack.append("dq")
+        elif c == "(":
+            stack.append("cmd")
+        elif c == ")" and ctx == "cmd":
+            stack.pop()
+        elif ctx == "top" and c == "#" and (i == 0 or rest[i - 1] in " \t"):
+            end = i
+            break
+        elif ctx == "top" and c in ";&|":
+            end = i
+            two = rest[i:i + 2]
+            if c == ";":
+                after = rest[i + 1:]
+            elif two in ("&&", "||"):
+                after = rest[i + 2:]
+            break
+        i += 1
+    decl = rest[:end]
+    # The words inside `( )` are VALUES, an array's members or a substitution's command, never
+    # names: shlex does not know parentheses, so `list=(two LEAKED)` would declare LEAKED (lessons
+    # review of #1103). Innermost groups first, until none is left.
+    while True:
+        bare = re.sub(r"\([^()]*\)", "", decl)
+        if bare == decl:
+            break
+        decl = bare
+    try:
+        words = shlex.split(decl, posix=True)
+    except ValueError:
+        words = decl.split()
+    names = []
+    for w in words:
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", w)
+        if m and not w.startswith("-"):
+            names.append(m.group(0))
+    return names, after
+
+
 def functions_in(lines):
     """-> [(name, first line, body lines)], skipping heredoc bodies, which are not shell."""
     out = []
@@ -116,11 +193,13 @@ def scan_file(path):
         declared = set()
         globals_set = set()
         for b in body:
+            # A line may hold several commands, `local a; local b; leak=1`, so each declaration
+            # is read to its own end and whatever follows is judged as the command it is.
             dm = DECLARED.match(b)
-            if dm:
-                for tok in dm.group(2).split():
-                    declared.add(tok.split("=")[0])
-                continue
+            while dm:
+                names, b = split_declaration(dm.group(2))
+                declared.update(names)
+                dm = DECLARED.match(b)
             for nm in assignments_on(b):
                 if nm not in declared:
                     globals_set.add(nm)

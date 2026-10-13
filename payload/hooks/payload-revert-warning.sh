@@ -101,7 +101,9 @@ is_this_checkout(){ sc_is_this_clone "$root" "$wcmd"; }
 # can be named (L11).
 watcher_clone_name(){
   local d
-  d="$(printf '%s' "$wcmd" | awk '{for (i = 1; i <= NF; i++) if ($i ~ /^\/.*\/claude-sync$/) { sub(/\/claude-sync$/, "", $i); print $i; exit }}')"
+  # Reads to the end and keeps the first answer, never leaving early: a consumer that exits kills
+  # its piped writer, and pipefail reports that death as a failure (L183, claude-config#1042).
+  d="$(printf '%s' "$wcmd" | awk '!got {for (i = 1; i <= NF; i++) if ($i ~ /^\/.*\/claude-sync$/) { sub(/\/claude-sync$/, "", $i); print $i; got = 1; break }}')"
   if [ -n "$d" ]; then printf '%s' "$d"; else printf '%s' "a clone whose directory could not be read from its command line ($wcmd)"; fi
 }
 

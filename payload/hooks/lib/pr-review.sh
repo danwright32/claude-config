@@ -508,7 +508,7 @@ NAMES
     gspecs=()
     while IFS= read -r p; do [ -n "$p" ] && gspecs+=(":(literal)$p"); done < "$parts/g$k.list"
     { [ -n "$lo_marks" ] && printf '%s\n' "$lo_marks"
-      awk -F '\t' 'NR == FNR { mine[$0] = 1; next } !($2 in mine) { printf "%s\t(changed, reviewed in another group: not shown below)\n", $2 }' "$parts/g$k.list" "$rows"
+      awk -F '\t' 'FILENAME == ARGV[1] { mine[$0] = 1; next } !($2 in mine) { printf "%s\t(changed, reviewed in another group: not shown below)\n", $2 }' "$parts/g$k.list" "$rows"
     } > "$marks"
     {
       file_list "$marks"
