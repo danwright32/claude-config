@@ -51,6 +51,40 @@ _D="dir""name"
 # under a lib/ folder named on stdin relative to $1. The path is BASH_SOURCE in any index or brace
 # spelling, $0, or a variable this same file assigned from either, and options (`--`) before it are
 # read past: each spelling left out would be exempt (L217). One awk over all of them (L297).
+# The program, read once, outside the function that runs it. Read by `read` rather than through a
+# command substitution, which bash 3.2 parses for quotes even inside a heredoc, and this program
+# holds lone double quotes. `read -d ""` stops at the end of input with status 1, by design.
+_SELF_SCAN=""
+IFS= read -r -d "" _SELF_SCAN <<'AWK' || true
+  # The name of the parameter a "$..." word at the start of s expands, or "" when it is not one.
+  function param(s,    t) {
+    sub(/^"/, "", s)
+    if (substr(s, 1, 1) != "$") return ""
+    s = substr(s, 2); sub(/^\{/, "", s)
+    if (s ~ /^0([^0-9]|$)/) return "0"
+    if (match(s, /^[A-Za-z_][A-Za-z_0-9]*/)) return substr(s, 1, RLENGTH)
+    return ""
+  }
+  FNR == 1 { split("", own) }
+  /^[[:space:]]*#/ { next }
+  {
+    # A variable given the file s own path keeps meaning it for the rest of this file.
+    rest = $0
+    while (match(rest, /[A-Za-z_][A-Za-z_0-9]*="?\$\{?(BASH_SOURCE|0([^0-9]|$))/)) {
+      a = substr(rest, RSTART, RLENGTH); sub(/=.*/, "", a); own[a] = 1
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    rest = $0
+    while (match(rest, D "[[:space:]]+")) {
+      rest = substr(rest, RSTART + RLENGTH)
+      arg = rest
+      while (match(arg, /^-[^[:space:]]*[[:space:]]+/)) arg = substr(arg, RLENGTH + 1)
+      p = param(arg)
+      if (p == "BASH_SOURCE" || p == "0" || (p != "" && (p in own))) { print FILENAME ":" FNR; break }
+    }
+  }
+AWK
+[ -n "$_SELF_SCAN" ] || { echo "test-lib-self-locate: the scan program came back empty, so nothing could be judged." >&2; exit 2; }
 sites_in(){   # $1 = root; stdin = repo relative paths
   local root="$1" rel
   local files=()
@@ -58,34 +92,7 @@ sites_in(){   # $1 = root; stdin = repo relative paths
     case "$rel" in lib/*.sh|*/lib/*.sh) [ -f "$root/$rel" ] && files+=("$rel") ;; esac
   done
   [ "${#files[@]}" -gt 0 ] || return 0
-  (cd "$root" && awk -v D="$_D" '
-    # The name of the parameter a "$..." word at the start of s expands, or "" when it is not one.
-    function param(s,    t) {
-      sub(/^"/, "", s)
-      if (substr(s, 1, 1) != "$") return ""
-      s = substr(s, 2); sub(/^\{/, "", s)
-      if (s ~ /^0([^0-9]|$)/) return "0"
-      if (match(s, /^[A-Za-z_][A-Za-z_0-9]*/)) return substr(s, 1, RLENGTH)
-      return ""
-    }
-    FNR == 1 { split("", own) }
-    /^[[:space:]]*#/ { next }
-    {
-      # A variable given the file s own path keeps meaning it for the rest of this file.
-      rest = $0
-      while (match(rest, /[A-Za-z_][A-Za-z_0-9]*="?\$\{?(BASH_SOURCE|0([^0-9]|$))/)) {
-        a = substr(rest, RSTART, RLENGTH); sub(/=.*/, "", a); own[a] = 1
-        rest = substr(rest, RSTART + RLENGTH)
-      }
-      rest = $0
-      while (match(rest, D "[[:space:]]+")) {
-        rest = substr(rest, RSTART + RLENGTH)
-        arg = rest
-        while (match(arg, /^-[^[:space:]]*[[:space:]]+/)) arg = substr(arg, RLENGTH + 1)
-        p = param(arg)
-        if (p == "BASH_SOURCE" || p == "0" || (p != "" && (p in own))) { print FILENAME ":" FNR; break }
-      }
-    }' "${files[@]}" 2>/dev/null)
+  (cd "$root" && awk -v D="$_D" "$_SELF_SCAN" "${files[@]}" 2>/dev/null)
   return 0
 }
 
