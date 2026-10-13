@@ -1,5 +1,6 @@
+import type { ModKitWrites } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesLeftAsIs, ScopeModesLeftBranch, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
-import type { Cmd } from './nobuild.ts'
+import { EDITORS, type Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
 // or no deploy step recorded (#687), the worktree and branch cleaned, and the issue closed. Until then the turn end is refused. Fixing
@@ -64,8 +65,80 @@ export type Reading = {
    * card has been made yet; unmeasured when the mod is not loaded. Never Claude's own report.
    */
   deploy: { state: DeployState } | null | Unmeasured | Unreadable
-  /** The files git status names uncommitted in the session's checkout (#1051); empty when none. */
+  /**
+   * The files git status names uncommitted in the session's checkout that this session or one of its
+   * agents wrote (#1051, #1108); empty when none.
+   */
   dirty: string[] | Unreadable
+  /**
+   * The other files git status names there, which this session did not write (#1108): another
+   * session's, a job's, or written by a route the mod cannot name. Never outstanding; said once, when
+   * winding down finishes.
+   */
+  notMine?: string[]
+}
+
+// A path with its empty, `.` and `..` steps taken out, so two spellings of one file match.
+const plain = (p: string): string => {
+  const out: string[] = []
+  for (const s of p.split('/')) {
+    if (s === '' || s === '.') continue
+    if (s === '..') out.pop()
+    else out.push(s)
+  }
+  return `/${out.join('/')}`
+}
+
+/**
+ * The files a call this session let through wrote (#1108), absolute: the file an editing tool names,
+ * and for a Bash call what mod-kit's one write reader names (#712), its files, its other changes and
+ * a program's named targets. A copy onto a name that may be a folder is given as both places it can
+ * land: the name, and the source's own name inside it, with everything under that, never the whole
+ * folder, which may hold another session's files (lessons review). A removal reaching a whole folder
+ * is given again ending in `/`, standing for everything under it. A made folder writes no file. A
+ * write the reader cannot name (a patch, a script, a path built from a variable) names nothing here.
+ */
+export const filesWritten = (call: { tool: string; input: Record<string, unknown>; writes: ModKitWrites }): string[] => {
+  if (EDITORS.has(call.tool)) {
+    const p = String(call.input.file_path ?? call.input.notebook_path ?? '')
+    return p.startsWith('/') ? [plain(p)] : []
+  }
+  if (call.tool !== 'Bash') return []
+  const out: string[] = []
+  const add = (path: string | undefined, whole: boolean) => {
+    if (!path?.startsWith('/')) return
+    out.push(plain(path))
+    if (whole) out.push(`${plain(path)}/`)
+  }
+  for (const f of call.writes.files) {
+    add(f.path, !!f.tree)
+    if (f.mayBeFolder && f.path) for (const s of f.sources ?? []) add(`${f.path}/${s.replace(/\/+$/, '').split('/').pop() ?? ''}`, true)
+  }
+  for (const c of call.writes.changes) if (c.does !== 'folder') add(c.path, !!c.tree)
+  for (const u of call.writes.unnamed) for (const t of u.targets ?? []) add(t, false)
+  return [...new Set(out)]
+}
+
+// A path as matched against another spelling of it (lessons review): macOS's default volume ignores
+// case, and /var, /tmp and /etc are links into /private, so git's path and a tool's can differ in
+// both. Read the same, a file this session wrote is never taken for another's; two files differing
+// only in case on a volume that tells them apart are both counted, the side that only asks again.
+const matchKey = (p: string) => p.toLowerCase().replace(/^\/private(?=\/(?:var|tmp|etc)\/)/, '')
+
+/**
+ * The uncommitted files git status names relative to `root`, split into this session's own (`written`
+ * names it, or a folder holding it) and the rest (#1108).
+ */
+export const whoseFiles = (dirty: readonly string[], root: string, written: readonly string[]): { own: string[]; others: string[] } => {
+  const files = new Set(written.filter(w => !w.endsWith('/')).map(matchKey))
+  const trees = written.filter(w => w.endsWith('/')).map(matchKey)
+  const own: string[] = []
+  const others: string[] = []
+  for (const f of dirty) {
+    const p = matchKey(plain(`${root}/${f}`))
+    ;(files.has(p) || trees.some(t => p.startsWith(t)) ? own : others).push(f)
+  }
+  return { own, others }
 }
 
 /**
@@ -79,8 +152,35 @@ export const porcelainFiles = (stdout: string): string[] =>
     .map(l => {
       const path = l.slice(3)
       const to = path.includes(' -> ') ? path.slice(path.lastIndexOf(' -> ') + 4) : path
-      return to.startsWith('"') && to.endsWith('"') ? to.slice(1, -1) : to
+      return to.startsWith('"') && to.endsWith('"') ? unquoted(to.slice(1, -1)) : to
     })
+
+// What git quoted, read back (#1108 lessons review): a byte past ASCII as an octal escape of its
+// UTF-8 (core.quotePath), and a quote, a backslash or a control character by its C escape. Read as
+// written, a file the session wrote under such a name never matched the path it wrote.
+const C_ESCAPES: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92 }
+// Read by code point, so a character git left raw (core.quotePath off) is never split in two.
+const unquoted = (q: string): string => {
+  const chars = [...q]
+  const bytes: number[] = []
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i] as string
+    if (c !== '\\') {
+      bytes.push(...new TextEncoder().encode(c))
+      continue
+    }
+    const octal = chars.slice(i + 1, i + 4).join('')
+    if (/^[0-7]{3}$/.test(octal)) {
+      bytes.push(parseInt(octal, 8))
+      i += 3
+    } else {
+      const next = chars[i + 1] ?? ''
+      bytes.push(...(C_ESCAPES[next] !== undefined ? [C_ESCAPES[next] as number] : new TextEncoder().encode(next)))
+      i += 1
+    }
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes))
+}
 
 // Files named in a sentence: at most five, then how many more.
 const MAX_NAMED = 5
