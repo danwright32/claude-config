@@ -1062,13 +1062,23 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   said in the `/sleep` reply, and sleep still holds.
 - At the end (the session that wins `/wake`, or the first to see the limit) the mod notes `woke` or
   `limit` with its own `$.session.usage()` reading on the record it moved aside, then renders once
-  more with `--final`: done is read from GitHub (merged PRs and closed issues since `since`, in
-  each repo any note names, `--limit 200` and a full page said as cut, the date predicate applied
+  more with `--final`: done is read from GitHub (merged PRs and closed issues from `since` to the
+  night's end, in each repo any note names, `--limit 200` and a full page said as cut, the date predicate applied
   again here) and cross checked against the notes both ways, a noted PR or issue the search did
   not list read by its number before it is called wrong (L1014); a worker silent past 30 minutes that
   never wrote `stopped`, a worker that never wrote a note, and a `claim` with no `done`, `parked` or
   `failed` note are each flagged as ended unexpectedly. GitHub's reads are bounded at 15 s each and
   60 s together (wake waits on them, so a GitHub outage costs Dan a minute at most); a repo not read is said, with what its sessions noted shown as unchecked.
+- The night's end is one bound, `night_end` (#1167): the `woke` or `limit` note's time; with
+  neither (the woke note could not be written), the render's own moment, never past the record's
+  `until`. Every GitHub read and the header end there, so a render after wake no longer takes the
+  day's work as the night's (re-rendering the 2026-10-12 night at 3 PM ET had listed PR #1127,
+  merged 8:32 AM ET after wake, under Done). A noted PR or issue GitHub shows finished only after
+  the end is said as such under Needs a look, never as done overnight and never as not done.
+- The writer stamps `by` from `CLAUDE_CODE_SESSION_ID`, the local id the record names its workers
+  by, when the caller gave none and the value is of a local id's shape, never replacing one the
+  caller gave (#1167): on 2026-10-12 every finding, question and issue note lacked one, so the
+  report could not count that worker as heard from.
 - A merge or close no note names is credited to the session that accounts for it (#1159), since a
   subagent writes no note: on 2026-10-12 every one of 11 PRs and 21 issues the overnight session's
   subagents merged and closed was listed as "with no session noting it". A merged PR is a session's
