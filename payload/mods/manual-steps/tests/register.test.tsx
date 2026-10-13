@@ -1037,6 +1037,124 @@ test('a step finished in an earlier session shows its age and is grey, on the he
   expect(shown[1]?.map(p => p.text).join('')).toBe('1. Sign out  done, per you, in an earlier session on Oct 5 at 1:00 AM')
 })
 
+// ---- A step another mod hands the card (#1107) ----
+// Scope modes pins sleep mode's morning reminder through this noun at /sleep, and takes it off by its
+// title once the morning review has happened, whichever step is open then.
+// Another mod calling the noun, standing in as scope modes does: a call to AddStep or FinishStep asks
+// the noun from its own hook, where every mod's noun is reachable, and answers with what it said, or
+// with what it threw.
+const caller: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      const tool = String(e.tool)
+      if (tool !== 'AddStep' && tool !== 'FinishStep') return next(e)
+      const input = (e as unknown as { input: object }).input
+      try {
+        const r = tool === 'AddStep' ? await $.manualSteps.add(input as never) : await $.manualSteps.finish(input as never)
+        return { result: r, text: JSON.stringify(r) } as never
+      } catch (err) {
+        return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
+      }
+    })
+  },
+}
+const withCaller = { plugins: [modKit, caller] }
+const MORNING = { title: "When you are up: review the night's proposed issues (2026-10-12)", location: "This Mac, in the session where you say I'm up or type /wake", clicks: ["Say I'm up, or type /wake", 'Answer the pickers'] }
+const askNoun = async ($: Engine, tool: string, input: object) => {
+  const r = (await $.tool.call({ tool, tool_use_id: 'n1', input } as never)) as { deny?: string; text?: string }
+  if (r.deny !== undefined) throw new Error(r.deny)
+  return JSON.parse(r.text ?? 'null') as unknown
+}
+const addStep = ($: Engine, s: object = MORNING) => askNoun($, 'AddStep', { heading: 'The morning after sleep mode', step: s })
+const finishStep = ($: Engine, title = MORNING.title) => askNoun($, 'FinishStep', { title })
+
+test('another mod adds a step: a card of its own when none is pinned, shown as a new card is and kept for the next session (#1107)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await addStep($)).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[0]).toMatch(/^The morning after sleep mode/)
+  expect(text[1]).toBe(`1. ${MORNING.title}  [done]`)
+  expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true }])
+})
+
+test('a step added to a card already pinned goes at its end, under its heading, and never twice (#1107)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  expect(await addStep($)).toEqual({ isShown: true })
+  expect(await addStep($)).toEqual({ isShown: true })
+  expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+})
+
+test('finish takes the step off by its title, whichever step is open, said as checked; one not there finishes nothing (#1107)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await addStep($)
+  expect(await finishStep($)).toEqual({ isFinished: true })
+  expect(stored(w.mem)?.steps[1]).toMatchObject({ title: MORNING.title, finished: 'checked' })
+  // The open step is still the first, with its Done.
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect(await finishStep($)).toEqual({ isFinished: false })
+  expect(await finishStep($, 'No such step')).toEqual({ isFinished: false })
+  // The last unfinished step taken off takes the card with it.
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toBe('Every step is finished, so the card is gone.')
+  expect(stored(w.mem)).toBeUndefined()
+})
+
+test('a later pin through the steps tool keeps a step another mod added, at its end, unless it names it (#1107 lessons review)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addStep($)
+  // Pinning replaces the card, but the reminder is not Claude's to drop.
+  await hand($, [step()])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+  expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
+  // Pinned again naming it, it is not listed twice.
+  await hand($, [step(), step({ title: MORNING.title, url: undefined, location: MORNING.location })])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+  // Taken off, it is not brought back by the next pin.
+  await finishStep($)
+  await hand($, [step({ title: 'Purge the cache' })])
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache'])
+})
+
+test('the only step taken off takes the card away (#1107)', withCaller, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await addStep($)
+  expect(await finishStep($)).toEqual({ isFinished: true })
+  expect(await band($)).toBeUndefined()
+  expect(stored(w.mem)).toBeUndefined()
+})
+
+test('a card carried from an earlier session takes the step but stays held, and says so (#1107)', withCaller, async ($, on) => {
+  const card: StepsCard = { heading: 'Cloudflare WAF', steps: [{ title: 'Purge the cache', url: 'https://b.example' }] }
+  const w = world(on, {}, { [`card:${ROOT}`]: card })
+  await start($)
+  expect(await addStep($)).toEqual({ isShown: false, reason: 'the steps carried from an earlier session are held until Claude checks them again' })
+  expect(await band($)).toBeUndefined()
+  expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache', MORNING.title])
+  // Taken off a held card too, so a review done elsewhere never leaves it behind.
+  expect(await finishStep($)).toEqual({ isFinished: true })
+  expect(stored(w.mem)?.steps.map(s => [s.title, s.finished])).toEqual([
+    ['Purge the cache', undefined],
+    [MORNING.title, 'checked'],
+  ])
+})
+
+test('nothing is added where nobody is at the prompt, and a step with no place is refused loudly (#1107)', withCaller, async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: ROOT, surface: null, isInteractive: false } as never)
+  expect(await addStep($)).toEqual({ isShown: false, reason: 'this session has nobody at its prompt' })
+  await start($)
+  const thrown = await addStep($, { title: 'Somewhere' }).then(() => 'did not throw', (err: unknown) => String(err))
+  expect(thrown).toMatch(/Step 1 \(Somewhere\) has no link or exact location/)
+})
+
 test('steps_done says only the open step takes a verdict, and to ask Dan which step he means (#886)', () => {
   expect(VERDICT_DESCRIPTION).toMatch(/only the open step/i)
   expect(VERDICT_DESCRIPTION).toMatch(/ask Dan which step he means/)
