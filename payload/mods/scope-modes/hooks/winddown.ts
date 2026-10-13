@@ -92,9 +92,11 @@ const plain = (p: string): string => {
 /**
  * The files a call this session let through wrote (#1108), absolute: the file an editing tool names,
  * and for a Bash call what mod-kit's one write reader names (#712), its files, its other changes and
- * a program's named targets. A folder the call reached whole (a removal of a tree, a copy that may
- * land inside a folder) is given again ending in `/`, standing for everything under it. A write the
- * reader cannot name (a patch, a script, a path built from a variable) names nothing here.
+ * a program's named targets. A copy onto a name that may be a folder is given as both places it can
+ * land: the name, and the source's own name inside it, with everything under that, never the whole
+ * folder, which may hold another session's files (lessons review). A removal reaching a whole folder
+ * is given again ending in `/`, standing for everything under it. A made folder writes no file. A
+ * write the reader cannot name (a patch, a script, a path built from a variable) names nothing here.
  */
 export const filesWritten = (call: { tool: string; input: Record<string, unknown>; writes: ModKitWrites }): string[] => {
   if (EDITORS.has(call.tool)) {
@@ -108,8 +110,11 @@ export const filesWritten = (call: { tool: string; input: Record<string, unknown
     out.push(plain(path))
     if (whole) out.push(`${plain(path)}/`)
   }
-  for (const f of call.writes.files) add(f.path, !!(f.mayBeFolder || f.tree))
-  for (const c of call.writes.changes) add(c.path, !!c.tree || c.does === 'folder')
+  for (const f of call.writes.files) {
+    add(f.path, !!f.tree)
+    if (f.mayBeFolder && f.path) for (const s of f.sources ?? []) add(`${f.path}/${s.replace(/\/+$/, '').split('/').pop() ?? ''}`, true)
+  }
+  for (const c of call.writes.changes) if (c.does !== 'folder') add(c.path, !!c.tree)
   for (const u of call.writes.unnamed) for (const t of u.targets ?? []) add(t, false)
   return [...new Set(out)]
 }

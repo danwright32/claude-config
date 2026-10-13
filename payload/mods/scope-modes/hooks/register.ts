@@ -2395,14 +2395,20 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
 // The files a call that ran wrote (#1108), noted whatever mode is on, from the session or any of its
 // agents, so winding down later counts only those as this session's uncommitted work: an editing
 // tool's file, and what mod-kit's one write reader names for a Bash call. A note that cannot be made
-// is said, since winding down would then let that file go uncommitted.
+// is said, since winding down would then let that file go uncommitted: once a session, since it runs
+// after every Bash call, read only ones included, so a reader that stays broken would otherwise toast
+// on each (lessons review); later ones go to the debug log.
+let writeNoteSaid = false
 const noteWritten = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string) => {
   try {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
     const files = filesWritten({ tool, input, writes })
     await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
   } catch (err) {
-    $.ui.toast(`Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`)
+    const said = `Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`
+    if (writeNoteSaid) $.ui.log(`scope-modes: ${said}`, { to: 'debug' })
+    else $.ui.toast(`${said} Later failures go to the debug log.`)
+    writeNoteSaid = true
   }
 }
 
@@ -3137,6 +3143,7 @@ export const register: Register = on => {
     await $.state.set(leftBranchRef, [] as ScopeModesLeftBranch[])
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])
+    writeNoteSaid = false
     prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)

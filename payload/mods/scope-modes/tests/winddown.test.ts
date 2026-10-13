@@ -304,17 +304,21 @@ describe('whose uncommitted files they are (#1108)', () => {
   })
   test("a Bash call writes what mod-kit's write reader names: its files, its other changes, and a program's named targets", () => {
     const writes = {
-      files: [{ word: 'out.txt', path: '/repo/out.txt' }, { word: '$X' }, { word: 'dir', path: '/repo/dir', mayBeFolder: true as const }],
+      files: [{ word: 'out.txt', path: '/repo/out.txt' }, { word: '$X' }, { word: 'dir', path: '/repo/dir', sources: ['/repo/x.ts'], mayBeFolder: true as const }],
       changes: [
         { word: 'old.ts', path: '/repo/old.ts', does: 'remove' as const },
         { word: 'build', path: '/repo/build', does: 'remove' as const, tree: true as const },
+        { word: 'made', path: '/repo/made', does: 'folder' as const },
       ],
       unnamed: [
         { what: 'an inline python3 script', words: [], inputs: [], targets: ['/repo/gen.ts'] },
         { what: 'a patch', words: [], inputs: ['/repo/p.diff'] },
       ],
     }
-    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/out.txt', '/repo/dir', '/repo/dir/', '/repo/old.ts', '/repo/build', '/repo/build/', '/repo/gen.ts'])
+    // A copy onto dir lands as dir or as dir/x.ts, never as all of dir, which may hold another
+    // session's files; a made folder writes no file (lessons review).
+    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/out.txt', '/repo/dir', '/repo/dir/x.ts', '/repo/dir/x.ts/', '/repo/old.ts', '/repo/build', '/repo/build/', '/repo/gen.ts'])
+    expect(whoseFiles(['dir/x.ts', 'dir/theirs.md', 'made/theirs.md'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['dir/x.ts'], others: ['dir/theirs.md', 'made/theirs.md'] })
   })
   test('the uncommitted files are split into the ones this session wrote and the rest', () => {
     const written = ['/repo/app.ts', '/repo/build/', '/elsewhere/x.ts']

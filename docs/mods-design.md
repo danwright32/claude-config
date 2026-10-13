@@ -896,8 +896,10 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   after each call that ran (never one refused here or beneath), the files it wrote, whatever mode is
   on, from the session or any of its agents (`written` in its state): the file an Edit, Write,
   MultiEdit or NotebookEdit names, and for a Bash call what mod-kit's one write reader names (its
-  files, its other changes such as a removal, and a program's named targets; a folder reached whole
-  stands for everything under it). Only those count as the session's uncommitted work, in the finish
+  files, its other changes such as a removal, and a program's named targets; a removal reaching a
+  whole folder stands for everything under it, while a copy onto a name that may be a folder stands
+  only for the places it can land, never the whole folder, and a made folder for no file). Only
+  those count as the session's uncommitted work, in the finish
   check, the `open_cleanup_branch` question and its coverage, and the `leave_branch` question. A file
   it cannot attribute (another session's, a job's, or written by a route the reader cannot name, such
   as a patch or `git mv`) never blocks, and the finish toast names it once: "Left uncommitted, since

@@ -1686,8 +1686,12 @@ test('a gh pr create that printed no link notes no PR; one that cannot be read t
   // The files the call wrote could not be read either, and that is said too (#1108).
   expect(w.toasts).toEqual([
     expect.stringMatching(/^Scope modes could not note the PR this call opened \(.*the reader broke.*\), so winding down will not know to finish it\.$/),
-    "Scope modes could not note which files this call wrote (the reader broke), so winding down may not count them as this session's.",
+    "Scope modes could not note which files this call wrote (the reader broke), so winding down may not count them as this session's. Later failures go to the debug log.",
   ])
+  // Every Bash call is read for its writes, so a reader that stays broken is toasted once, then logged (lessons review).
+  await $.tool.call({ tool: 'Bash', command: 'cat __reader_fails', tool_use_id: 'g3' } as never)
+  expect(w.toasts.length).toBe(2)
+  expect(w.logs.filter(l => l.startsWith('scope-modes: Scope modes could not note which files this call wrote')).length).toBe(1)
   await command($ as never, 'winddown')
   // Neither PR was noted, so on a clean default branch there is nothing to finish.
   expect((await stop($ as never)).block).toBeUndefined()
