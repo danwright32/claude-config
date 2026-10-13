@@ -27,6 +27,19 @@ export type ScopeModesLeftOpen = { repo: string; number: number; head: string; w
 export type ScopeModesLeftClosed = { repo: string; number: number; closed: true; why: string }
 /** Dan's own answer about one PR, open or closed, found by its repository and number; one per PR. */
 export type ScopeModesLeftAsIs = ScopeModesLeftOpen | ScopeModesLeftClosed
+/**
+ * A branch Dan himself chose to leave as it is (#1074), from his answer to leave_branch: never
+ * deleted here, a worktree on it kept, and the uncommitted `files` in the session's checkout on it
+ * when he answered left uncommitted (a change to any other file asks again). Found by repository and
+ * branch; one per branch. The branch on GitHub is not covered: it holds no checkout.
+ */
+export type ScopeModesLeftBranch = { repo: string; branch: string; files: string[]; why: string }
+/**
+ * A cleanup branch Dan agreed to while winding down (#1051), from his answer to open_cleanup_branch:
+ * the branch may start in the checkout at `root`, by checkout or switch, while nothing beyond `files`
+ * (uncommitted there when he answered) is uncommitted. Used once.
+ */
+export type ScopeModesCleanup = { root: string; branch: string; files: string[]; why: string }
 
 /** Called from another mod (manual steps, #614, holds its items here while Dan is away): await it. */
 export type ScopeModes = {
@@ -79,6 +92,15 @@ declare module 'claude-code' {
        * before #1033 still reads.
        */
       leftOpen: ScopeModesLeftAsIs[]
+      /**
+       * The branches this session made its own (#1074): created, committed to or pushed by it or one
+       * of its agents. Winding down finishes only these, never a branch its checkout merely sat on.
+       */
+      branches: string[]
+      /** The branches Dan chose to leave as they are (#1074). */
+      leftBranch: ScopeModesLeftBranch[]
+      /** The cleanup branches Dan agreed to while winding down (#1051), each removed once used. */
+      cleanup: ScopeModesCleanup[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
     }

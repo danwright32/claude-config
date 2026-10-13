@@ -239,6 +239,10 @@ type Opts = {
   workingTreeFails?: string
   /** The folders git status finds uncommitted changes in (#996); none by default. */
   dirty?: string[]
+  /** The files git status names in those folders (#1051); app.ts unless said. */
+  dirtyFiles?: string[]
+  /** A `git switch -c` or `git checkout -b` that runs but leaves the checkout where it was (#1051). */
+  switchFails?: boolean
   /** mod-kit's branch reader fails (#980), with what it threw. */
   branchReaderFails?: string
   /** The session's folder, /repo unless said: a linked worktree of /repo, whose main working tree stays /repo (#980 review). */
@@ -521,7 +525,7 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
-    if (cmd === 'git' && a.includes('status')) return ok(o.dirty?.includes(a[a.indexOf('-C') + 1] as string) ? ' M app.ts\n' : '')
+    if (cmd === 'git' && a.includes('status')) return ok(o.dirty?.includes(a[a.indexOf('-C') + 1] as string) ? (o.dirtyFiles ?? ['app.ts']).map(f => ` M ${f}\n`).join('') : '')
     // What the overnight rules ask of the disk (#834): /repo is a primary checkout of o/r unless a
     // test says otherwise, and every other folder is in no repository.
     if (cmd === 'git' && a.includes('remote')) {
@@ -660,6 +664,9 @@ const world = (on: On, o: Opts = {}) => {
     }
     const command = (e as { command?: string }).command
     w.reached.push(String(command ?? (e as { file_path?: string }).file_path ?? e.tool))
+    // A branch started by switch or checkout moves the checkout onto it, unless the test says it fails (#1051).
+    const started = /\bgit (?:switch -c|checkout -b) (\S+)/.exec(command ?? '')
+    if (started && !o.switchFails) o.branch = started[1]
     if (/\bpr create\b/.test(command ?? '') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
     return { result: 'ran', text: 'ran' } as never
   })
@@ -803,6 +810,7 @@ const sayMidTurn = async ($: $T, text: string) =>
 test('"stop winding down mode" sent mid turn turns winding down off, and the turn end is no longer refused (#805)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/Winding down is not finished/)
   const r = await sayMidTurn($ as never, 'stop winding down mode. run load 1')
@@ -942,6 +950,7 @@ const merged = (state = 'MERGED') => ({ pr: { number: 12, state, url: 'https://g
 test('winding down refuses the turn end until merged, live and cleaned, then ends itself with a safe to close toast (injected clock)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   const first = await stop($ as never)
   expect(first.block).toMatch(/^Winding down is not finished: PR #12 is not merged yet\./)
@@ -972,6 +981,7 @@ const cleaned = { gh: merged(), branchHere: false, branchOnGitHub: false }
 test("deploying, or could not confirm live, keeps the turn end refused with that reason; no deploy step recorded finishes it", withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...cleaned, verdict: { state: 'deploying', at: T0 } })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the deploy is still running \(is it live says Merged, deploying\)\./)
   w.o.verdict = { state: 'unconfirmed', at: T0 }
@@ -986,6 +996,7 @@ test("deploying, or could not confirm live, keeps the turn end refused with that
 test('without the is it live mod the deploy is unmeasured, never live: the turn end stays refused', withoutIsItLive, async ($, on) => {
   const { w, clock } = world(on, cleaned)
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the deploy is unmeasured: the is it live mod is not loaded\./)
   await clock.advance(5 * MIN)
@@ -996,6 +1007,7 @@ test('without the is it live mod the deploy is unmeasured, never live: the turn 
 test('a verdict that cannot be read, or a PR GitHub gave no link for, is said and never counts as live', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...cleaned, verdict: { throws: 'the session state could not be read' } })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/the deploy verdict could not be read \(the session state could not be read\)/)
   w.o.verdict = { state: 'live', at: T0 }
@@ -1007,6 +1019,7 @@ test('a verdict that cannot be read, or a PR GitHub gave no link for, is said an
 test("Claude's own report is retired: no winddown_live tool, and calling it records nothing", withDeps, async ($, on) => {
   const { w, clock } = world(on, cleaned)
   await start($ as never, clock)
+  await madeOwn($ as never)
   expect(w.tools).toContain('switch_to_build')
   expect(w.tools).not.toContain('winddown_live')
   await command($ as never, 'winddown')
@@ -1018,6 +1031,7 @@ test("Claude's own report is retired: no winddown_live tool, and calling it reco
 test('a finish check that cannot read GitHub never counts as finished', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: { pr: null, issues: {}, fails: 'HTTP 502' } })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/the PR could not be read \(HTTP 502\)/)
   await clock.advance(5 * MIN)
@@ -1028,6 +1042,7 @@ test('a finish check that cannot read GitHub never counts as finished', withDeps
 test('a branch that cannot be read when winding down turns on is said, never read as nothing to finish (L11)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { branch: '__fails' })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   // In mod-kit's words since #980, which say which read failed.
   expect((await stop($ as never)).block).toMatch(/what this session is working on could not be read \(git could not read the branch: fatal: not a git repository\)/)
@@ -1059,6 +1074,7 @@ test('winding down on the branch origin/HEAD names has nothing to finish (#980)'
 test('winding down on main where origin/HEAD names develop finishes main as a branch of its own (#980)', withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', defaultBranch: 'develop' })
   await start($ as never, clock)
+  await madeOwn($ as never, 'main')
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for main yet\./)
 })
@@ -1120,6 +1136,7 @@ const WT = '/repo/.claude/worktrees/wt'
 test("a merged, live PR whose worktree wind down removed lets the turn end, read by the repository's name (#1059)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   w.o.gh = merged()
   w.o.verdict = { state: 'live', at: T0 }
@@ -1139,6 +1156,7 @@ test("a merged, live PR whose worktree wind down removed lets the turn end, read
 test('a removed worktree whose branch is still in the main checkout is read there and said, never as an unreadable PR (#1059)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   w.o.gh = merged()
   w.o.verdict = { state: 'live', at: T0 }
@@ -1156,6 +1174,7 @@ test('a removed worktree whose branch is still in the main checkout is read ther
 test("a removed worktree whose repository nothing names is said as the missing folder, never as gh failing to start (#1059)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN'), remote: null })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   w.o.gh = merged()
   w.o.gone = [WT]
@@ -1167,6 +1186,7 @@ test("a removed worktree whose repository nothing names is said as the missing f
 test("a worktree removed between looking for it and starting gh in it is said as the missing folder, and the next check reads past it (#1059)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { cwd: WT, gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   w.o.gh = merged()
   w.o.verdict = { state: 'live', at: T0 }
@@ -1189,6 +1209,7 @@ test('winding down in no repository has nothing to finish (#980)', withDeps, asy
 test('an answer from GitHub that is not what was asked for refuses the turn end rather than letting it through', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: { ...merged(), issues: {}, garbled: true } as never })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the finish check failed/)
   expect(w.toasts).toEqual([])
@@ -1211,6 +1232,7 @@ test("winding down allows the fix that blocks this issue's merge, and denies new
 test('turning winding down on again keeps the PR it already found, rather than reading the target afresh', withDeps, async ($, on) => {
   const { w, clock } = world(on, { gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
   // The session is back on main now; saying the phrase again must not drop PR #12.
@@ -1270,6 +1292,7 @@ test('a session whose own PR is finished is not finished while a PR it opened is
   const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/12\n' })
   w.o.gh = { ...merged(), others: [pr31('OPEN'), pr40] }
   await start($ as never, clock)
+  await madeOwn($ as never)
   // The session opens its own branch's PR, then a second one it means to leave for Dan.
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
   w.o.created = 'https://github.com/o/r/pull/31\n'
@@ -1297,6 +1320,7 @@ test("the branch's own PR GitHub gave no link for is still read once, not again 
   const { w, clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, created: 'https://github.com/o/r/pull/12\n' })
   w.o.gh = { ...merged(), pr: { number: 12, state: 'MERGED', closingIssuesReferences: [{ number: 616 }] } }
   await start($ as never, clock)
+  await madeOwn($ as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/GitHub gave no link for PR #12/)
@@ -1316,6 +1340,7 @@ test('winding down never refuses AskUserQuestion: Claude asks Dan rather than pa
 test('the winding down note, its command context and the Stop reason all say to finalize everything, asking Dan with a picker and merging (#856)', withDeps, async ($, on) => {
   const { clock } = world(on, { gh: merged('OPEN') })
   await start($ as never, clock)
+  await madeOwn($ as never)
   const ran = (await command($ as never, 'winddown')).context?.join('\n') ?? ''
   const note = (await say($ as never, 'carry on')).context?.join('\n') ?? ''
   const block = (await stop($ as never)).block ?? ''
@@ -1364,6 +1389,7 @@ test("a PR left open by Dan's choice is listed apart from what is outstanding, a
   const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
   w.o.gh = { ...own, others: [openPr(31, 'aaa1111')] }
   await start($ as never, clock)
+  await madeOwn($ as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
   await command($ as never, 'winddown')
   await call($ as never, leave(31, { repo: 'o/r' }))
@@ -1383,6 +1409,7 @@ test('only his answer to leave_pr_open leaves a PR open: a picker of Claude\'s o
   const { w, clock } = world(on, { created: 'https://github.com/o/r/pull/31\n', ask: 'Leave it open' })
   w.o.gh = { ...merged('OPEN'), others: [openPr(31, 'aaa1111')] }
   await start($ as never, clock)
+  await madeOwn($ as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --title wording', tool_use_id: 'g1' } as never)
   await command($ as never, 'winddown')
   // The same words through Claude's own picker are never read as his choice: that would be inferred.
@@ -1414,6 +1441,7 @@ test("the branch's own PR is matched to Dan's choice to leave it open by the rep
   const own = (url: string) => ({ ...merged('OPEN'), pr: { ...merged('OPEN').pr, url, headRefOid: 'ccc3333' }, others: [] })
   w.o.gh = own('https://github.com/o/r/pull/12')
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   await call($ as never, leave(12, { repo: 'o/r' }))
   w.o.remote = 'git@github.com:x/y.git'
@@ -1429,6 +1457,7 @@ test("the branch's own PR is matched to Dan's choice to leave it open by the rep
 test("a PR link mod-kit cannot read refuses the turn end rather than finish winding down (#961)", withDeps, async ($, on) => {
   const { clock } = world(on, { ...cleaned, verdict: { state: 'live', at: T0 }, linkReaderFails: true })
   await start($ as never, clock)
+  await madeOwn($ as never)
   await command($ as never, 'winddown')
   expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the finish check failed \(.*mod-kit is not loaded/)
 })
@@ -1448,16 +1477,23 @@ test('asleep, GH_REPO is read as gh reads it, and one that cannot be read refuse
 
 // #961: the deploy verdict is asked for under the repository the PR's link names, read by mod-kit's
 // link reader, as is it live keys its cards; a link it cannot read is said, never taken as live.
-test("a merged PR's deploy is read under the repository its link names, in any case, and a link that cannot be read is said (#961)", withDeps, async ($, on) => {
-  const pr31 = (url: string) => ({ number: 31, state: 'MERGED', url, headRefName: 'fix-31', closingIssuesReferences: [] })
-  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31('HTTPS://GITHUB.COM/o/r/pull/31'), issues: {} }, verdict: { state: 'live', at: T0 }, branchHere: false, branchOnGitHub: false, linkReaderFailsOn: '#unreadable' })
+// A merged PR is read from GitHub once (#1037), so each link is its own session here.
+const pr31At = (url: string) => ({ number: 31, state: 'MERGED', url, headRefName: 'fix-31', closingIssuesReferences: [] })
+const linkWorld = (url: string): Opts => ({ branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31At(url), issues: {} }, verdict: { state: 'live', at: T0 }, branchHere: false, branchOnGitHub: false, linkReaderFailsOn: '#unreadable' })
+test("a merged PR's deploy is read under the repository its link names, in any case (#961)", withDeps, async ($, on) => {
+  const { clock } = world(on, linkWorld('HTTPS://GITHUB.COM/o/r/pull/31'))
   await start($ as never, clock)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
   await command($ as never, 'winddown')
-  w.o.gh = { pr: pr31('https://github.com/o/r/pull/31#unreadable'), issues: {} }
-  expect((await stop($ as never)).block).toMatch(/could not be read \(GitHub's link for PR #31 could not be read \(mod-kit is not loaded\)\)/)
-  w.o.gh = { pr: pr31('HTTPS://GITHUB.COM/o/r/pull/31'), issues: {} }
   expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test("a merged PR's link that cannot be read is said, never taken as live (#961)", withDeps, async ($, on) => {
+  const { clock } = world(on, linkWorld('https://github.com/o/r/pull/31#unreadable'))
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/could not be read \(GitHub's link for PR #31 could not be read \(mod-kit is not loaded\)\)/)
 })
 
 // #961: the PR a gh pr create opened is the last link in its output that mod-kit's link reader
@@ -1549,6 +1585,7 @@ test('only his "Leave it closed" settles a closed PR: Reopen it or anything type
   const withOwn = (pr711: ReturnType<typeof openPr>) => ({ ...merged('OPEN'), others: [pr711] })
   w.o.gh = withOwn(closedPr(711, 'aaa1111'))
   await start($ as never, clock)
+  await madeOwn($ as never)
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --title stacked', tool_use_id: 'g1' } as never)
   await command($ as never, 'winddown')
   const held = async () => {
@@ -1615,6 +1652,7 @@ test("a session on a branch with no PR of its own still finishes the PRs it open
   const pr31 = { number: 31, state: 'MERGED', url: 'https://github.com/o/r/pull/31', headRefName: 'fix-31', closingIssuesReferences: [] }
   const { clock } = world(on, { branch: 'feature-x', created: 'https://github.com/o/r/pull/31\n', gh: { pr: pr31, issues: {} }, verdict: { state: 'live', at: T0 } })
   await start($ as never, clock)
+  await madeOwn($ as never, 'feature-x')
   await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1', agentId: 'a1' } as never)
   await command($ as never, 'winddown')
   const block = (await stop($ as never)).block ?? ''
@@ -1649,6 +1687,8 @@ test('on the default branch, winding down follows the session onto the branch it
   await command($ as never, 'winddown')
   w.o.branch = 'scope-modes-616'
   w.o.gh = merged('OPEN')
+  // The branch it moved onto is its own once it has created, committed to or pushed it (#1074).
+  await madeOwn($ as never)
   expect((await stop($ as never)).block).toMatch(/PR #12 is not merged yet/)
 })
 
@@ -1656,6 +1696,7 @@ test("an agent sent to fix this PR's merge is allowed though its prompt names th
   const pr = { number: 665, state: 'OPEN', url: 'https://github.com/o/r/pull/665', headRefName: 'fix-ci', closingIssuesReferences: [{ number: 700 }] }
   const { w, clock } = world(on, { branch: 'fix-ci', gh: { pr, issues: {} } })
   await start($ as never, clock)
+  await madeOwn($ as never, 'fix-ci')
   await command($ as never, 'winddown')
   const agent = (prompt: string, id: string) => call($ as never, { tool: 'Agent', prompt, description: 'x', tool_use_id: id } as never)
   expect(await agent('Watch CI on PR #665 and report why it failed', 'a1')).toBe('ran')
@@ -2220,14 +2261,15 @@ test('a message from Dan in the evening while asleep does not ask whether he is 
 })
 
 // Lessons review of #1055: waking has its own line to open the reply with, so a switch the same
-// message makes is acknowledged right after it, never as a second opening.
+// message makes is acknowledged right after it, never as a second opening. Since #1086 waking is a
+// switch acknowledged too, so the one acknowledgement says both, waking first.
 test('a message that wakes sleep mode and switches a mode opens with the waking line, the switch acknowledged right after it (#1055)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
   await start($ as never, clock)
   const ctx = (await say($ as never, "I'm up. no coding yet")).context?.join('\n') ?? ''
   expect(ctx).toMatch(/Dan's message woke sleep mode\. Say so in one line first/)
   expect(ctx).not.toContain('Open your reply')
-  expect(ctx).toContain(acknowledge([ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' }))
+  expect(ctx).toContain(acknowledge([ackOnSaid('wake'), ackOnSaid('NO BUILD')], { after: 'the line saying what waking did' }))
 })
 
 test("Dan's own \"I'm up\" wakes it; the same words from another session do not", withDeps, async ($, on) => {
@@ -3551,4 +3593,275 @@ test('a /sleep that throws after the questions leaves no unanswered list behind,
   expect(UNANSWERED in w.files).toBe(false)
   expect(CURRENT in w.files).toBe(false)
   expect(`${SLEEP}/preparing` in w.files).toBe(false)
+})
+
+// ---- A cleanup branch Dan agrees to while winding down (#1051) ----
+// On 2026-10-09 the claude-config checkout held one line a monthly job had appended to a committed
+// record. Winding down counted it as unfinished and refused the branch to commit it on, so it could
+// finish only with Dan turning it off. His answer to open_cleanup_branch, naming the files, lets that
+// one branch start while nothing else is uncommitted.
+const CLEANUP = 'mcp__scope-modes__open_cleanup_branch'
+const READINGS = 'tests/section-time-readings.tsv'
+const cleanupAsk = (branch: string, id = 'k1') => ({ tool: CLEANUP, branch, why: 'commit the monthly section time reading', tool_use_id: id }) as never
+const onMainDirty = (extra: Opts = {}): Opts => ({ branch: 'main', dirty: ['/repo'], dirtyFiles: [READINGS], ...extra })
+
+test('winding down with uncommitted work refuses a new branch until Dan agrees to a cleanup branch for those files, then lets that branch alone start, once (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
+  await start($ as never, clock)
+  expect(w.tools).toContain('open_cleanup_branch')
+  await command($ as never, 'winddown')
+  const block = (await stop($ as never)).block ?? ''
+  expect(block).toContain(`there are uncommitted changes (${READINGS}): commit them on a branch Dan agrees to (mcp__scope-modes__open_cleanup_branch), or ask him whether to leave them (mcp__scope-modes__leave_branch)`)
+  // Refused before he answers, and the refusal names the way through.
+  expect(await call($ as never, bash('git switch -c chore/readings'))).toMatch(/^Blocked: winding down, so this did not start a new branch\..*mcp__scope-modes__open_cleanup_branch/)
+  const r = await call($ as never, cleanupAsk('chore/readings'))
+  expect(w.asked).toEqual([`Open the branch chore/readings to commit ${READINGS} (commit the monthly section time reading)? Winding down lets it start for these files only, and finishes it like any other PR.`])
+  expect(w.askedOptions).toEqual([['Open it', 'Do not']])
+  expect(r).toMatch(/^Dan agreed: make the branch chore\/readings now/)
+  // A feature branch is still refused.
+  expect(await call($ as never, bash('git checkout -b feature-x', 'c2'))).toMatch(/did not start a new branch/)
+  // The cleanup branch starts, and that is said.
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c3'))).toBe('ran')
+  expect(w.toasts).toEqual([`Winding down let the branch chore/readings start, for the cleanup Dan agreed to (${READINGS}).`])
+  // His answer was for one start.
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c4'))).toMatch(/did not start a new branch/)
+})
+
+test('the cleanup branch Dan agreed to is refused once anything beyond his files is uncommitted, naming it (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/readings'))
+  w.o.dirtyFiles = [READINGS, 'app.ts']
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(
+    /^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings for tests\/section-time-readings\.tsv only, and app\.ts is uncommitted too\./,
+  )
+})
+
+test("Dan's cleanup answer is used up only once the checkout is on that branch: a start that did not move it keeps his answer (#1051)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it', switchFails: true }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/readings'))
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toBe('ran')
+  expect(w.toasts).toEqual([])
+  w.o.switchFails = false
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c3'))).toBe('ran')
+  expect(w.toasts).toEqual([`Winding down let the branch chore/readings start, for the cleanup Dan agreed to (${READINGS}).`])
+})
+
+test('a cleanup branch Dan agreed to is refused once nothing is uncommitted, since there is no cleanup left for it to carry (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  await call($ as never, cleanupAsk('chore/readings'))
+  w.o.dirty = []
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(
+    /^Blocked: winding down, so this did not start a new branch\. Dan agreed to chore\/readings to commit tests\/section-time-readings\.tsv, and nothing is uncommitted now\./,
+  )
+})
+
+test('any answer but Open it records nothing, and the branch stays refused (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Do not' }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect(await call($ as never, cleanupAsk('chore/readings'))).toBe('Dan did not agree to the branch chore/readings, so winding down still refuses it.')
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(/did not start a new branch/)
+  expect(w.toasts).toEqual([])
+})
+
+test('a cleanup branch is asked about only while winding down, and only for work that is uncommitted (#1051)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty())
+  await start($ as never, clock)
+  expect(await call($ as never, cleanupAsk('chore/readings'))).toBe("Winding down is not on, so no branch needs Dan's answer: make it as usual. He was not asked.")
+  await command($ as never, 'winddown')
+  w.o.dirty = []
+  expect(await call($ as never, cleanupAsk('chore/readings', 'k2'))).toBe('Nothing is uncommitted in /repo, so there is no cleanup for a branch to commit. Dan was not asked.')
+  expect(await call($ as never, cleanupAsk('-bad', 'k3'))).toBe('"-bad" is not a branch name git takes, so Dan was not asked.')
+  expect(w.asked).toEqual([])
+})
+
+test('while Dan is asleep neither branch question is asked: each is noted for his morning report and nothing is recorded (#1051, #1074)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onMainDirty({ ask: 'Open it' }))
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  w.files[CURRENT] = asleepRecord()
+  expect(await call($ as never, cleanupAsk('chore/readings'))).toBe(
+    'Dan is asleep (sleep mode), so he was not asked and nothing was recorded: winding down still refuses the branch chore/readings. The question is noted for his morning report.',
+  )
+  expect(await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'main', why: 'the reading is a job of its own', tool_use_id: 'b1' } as never)).toBe(
+    'Dan is asleep (sleep mode), so he was not asked and nothing was recorded: winding down still waits on the branch main. The question is noted for his morning report.',
+  )
+  expect(w.asked).toEqual([])
+  expect(w.appended.map(a => (JSON.parse(a.line) as { kind: string }).kind)).toEqual(['question', 'question'])
+  delete w.files[CURRENT]
+  expect(await call($ as never, bash('git switch -c chore/readings', 'c2'))).toMatch(/did not start a new branch/)
+})
+
+// ---- Whose branch it is, and leaving one as it is (#1074) ----
+// On 2026-10-11 winding down blocked every stop of a Slate session on fix/2210-corrected-number-wins,
+// whose PR had merged a month before: the shared primary checkout simply sat on it. Dan answered
+// "leave it as is" twice and nothing could record it. A branch is the session's own only once it
+// created, committed to or pushed it; Dan's answer to leave_branch settles one left as it is.
+const SLATE = 'fix/2210-corrected-number-wins'
+const slatePr = { number: 2212, state: 'MERGED', url: 'https://github.com/o/r/pull/2212', headRefName: SLATE, closingIssuesReferences: [{ number: 2210 }] }
+const onSlate = (extra: Opts = {}): Opts => ({ branch: SLATE, gh: { pr: slatePr, issues: { 2210: 'CLOSED' } }, verdict: { state: 'live', at: T0 }, worktrees: `worktree /repo\nbranch refs/heads/${SLATE}\n`, ...extra })
+const madeOwn = async ($: $T, branch = 'scope-modes-616') => {
+  expect(await call($, bash(`git push -u origin ${branch}`, 'own'))).toBe('ran')
+}
+
+test('a branch the checkout already sat on, which this session never created, committed to or pushed, is not its to finish (#1074)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, onSlate())
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual(['Wind down finished: safe to close this session.'])
+  // Its PR is another session's, so GitHub was never asked about it.
+  expect(w.runs.some(r => r[0] === 'gh')).toBe(false)
+})
+
+for (const [how, line] of [
+  ['created', 'git checkout -b fix-700'],
+  ['committed to', 'git commit -m wip'],
+  ['pushed', 'git push -u origin fix-700'],
+] as const)
+  test(`a branch this session ${how} is its own to finish (#1074)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'fix-700' })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line))).toBe('ran')
+    await command($ as never, 'winddown')
+    expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there is no PR for fix-700 yet\./)
+  })
+
+test("an agent's commit, or one after a cd, names no branch of this session's checkout (#1074)", withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'fix-700' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m wip', tool_use_id: 'a1', agentId: 'ag1' } as never)
+  await call($ as never, bash('cd ../other && git commit -m wip', 'c2'))
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test("uncommitted work in the checkout of a branch that is not the session's still counts, and Dan's answer to leave it settles it until another file changes (#1074)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, onSlate({ dirty: ['/repo'], dirtyFiles: ['notes.md'], ask: 'Leave it as it is' }))
+  await start($ as never, clock)
+  expect(w.tools).toContain('leave_branch')
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(notes\.md\)/)
+  const r = await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: SLATE, why: "another session's work", tool_use_id: 'b1' } as never)
+  expect(w.asked).toEqual([`Leave the branch ${SLATE} in o/r as it is (another session's work)? Winding down stops waiting for it to be deleted here or for a worktree on it to go, and for notes.md to be committed. A change to any other file asks again.`])
+  expect(w.askedOptions).toEqual([['Leave it as it is', 'Clean it up']])
+  expect(r).toBe(`Dan chose to leave the branch ${SLATE} in o/r as it is: winding down counts it settled, with notes.md uncommitted.`)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.toasts).toEqual([`Wind down finished: safe to close this session. Left as it is by your choice: the branch ${SLATE} in o/r (another session's work).`])
+})
+
+test("Dan's answer to leave the session's own merged branch as it is settles the branch here and its worktree, never a new uncommitted file (#1074)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...cleaned, branchHere: true, verdict: { state: 'live', at: T0 }, worktrees: 'worktree /repo\nbranch refs/heads/scope-modes-616\n', ask: 'Leave it as it is' })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: the branch scope-modes-616 still exists here; a worktree is still on scope-modes-616\./)
+  await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'scope-modes-616', why: 'another session stands on it', tool_use_id: 'b1' } as never)
+  expect(w.asked).toEqual(['Leave the branch scope-modes-616 in o/r as it is (another session stands on it)? Winding down stops waiting for it to be deleted here or for a worktree on it to go.'])
+  expect((await stop($ as never)).block).toBeUndefined()
+  // Clean it up withdraws it.
+  w.o.ask = 'Clean it up'
+  await command($ as never, 'winddown')
+  await call($ as never, { tool: 'mcp__scope-modes__leave_branch', branch: 'scope-modes-616', why: 'another session stands on it', tool_use_id: 'b2' } as never)
+  expect((await stop($ as never)).block).toMatch(/the branch scope-modes-616 still exists here/)
+})
+
+// ---- How often winding down asks GitHub (#1037) ----
+// Every minute it read every PR the session opened, and one gh issue view per closing issue of each:
+// for an orchestrating session, about 2N GraphQL points a minute from the allowance every gh command
+// on the Mac shares (#1014). It now asks only for what can still change, backs off for a PR that has
+// not moved, and reads closing issues only once a PR has merged.
+const ghOf = (w: { runs: string[][] }) => w.runs.filter(r => r[0] === 'gh')
+const fanned = (state: string, issues: string) => ({
+  pr: null,
+  others: [31, 32, 33].map(n => ({ number: n, state, url: `https://github.com/o/r/pull/${n}`, headRefName: `fix-${n}`, headRefOid: `h${n}`, closingIssuesReferences: [{ number: n * 10 }, { number: n * 10 + 1 }] })),
+  issues: Object.fromEntries([31, 32, 33].flatMap(n => [[n * 10, issues], [n * 10 + 1, issues]])),
+})
+
+test('winding down backs off reading open PRs that have not moved, never reads their issues, and reads a merged one no more once its issues closed (#1037)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', gh: fanned('OPEN', 'OPEN') })
+  await start($ as never, clock)
+  for (const n of [31, 32, 33]) {
+    w.o.created = `https://github.com/o/r/pull/${n}\n`
+    await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: `g${n}`, agentId: `a${n}` } as never)
+  }
+  await command($ as never, 'winddown')
+  const before = ghOf(w).length
+  await clock.advance(10 * MIN)
+  const ticked = ghOf(w).slice(before)
+  // An open PR's issues decide nothing, so none is read.
+  expect(ticked.filter(r => r[1] === 'issue')).toEqual([])
+  // Each PR asked at the first minute, then after 1, 2 and 4 minutes unchanged: 4 asks in 10 minutes, not 10.
+  for (const n of [31, 32, 33]) expect(ticked.filter(r => r.join(' ').startsWith(`gh pr view ${n} `)).length).toBe(4)
+  // A turn end always asks afresh.
+  const atStop = ghOf(w).length
+  expect((await stop($ as never)).block).toMatch(/PR #31 is not merged yet/)
+  expect(ghOf(w).slice(atStop).length).toBe(3)
+  // Merged with its issues closed, a PR is read once more, then never again.
+  w.o.gh = fanned('MERGED', 'CLOSED')
+  const merging = ghOf(w).length
+  await stop($ as never)
+  expect(ghOf(w).slice(merging).length).toBe(3 + 6)
+  const done = ghOf(w).length
+  await clock.advance(10 * MIN)
+  await stop($ as never)
+  expect(ghOf(w).slice(done)).toEqual([])
+})
+
+test("the minute's check never ends winding down on a kept reading: a push since Dan chose to leave a PR open is read before it finishes (#1037)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', created: 'https://github.com/o/r/pull/31\n', gh: { pr: null, others: [openPr(31, 'aaa1111')], issues: {} }, ask: 'Leave it open' })
+  await start($ as never, clock)
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill', tool_use_id: 'g1' } as never)
+  await command($ as never, 'winddown')
+  // Read at the first minute and again at the second, unchanged, so it is kept for two minutes.
+  await clock.advance(2 * MIN)
+  await call($ as never, leave(31, { repo: 'o/r' }))
+  // Pushed to since he answered, while the minute's check holds the reading from before.
+  w.o.gh = { pr: null, others: [openPr(31, 'bbb2222')], issues: {} }
+  await clock.advance(MIN)
+  expect(w.toasts).toEqual([])
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+})
+
+test('a PR read GitHub did not answer is asked again the next minute, never backed off (#1037)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: { ...merged('OPEN'), fails: 'HTTP 502' } })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  const before = ghOf(w).length
+  await clock.advance(3 * MIN)
+  expect(ghOf(w).length - before).toBe(3)
+})
+
+// ---- Sleep and wake say what they do, as every other switch does (#1086) ----
+// Dan, 2026-10-12: sleep and wake get the same acknowledgement as the other modes.
+test('/sleep that starts tells Claude to open its reply with what sleep mode does; one that changes nothing does not (#1086)', withDeps, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(r.context).toEqual([ackOn('sleep')])
+  expect((await command($ as never, 'sleep')).context).toBeUndefined()
+})
+
+test('/wake that wakes tells Claude to open its reply with what waking does; one with nothing to wake does not (#1086)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toMatch(/^Sleep mode is off\./)
+  expect(r.context).toEqual([ackOn('wake')])
+  expect((await command($ as never, 'wake')).context).toBeUndefined()
+})
+
+test('"I\'m up" acknowledges waking right after the line saying what waking did (#1086)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, "I'm up")).context ?? []
+  expect(ctx).toContain(acknowledge([ackOnSaid('wake')], { after: 'the line saying what waking did' }))
 })
