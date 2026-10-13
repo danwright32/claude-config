@@ -275,7 +275,9 @@ if [ -n "$findings_file" ]; then reason_args+=(--findings "$findings_file"); fi
 if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # A seen ledger that could not be kept beside the spool rides in the REASON, not the findings file:
 # a review without findings writes no findings file, and this fault is the same whether or not there
-# are findings, so it goes out with whichever review speaks next (L98).
+# are findings, so it goes out with whichever review speaks next (L98). It is a SECOND --extra beside
+# the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
+# which test-review-reason.sh asserts with two of them.
 if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
 
 payload="$(python3 "$SELF_DIR/lib/review-reason.py" "${reason_args[@]}" 2>/dev/null)" || payload=""
