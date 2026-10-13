@@ -42,6 +42,11 @@ trap 'rm -rf "$WORK"' EXIT
 # did exactly that 120 times before anyone noticed (L2).
 export CLAUDE_ISSUE_SPOOL_DIR="$WORK/spool"
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+# And to a throwaway temp directory. The review hook writes its cooldown stamp, findings file and
+# per session stamp under $TMPDIR, so every run used to leave them in the real one, a set per
+# throwaway project (claude-config#1019).
+export TMPDIR="$WORK/tmp"
+mkdir -p "$TMPDIR"
 
 pass=0
 fail=0

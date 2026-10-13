@@ -30,6 +30,13 @@ case "${WORK%/}" in
     exit 1 ;;
 esac
 trap 'rm -rf "$WORK"' EXIT
+# Both hooks run here against a throwaway spool and a throwaway temp directory. The review reads the
+# spool and writes its cooldown stamp (and, with findings, a findings file and a stamp per session)
+# under $TMPDIR, so this suite used to read Dan's live spool and leave a stamp per throwaway project
+# in the real temp directory at every run (claude-config#1019, L2).
+export CLAUDE_ISSUE_SPOOL_DIR="$WORK/spool"
+export TMPDIR="$WORK/tmp"
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR" "$TMPDIR"
 
 make_transcript() {
   # $1 = path, $2 = tool name to use in the assistant turn ("" = chat only)

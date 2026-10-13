@@ -86,8 +86,12 @@ trap 'rm -f ${render_stamp:+"$render_stamp"}' EXIT
 # ${TMPDIR%/} rather than $TMPDIR, because macOS sets it with a trailing slash and this path is SHOWN
 # to Dan in the reason rather than only used.
 hash=$(printf '%s' "$proj" | shasum | cut -c1-12)
-findings_path="${TMPDIR:-/tmp}"
-findings_path="${findings_path%/}/claude-issue-findings-${hash}.txt"
+# Every file the review leaves behind for a later step (the findings, each session's stamp, the seen
+# ledger beside it) starts with this, and the sweep below removes only files that do (#1019).
+findings_prefix="claude-issue-findings-"
+findings_dir="${TMPDIR:-/tmp}"
+findings_dir="${findings_dir%/}"
+findings_path="${findings_dir}/${findings_prefix}${hash}.txt"
 stamp_file="${findings_path%.txt}.$(basename "$transcript" .jsonl).manifest"
 seen_ledger=""
 if [ -f "$SPOOL_LIB" ]; then
@@ -165,6 +169,29 @@ INSTRUCTION="$SELF_DIR/review/issue-review.md"
 #
 # It also replaces the old ARG_MAX dance. The spool has no natural size limit, and
 # nothing here passes it as an argument any more.
+#
+# ONE SHELL WORD, written for a person to read as well as for bash to run (#1020). The clear line was
+# quoted with printf %q, which under the bash macOS ships (3.2) writes a character outside ASCII as one
+# raw byte plus octal escapes: the work MacBook's projects sit under `Documents - Dan<U+2019>s MacBook
+# Pro`, a reader was shown a replacement character, and a line retyped from what was shown named a
+# different directory and so read different keys. A word made only of characters no shell treats
+# specially is left bare; anything else is single quoted, which keeps every byte as it is, with each
+# single quote inside written as '\''.
+shell_word() { # shell_word <string> -> that string as one shell word
+  local s="$1" out=""
+  case "$s" in
+    "") printf "''"; return 0 ;;
+    *[!A-Za-z0-9_./:@%+=,-]*) ;;
+    *) printf '%s' "$s"; return 0 ;;
+  esac
+  while :; do
+    case "$s" in
+      *\'*) out="$out${s%%\'*}'\\''"; s="${s#*\'}" ;;
+      *) out="$out$s"; break ;;
+    esac
+  done
+  printf "'%s'" "$out"
+}
 findings_file=""
 if [ -n "$pending" ]; then
   findings_file="$findings_path"
@@ -192,7 +219,8 @@ if [ -n "$pending" ]; then
   # a rule for reconstructing it. Two independent derivations that must stay in step is what failed
   # (L70, L285), and it is the same drift this design already recorded once, on the writing side.
   #
-  # Quoted with %q, so a path holding a space is still one argument when the line is run verbatim.
+  # Quoted with shell_word (below), so a path holding a space is still one argument when the line is
+  # run verbatim, and a path holding a character outside ASCII is still READABLE (#1020).
   #
   # AND THE STAMP, as its third argument (claude-config#381). Named per SESSION, not per project like
   # the findings file: two sessions in one project each have a picker open at times, and one render
@@ -202,12 +230,27 @@ if [ -n "$pending" ]; then
   # the old command, which files every record under the key including any harvested while the picker
   # is open, so the honest answer is that these cannot be filed from this review and will come back
   # at the next one (L173, L11).
+  #
+  # SPENT BOOKKEEPING IS REMOVED FIRST (#1019). Each session that is shown findings leaves a stamp,
+  # and a clear that could not rewrite the spool leaves a seen ledger beside it; nothing removed
+  # either, so one Slate project held 26 stamps on 2026-10-09. Both are spent once the ownership
+  # window has passed: a seen mark stops counting the moment its record is old enough for anybody to
+  # claim (`unclaimed`), and a stamp that old names a render long superseded, whose clear line would
+  # only be refused. Every project's are swept, not only this one's, because a project that is never
+  # reviewed again never sweeps its own. Only at a render that shows findings, because that is the only
+  # render that creates any of these files. The count goes into the file the reader opens (L98), ABOVE
+  # the clear line, because review/issue-review.md tells the reader the file ends with that line.
+  if [ -n "$findings_file" ] && [ -f "$SPOOL_LIB" ]; then
+    swept="$(bash "$SPOOL_LIB" sweep-stamps "$findings_dir" "$findings_prefix" 2>&1)" || true
+    if [ -n "$swept" ]; then printf '\n%s\n' "$swept" >> "$findings_file" 2>/dev/null || true; fi
+  fi
   if [ -n "$findings_file" ]; then
     if [ -n "$render_stamp" ] && [ -s "$render_stamp" ] \
         && mv -f "$render_stamp" "$stamp_file" 2>/dev/null && [ -f "$stamp_file" ]; then
       render_stamp=""
-      printf '\nTO FILE THESE, run this line exactly as it stands:\n  bash %q clear %q %q %q\n' \
-        "$SELF_DIR/lib/issue-spool.sh" "$proj" "$transcript" "$stamp_file" >> "$findings_file" 2>/dev/null || true
+      printf '\nTO FILE THESE, run this line exactly as it stands:\n  bash %s clear %s %s %s\n' \
+        "$(shell_word "$SELF_DIR/lib/issue-spool.sh")" "$(shell_word "$proj")" \
+        "$(shell_word "$transcript")" "$(shell_word "$stamp_file")" >> "$findings_file" 2>/dev/null || true
     else
       printf '\nTHESE cannot be filed from this review: the record of which spool records it read could not be written, and filing without it would also file anything harvested while the picker is open. There is nothing to run; they stay pending and come back at the next review.\n' \
         >> "$findings_file" 2>/dev/null || true
