@@ -19,6 +19,31 @@ export const SETTLED_NO = 'Not yet'
 /** The skip question's third answer (#1010): this one refused edit changes nothing on screen. */
 export const NOT_LOOK = 'Not a look change'
 
+/**
+ * The version of what this guard and the design rounds skill agree a question carries (#1057): its
+ * metadata and what each key means. The skill is read fresh at every use and the guard only when a
+ * session starts or the mod reloads, so the two can differ in a running session. The skill states
+ * its version in `<!-- design-round-guard contract: N -->` and asks every question to carry it as
+ * metadata `contract`; a guard meeting a newer one says it is older than the steps Claude read. Raise
+ * both together whenever a question's metadata changes meaning (tests/test-mod-skill-contracts.sh
+ * fails while they differ).
+ * 1: #1046, Settled answering for what the refused call it names (`call`) waits on.
+ */
+export const CONTRACT = 1
+/** The skill this guard enforces, as installed under ~/.claude/skills. */
+export const SKILL = 'design-rounds'
+
+/** The contract a skill's text states (`<!-- design-round-guard contract: N -->`), or undefined for one stating none. */
+export const contractOf = (text: string): number | undefined => {
+  const m = /<!--\s*design-round-guard contract:\s*(\d+)\s*-->/.exec(text)
+  return m ? Number(m[1]) : undefined
+}
+
+/** What Claude reads when the steps it followed are newer than the guard this session loaded (#1057). */
+export const predates = (theirs: number): string =>
+  `Blocked: this session's design round guard predates the design rounds steps you read (they follow version ${theirs} of its questions, it knows version ${CONTRACT}), so it would misread this answer and nothing was asked or recorded. ` +
+  `Tell Dan, and start a new session, which loads the current guard; asking again here gets the same answer.`
+
 // The plan's list (Dan, 2026-10-08): style files (CSS and its preprocessors, the Tailwind config,
 // design tokens), screen and component files (.tsx, .jsx, .vue, .svelte, .html), and SwiftUI views.
 // A logic only file in one of these shapes sometimes counts, which the plan accepts: Dan says skip.
@@ -137,36 +162,196 @@ export const mentionedLookFiles = (text: string): string[] => {
 }
 
 /**
- * Whether a name the write reader could not follow may still be a look changing file, its extension
- * being a pattern the shell can expand to one (`page.ts[x]`, `site.c?s`, `x.{css,md}`, `out.*`)
- * (#1010). One that cannot (`x.l[o]g`, `x.{md,txt}`) is not (lessons review of #1010), and one this
- * cannot read as a pattern is taken as one that may.
+ * Whether a word's file name (its last part) is one the shell would expand as a pattern, as against
+ * one built from a variable or a command's output: a `*`, `?`, bracket or brace, or a group, zsh's
+ * `(a|b)` or bash's extglob `@(a|b)`. A name in brackets alone (`(shop)`, `x(1)`) is a name. Its
+ * folder may be anything, a variable included (`$D/[t]okens.json`): that only leaves the folder
+ * unknown (lessons review of #1015).
  */
-export const patternExtension = (word: string): boolean => {
+export const isPattern = (word: string): boolean => {
   const base = word.split('/').pop() ?? ''
-  const dot = base.lastIndexOf('.')
-  if (dot < 0 || !/[*?[\]{}]/.test(base.slice(dot + 1))) return false
-  const ext = base.slice(dot + 1)
-  let re = ''
-  for (let i = 0; i < ext.length; i++) {
-    const c = ext[i] as string
-    if (c === '*') re += '.*'
-    else if (c === '?') re += '.'
-    else if (c === '[') {
-      const end = ext.indexOf(']', i + 2)
-      if (end < 0) return true
-      const body = ext.slice(i + 1, end).replace(/^[!^]/, '^').replace(/[\\\]]/g, '\\$&')
-      re += `[${body}]`
-      i = end
-    } else if (c === '{') {
-      const end = ext.indexOf('}', i)
-      if (end < 0) return true
-      re += `(?:${ext.slice(i + 1, end).split(',').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`
-      i = end
-    } else re += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return (/[*?[\]{}]/.test(base) || isGroupPattern(base)) && !/[$`]/.test(base)
+}
+
+/**
+ * Whether a word holds a pattern group, zsh's `(a|b)` or bash's extglob `@(a|b)`, which mod-kit's
+ * write reader takes for a name and gives a path: the shell may expand it all the same (#1015).
+ */
+export const isGroupPattern = (word: string): boolean => /\([^()]*\|[^()]*\)|[@!+*?]\(/.test(word)
+
+/**
+ * The folder a pattern's name sits in, as an absolute path, when the word spells it out from the top
+ * of the disk or from home with no pattern in it (`~/.claude/state/x/*.json`); undefined otherwise.
+ * A relative folder is never followed here: a cd earlier in the command moves it, and only mod-kit's
+ * write reader follows a cd (#1015).
+ */
+export const patternFolder = (word: string, home: string): string | undefined => {
+  const cut = word.lastIndexOf('/')
+  if (cut < 0) return undefined
+  const folder = word.slice(0, cut) || '/'
+  if (/[*?[\]{}$`]/.test(folder.replace(/^\$(HOME\b|\{HOME\})/, ''))) return undefined
+  const fromHome = folder === '~' || folder.startsWith('~/') || /^\$(HOME\b|\{HOME\})/.test(folder)
+  if (fromHome && !home) return undefined
+  if (!fromHome && !folder.startsWith('/')) return undefined
+  return resolvePath(folder.replace(/^\$(HOME\b|\{HOME\})/, '~'), '/', home)
+}
+
+// Every look changing name (shapeKind) as a pattern, in lower case, the case shapeKind reads a name
+// in: each listed extension, each Tailwind config, and the design tokens names. TOKENS' run of
+// `.part`s is written as `*`, a little wider than the rule, so a pattern is never let through that
+// the rule would hold.
+const LOOK_NAMES: readonly string[] = [
+  ...[...STYLE, ...SCREEN, 'swift'].map(x => `*.${x}`),
+  ...['js', 'cjs', 'mjs', 'ts', 'cts', 'mts'].map(x => `tailwind.config.${x}`),
+  ...['', 'design', 'design-', 'design_', 'design.'].flatMap(p =>
+    ['json', 'jsonc', 'js', 'cjs', 'mjs', 'ts', 'css', 'scss'].flatMap(x => [`${p}tokens.${x}`, `${p}tokens.*.${x}`]),
+  ),
+  '*.tokens.json',
+]
+
+// One place in a pattern: a character, `?` (any one), `*` (any run, the empty one included) or a
+// bracket expression (one of a set, or of none of it when negated).
+type Atom = { star: true } | { one: (c: string) => boolean }
+// Brace expansion multiplies a name; past this many spellings it is not worth reading, and is held.
+const MAX_SPELLINGS = 256
+
+// A name's brace expansions, as bash makes them: the first `{a,b}` holding a comma at its own depth
+// becomes each of its parts, then the rest in turn; a brace holding no comma is literal. A sequence
+// (`{a..z}`, `{1..9}`) is read as `*`, which matches everything it could spell. Null past
+// MAX_SPELLINGS.
+const spellings = (name: string): string[] | null => {
+  let depth = 0
+  let open = -1
+  const commas: number[] = []
+  for (let i = 0; i < name.length; i++) {
+    const c = name[i]
+    if (c === '\\') i++
+    else if (c === '{') {
+      if (depth++ === 0) {
+        open = i
+        commas.length = 0
+      }
+    } else if (c === '}' && depth > 0) {
+      if (--depth === 0) {
+        const body = name.slice(open + 1, i)
+        const rest = name.slice(i + 1)
+        const head = name.slice(0, open)
+        let parts: string[] | null = null
+        if (commas.length) parts = [...commas.map((at, k) => name.slice(k ? (commas[k - 1] as number) + 1 : open + 1, at)), name.slice((commas[commas.length - 1] as number) + 1, i)]
+        else if (/^(-?\d+|[A-Za-z])\.\.(-?\d+|[A-Za-z])(\.\.-?\d+)?$/.test(body)) parts = ['*']
+        if (!parts) continue
+        const out: string[] = []
+        const tails = spellings(rest)
+        if (!tails) return null
+        for (const part of parts) {
+          const heads = spellings(head + part)
+          if (!heads) return null
+          for (const h of heads) for (const t of tails) out.push(h + t)
+          if (out.length > MAX_SPELLINGS) return null
+        }
+        return out
+      }
+    } else if (c === ',' && depth === 1) commas.push(i)
   }
-  const may = new RegExp(`^${re}$`, 'i')
-  return [...STYLE, ...SCREEN, 'swift'].some(x => may.test(x))
+  return [name]
+}
+
+// One spelling as atoms; null for a pattern no rule here reads. A pattern matches a name's characters
+// as they are, case and all; a look changing name (`caseless`) matches any case, since shapeKind reads
+// a name in lower case, and the Mac's disk takes a name in capitals for the same file.
+const atomsOf = (spelling: string, caseless = false): Atom[] | null => {
+  const out: Atom[] = []
+  const fold = (c: string) => (caseless ? [c.toLowerCase()] : [c])
+  for (let i = 0; i < spelling.length; i++) {
+    const c = spelling[i] as string
+    if (c === '(' || c === ')' || c === '|') return null
+    if (c === '\\') {
+      const lit = spelling[++i] ?? '\\'
+      out.push({ one: x => fold(x).includes(lit) })
+    } else if (c === '*') {
+      if (!('star' in (out[out.length - 1] ?? {}))) out.push({ star: true })
+    } else if (c === '?') out.push({ one: () => true })
+    else if (c === '[') {
+      // `]` first in the set is one of it; a set never closed is a literal `[`, as bash reads it.
+      let j = i + 1
+      const negated = spelling[j] === '!' || spelling[j] === '^'
+      if (negated) j++
+      if (spelling[j] === ']') j++
+      const end = spelling.indexOf(']', j)
+      if (end < 0) {
+        out.push({ one: x => fold(x).includes('[') })
+        continue
+      }
+      const body = spelling.slice(negated ? i + 2 : i + 1, end)
+      // A POSIX class (`[:alpha:]`) is read as any one character: wider than the class, never narrower.
+      const any = /\[:[a-z]+:\]/.test(body)
+      const ranges: [string, string][] = []
+      for (let k = 0; k < body.length; k++) {
+        const lo = body[k] as string
+        if (body[k + 1] === '-' && k + 2 < body.length) {
+          ranges.push([lo, body[k + 2] as string])
+          k += 2
+        } else ranges.push([lo, lo])
+      }
+      const inSet = (x: string) => any || ranges.some(([lo, hi]) => x >= lo && x <= hi)
+      out.push({ one: x => fold(x).some(y => inSet(y) !== negated) })
+      i = end
+    } else out.push({ one: x => fold(x).includes(c) })
+  }
+  return out
+}
+
+// Every character a file name can hold that tells patterns apart: printable ASCII, and one beyond it.
+const ALPHABET = [...Array.from({ length: 0x7e - 0x20 + 1 }, (_, k) => String.fromCharCode(0x20 + k)).filter(c => c !== '/'), 'é']
+
+// Whether two patterns share a name: a walk over both at once, where a `*` matches nothing or takes
+// one character from the other side, and two single places agree on some character.
+const overlap = (a: readonly Atom[], b: readonly Atom[]): boolean => {
+  const seen = new Map<number, boolean>()
+  const walk = (i: number, j: number): boolean => {
+    const key = i * (b.length + 1) + j
+    const had = seen.get(key)
+    if (had !== undefined) return had
+    seen.set(key, false)
+    const x = a[i]
+    const y = b[j]
+    let r = false
+    if (!x && !y) r = true
+    else if (x && 'star' in x && walk(i + 1, j)) r = true
+    else if (y && 'star' in y && walk(i, j + 1)) r = true
+    else if (x && y) {
+      if ('star' in x) r = walk(i, j + 1)
+      else if ('star' in y) r = walk(i + 1, j)
+      else r = ALPHABET.some(c => x.one(c) && y.one(c)) && walk(i + 1, j + 1)
+    }
+    seen.set(key, r)
+    return r
+  }
+  return walk(0, 0)
+}
+
+const LOOK_ATOMS = LOOK_NAMES.map(n => atomsOf(n, true) as Atom[])
+
+/**
+ * Whether a file name the shell expands as a pattern may name a look changing file (#1015): `look`
+ * when some name it can expand to is one (`[t]ailwind.config.ts`, `app/[t]okens.json`, `page.ts[x]`,
+ * `out.*`, `build/*`), `not` when its literal parts rule every one out (`run-*.log`, `x.{md,txt}`,
+ * `x.[!c]ss`), and `unread` for one no rule here reads (a group, as bash's extglob and zsh's
+ * alternation and qualifiers write it, or a brace expansion past MAX_SPELLINGS spellings). Only the
+ * last part of a path is read: a pattern in a folder is followed by the caller, or not at all. Since
+ * #1010 only a pattern in the extension was judged, so a pattern in the rest of the name passed.
+ */
+export const patternMayBeLook = (word: string): 'look' | 'not' | 'unread' => {
+  const base = word.split('/').pop() ?? ''
+  const all = spellings(base)
+  if (!all) return 'unread'
+  let may = false
+  for (const s of all) {
+    const atoms = atomsOf(s)
+    if (!atoms) return 'unread'
+    if (!may && LOOK_ATOMS.some(l => overlap(atoms, l))) may = true
+  }
+  return may ? 'look' : 'not'
 }
 
 /**
