@@ -1256,7 +1256,7 @@ mt_remote_path() {  # $1 = owner/name, $2 = a repo relative path, $3 = account o
   # Judged on everything gh printed, reported by its first line.
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
   if [ "$rc" = 0 ]; then MT_REMOTE_STATE="present"; return 0; fi
-  MT_REMOTE_ERR=$(printf '%s\n' "$err" | awk 'NF { print; exit }')
+  MT_REMOTE_ERR=$(printf '%s\n' "$err" | awk 'NF && !got { print; got = 1 }')
   MT_REMOTE_ERR="${MT_REMOTE_ERR:-gh exited $rc}"
   case "$err" in
     *"HTTP 404"*) MT_REMOTE_STATE="absent"; return 0 ;;
