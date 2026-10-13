@@ -438,6 +438,7 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('T=$(mktemp -d -p /Users/x/repo); git -C "$T" checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d); git -C "${T:-/Users/x/repo}" checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d); git -C "$T/../.." checkout main')).toBe(unknown)
+    expect(await bash('cd "$TMPDIR/.." && git checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d); cd "$T" && git branch -D x && cd /Users/x/repo && git branch -D y')).toBe('delete a branch')
     // TMPDIR set in the line itself may be anywhere, so mktemp's folder is no longer known.
     expect(await bash('TMPDIR=/Users/x/repo; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
@@ -446,6 +447,8 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('git --git-dir=/Users/x/repo/.git -C /tmp/t1 checkout main')).toBe(unknown)
     expect(await bash('GIT_DIR=/Users/x/repo/.git git -C /tmp/t1 checkout main')).toBe(unknown)
     expect(await bash('git -C /tmp/t1 --work-tree=/Users/x/repo checkout main')).toBe(unknown)
+    expect(await bash('git -C /tmp/t1 -c core.worktree=/Users/x/repo checkout main')).toBe(unknown)
+    expect(await bash('git -C /Users/x/repo -C /tmp/t1 branch -D x')).toBe('delete a branch')
     // And the real checkout as before.
     expect(await bash('git checkout main')).toBe('run git checkout in a primary checkout')
     expect(await bash('git branch -D x')).toBe('delete a branch')

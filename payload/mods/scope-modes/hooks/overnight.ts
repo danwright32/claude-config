@@ -18,6 +18,7 @@ import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, op
 //   Supabase and psql writes;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes;
+//   none of these three in a throwaway repository under the temp folder (#1124), below;
 // - claude-sync send, sync, apply-only and install, and a pull from anywhere but the live sync clone
 //   or with its environment changed. The live clone's pull is the config repository's deploy step
 //   (#1106), judged against the night's lists by phase 7 (mergedeploy.ts), never here.
@@ -186,11 +187,16 @@ export const tempWords = (raw: string): ((word: string) => string) => {
     return w.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)(?!\w)/g, (all, a?: string, b?: string) => (vars.has((a ?? b) as string) ? `${MARK}/${a ?? b}` : all))
   }
 }
-// git told to use another repository's git folder or work tree runs there, not in the folder it
-// names with -C or a cd, so that folder being a temp one says nothing.
-const ELSEWHERE_FLAGS = ['--git-dir', '--work-tree']
-const gitElsewhere = (words: readonly string[], raw: string): boolean =>
-  words.some(w => ELSEWHERE_FLAGS.some(f => w === f || w.startsWith(`${f}=`))) || /(?:^|[^\w$])GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/.test(raw)
+// git told to use another repository's git folder or work tree (a global option such as the git
+// folder's, a config one, a second -C that git would add to the first, or GIT_DIR in the line) may
+// run somewhere other than the folder it names with -C or a cd, so that folder being a temp one
+// says nothing. Read from the words before the subcommand mod-kit's reading found, never from a
+// list of git's options here: anything there but one -C and its folder counts.
+const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, raw: string): boolean => {
+  const globals = g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
+  const plain = globals.length === 0 || (globals.length === 2 && globals[0] === '-C')
+  return !plain || /(?:^|[^\w$])GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/.test(raw)
+}
 // The repositories a push writes to, as git names them: the repository after its flags, and
 // --repo. Each a temp path, as written or relative to the folder git runs in: a remote's name or a
 // URL may be GitHub, and a push naming none goes to the branch's remote.
@@ -223,7 +229,7 @@ const pushesToTemp = (args: readonly string[], where: string | null, home: strin
 // command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or when
 // a git subcommand or option follows it. Prose naming git with neither (a git repository, the
 // .gitignore, --git-dir) runs nothing; prose that reads as a command ("then git push") still counts.
-const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'symbolic-ref', 'tag', 'update-index', 'update-ref', 'worktree'])
+const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
 export const runsGit = (text: string): boolean => {
   if (/(?:['"`]|;|&&|\|\||\||\$\(|\(|\n)[ \t]*(?:[\w.~/-]*\/)?git(?=[\s'"`;|&)]|$)/.test(text)) return true
   for (const m of text.matchAll(/(?<![\w.$/-])git[ \t]+(-[\w-]*|[a-z][\w-]*)/g)) {
@@ -550,7 +556,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // running it are let through; a command missing from that list fails closed.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look, temp, gitElsewhere(words, call.raw))
+      const why = await gitRefusal(c.git, dir, call.home, look, temp, gitElsewhere(c.words, c.git, call.raw))
       if (why) return why
       continue
     }

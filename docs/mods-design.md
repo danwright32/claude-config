@@ -1222,6 +1222,27 @@ the ban list knowing that an action it does not name is approved.
   `sudo`; a file sourced in the line).
   Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
   managed settings file (#876) nothing is approved overnight.
+- Git is judged by where its writes land (#1124). On 2026-10-13 sleep mode refused suites that
+  build throwaway repositories and an inline python edit whose text held the word git, and an
+  agent reworded its commands to get past it. A repository under the temp folder (`/tmp`,
+  `/private/tmp` or the per user one under `/var/folders`) is nobody's checkout, so a branch
+  switch or a branch delete there goes ahead, and so does a force push or a branch delete by push
+  whose destination is a temp path (as written, `file://`, or relative to the folder git runs in).
+  The folder is a path the line spells there, or one `mktemp` makes there in the same line: a
+  `$(mktemp ...)` word, a variable every assignment of which in the line is such a mktemp, or
+  `$TMPDIR` while the line does not set TMPDIR. Each stands for a folder under a made up name at
+  the root, so climbing out of it (`$T/../..`, `$TMPDIR/..`) leaves the temp folder as it would on
+  the disk, and the disk is never asked about it. Still refused: a push to a remote by name or URL
+  (it may be GitHub) or to a real folder, a climb out of the temp folder, a variable set any other
+  way (a second assignment, `for`, `read`, `${T:-x}`), a mktemp template or `-p` outside the temp
+  folder or built by the shell, TMPDIR set in the line, and git given `--git-dir`, `--work-tree`
+  or `GIT_DIR` in the line. Not followed: a symlink under the temp folder, and GIT_DIR in the
+  session's own environment; the wake check reads what really happened. A suite run from its file
+  is not read at all, as before. Inline code that can run a process is refused for git only where
+  git would run: starting a quoted string or a shell command inside one (`['git', ...]`,
+  `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or followed by a git subcommand or option;
+  a git repository, the .gitignore or `--git-dir` in prose runs nothing. gh, the database clients
+  and claude-sync are still refused by the word in such code.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
   created (events and search, since either can lag), milestones touched and deploy runs in each
   repository with an event overnight, each repository the night's notes name (a private one the
