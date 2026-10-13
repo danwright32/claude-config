@@ -727,6 +727,13 @@ if [ "$ran" -gt 0 ]; then
   PUSH_GATE_LEDGER_DIR="$WORK/push-gates"
   export PUSH_GATE_LEDGER_DIR
 
+  # And the sleep record (lib/sleep.sh): a record of its own that does not exist, so a suite driving
+  # a sleep aware hook is never silenced by the Mac really being asleep. On 2026-10-13 the first run
+  # made during a night of sleep mode failed every such suite while CI, with no record, passed. A
+  # suite that is ABOUT sleep names its own record and is unaffected.
+  CLAUDE_SLEEP_RECORD="$WORK/sleep-record/current.json"
+  export CLAUDE_SLEEP_RECORD
+
   # ---- and the other live stores (claude-config#216) ----
   # The bracket above covers the store the incident happened in. The same class of mistake reaches
   # the rule files every session loads, the settings, the clone registry and the shell rc, and
@@ -842,13 +849,18 @@ LIVECOPY
     # process of its own and cannot perturb what it is measuring. The exit status is written
     # LAST, because that file is what marks a suite finished and a reader of it must not find a
     # suite that has an exit status but no duration.
+    #
+    # Its stdin is /dev/null, never this loop's. Under the Mac's bash 3.2 a job started here shares
+    # the here-document the loop reads its launch list from, so one suite reading stdin to the end
+    # took every name still waiting: each then reported no exit status, "killed or never started",
+    # and 93 of 101 failed on 2026-10-13. Linux CI's bash never showed it.
     ( SECONDS=0
       HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; _src=$?
       printf '%s' "$SECONDS" > "$WORK/$idx.sec"
       # The load the moment it finished, read for every suite because a failure is only known once
       # its output is judged below, by which time the moment has passed (claude-config#1083).
       load_average_one_minute > "$WORK/$idx.load" 2>/dev/null
-      printf '%s' "$_src" > "$WORK/$idx.rc" ) &
+      printf '%s' "$_src" > "$WORK/$idx.rc" ) < /dev/null &
     lane_pid[$lane]=$!
   done <<LAUNCH
 $launch_order
@@ -1172,7 +1184,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # runner. Something after it keeps a real process in between.
         # Its output is kept, because a recheck is judged by the same rules as the first run, not
         # by its exit status alone (claude-config#1044).
-        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) &
+        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
         _fl_waited=0
         while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do

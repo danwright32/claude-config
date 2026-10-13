@@ -1706,6 +1706,12 @@ model's answers come from a scripted stand-in, so it costs nothing and runs in e
 show, the first real night measures: an interactive session enrolled by `/sleep`, a real model
 following the overnight rules for hours, and a real usage limit.
 
+**Test runs never read the real record.** `run-all-tests.sh` hands every suite a sleep record of
+its own that does not exist (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
+names no path), so a hook suite run during a night of sleep mode sees an awake Mac. Before this,
+the first suite run made while asleep (2026-10-13) failed every suite driving a quiet hook, and CI,
+with no record, passed. The suites that are about where the record is found unset it.
+
 ## Local state (per Mac, never synced)
 
 Every file in the table below holds state outside `payload/` and belongs to the Mac that wrote it. All are gitignored,

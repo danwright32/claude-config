@@ -21,6 +21,10 @@
 # it is not known; with neither known only the record's end decides). Every answer comes back on
 # stdout, never through a variable, since a caller reads it in a subshell.
 #
+# A caller naming no path reads CLAUDE_SLEEP_RECORD when it is set, else the real record. The test
+# runner sets it for every suite to a record that does not exist, so a suite driving a sleep aware
+# hook is never silenced by the Mac really being asleep (2026-10-13). Nothing else sets it.
+#
 # Which boot a record belongs to is decided by its `bootSession` (kern.bootsessionuuid), which only a
 # restart changes, whenever the record carries one and this boot's session could be read. Only
 # otherwise by `bootTime`, and then within 300 seconds, never exactly: macOS derives kern.boottime
@@ -45,7 +49,7 @@ sleep_boot_session_of() {
 
 # The state on the first line and why on the second (empty but for unreadable).
 _sleep_read() {
-  local file="${1:-$HOME/.claude/state/sleep/current.json}" now="${2:-}" boot="${3:-}" session="${4:-}" out
+  local file="${1:-${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}}" now="${2:-}" boot="${3:-}" session="${4:-}" out
   if [ ! -e "$file" ]; then
     printf 'none\n\n'
     return 0
@@ -166,7 +170,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ]; then
   _SLEEP_LIB_DIR="$(cd "$_SLEEP_LIB_DIR" 2>/dev/null && pwd)"
 fi
 sleep_note() {
-  local line="${1:-}" file="${2:-$HOME/.claude/state/sleep/current.json}" state script
+  local line="${1:-}" file="${2:-${CLAUDE_SLEEP_RECORD:-$HOME/.claude/state/sleep/current.json}}" state script
   state="$(sleep_state "$file" "${3:-}" "${4:-}" "${5:-}")"
   if [ "$state" != asleep ]; then
     printf 'sleep_note: not written, since the Mac is not asleep (the sleep record reads as %s)\n' "$state" >&2

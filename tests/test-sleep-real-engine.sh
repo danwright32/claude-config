@@ -49,6 +49,9 @@
 # takes under a minute, so it runs in every local run; SLEEP_REAL_ENGINE=0 skips it. Wherever there
 # is no Claude Code or no macOS (CI's Linux runner), it says UNMEASURED and why.
 set -uo pipefail
+# This suite is ABOUT where the sleep record is found, through HOME, so it sets aside the record
+# the test runner hands every other suite through CLAUDE_SLEEP_RECORD (lib/sleep.sh).
+unset CLAUDE_SLEEP_RECORD
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
