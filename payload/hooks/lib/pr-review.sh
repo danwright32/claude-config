@@ -390,18 +390,30 @@ earlier_reviews() {
   local -a files=()
   for f in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$f" ] && files+=("$f"); done
   [ "${#files[@]}" -gt 0 ] || return 0
-  # One awk over every review's header, newest first: finished, head and file of each finished
-  # review of this branch label that returned a review.
+  # One awk over every review's header: finished, head and file of each finished review of this
+  # branch label that returned a review.
   rows="$(awk -v br="$branch" '
     FNR == 1 { b = ""; s = ""; st = ""; fin = 0 }
     /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
     /^status=/ { st = substr($0, 8) } /^finished=/ { fin = substr($0, 10) + 0 }
-    /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\n", fin, s, FILENAME; nextfile }' "${files[@]}" 2>/dev/null \
-    | sort -t "$(printf '\t')" -k1,1nr)"
-  local re='^([^ :]+):([0-9]+): '
+    /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\n", fin, s, FILENAME; nextfile }' "${files[@]}" 2>/dev/null)"
+  # Newest first means the head NEAREST this one, counted in commits, never the finish stamp: on CI
+  # (2026-10-13, PR #1109) two reviews finished in the same second, the tie went by sha, and the
+  # newer review was the one the cap left out. The stamp only breaks a tie in distance.
+  local d ranked=""
   while IFS=$'\t' read -r fin s rf; do
     [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
     git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null || continue
+    d="$(git rev-list --count "$s..$full_sha" 2>/dev/null)"
+    case "$d" in ''|*[!0-9]*) continue ;; esac
+    ranked="$ranked$d"$'\t'"$fin"$'\t'"$s"$'\t'"$rf"$'\n'
+  done <<ROWS
+$rows
+ROWS
+  rows="$(printf '%s' "$ranked" | sort -t "$(printf '\t')" -k1,1n -k2,2nr)"
+  local re='^([^ :]+):([0-9]+): '
+  while IFS=$'\t' read -r d fin s rf; do
+    [ -n "$s" ] || continue
     sect=""
     while IFS= read -r line; do
       [[ "$line" =~ $re ]] || continue
