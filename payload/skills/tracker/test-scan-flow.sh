@@ -216,9 +216,9 @@ write_config "{\"url\":\"https://script.google.com/macros/s/FAKE/exec\",\"token\
 run set-authors "[\"$ME_EMAIL\",\"Dan Wright\"]"
 check_eq "set-authors succeeds" 0 "$RC"
 check_eq "and saves the authors" "[\"$ME_EMAIL\",\"Dan Wright\"]" "$(jq "$(cat "$CONFIG")" 'd["authors"]')"
-check_eq "and keeps the url and the token exactly" '["https://script.google.com/macros/s/FAKE/exec",true]' \
-  "$(jq "$(cat "$CONFIG")" '[d["url"], d["token"] == "kept token, invented for this test"]')"
-check_not "and never prints the token" "kept token, invented" "$OUT"
+check_eq "and keeps the url and the token exactly" "[\"https://script.google.com/macros/s/FAKE/exec\",\"$KEEP_TOKEN\"]" \
+  "$(jq "$(cat "$CONFIG")" '[d["url"], d["token"]]')"
+check_not "and never prints the token" "$KEEP_TOKEN" "$OUT"
 check_eq "and the file is readable by its owner only" "600" "$(mode_of "$CONFIG")"
 for bad in '[]' '"dan@example.com"' '[1]' '["  "]' '{not json'; do
   before="$(fingerprint "$CONFIG")"
