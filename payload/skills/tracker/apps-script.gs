@@ -1,13 +1,17 @@
 /**
  * Personal Project Tracker: Apps Script Web App
  *
- * Deploy: Deploy > New deployment > Web app
+ * Deploy, the FIRST time only: Deploy > New deployment > Web app
  *   Execute as: Me
  *   Who has access: Anyone   (the TOKEN below guards every request)
- * Copy the resulting /exec URL into the skill's config.local.json.
+ * Copy the resulting /exec URL into the skill's config.local.json. Never make a second
+ * deployment: it gets a new /exec URL, and the old one goes on answering with the old code.
  *
  * Every request is a POST with the key in its BODY, never the address, so Google's request
- * logs never record it (claude-config#675):
+ * logs never record it (claude-config#675). Every answer to a caller holding the key carries
+ * spreadsheetId, the id of the sheet this script is attached to, and a request carrying sheetId
+ * (the sheet the caller means) is refused, before anything is read or written, when that is not
+ * this sheet (claude-config#1080: a link deployed from another sheet's script answered for weeks):
  *   POST { key, action: "headers" }               -> { ok, headers: [...] }
  *   POST { key, data: { Header: val } }           -> appends a row, returns { ok, rowNumber, row }
  *   POST { key, action: "update", link, projectName, cells: { Header: val } }
@@ -40,8 +44,7 @@ const TOKEN_PLACEHOLDER = 'REPLACE_WITH_A_LONG_RANDOM_STRING';
 const TOKEN_MIN_LENGTH = 32;
 const SHEET_NAME = ''; // leave blank to use the first sheet
 
-function getSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+function getSheet_(ss) {
   return SHEET_NAME ? ss.getSheetByName(SHEET_NAME) : ss.getSheets()[0];
 }
 
@@ -95,17 +98,31 @@ function doPost(e) {
   const problem = tokenProblem_(body.key);
   if (problem) return json_({ ok: false, error: problem });
 
-  const sheet = getSheet_();
-  if (body.action === 'update') return json_(update_(sheet, body));
+  // From here on the caller holds the key, so every answer names the sheet this script is
+  // attached to, and a request meant for another sheet stops before anything is read or written.
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const boundId = ss.getId();
+  const answer = function (obj) { obj.spreadsheetId = boundId; return json_(obj); };
+  if (body.sheetId !== undefined) {
+    if (typeof body.sheetId !== 'string' || !body.sheetId) {
+      return answer({ ok: false, error: 'sheetId must be the id of a spreadsheet, as text; nothing was changed' });
+    }
+    if (body.sheetId !== boundId) {
+      return answer({ ok: false, error: 'wrong sheet: this web app is attached to the spreadsheet ' + boundId + ', not ' + body.sheetId + '; nothing was changed' });
+    }
+  }
+
+  const sheet = getSheet_(ss);
+  if (body.action === 'update') return answer(update_(sheet, body));
   // Anything else that names an action is refused: a mistyped "update" must never fall through
   // to the append below and add a row.
   if (body.action !== undefined && body.action !== 'headers' && body.action !== 'append') {
-    return json_({ ok: false, error: 'unknown action "' + String(body.action) + '": send "headers", "append" or "update"' });
+    return answer({ ok: false, error: 'unknown action "' + String(body.action) + '": send "headers", "append" or "update"' });
   }
   const heads = headers_(sheet);
-  if (body.action === 'headers') return json_({ ok: true, headers: heads });
+  if (body.action === 'headers') return answer({ ok: true, headers: heads });
   if (!body.data || typeof body.data !== 'object') {
-    return json_({ ok: false, error: 'nothing to append: send action "headers" or a data object' });
+    return answer({ ok: false, error: 'nothing to append: send action "headers" or a data object' });
   }
   const data = body.data;
 
@@ -115,7 +132,7 @@ function doPost(e) {
   const dataKeys = Object.keys(data);
   for (let i = 0; i < dataKeys.length; i++) {
     const problem = cellValueProblem_(dataKeys[i], data[dataKeys[i]], false);
-    if (problem) return json_({ ok: false, error: problem + '; nothing was appended' });
+    if (problem) return answer({ ok: false, error: problem + '; nothing was appended' });
     byHeader.set(norm(dataKeys[i]), data[dataKeys[i]]);
   }
 
@@ -134,7 +151,7 @@ function doPost(e) {
   // Answer with the row as the sheet shows it, never the escaped values handed to appendRow.
   const rowNumber = sheet.getLastRow();
   const shown = sheet.getRange(rowNumber, 1, 1, heads.length).getDisplayValues()[0];
-  return json_({ ok: true, rowNumber: rowNumber, row: shown, headers: heads });
+  return answer({ ok: true, rowNumber: rowNumber, row: shown, headers: heads });
 }
 
 function norm_(s) { return String(s).trim().toLowerCase(); }
