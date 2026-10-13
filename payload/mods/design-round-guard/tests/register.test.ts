@@ -1363,10 +1363,15 @@ test('#1158: a restore git cannot read is held as a look change, and the refusal
 // may change what it names first (a branch switch, a staged copy, a script that runs git).
 test('#1158: a restore beside any other command is judged whole, saying why; one alone after a cd is measured', withKit, async ($, on) => {
   const w = world($, on, { files: { [MOD_HOOK]: EDITED, ...MOD_PLUGIN }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: MOD_TEXT, [`/w/slate :${MOD_REL}`]: MOD_TEXT } })
-  for (const command of [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git checkout HEAD -- ${MOD_REL} | cat`]) {
-    const why = refusalOf(await call($, { tool: 'Bash', command }))
-    expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes('the command runs more than this one git checkout or restore') }).toEqual({ command, held: true, said: true })
-  }
+  const chained = [`git switch other && git checkout HEAD -- ${MOD_REL}`, `git add ${MOD_REL} && git restore ${MOD_REL}`, `./sync.sh; git checkout HEAD -- ${MOD_REL}`, `git checkout HEAD -- ${MOD_REL} | cat`]
+  // So does git told to read another index, repository or setting, by the environment or its own
+  // options before the subcommand (lessons review).
+  const elsewhere = [`GIT_INDEX_FILE=/tmp/idx git restore ${MOD_REL}`, `GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `env GIT_DIR=/other git checkout HEAD -- ${MOD_REL}`, `git -c core.autocrlf=true checkout HEAD -- ${MOD_REL}`, `git --git-dir=/other checkout HEAD -- ${MOD_REL}`, `git --work-tree=/w/slate checkout HEAD -- ${MOD_REL}`]
+  for (const [commands, said] of [[chained, 'the command runs more than this one git checkout or restore'], [elsewhere, 'the command sets how git reads its repository']] as const)
+    for (const command of commands) {
+      const why = refusalOf(await call($, { tool: 'Bash', command }))
+      expect({ command, held: why.includes(SKIP_QUESTION), said: why.includes(said) }).toEqual({ command, held: true, said: true })
+    }
   expect(w.ran).toEqual([])
   expect(refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && git checkout HEAD -- ${MOD_REL}` }))).toBe('')
 })

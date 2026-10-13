@@ -2441,7 +2441,9 @@ way", so the edit it never wanted stayed.
 - **Only a restore alone is measured.** The source is read before the call runs, and any other
   command on the line may change what it names first (`git switch x && git checkout HEAD -- f`,
   `git add f && git restore f`, a script that runs git), so a line that is anything more than one
-  git checkout or restore, a cd before it aside, is judged whole, saying so (lessons review).
+  git checkout or restore, a cd before it aside, is judged whole, saying so (lessons review). So
+  is one told to read another index, repository or setting: a `GIT_` variable set on the line, or
+  any of git's own options before the subcommand but `-C`.
 - **A refusal holds the change, not the file.** It now says "Do not make this change to <file> any
   other way", and, for a `.tsx` or `.jsx` file only, that undoing an earlier edit of one's own is
   judged by the lines it changes; a stylesheet's refusal does not claim it (lessons review).

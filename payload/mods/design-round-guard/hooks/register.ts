@@ -276,13 +276,20 @@ const putBack = async ($: EngineInterface, path: string, tree: string, from: str
 // review of #1158): putBack reads the source as it stands now, and any other command on the line may
 // change what that source names first (`git switch x && git checkout HEAD -- f`, `git add f && git
 // restore f`, a script that runs git). So only a line that is one git checkout or restore alone, a cd
-// before it aside, is measured; anything else is judged whole, saying so.
+// before it aside, is measured; anything else is judged whole, saying so. So is git told to read
+// another index, repository or setting: a GIT_ variable set on the line (which the command reader
+// drops from a command's words), or any of git's own options before the subcommand but -C, whose
+// folder mod-kit already follows (lessons review).
 const restoreAlone = async ($: EngineInterface, command: string): Promise<string | undefined> => {
   try {
     const rest = (await $.modkit.pipeline({ command })).filter(c => c.words[0] !== 'cd')
-    const only = rest.length === 1 ? await $.modkit.git({ words: rest[0]?.words ?? [] }) : undefined
-    if (only?.sub === 'checkout' || only?.sub === 'restore') return undefined
-    return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
+    const words = rest.length === 1 ? (rest[0]?.words ?? []) : []
+    const g = words.length ? await $.modkit.git({ words }) : undefined
+    if (!(g?.sub === 'checkout' || g?.sub === 'restore')) return 'the command runs more than this one git checkout or restore, and what runs first may change what it puts back'
+    const before = words.slice(1, words.indexOf(g.sub, 1))
+    if (/(^|[^\w$])GIT_\w*=/.test(command) || !before.every((w, i) => i % 2 === 1 || w === '-C') || before.length % 2)
+      return `the command sets how git reads its repository (${before.length ? before.join(' ') : 'a GIT_ variable'}), so what it puts back may not be what this checkout holds`
+    return undefined
   } catch (err) {
     return `mod-kit could not read the command: ${message(err)}`
   }
