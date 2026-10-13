@@ -1231,8 +1231,12 @@ the ban list knowing that an action it does not name is approved.
   The folder is a path the line spells there, or one `mktemp` makes there in the same line: a
   `$(mktemp ...)` word, a variable every assignment of which in the line is such a mktemp, or
   `$TMPDIR` while the line does not set TMPDIR. Each stands for a folder under a made up name at
-  the root, so climbing out of it (`$T/../..`, `$TMPDIR/..`) leaves the temp folder as it would on
-  the disk, and the disk is never asked about it. Still refused: a push to a remote by name or URL
+  the root, and any climb (`..`) out of one, or from a folder reached through one, cannot be
+  followed, so it is no longer known to be in the temp folder (`$TMPDIR/../Users/x/repo` would
+  otherwise read as under the mark). A branch delete there needs a repository of its own: a
+  folder the line spells is asked of the disk and goes ahead only as a primary checkout, since a
+  linked worktree of a real repository under the temp folder shares that repository's branches; a
+  mktemp folder is new, so it goes ahead unless the line runs `git worktree`. Still refused: a push to a remote by name or URL
   (it may be GitHub) or to a real folder, a climb out of the temp folder, a variable set any other
   way (a second assignment, `for`, `read`, `${T:-x}`), a mktemp template or `-p` outside the temp
   folder or built by the shell, TMPDIR set in the line, and git given `--git-dir`, `--work-tree`

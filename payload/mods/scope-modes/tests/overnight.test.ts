@@ -17,7 +17,9 @@ const github = async (remote: string) => githubRepo(remote)
 const HOME = '/Users/x'
 const CWD = '/Users/x/repo'
 const REPOS: Record<string, string> = { '/Users/x/repo': 'o/r', '/Users/x/wt': 'o/r', '/Users/x/theirs': 'other/x' }
-const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true }
+// Under the temp folder (#1124): two throwaway repositories of their own, and a linked worktree of
+// a real repository someone put there, which shares that repository's branches.
+const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true, '/tmp/t3': true, '/private/var/folders/kd/abc/T/x': true, '/tmp/wt': false }
 const under = <T>(map: Record<string, T>, dir: string): T | null => {
   for (const [k, v] of Object.entries(map)) if (dir === k || dir.startsWith(`${k}/`)) return v
   return null
@@ -439,6 +441,20 @@ describe('git in throwaway repositories under the temp folder (#1124)', () => {
     expect(await bash('T=$(mktemp -d); git -C "${T:-/Users/x/repo}" checkout main')).toBe(unknown)
     expect(await bash('T=$(mktemp -d); git -C "$T/../.." checkout main')).toBe(unknown)
     expect(await bash('cd "$TMPDIR/.." && git checkout main')).toBe(unknown)
+    // A climb out of a mktemp folder or $TMPDIR, however far, is no longer known to be in it
+    // (lessons review of 214d3ce).
+    expect(await bash('cd "$TMPDIR/../Users/x/repo" && git branch -D y')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); cd "$T" && cd ../../Users/x/repo && git branch -D y')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); git -C "$T/../Users/x/repo" update-ref -d refs/heads/y')).toBe('delete a branch')
+    // A linked worktree of a real repository under the temp folder shares its branches, so a
+    // branch delete there is refused; so is one where the disk cannot say, and one in a line
+    // that adds a worktree (lessons review of 214d3ce).
+    expect(await bash('git -C /tmp/wt branch -D main')).toBe('delete a branch')
+    expect(await bash('cd /tmp/wt && git update-ref -d refs/heads/main')).toBe('delete a branch')
+    expect(await bash('git -C /tmp/unknown branch -D main')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); git worktree add "$T/wt" && git -C "$T/wt" branch -D main')).toBe('delete a branch')
+    // Switching branches in such a worktree is as in any linked worktree: allowed, as before.
+    expect(await bash('git -C /tmp/wt switch -c x')).toBeUndefined()
     expect(await bash('T=$(mktemp -d); cd "$T" && git branch -D x && cd /Users/x/repo && git branch -D y')).toBe('delete a branch')
     // TMPDIR set in the line itself may be anywhere, so mktemp's folder is no longer known.
     expect(await bash('TMPDIR=/Users/x/repo; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)

@@ -217,10 +217,20 @@ const pushesToTemp = (args: readonly string[], where: string | null, home: strin
   }
   if (!dests.length) return false
   return dests.every(d => {
-    const p = expand(d.replace(/^file:\/\//, ''))
-    if (!(p.startsWith('/') || p.startsWith('.'))) return false
-    return inTemp(resolveDir(p, where, home))
+    const p = d.replace(/^file:\/\//, '')
+    if (!(expand(p).startsWith('/') || p.startsWith('.'))) return false
+    return inTemp(resolveIn(p, where, home, expand))
   })
+}
+// A folder a word names, resolved against the folder before it, with the temp folder's words read
+// as tempWords reads them. A climb (`..`) out of a mktemp folder or $TMPDIR, or from a folder
+// reached through one, cannot be followed: the marks stand for folders whose parents nobody knows,
+// so `$TMPDIR/../Users/x/repo` would otherwise read as inside the mark (lessons review of 214d3ce).
+const resolveIn = (word: string, dir: string | null, home: string, expand: (w: string) => string): string | null => {
+  const w = expand(word)
+  const marked = w !== word || (dir !== null && (dir === MARK || dir.startsWith(`${MARK}/`)))
+  if (marked && w.split('/').includes('..')) return null
+  return resolveDir(w, dir, home)
 }
 
 // Whether code that can run a process names git where a process would run it (#1124), rather than
@@ -272,24 +282,32 @@ const checkoutMoves = (args: readonly string[]): boolean => {
 }
 const GIT_PUTS_BACK = new Set(['checkout', 'restore', 'rm', 'mv', 'apply', 'am'])
 
-// `temp` says how this call's words name a folder in the temp folder (tempWords), and `elsewhere`
-// whether git was told to use another repository's git folder or work tree (#1124).
-const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look, temp: (w: string) => string, elsewhere: boolean): Promise<string | undefined> => {
+// How a call reads the temp folder (#1124): `temp`, its words as tempWords reads them; `elsewhere`,
+// whether git was told to use another repository's git folder or work tree; `worktrees`, whether
+// any git in the line adds or moves a worktree, which can put a real repository's branches there.
+type TempReading = { temp: (w: string) => string; elsewhere: boolean; worktrees: boolean }
+const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look, t: TempReading): Promise<string | undefined> => {
   const sub = g.sub ?? ''
   const args = g.args
   if (GIT_PUTS_BACK.has(sub) && args.some(isLessons)) return 'write to LESSONS.md'
   // The folder git runs in, and whether it is a throwaway repository under the temp folder.
-  const where = g.dir === undefined ? dir : resolveDir(temp(g.dir), dir, home)
-  const throwaway = !elsewhere && inTemp(where)
+  const where = g.dir === undefined ? dir : resolveIn(g.dir, dir, home, t.temp)
+  const throwaway = !t.elsewhere && inTemp(where)
+  // A branch deleted there is one of its own only in a repository of its own: a linked worktree
+  // of a real repository under the temp folder shares that repository's branches (lessons review
+  // of 214d3ce). A folder mktemp makes in this line is new, so it is one unless the line adds a
+  // worktree; a folder the line spells is asked of the disk, and one it cannot answer for refuses.
+  const ownBranches = async () =>
+    throwaway && !t.worktrees && (where !== null && (where === MARK || where.startsWith(`${MARK}/`)) ? true : (await look.isPrimary(where as string)) === true)
   if (sub === 'push') {
     const why = pushRefusal(args)
-    return why && (elsewhere || !pushesToTemp(args, where, home, temp)) ? why : undefined
+    return why && (t.elsewhere || !pushesToTemp(args, where, home, t.temp)) ? why : undefined
   }
   if (sub === 'branch') {
     const short = shortFlags(args)
-    return !throwaway && (args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D')) ? 'delete a branch' : undefined
+    return (args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D')) && !(await ownBranches()) ? 'delete a branch' : undefined
   }
-  if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return throwaway ? undefined : 'delete a branch'
+  if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return (await ownBranches()) ? undefined : 'delete a branch'
   if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
     if (throwaway) return undefined
     const primary = where === null ? null : await look.isPrimary(where)
@@ -521,6 +539,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
+  const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
   for (const c of call.commands) {
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
@@ -535,7 +554,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     }
     if (cmd === 'cd' || cmd === 'pushd') {
       const to = words.slice(1).find(a => !a.startsWith('-') || a === '-')
-      dir = resolveDir(to === undefined ? to : temp(to), dir, call.home)
+      dir = to === undefined ? resolveDir(to, dir, call.home) : resolveIn(to, dir, call.home, temp)
       continue
     }
     if (cmd === 'popd') {
@@ -556,7 +575,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // running it are let through; a command missing from that list fails closed.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look, temp, gitElsewhere(c.words, c.git, call.raw))
+      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees })
       if (why) return why
       continue
     }
