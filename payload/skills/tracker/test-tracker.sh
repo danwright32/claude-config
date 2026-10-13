@@ -343,8 +343,13 @@ check_not "and never puts the token on curl's command line" "$GOOD_TOKEN" "$(gre
 # below against the web app) instead of adding a duplicate row.
 check_not "and the cells never travel as \"data\", which a script without update would append" '"data"' "$(grep '^STDIN:' "$CURL_LOG")"
 FAKE_ANSWER='{"ok":false,"error":"nothing to append: send action \"headers\" or a data object"}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
-if [ "$RC" -eq 1 ]; then ok; else bad "an update refused by a script without update exits 1 (got $RC)"; fi
-check "and says the deployed script predates update and needs a new version" "Turning on update" "$OUT"
+if [ "$RC" -eq 1 ]; then ok; else bad "an update refused with nothing to append exits 1 (got $RC)"; fi
+check "and names the web app's own error" "nothing to append" "$OUT"
+# A script that old is also older than the sheet check, so in practice it is stopped there,
+# before any update is sent (the sheet check cases below show it).
+FAKE_HEADERS_ANSWER='{"ok":true,"headers":["Link"]}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
+check "an update to a script older than the sheet check is refused at the check" "did not say which sheet" "$OUT"
+check_eq "and no update is sent" 1 "$(curl_calls)"
 # A success answer that is not an update's (an append's, from some other script) is a failure.
 FAKE_ANSWER='{"ok":true,"rowNumber":7,"row":["x"]}' run update "https://github.com/example/alpha" "Alpha" '{"My Actions":"x"}'
 if [ "$RC" -eq 1 ]; then ok; else bad "an update answered by something other than an update exits 1 (got $RC)"; fi

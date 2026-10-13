@@ -136,10 +136,9 @@ if got is not None and got != want:
     other_sheet(got)
 if not isinstance(reply, dict) or reply.get("ok") is not True:
     why = reply.get("error") if isinstance(reply, dict) else None
+    # A script older than update refuses an update body with "nothing to append", but it is also
+    # older than the sheet check, so the sheet check refuses it first and no update reaches it.
     sys.stderr.write("tracker.sh: the web app refused: %s\n" % (why or body[:200]))
-    if expect in ("update", "preview") and "nothing to append" in str(why):
-        # The deployed script has no update, and refused the body because it carries no data.
-        sys.stderr.write("tracker.sh: the deployed web app predates update, so nothing was changed. Deploy the current apps-script.gs as a new version (SKILL.md, Turning on update).\n")
     sys.exit(1)
 if expect == "sheet" and got is None:
     # A script older than the sheet check answers without the id, and an old script is what the

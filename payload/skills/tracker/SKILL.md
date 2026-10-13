@@ -70,9 +70,9 @@ in `config.local.json` came from another sheet's script.
 "Turning on the sheet check" below deploys the same current script, so once it is done, so is this.
 
 `tracker.sh update` needs the deployed script to be the current `apps-script.gs`, which has the
-`update` action. A deployment made before #1031 does not, and refuses every update with
-`nothing to append` (it changes nothing; `tracker.sh` then says the script predates update).
-Do this once, on one Mac; the `/exec` URL and the token stay the same:
+`update` action. A deployment made before #1031 does not, and is also older than the sheet check,
+so `tracker.sh` refuses it with `did not say which sheet it is attached to` before sending any
+update. Do this once, on one Mac; the `/exec` URL and the token stay the same:
 
 1. Open the sheet, **Dan Work Project Tracker**, by its link (not the other sheet of the same
    name): https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLVUF0pf4Aj8Pi9B5TOcqCj-8WkUQsN3w/edit
