@@ -366,6 +366,25 @@ run L900
 check_eq "nofaults: exits nonzero" "1" "$rc"
 check "nofaults: says the duplicate check could not run" "could not check" "$out"
 check_eq "nofaults: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+check "nofaults: and says what the tool said" "unknown command 'lesson-faults'" "$out"
+
+# ---- 20. a failure that is not a duplicate report cannot be read as "no duplicate" ----
+# A report of OTHER faults only reads the same as a check that failed before reaching the duplicates
+# (a lock, a missing home), because neither carries the duplicate sentence, so both refuse. The
+# overcap wording is lesson_fault_cause's own.
+reset_world otherfault
+printf '%s\n' "claude-sync: it holds lesson entries whose line in the generated index runs past the cap, and that index loads into every session in every project: LESSONS.md:12: L900. Give each one a 'SHORT: <the rule in one line>' line inside its entry; the full rule stays exactly as it is and the index renders the short form instead." >"$FAKE/faults"
+run L900 L901
+check_eq "otherfault: exits nonzero" "1" "$rc"
+check "otherfault: refuses each number" "REFUSED L901: could not check" "$out"
+check "otherfault: and relays the fault" "runs past the cap" "$out"
+check_eq "otherfault: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
+reset_world lockfail
+printf '%s\n' "claude-sync: $CLAUDE_HOME does not exist, so nothing can be checked." >"$FAKE/faults"
+run L900
+check_eq "lockfail: exits nonzero" "1" "$rc"
+check "lockfail: says the check could not be made" "REFUSED L900: could not check" "$out"
+check_not "lockfail: GitHub is never asked anything" "issue" "$(cat "$FAKE/calls")"
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

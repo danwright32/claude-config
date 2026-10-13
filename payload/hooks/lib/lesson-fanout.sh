@@ -66,25 +66,26 @@ done
 # went out carrying another project's lesson. The question is asked of `lesson-faults`, the same list
 # the send refuses on, rather than a second copy of the duplicate rule here (L41), and of the same
 # home `lesson` reads below. SYNC_NO_NOTIFY because the tool notifies on a non interactive failure,
-# and this prints the fault itself. A tool that cannot answer refuses the run: the question is
-# whether twelve public issues carry the right rule, so not knowing is not a yes (L42).
+# and this prints the fault itself.
+#
+# Only two answers are taken as answers: exit 0 (nothing is wrong, so no number is shared), or a
+# report that carries the duplicate sentence (every fault kind is reported together, so a number
+# absent from it is not shared). Any other failure, an older clone without the command, a lock or
+# home error, or a report of other faults only, cannot be told apart from the check not having run,
+# so every number is refused with what the tool said: the question is whether twelve issues, some
+# in public repos, carry the right rule, and not knowing is not a yes (L42, L11).
 overall=0
 faults_rc=0
 faults="$(CLAUDE_HOME="$CLAUDE_HOME" SYNC_NO_NOTIFY=1 "$SYNC_TOOL" lesson-faults 2>&1)" || faults_rc=$?
-if [ "$faults_rc" -ne 0 ]; then
-  case "$faults" in
-    "claude-sync: unknown command"*) faults_known=0 ;;
-    "claude-sync: "*) faults_known=1 ;;
-    *) faults_known=0 ;;
-  esac
-  if [ "$faults_known" -eq 0 ]; then
-    echo "REFUSED: could not check whether any of $* names two lessons, because '$SYNC_TOOL lesson-faults' did not answer (exit $faults_rc): ${faults:-<nothing>}. Nothing was filed. Pull that clone of claude-sync, then run this again."
-    echo "NOT COMPLETE: the lines marked FAILED or REFUSED above were not filed. Rerunning files only those."
-    exit 1
-  fi
-fi
+dup_reported=0
+case "$faults" in *"the same lesson number is used"*) dup_reported=1 ;; esac
 sound=()
 for num in "$@"; do
+  if [ "$faults_rc" -ne 0 ] && [ "$dup_reported" -eq 0 ]; then
+    echo "REFUSED $num: could not check whether $num names two lessons, because '$SYNC_TOOL lesson-faults' exited $faults_rc without reporting on duplicates, which reads the same whether it found other faults or could not run at all. What it said: ${faults:-<nothing>} Fix what it names, or pull that clone of claude-sync if it does not know the command, then run this again."
+    overall=1
+    continue
+  fi
   if [ "$faults_rc" -ne 0 ] && grep -qE "(^|[^0-9A-Za-z])$num used [0-9]+ times" <<<"$faults"; then
     echo "REFUSED $num: $num names more than one lesson in $CLAUDE_HOME/LESSONS.md, so 'claude-sync lesson $num' answers with whichever comes first and every sweep issue would carry that rule, whichever lesson was meant. What lesson-faults said: ${faults#claude-sync: } Then fan out each lesson under its own number."
     overall=1

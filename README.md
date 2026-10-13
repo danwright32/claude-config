@@ -837,7 +837,9 @@ Mac's band across `~/.claude` AND the payload. The local copy covers a lesson wr
 sent yet; the payload covers a number already published that this Mac's copy no longer holds, whose
 references in filed issues nothing here can reach (claude-config#1140). `lesson-fanout.sh` refuses a
 number `lesson-faults` reports as used more than once, because `claude-sync lesson` answers with the
-first entry under that number and the sweep issues would carry whichever rule that is.
+first entry under that number and the sweep issues would carry whichever rule that is. When
+`lesson-faults` fails without reporting on duplicates at all (other faults only, or it could not
+run), every number is refused, since those read alike and neither says the number is unshared.
 
 `next-lesson` does not RESERVE the number it prints. Two sessions asking before either has written
 are offered the same one, and the duplicate check catches it only once both are written.

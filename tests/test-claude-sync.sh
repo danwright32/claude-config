@@ -11256,6 +11256,14 @@ nl1140_full_rc=0; nl1140_full="$(_nl1140 next-lesson)" || nl1140_full_rc=$?
 check "#1140 a band the payload has filled rolls over rather than refusing" \
   "[ \"\$nl1140_full_rc\" -eq 0 ] && grep -q '^L1001\$' <<< \"\$nl1140_full\""
 check "#1140 and never hands out a number past the band it was given" "! grep -q 'has no room in it' <<< \"\$nl1140_full\""
+# lesson-fanout.sh reads a duplicate out of lesson-faults by two pieces of wording: the duplicate
+# sentence, which says the tool reported on duplicates at all, and 'Lnnn used N times'. Its own suite
+# copies them, so the contract is held here, where the wording is made. Reworded, the fan out would
+# refuse every lesson while any fault stood, not file a wrong one, but it would say nothing useful.
+printf -- '- **L762. slate.** body\n- **L762. bidspoke.** body\n' > "$NLH/LESSONS.md"
+nl1140_faults_rc=0; nl1140_faults="$(_nl1140 lesson-faults)" || nl1140_faults_rc=$?
+check "#1140 the fan out's contract: a duplicate is reported in the words it reads" \
+  "[ \"\$nl1140_faults_rc\" -ne 0 ] && line_has \"\$nl1140_faults\" 'the same lesson number is used' 'L762 used 2 times'"
 
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
