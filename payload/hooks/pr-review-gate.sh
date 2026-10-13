@@ -87,6 +87,11 @@ fi
 args=(check --dir "$repo_dir" --sha "$head")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
 [ -n "$head_branch" ] && args+=(--branch "$head_branch")
+# The pull request a review started here reads the description and comments of, where answers to
+# earlier findings are written (claude-config#1161). Its number as GitHub gave it, so a merge naming
+# the pull request by branch or link still passes a number.
+pr_number="$(printf '%s' "$envelope" | jq -r 'if .found then .view.number // "" else "" end' 2>/dev/null)"
+case "$pr_number" in ''|*[!0-9]*) ;; *) args+=(--pr "$pr_number") ;; esac
 # The read key the findings' refusal carries, if this merge presents it (claude-config#788). The
 # hook does not inherit the command's own assignments, so it is read from the command text and
 # handed on; anything else in the environment is cleared, so only THIS command can present one.

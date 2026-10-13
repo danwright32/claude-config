@@ -649,6 +649,18 @@ one. The same pull request means a review labelled with the same branch, of a he
 descends from, so a reused branch name or a rewritten branch starts with no history. The history
 is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way first, saying so.
 
+Since claude-config#1161 that history also carries the pull request's own description and comments,
+where agents actually write their answers ("not a defect, because..."). They are read from GitHub
+once, when the review starts, and only when there are earlier findings for them to answer, so a
+branch's first review asks GitHub nothing. The pull request is the one the merge helper or the merge
+gate names (`--pr`), else the branch's open one, which is how a review the push gate or a commit
+starts finds it. A transient failure is asked again (three tries in all, two seconds apart,
+`PR_REVIEW_PR_READ_TRIES` and `PR_REVIEW_PR_READ_WAIT`); a read that still fails never stops the
+review, and the review's input says the comments could not be read and why. No pull request, and a
+pull request of the same branch name that is no longer open, are each said in their own words. They
+take at most half the history budget, newest comments first, each cut to a quarter of that share,
+the description having the rest, and anything cut or left out is said.
+
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
