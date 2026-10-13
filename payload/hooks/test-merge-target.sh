@@ -186,20 +186,26 @@ for w in 'echo $((1+2)) && gh pr merge 7' 'echo ) && gh pr merge 7' 'echo "(" &&
   if mt_runs_merge "$w"; then pass; else fail "a merge after a parenthesis that is not a substitution was not seen: $w"; fi
 done
 if mt_runs_merge 'echo "done; gh pr merge 7"'; then fail "a merge quoted after a separator inside an echo was read as a merge"; else pass; fi
-# lib/shell-words.py, the reader behind the two functions above, directly: its two modes, and a
-# refusal by exit code for anything else, so a typo in a caller is a failure, not an empty answer.
+# lib/shell-words.py, the reader behind the two functions above, directly: the reading both libraries
+# share (#1040), the assignment split, and a refusal by exit code for anything else, so a typo in a
+# caller is a failure, not an empty answer.
 SW="$HOOK_DIR/lib/shell-words.py"
-eq "$(printf '%s' 'a; b && c || d' | python3 "$SW" segments)" "a"$'\n'" b "$'\n'" c "$'\n'" d" "shell-words cuts at each separator outside quotes"
-eq "$(printf '%s' 'echo "a; b" && c' | python3 "$SW" segments)" 'echo "a; b" '$'\n'' c' "and not inside them"
+sw_texts() { python3 "$SW" read | tr '\036' '\n' | awk -F '\034' 'NF { print $2 }'; }
+eq "$(printf '%s' 'a; b && c || d' | sw_texts)" "a"$'\n'" b "$'\n'" c "$'\n'" d" "shell-words cuts at each separator outside quotes"
+eq "$(printf '%s' 'echo "a; b" && c' | sw_texts)" 'echo "a; b" '$'\n'' c' "and not inside them"
 eq "$(printf '%s' 'A="x y" B=$(p q) cmd arg' | python3 "$SW" split)" "A=x y"$'\n'"B=\$(p q)"$'\n'$'\x1f'$'\n'"cmd arg" "shell-words splits leading assignments from the command"
 printf 'x' | python3 "$SW" nonsense >/dev/null 2>&1; eq "$?" "64" "shell-words refuses an unknown mode"
 # A reader that CRASHES must fall back to the plain reading, never answer "no merge" (L42, L490).
 BROKEN_SW="$(mktemp "${TMPDIR:-/tmp}/broken-sw.XXXXXX")"
 printf 'import sys\nsys.exit(3)\n' > "$BROKEN_SW"
-saved_sw="$MT_SHELL_WORDS"; MT_SHELL_WORDS="$BROKEN_SW"
+# Both readers: the assignment split (MT_SHELL_WORDS) and the command reading the push library owns
+# (PS_SHELL_WORDS, #1040). A reader that exits 3, the code that means "crude records follow", with no
+# records at all must not read as a command running nothing.
+saved_sw="$MT_SHELL_WORDS"; saved_ps="$PS_SHELL_WORDS"; MT_SHELL_WORDS="$BROKEN_SW"; PS_SHELL_WORDS="$BROKEN_SW"
 if mt_runs_merge 'GH_TOKEN=x gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after an assignment"; fi
 if mt_runs_merge 'echo a; gh pr merge 7'; then pass; else fail "a crashed reader hid a merge after a separator"; fi
-MT_SHELL_WORDS="$saved_sw"; rm -f "$BROKEN_SW"
+if ps_is_git_push 'echo a; git push'; then pass; else fail "a crashed reader hid a push after a separator"; fi
+MT_SHELL_WORDS="$saved_sw"; PS_SHELL_WORDS="$saved_ps"; rm -f "$BROKEN_SW"
 # rtk in front is the same merge, and its number and repository are read (lessons review of #795).
 eq "$(mt_pr_number 'rtk gh pr merge 7 --repo a/b')" "7" "an rtk merge names its pull request"
 eq "$(mt_repo_flag 'rtk gh pr merge 7 --repo a/b')" "a/b" "and its repository"
@@ -773,6 +779,32 @@ for mode in pages done junk empty reset forbidden; do
 done
 : > "$MT_GH_LOG"
 eq "$(MT_RUNS_MODE=done PATH="$ghstub:$PATH" mt_unfinished_runs acme/widget abc123 "" ; cat "$MT_GH_LOG")" "api repos/acme/widget/actions/runs?head_sha=abc123&per_page=100 --paginate" "asked about that commit, every page"
+
+echo "merge-target: mt_remote_path says what gh said, so a dropped connection can be asked again (claude-config#1096)"
+# It printed only present, absent or unknown, so a caller could not tell a dropped connection from a
+# refusal and refused on the first. Now it is a reader: 0 answered, 2 transient, 1 anything else.
+cat > "$ghstub/gh" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MT_GH_LOG"
+case "$MT_PATH_MODE" in
+  present) echo '{}' ;;
+  absent) echo 'gh: Not Found (HTTP 404)' >&2; exit 1 ;;
+  timeout) echo 'Get "https://api.github.com/repos/acme/widget/contents/x": net/http: TLS handshake timeout' >&2; exit 1 ;;
+  forbidden) echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1 ;;
+  silent) exit 1 ;;
+esac
+EOS
+chmod +x "$ghstub/gh"
+for mode in present absent timeout forbidden silent; do
+  MT_PATH_MODE="$mode" PATH="$ghstub:$PATH" mt_remote_path acme/widget tools/x ""; rc=$?
+  case "$mode" in
+    present) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "0|present|" "a path that is there is present" ;;
+    absent) eq "$rc|$MT_REMOTE_STATE" "0|absent" "gh's own 404 is an answer: absent" ;;
+    timeout) eq "$rc|$MT_REMOTE_STATE" "2|unknown" "a timeout is unknown and worth asking again" ;;
+    forbidden) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a refusal is unknown, believed at once, with GitHub's words" ;;
+    silent) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh exited 1" "a failure gh says nothing about is unknown and not asked again" ;;
+  esac
+done
 rm -rf "$ghstub"
 
 echo "merge-target: mt_retry_read asks again only on a transient failure, inside its deadline (claude-config#1081)"
@@ -788,6 +820,136 @@ calls=0; slept=""
 mt_retry_read 3 5 fake_sleep "" "" refused; eq "$?|$calls|$slept" "1|1|" "a refusal is believed the first time"
 tries_left=9; calls=0; slept=""
 mt_retry_read 3 5 fake_sleep "$SECONDS" "" flaky; eq "$?|$calls|$slept" "2|1|" "no retry is made whose wait would end past the deadline"
+
+echo "merge-target: the push library's reading, not one of its own (claude-config#1040)"
+# This file read commands with its own pair, a bash heredoc stripper then a python segment cutter,
+# beside the reader lib/push-scope.sh uses, and two readers of one command drift (L613, L370): the
+# stripper had a blind spot the push reader did not, and neither knew what the other did with a
+# comment, a pipe or a substitution. It reads ps__read's records now, so the answers below are the
+# ones it gave before the switch, measured on main on 2026-10-12, except where a line says it is a
+# deliberate change and why.
+#   answer  = "<is a gh merge> <merges by any route> pr=<number> repo=<--repo or link>"
+corpus_answer() {
+  local a=n b=n
+  mt_is_pr_merge "$1" && a=y
+  mt_runs_merge "$1" && b=y
+  printf '%s %s pr=%s repo=%s' "$a" "$b" "$(mt_pr_number "$1")" "$(mt_repo_flag "$1")"
+}
+same() {  # same <answer> <command>
+  eq "$(corpus_answer "$2")" "$1" "#1040 the same answer after the switch: $(printf '%s' "$2" | tr '\n' '~')"
+}
+same "y y pr=7 repo=" "$MERGE 7 --squash"
+same "y y pr=7 repo=" "cd /tmp && $MERGE 7"
+same "n n pr= repo=" "gh pr view 7"
+same "y y pr=42 repo=" "GH_TOKEN=abc $MERGE 42"
+same "y y pr=7 repo=" "GH_TOKEN=\$(gh auth token -u x; true) $MERGE 7"
+same "y y pr=7 repo=acme/widget" "GH_TOKEN=\"\$(gh auth token -u x)\" $MERGE 7 --repo acme/widget"
+same "y y pr=42 repo=" "git fetch origin ; $MERGE 42"
+same "y y pr=42 repo=" "/opt/homebrew/bin/$MERGE 42"
+same "n n pr= repo=" "echo \"$MERGE 7\""
+same "n n pr= repo=" "echo '$MERGE 7; done'"
+same "n n pr= repo=" "cat <<EOF"$'\n'"$MERGE 7"$'\n'"EOF"
+same "y y pr=8 repo=" "cat <<'EOF'"$'\n'"don't; $MERGE 7"$'\n'"EOF"$'\n'"$MERGE 8"
+same "n n pr= repo=" "gh issue create --body \"run $MERGE 5 later\""
+same "y y pr=123 repo=cli/cli" "$MERGE https://github.com/cli/cli/pull/123 --squash"
+same "y y pr=7 repo=danwright32/claude-config" "$MERGE 7 --repo danwright32/claude-config --squash --delete-branch"
+same "y y pr=7 repo=" "$MERGE --match-head-commit abc123 7"
+same "y y pr=9 repo=" "$MERGE --body 42 9"
+same "n y pr=680 repo=" "npm run merge -- 680"
+same "n n pr= repo=" "npm run merge-ready 680"
+same "n y pr=77 repo=" "venv/bin/python tools/wait_for_checks.py 77 --merge"
+same "n n pr= repo=" "python3 tools/wait_for_checks.py 77"
+same "n y pr=12 repo=" "\$PY tools/wait_for_checks.py 12 --merge"
+same "n y pr=31 repo=" "./scripts/merge-when-green.sh 31"
+same "y y pr=7 repo=" "$MERGE 7 && echo merged"
+same "y y pr=7 repo=" "$MERGE 7 | tee log"
+same "y y pr=7 repo=" "(cd /tmp && $MERGE 7)"
+same "y y pr=7 repo=" "echo hi # ; $MERGE 7"
+same "n n pr= repo=" "# $MERGE 7"
+same "y y pr=7 repo=" "$MERGE 7; $MERGE 8"
+same "y y pr=1 repo=" "cd /a && $MERGE 1; cd /b && $MERGE 2"
+same "y y pr=7 repo=" "PR_REVIEW_READ=abcdef $MERGE 7"
+same "y y pr=4 repo=" "echo \$'it\\'s'; $MERGE 4"
+same "n n pr= repo=" "git commit -m \"merge the thing\" && git push"
+same "y y pr=7 repo=" "echo don't; $MERGE 7"
+eq "$(mt_presented_read_key "PR_REVIEW_READ=abcdef $MERGE 7" mt_runs_merge)" "abcdef" "#1040 the read key in front of a merge is still read"
+eq "$(mt_presented_read_key "PR_REVIEW_READ=abcdef echo; $MERGE 7" mt_runs_merge)" "" "#1040 and one in front of another command is still not"
+# Deliberate changes, each the shell's own reading, which the bash cut got wrong:
+#   a merge the shell runs after a pipe, inside a subshell or inside a command substitution was not
+#   seen at all, so no merge gate judged it;
+same "y y pr=7 repo=" "echo x | $MERGE 7"
+same "y y pr=7 repo=" "($MERGE 7)"
+same "y y pr=7 repo=" "X=\$($MERGE 7)"
+#   a merge behind a reserved word (then, do, {, !, time) or behind rtk was read by its first three
+#   whitespace words, `then gh pr`, so it was no merge to any merge gate (the next section);
+same "y y pr=9 repo=" "rtk $MERGE 9 --squash"
+same "y y pr=7 repo=" "if true; then $MERGE 7; fi"
+same "y y pr=7 repo=" "{ $MERGE 7; }"
+#   and a command that runs no merge names no pull request: the number used to be read from the
+#   whole command when no command was a merge, which with no heredoc stripper left would read a
+#   number out of a heredoc body (this line, unchanged from main, is that guard).
+same "n n pr= repo=" "cat <<EOF"$'\n'"$MERGE 7"$'\n'"EOF"$'\n'"echo merged"
+
+echo "merge-target: a merge in every command position the shell has (claude-config#1040)"
+# The merge head reader took the first three whitespace words of each command, so the words that only
+# open or continue a compound command (then, do, else, {, !, time) or rtk in front stood where gh
+# should, and the merge walked past every merge gate. It now reads each command from its command
+# name on, past those words and any leading assignments, from the one reading (ps__read).
+for w in "if true; then $MERGE 7 --squash; fi" \
+         "if true; then"$'\n'"  $MERGE 7 --squash"$'\n'"fi" \
+         "{ $MERGE 7 --squash; }" \
+         "( $MERGE 7 --squash )" \
+         "while false; do $MERGE 7; done" \
+         "! $MERGE 7" \
+         "time $MERGE 7" \
+         "rtk $MERGE 7 --squash" \
+         "/usr/local/bin/rtk $MERGE 7" \
+         "GH_TOKEN=abc $MERGE 7" \
+         "if true; then GH_TOKEN=\$(gh auth token -u x) $MERGE 7; fi" \
+         "{ X=\"a b\" rtk $MERGE 7; }"; do
+  if mt_is_pr_merge "$w" && mt_runs_merge "$w"; then pass; else fail "#1040 a merge in command position was not read as a merge: $w"; fi
+  eq "$(mt_pr_number "$w")" "7" "#1040 and it names its pull request: $(printf '%s' "$w" | tr '\n' '~')"
+done
+for w in "if true; then npm run merge -- 7; fi" "{ ./scripts/merge-when-green.sh 7; }" "then \$PY tools/wait_for_checks.py 7 --merge"; do
+  if mt_runs_merge "$w"; then pass; else fail "#1040 a merge tool behind a reserved word was not read as a merge: $w"; fi
+done
+eq "$(mt_repo_flag "if true; then $MERGE 7 --repo acme/widget; fi")" "acme/widget" "#1040 the repository a merge behind then names"
+eq "$(mt_presented_read_key "if true; then PR_REVIEW_READ=abc123 $MERGE 7; fi" mt_runs_merge)" "abc123" "#1040 a read key in front of a merge behind then"
+# And words that only look like these stay arguments: a reserved word is one only where a command starts.
+for w in "echo then $MERGE 7" "echo { $MERGE 7 }" "echo rtk $MERGE 7" "git commit -m \"then $MERGE 7\""; do
+  if mt_runs_merge "$w"; then fail "#1040 a merge named in an argument was read as a merge: $w"; else pass; fi
+done
+# The same cost as before: a merge behind then is one reading, and no assignment split of its own.
+CNT="$(mktemp -d "${TMPDIR:-/tmp}/mt-count.XXXXXXXX")"
+mkdir -p "$CNT/bin"
+printf '#!/bin/bash\nprintf "start\\n" >> "%s/log"\nexec "%s" "$@"\n' "$CNT" "$(command -v python3)" > "$CNT/bin/python3"
+chmod +x "$CNT/bin/python3"
+PATH="$CNT/bin:$PATH" bash -c '. "$1"; mt_runs_merge "$2"; mt_presented_read_key "$2" mt_runs_merge' _ "$HOOK_DIR/lib/merge-target.sh" "if true; then GH_TOKEN=x PR_REVIEW_READ=abc $MERGE 7; fi" >/dev/null
+n="$( [ -f "$CNT/log" ] && wc -l < "$CNT/log" | tr -d ' ' || printf 0)"
+eq "$n" "1" "#1040 a merge behind then and two assignments is read with one python start"
+rm -rf "$CNT"
+
+# One reading per command, counted in python3 starts rather than seconds (L224): the questions a
+# merge gate asks of one merge, in one shell, start the reader once and the merge's own argument
+# reader once per question that needs it (mt_pr_number, mt_repo_flag). Six on main.
+CNT="$(mktemp -d "${TMPDIR:-/tmp}/mt-count.XXXXXXXX")"
+mkdir -p "$CNT/bin"
+printf '#!/bin/bash\nprintf "start\\n" >> "%s/log"\nexec "%s" "$@"\n' "$CNT" "$(command -v python3)" > "$CNT/bin/python3"
+chmod +x "$CNT/bin/python3"
+got="$(PATH="$CNT/bin:$PATH" bash -c '. "$1"; mt_is_pr_merge "$2" && mt_runs_merge "$2" && printf "%s|%s" "$(mt_pr_number "$2")" "$(mt_repo_flag "$2")"' _ "$HOOK_DIR/lib/merge-target.sh" "$MERGE 7 --repo acme/widget --squash")"
+eq "$got" "7|acme/widget" "#1040 the counted questions are answered right"
+n="$( [ -f "$CNT/log" ] && wc -l < "$CNT/log" | tr -d ' ' || printf 0)"
+if [ "$n" -le 3 ] && [ "$n" -ge 1 ]; then pass; else fail "#1040 four questions of one merge started python $n times, wanted 1 to 3"; fi
+rm -rf "$CNT"
+
+# And no second reader can come back: this file never asks lib/shell-words.py for a reading of its
+# own, only for the assignment split the push library has no use for, and the segment cutter it used
+# is gone from the reader (L613: the component and the guard in one change).
+own="$(grep -nE 'SHELL_WORDS"?[[:space:]]+(read|commands|words|gitdir|segments)' "$HOOK_DIR/lib/merge-target.sh")"
+eq "$own" "" "#1040 merge-target.sh reads no command with a reader of its own"
+eq "$(grep -c 'strip_heredocs' "$HOOK_DIR/lib/merge-target.sh")" "0" "#1040 and strips no heredoc of its own"
+printf 'a; b' | python3 "$HOOK_DIR/lib/shell-words.py" segments >/dev/null 2>&1
+eq "$?" "64" "#1040 the segment cutter is gone from the reader"
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

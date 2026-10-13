@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""shell-words.py: a command read the way the shell nests quotes and substitutions, for the merge
-matcher in merge-target.sh (claude-config#788).
+"""shell-words.py: a command read the way the shell nests quotes and substitutions, the one reader
+behind lib/push-scope.sh and lib/merge-target.sh (claude-config#788, #1017, #1040).
 
 Written in python because the same scan in bash, a character at a time, took 55 seconds on a 26 KB
 command (an issue body mentioning a merge), measured 2026-10-05; every merge gate runs it, and a
 hook that slow is killed and the command goes unscreened.
 
-  shell-words.py segments   stdin: a command (heredoc bodies already removed)
-      prints each segment on its own line, cut at && || ; and newlines only where nothing is open.
-      A newline INSIDE a segment (in a quoted string) becomes a space, so line readers stay whole.
-      With anything left open at the end (an unclosed quote, as in `echo don't; gh pr merge 7`),
-      the reading cannot be trusted and the plain cut at every separator is printed instead: a
-      separator inside quotes then over cuts, which can only show the gates MORE merges (L42).
   shell-words.py split      stdin: one segment
       prints its leading NAME=value assignments, one per line, value with one layer of outermost
       quotes removed, then a line holding only the 0x1f separator, then the command that follows.
@@ -19,6 +13,13 @@ hook that slow is killed and the command goes unscreened.
       every simple command the shell would run, each as "<dir>" 0x1f "<text>" 0x1e, where <dir>
       is the directory the cd commands before it have moved its shell to (empty for none). The
       reader behind lib/push-scope.sh's questions about a push (claude-config#1017); see commands().
+  shell-words.py read       stdin: a whole command
+      the commands reading with everything the hooks ask of each command beside it, so one python
+      start answers them all (claude-config#1040). Each record is "<dir>" 0x1c "<text>" 0x1c
+      "<its words, 0x1f between them>" 0x1c "<its git -C directory>" 0x1c "<1 when the text read
+      on its own is exactly this one command, else 0>" 0x1c "<the command from its name on, past
+      leading reserved words and assignments>" 0x1c "<those assignments, one per line>" 0x1e. Exit
+      3 as commands; see read() and command_rest().
   shell-words.py words      stdin: one command
       its words as the shell reads them, quotes removed, joined by 0x1f, past any leading reserved
       word (then, do, else, ...), so the first word is the command's own; see command_words().
@@ -36,70 +37,6 @@ import os
 import re
 import shlex
 import sys
-
-
-def segments(s):
-    out, cur, stack = [], [], []
-    i, n = 0, len(s)
-    while i < n:
-        c = s[i]
-        nx = s[i + 1] if i + 1 < n else ""
-        top = stack[-1] if stack else ""
-        if top == "'":
-            if c == "'":
-                stack.pop()
-            cur.append(c)
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            cur.append(c + nx)
-            i += 2
-            continue
-        if not stack:
-            if c + nx in ("&&", "||"):
-                out.append("".join(cur))
-                cur = []
-                i += 2
-                continue
-            if c in ";\n":
-                out.append("".join(cur))
-                cur = []
-                i += 1
-                continue
-        if c == '"':
-            if top == '"':
-                stack.pop()
-            else:
-                stack.append(c)
-        elif c == "'":
-            if top != '"':
-                stack.append(c)
-        elif c == "`":
-            if top == "`":
-                stack.pop()
-            else:
-                stack.append(c)
-        elif c == "$" and nx in ("(", "{"):
-            stack.append(nx)
-            cur.append(c + nx)
-            i += 2
-            continue
-        elif c == "(":
-            if stack and top != '"':
-                stack.append(c)
-        elif c == ")":
-            if top == "(":
-                stack.pop()
-        elif c == "}":
-            if top == "{":
-                stack.pop()
-        cur.append(c)
-        i += 1
-    if stack:
-        plain = s.replace("&&", "\n").replace("||", "\n").replace(";", "\n")
-        return plain.split("\n")
-    out.append("".join(cur))
-    return [seg.replace("\n", " ") for seg in out]
 
 
 def is_name(word):
@@ -507,8 +444,8 @@ def bare(s):
     commands() lists `out=$(cd A && git push)` beside the push inside it, and a push recogniser
     that reads substitutions afresh says yes to both; the outer one is a container, and judging it
     puts the push in the outer shell's directory. `git push origin "$(git branch)"` is still a push
-    with its substitution emptied, and stays one. Quotes and parentheses are read as segments()
-    reads them, quotes opening afresh inside a substitution. A substitution left open at the end
+    with its substitution emptied, and stays one. Quotes and parentheses are read the way the
+    shell nests them, quotes opening afresh inside a substitution. A substitution left open at the end
     cannot be read, so the command is returned whole, which keeps it counted (L42).
     """
     out, stack, i, n = [], [], 0, len(s)
@@ -593,17 +530,73 @@ def crude_commands(s):
     return out
 
 
+def alone(text):
+    """Whether `text`, read as a command of its own, is exactly the one command `text`.
+
+    A caller that has read a whole command asks each of its commands questions of its own (is this
+    one a push?), and every such question would read that text afresh. When the answer is this, the
+    caller can answer from the reading it already holds, with no second python start. A text holding
+    a substitution reads as more than one command, so it is never alone.
+    """
+    try:
+        return commands(text) == [("", text)]
+    except Unreadable:
+        return False
+
+
+def command_rest(text):
+    """(the command from its own name on, its leading assignments) for one command's text.
+
+    Past the reserved words that only open or continue a compound command (RESERVED: then, do, {,
+    !, time, ...) and then past leading NAME=value assignments, read by split(), which knows a value
+    holding quotes, a substitution or spaces. A merge gate reading the first words of `then gh pr
+    merge 7` saw `then` where gh should be, so a merge inside an if, a loop or a brace group was no
+    merge to any of them (claude-config#1040). The text is kept as written, quotes and all, so a
+    caller reads its arguments the way it always has.
+    """
+    s = text.lstrip()
+    while True:
+        m = re.match(r"(\S+)(\s+|$)", s)
+        if not m or m.group(1) not in RESERVED:
+            break
+        s = s[m.end():]
+    assigns, rest = split(s)
+    return rest, "\n".join(assigns)
+
+
+def read(s):
+    """The commands reading, each record with its words, its git -C directory and whether it is alone.
+
+    Everything lib/push-scope.sh and lib/merge-target.sh ask of one command, answered by one python
+    start rather than one per command (claude-config#1040): ps_is_git_push asked python for the words
+    of every command in the line, so a heredoc commit, forty short commands and a push started 44
+    pythons in every push hook (measured 2026-10-12).
+    """
+    try:
+        records, rc = commands(s), 0
+    except Unreadable:
+        records, rc = crude_commands(s), 3
+    out = []
+    for d, t in records:
+        rest, assigns = command_rest(t)
+        fields = (d, t, "\x1f".join(command_words(t)), git_dir(t), "1" if alone(t) else "0", rest, assigns)
+        out.append("\x1c".join(fields) + "\x1e")
+    return "".join(out), rc
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     data = sys.stdin.read()
-    if mode == "segments":
-        sys.stdout.write("".join(seg + "\n" for seg in segments(data)))
-    elif mode == "words":
+    if mode == "words":
         sys.stdout.write("\x1f".join(command_words(data)))
     elif mode == "gitdir":
         sys.stdout.write(git_dir(data))
     elif mode == "bare":
         sys.stdout.write(bare(data))
+    elif mode == "read":
+        text, rc = read(data)
+        sys.stdout.write(text)
+        return rc
     elif mode == "commands":
         # Exit 3 says only the crude reading was possible; its records are printed all the same.
         try:
@@ -618,7 +611,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py segments|split|commands|words|gitdir|bare < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare < text\n")
         return 64
     return 0
 
