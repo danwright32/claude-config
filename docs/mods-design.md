@@ -2325,6 +2325,28 @@ we have the question presented in plain terms so I actually know what is going t
   again, and says so for the lesson's picker too; before, Claude was told to act on what Dan said
   and he was told nothing.
 
+### What #1151 changed, 2026-10-13
+
+A design round in a NurseDex session was refused twice on its own scratchpad files ("screen.css and
+round1.html changes how the screen looks"). Its commands set `D=<scratchpad>`, ran `cd $D`, wrote a
+spec by heredoc naming `"styles": "screen.css"`, and edited the stylesheet with a python script on
+standard input. mod-kit's reader had already placed every named file in the scratchpad; what held
+it was the guard's guess at the python script's writes, made from every name the whole command
+mentioned (the spec's data, a grep, the switcher's arguments) and placed in the session's folder,
+the NurseDex checkout.
+
+- **A program is judged by its own text, where it runs.** mod-kit's write reader now gives a read
+  program's text (`program`) and the folder it runs in (`folder`, a cd before it followed, absent
+  where that cannot be). The guard reads only that text, and places a bare name in that folder; an
+  absolute name stands; a bare name after a cd it cannot follow is held as a write that cannot be
+  followed. A program whose text names every file it writes is still judged by those files (#830).
+- **A fixed name is what it is wherever it lands.** A write the reader cannot place counted every
+  look changing name the command mentioned, heredoc data included. Now only a write whose own name
+  the shell fills in (a variable or a command's output in its last part) is held that way: a spec at
+  `$D/spec.json` is a spec, whatever its data names.
+- Look edits in the project are held as before: a program writing a stylesheet there, by a bare or
+  a written name, and a stylesheet written by heredoc.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

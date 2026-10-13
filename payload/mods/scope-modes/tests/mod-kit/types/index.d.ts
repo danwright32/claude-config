@@ -363,7 +363,11 @@ export type ModKitChange = { word: string; path?: string; folder?: string; does:
 export type ModKitWrites = {
   files: ModKitWrite[]
   changes: ModKitChange[]
-  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[] }[]
+  /**
+   * For a program the reader read (inline or on standard input), `program` is its text and `folder`
+   * the folder it runs in, a cd before it followed, left out where that cannot be followed (#1151).
+   */
+  unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; folder?: string }[]
   byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true }[]
 }
 
