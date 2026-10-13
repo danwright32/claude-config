@@ -121,7 +121,7 @@ def main(argv):
             return 1
         lessons = {n: t for n, t in lessons.items() if n not in have}
         if not lessons:
-            whose = f"of {a.host}'s lessons " if a.host else "lesson "
+            whose = f"lesson of {a.host}'s " if a.host else "lesson "
             print(f"NOTHING TO TAG: every {whose}is already tagged in {a.skip_tagged}")
             return 0
     if not lessons:

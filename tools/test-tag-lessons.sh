@@ -111,7 +111,7 @@ check "the end line counts only what was asked" "END 1 lessons tagged" "$out"
 printf 'L2\tdesign\n' > "$WORK/have2.tsv"
 out="$(FAKE_MODE=good run --host mac-a --bands-dir "$BANDS" --skip-tagged "$WORK/have2.tsv")"; rc=$?
 check_rc "nothing of this Mac's left to tag is a success" 0 "$rc"
-check "and says whose" "NOTHING TO TAG" "$out"
+check "and says whose, in a sentence that reads" "NOTHING TO TAG: every lesson of mac-a's is already tagged" "$out"
 [ ! -f "$FAKE_LOG/args" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: another Mac's untagged lesson was sent to the reader"; }
 # A host holding no band cannot be told its lessons, so it is refused, never read as owning none
 # (which would report NOTHING TO TAG for ever) or all (which would tag the other Mac's).
