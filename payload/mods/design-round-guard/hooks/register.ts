@@ -622,7 +622,11 @@ export const register: Register = on => {
       // Steps newer than this guard (#1057): the version the question carries, or the skill on disk
       // states, past CONTRACT. Read before anything is asked or recorded, so Dan is never asked a
       // question whose answer this guard would misread.
-      const newer = await newerContract($, ask.metadata?.contract)
+      const carried = ask.metadata?.contract
+      // A contract given in any other form is refused by name, never read as no claim (lessons review of #1057).
+      if (carried !== undefined && !(typeof carried === 'number' && Number.isInteger(carried) && carried > 0))
+        return { deny: `${JSON.stringify(carried)} is not a contract version: give metadata "contract" as the whole number the design rounds steps state, or leave it out.` }
+      const newer = await newerContract($, carried)
       if (newer !== undefined) return { deny: predates(newer) }
       const questions = Array.isArray(ask.questions) ? ask.questions : []
 

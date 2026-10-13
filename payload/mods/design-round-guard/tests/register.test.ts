@@ -990,6 +990,20 @@ test('#1057: an answer in a form newer than this guard knows is refused, naming 
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
 })
 
+// Lessons review of #1057: a contract that is not a whole number ("2", 2.5) read as no claim, so the
+// question was answered as current. It is refused by name, before Dan is asked.
+test('#1057: a contract that is not a whole number is refused by name, with nothing asked or recorded', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const id = idIn(refusalOf(await call($, PAGE)))
+  if (!id) throw new Error('no refused call')
+  for (const contract of ['2', 2.5, 0, null]) {
+    const why = refusalOf(await askSettled($, w, SETTLED_YES, {}, { call: id, contract }))
+    expect([contract, why.includes('is not a contract version')]).toEqual([contract, true])
+  }
+  expect(w.asked).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+})
+
 test('#1057: the design rounds skill on disk stamped newer than this guard is refused the same way, even with no contract given', withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate', files: { [SKILL_MD]: stamped(CONTRACT + 1) } })
   const id = idIn(refusalOf(await call($, PAGE)))
