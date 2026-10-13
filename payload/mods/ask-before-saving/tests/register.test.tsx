@@ -68,6 +68,8 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => true,
         // #1135: whether a prompt is Dan's words, read with the same copy.
         isDans: async (input: { origin: unknown }) => {
+          // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+          if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
           const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout) as boolean
@@ -227,6 +229,12 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
+  // The transcript's dim lines.
+  const logs: string[] = []
+  on('ui.log', ($, e) => {
+    logs.push(String((e as { text?: string }).text))
+    return { value: undefined } as never
+  })
   // The notes Claude reads: each row the session appended, as the harness's own append answered it
   // (the row after `next`, never what the mod asked for), so a note counts only once it landed.
   // While `ctl.notesRefused` holds a reason, the session refuses every note with it.
@@ -238,7 +246,7 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     notes.push(content.map(c => c.text ?? '').join(''))
     return appended
   })
-  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes }
+  return { files, ran, asked, dialog, toasts, prompts, clock, at, printenv, ctl, notes, logs }
 }
 type W = ReturnType<typeof world>
 
@@ -808,6 +816,15 @@ test('git putting back, removing or moving a memory file is not a save, so it ru
   }
   expect(w.ran.length).toBe(4)
   expect(w.asked).toEqual([])
+})
+
+test("a reader mod-kit cannot answer reads permanent words as not Dan's, so the question is asked, said once", withKit, async ($, on) => {
+  const w = world($, on)
+  for (let i = 0; i < 2; i++) await dan($, 'From now on, ask before you merge anything.', { kind: 'composer', breaks: true })
+  const r = await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Ask before merging.' })
+  expect(refusalOf(r)).toContain(ASKS)
+  expect(w.ran).toEqual([])
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
 })
 
 // Dan's answer is read only from his dialog: a question that hides the file, one about no waiting

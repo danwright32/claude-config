@@ -29,6 +29,8 @@ const modKit: { name: string; register: Register } = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const isDans = async (input: unknown) => {
+        // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+        if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
         const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout) as boolean
@@ -149,6 +151,13 @@ for (const [who, origin, counts] of [
     expect(w.logs.length).toBe(counts ? 1 : 0)
   })
 }
+
+test("a reader mod-kit cannot answer reads the message as not Dan's, said once, and his message still goes on", KIT, async ($, on) => {
+  const w = world(on)
+  for (let i = 0; i < 2; i++) expect(((await type($ as never, 'no next issue', { kind: 'composer', breaks: true })) as { text?: string }).text).toBe('no next issue')
+  expect((await ask($ as never, QUESTION, { metadata: { source: 'next-issue' } })).result?.answers).toEqual({ engine: 'picker' })
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
 
 test('/pickers with anything but on changes nothing and says what it understands', KIT, async ($, on) => {
   world(on)

@@ -203,6 +203,23 @@ const attempt = async ($: EngineInterface): Promise<void> => {
   $.ui.log(`${MOD}: /rename answered ${outcome} (${detail}); ${outcome === 'set' ? 'named' : 'will set sessionTitle on the next message'}`, { to: 'debug' })
 }
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Auto session name could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     toldBackground = false
@@ -264,7 +281,7 @@ export const register: Register = on => {
   // did), and never in the way of the message itself.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (result.drop !== undefined || !(await $.modkit.isDans({ origin: e.origin }))) return result
+    if (result.drop !== undefined || !(await dansWords($, e.origin))) return result
     const hasImages = (e.attachments ?? []).some(a => a.type === 'image')
     try {
       await update($, cur => {
@@ -275,6 +292,31 @@ export const register: Register = on => {
       })
     } catch (err) {
       $.ui.log(`${WHO} couldn't note your message for naming this session: ${errText(err)}. It names the session from a later message of yours.`)
+    }
+    return result
+  })
+
+  // A slash command Dan types with arguments is his words for naming too (Dan, 2026-10-13, #1135).
+  // Measured on Claude Code 2.1.296 that day, a typed slash command never reaches prompt.submit: it
+  // arrives here with his origin (composer, or bridge from his phone) and its arguments, so whose it
+  // is is mod-kit's same reader and only the arguments rule is this mod's. One with no arguments
+  // says nothing to name a session by; a plugin's command is never his (and a plugin's
+  // $.command.run did not reach other plugins' command.run hooks at all, measured the same day).
+  // /rename is Dan naming the session himself, below. Recorded once the command has run (one that
+  // threw is not recorded), and never in the way of the command itself.
+  on('command.run', async ($, e, next) => {
+    const result = await next(e)
+    const args = e.args.trim()
+    if (!args || e.command === 'rename' || !(await dansWords($, e.origin))) return result
+    try {
+      await update($, cur => {
+        if (!cur || cur.outcome !== 'waiting') return undefined
+        const before = cur.dans ?? NO_DANS
+        const after = withDans(before, `/${e.command} ${args}`, false)
+        return after === before ? undefined : { ...cur, dans: { words: [...after.words], imageTurns: after.imageTurns } }
+      })
+    } catch (err) {
+      $.ui.log(`${WHO} couldn't note your /${e.command} for naming this session: ${errText(err)}. It names the session from a later message of yours.`)
     }
     return result
   })

@@ -15,6 +15,8 @@ const deps: { name: string; register: Register } = {
         // world, which reads with a byte for byte copy of mod-kit's reader under tests/mod-kit.
         modkit: {
           isDans: async (input: { origin: unknown }) => {
+            // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+            if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
             const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
             if (r.exitCode !== 0) throw new Error(r.stderr)
             return JSON.parse(r.stdout) as boolean
@@ -1169,6 +1171,16 @@ test("a subagent's refused calls are its own, not the session's", withDeps, asyn
   await start($)
   for (const id of ['s1', 's2', 's3']) await appendRow($, [{ id, error: 'refused' }], 'sub1')
   expect(w.progress.filter(p => p.failed !== undefined)).toEqual([])
+})
+
+test("a reader mod-kit cannot answer reads a message as not Dan's request, said once", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  for (let i = 0; i < 2; i++) await $.prompt.submit({ text: 'Carry on with the Gmail send fix', origin: { kind: 'composer', breaks: true }, wait: false } as never)
+  await $.tool.call(bash('ls'))
+  expect(last(w)?.request).toBeUndefined()
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
 })
 
 // #1135: only what Dan types is his words, at the Mac or from his phone, as in every mod (Dan,

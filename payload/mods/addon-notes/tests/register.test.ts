@@ -13,6 +13,8 @@ const modKit: { name: string; register: Register } = {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const isDans = async (input: unknown) => {
+        // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+        if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
         const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout) as boolean
@@ -31,6 +33,11 @@ type Seen = { text: string; context: readonly string[] }
 const world = (on: On, opts: { dropBelow?: boolean } = {}) => {
   const seen: Seen[] = []
   const toasts: string[] = []
+  const logs: string[] = []
+  on('ui.log', ($, e) => {
+    logs.push(e.text)
+    return { value: undefined }
+  })
   // Claude Code beneath the mod: records what entered, or refuses it.
   on('prompt.submit', ($, e) => {
     if (opts.dropBelow) return { drop: 'blocked by a settings hook' }
@@ -49,7 +56,7 @@ const world = (on: On, opts: { dropBelow?: boolean } = {}) => {
     const { origin } = JSON.parse(e.argv[2] as string)
     return { value: { exitCode: 0, stdout: JSON.stringify(isDans(origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
-  return { seen, toasts }
+  return { seen, toasts, logs }
 }
 
 // A prompt as Claude Code raises it: typed at the terminal, mid turn when turnId is set.
@@ -111,6 +118,14 @@ for (const [who, origin, counts] of [
     expect(w.toasts).toEqual(counts ? [TOAST] : [])
   })
 }
+
+test("a reader mod-kit cannot answer leaves a + note as typed, said once, and it still goes on", KIT, async ($, on) => {
+  const w = world(on)
+  for (let i = 0; i < 2; i++) await $.prompt.submit(typed('+ also link the commission', 't1', { kind: 'composer', breaks: true }))
+  expect(w.seen.map(x => x.context)).toEqual([[], []])
+  expect(w.toasts).toEqual([])
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
 
 test('no toast when the note never entered: refused beneath', KIT, async ($, on) => {
   const w = world(on, { dropBelow: true })

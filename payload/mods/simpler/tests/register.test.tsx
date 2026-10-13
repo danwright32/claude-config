@@ -114,6 +114,8 @@ const modKit: { name: string; register: Register } = {
         clickable: async () => (await built.env.get('NO_CLICKS')) !== '1',
         // #1135: whether a prompt is Dan's words, asked of the world, which reads with mod-kit's own copy.
         isDans: async (input: { origin: unknown }) => {
+          // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+          if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
           const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout) as boolean
@@ -332,6 +334,17 @@ for (const [who, origin, counts] of [
     await ui.unmount()
   })
 }
+
+test("a reader mod-kit cannot answer leaves the button, said once", KIT, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await answer($, LONG)
+  for (let i = 0; i < 2; i++) await submitAs($, { kind: 'composer', breaks: true } as never)
+  const ui = await mountReply($, 'terminal')
+  expect(await ui.find({ key: 'simpler' })).toBeDefined()
+  await ui.unmount()
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
 
 test('pressing it submits the request as Dan, logs the press with the kind, and takes the button away', KIT, async ($, on) => {
   const w = world(on)

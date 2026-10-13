@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 
@@ -19,6 +19,23 @@ const QUIET_NOTE = [
   'Dan turned off next issue pickers for this session. Offer next issues as a plain list, never as a picker, whatever any other rule says, until he runs /pickers on.',
 ].join('\n')
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pickers', description: 'Turns next issue pickers back on for this session.', argumentHint: 'on' })
@@ -36,7 +53,7 @@ export const register: Register = on => {
   // What Dan types, at the Mac or from his phone through Remote Control, as mod-kit's one reader says
   // (#1135). A plugin's prompt, a handoff's opening one included, a peer's or a notice is not his.
   on('prompt.submit', async ($, e, next) => {
-    if (!(await $.modkit.isDans({ origin: e.origin }))) return next(e)
+    if (!(await dansWords($, e.origin))) return next(e)
     if (asksQuiet(e.text) && !(await $.state.get(quietRef)).value) {
       await $.state.set(quietRef, true)
       $.ui.invalidate('prompt.section')

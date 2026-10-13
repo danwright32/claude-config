@@ -680,8 +680,17 @@ and open to his correction.
   an image. The mod records his first worded message, his newest few and how many of his messages
   carried only images as each enters; only those open the name, count as his image turns, or reach
   Haiku as the person's. A record from before the change holds none, so such a session waits for
-  his next words. A slash command he types counts only if the engine passes it through
-  `prompt.submit`, which has not been measured (the transcript stores one with no origin).
+  his next words. A slash command he types WITH arguments counts as his words too (`/goal complete
+  all open issues`; Dan, 2026-10-13, #1135), read as `/<command> <arguments>`; one with no
+  arguments says nothing to name by, and a plugin's command never counts. Measured on Claude Code
+  2.1.296 the same day, with a probe plugin in a real interactive session in a pseudo terminal: a
+  typed slash command never reaches `prompt.submit` (with or without arguments), only
+  `command.run`, carrying his origin (`composer`) and its arguments, while a typed message reaches
+  `prompt.submit` as `composer`; a plugin cannot submit a slash command through `prompt.submit` at
+  all (the host refuses one beginning with `/`), and another plugin's `$.command.run` did not reach
+  the probe's `command.run` hook. So the mod reads commands at `command.run`, asks mod-kit's same
+  reader whose they are, and keeps the arguments rule to itself: it is about what can name a
+  session, not whose words they are, and the goal tracker keeps no slash command as a request.
 - The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
@@ -1793,7 +1802,10 @@ it two ways: the goal tracker and auto session name also counted a handoff's ope
 pressed Use on. Dan decided on 2026-10-13: only what he types counts, at the Mac (`composer`) or
 from his phone through Remote Control (`bridge`), never a handoff's opening prompt, in every mod.
 mod-kit holds the one reader (`$.modkit.isDans({ origin })`, `hooks/origin.ts`), and every one of
-them asks it; whether a message came from the phone, which scope modes asks for its phone line, is
+them asks it; a reader that cannot answer (a mod-kit loaded before it had one, which a reload can
+leave, standing rule 5) reads the prompt as not his, the side that changes nothing, said once in
+the transcript, and the prompt always goes on. Auto session name also counts a slash command he
+types with arguments, read at `command.run` with the same reader (above); whether a message came from the phone, which scope modes asks for its phone line, is
 another question and stays its own. `tools/check-mod-shared-parts.sh` fails any other mod that
 reads the origin for this itself (naming the `composer` kind as a string). Each mod's tests ask
 through a byte for byte copy of the reader under its `tests/mod-kit`, with a typed prompt, a phone

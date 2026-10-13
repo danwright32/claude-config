@@ -1,4 +1,4 @@
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import type { AddonNotes } from '../types/index.d.ts'
 import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, resumeLine } from './classify.ts'
 
@@ -18,6 +18,23 @@ import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, res
 // of his. Held for this session's process only: a hot reload of the mod forgets it, which costs at
 // most one reply read as a plain message, the behaviour without the mod.
 let interrupted = false
+
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Add-on notes could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
 
 export const register: Register = on => {
   // The resume line is read for other mods here, by the rule this mod draws it by, so a mod that
@@ -49,7 +66,7 @@ export const register: Register = on => {
   // from the phone through Remote Control. A peer session, a background task or a plugin, a
   // handoff's opening prompt included, is never an add-on.
   on('prompt.submit', async ($, e, next) => {
-    if (!(await $.modkit.isDans({ origin: e.origin }))) return next(e)
+    if (!(await dansWords($, e.origin))) return next(e)
     const midTurn = e.turnId !== undefined
     // An interrupt is answered by Dan's next message, whatever it says; one typed into a running
     // turn is not that message (the interrupted turn is over by then, so a running turn is a newer one).

@@ -2803,6 +2803,23 @@ const WORKER_NOTE =
   "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
 const HOME_NOTE = `Dan is back at the Mac: ${MODE_DEF.home.will}.`
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Scope modes could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -3016,7 +3033,7 @@ export const register: Register = on => {
     // Only Dan's own words switch a mode, as mod-kit's one reader says (#1135): what he types, at the
     // Mac or from his phone. Nothing else may (a peer session, a plugin, a handoff's opening prompt, a
     // notification), so a message from elsewhere saying "go ahead and build" cannot lift no build.
-    const isDans = await $.modkit.isDans({ origin: e.origin })
+    const isDans = await dansWords($, e.origin)
     if (isDans) {
       const triggers = triggersIn(e.text) as Trigger[]
       // What each switch says it now does (#1055), opened with once for them all, so a message that

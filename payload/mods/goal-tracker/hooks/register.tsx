@@ -375,6 +375,23 @@ const beginAgain = async ($: EngineInterface) => {
   if (progress) progress = withWaiting(progress)
 }
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`The goal tracker could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   // Everything the module keeps belongs to one session: a later start in the same process begins
   // again rather than reading the last one's (lessons review of #634).
@@ -481,7 +498,7 @@ export const register: Register = on => {
   // (#1135, Dan, 2026-10-13): a handoff's opening prompt he pressed Use on is not, which #706 had
   // counted as the session's first request, nor is any other plugin's prompt or a notification.
   on('prompt.submit', async ($, e, next) => {
-    const isPerson = await $.modkit.isDans({ origin: e.origin })
+    const isPerson = await dansWords($, e.origin)
     await paneOnPrompt($, e, isPerson)
     const result = await next(e)
     const text = e.text.trim()

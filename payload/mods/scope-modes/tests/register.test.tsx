@@ -84,7 +84,11 @@ const deps: { name: string; register: Register } = {
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
           // #1135: whether a prompt is Dan's words, read by the world with mod-kit's own copy.
-          isDans: async (input: { origin: unknown }) => kit('isDans', input),
+          isDans: async (input: { origin: unknown }) => {
+            // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+            if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
+            return kit('isDans', input)
+          },
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
@@ -785,6 +789,14 @@ for (const [who, origin, counts] of [
     else expect(w.modes).toEqual([])
   })
 }
+
+test("a reader mod-kit cannot answer reads a phrase as not Dan's, so no mode switches, said once, and the prompt still goes on", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  for (let i = 0; i < 2; i++) expect((await say($ as never, 'no coding yet', { kind: 'composer', breaks: true })).text).toBe('no coding yet')
+  expect(w.modes).toEqual([])
+  expect(w.logs.filter((l: string) => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
 
 test('/nobuild and /winddown say which mode turned on; /build turns it off and confirms', withDeps, async ($, on) => {
   const { w, clock } = world(on)

@@ -51,6 +51,8 @@ const modKit: { name: string; register: Register } = {
         clickable: never('clickable'),
         // #1135: whether a prompt is Dan's words, read by the world with mod-kit's own copy.
         isDans: async (input: { origin: unknown }) => {
+          // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+          if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
           const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return JSON.parse(r.stdout) as boolean
@@ -353,6 +355,49 @@ for (const [who, origin, counts] of [
       expect(w.prompts.length).toBe(1)
       expect(w.prompts[0]).toContain('Opening request:\nCarry on with the Gmail send fix')
       expect(w.renames.map(r => r.args)).toEqual(['Gmail send fix'])
+    } else {
+      expect(w.prompts.length).toBe(0)
+      expect(w.renames.length).toBe(0)
+    }
+  })
+}
+
+test("a reader mod-kit cannot answer reads a message as not Dan's words, so it opens no name, said once", withKit, async ($, on) => {
+  const w = world(on, { messages: [], replies: ['Gmail send fix'] })
+  await start($, w)
+  await w.clock.advance(10 * MIN)
+  for (let i = 0; i < 2; i++) await sends($, w, 'Carry on with the Gmail send fix', { kind: 'composer', breaks: true } as never)
+  w.messages.push(said('Reading the notes.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
+
+// Dan, 2026-10-13 (#1135): a slash command he typed WITH arguments is his words for naming. Measured
+// the same day on Claude Code 2.1.296, a typed slash command never reaches prompt.submit: it arrives
+// at command.run with his origin (composer) and its arguments, so it is read there. One with no
+// arguments says nothing to name the session by, and a plugin's command is never his.
+for (const [who, args, origin, counts] of [
+  ['typed with arguments', 'complete all open issues', { kind: 'composer' }, true],
+  ['sent from his phone with arguments', 'complete all open issues', { kind: 'bridge' }, true],
+  ['typed with no arguments', '', { kind: 'composer' }, false],
+  ['run by a plugin, with arguments', 'complete all open issues', { kind: 'plugin', name: 'some-plugin' }, false],
+] as [string, string, Origin, boolean][]) {
+  test(`a slash command ${who} ${counts ? 'opens the name' : 'opens no name'}`, withKit, async ($, on) => {
+    const w = world(on, { messages: [], replies: ['Complete open issues'] })
+    on('command.run', { command: 'goal' }, () => ({ text: 'Goal set.' }))
+    await start($, w)
+    await w.clock.advance(10 * MIN)
+    w.messages.push({ role: 'user', text: `/goal ${args}`.trim(), toolUses: [] })
+    await $.command.run({ command: 'goal', args, origin, presentation: { isFullscreen: false, columns: 120 } } as never)
+    w.messages.push(said('Working through the open issues now.'))
+    await turnEnds($)
+    await w.clock.settle()
+    if (counts) {
+      expect(w.prompts.length).toBe(1)
+      expect(w.prompts[0]).toContain('Opening request:\n/goal complete all open issues')
+      expect(w.renames.map(r => r.args)).toEqual(['Complete open issues'])
     } else {
       expect(w.prompts.length).toBe(0)
       expect(w.renames.length).toBe(0)
