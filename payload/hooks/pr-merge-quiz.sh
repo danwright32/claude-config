@@ -169,10 +169,30 @@ mt_runs_merge "$cmd" || exit 0
 # Announced, never silent. A skip nobody sees reads exactly like a hook that never fired (L98),
 # so it says so in one line straight to Dan, through systemMessage rather than a block, because
 # there is nothing for Claude to decide and a block would spend a turn relaying a fixed fact.
+#
+# EVERY MERGE IN THE COMMAND (claude-config#1082). The merge gates refuse a command merging more
+# than one pull request (#1072), so this hook meets one only when an override let it through, and it
+# read the first merge alone: an opted out or quietly labelled first merge silenced the quiz for a
+# visible second one. So each merge is read where it ran (mt_merge_each), the opt out skips only when
+# EVERY merge's repository carries the marker, and the label gate below reads every merge that is not
+# opted out. A command running several merges that nothing can read is quizzed, saying so.
 QUIZ_OPT_OUT_MARKER=".no-pr-quiz"
-quiz_repo="$(mt_checkout_dir "$(mt_repo_dir "$cmd" "$cwd")")"
-if [ -n "$quiz_repo" ] && [ -f "$quiz_repo/$QUIZ_OPT_OUT_MARKER" ]; then
-  msg="PR quiz skipped: $(basename "$quiz_repo") has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges here quizzed again."
+merge_lines="$(mt_merge_each "$cmd" "$cwd")"; each_rc=$?
+merges_unread=0; [ "$each_rc" -eq 2 ] && merges_unread=1
+quizzed_lines=""; opted_out_repos=""; merge_count=0
+while IFS= read -r m <&3; do
+  [ -n "$m" ] || continue
+  merge_count=$((merge_count + 1))
+  quiz_repo="$(mt_checkout_dir "${m%%$'\t'*}")"
+  if [ -n "$quiz_repo" ] && [ -f "$quiz_repo/$QUIZ_OPT_OUT_MARKER" ]; then
+    case " $opted_out_repos " in *" $(basename "$quiz_repo") "*) ;; *) opted_out_repos="${opted_out_repos:+$opted_out_repos }$(basename "$quiz_repo")" ;; esac
+  else
+    quizzed_lines+="$m"$'\n'
+  fi
+done 3<<< "$merge_lines"
+if [ "$merges_unread" = 0 ] && [ "$merge_count" -gt 0 ] && [ -z "$quizzed_lines" ]; then
+  msg="PR quiz skipped: $opted_out_repos has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges here quizzed again."
+  [ "$merge_count" -gt 1 ] && msg="PR quiz skipped: every repository this command merged in ($opted_out_repos) has opted out with $QUIZ_OPT_OUT_MARKER at its root. Delete that file to have merges there quizzed again."
   if command -v jq >/dev/null 2>&1; then
     jq -nc --arg m "$msg" '{systemMessage: $m}'
   else
@@ -328,18 +348,34 @@ quiz_is_owed() {
     return 0
   fi
 
+  # Several merges nothing could read (#1082): which pull requests they were is unknown, so no label
+  # can silence the quiz.
+  QUIZ_VERDICT="unread-merges"
+  [ "$merges_unread" = 1 ] && return 0
+
+  # Every merge that is not opted out, and the quiz is owed when ANY of them owes it (#1082): the
+  # first merge's quiet label used to silence a visible second one. All quiet is quiet.
+  local m
+  while IFS= read -r m <&4; do
+    [ -n "$m" ] || continue
+    quiz_owed_for "${m%%$'\t'*}" "$(printf '%s' "$m" | cut -f2)" "${m##*$'\t'}" && return 0
+  done 4<<< "$quizzed_lines"
+  [ "$QUIZ_VERDICT" = "quiet" ] && return 1
+  return 0
+}
+
+# One merge's label: 0 when it owes a quiz (QUIZ_VERDICT says why), 1 when its label says quiet.
+quiz_owed_for() {  # $1 = the directory the merge runs in, $2 = the repository it names or empty, $3 = its number or empty
   QUIZ_VERDICT="no-repo"
   # WHICH repository, resolved the way gh resolves it: the merge's own --repo, -R or pull
   # request link first, then the directory the merge runs in (claude-config#463, #470). This
   # read asked gh about the session's folder whatever the merge named, so a merge from another
   # project had its label read from a stranger's pull request, or from nothing at all.
-  local repo_flag
-  repo_flag="$(mt_repo_flag "$cmd")"
-  cd "$(mt_repo_dir "$cmd" "$cwd")" 2>/dev/null || return 0
+  local repo_flag="$2"
+  cd "$1" 2>/dev/null || return 0
 
-  local slug pr envelope labels
+  local slug pr="$3" envelope labels
   slug="${repo_flag:-$(mt_remote_slug)}"
-  pr="$(mt_pr_number "$cmd")"
   envelope="$(mt_pr_view "$pr" "number,url,labels" "$slug" "$repo_flag")"
   if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true" ]; then
     # Three different faults, three names. An answer about ANOTHER repo means the wrong
@@ -457,6 +493,25 @@ if [ -n "$session_id" ]; then
   skip_note="$skip_note If he says to skip quizzes for the rest of this session, run exactly this command, then confirm in one line: bash $(printf '%q' "$HOOK_DIR/pr-merge-quiz.sh") --snooze-session $session_id"
 fi
 notice="$notice$skip_note"
+
+# More than one merge (#1082): the instruction is written for one, so it names every pull request
+# the command merged and asks for each to be judged, rather than leaving Claude to quiz the first.
+if [ "$merges_unread" = 1 ]; then
+  notice="$notice
+
+This command ran more than one merge, and nothing here could read which pull requests they were. Find each one from the command and its output, and run steps 1 to 3 for EACH of them."
+elif [ "$merge_count" -gt 1 ]; then
+  merged_list=""
+  while IFS= read -r m <&3; do
+    [ -n "$m" ] || continue
+    m_flag="$(printf '%s' "$m" | cut -f2)"
+    m_repo="${m_flag:-$(cd "${m%%$'\t'*}" 2>/dev/null && mt_remote_slug)}"
+    merged_list="${merged_list:+$merged_list, }$(mt_pr_label "${m##*$'\t'}") in ${m_repo:-${m%%$'\t'*}}"
+  done 3<<< "$quizzed_lines"
+  notice="$notice
+
+This command merged more than one pull request: $merged_list. Run steps 1 to 3 for EACH of them, and quiz on every one that shipped something user facing.${opted_out_repos:+ Merges in $opted_out_repos are not quizzed: that repository has opted out with $QUIZ_OPT_OUT_MARKER.}"
+fi
 
 # Appended through jq rather than by rebuilding the reason, because the reason is a single
 # JSON string carrying its own escapes and re-quoting it by hand is how they get lost.

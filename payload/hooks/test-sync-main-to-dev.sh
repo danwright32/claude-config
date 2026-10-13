@@ -33,7 +33,13 @@ cat > "$FIXTURE/bin/gh" <<'SH'
 case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
-  *"pr view"*) [ -f "$FAKE_PR_JSON" ] && cat "$FAKE_PR_JSON" ;;
+  *"pr view"*)
+    # A per repository record (pr-<owner>_<name>.json, the --repo or -R the call names) wins, so a
+    # command merging into two repositories can be answered for each (claude-config#1082).
+    repo="" prev=""
+    for a in "$@"; do case "$prev" in --repo|-R) repo="$a" ;; esac; prev="$a"; done
+    per="$(dirname "$FAKE_PR_JSON")/pr-$(printf '%s' "$repo" | tr '[:upper:]/' '[:lower:]_').json"
+    if [ -n "$repo" ] && [ -f "$per" ]; then cat "$per"; else [ -f "$FAKE_PR_JSON" ] && cat "$FAKE_PR_JSON"; fi ;;
   api*)
     printf '%s\n' "$*" >> "$FAKE_API_LOG"
     case "${FAKE_MERGE_STATUS:-201}" in
@@ -131,6 +137,22 @@ fire "$FIXTURE/tp" "gh pr view 7"
 check "viewing a PR makes no call" no_call
 fire "$FIXTURE/tp" "SKIP_MAIN_DEV_SYNC=1 gh pr merge 7"
 check "the documented override makes no call" no_call
+
+# --- Every merge in a command is acted on, not only the first (claude-config#1082) ---
+# The merge gates refuse a command merging more than one pull request (#1072), so this hook sees two
+# only under an override, and then it acted on the FIRST alone: a first merge in a repository that is
+# not listed made it say nothing, and the second merge's repository was left with dev behind main.
+printf '{"number":7,"url":"https://github.com/acme/widget/pull/7","state":"MERGED","baseRefName":"main"}' > "$FIXTURE/pr-acme_widget.json"
+printf '{"number":8,"url":"https://github.com/%s/pull/8","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
+fire "$FIXTURE/other" "SKIP_PR_REVIEW=1 gh pr merge 7 -R acme/widget --squash && gh pr merge 8 -R $TP --squash"
+check "#1082 the second merge's listed repository is synced" called_merge
+check "#1082 naming that pull request" holds "$OUT" "after PR #8"
+# Two merges into the listed repository: each is acted on and each outcome is said.
+printf '{"number":9,"url":"https://github.com/%s/pull/9","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
+fire "$FIXTURE/other" "SKIP_PR_REVIEW=1 gh pr merge 8 -R $TP --squash; gh pr merge 9 -R acme/widget --squash"
+check "#1082 a listed first merge is still synced when a second follows" called_merge
+check "#1082 and the unlisted second merge asks for nothing" eval '[ "$(grep -c merges "$FAKE_API_LOG")" = 1 ]'
+rm -f "$FIXTURE/pr-acme_widget.json" "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
 
 # Positive control for the list file: trypennie is in the SHIPPED list, so the cases above exercised
 # the real registry rather than a fixture copy of it.
