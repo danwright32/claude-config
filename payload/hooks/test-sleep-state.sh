@@ -139,6 +139,16 @@ printf '{"v":1,' > "$WORK/bad.json"
 check_eq "a broken record says why, asked in a subshell as every caller asks" "the sleep record is not JSON" "$(sleep_why "$WORK/bad.json" 1 1)"
 check_eq "an asleep record has no why" "" "$(sleep_why "$WORK/rec0.json" 1791360000000 1759800000)"
 
+# THE LIBRARY FINDS ITS OWN FOLDER WITH NO EXTERNAL COMMAND (claude-config#1098). It used dirname,
+# so under a PATH holding nothing `cd ""` left it in the CALLER's folder and sleep_note ran
+# whichever sleep-report.py sat there, or the installed one, rather than the copy beside it,
+# without saying so. Asked from a folder that is not the library's, by an absolute and by a
+# relative path, with bash named by its own path so nothing at all is looked up.
+own_abs="$(cd "$WORK" && PATH=/nonexistent "$BASH" -c '. "$1" 2>/dev/null; printf "%s" "$_SLEEP_LIB_DIR"' _ "$LIB")"
+check_eq "#1098 sourced by its full path under an empty PATH, it knows its own folder" "$DIR/lib" "$own_abs"
+own_rel="$(cd "$DIR" && PATH=/nonexistent "$BASH" -c '. lib/sleep.sh 2>/dev/null; printf "%s" "$_SLEEP_LIB_DIR"')"
+check_eq "#1098 and sourced by a relative path too" "$DIR/lib" "$own_rel"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
