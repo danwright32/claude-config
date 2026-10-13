@@ -146,6 +146,7 @@ function lint(text, products) {
     if (!second) say(refusals, opener[0].n, 'a post covering more than one product needs the product line "' + expected + '" on the line after the opener');
     else if (second.text.trim() !== expected) say(refusals, second.n, 'the line after the opener must be the product line "' + expected + '"');
   } else {
+    if (inOrder.length === 1) say(refusals, sections[0].n, 'a post covering one product has no product heading; start with its first category');
     opener.slice(1).forEach(function (l) {
       if (isProductLine(l.text, products)) say(refusals, l.n, 'a post covering one product carries no product line; delete it');
     });
@@ -166,6 +167,7 @@ function main(argv) {
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     products = cfg.repos.map(function (r) { return r.name; });
+    if (!products.length) throw new Error('it lists no products');
     if (!products.every(function (n) { return typeof n === 'string' && n; })) throw new Error('a repo has no name');
   } catch (e) {
     process.stderr.write('The product list in repos.json at ' + configPath + ' could not be read (' + (e.code || e.message) + ').\n');

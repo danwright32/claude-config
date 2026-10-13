@@ -654,6 +654,18 @@ const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
   check(r.code === 1 && /line 2\b[^\n]*one product/i.test(r.out), 'a one product post carries no product line', r.all);
 }
 {
+  const r = lintWith(['Updates for the week of October 6 :thread:', 'PET', 'GOALS', 'Rookie goals count from the floor date.', ''].join('\n'));
+  check(r.code === 1 && /line 2\b[^\n]*one product/i.test(r.out), 'a one product post carries no product heading either', r.all);
+}
+{
+  const empty = path.join(SCRATCH, 'empty repos.json');
+  fs.writeFileSync(empty, JSON.stringify({ repos: [] }));
+  const file = path.join(SCRATCH, 'empty config post.txt');
+  fs.writeFileSync(file, multi([MULTI_OPENER], ['Slate', 'PET', 'Sonar']));
+  const r = run(LINT, ['--config', empty, file], { scenario: '', ghLog: '' });
+  check(r.code === 2 && /no products/i.test(r.err), 'a config listing no products is refused, never read as no products', r.all);
+}
+{
   const r = lintWith(CLEAN);
   check(r.code === 0 && !/line \d/.test(r.out), 'a one product post with no product sections still passes with a config', r.all);
 }
