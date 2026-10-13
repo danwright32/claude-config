@@ -846,8 +846,17 @@ number is shared. `lesson-fanout.sh` also refuses, before touching GitHub, any n
 `lesson-faults` fails without reporting on duplicates at all (other faults only, or it could not
 run), every number is refused, since those read alike and neither says the number is unshared.
 
-`next-lesson` does not RESERVE the number it prints. Two sessions asking before either has written
-are offered the same one, and the duplicate check catches it only once both are written.
+`next-lesson` RESERVES the number it prints for ten minutes (claude-config#1148), so two sessions
+asking before either has written are given two numbers, and asking twice gives two answers. The
+reservations are one line each in `~/.claude/state/lesson-reservations.tsv` (number, band, when it
+lapses, the session that asked), written under a small lock of its own, never the sync lock. That
+file is never synced, so a reservation cannot cross Macs. A reservation clears once its lesson is
+written in either copy, and one nobody uses lapses, after which its number is offered again since it
+was never published. `check-lessons` and a pull's renumber skip reserved numbers without reserving
+any. Ten minutes covers the gap between asking and writing, including an entry the lesson check
+blocks and the session then fixes; a longer window buys nothing. Set `SYNC_LESSON_RESERVE_SECONDS`
+to change it. A line in that file that cannot be read stops `next-lesson` and names the file;
+deleting it clears every reservation and loses nothing else.
 
 An entry has to be written as `- **Lnnn. ...` to be a lesson at all. Everything here reads only that
 form, so one written any other way (a heading, a list item with the bold left off) is invisible to

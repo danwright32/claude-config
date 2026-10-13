@@ -4710,12 +4710,14 @@ check "#15 next-lesson does not offer a gap"          "! grep -q 'L3' <<< \"\$ou
 # pipefail a grep matching nothing killed the whole command and printed nothing.
 printf '# just rules, no lessons here\n' > "$LNH/RTK.md"
 out_next2="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" next-lesson 2>&1)"; rc_next2=$?
-check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && grep -q '^L6$' <<< \"\$out_next2\""
+# L7, not L6: the first ask above RESERVED L6 for ten minutes, so a second ask is given the next one
+# (claude-config#1148).
+check "#15 next-lesson survives a file with no lessons" "[ \"\$rc_next2\" -eq 0 ] && grep -q '^L7$' <<< \"\$out_next2\""
 
 # The standalone check, usable as a gate before writing a lesson.
 out_chk_ok="$(SYNC_NO_GIT=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_ok=$?
 check "#15 check-lessons passes on sound numbering" "[ \"\$rc_chk_ok\" -eq 0 ]"
-check "#15 check-lessons reports the next free number" "grep -q 'next free: L6' <<< \"\$out_chk_ok\""
+check "#15 check-lessons reports the next free number, past the two reserved" "grep -q 'next free: L8' <<< \"\$out_chk_ok\""
 printf -- '- **L5. five again.** duplicate\n' >> "$LNH/LESSONS.md"
 out_chk_bad="$(SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$LNH" SYNC_REPO="$LN" bash "$SCRIPT" check-lessons 2>&1)"; rc_chk_bad=$?
 check "#15 check-lessons fails on a duplicate" "[ \"\$rc_chk_bad\" -ne 0 ]"
@@ -10947,7 +10949,10 @@ check "#44 and the two Macs are not offered the same number" \
 # A band is claimed once. Re-claiming on every call would walk up the bands for ever and make the
 # number nobody can predict.
 out_bd2b="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 asking twice gives the same answer"       "grep -q '^L501$' <<< \"\$out_bd2b\""
+# Asking twice used to give the same answer, and that is exactly what let two sessions take one
+# number. The first ask now RESERVES L501 for ten minutes, so the second is given L502
+# (claude-config#1148); what this still proves is that the band is not claimed again.
+check "#44 asking twice inside the reservation window gives the next number" "grep -q '^L502$' <<< \"\$out_bd2b\""
 check "#44 and does not claim a second band"          "[ \"\$(cat '$BDR/lesson-bands/MacTwo' 2>/dev/null)\" = '501' ]"
 check "#44 an established Mac says nothing about claiming" \
   "! grep -qi 'claimed' <<< \"\$out_bd2b\""
@@ -10957,8 +10962,10 @@ printf -- '- **L501. five hundred and one.** body\n' >> "$BDB/LESSONS.md"
 printf -- '- **L501. five hundred and one.** body\n' >> "$BDA/LESSONS.md"
 out_bd3="$(SYNC_HOSTNAME=MacTwo SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDB" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
 out_bd4="$(SYNC_HOSTNAME=MacOne SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDA" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 the Mac that wrote it moves on to the next in its band" "grep -q '^L502$' <<< \"\$out_bd3\""
-check "#44 the other Mac is unaffected by it"                      "grep -q '^L4$' <<< \"\$out_bd4\""
+# MacTwo wrote L501 and still holds L502 reserved, so it moves on past both. MacOne's own first ask
+# reserved L4, so it is given L5, and nothing MacTwo wrote or reserved moves it (#1148).
+check "#44 the Mac that wrote it moves on past everything it has written or reserved" "grep -q '^L503$' <<< \"\$out_bd3\""
+check "#44 the other Mac is unaffected by it"                      "grep -q '^L5$' <<< \"\$out_bd4\""
 # Numbering is still one namespace, so the duplicate check has to keep judging the whole file
 # rather than one band: an arriving duplicate is exactly what it exists to catch.
 printf -- '- **L501. a second entry under the same number.** body\n' >> "$BDA/LESSONS.md"
@@ -10995,7 +11002,8 @@ check "#44 and the rollover is reported, not silent" \
 # Rolling over is a claim like any other: made once. A band that rolled on every call would walk up
 # the bands for ever and make the number nobody can predict.
 out_bdfull2="$(SYNC_HOSTNAME=MacThree SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$BDC" SYNC_REPO="$BDR" bash "$SCRIPT" next-lesson 2>&1)"
-check "#44 asking again mints from the band it rolled to"   "grep -q '^L1001\$' <<< \"\$out_bdfull2\""
+# L1002: the ask that rolled over reserved L1001 (#1148).
+check "#44 asking again mints from the band it rolled to"   "grep -q '^L1002\$' <<< \"\$out_bdfull2\""
 check "#44 and does not roll a second time"                 "[ \"\$(cat '$BDR/lesson-bands/MacThree' 2>/dev/null)\" = '1001' ]"
 check "#44 and says nothing, because nothing changed"       "! grep -qi 'had no number left' <<< \"\$out_bdfull2\""
 # A band NOBODY claims can still hold numbers: a Mac that moved off a band after a collision leaves
@@ -11052,6 +11060,7 @@ done
 # so the rule has to give the same answer wherever it runs: the lower name keeps the band. Which
 # Mac that is does not matter; that both agree without talking does.
 rm -f "$BDR/lesson-bands/MacThree"            # the full-band fixture above, not part of this one
+rm -f "$BDC/state/lesson-reservations.tsv"    # and the numbers it reserved in the home both share (#1148)
 printf '501\n' > "$BDR/lesson-bands/MacTwo"   # restore, then hand a later-named Mac the same band
 printf '501\n' > "$BDR/lesson-bands/MacZulu"
 printf -- '- **L1. one.** body\n' > "$BDC/LESSONS.md"
@@ -11234,7 +11243,10 @@ NLR="$WORK/nl1140-repo"; NLH="$WORK/nl1140-home"
 mkdir -p "$NLR/payload" "$NLR/lesson-bands" "$NLH"
 echo 501 > "$NLR/lesson-bands/MacWork"
 printf '# rules\n@LESSONS.md\n' > "$NLH/CLAUDE.md"; cp "$NLH/CLAUDE.md" "$NLR/payload/CLAUDE.md"
-_nl1140(){ SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NLH" SYNC_REPO="$NLR" bash "$SCRIPT" "$@" 2>&1; }
+# Each ask here is about which numbers the FILES hold, so it starts with nothing reserved: the
+# fixture is rewritten between asks, and an earlier ask's reservation would otherwise decide the
+# answer (claude-config#1148 has its own section for that).
+_nl1140(){ rm -f "$NLH/state/lesson-reservations.tsv"; SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NLH" SYNC_REPO="$NLR" bash "$SCRIPT" "$@" 2>&1; }
 # The case the issue names: written here, not sent. Counted before this change and after it.
 printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L762. written here, not sent.** body\n' > "$NLH/LESSONS.md"
 printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$NLR/payload/LESSONS.md"
@@ -11292,6 +11304,87 @@ nl1140_byid1_rc=0; nl1140_byid1="$(_nl1140 lesson "${nl1140_id1:-none}")" || nl1
 check "#1140 and the first entry's id finds only the first" \
   "[ \"\$nl1140_byid1_rc\" -eq 0 ] && grep -q 'slate rule' <<< \"\$nl1140_byid1\" && ! grep -q 'bidspoke rule' <<< \"\$nl1140_byid1\""
 check "#1140 and the answer by id still says the number is shared" "grep -q 'names 2 lessons' <<< \"\$nl1140_byid1\""
+
+section "== a number handed out is reserved for a few minutes (claude-config#1148) =="
+# next-lesson printed a number and recorded nothing, so two sessions asking before either had written
+# its entry were both handed it: the likeliest cause of the 2026-10-13 L762 clash, where two sessions
+# then renumbered 762 to 765 in lockstep. Each number it prints is now RESERVED for a window, in a
+# per Mac file under $CLAUDE_HOME/state (never synced, so a reservation can never cross Macs), and
+# the next ask skips it. A written lesson clears its reservation; an unused one lapses.
+RVR="$WORK/rv1148-repo"; RVH="$WORK/rv1148-home"; RVF="$RVH/state/lesson-reservations.tsv"
+mkdir -p "$RVR/payload" "$RVR/lesson-bands" "$RVH/state"
+echo 501 > "$RVR/lesson-bands/MacWork"
+printf '# rules\n@LESSONS.md\n' > "$RVH/CLAUDE.md"; cp "$RVH/CLAUDE.md" "$RVR/payload/CLAUDE.md"
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$RVH/LESSONS.md"; cp "$RVH/LESSONS.md" "$RVR/payload/LESSONS.md"
+_rv1148(){ SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$RVH" SYNC_REPO="$RVR" bash "$SCRIPT" "$@" 2>&1; }
+# The incident, driven: five sessions ask at once. Each must get a number nobody else got.
+rm -f "$RVF"
+for _rv_i in 1 2 3 4 5; do
+  ( _rv1148 next-lesson > "$WORK/rv1148-ask-$_rv_i.out" ) &
+done
+wait
+rv_nums="$(cat "$WORK"/rv1148-ask-*.out | grep -E '^L[0-9]+$' | sort)"
+dbg "five concurrent asks: $(printf '%s' "$rv_nums" | tr '\n' ' ')"
+check "#1148 five sessions asking at once are each given a number" "[ \"\$(printf '%s\n' \"\$rv_nums\" | grep -c .)\" -eq 5 ]"
+check "#1148 and no two of them the same one" "[ \"\$(printf '%s\n' \"\$rv_nums\" | sort -u | grep -c .)\" -eq 5 ]"
+check "#1148 and they are the next five numbers, with no gap" \
+  "[ \"\$(printf '%s\n' \"\$rv_nums\" | tr '\n' ' ')\" = 'L762 L763 L764 L765 L766 ' ]"
+# What is recorded: the number, the band, when it lapses, and who asked.
+rm -f "$RVF"
+rv_now="$(date +%s)"
+rv_one="$(CLAUDE_CODE_SESSION_ID=session-one _rv1148 next-lesson)"
+check "#1148 the number handed out is reserved in this Mac's own state" "grep -q '^762	501	' '$RVF'"
+rv_exp="$(awk -F '\t' '$1 == 762 { print $3 }' "$RVF")"
+check "#1148 for ten minutes" "[ \"\$(( rv_exp - rv_now ))\" -ge 590 ] && [ \"\$(( rv_exp - rv_now ))\" -le 610 ]"
+check "#1148 naming the session that asked" "grep -q '	session-one\$' '$RVF'"
+check "#1148 and the asker is told it is reserved, and for how long" "line_has \"\$rv_one\" 'L762' 'reserved' '10 minutes'"
+check "#1148 nothing about a reservation reaches the sync repository" "! grep -rq 'session-one' '$RVR'"
+# Asking twice inside the window gives two numbers now. The rule #44 recorded, that asking twice gives
+# the same answer, was true only because nothing was reserved, and it is exactly what let two
+# sessions take one number.
+rv_two="$(_rv1148 next-lesson)"
+check "#1148 asking again inside the window is given the next number" "grep -q '^L763\$' <<< \"\$rv_two\""
+# check-lessons previews the number the next ask would get, and reserves nothing.
+rv_chk="$(_rv1148 check-lessons)"
+check "#1148 check-lessons previews the next number past the reservations" "grep -q 'next free: L764' <<< \"\$rv_chk\""
+check "#1148 and reserves nothing itself" "! grep -q '^764	' '$RVF'"
+# A written lesson clears its reservation.
+printf -- '- **L762. written.** body\n' >> "$RVH/LESSONS.md"
+rv_three="$(_rv1148 next-lesson)"
+check "#1148 once the lesson is written its reservation is cleared" "! grep -q '^762	' '$RVF'"
+check "#1148 while the unwritten one still holds its number" "grep -q '^764\$' <<< \"\$(cut -f1 '$RVF')\" && grep -q '^L764\$' <<< \"\$rv_three\""
+# An unused reservation lapses: written here with a past expiry, as one left by a session that asked
+# and never wrote. Its number is offered again, since nothing ever published it.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$RVH/LESSONS.md"
+printf '762\t501\t%s\tgone-session\n' "$(( $(date +%s) - 5 ))" > "$RVF"
+rv_lapsed="$(_rv1148 next-lesson)"
+check "#1148 a lapsed reservation does not hold its number" "grep -q '^L762\$' <<< \"\$rv_lapsed\""
+check "#1148 and is dropped from the file" "! grep -q 'gone-session' '$RVF'"
+# A reservation in a band this Mac no longer mints from is not this Mac's business any more.
+printf '1200\t1001\t%s\tother-band\n' "$(( $(date +%s) + 300 ))" > "$RVF"
+rv_band="$(_rv1148 next-lesson)"
+check "#1148 a reservation from another band moves nothing" "grep -q '^L762\$' <<< \"\$rv_band\""
+# A line that cannot be read is never read as a number to skip or as an empty file: refused, named.
+printf 'garbage line\n' > "$RVF"
+rv_bad_rc=0; rv_bad="$(_rv1148 next-lesson)" || rv_bad_rc=$?
+check "#1148 an unreadable reservations file refuses rather than guessing" \
+  "[ \"\$rv_bad_rc\" -ne 0 ] && grep -q 'lesson-reservations.tsv' <<< \"\$rv_bad\" && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_bad\""
+rm -f "$RVF"
+# An ask that died holding the lock leaves it behind; the next ask takes it over rather than waiting
+# out its deadline and refusing. The pid is one that has certainly exited: a shell that printed its
+# own and ended.
+rv_dead_pid="$(bash -c 'echo $$')"
+mkdir -p "$RVF.lock"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+rv_stale_rc=0; rv_stale="$(_rv1148 next-lesson)" || rv_stale_rc=$?
+check "#1148 a lock left by an ask that died is taken over" "[ \"\$rv_stale_rc\" -eq 0 ] && grep -q '^L762\$' <<< \"\$rv_stale\""
+check "#1148 and released again afterwards" "[ ! -d '$RVF.lock' ]"
+rm -f "$RVF"
+# A window that is not a whole number of seconds would read as zero in bash arithmetic and reserve
+# nothing, silently (L50), so it is refused by name.
+rv_win_rc=0; rv_win="$(SYNC_LESSON_RESERVE_SECONDS=ten _rv1148 next-lesson)" || rv_win_rc=$?
+check "#1148 a reservation window that is not a number is refused" \
+  "[ \"\$rv_win_rc\" -ne 0 ] && grep -q 'SYNC_LESSON_RESERVE_SECONDS' <<< \"\$rv_win\" && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_win\""
+rm -f "$RVF"
 
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever

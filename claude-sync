@@ -18,7 +18,7 @@
 #   claude-sync hold 30 "why"     # stop the watcher committing for a while, so you can commit
 #   claude-sync release           # lift that hold now rather than waiting for it to run out
 #   claude-sync clean-backups     # remove the .syncbak copies a pull left beside your files
-#   claude-sync next-lesson       # the next free lesson number, so none is picked by eye
+#   claude-sync next-lesson       # the next free lesson number, reserved for ten minutes
 #   claude-sync check-lessons     # fail if anything would stop the lessons file publishing
 #   claude-sync lesson-faults     # the same faults, lock free and silent when there are none
 #   claude-sync lesson-index-faults # read-only: do the generated index files match LESSONS.md
@@ -34,6 +34,7 @@
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
 #   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY,
 #   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number),
+#   SYNC_LESSON_RESERVE_SECONDS (how long next-lesson reserves a number, default 600),
 #   SYNC_NO_CITATION_PREFILTER=1 (scan every synced file for a lesson citation
 #   instead of grepping for candidates first: the pre-#53 path, kept so the two
 #   can be compared)
@@ -3895,14 +3896,118 @@ minting_lesson_files(){   # $1 = tree
   lesson_files_in "$PAYLOAD"
 }
 
-# Whether band $2 still holds a number that tree $1 (or the payload) has not used.
-lesson_band_has_room(){   # $1 = tree  $2 = band start
-  local f files=() highest
+# ---- a number handed out is RESERVED for a while (claude-config#1148) ----
+# next-lesson used to print a number and record nothing, so two sessions asking before either had
+# written its entry were both given it. That is the likeliest cause of the 2026-10-13 L762 clash,
+# where two sessions then renumbered 762 to 765 in lockstep, each asking again before the other wrote.
+#
+# So each number next-lesson prints is reserved, one line per number in
+# $CLAUDE_HOME/state/lesson-reservations.tsv: "<number> TAB <band> TAB <lapses at, epoch> TAB <who
+# asked>". It lives in this Mac's own state, which is never synced, so a reservation can never cross
+# Macs; each Mac mints in its own band anyway, and the band is recorded so a reservation from a band
+# this Mac has rolled off moves nothing. Every reader of "which numbers are taken" (the minter, the
+# room check, check-lessons' preview, the merge's renumber) counts a live reservation as taken; only
+# next-lesson writes one, under its own small lock, never the sync lock, which a watcher holds for
+# minutes and which takes a whole run's worth of side effects with it.
+#
+# THE WINDOW is ten minutes. A number is asked for once Dan has approved a lesson and is written in
+# the next edit, which is seconds, and the longest honest gap is that edit being blocked by
+# lesson-entry-check.sh and fixed in the same session, a few minutes at most. Ten covers that with
+# room. Longer buys nothing: a lapsed reservation only means an unused number is offered again, and
+# a reservation never outlives the lesson it was for, because a written number is taken by the files.
+LESSON_RESERVE_SECONDS="${SYNC_LESSON_RESERVE_SECONDS:-600}"
+case "$LESSON_RESERVE_SECONDS" in
+  ''|*[!0-9]*) die "SYNC_LESSON_RESERVE_SECONDS is set to '$LESSON_RESERVE_SECONDS', which is not a whole number of seconds, and bash would read it as zero, so no number would ever be reserved. NOTHING was done. Unset it to use the default of 600." ;;
+esac
+LESSON_RESERVATIONS_FILE="$CLAUDE_HOME/state/lesson-reservations.tsv"
+
+# A reservations file holding a line that cannot be read is REFUSED, in the main shell where a refusal
+# actually stops the run. Read inside a command substitution, a refusal would end only that subshell
+# and the caller would carry on as if nothing were reserved (bash 3.2 has no inherit_errexit), which
+# would hand out a reserved number: the one thing the file exists to stop (L50). So the commands that
+# mint or preview call this first, and the readers below simply skip what they cannot read.
+require_readable_reservations(){
+  [ -f "$LESSON_RESERVATIONS_FILE" ] || return 0
+  local bad
+  bad="$(awk -F '\t' 'NF != 4 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ { print NR; exit }' "$LESSON_RESERVATIONS_FILE")"
+  [ -z "$bad" ] || die "line $bad of $LESSON_RESERVATIONS_FILE is not '<number><TAB><band><TAB><lapses at><TAB><who asked>', so which lesson numbers are reserved cannot be read, and guessing could hand one out twice. NOTHING was minted. Delete that file to clear every reservation: nothing else is lost, and a number already written is taken by the lessons file whatever this file says."
+  return 0
+}
+
+# Every readable reservation line.
+lesson_reservation_lines(){
+  [ -f "$LESSON_RESERVATIONS_FILE" ] || return 0
+  awk -F '\t' 'NF == 4 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/' "$LESSON_RESERVATIONS_FILE"
+}
+
+# The highest number a LIVE reservation holds inside one band, or one below the band when none does.
+highest_reserved_in_band(){   # $1 = band start
+  lesson_reservation_lines | awk -F '\t' -v band="$1" -v now="$(date +%s)" -v top="$(($1 + LESSON_BAND_SIZE - 1))" '
+    BEGIN { h = band - 1 }
+    $2 == band && $3 > now && $1 >= band && $1 <= top && $1 > h { h = $1 }
+    END { print h }'
+}
+
+# The highest number taken inside a band: written in either copy, or reserved.
+highest_taken_in_band(){   # $1 = tree  $2 = band start
+  local f files=() written reserved
   while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
+  written=$(($2 - 1))
   # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
   # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
-  [ "${#files[@]}" -gt 0 ] || return 0
-  highest="$(highest_lesson_in_band "$2" "${files[@]}")"
+  [ "${#files[@]}" -gt 0 ] && written="$(highest_lesson_in_band "$2" "${files[@]}")"
+  reserved="$(highest_reserved_in_band "$2")"
+  if [ "$reserved" -gt "$written" ]; then printf '%s' "$reserved"; else printf '%s' "$written"; fi
+}
+
+# The reservations lock: mkdir, which is atomic, holding the pid of whoever took it. A holder that has
+# died leaves it behind, so a lock whose pid is not running is taken over rather than waited on for
+# ever. The critical section reads a few files and writes one line, so ten seconds is a deadline,
+# not a wait anybody will see.
+take_reservations_lock(){
+  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder
+  mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
+  t0="$(date +%s)"
+  while ! mkdir "$lock" 2>/dev/null; do
+    holder="$(cat "$lock/pid" 2>/dev/null || true)"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;   # being written this instant, or unreadable: wait, never break on a guess
+      *) if ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi ;;
+    esac
+    [ "$(( $(date +%s) - t0 ))" -lt 10 ] || die "another ask for a lesson number has held $lock for ten seconds, so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder."
+    sleep 0.1
+  done
+  printf '%s\n' "$$" > "$lock/pid"
+}
+release_reservations_lock(){ rm -rf "$LESSON_RESERVATIONS_FILE.lock"; }
+
+# next-lesson: the next number, reserved. Lapsed reservations, and those whose lesson is now written
+# in either copy, are dropped in the same pass, which is what clears a reservation once it is used.
+do_next_lesson(){
+  local num now written tmp who f
+  require_readable_reservations
+  lesson_band_with_room "$CLAUDE_HOME"
+  take_reservations_lock
+  num="$(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND")" || { release_reservations_lock; exit 1; }
+  if [ -n "$LESSON_BAND" ]; then
+    now="$(date +%s)"
+    written=" $(minting_lesson_files "$CLAUDE_HOME" | while IFS= read -r f; do lesson_numbers_in "$f"; done | sort -un | tr '\n' ' ')"
+    tmp="$LESSON_RESERVATIONS_FILE.tmp.$$"
+    who="${CLAUDE_CODE_SESSION_ID:-pid $PPID}"; who="$(printf '%s' "$who" | tr -d '\t\n')"
+    {
+      lesson_reservation_lines | awk -F '\t' -v now="$now" -v written="$written" '$3 > now && index(written, " " $1 " ") == 0'
+      printf '%s\t%s\t%s\t%s\n' "${num#L}" "$LESSON_BAND" "$((now + LESSON_RESERVE_SECONDS))" "$who"
+    } > "$tmp" && mv "$tmp" "$LESSON_RESERVATIONS_FILE" || { rm -f "$tmp"; release_reservations_lock; die "could not write $LESSON_RESERVATIONS_FILE, so $num was not reserved and another session could be given it. NOTHING was minted. Ask again."; }
+    echo "claude-sync: $num is reserved for $(duration_in_words "$LESSON_RESERVE_SECONDS"), so no other ask on this Mac is given it. Write the lesson under it before then; a number nobody writes lapses and is offered again." >&2
+  fi
+  release_reservations_lock
+  printf '%s\n' "$num"
+}
+
+# Whether band $2 still holds a number that tree $1 (or the payload) has not used or reserved.
+lesson_band_has_room(){   # $1 = tree  $2 = band start
+  local highest
+  highest="$(highest_taken_in_band "$1" "$2")"
   [ "$((highest + 1))" -le "$(($2 + LESSON_BAND_SIZE - 1))" ]
 }
 
@@ -3959,8 +4064,9 @@ lesson_band_with_room(){   # $1 = tree
 next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
   local f highest=0 n band="${2:-}" files=()
   while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
-  if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
-    highest="$(highest_lesson_in_band "$band" "${files[@]}")"
+  if [ -n "$band" ]; then
+    # Written in either copy, or reserved by an ask still inside its window (claude-config#1148).
+    highest="$(highest_taken_in_band "$1" "$band")"
     if [ "$((highest + 1))" -gt "$((band + LESSON_BAND_SIZE - 1))" ]; then
       # Spilling into the next band would put the collisions back with nothing saying so, which is
       # the one failure this whole mechanism exists to prevent. This is the BACKSTOP: every caller
@@ -3977,7 +4083,6 @@ next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whol
     printf 'L%s\n' "$((highest + 1))"
     return 0
   fi
-  [ -n "$band" ] && { printf 'L%s\n' "$band"; return 0; }
   for f in ${files[@]+"${files[@]}"}; do
     # The trailing "|| true" is load-bearing: under pipefail a grep that matches
     # nothing fails the whole substitution, and an assignment that fails is fatal
@@ -11913,7 +12018,8 @@ case "$cmd" in
   install-autosync) do_install_autosync ;;
   # Read-only about the config: it runs the checks and records what they said, nothing else.
   recheck) do_recheck ;;
-  next-lesson) lesson_band_with_room "$CLAUDE_HOME"; next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND" ;;
+  # Reserves the number it prints (claude-config#1148), so two sessions asking at once get two.
+  next-lesson) do_next_lesson ;;
   repo-slug) repo_slug || { echo "claude-sync: origin is not a GitHub remote, so there is no owner and name to derive." >&2; exit 1; } ;;
   cite-scan) do_cite_scan "${2:-}" ;;   # read-only: which synced files cite a lesson number
   cite-pin) do_cite_pin ;;              # record what each cited lesson number names now
@@ -11968,6 +12074,8 @@ case "$cmd" in
     # The same rule check-home-paths follows for its three (claude-config#164, #108).
     lessonfaults="$(lesson_publish_faults "$CLAUDE_HOME")"
     if ! is_blank "$lessonfaults"; then die "$lessonfaults"; fi
+    # A preview: it skips reserved numbers, so it names what the next ask gets, and reserves nothing.
+    require_readable_reservations
     lesson_band_with_room "$CLAUDE_HOME"
     echo "lesson numbering is sound (next free: $(next_lesson_number "$CLAUDE_HOME" "$LESSON_BAND"))"
     ;;
