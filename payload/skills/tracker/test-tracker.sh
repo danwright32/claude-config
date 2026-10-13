@@ -220,6 +220,10 @@ gitignored(){ # gitignored <file name>; prints yes when a pattern in the skill's
   python3 -c 'import fnmatch,sys; ps=[l.strip() for l in open(sys.argv[1]) if l.strip() and not l.startswith("#")]; print("yes" if any(fnmatch.fnmatch(sys.argv[2], p) for p in ps) else "no")' "$DIR/.gitignore" "$1" 2>&1
 }
 check_eq "the skill's .gitignore leaves out config.local.json" "yes" "$(gitignored config.local.json)"
+# And every copy of it the token travels in (claude-config#1089): the shapes actually made beside
+# it on 2026-10-12, and an editor's backup.
+check_eq "and every backup copy of it" "yes yes yes yes" \
+  "$(gitignored config.local.json.bak-2026-10-12) $(gitignored config.local.json.bak) $(gitignored config.local.json.writing) $(gitignored 'config.local.json~')"
 check_eq "and does not leave out the files the skill ships" "no no no" "$(gitignored tracker.sh) $(gitignored config.example.json) $(gitignored SKILL.md)"
 
 # --- a sandbox copy of the skill, and a curl that reaches nothing -------------
