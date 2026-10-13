@@ -36,7 +36,7 @@ const check = async (over: World = {}, read: GithubOf = github) => {
     const key = argv.join(' ')
     asked.push(key)
     return world[key] ?? fail(`unexpected: ${key}`)
-  }, { since: SINCE, home: HOME, github: read })
+  }, { since: SINCE, home: HOME, github: read, now: () => SINCE })
   return { ...r, asked }
 }
 
@@ -123,7 +123,7 @@ describe('the wake check', () => {
   })
   test('every repository the notes of the night name is read too, private ones included, whatever the events show', async () => {
     const world: World = { ...QUIET, 'gh api repos/o/private/milestones?state=all&per_page=100': ok(JSON.stringify([{ title: 'Secret', updated_at: AFTER }])), 'gh run list -R o/private --json workflowName,event,createdAt,url --limit 100': ok('[]') }
-    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'] })
+    const r = await wakeCheck(async argv => world[argv.join(' ')] ?? fail(`unexpected: ${argv.join(' ')}`), { since: SINCE, home: HOME, github, repos: ['O/Private'], now: () => SINCE })
     expect(r.hits).toEqual(['Milestone touched overnight: o/private "Secret"'])
     expect(r.unmeasured).toEqual([])
   })
