@@ -114,17 +114,23 @@ export const filesWritten = (call: { tool: string; input: Record<string, unknown
   return [...new Set(out)]
 }
 
+// A path as matched against another spelling of it (lessons review): macOS's default volume ignores
+// case, and /var, /tmp and /etc are links into /private, so git's path and a tool's can differ in
+// both. Read the same, a file this session wrote is never taken for another's; two files differing
+// only in case on a volume that tells them apart are both counted, the side that only asks again.
+const matchKey = (p: string) => p.toLowerCase().replace(/^\/private(?=\/(?:var|tmp|etc)\/)/, '')
+
 /**
  * The uncommitted files git status names relative to `root`, split into this session's own (`written`
  * names it, or a folder holding it) and the rest (#1108).
  */
 export const whoseFiles = (dirty: readonly string[], root: string, written: readonly string[]): { own: string[]; others: string[] } => {
-  const files = new Set(written.filter(w => !w.endsWith('/')))
-  const trees = written.filter(w => w.endsWith('/'))
+  const files = new Set(written.filter(w => !w.endsWith('/')).map(matchKey))
+  const trees = written.filter(w => w.endsWith('/')).map(matchKey)
   const own: string[] = []
   const others: string[] = []
   for (const f of dirty) {
-    const p = plain(`${root}/${f}`)
+    const p = matchKey(plain(`${root}/${f}`))
     ;(files.has(p) || trees.some(t => p.startsWith(t)) ? own : others).push(f)
   }
   return { own, others }

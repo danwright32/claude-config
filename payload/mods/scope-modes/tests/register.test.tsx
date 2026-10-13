@@ -3821,6 +3821,18 @@ for (const [how, wrote] of [
     expect(block).not.toContain('other/plan.md')
   })
 
+test("two calls finishing at once, the session's and an agent's, each keep the files they wrote (lessons review of #1108)", withDeps, async ($, on) => {
+  const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['a.ts', 'b.ts', 'c.ts'] })
+  await start($ as never, clock)
+  await Promise.all([
+    call($ as never, bash('echo x > a.ts', 'w1')),
+    $.tool.call({ tool: 'Bash', command: 'echo y > b.ts', tool_use_id: 'w2', agentId: 'ag1' } as never),
+    call($ as never, bash('echo z > c.ts', 'w3')),
+  ])
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(a\.ts, b\.ts, c\.ts\): /)
+})
+
 test('a call refused beneath the mod wrote nothing, so its file is not the session\'s (#1108)', withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], refusedBeneath: 'app.ts' })
   await start($ as never, clock)

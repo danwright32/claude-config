@@ -2322,6 +2322,23 @@ const setScope = async ($: EngineInterface, scope: ScopeModesScope | null): Prom
   return was
 }
 
+// Adds to one of the lists noted after each call what it does not hold yet, read and written with
+// ifVersion and again on a miss: the session's calls and its agents' finish at once, and a plain read
+// then set lets the later write drop the other's entries (lessons review of #1108). The engine wants
+// each state reference spelled where it is read or written, so the caller hands both in.
+type ListIo<T> = { get: () => Promise<{ value?: T[] | null; version: number }>; set: (list: T[], ifVersion: number) => Promise<{ isSet: boolean }> }
+const addToList = async <T,>(io: ListIo<T>, items: readonly T[], same: (a: T, b: T) => boolean) => {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const held = await io.get()
+    const now = held.value ?? []
+    const fresh = items.filter((x, i) => !now.some(n => same(n, x)) && items.findIndex(y => same(y, x)) === i)
+    if (!fresh.length) return
+    if ((await io.set([...now, ...fresh], held.version)).isSet) return
+  }
+  throw new Error('the list changed under every one of 10 attempts to add to it')
+}
+const sameText = (a: string, b: string) => a === b
+
 // The branches a Bash call made this session's own (#1074), whatever mode is on, from the session or
 // any of its agents: one it created or pushed by name, and for a commit or a push naming none, the
 // branch checked out where it ran. That is known only for the session's own call with no `cd` before
@@ -2340,9 +2357,7 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
       if (at && 'unreadable' in at && at.unreadable !== DETACHED) throw new Error(at.unreadable)
       if (at && !('unreadable' in at) && at.branch) add.push(at.branch)
     }
-    const mine = await branchesOf($)
-    const fresh = [...new Set(add)].filter(b => !mine.includes(b))
-    if (fresh.length) await $.state.set(branchesRef, [...mine, ...fresh])
+    await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
   } catch (err) {
     $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
   }
@@ -2367,10 +2382,11 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
       if (r) found = { repo: r, number: Number(l[1]) }
     }
     if (!found) return
-    const { repo, number } = found
-    const opened = await openedOf($)
-    if (opened.some(o => o.repo.toLowerCase() === repo.toLowerCase() && o.number === number)) return
-    await $.state.set(openedRef, [...opened, { repo, number }])
+    await addToList<ScopeModesOpened>(
+      { get: () => $.state.get(openedRef), set: (l, v) => $.state.set(openedRef, l, { ifVersion: v }) },
+      [found],
+      (a, b) => a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number,
+    )
   } catch (err) {
     $.ui.toast(`Scope modes could not note the PR this call opened (${msg(err)}), so winding down will not know to finish it.`)
   }
@@ -2384,10 +2400,7 @@ const noteWritten = async ($: EngineInterface, tool: string, input: Record<strin
   try {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
     const files = filesWritten({ tool, input, writes })
-    if (!files.length) return
-    const mine = await writtenOf($)
-    const fresh = files.filter(f => !mine.includes(f))
-    if (fresh.length) await $.state.set(writtenRef, [...mine, ...fresh])
+    await addToList({ get: () => $.state.get(writtenRef), set: (l, v) => $.state.set(writtenRef, l, { ifVersion: v }) }, files, sameText)
   } catch (err) {
     $.ui.toast(`Scope modes could not note which files this call wrote (${msg(err)}), so winding down may not count them as this session's.`)
   }

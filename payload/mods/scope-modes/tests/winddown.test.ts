@@ -310,4 +310,12 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(whoseFiles(['app.ts'], '/repo/', written)).toEqual({ own: ['app.ts'], others: [] })
     expect(whoseFiles([], '/repo', written)).toEqual({ own: [], others: [] })
   })
+  test("a file written under another spelling of its path is still the session's: case, and /private before /var, /tmp or /etc (lessons review)", () => {
+    expect(whoseFiles(['App.ts'], '/Users/x/Repo', ['/users/x/repo/app.ts'])).toEqual({ own: ['App.ts'], others: [] })
+    expect(whoseFiles(['a.ts'], '/private/var/folders/r', ['/var/folders/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
+    expect(whoseFiles(['a.ts'], '/tmp/r', ['/private/tmp/r/a.ts'])).toEqual({ own: ['a.ts'], others: [] })
+    expect(whoseFiles(['b/c.ts'], '/private/tmp/r', ['/tmp/r/b/'])).toEqual({ own: ['b/c.ts'], others: [] })
+    // Only those three links: /private elsewhere is a folder of its own.
+    expect(whoseFiles(['a.ts'], '/private/stuff', ['/stuff/a.ts'])).toEqual({ own: [], others: ['a.ts'] })
+  })
 })
