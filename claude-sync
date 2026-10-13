@@ -3972,14 +3972,29 @@ take_reservations_lock(){
     holder="$(cat "$lock/pid" 2>/dev/null || true)"
     case "$holder" in
       ''|*[!0-9]*) : ;;   # being written this instant, or unreadable: wait, never break on a guess
-      *) if ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi ;;
+      *) if ! kill -0 "$holder" 2>/dev/null; then break_stale_reservations_lock "$lock" "$holder"; continue; fi ;;
     esac
-    [ "$(( $(date +%s) - t0 ))" -lt 10 ] || die "another ask for a lesson number has held $lock for ten seconds, so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder."
+    [ "$(( $(date +%s) - t0 ))" -lt 10 ] || die "another ask for a lesson number has held $lock for ten seconds, so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder (and $lock.break if it is there)."
     sleep 0.1
   done
   printf '%s\n' "$$" > "$lock/pid"
 }
 release_reservations_lock(){ rm -rf "$LESSON_RESERVATIONS_FILE.lock"; }
+
+# Taking over a lock whose holder died is itself serialised. Two waiters can both read the same dead
+# pid, and if each simply removed the lock, the second would remove the one the first had just
+# taken, and both would mint at once. So a takeover first takes $lock.break (mkdir, atomic), then
+# reads the pid AGAIN and removes the lock only if it still names the same dead holder. A lock taken
+# since holds no pid yet or a live one, and is left alone. A waiter that cannot take the break lock
+# simply waits its turn.
+break_stale_reservations_lock(){   # $1 = lock dir  $2 = the dead holder's pid
+  mkdir "$1.break" 2>/dev/null || return 0
+  if [ "$(cat "$1/pid" 2>/dev/null || true)" = "$2" ] && ! kill -0 "$2" 2>/dev/null; then
+    rm -rf "$1"
+  fi
+  rmdir "$1.break" 2>/dev/null || true
+  return 0
+}
 
 # next-lesson: the next number, reserved. Lapsed reservations, and those whose lesson is now written
 # in either copy, are dropped in the same pass, which is what clears a reservation once it is used.

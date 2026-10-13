@@ -11379,6 +11379,27 @@ rv_stale_rc=0; rv_stale="$(_rv1148 next-lesson)" || rv_stale_rc=$?
 check "#1148 a lock left by an ask that died is taken over" "[ \"\$rv_stale_rc\" -eq 0 ] && grep -q '^L762\$' <<< \"\$rv_stale\""
 check "#1148 and released again afterwards" "[ ! -d '$RVF.lock' ]"
 rm -f "$RVF"
+# The takeover must not remove a lock somebody took SINCE the dead holder was read. Two waiters that
+# both saw the dead pid would otherwise each remove the lock, the second removing the one the first
+# had just taken, and both would mint at once. Driven directly, with the tool sourced: the lock now
+# names a LIVE holder (this suite), and the takeover is asked to break it for the dead one it saw.
+mkdir -p "$RVF.lock"; printf '%s\n' "$$" > "$RVF.lock/pid"
+bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_reservations_lock '$RVF.lock' '$rv_dead_pid'" >/dev/null 2>&1 || true
+check "#1148 a takeover leaves alone a lock taken since the dead holder was read" \
+  "[ \"\$(cat '$RVF.lock/pid' 2>/dev/null)\" = '$$' ]"
+check "#1148 and leaves no takeover lock behind" "[ ! -d '$RVF.lock.break' ]"
+rm -rf "$RVF.lock"
+# And end to end: a dead holder's lock in place while five sessions ask at once.
+mkdir -p "$RVF.lock"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+rm -f "$WORK"/rv1148-stale-*.out
+for _rv_i in 1 2 3 4 5; do
+  ( _rv1148 next-lesson > "$WORK/rv1148-stale-$_rv_i.out" ) &
+done
+wait
+rv_stale_nums="$(cat "$WORK"/rv1148-stale-*.out | grep -E '^L[0-9]+$' | sort)"
+check "#1148 five asks racing to take over a dead holder's lock still get five numbers" \
+  "[ \"\$(printf '%s\n' \"\$rv_stale_nums\" | sort -u | grep -c .)\" -eq 5 ]"
+rm -f "$RVF"
 # A window that is not a whole number of seconds would read as zero in bash arithmetic and reserve
 # nothing, silently (L50), so it is refused by name.
 rv_win_rc=0; rv_win="$(SYNC_LESSON_RESERVE_SECONDS=ten _rv1148 next-lesson)" || rv_win_rc=$?
