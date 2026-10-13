@@ -1,6 +1,11 @@
 {
   "repos": [
     {
+      "name": "Slate",
+      "repo": "Try-Pennie/slate",
+      "changelogFrom": "2026-10-03"
+    },
+    {
       "name": "PET",
       "repo": "Try-Pennie/project-enrollment-tracker",
       "deployRecord": "build_history",
@@ -11,11 +16,6 @@
       "name": "Sonar",
       "repo": "Try-Pennie/sonar",
       "changelogFrom": "2026-09-28"
-    },
-    {
-      "name": "Slate",
-      "repo": "Try-Pennie/slate",
-      "changelogFrom": "2026-10-03"
     }
   ],
   "_slateNote": "Slate joined the rotation on 2026-10-02, the day of its launch post (Dan chose this over waiting). Its state was seeded at PR #2999, the newest merge before that post.",
