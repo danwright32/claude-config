@@ -373,10 +373,11 @@ type AskInput = { questions?: { question?: unknown; header?: unknown; options?: 
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
 export const register: Register = on => {
-  // Dan's latest message of his own, typed or from his phone, read for the words that already make
-  // a rule permanent. A peer session's or a plugin's message never counts.
+  // Dan's latest message of his own, typed or from his phone as mod-kit's one reader says (#1135),
+  // read for the words that already make a rule permanent. A peer session's or a plugin's message,
+  // a handoff's opening prompt included, never counts.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') await $.state.set(promptRef, e.text)
+    if (await $.modkit.isDans({ origin: e.origin })) await $.state.set(promptRef, e.text)
     return next(e)
   })
 

@@ -10,6 +10,21 @@ import { commandWrites } from '../hooks/writes.ts'
 
 type Entry = { method: 'commands' | 'writes' | 'git'; input: Record<string, unknown>; want: unknown }
 const ENTRIES: Entry[] = [
+  {"method":"commands","input":{"command":"git checkout main -- notes.txt"},"want":[["git","checkout","main","--","notes.txt"]]},
+  {"method":"git","input":{"words":["git","checkout","main","--","notes.txt"]},"want":{"sub":"checkout","args":["main","--","notes.txt"]}},
+  {"method":"writes","input":{"command":"git checkout main -- notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}},
+  {"method":"commands","input":{"command":"git restore notes.txt"},"want":[["git","restore","notes.txt"]]},
+  {"method":"git","input":{"words":["git","restore","notes.txt"]},"want":{"sub":"restore","args":["notes.txt"]}},
+  {"method":"writes","input":{"command":"git restore notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}},
+  {"method":"commands","input":{"command":"git rm notes.txt"},"want":[["git","rm","notes.txt"]]},
+  {"method":"git","input":{"words":["git","rm","notes.txt"]},"want":{"sub":"rm","args":["notes.txt"]}},
+  {"method":"writes","input":{"command":"git rm notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}]}},
+  {"method":"commands","input":{"command":"git mv notes.txt docs/old.txt"},"want":[["git","mv","notes.txt","docs/old.txt"]]},
+  {"method":"git","input":{"words":["git","mv","notes.txt","docs/old.txt"]},"want":{"sub":"mv","args":["notes.txt","docs/old.txt"]}},
+  {"method":"writes","input":{"command":"git mv notes.txt docs/old.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"docs/old.txt","path":"/repo/docs/old.txt","does":"write"},{"word":"docs/old.txt/notes.txt","path":"/repo/docs/old.txt/notes.txt","does":"write","tree":true},{"word":"notes.txt","path":"/repo/notes.txt","does":"remove","tree":true}]}},
+  {"method":"commands","input":{"command":"git rm -r src"},"want":[["git","rm","-r","src"]]},
+  {"method":"git","input":{"words":["git","rm","-r","src"]},"want":{"sub":"rm","args":["-r","src"]}},
+  {"method":"writes","input":{"command":"git rm -r src","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"src","path":"/repo/src","does":"remove","tree":true}]}},
   {"method":"commands","input":{"command":"echo x > unwritable.txt; echo y > fine.txt"},"want":[["echo","x",">","unwritable.txt"],["echo","y",">","fine.txt"]]},
   {"method":"git","input":{"words":["echo","x",">","unwritable.txt"]},"want":null},
   {"method":"git","input":{"words":["echo","y",">","fine.txt"]},"want":null},
@@ -184,8 +199,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 164 entries', () => {
-    expect(ENTRIES.length).toBe(164)
+  test('holds 179 entries', () => {
+    expect(ENTRIES.length).toBe(179)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

@@ -141,6 +141,13 @@ once it has run, every file it named is added to this session's edits, also when
 failed, since it may have written before it failed. Only a refusal leaves the record alone, a later
 guard's refusal included (both pinned by tests since #700).
 
+Since #1136 what git itself changes is judged and recorded the same way (Dan, 2026-10-13), read
+from the write reader's `byGit`: a checkout of a path (`git checkout main -- notes.txt`) and a
+restore of the working tree as an edit, git rm and a git mv's source as a removal, each over
+everything under it, since the path may be a folder. A pathspec git matches across folders (`:/x`,
+a pattern) names no path and is not guessed at. A checkout of the whole tree (`git checkout -- .`)
+is still judged first as a checkout wide command, and then on the other sessions' files under it.
+
 What the words do not name is not guessed at, and is neither judged nor recorded: a script
 (`bash ./update.sh`, `python3 -c`, `node -e`, `make`), a path built from a variable, a glob or a
 command substitution, and a relative path after a `cd` to a folder that cannot be named (`cd $DIR`,
@@ -516,9 +523,11 @@ plainest reading of the decisions above:
 - **/clear begins again.** A /clear ends the conversation while the process goes on with no session
   start, so the tracker starts its progress afresh then: the new conversation never carries the old
   one's request, steps, goal, failures or waiting marks.
-- **A handoff's opening prompt is Dan's request.** The handoff mod's Use button submits the saved
-  prompt as Dan's own words, from the plugin, so it becomes the new session's goal text as a typed
-  first message does, and closes the pane as his message would. Another plugin's prompt does not.
+- **Only what Dan types is his request (#1135).** Dan decided on 2026-10-13 that only what he types,
+  at the Mac or from his phone, is his words, in every mod. A handoff's opening prompt he pressed Use
+  on is not, so it no longer becomes the new session's goal text (as #706 had it) nor closes the
+  pane, and no other plugin's prompt does either. mod-kit's one reader answers it (`$.modkit.isDans`,
+  below).
 
 ## Add-on notes (#620), behaviour decided while building, 2026-10-04
 
@@ -664,9 +673,9 @@ and open to his correction.
   not a question nor a short acknowledgement. Until either is there, nothing is named and no failure
   is said, so a session with one image and no words is never named, as decided.
 - Dan's words are the ones the engine marks as his (#1123): `prompt.submit`'s origin, typed at the
-  terminal (`composer`), sent from his phone (`bridge`), or a handoff's opening prompt he pressed
-  Use on (`plugin` `handoff` `asUser`), the rule goal-tracker reads a session's first request by. A
-  transcript message carries no origin, so before this a background task's notice or another
+  terminal (`composer`) or sent from his phone (`bridge`), as mod-kit's one reader says (#1135). A
+  handoff's opening prompt he pressed Use on counted too until Dan decided on 2026-10-13 that it is
+  not his words in any mod. A transcript message carries no origin, so before this a background task's notice or another
   plugin's message read from it counted as his words and named a session he had opened with only
   an image. The mod records his first worded message, his newest few and how many of his messages
   carried only images as each enters; only those open the name, count as his image turns, or reach
@@ -918,8 +927,8 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   Since #1123 what git itself changed counts too, so a session cannot finish with it uncommitted
   while the toast names it as another's: git mv (the destination, and the source's own name inside
   it), git rm (also `--cached`, which leaves the file changed in git status), a checkout of a path
-  and git restore of the working tree, which the write reader names apart as `byGit` so the guards
-  judging `files` and `changes` are unchanged; a patch git applies or am takes, by the paths its
+  and git restore of the working tree, which the write reader names apart as `byGit` (the design
+  round guard and the collision guard judge it too since #1136; ask before saving does not); a patch git applies or am takes, by the paths its
   patch file names (both sides of each diff, its `-p` and `--directory` honoured); and a stash git
   pops or applies, by `git stash show --include-untracked --name-only` read before the call runs,
   since a pop drops it (one that cannot be read is toasted once, and the call runs). The checkout
@@ -1774,6 +1783,22 @@ crosses between mods. Claude's own SendMessage is left as it is. `tools/check-mo
 fails any other mod that keeps its own retry: a loop that stops once a send is delivered, or the
 "no reason given" fallback.
 
+### Whether a prompt is Dan's words, shared by every mod (#1135)
+
+Seven mods ask whether a prompt is Dan's own words: picker manners (next issue pickers off), ask
+before saving (his permanent words skip the question), scope modes (a phrase switches a mode, and
+whether he is up), the goal tracker (the session's request, and closing the goals pane), auto
+session name, Simpler (his message takes the button away) and add-on notes (a + note). They asked
+it two ways: the goal tracker and auto session name also counted a handoff's opening prompt he
+pressed Use on. Dan decided on 2026-10-13: only what he types counts, at the Mac (`composer`) or
+from his phone through Remote Control (`bridge`), never a handoff's opening prompt, in every mod.
+mod-kit holds the one reader (`$.modkit.isDans({ origin })`, `hooks/origin.ts`), and every one of
+them asks it; whether a message came from the phone, which scope modes asks for its phone line, is
+another question and stays its own. `tools/check-mod-shared-parts.sh` fails any other mod that
+reads the origin for this itself (naming the `composer` kind as a string). Each mod's tests ask
+through a byte for byte copy of the reader under its `tests/mod-kit`, with a typed prompt, a phone
+prompt, a handoff's opening prompt and a task notification.
+
 ### Which guard decides first (#707), built 2026-10-04
 
 Not put to Dan; each is the plainest reading of the issue, and each is open to his changing it.
@@ -2137,7 +2162,13 @@ the issue approved; what follows is that plan as built, with the readings taken 
   `.html`. A `.swift` file counts when its text, as written or on disk, imports SwiftUI or declares a
   view, and when that text cannot be had. A removal or emptying of a look changing file counts; a
   stamp, mode change or folder does not, nor does removing a whole folder by its name (`rm -r
-  components`), which would need the folder walked and is left as a gap. A file in no git checkout is
+  components`), which would need the folder walked and is left as a gap. Since #1136 what git itself
+  changes counts the same way (Dan, 2026-10-13): a checkout of a path (`git checkout main --
+  app/globals.css`), git restore, git rm and both names of a git mv, read from mod-kit's write
+  reader's `byGit`; a whole folder named to git is the same gap as `rm -r`, and a pathspec git
+  matches across folders (`:/x`, a pattern) is held as a write that cannot be followed, or judged as
+  a pattern. Ask before saving does not judge them: putting back or moving what git holds saves no
+  new rule. A file in no git checkout is
   in no project and passes, which is what lets a design round build its switcher in the scratchpad.
 - **Which tools.** Every tool whose input carries a file path (a key ending path or paths) is judged
   as writing it, except those known only to read it (Read, Grep, Glob, LS, NotebookRead, LSP,

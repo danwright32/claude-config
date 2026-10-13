@@ -1047,6 +1047,22 @@ for m in link-open link-anchored link-class; do
     || check "and names $m, pointing it at modkit.linkRepo" "$out"
 done
 case "$out" in *clean-asks-link*) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" "$out" ;; *) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" ok ;; esac
+# #1135: whether a prompt is Dan's words, read by hand from its origin, as five mods did two ways
+# (two of them also counting a handoff's opening prompt). Each shape fails the run, pointed at
+# $.modkit.isDans; a mod asking the kit passes, and so does one asking only whether a message came
+# from the phone, which is another question.
+M9D="$TMPROOT/m9d"
+mkmodsrc "$M9D" clean-asks-dans "const dans = await \$.modkit.isDans({ origin: e.origin }); const fromPhone = e.origin.kind === 'bridge'"
+mkmodsrc "$M9D" dans-skips "if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)"
+mkmodsrc "$M9D" dans-handoff "const isDans = o => o.kind === 'composer' || o.kind === 'bridge' || (o.kind === 'plugin' && o.name === 'handoff' && o.asUser === true)"
+mkmodsrc "$M9D" dans-double "const fromDan = origin => origin?.kind === \"composer\" || origin?.kind === \"bridge\""
+out="$(bash "$SHARED" "$M9D" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a hand rolled reading of whether a prompt is Dan's words fails the run" ok || check "a hand rolled reading of whether a prompt is Dan's words fails the run" "exit=$code out=$out"
+for m in dans-skips dans-handoff dans-double; do
+  printf '%s\n' "$out" | grep "$m keeps its own dans-words" | grep -q 'modkit.isDans(' && check "and names $m, pointing it at modkit.isDans" ok \
+    || check "and names $m, pointing it at modkit.isDans" "$out"
+done
+case "$out" in *clean-asks-dans*) check "a mod asking the kit, or asking only whether a message came from the phone, passes" "$out" ;; *) check "a mod asking the kit, or asking only whether a message came from the phone, passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.

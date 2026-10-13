@@ -4,6 +4,7 @@ import type {} from '../types/index.d.ts'
 import { APPROVAL_MS } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
+import { isDans } from './mod-kit/hooks/origin.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
 // Dan answers, his own permanent words skip the question, and each answer does what the spec says.
@@ -65,6 +66,12 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
+        // #1135: whether a prompt is Dan's words, read with the same copy.
+        isDans: async (input: { origin: unknown }) => {
+          const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout) as boolean
+        },
       }
       return { ...built, modkit }
     })
@@ -148,6 +155,10 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
       const input = JSON.parse(String(e.argv[2])) as { command: string; cwd: string; home: string }
       const out = JSON.stringify(commandWrites(input.command, input.cwd, input.home))
       return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
+      const input = JSON.parse(String(e.argv[2])) as { origin: never }
+      return { value: { exitCode: 0, stdout: JSON.stringify(isDans(input.origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     if (e.argv[0] === '__modkit' && e.argv[1] === 'pipeline') {
       const input = JSON.parse(String(e.argv[2])) as { command: string }
@@ -251,8 +262,8 @@ const askDan = async ($: Caller, w: W, refusal: string, answer: string | undefin
     ...extra,
   })
 }
-const dan = async ($: unknown, text: string, kind = 'composer') => {
-  await ($ as { prompt: { submit: (x: never) => Promise<unknown> } }).prompt.submit({ text, origin: { kind } } as never)
+const dan = async ($: unknown, text: string, kind: string | object = 'composer') => {
+  await ($ as { prompt: { submit: (x: never) => Promise<unknown> } }).prompt.submit({ text, origin: typeof kind === 'string' ? { kind } : kind } as never)
 }
 // Nothing went to the main session unasked: no prompt of the mod's own and no note (#777: a For good
 // once submitted a prompt to the main session for a subagent's call, twice).
@@ -765,6 +776,38 @@ test("permanent words from a peer session's message or a plugin's prompt do not 
     expect(`${kind}: ${refusalOf(r)}`).toContain(ASKS)
   }
   expect(w.ran).toEqual([])
+})
+
+// #1135: only what Dan types counts, at the Mac or from his phone, as in every mod (Dan, 2026-10-13):
+// a handoff's opening prompt he pressed Use on is not his words, nor is a task notification.
+for (const [who, origin, counts] of [
+  ['typed at the terminal', { kind: 'composer' }, true],
+  ['sent from his phone through Remote Control', { kind: 'bridge' }, true],
+  ["a handoff's opening prompt he pressed Use on", { kind: 'plugin', name: 'handoff', asUser: true }, false],
+  ['a background task notification', { kind: 'task-notification' }, false],
+] as [string, object, boolean][]) {
+  test(`permanent words ${who} ${counts ? 'skip the question' : 'do not skip the question'}`, withKit, async ($, on) => {
+    const w = world($, on)
+    await dan($, 'From now on, ask before you merge anything.', origin)
+    const r = await call($, { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'a', new_string: 'a\n- Ask before merging.' })
+    if (counts) expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+    else {
+      expect(refusalOf(r)).toContain(ASKS)
+      expect(w.ran).toEqual([])
+    }
+  })
+}
+
+// #1136, decided by Dan on 2026-10-13: ask before saving does not judge what git itself changes. A
+// checkout, restore, git rm or git mv of a memory file puts back or moves what is already in git,
+// so it saves no new rule; the design round and collision guards judge those files, this one not.
+test('git putting back, removing or moving a memory file is not a save, so it runs unasked', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of ['git checkout main -- CLAUDE.md', 'git restore AGENTS.md', 'git rm CLAUDE.md', 'git mv CLAUDE.md docs/OLD.md']) {
+    expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
+  }
+  expect(w.ran.length).toBe(4)
+  expect(w.asked).toEqual([])
 })
 
 // Dan's answer is read only from his dialog: a question that hides the file, one about no waiting

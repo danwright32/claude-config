@@ -120,6 +120,11 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}) })
+  // What git itself changes (#1136, Dan, 2026-10-13): a checkout of a path or a restore puts a file
+  // back, git rm and git mv take it away or move it, each changing the look as a write does. A git
+  // pathspec matched across folders (`:/x`, a pattern) has no path, so it is held as a write that
+  // cannot be followed, or judged as a pattern.
+  for (const g of w.byGit ?? []) targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}) })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {

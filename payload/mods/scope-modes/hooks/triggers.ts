@@ -1,4 +1,3 @@
-import type { PromptOrigin } from 'claude-code'
 
 type Scope = 'NO BUILD' | 'WINDING DOWN'
 export type Trigger = { kind: 'scope'; scope: Scope } | { kind: 'build' } | { kind: 'off'; scope: Scope } | { kind: 'place'; place: 'away' | 'home' } | { kind: 'wake' }
@@ -103,10 +102,3 @@ export const scopesAskedOffIn = (text: string): Scope[] => {
   }
   return out
 }
-
-/**
- * Whether a prompt is Dan's own words: his Enter at the terminal, or his phone through Remote
- * Control. Nothing else may change a mode (a peer session, a plugin, a notification), so a message
- * from elsewhere saying "go ahead and build" cannot lift no build.
- */
-export const isDans = (origin: PromptOrigin): boolean => origin.kind === 'composer' || origin.kind === 'bridge'

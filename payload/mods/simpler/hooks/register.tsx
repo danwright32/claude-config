@@ -217,7 +217,9 @@ export const register: Register = on => {
     return next(e)
   })
   on('prompt.submit', async ($, e, next) => {
-    const byDan = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    // Dan's own message, as mod-kit's one reader says (#1135): typed or from his phone, never a
+    // handoff's opening prompt or another plugin's.
+    const byDan = await $.modkit.isDans({ origin: e.origin })
     // Typing /simpler is pressing the button (#939), never typing past it.
     const isPress = /^\/simpler\s*$/.test(e.text.trim())
     if (byDan && !isPress && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)

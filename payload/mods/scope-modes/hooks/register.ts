@@ -65,7 +65,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
-import { isDans, scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
+import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import {
   branchChoiceFor,
@@ -3013,7 +3013,11 @@ export const register: Register = on => {
       await announce($)
     }
     const notes: string[] = []
-    if (isDans(e.origin)) {
+    // Only Dan's own words switch a mode, as mod-kit's one reader says (#1135): what he types, at the
+    // Mac or from his phone. Nothing else may (a peer session, a plugin, a handoff's opening prompt, a
+    // notification), so a message from elsewhere saying "go ahead and build" cannot lift no build.
+    const isDans = await $.modkit.isDans({ origin: e.origin })
+    if (isDans) {
       const triggers = triggersIn(e.text) as Trigger[]
       // What each switch says it now does (#1055), opened with once for them all, so a message that
       // switches two modes never gives Claude two competing openings.
@@ -3082,7 +3086,7 @@ export const register: Register = on => {
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
       // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
       // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.
-      if (isDans(e.origin) && askedUp !== sleeping.record.generation) {
+      if (isDans && askedUp !== sleeping.record.generation) {
         const now = await $.clock.now()
         if (isDaytimeEt(now)) {
           asking = sleeping.record.generation

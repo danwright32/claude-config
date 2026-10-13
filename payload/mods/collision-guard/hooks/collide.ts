@@ -149,9 +149,14 @@ export const latestRequest = (tail: string): string | undefined => {
 // changed, which touches no other session's work.
 export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true }
 
+// What git itself changes is judged the same way (#1136, Dan, 2026-10-13): a checkout of a path and a
+// restore of the working tree put back what they name, an edit; git rm and a git mv's source take it
+// away, a removal; each over everything under it where the reader says it may be a folder. A git
+// pathspec matched across folders (`:/x`, a pattern) names no path, and is not guessed at.
 type Written = {
   files: { path?: string; sources?: string[]; mayBeFolder?: true; tree?: true }[]
   changes: { path?: string; does: string; tree?: true }[]
+  byGit?: { path?: string; does: 'write' | 'remove'; tree?: true }[]
 }
 export const judgedWrites = (w: Written): ShellWrite[] => {
   const out: ShellWrite[] = []
@@ -167,6 +172,11 @@ export const judgedWrites = (w: Written): ShellWrite[] => {
     if (!c.path) continue
     if (c.does === 'remove') add(c.path, c.tree ? { removes: true, tree: true } : { removes: true })
     else if (c.does === 'touch' || c.does === 'truncate') add(c.path, {})
+  }
+  for (const g of w.byGit ?? []) {
+    if (!g.path) continue
+    const tree = g.tree ? { tree: true as const } : {}
+    add(g.path, g.does === 'remove' ? { removes: true, ...tree } : tree)
   }
   return out
 }

@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { AutoSessionNameRecord as Rec } from '../types/index.d.ts'
-import { cleanName, hasExchange, isDans, namePrompt, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from './name.ts'
+import { cleanName, hasExchange, namePrompt, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from './name.ts'
 
 // Auto session name (claude-config#635), behaviour agreed with Dan on 2026-10-04: ten minutes after
 // an interactive session starts (or after its first exchange, when nothing was asked by then) it is
@@ -258,11 +258,13 @@ export const register: Register = on => {
 
   // What Dan sends, read where the engine marks each message's origin (#1123): a transcript message
   // carries no such mark, so a task's notice or another plugin's message read from it looked like
-  // his words and named a session he had opened with only an image (#1085). Recorded once the
-  // message has entered (a dropped one never did), and never in the way of the message itself.
+  // his words and named a session he had opened with only an image (#1085). Whose words they are is
+  // mod-kit's one reader (#1135): what he types, at the Mac or from his phone, never a handoff's
+  // opening prompt (Dan, 2026-10-13). Recorded once the message has entered (a dropped one never
+  // did), and never in the way of the message itself.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
-    if (!isDans(e.origin) || result.drop !== undefined) return result
+    if (result.drop !== undefined || !(await $.modkit.isDans({ origin: e.origin }))) return result
     const hasImages = (e.attachments ?? []).some(a => a.type === 'image')
     try {
       await update($, cur => {

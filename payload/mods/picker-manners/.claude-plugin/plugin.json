@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "description": "Keeps AskUserQuestion to one question per call, and refuses next issue offers while Dan has them off.",
   "author": { "name": "Dan Wright" },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit"]
 }

@@ -1,4 +1,4 @@
-import type { PromptOrigin, Register } from 'claude-code'
+import type { Register } from 'claude-code'
 import type { AddonNotes } from '../types/index.d.ts'
 import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, resumeLine } from './classify.ts'
 
@@ -13,10 +13,6 @@ import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, res
 //    draws dim. Anything else after an interrupt is left exactly as typed.
 //
 // The words Dan typed always reach the model unchanged; only context is added.
-
-// Only Dan's own messages: typed at the terminal, or sent from the phone through Remote Control.
-// A peer session, a background task or a plugin is never an add-on.
-const fromDan = (origin: PromptOrigin | undefined): boolean => origin?.kind === 'composer' || origin?.kind === 'bridge'
 
 // Whether the main loop's last turn ended because Dan interrupted it, not yet answered by a message
 // of his. Held for this session's process only: a hot reload of the mod forgets it, which costs at
@@ -49,8 +45,11 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Only Dan's own messages, as mod-kit's one reader says (#1135): typed at the terminal, or sent
+  // from the phone through Remote Control. A peer session, a background task or a plugin, a
+  // handoff's opening prompt included, is never an add-on.
   on('prompt.submit', async ($, e, next) => {
-    if (!fromDan(e.origin)) return next(e)
+    if (!(await $.modkit.isDans({ origin: e.origin }))) return next(e)
     const midTurn = e.turnId !== undefined
     // An interrupt is answered by Dan's next message, whatever it says; one typed into a running
     // turn is not that message (the interrupted turn is over by then, so a running turn is a newer one).

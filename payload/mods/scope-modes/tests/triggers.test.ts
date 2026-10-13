@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { isDans, scopesAskedOffIn, triggersIn } from '../hooks/triggers.ts'
+import { scopesAskedOffIn, triggersIn } from '../hooks/triggers.ts'
 
 // Each phrase the specs name (#616, #621), and the ones mined from Dan's chats that they quote.
 describe('triggersIn', () => {
@@ -127,15 +127,5 @@ describe('triggersIn', () => {
       { kind: 'place', place: 'away' },
       { kind: 'scope', scope: 'WINDING DOWN' },
     ])
-  })
-})
-
-describe('isDans', () => {
-  test("Dan's own Enter and his phone count; a peer, a plugin or a notification never turns a mode on", () => {
-    expect(isDans({ kind: 'composer' })).toBe(true)
-    expect(isDans({ kind: 'bridge' })).toBe(true)
-    for (const kind of ['peer', 'peer-send-message', 'task-notification', 'scheduled-trigger', 'unclassified', 'sdk'])
-      expect(isDans({ kind } as never)).toBe(false)
-    expect(isDans({ kind: 'plugin', name: 'x', asUser: true })).toBe(false)
   })
 })

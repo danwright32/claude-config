@@ -44,6 +44,7 @@ const modKit: { name: string; register: Register } = {
         // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
+        isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },

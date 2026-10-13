@@ -53,7 +53,12 @@
 #             reading a github.com link's repository by hand    live and scope-modes read a pull request's
 #             (a pattern capturing or matching a class right    link four ways, which differed on its end
 #             after github.com/)                                and on case)
-#   press     a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
+#   dans-words                                                  use $.modkit.isDans({ origin }) (#1135: five
+#             reading whether a prompt is Dan's own words       mods asked it two ways, two of them also
+#             from its origin by hand (naming the composer      counting a handoff's opening prompt). Whether
+#             kind as a string)                                 it came from his phone (bridge alone) is
+#                                                               another question.
+#   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
 #                                                               cannot land (#939) is never answered by a
@@ -129,6 +134,7 @@ PARTS=(
   "remote-reader|\\\\\\.git(\\\$|\\)\\?)|github\\\\\\.com\\[|\\[(/:|:/)\\]|\$.modkit.repo({ root, remote }) (its github and name), or \$.modkit.ghRepo({ spelling }) for a repository as gh spells one"
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
+  "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
 )
 
 n=0

@@ -134,6 +134,26 @@ describe('the files a shell command writes, as this guard judges them', () => {
     // against everything under it (lessons review of #798).
     expect(judgedWrites({ files: [{ path: '/repo/src', tree: true }], changes: [] })).toEqual([{ path: '/repo/src', tree: true }])
   })
+  // #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path and a
+  // restore write what they name, git rm and a git mv's source remove it. Each may be a folder, so
+  // each is judged on everything under it, as mod-kit's reader marks it.
+  test('what git changes is judged: a checkout or restore as an edit, git rm and a moved source as a removal', () => {
+    const byGit = [
+      { word: 'app/globals.css', path: '/repo/app/globals.css', does: 'write' as const, tree: true as const },
+      { word: 'docs/old.txt', path: '/repo/docs/old.txt', does: 'write' as const },
+      { word: 'notes.txt', path: '/repo/notes.txt', does: 'remove' as const },
+      { word: 'src', path: '/repo/src', does: 'remove' as const, tree: true as const },
+    ]
+    expect(judgedWrites({ files: [], changes: [], byGit })).toEqual([
+      { path: '/repo/app/globals.css', tree: true },
+      { path: '/repo/docs/old.txt' },
+      { path: '/repo/notes.txt', removes: true },
+      { path: '/repo/src', removes: true, tree: true },
+    ])
+  })
+  test('a git pathspec git matches across folders names no path, and is not guessed at', () => {
+    expect(judgedWrites({ files: [], changes: [], byGit: [{ word: ':/app', does: 'write' } as never, { word: '*.css', does: 'remove' } as never] })).toEqual([])
+  })
   test('what the words cannot name is not guessed at (#654)', () => {
     expect(judgedWrites({ files: [{ word: '$OUT' } as never], changes: [{ word: '*.txt', does: 'remove' } as never] })).toEqual([])
   })

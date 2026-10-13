@@ -33,10 +33,10 @@ export const register: Register = on => {
     return why ? { deny: why } : next(e)
   })
 
-  // What Dan types, at the Mac or from his phone through Remote Control. A plugin's or a peer's
-  // prompt is not his.
+  // What Dan types, at the Mac or from his phone through Remote Control, as mod-kit's one reader says
+  // (#1135). A plugin's prompt, a handoff's opening one included, a peer's or a notice is not his.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return next(e)
+    if (!(await $.modkit.isDans({ origin: e.origin }))) return next(e)
     if (asksQuiet(e.text) && !(await $.state.get(quietRef)).value) {
       await $.state.set(quietRef, true)
       $.ui.invalidate('prompt.section')
