@@ -254,6 +254,8 @@ type Opts = {
   linkedWorktree?: boolean
   /** The wake check's reads (#834), each command line's own answer: its output, or a failure. */
   night?: Record<string, string | { fails: string }>
+  /** How long each of the wake check's GitHub reads takes on the engine's clock, never the real one (#1147). */
+  nightReadMs?: number
   /** What the permission step beneath answers a permission request with (#834). */
   beneathDecision?: { behavior: 'deny'; message: string }
   /** Whether the step beneath a classifier refusal asks for a retry (#834). */
@@ -397,9 +399,15 @@ const world = (on: On, o: Opts = {}) => {
   const isGone = (dir: string) => (o.gone ?? []).includes(dir)
   const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
   on('fs.exists', ($, e) => ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  // Each wake check read already moved on the engine's clock, so answering it moves it no further.
+  const timed = new WeakSet<object>()
   on('process.run', function answer($, e) {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
+    if (o.nightReadMs && cmd === 'gh' && (a[0] === 'api' || a[0] === 'search' || (a[0] === 'run' && a[1] === 'list')) && !timed.has(e)) {
+      timed.add(e)
+      return clock.advance(o.nightReadMs).then((): unknown => answer($, e)) as never
+    }
     // A process started in a folder that is not there fails to start, and the error names the
     // command, not the folder (measured in #1059: spawn('gh', ..., { cwd: '/nonexistent' })).
     const at = e.init?.cwd
@@ -3163,6 +3171,17 @@ test('/wake puts what the overnight check found first, in the reply and the note
   expect(notes.map(n => n.kind)).toEqual(['outward', 'unmeasured', 'woke'])
   expect(w.appended.every(a => a.file === `${SLEEP}/ended/${T0}-woke-s1.json`)).toBe(true)
   expect(notes[0]?.text).toBe('Issue created overnight: o/r#9 "Filed overnight"')
+})
+
+test('the wake check times its 30 s GitHub budget on the engine clock, so a slow night stops on it (#1147, L524)', withDeps, async ($, on) => {
+  // Each GitHub read takes 25 s on the engine's clock and no time at all on the real one.
+  const { w, clock } = world(on, { ...worker, nightReadMs: 25_000 })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  const notes = w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string })
+  expect(notes.filter(n => n.kind === 'unmeasured').map(n => n.text)).toContain('the overnight check stopped at its 30 s limit, so the rest of GitHub was not read')
+  // Two reads use the 30 s (login and events); nothing on GitHub after them is read.
+  expect(w.runs.some(r => r.join(' ').startsWith('gh search issues'))).toBe(false)
 })
 
 test('"I\'m up" carries what waking found only as data: an issue title written overnight cannot close the block (#922)', withDeps, async ($, on) => {
