@@ -63,7 +63,10 @@
 # request.
 
 set -uo pipefail
-LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+LIB="${BASH_SOURCE[0]%/*}"; [ "$LIB" != "${BASH_SOURCE[0]}" ] || LIB=.
+LIB="$(cd "${LIB:-/}" && pwd)"
 . "$LIB/ai-review-common.sh" 2>/dev/null || { echo "pr-review-report: lib/ai-review-common.sh is missing, so the ledgers cannot be found." >&2; exit 1; }
 
 days=21

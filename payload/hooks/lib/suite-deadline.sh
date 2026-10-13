@@ -60,7 +60,11 @@
 #                        suite past its deadline without waiting it out (L524).
 #   SUITE_WALL_PIDFILE   where the watchdog writes its own pid. A seam, so a test can prove it left.
 
-_suite_deadline_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh). The watchdog below, this file run
+# rather than sourced, finds kill-tree.sh by it too.
+_suite_deadline_dir="${BASH_SOURCE[0]%/*}"; [ "$_suite_deadline_dir" != "${BASH_SOURCE[0]}" ] || _suite_deadline_dir=.
+_suite_deadline_dir="$(cd "${_suite_deadline_dir:-/}" && pwd)"
 # The one limit every suite takes unless it passes its own (claude-config#465). Its derivation is
 # the DESIGN.md row; test-suite-deadline.sh reads it from this line, so keep it on one line. Not
 # read from the environment: SUITE_WALL_TIMEOUT is the one override, for one run.
@@ -136,7 +140,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
       # Stopped while its tree is walked, so it cannot start a replacement for what is killed
       # underneath it, which is the race lib/kill-tree.sh records (#174).
       kill -STOP "$target" 2>/dev/null
-      bash "$(dirname "$0")/kill-tree.sh" "$target" 2>/dev/null
+      bash "$_suite_deadline_dir/kill-tree.sh" "$target" 2>/dev/null
       kill -CONT "$target" 2>/dev/null
       n=0
       while kill -0 "$target" 2>/dev/null && [ "$n" -lt 20 ]; do sleep "$poll"; n=$(( n + 1 )); done

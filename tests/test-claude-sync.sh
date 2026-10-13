@@ -8693,10 +8693,11 @@ _grepescapes(){   # $@ = files to read
   for f in "$@"; do
     # Comments stripped and continuation lines joined first, exactly as the scan above does it: a
     # pattern written across two lines is otherwise read as two halves of nothing.
-    sed 's/#.*//' "$f" \
+    # Handed to the awk as a here-string rather than piped (claude-config#1104): its program is a
+    # file the pipefail scan cannot read, so whether it leaves early could not be judged.
+    awk -v FILENAME="$f" -f "$_GTAWK" <<< "$(sed 's/#.*//' "$f" \
       | sed -e :a -e '/\\$/N; s/\\\n//; ta' \
-      | sed 's/\$(printf [^)]*)//g' \
-      | awk -v FILENAME="$f" -f "$_GTAWK"
+      | sed 's/\$(printf [^)]*)//g')"
   done
   return 0
 }
