@@ -19,6 +19,8 @@ export type Runner = (argv: string[], timeoutMs?: number) => Promise<Ran>
 export const WAKE_CHECK_MS = 30_000
 const READ_MS = 20_000
 export type WakeFindings = { hits: string[]; unmeasured: string[] }
+/** The time now in ms: the engine's clock (`$.clock.now`), never Date.now, which no test can move. */
+export type Clock = () => number | Promise<number>
 
 const iso = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
 const firstLine = (s: string) => s.trim().split('\n')[0]?.trim() ?? ''
@@ -32,7 +34,7 @@ const at = (s: unknown) => (typeof s === 'string' ? Date.parse(s) : Number.NaN)
  */
 export const wakeCheck = async (
   runAny: Runner,
-  o: { since: number; home: string; github: GithubOf; repos?: string[]; now?: () => number; budgetMs?: number },
+  o: { since: number; home: string; github: GithubOf; repos?: string[]; now: Clock; budgetMs?: number },
 ): Promise<WakeFindings> => {
   const hits: string[] = []
   const unmeasured: string[] = []
@@ -40,14 +42,16 @@ export const wakeCheck = async (
   // on the report's own final render, which has its own 90 s, so this check takes 30 s at most.
   // Each read is given only the time left (never more than 20 s), a read past the deadline is not
   // made, and that is said once; the local reads (git, stat) always run.
-  const now = o.now ?? Date.now
+  // Timed on the clock the caller passes, the engine's in the hooks, so a test that moves the
+  // engine's clock moves this deadline and never waits for real (#1147, L524).
+  const { now } = o
   const budget = o.budgetMs ?? WAKE_CHECK_MS
-  const started = now()
+  const started = await now()
   let over = false
   const SKIPPED = -2
   const run = async (argv: string[]): Promise<Ran> => {
     if (argv[0] !== 'gh') return runAny(argv)
-    const left = budget - (now() - started)
+    const left = budget - ((await now()) - started)
     if (left <= 0) {
       if (!over) unmeasured.push(`the overnight check stopped at its ${Math.round(budget / 1000)} s limit, so the rest of GitHub was not read`)
       over = true
