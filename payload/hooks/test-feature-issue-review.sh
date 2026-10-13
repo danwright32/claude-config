@@ -212,8 +212,24 @@ m = re.search(r"waiting in (\S+?)\. They", sys.stdin.read())
 print(m.group(1) if m else "")
 '
 }
-# The command on the line after TO FILE THESE in a findings file, exactly as written.
-clear_line_of() { awk 'f { sub(/^  /, ""); print; exit } /^TO FILE THESE/ { f = 1 }' "$1" 2>/dev/null; }
+# The command on the line after TO FILE THESE in a findings file, exactly as written, or nothing when
+# there is no such file. Checked first, because awk handed an empty name reads stdin (claude-config#1121).
+clear_line_of() {
+  [ -n "$1" ] && [ -f "$1" ] || return 1
+  awk 'f { sub(/^  /, ""); print; exit } /^TO FILE THESE/ { f = 1 }' "$1" 2>/dev/null
+}
+# The first <n> lines of a file, for a failure message, or a sentence saying there is no such file.
+first_lines() { # first_lines <n> <file>
+  if [ -n "$2" ] && [ -f "$2" ]; then awk -v n="$1" 'NR <= n' "$2" 2>/dev/null; else printf 'no file at [%s]' "$2"; fi
+}
+# Whether a review named a findings file that exists, failing the named case when it did not, so a
+# review that printed nothing reads as that case failing rather than as an empty answer to the next
+# question (claude-config#1121).
+named_file_ok() { # named_file_ok <case> <path>
+  [ -n "$2" ] && [ -f "$2" ] && return 0
+  check "$1" "the review named no findings file it wrote (named [$2]), so there was nothing to read"
+  return 1
+}
 # Whether <text> holds <needle>, and whether it holds <line> as a whole line. Matched in the shell
 # rather than through `producer | grep -q`, which leaves on its first match and kills the producer, so
 # under pipefail a match can report as a failure (test-pipefail-shortcircuit.sh).
@@ -223,6 +239,20 @@ $1
 " in *"
 $2
 "*) return 0 ;; esac; return 1; }
+# Handed no file, a reader must read nothing (claude-config#1121). awk takes an empty name as no
+# name at all and reads stdin instead, so when a review printed nothing and named no findings file,
+# this suite run alone from a terminal sat waiting on the keyboard. Fed text on stdin here, so a
+# reader that falls back to stdin is caught by what it prints rather than by a hang.
+_stdin_read="$(printf 'TO FILE THESE\n  read from stdin\n' | clear_line_of "")"
+[ -z "$_stdin_read" ] \
+  && check "#1121 the clear line reader handed no file reads nothing" ok \
+  || check "#1121 the clear line reader handed no file reads nothing" "it read [$_stdin_read] from stdin"
+_stdin_read="$(printf 'read from stdin\n' | first_lines 2 "")"
+case "$_stdin_read" in
+  *"read from stdin"*) check "#1121 the first lines reader handed no file reads nothing, and says so" "it read [$_stdin_read] from stdin" ;;
+  *"no file at []"*) check "#1121 the first lines reader handed no file reads nothing, and says so" ok ;;
+  *) check "#1121 the first lines reader handed no file reads nothing, and says so" "it printed [$_stdin_read]" ;;
+esac
 reason_of() {
   printf '%s' "$1" | python3 -c '
 import json, sys
@@ -320,7 +350,7 @@ grep -q "issue list" "$GH_CALLS" 2>/dev/null \
   || check "#256 the review asks for the open issues" "gh was never called: $(cat "$GH_CALLS" 2>/dev/null)"
 grep -q "already #412" "$named" 2>/dev/null \
   && check "#256 a finding an open issue already covers carries that issue's number" ok \
-  || check "#256 a finding an open issue already covers carries that issue's number" "file=$(awk 'NR <= 3' "$named" 2>/dev/null)"
+  || check "#256 a finding an open issue already covers carries that issue's number" "file=$(first_lines 3 "$named")"
 grep -q "already #998" "$named" 2>/dev/null \
   && check "#256 and an unrelated open issue is not attached to it" "it named #998 as well" \
   || check "#256 and an unrelated open issue is not attached to it" ok
@@ -364,7 +394,7 @@ print(m.group(1) if m else "")
 ')"
 grep -qF "$FAILMARK" "$named_fo" 2>/dev/null \
   && check "#256 a gh that refuses leaves the findings going out unannotated" ok \
-  || check "#256 a gh that refuses leaves the findings going out unannotated" "file=[$named_fo] $(awk 'NR <= 2' "$named_fo" 2>/dev/null)"
+  || check "#256 a gh that refuses leaves the findings going out unannotated" "file=[$named_fo] $(first_lines 2 "$named_fo")"
 # And SAYS it could not look. Failing open is right; failing open in silence makes an unannotated
 # list indistinguishable from a list with no duplicates in it (L10, L11).
 grep -q "OPEN ISSUES NOT READ" "$named_fo" 2>/dev/null \
@@ -501,6 +531,7 @@ mkdir -p "$APOS_PROJ"
 APOS_MARK="r1020 a finding from the folder with a curly apostrophe"
 bash "$DIR/lib/issue-spool.sh" note "$APOS_PROJ" "$APOS_MARK" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
 apos_file="$(named_in "$(reason_of "$(run_review "$APOS_PROJ")")")"
+named_file_ok "#1020 the review for a project under a curly apostrophe writes a findings file" "$apos_file"
 apos_line="$(clear_line_of "$apos_file")"
 [ -n "$apos_line" ] \
   && check "#1020 the review writes a clear line for a project under a curly apostrophe" ok \
@@ -527,7 +558,9 @@ SQ_PROJ="$WORK/Dan's proj"
 mkdir -p "$SQ_PROJ"
 SQ_MARK="r1020 a finding from a folder with a plain apostrophe"
 bash "$DIR/lib/issue-spool.sh" note "$SQ_PROJ" "$SQ_MARK" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
-sq_line="$(clear_line_of "$(named_in "$(reason_of "$(run_review "$SQ_PROJ")")")")"
+sq_file="$(named_in "$(reason_of "$(run_review "$SQ_PROJ")")")"
+named_file_ok "#1020 the review for a folder with a plain apostrophe writes a findings file" "$sq_file"
+sq_line="$(clear_line_of "$sq_file")"
 sq_said="$(eval "$sq_line" 2>&1)"
 holds "$(bash "$DIR/lib/issue-spool.sh" archive "$SQ_PROJ" "$TRANSCRIPT" 2>/dev/null)" "$SQ_MARK" \
   && check "#1020 a folder with a plain apostrophe still gets a line that runs" ok \
@@ -604,6 +637,7 @@ python3 -c 'import os, sys, time; t = time.time() - 86400; os.utime(sys.argv[1],
 SW_PROJ="$(mktemp -d "$WORK/sweep.XXXXXX")"
 bash "$DIR/lib/issue-spool.sh" note "$SW_PROJ" "r1019 a finding whose review sweeps" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
 sw_file="$(named_in "$(reason_of "$(run_review "$SW_PROJ")")")"
+named_file_ok "#1019 the review that sweeps writes a findings file" "$sw_file"
 sw_gone=0
 for f in "$sw_old_manifest" "$sw_old_seen" "$sw_old_txt"; do [ -e "$f" ] || sw_gone=$((sw_gone + 1)); done
 [ "$sw_gone" -eq 3 ] \
@@ -626,7 +660,7 @@ grep -q "removed 3 " "$sw_file" 2>/dev/null \
   && check "#1019 and says how many it removed" ok \
   || check "#1019 and says how many it removed" "file=$(tail -3 "$sw_file" 2>/dev/null)"
 # Said ABOVE the clear line: review/issue-review.md tells the reader the file ends with it.
-[ -n "$sw_stamp" ] && [ "$(awk 'NF { last = $0 } END { sub(/^  /, "", last); print last }' "$sw_file")" = "$(clear_line_of "$sw_file")" ] \
+[ -n "$sw_stamp" ] && [ -f "$sw_file" ] && [ "$(awk 'NF { last = $0 } END { sub(/^  /, "", last); print last }' "$sw_file")" = "$(clear_line_of "$sw_file")" ] \
   && check "#1019 and the findings file still ends with the clear line" ok \
   || check "#1019 and the findings file still ends with the clear line" "file ends: $(tail -2 "$sw_file" 2>/dev/null)"
 rm -rf "$sw_recent_seen" "$sw_unrelated" "$sw_dir"
