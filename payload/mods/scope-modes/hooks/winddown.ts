@@ -1,4 +1,4 @@
-import type { ScopeModesLeftAsIs, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
+import type { ScopeModesLeftAsIs, ScopeModesLeftBranch, ScopeModesLeftClosed, ScopeModesLeftOpen } from '../types/index.d.ts'
 import type { Cmd } from './nobuild.ts'
 
 // Winding down (#616). Finished means the PR merged, the is it live mod's card for it saying Live
@@ -31,6 +31,12 @@ export const isLeftClosed = (d: LeftAsIs): d is LeftClosed => 'closed' in d && d
 /** Dan's choice about this PR, by repository (in any case) and number, or undefined when he made none. */
 export const choiceFor = (all: readonly LeftAsIs[], repo: string, number: number): LeftAsIs | undefined =>
   all.find(d => d.number === number && d.repo.toLowerCase() === repo.toLowerCase())
+
+/** Dan's own answer that a branch stays as it is (#1074): never deleted here, its worktree kept. */
+export type LeftBranch = ScopeModesLeftBranch
+/** Dan's choice about this branch, by repository (in any case) and branch name, or undefined. */
+export const branchChoiceFor = (all: readonly LeftBranch[], repo: string, branch: string): LeftBranch | undefined =>
+  all.find(d => d.branch === branch && d.repo.toLowerCase() === repo.toLowerCase())
 type Unreadable = { unreadable: string }
 const isUnreadable = (v: unknown): v is Unreadable => !!v && typeof v === 'object' && 'unreadable' in v
 
@@ -43,6 +49,13 @@ export type Reading = {
   pr: { number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; head?: string; issues: { number: number; state: 'OPEN' | 'CLOSED' }[] } | null | Unreadable
   /** Dan's choice to leave this PR open (#917) or closed (#1033), when he made one; never inferred. */
   choice?: LeftAsIs
+  /**
+   * The checkout was on this branch, which this session neither created, committed to nor pushed
+   * (#1074): it is not the session's, so it has no PR or cleanup of the session's to finish.
+   */
+  inherited?: boolean
+  /** Dan's choice to leave this branch as it is (#1074), when he made one; never inferred. */
+  branchLeft?: LeftBranch
   branchHere: boolean | Unreadable
   branchOnGitHub: boolean | Unreadable
   worktreeOnBranch: boolean | Unreadable
@@ -51,8 +64,34 @@ export type Reading = {
    * card has been made yet; unmeasured when the mod is not loaded. Never Claude's own report.
    */
   deploy: { state: DeployState } | null | Unmeasured | Unreadable
-  dirty: boolean | Unreadable
+  /** The files git status names uncommitted in the session's checkout (#1051); empty when none. */
+  dirty: string[] | Unreadable
 }
+
+/**
+ * The files `git status --porcelain` names, one per line: a rename's new name, and a name git
+ * quoted for a space or an unusual byte without its quotes.
+ */
+export const porcelainFiles = (stdout: string): string[] =>
+  stdout
+    .split('\n')
+    .filter(l => l.length > 3)
+    .map(l => {
+      const path = l.slice(3)
+      const to = path.includes(' -> ') ? path.slice(path.lastIndexOf(' -> ') + 4) : path
+      return to.startsWith('"') && to.endsWith('"') ? to.slice(1, -1) : to
+    })
+
+// Files named in a sentence: at most five, then how many more.
+const MAX_NAMED = 5
+export const filesSaid = (files: readonly string[]) =>
+  files.length <= MAX_NAMED ? files.join(', ') : `${files.slice(0, MAX_NAMED).join(', ')} and ${files.length - MAX_NAMED} more`
+
+/** The tools that answer for uncommitted work while winding down, as the finish check and refusal name them. */
+export const CLEANUP_TOOL = 'mcp__scope-modes__open_cleanup_branch'
+export const LEAVE_BRANCH_TOOL = 'mcp__scope-modes__leave_branch'
+const uncommitted = (files: readonly string[]) =>
+  `there are uncommitted changes (${filesSaid(files)}): commit them on a branch Dan agrees to (${CLEANUP_TOOL}), or ask him whether to leave them (${LEAVE_BRANCH_TOOL})`
 
 /** A card's state, as is it live keeps it (its contract's IsItLiveCard['state']). */
 export type DeployState = 'live' | 'deploying' | 'unconfirmed' | 'no-deploy'
@@ -77,9 +116,17 @@ export const outstanding = (r: Reading): string[] => {
     return out
   }
   if (r.pr === null) {
-    if (!r.isDefault) return [`there is no PR for ${r.branch} yet`]
+    // A branch that is not the session's (#1074) is read as the default branch is: only its
+    // uncommitted work can be the session's.
+    if (!r.isDefault && !r.inherited) return [`there is no PR for ${r.branch} yet`]
     if (isUnreadable(r.dirty)) unread('whether anything is uncommitted', r.dirty)
-    else if (r.dirty) out.push('there are uncommitted changes')
+    else {
+      // Dan's answer to leave the branch as it is settles the files he was asked about, never one
+      // changed since (#1074), as his answer about a PR never covers commits he was not asked about.
+      const asked = r.branchLeft?.files ?? []
+      const left = r.dirty.filter(f => !asked.includes(f))
+      if (left.length) out.push(uncommitted(left))
+    }
     return out
   }
   if (r.pr.state === 'OPEN') {
@@ -106,12 +153,17 @@ export const outstanding = (r: Reading): string[] => {
     const left = Object.prototype.hasOwnProperty.call(DEPLOY_LEFT, d.state) ? DEPLOY_LEFT[d.state] : `is it live answered a state wind down does not know (${String(d.state)})`
     if (left) out.push(left)
   }
-  const checks: [string, boolean | Unreadable, string][] = [
-    [`whether ${r.branch} is gone here`, r.branchHere, `the branch ${r.branch} still exists here`],
-    [`whether ${r.branch} is gone from GitHub`, r.branchOnGitHub, `the branch ${r.branch} still exists on GitHub`],
-    [`whether a worktree is still on ${r.branch}`, r.worktreeOnBranch, `a worktree is still on ${r.branch}`],
+  // Dan's answer to leave the branch as it is (#1074) keeps it here and any worktree on it, which can
+  // stand under another session; the branch on GitHub holds no checkout, so it is still cleaned.
+  const keptHere = !!r.branchLeft
+  // Each check, and whether it is of this checkout, which his answer keeps.
+  const checks: [string, boolean | Unreadable, string, boolean][] = [
+    [`whether ${r.branch} is gone here`, r.branchHere, `the branch ${r.branch} still exists here`, true],
+    [`whether ${r.branch} is gone from GitHub`, r.branchOnGitHub, `the branch ${r.branch} still exists on GitHub`, false],
+    [`whether a worktree is still on ${r.branch}`, r.worktreeOnBranch, `a worktree is still on ${r.branch}`, true],
   ]
-  for (const [question, v, still] of checks) {
+  for (const [question, v, still, local] of checks) {
+    if (local && keptHere) continue
     if (isUnreadable(v)) unread(question, v)
     else if (v) out.push(still)
   }
@@ -142,11 +194,88 @@ const agentFor = (n: number) => NEW_WORK.agent.replace('another issue', `issue #
 /** What finishing one PR means, as winding down's note and its acknowledgement (#1055) both say it. */
 export const FINISHED = 'merged, its deploy live, its worktree and branch cleaned and its issues closed'
 
+// A git command's value for a flag, given as the next word or after `=` (`-c x`, `--create=x`).
+const valueOf = (args: readonly string[], flags: readonly string[]): string | undefined => {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (flags.includes(a)) return args[i + 1]
+    const eq = flags.find(f => f.startsWith('--') && a.startsWith(`${f}=`))
+    if (eq) return a.slice(eq.length + 1)
+  }
+  return undefined
+}
+
+/**
+ * The branch a git command starts, when it starts one: its name where the words give it, and whether
+ * the checkout moves onto it (checkout and switch), which carries the uncommitted changes there.
+ */
+export const newBranchOf = (c: Cmd): { name: string | undefined; moves: boolean } | undefined => {
+  const g = c.git
+  const args = g?.args ?? []
+  if (g?.sub === 'checkout' && args.some(a => a === '-b' || a === '-B' || a === '--orphan')) return { name: valueOf(args, ['-b', '-B', '--orphan']), moves: true }
+  if (g?.sub === 'switch' && args.some(a => ['-c', '-C', '--create', '--force-create', '--orphan'].includes(a) || /^--(force-)?create=/.test(a)))
+    return { name: valueOf(args, ['-c', '-C', '--create', '--force-create', '--orphan']), moves: true }
+  if (g?.sub === 'worktree' && args[0] === 'add') return { name: valueOf(args, ['-b', '-B']), moves: false }
+  if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { name: args[0], moves: false }
+  return undefined
+}
+
+// git push's options that take a value as the next word, so it is never read as the remote.
+const PUSH_VALUES = ['-o', '--push-option', '--repo', '--receive-pack', '--exec']
+
+/**
+ * The branches a call makes the session's own (#1074): one it creates, one it pushes by name (a
+ * refspec's destination), and `current` for a commit or a push naming none, which is of the branch
+ * checked out where it runs. A deletion and a tag name no branch.
+ */
+export const branchesTouched = (commands: readonly Cmd[]): { named: string[]; current: boolean } => {
+  const named: string[] = []
+  let current = false
+  for (const c of commands) {
+    const started = newBranchOf(c)
+    if (started?.name) named.push(started.name)
+    const g = c.git
+    if (g?.sub === 'commit') current = true
+    if (g?.sub !== 'push') continue
+    const args = g.args
+    if (args.some(a => a === '-d' || a === '--delete' || a === '--tags' || a === '--mirror' || a === '--all')) continue
+    const words: string[] = []
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i] as string
+      if (PUSH_VALUES.includes(a)) i++
+      else if (!a.startsWith('-')) words.push(a)
+    }
+    // The first word is the remote; the rest are refspecs.
+    const specs = words.slice(1)
+    if (!specs.length) current = true
+    for (const spec of specs) {
+      const s = spec.replace(/^\+/, '')
+      const src = s.includes(':') ? s.slice(0, s.indexOf(':')) : s
+      const dst = (s.includes(':') ? s.slice(s.indexOf(':') + 1) : s).replace(/^refs\/heads\//, '')
+      // An empty source deletes the branch; a tag is no branch.
+      if (s.includes(':') && !src) continue
+      if (dst.startsWith('refs/')) continue
+      if (dst === 'HEAD') current = true
+      else if (dst) named.push(dst)
+    }
+  }
+  return { named, current }
+}
+
 /**
  * Why winding down refuses this call as new work, or undefined. Only the starts of new work are
- * refused; everything this issue's merge, deploy and cleanup need goes through.
+ * refused; everything this issue's merge, deploy and cleanup need goes through. `cleanBranches` are
+ * the branches Dan agreed to as cleanup (#1051) whose files cover what is uncommitted now: starting
+ * one by checkout or switch, which carry those changes onto it, is not new work. A refused start of a
+ * named branch says which, so the refusal can say why his answer did not cover it.
  */
-export const newWork = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[]; issues: readonly number[] }): Refusal | undefined => {
+export const newWork = (call: {
+  tool: string
+  input: Record<string, unknown>
+  commands: Cmd[]
+  issues: readonly number[]
+  cleanBranches?: readonly string[]
+}): (Refusal & { branch?: string }) | undefined => {
   const { tool, input } = call
   if (tool === 'Skill' && String(input.skill ?? '').replace(/^.*:/, '') === 'next-issue') return { what: NEW_WORK.nextIssue }
   if (tool === 'EnterWorktree') return { what: NEW_WORK.branch }
@@ -160,12 +289,11 @@ export const newWork = (call: { tool: string; input: Record<string, unknown>; co
   }
   if (tool !== 'Bash') return undefined
   for (const c of call.commands) {
-    const g = c.git
-    const args = g?.args ?? []
-    if (g?.sub === 'checkout' && args.some(a => a === '-b' || a === '-B' || a === '--orphan')) return { what: NEW_WORK.branch }
-    if (g?.sub === 'switch' && args.some(a => a === '-c' || a === '-C' || a === '--create' || a === '--force-create' || a === '--orphan')) return { what: NEW_WORK.branch }
-    if (g?.sub === 'worktree' && args[0] === 'add') return { what: NEW_WORK.branch }
-    if (g?.sub === 'branch' && args.length > 0 && !args[0]?.startsWith('-')) return { what: NEW_WORK.branch }
+    const started = newBranchOf(c)
+    if (started) {
+      if (started.moves && started.name && call.cleanBranches?.includes(started.name)) continue
+      return { what: NEW_WORK.branch, ...(started.name ? { branch: started.name } : {}) }
+    }
     // gh read by mod-kit's one reader (#961), past its global flags (`gh -R o/x issue develop 7`).
     if (c.gh?.sub === 'issue' && c.gh.act === 'develop') return { what: NEW_WORK.branch }
     // A flag before the subcommand the reader cannot place could hide `issue develop`, so it is refused.
