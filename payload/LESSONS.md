@@ -3255,6 +3255,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L1027. A local env file that holds production's error reporting address makes every error on a
+  developer's machine or test server page the live alert channel, so local dev and test servers must
+  report nowhere or to a separate environment, and the alert must act only on production.**
+  (nursedex#1170, 2026-10-13)
+  SHORT: Local dev and test servers must not report to production's error tracker, and alerts act only on production.
+
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
   assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
   parser hands back EMPTY input, and every predicate over empty input reads as nothing to refuse, so
@@ -5606,6 +5612,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
 
 ## Security and privacy
+
+- **L1026. An access check in a shared layout does not protect the pages beneath it, because the
+  framework renders a layout and its page at the same time and may not re-run the layout on navigation;
+  every protected page or its data loader must check access itself, with a test that fails when one
+  does not.** (nursedex#1169, 2026-10-13)
+  SHORT: A layout's access check does not guard its pages; every protected page checks access itself, with a test.
 
 - **L761. A pattern that keeps a secret-bearing file out of git or a sync (an ignore rule, an exclude
   list) must also match that file's copies, such as .bak, .orig and ~ backups, because a backup is the
@@ -8663,6 +8675,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L1025. Every build of an app that declares a URL scheme, a test host or Debug product included,
+  registers with the operating system and competes for that scheme's links, so a development build
+  must not declare the production scheme, or a link opened while the app is closed can launch a test
+  build against real data.**
+  (downbeat#575, 2026-10-13)
+  SHORT: A dev or test build declaring the production URL scheme competes for its links, so a link opened with the app closed can launch it on real data.
 
 - **L766. When a deadline stops waiting on a write to another system, record that write as UNKNOWN and have a later step read the target back and resend only if it is absent, because an outcome labelled 'may have finished' that nothing re-checks becomes a silent loss on every slow upstream night.**
   (Try-Pennie/bidspoke#2015, 2026-10-13)
