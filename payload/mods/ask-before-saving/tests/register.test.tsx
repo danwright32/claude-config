@@ -550,6 +550,39 @@ test('a command that only quotes a memory path in its text goes straight through
   quietOnMain(w)
 })
 
+// #1155: a program's writes are guessed from its own text and arguments, placed in the folder it runs
+// in (mod-kit's `program` and `folder`, #1151), never from another command's heredoc data in the same
+// call, nor from the session's folder.
+test("a heredoc spec naming lasting memory as data, beside a program writing something else, goes straight through", withKit, async ($, on) => {
+  const w = world($, on)
+  const commands = [
+    `cd /tmp/round && cat > spec.json <<'EOF'\n{ "rules": "~/.claude/CLAUDE.md", "notes": "${MEM}" }\nEOF\npython3 - <<'EOF'\nimport sys\nopen(sys.argv[1], 'w').write('x')\nEOF`,
+    `cd /tmp/round && cat > spec.json <<'EOF'\n{ "styles": "AGENTS.md" }\nEOF\npython3 - out.json <<'EOF'\nimport json, sys\njson.dump({}, open(sys.argv[1], 'w'))\nEOF`,
+    // A program in a temporary folder outside any checkout writing a CLAUDE.md there: no lasting memory.
+    `cd /tmp/round && python3 - CLAUDE.md <<'EOF'\nimport sys\nopen(sys.argv[1], 'w').write('x')\nEOF`,
+  ]
+  for (const command of commands) expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(commands.length)
+  quietOnMain(w)
+})
+
+test('a program that really writes lasting memory is asked about, by its arguments or its text, wherever it runs', withKit, async ($, on) => {
+  const w = world($, on)
+  const write = `<<'EOF'\nimport sys\nopen(sys.argv[1], 'a').write('- Use pnpm.')\nEOF`
+  // Handed the file as an argument, in the session's folder and in a checkout it cds into.
+  const here = refusalOf(await call($, { tool: 'Bash', command: `python3 - AGENTS.md ${write}` }))
+  expect(here).toContain(ASKS)
+  expect(here).toContain('~/Apps/slate/AGENTS.md')
+  const there = refusalOf(await call($, { tool: 'Bash', command: `cd /tmp/repo/app && python3 - CLAUDE.md ${write}` }))
+  expect(there).toContain(ASKS)
+  expect(there).toContain('/tmp/repo/app/CLAUDE.md')
+  // After a cd the reader cannot follow, a bare name's place is unknown, so it is asked about.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cd $SOMEWHERE && python3 - CLAUDE.md ${write}` }))).toContain(ASKS)
+  // Named in the program's own text, with the spec's data beside it.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > /tmp/round/spec.json <<'EOF'\n{}\nEOF\npython3 - <<'EOF'\nd = '.'\nopen(d + '/AGENTS.md', 'a').write('- Use pnpm.')\nEOF` }))).toContain(ASKS)
+  expect(w.ran).toEqual([])
+})
+
 test('a command whose real write target cannot be read is still asked about when its text mentions lasting memory', withKit, async ($, on) => {
   const w = world($, on)
   const commands = [
