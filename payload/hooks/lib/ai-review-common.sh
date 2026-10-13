@@ -236,9 +236,15 @@ ar_size_text() {   # $1 = bytes
 # these reviews, claude-config#1090), so none reports a review without saying what it did not
 # read. A review refused as too large never ran, so for that outcome ($2) it says what WOULD have
 # been left out, never that a review left it out (L11).
+#
+# The sorted rows reach awk as a here-string rather than through a pipe (claude-config#1120): the
+# program starts with $AR_AWK_SIZE, so the pipefail check cannot read all of it and names a pipe
+# into it as unjudged. A here-string has no writer that awk could leave behind.
 ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
   [ -s "$1" ] || return 0
-  LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null | LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'
+  local rows
+  rows="$(LC_ALL=C sort -t "$(printf '\t')" -k1,1nr "$1" 2>/dev/null)"
+  LC_ALL=C awk -F '\t' -v file="$1" -v max=10 -v chars=1500 -v status="${2:-}" "$AR_AWK_SIZE"'
     NF >= 4 && $2 != "" {
       n++; total += $1
       item = $2 " (" $4 ", " size($1) ")"
@@ -251,7 +257,7 @@ ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
         printf "Would have been left out of the review as proven to need no reading, had the rest fitted: %d file(s), %s in all: %s%s.\n", n, size(total), list, more
       else
         printf "Not read by this review: %d file(s), %s in all, left out because the branch was over the size cap and each is proven to need no reading: %s%s.\n", n, size(total), list, more
-    }'
+    }' <<< "$rows"
 }
 
 # FILES A REVIEW OVER THE CAP MAY LEAVE OUT, because each is PROVEN to need no reading
