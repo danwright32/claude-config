@@ -26,15 +26,17 @@ const under = <T>(map: Record<string, T>, dir: string): T | null => {
 }
 const look: Look = { repoOf: async dir => under(REPOS, dir), isPrimary: async dir => under(PRIMARY, dir) }
 
+// A word read as a command line of its own, by the same reader (#1132).
+const read = async (text: string) => readCommands(text)
 // GH_REPO as the mod hands it over: read by mod-kit's ghRepo (its byte for byte copy), absent when
 // it is not set (#961).
 const bash = (command: string, o: { cwd?: string; ghRepo?: string; look?: Look } = {}) =>
   overnightRefusal(
-    { tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ...(o.ghRepo ? { ghRepo: ghRepo(o.ghRepo) } : {}) },
+    { tool: 'Bash', input: { command }, raw: command, commands: readCommands(command), writes: commandWrites(command, o.cwd ?? CWD, HOME), cwd: o.cwd ?? CWD, home: HOME, ...(o.ghRepo ? { ghRepo: ghRepo(o.ghRepo) } : {}), read },
     o.look ?? look,
   )
 const NONE = { files: [], changes: [], unnamed: [] }
-const tool = (name: string, input: Record<string, unknown>) => overnightRefusal({ tool: name, input, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)
+const tool = (name: string, input: Record<string, unknown>) => overnightRefusal({ tool: name, input, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME, read }, look)
 
 describe('ordinary overnight work is not on the list, so it goes ahead', () => {
   test('building, testing, committing, pushing a branch and opening a PR', async () => {
@@ -63,7 +65,7 @@ describe('ordinary overnight work is not on the list, so it goes ahead', () => {
     expect(await bash('git checkout -- payload/a.ts')).toBeUndefined()
   })
   test('a Bash call with no command is refused, never approved as empty (#834 review of edeb682)', async () => {
-    expect(await overnightRefusal({ tool: 'Bash', input: {}, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME }, look)).toBe('run a Bash call with no command')
+    expect(await overnightRefusal({ tool: 'Bash', input: {}, raw: '', commands: [], writes: NONE, cwd: CWD, home: HOME, read }, look)).toBe('run a Bash call with no command')
   })
   test('editing code, and tools nobody listed', async () => {
     expect(await tool('Edit', { file_path: '/Users/x/repo/payload/a.ts' })).toBeUndefined()
@@ -241,6 +243,49 @@ describe('gh overnight: a short list of reads anywhere, a short list of writes o
     expect(await bash(`gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addComment')
     expect(await bash(`gh api graphql -f query='mutation { addLabelsToLabelable(input: {}) { clientMutationId } }'`)).toBe('call the GitHub API to run addLabelsToLabelable')
   })
+  test('code naming gh is refused only where it would run gh, never for the word in prose (#1132)', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    expect(await bash(`python3 -c "import subprocess; print('the gh CLI, github.com, gh-pages and ghost')"`)).toBeUndefined()
+    expect(await bash(`python3 -c "import subprocess; print('ask gh for the list later')"`)).toBeUndefined()
+    for (const c of [
+      `python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'close', '5'])"`,
+      `python3 -c "import subprocess; subprocess.run('gh issue create -t x', shell=True)"`,
+      `python3 -c "import os; os.system('cd /x && gh pr merge 5')"`,
+      `python3 -c "import subprocess; g = '/opt/homebrew/bin/gh'; subprocess.run([g, 'pr', 'merge'])"`,
+      `node -e "require('child_process').execSync('gh issue close 5')"`,
+      `node -e "require('child_process').execSync(\\\`gh \${sub}\\\`)"`,
+      `python3 -c "import subprocess; subprocess.run(['/usr/bin/env', 'gh', 'pr', 'merge', '5'])"`,
+      `python3 -c "import subprocess; print('then run gh pr merge 5')"`,
+      `python3 -c "import subprocess; subprocess.run(['x', 'gh -R o/r pr merge 5'])"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
+  })
+  test('a line that sources a file is judged by where gh would run, never by the word in its data (#1132)', async () => {
+    // The two notes refused on 2026-10-12 and 13: a sourced helper given JSON whose text names gh.
+    const refused = [
+      `source ~/.claude/hooks/lib/sleep.sh && sleep_note '{"kind":"finding","text":"#702 is built and tested on the local tests-647 branch, but not pushed: it needs a force push after a rebase, which sleep mode refuses. In the morning: from the tests-647 worktree, git push --force-with-lease, then gh pr edit 702 with the body in scratchpad/tests-652/pr702.md, then gh pr ready 702."}' && echo noted`,
+      `source ~/.claude/hooks/lib/sleep.sh && sleep_note '{"kind":"finding","text":"PR #1109 is finished and reviewed but not merged: CI failed 3 cases, and gh run rerun is refused overnight. Morning: rerun CI (gh run rerun 38344274838 --repo danwright32/claude-config --failed) or let a fix to main bring the branch up to date. #1077 stays open for Dan'"'"'s decision."}' && echo noted`,
+    ]
+    for (const c of refused) expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+    expect(await bash(`. ./lib.sh; note "rerun it with gh run rerun 5 in the morning"`)).toBeUndefined()
+    expect(await bash(`GH_PAGER=cat note "rerun it with gh run rerun 5 in the morning"`)).toBeUndefined()
+    // Where gh would run is still judged: the sourced file's own words, text eval or env -S runs,
+    // gh as a word a function could run, and a word that is itself a gh call.
+    for (const c of [
+      'source ~/.ghenv && gh pr merge 5',
+      'source ./lib.sh gh pr merge 5',
+      `source <(echo gh pr merge 5)`,
+      `. ./lib.sh; eval "gh issue create -t x"`,
+      `source ./lib.sh && env -S 'GH_REPO=other/x gh pr merge 5'`,
+      'source ./lib.sh && retry gh pr merge 5',
+      `source ./lib.sh && retry "gh pr merge 5"`,
+      `source ./lib.sh && retry '/opt/homebrew/bin/gh -R o/r pr merge 5'`,
+      `source ./lib.sh && retry 'cd /x && gh pr merge 5'`,
+      `source ./lib.sh && retry 'sudo gh issue close 5'`,
+      `GH_TOKEN=abc retry "gh pr merge 5"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: unresolved })
+  })
 })
 
 describe('comments go only to the repository the checkout is', () => {
@@ -289,7 +334,7 @@ describe('comments go only to the repository the checkout is', () => {
     const unresolved = 'write to GitHub where the repository it reaches could not be resolved'
     const command = 'gh issue comment 5 --body x'
     const unread = readCommands(command).map(({ gh: _gh, ...c }) => c)
-    expect(await overnightRefusal({ tool: 'Bash', input: { command }, raw: command, commands: unread, writes: NONE, cwd: CWD, home: HOME }, look)).toBe(unresolved)
+    expect(await overnightRefusal({ tool: 'Bash', input: { command }, raw: command, commands: unread, writes: NONE, cwd: CWD, home: HOME, read }, look)).toBe(unresolved)
   })
 })
 

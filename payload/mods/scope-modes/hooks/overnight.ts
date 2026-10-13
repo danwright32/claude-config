@@ -49,6 +49,8 @@ export type OvernightCall = {
   cwd: string
   home: string
   ghRepo?: string | null
+  /** mod-kit's reader of a command line, for text the call hands a command as a word (#1132). */
+  read: (text: string) => Promise<Cmd[]>
 }
 
 /** Never approved overnight, whatever else: a question for Dan and the plan approval (H8). */
@@ -248,21 +250,29 @@ const resolveIn = (word: string, dir: string | null, home: string, expand: (w: s
   return resolveDir(w, dir, home)
 }
 
-// Whether code that can run a process names git where a process would run it (#1124), rather than
-// the word anywhere: on 2026-10-13 a python edit was refused for writing "Scanning git work" and
-// "import subprocess" into a file. git runs from code when it starts a quoted string or a shell
-// command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or when
-// a git subcommand or option follows it. Prose naming git with neither (a git repository, the
-// .gitignore, --git-dir) runs nothing; prose that reads as a command ("then git push") still counts.
-const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
-export const runsGit = (text: string): boolean => {
-  if (/(?:['"`]|;|&&|\|\||\||\$\(|\(|\n)[ \t]*(?:[\w.~/-]*\/)?git(?=[\s'"`;|&)]|$)/.test(text)) return true
-  for (const m of text.matchAll(/(?<![\w.$/-])git[ \t]+(-[\w-]*|[a-z][\w-]*)/g)) {
-    const next = m[1] as string
-    if (next.startsWith('-') || GIT_SUBCOMMANDS.has(next)) return true
-  }
-  return false
+// Whether code that can run a process names a program where a process would run it (git #1124, gh
+// #1132), rather than the word anywhere: on 2026-10-13 a python edit was refused for writing
+// "Scanning git work" and "import subprocess" into a file. A program runs from code when it starts
+// a quoted string or a shell command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git
+// push"`, a backtick), or when one of its subcommands or an option follows it. Prose naming it with
+// neither (a git repository, the .gitignore, --git-dir, the gh CLI, gh-pages) runs nothing; prose
+// that reads as a command ("then git push", "rerun with gh run rerun") still counts.
+const callsWith = (subcommands: ReadonlySet<string>) => (next: string | undefined): boolean =>
+  next !== undefined && (next.startsWith('-') || subcommands.has(next))
+const runsFrom = (program: string, subcommands: ReadonlySet<string>) => {
+  const starts = new RegExp(`(?:['"\`]|;|&&|\\|\\||\\||\\$\\(|\\(|\\n)[ \\t]*(?:[\\w.~/-]*\\/)?${program}(?=[\\s'"\`;|&)]|$)`)
+  const followed = new RegExp(`(?<![\\w.$/-])${program}[ \\t]+(-[\\w-]*|[a-z][\\w-]*)`, 'g')
+  const calls = callsWith(subcommands)
+  return (text: string): boolean => starts.test(text) || [...text.matchAll(followed)].some(m => calls(m[1]))
 }
+const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
+export const runsGit = runsFrom('git', GIT_SUBCOMMANDS)
+// gh's subcommands: a gh named as an argument (a wrapper passing it on) or in code runs when one of
+// these or a flag (`-R o/r`) follows it. A user's own gh alias in that place is not seen; the wake
+// check is the backstop.
+const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
+const ghCallsWith = callsWith(GH_SUBCOMMANDS)
+export const runsGh = runsFrom('gh', GH_SUBCOMMANDS)
 
 // ---- git ----
 
@@ -449,8 +459,33 @@ const wrapped = (call: OvernightCall): boolean => {
   // A file sourced in the same line can set any of those without the line showing it, and so can
   // a string env -S splits into a command.
   if (call.commands.some(c => ['source', '.'].includes(name(c.words[0])))) return true
-  if (/(?:^|[\s;&|(])env\s+(?:\S+\s+)*?(?:-S|--split-string)\b/.test(call.raw)) return true
+  if (ENV_SPLIT.test(call.raw)) return true
   return call.commands.some(c => ['eval', 'source', '.'].includes(name(c.words[0])) && c.words.slice(1).some(w => /\bgh\b/.test(w)))
+}
+// env splitting a string into a command, read on the line as written, quotes included.
+const ENV_SPLIT = /(?:^|[\s;&|(])env\s+(?:\S+\s+)*?(?:-S|--split-string)\b/
+
+// Whether a command, as mod-kit's reader reads it, runs gh in command position: by its own name, or
+// through a runner the reader reads past (env, sudo, timeout, a shell's -c).
+const callsGh = (c: Cmd): boolean => name(c.words[0]) === 'gh' || c.gh !== undefined
+
+// Where a gh the reader reads no command for could still run, in a line `wrapped` cannot vouch for
+// (#1132): text eval or source runs, which is code, so gh anywhere in it; and a word handed to any
+// other command that, read by mod-kit's reader as a command line of its own, runs gh, which a
+// function a sourced file defines may do with it. A note, a message or JSON naming gh in prose
+// ("then gh pr edit 702", "(gh run rerun 5)") runs nothing, as the same words do in a line that
+// sources nothing; on 2026-10-12 and 13 the word anywhere in the line refused sleep_note calls.
+const ghUnseen = async (c: Cmd, read: OvernightCall['read']): Promise<boolean> => {
+  const args = c.words.slice(1)
+  if (['eval', 'source', '.'].includes(name(c.words[0]))) return args.some(w => /\bgh\b/.test(w))
+  for (const w of args) if (/\bgh\b/.test(w) && (await read(w)).some(callsGh)) return true
+  return false
+}
+// The string env -S splits into a command is code too, read on the line as written.
+const ghRunsUnread = async (call: OvernightCall): Promise<boolean> => {
+  if (ENV_SPLIT.test(call.raw)) return /\bgh\b/.test(call.raw)
+  for (const c of call.commands) if (await ghUnseen(c, call.read)) return true
+  return false
 }
 
 const UNRESOLVED = 'write to GitHub where the repository it reaches could not be resolved'
@@ -478,11 +513,6 @@ const mcpWrites = (tool: string): boolean => {
   return !words.some(w => READS.has(w)) || words.some(w => WRITES.has(w))
 }
 
-// Whether the word after a gh named as an argument makes it a gh call: a gh subcommand, or a flag
-// (`-R o/r`), as a wrapper passes it on. A search term or a path (`grep gh README.md`, `ls gh`)
-// runs nothing. A user's own gh alias in that place is not seen; the wake check is the backstop.
-const GH_SUBCOMMANDS: ReadonlySet<string> = new Set(['alias', 'api', 'attestation', 'auth', 'browse', 'cache', 'co', 'codespace', 'completion', 'config', 'extension', 'gist', 'gpg-key', 'issue', 'label', 'org', 'pr', 'project', 'release', 'repo', 'ruleset', 'run', 'search', 'secret', 'ssh-key', 'status', 'variable', 'workflow'])
-const runsGh = (next: string | undefined): boolean => next !== undefined && (next.startsWith('-') || GH_SUBCOMMANDS.has(next))
 // The commands that name a program without running it: printing its name, or finding where it is.
 const NAMES_ONLY: ReadonlySet<string> = new Set(['echo', 'printf', 'which', 'type', 'whereis', 'man', 'brew'])
 
@@ -556,7 +586,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   // Each command in order, in the folder it runs in: a cd moves it, a subshell keeps its own.
   // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither
   // the call nor where it goes can be read, so it is refused (#834 review).
-  if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
+  if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && (await ghRunsUnread(call))) return UNRESOLVED
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
   const temp = tempWords(call.raw)
@@ -588,13 +618,15 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // claude-sync, which would reach what the list bans past every rule above.
     if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
-    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:gh|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || runsGit(c.program.text)))
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || runsGit(c.program.text) || runsGh(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
     // wrapper is called (#834 review of 46f07ff). Only the commands that name a program without
-    // running it are let through; a command missing from that list fails closed.
-    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
+    // running it are let through; a command missing from that list fails closed. The word is a gh
+    // call only when a gh subcommand or a flag follows it: a search term or a path (`grep gh
+    // README.md`, `ls gh`) runs nothing.
+    if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && ghCallsWith(words[i + 2]))) return UNRESOLVED
     if (c.git) {
       const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees })
       if (why) return why
