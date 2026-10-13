@@ -373,7 +373,13 @@ export type ModKitWrites = {
    * no code at run time; absent, data cannot be told from code, and the whole `program` is the guess.
    */
   unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[]; program?: string; code?: string; folder?: string }[]
-  byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true }[]
+  /**
+   * `from`, on a checkout of a path or a restore, is where git puts the file back from, spelled as
+   * `git cat-file blob <from>:<path>` reads it: the ref named, '' for the index, 'HEAD' for a restore
+   * of the index and the working tree together, ':2' or ':3' for one side of a conflict (#1158). One
+   * file put back from two places is given once for each.
+   */
+  byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true; from?: string }[]
 }
 
 /**

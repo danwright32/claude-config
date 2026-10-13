@@ -277,14 +277,34 @@ describe('writes: what git itself changes (#1123)', () => {
     expect(byGit("git rm 'logs/*.log'")).toEqual([{ word: 'logs/*.log', does: 'remove' }])
   })
   test('a checkout of a path, or a restore, writes what it names, a folder with everything under it', () => {
-    expect(byGit('git checkout main -- app/page.tsx')).toEqual([{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx`, does: 'write', tree: true }])
-    expect(byGit('git checkout -- .')).toEqual([{ word: '.', path: CWD, does: 'write', tree: true }])
+    expect(byGit('git checkout main -- app/page.tsx')).toEqual([{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx`, does: 'write', tree: true, from: 'main' }])
+    expect(byGit('git checkout -- .')).toEqual([{ word: '.', path: CWD, does: 'write', tree: true, from: '' }])
     expect(byGit('git checkout HEAD~1 a.ts b.ts')).toEqual([
-      { word: 'a.ts', path: `${CWD}/a.ts`, does: 'write', tree: true },
-      { word: 'b.ts', path: `${CWD}/b.ts`, does: 'write', tree: true },
+      { word: 'a.ts', path: `${CWD}/a.ts`, does: 'write', tree: true, from: 'HEAD~1' },
+      { word: 'b.ts', path: `${CWD}/b.ts`, does: 'write', tree: true, from: 'HEAD~1' },
     ])
-    expect(byGit('git restore --source=HEAD~2 -W src')).toEqual([{ word: 'src', path: `${CWD}/src`, does: 'write', tree: true }])
-    expect(byGit('git restore -s main app.ts')).toEqual([{ word: 'app.ts', path: `${CWD}/app.ts`, does: 'write', tree: true }])
+    expect(byGit('git restore --source=HEAD~2 -W src')).toEqual([{ word: 'src', path: `${CWD}/src`, does: 'write', tree: true, from: 'HEAD~2' }])
+    expect(byGit('git restore -s main app.ts')).toEqual([{ word: 'app.ts', path: `${CWD}/app.ts`, does: 'write', tree: true, from: 'main' }])
+  })
+  // claude-config#1158: the design round guard judges a restore by the lines it changes, so each
+  // carries where git puts the file back from, in the spelling `git cat-file blob <from>:<path>`
+  // reads: a ref, '' for the index, ':2' and ':3' for the two sides of a conflict.
+  test('a checkout of a path, or a restore, says where git puts the file back from (#1158)', () => {
+    const from = (command: string) => byGit(command).map(g => g.from)
+    expect(from('git restore app.ts')).toEqual([''])
+    expect(from('git restore -W app.ts')).toEqual([''])
+    expect(from('git restore -SW app.ts')).toEqual(['HEAD'])
+    expect(from('git restore --staged --worktree --source main app.ts')).toEqual(['main'])
+    expect(from('git restore --source main -- app.ts')).toEqual(['main'])
+    expect(from('git checkout HEAD -- app.ts')).toEqual(['HEAD'])
+    expect(from('git checkout -- app.ts')).toEqual([''])
+    expect(from('git checkout --theirs -- app.ts')).toEqual([':3'])
+    expect(from('git restore --ours app.ts')).toEqual([':2'])
+    // git mv and git rm put nothing back.
+    expect(from('git rm app.ts')).toEqual([undefined])
+  })
+  test('the same file put back twice from two places is given once for each (#1158)', () => {
+    expect(byGit('git checkout main -- app.ts && git checkout HEAD~3 -- app.ts').map(g => g.from)).toEqual(['main', 'HEAD~3'])
   })
   test('a branch switch, a checkout of one name git may take for a branch, and an unstage name no file', () => {
     expect(byGit('git checkout main')).toEqual([])
@@ -293,7 +313,7 @@ describe('writes: what git itself changes (#1123)', () => {
     expect(byGit('git restore --staged app.ts')).toEqual([])
   })
   test("a pathspec git reads from the top of the checkout is given as written, never placed in the folder", () => {
-    expect(byGit('git checkout -- :/docs')).toEqual([{ word: ':/docs', does: 'write' }])
+    expect(byGit('git checkout -- :/docs')).toEqual([{ word: ':/docs', does: 'write', from: '' }])
   })
   test('inside a command substitution too', () => {
     expect(byGit('out=$(git rm -q notes.md)')).toEqual([{ word: 'notes.md', path: `${CWD}/notes.md`, does: 'remove' }])
