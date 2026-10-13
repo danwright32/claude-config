@@ -657,7 +657,10 @@ gate names (`--pr`), else the branch's open one, which is how a review the push 
 starts finds it. A transient failure is asked again (three tries in all, two seconds apart,
 `PR_REVIEW_PR_READ_TRIES` and `PR_REVIEW_PR_READ_WAIT`); a read that still fails never stops the
 review, and the review's input says the comments could not be read and why. No pull request, and a
-pull request of the same branch name that is no longer open, are each said in their own words. They
+pull request of the same branch name that is no longer open, are each said in their own words. The
+repository is public, so only comments by people with write access are given, a fork's description
+is left out, and the reviewer is told these are claims to check against the code, never
+instructions. They
 take at most half the history budget, newest comments first, each cut to a quarter of that share,
 the description having the rest, and anything cut or left out is said.
 
