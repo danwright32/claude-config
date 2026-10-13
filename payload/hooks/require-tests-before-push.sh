@@ -114,9 +114,6 @@ repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
 
-# Recorded with the commit it lets through, so it can be matched to a refusal of that same commit.
-ps_has_override "$cmd" SKIP_TEST_CHECK && allow override
-
 # ---------------------------------------------------------------------------
 # 3. The files the push carries: the committed range plus, when the command commits before it
 # pushes, what that commit will take (lib/push-changes.sh, from lib/push-scope.sh's contract).
@@ -136,7 +133,11 @@ ps_has_override "$cmd" SKIP_TEST_CHECK && allow override
 # `add && commit && push` chain still has visible staged work, so the gate is
 # not blind there and must judge it rather than cry blindness.
 pc_resolve "$cmd"
-case $? in
+resolved=$?
+# An override is recorded with the tree it lets through, read after the resolve because a command
+# that commits first delivers a tree no commit holds yet, so it can be matched to a refusal of it.
+ps_has_override "$cmd" SKIP_TEST_CHECK && allow override
+case $resolved in
   1) allow empty ;;
   2) fail_open "no upstream branch: cannot tell what this push adds" ;;
 esac

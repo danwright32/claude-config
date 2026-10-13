@@ -138,7 +138,7 @@ LEDGER="$(pc_ledger_path)"
 W="$(mk_repo)"
 ( cd "$W" && PC_GATE=simplify PC_CALL_ID=toolu_1 pc_record block "$(printf 'one\ttab\nnewline')" ) || no "pc_record failed on a writable ledger"
 row="$(tail -1 "$LEDGER" 2>/dev/null)"
-if [ "$(awk -F '\t' '{ print NF }' <<< "$row")" = 14 ]; then ok; else no "a row should have 14 columns, got [$row]"; fi
+if [ "$(awk -F '\t' '{ print NF }' <<< "$row")" = 15 ]; then ok; else no "a row should have 15 columns, got [$row]"; fi
 if [ "$(awk -F '\t' '{ print $3 "|" $4 "|" $7 "|" $14 }' <<< "$row")" = "simplify|block|toolu_1|one tab newline" ]; then ok; else no "row fields wrong, or a tab or newline in the detail broke it: [$row]"; fi
 before="$(wc -l < "$LEDGER")"
 ( cd "$W" && PC_GATE=simplify pc_record blocked "x" ); rc=$?

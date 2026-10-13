@@ -27,7 +27,7 @@ import time
 OUTCOMES = ["override", "nosource", "empty", "docsonly", "untested", "pass", "block", "cantjudge", "failopen"]
 GATES = [("simplify", "simplify-before-push.sh"), ("tests", "require-tests-before-push.sh")]
 MIN_JUDGED = 5
-COLUMNS = 14
+COLUMNS = 15
 
 
 def ledger_default():
@@ -58,7 +58,7 @@ def read(path, since):
             rows.append({
                 "finished": num(c[0]), "host": c[1], "gate": c[2], "outcome": c[3], "repo": c[4],
                 "head": c[5], "call": c[6], "model": c[7], "wall": num(c[8]), "ms": num(c[9]),
-                "cost": num(c[10]), "bytes": num(c[11]), "started": num(c[12]), "detail": c[13],
+                "cost": num(c[10]), "bytes": num(c[11]), "started": num(c[12]), "detail": c[13], "tree": c[14],
             })
     return rows, bad
 
@@ -88,11 +88,15 @@ def gate_report(gate, script, rows):
     out.append("  of the %d judged: passed %d, blocked %d (%s of those it decided), judge failed %d" % (
         len(judged), count["pass"], blocks, pct(blocks, decided), len(failed)))
     # An override of a commit this same gate blocked is a person saying the block was wrong (or not
-    # worth fixing). It is evidence of a false positive, not proof, and is labelled as such.
-    blocked = {(r["repo"], r["head"]) for r in mine if r["outcome"] in ("block", "cantjudge") and r["head"]}
-    overridden = {(r["repo"], r["head"]) for r in mine if r["outcome"] == "override" and r["head"]}
+    # worth fixing). It is evidence of a false positive, not proof, and is labelled as such. Matched
+    # on the tree the push delivers, which is the same whether the commit was made in the push's own
+    # command or before it; HEAD only where the tree could not be worked out.
+    def key(r):
+        return (r["repo"], r["tree"] or ("head:" + r["head"]))
+    blocked = {key(r) for r in mine if r["outcome"] in ("block", "cantjudge") and (r["tree"] or r["head"])}
+    overridden = {key(r) for r in mine if r["outcome"] == "override" and (r["tree"] or r["head"])}
     both = blocked & overridden
-    out.append("  overridden after a block of the same commit: %d of %d blocked commits (%s), the nearest this record comes to a false positive rate" % (
+    out.append("  overridden after a block of the same content: %d of %d blocked pushes (%s), the nearest this record comes to a false positive rate" % (
         len(both), len(blocked), pct(len(both), len(blocked))))
     walls = sorted(r["wall"] for r in judged if r["wall"] is not None)
     if walls:

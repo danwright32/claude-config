@@ -776,7 +776,8 @@ python3 ~/.claude/hooks/lib/push-gate-report.py [--days 30]
 ```
 
 It prints, per gate, how often its judge was called, passed, blocked or could not decide (and why),
-how often the gate was overridden on a commit it had just blocked (the nearest the record comes to
+how often the gate was overridden on the same content it had just blocked, matched on the tree the
+push delivers so a commit made in the push's own command still matches (the nearest the record comes to
 a false positive rate, and what decides whether the simplify judge should move from haiku to
 sonnet), the judge's time and cost, and on how many pushes both judges were called and whether the
 two calls ran at the same time (#1077). A rate over fewer than five pushes prints as UNMEASURED. The

@@ -267,6 +267,23 @@ want_silent "an override still allows, silently"
 want_row rec-override override "an override is recorded"
 if [ "$(col "$(row_of rec-override)" 6)" = "$head_blocked" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the override row does not name the commit it let through, so it cannot be matched to the block: [$(row_of rec-override)]"; fi
 
+# A block of an add, commit and push chain is matched to the override of the SAME content even when
+# the commit was then made on its own, because both carry the tree the push delivers (column 15),
+# never the commit the chain stood on before its own commit ran (merge review of #1109).
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'import sys\n\ndef chain_area(w, h):\n    return w * h\n' > lib/chain.py ) >/dev/null 2>&1
+HK_ID=rec-chain-block STUB_CLAUDE_OUT="$BLOCK_OUT" run_hook "$W" "git add lib/chain.py && git commit -m chain && git push"
+want_row rec-chain-block block "a block of a commit chain is recorded"
+# Working out that tree must never stage anything in the real index.
+if [ "$(git -C "$W" status --porcelain -- lib/chain.py)" = "?? lib/chain.py" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: recording the tree changed the real index: [$(git -C "$W" status --porcelain)]"; fi
+( cd "$W" && git add lib/chain.py && git commit -qm chain ) >/dev/null 2>&1
+HK_ID=rec-chain-override run_hook "$W" "SKIP_SIMPLIFY_CHECK=1 git push"
+want_row rec-chain-override override "the override after the commit is recorded"
+tree_blocked="$(col "$(row_of rec-chain-block)" 15)"; tree_overridden="$(col "$(row_of rec-chain-override)" 15)"
+if [ -n "$tree_blocked" ] && [ "$tree_blocked" = "$tree_overridden" ] && [ "$tree_overridden" = "$(git -C "$W" rev-parse 'HEAD^{tree}')" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the chain's block and the later override of the same content carry different trees: [$tree_blocked] [$tree_overridden]"; fi
+# And the commit the chain stood on is not what it delivers, so it is not the key.
+if [ "$(col "$(row_of rec-chain-block)" 6)" != "$(git -C "$W" rev-parse HEAD)" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the fixture did not make the commit separately, so it proves nothing"; fi
+
 W="$(mk_repo)"; seed_source "$W"
 HK_ID=rec-pass STUB_CLAUDE_OUT='{"result":"{\"verdict\":\"pass\",\"findings\":[]}","duration_ms":4200,"total_cost_usd":0.0123}' run_hook "$W" "git push"
 want_row rec-pass pass "a pass is recorded"

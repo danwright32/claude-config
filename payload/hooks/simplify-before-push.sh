@@ -85,15 +85,17 @@ PC_PUSH=1
 repo_dir="$(ps_repo_dir "$cmd" "$cwd")" || exit 0
 [ -n "$repo_dir" ] || exit 0
 cd "$repo_dir" 2>/dev/null || exit 0
-# Recorded with the commit it lets through, so it can be matched to a block of that same commit.
-ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && allow override
 
 # ---------------------------------------------------------------------------
 # 3. The files the push carries, from the shared contract (lib/push-changes.sh). Nothing, with an
 #    upstream, means the push adds nothing: stay quiet. Without one the gate may be blind (#736).
 # ---------------------------------------------------------------------------
 pc_resolve "$cmd"
-case $? in
+resolved=$?
+# An override is recorded with the tree it lets through, read after the resolve because a command
+# that commits first delivers a tree no commit holds yet, so it can be matched to a block of it.
+ps_has_override "$cmd" SKIP_SIMPLIFY_CHECK && allow override
+case $resolved in
   1) allow empty ;;
   2) fail_open "no upstream branch: cannot tell what this push adds" ;;
 esac

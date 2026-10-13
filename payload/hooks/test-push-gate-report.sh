@@ -19,8 +19,9 @@ trap 'rm -rf "$TMPROOT"' EXIT
 
 L="$TMPROOT/push-gates.tsv"
 NOW=2000000000
-# finished host gate outcome repo head call model wall ms cost bytes started detail
-row() { printf '%s\th\t%s\t%s\t/r\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" >> "$L"; }
+# finished host gate outcome repo head call model wall ms cost bytes started detail [tree]; the tree
+# defaults to one per head, as a plain push's would be.
+row() { printf '%s\th\t%s\t%s\t/r\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "${13:-tree-$4}" >> "$L"; }
 t=$((NOW - 3600))
 # simplify: 4 passes, 2 blocks (c5, c6), 1 timeout, 1 no source, 1 override of the blocked commit c5.
 for i in 1 2 3 4; do row "$((t + 20))" simplify pass "c$i" "id$i" haiku 10 9000 0.01 5000 "$t" ""; done
@@ -28,7 +29,9 @@ row "$((t + 20))" simplify block c5 id5 haiku 12 11000 0.01 5000 "$t" "unused|de
 row "$((t + 20))" simplify block c6 id6 haiku 14 13000 0.01 5000 "$t" "debug-left"
 row "$((t + 90))" simplify failopen c7 id7 haiku 90 "" "" 5000 "$t" "judge timed out after 90s"
 row "$t" simplify nosource c8 id8 "" "" "" "" "" "$t" ""
-row "$((t + 100))" simplify override c5 id9 "" "" "" "" "" "$((t + 100))" ""
+# The block of c5 came from a command that committed first; the override came after the commit was
+# made on its own, so its HEAD differs (c5x) while the content it delivers is the same tree.
+row "$((t + 100))" simplify override c5x id9 "" "" "" "" "" "$((t + 100))" "" tree-c5
 # tests: judged on id1..id5 (overlapping simplify's calls on id1..id4, not on id5), plus id10 alone.
 for i in 1 2 3 4; do row "$((t + 30))" tests pass "c$i" "id$i" sonnet 30 29000 0.05 9000 "$t" ""; done
 row "$((t + 200))" tests block c5 id5 sonnet 30 29000 0.05 9000 "$((t + 170))" "the x change"
@@ -44,7 +47,7 @@ want "1 lines could not be read" "an unreadable line is named, not dropped"
 want "simplify gate (simplify-before-push.sh), judge: haiku" "the simplify gate and its model"
 want "reached 9 pushes: judge called on 7, overridden 1, no source 1" "simplify reach counts, the old row left out"
 want "of the 7 judged: passed 4, blocked 2 (33% of those it decided), judge failed 1" "simplify verdicts"
-want "overridden after a block of the same commit: 1 of 2 blocked commits (UNMEASURED, under 5)" "an override is matched to its block, and a thin rate is not printed as one"
+want "overridden after a block of the same content: 1 of 2 blocked pushes (UNMEASURED, under 5)" "an override is matched to its block by the tree, and a thin rate is not printed as one"
 want "judge wall time: median 10s, slowest 90s, over 7 calls" "simplify judge time (10, 10, 10, 10, 12, 14, 90)"
 want "judge cost: \$0.06 in all, \$0.0100 a call, from the 6 calls that reported one" "simplify cost"
 want "could not decide 1 times: judge timed out after 90s" "fail open reasons"

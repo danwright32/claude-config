@@ -73,11 +73,13 @@ pc_resolve() {   # $1 = command
   # The PENDING files when the command commits before it pushes: the index, plus what the shared
   # reader says the commit takes beyond it (#457), counting only files that exist. Read here, in the
   # directory the command runs in, because the paths its git add names are relative to it.
-  PC_WIDENED=0
+  PC_WIDENED=0; PC_PENDING_ALL=""
   if [ "$PC_COMMIT_IN_CHAIN" -eq 1 ]; then
     pending="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)"
     pending_list="$(ps_pending_files "$1")"
     [ "${pending_list%%$'\n'*}" = "WIDENED" ] && PC_WIDENED=1
+    # Every path the commit takes beyond the index, deletions included, for pc_push_tree.
+    PC_PENDING_ALL="$(printf '%s\n' "$pending_list" | tail -n +2)"
     top="$(git rev-parse --show-toplevel 2>/dev/null)"
     while IFS= read -r f; do
       [ -n "$f" ] && [ -e "$top/$f" ] || continue
@@ -220,10 +222,16 @@ except Exception:
 # push. Read with lib/push-gate-report.py.
 #
 # Columns: finished, host, gate, outcome, repository root, HEAD, tool call id, model, judge wall
-# seconds, judge duration_ms, judge cost in USD, bytes sent to the judge, started, detail. The tool
-# call id is the one Claude Code gives every hook on one call, so the two gates' lines for one push
-# share it, which is how pushes both judges were called on are counted (#1077). The model columns
-# are filled only when a judge was called.
+# seconds, judge duration_ms, judge cost in USD, bytes sent to the judge, started, detail, and the
+# tree the push delivers. The tool call id is the one Claude Code gives every hook on one call, so
+# the two gates' lines for one push share it, which is how pushes both judges were called on are
+# counted (#1077). The model columns are filled only when a judge was called.
+#
+# The TREE, not HEAD, is what a block and a later override are matched on. For an add, commit and
+# push command the commit does not exist yet when the gate runs, so HEAD names the commit it stands
+# on: a blocked chain and an override of the same content after the commit was made on its own
+# carried different HEADs, and two different chains from one commit carried the same one. The tree
+# is the same content either way (pc_push_tree).
 #
 # The outcomes are this list and nothing else, so the report and the gates spell them one way:
 #   override   SKIP_*_CHECK=1 on the push
@@ -271,8 +279,33 @@ pc_record() {   # $1 = outcome  $2 = detail  $3 = judged (when a judge was calle
       start="$PC_JUDGE_START"; wall=$((PC_JUDGE_END - PC_JUDGE_START))
     fi
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  local tree; tree="$(pc_push_tree)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$now" "$host" "${PC_GATE:-}" "$outcome" "$repo" "$head" "${PC_CALL_ID:-}" \
-    "$model" "$wall" "$ms" "$cost" "$bytes" "$start" "$detail" 2>/dev/null >> "$file" || return 1
+    "$model" "$wall" "$ms" "$cost" "$bytes" "$start" "$detail" "$tree" 2>/dev/null >> "$file" || return 1
+  return 0
+}
+
+# The tree the push delivers: HEAD's for a plain push, and for a command that commits first, the
+# tree that commit will make, written from a COPY of the index with the pending files added, so the
+# real index is never touched. Prints nothing when it cannot be worked out; the report then falls
+# back to HEAD for that line.
+pc_push_tree() {
+  local idx tmp f
+  local -a paths=()
+  if [ "${PC_COMMIT_IN_CHAIN:-0}" != 1 ]; then
+    git rev-parse --verify --quiet 'HEAD^{tree}' 2>/dev/null
+    return 0
+  fi
+  idx="$(git rev-parse --git-path index 2>/dev/null)"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/pc-index.XXXXXXXX")" || return 0
+  if [ -f "$idx" ]; then cp "$idx" "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  else rm -f "$tmp"; GIT_INDEX_FILE="$tmp" git read-tree HEAD 2>/dev/null || { rm -f "$tmp"; return 0; }; fi
+  while IFS= read -r f; do [ -n "$f" ] && paths+=("$f"); done <<< "$PC_PENDING_ALL"
+  if [ "${#paths[@]}" -gt 0 ]; then
+    GIT_INDEX_FILE="$tmp" git add -A -- "${paths[@]}" >/dev/null 2>&1 || { rm -f "$tmp"; return 0; }
+  fi
+  GIT_INDEX_FILE="$tmp" git write-tree 2>/dev/null
+  rm -f "$tmp"
   return 0
 }
