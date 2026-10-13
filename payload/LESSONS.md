@@ -4601,6 +4601,13 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L1024. A record REPLACED under a new id leaves every copy of the old id already handed outside
+  the system (a link in another app, an emailed URL, an export) pointing at nothing, so whatever
+  resolves an inbound id must follow the replacement to its successor, or the replacement must keep
+  the old id.**
+  (downbeat#573, 2026-10-13)
+  SHORT: A record replaced under a new id strands every copy of the old id held outside, so resolving an inbound id must follow the replacement chain.
+
 - **L483. A merge that KEEPS an entry because one side lacks it must carry the scope that entry
   was declared under (its matcher, section or parent) and reinsert it there**, because appending
   it to the first container of the right kind re-scopes it silently: the entry is present, every
