@@ -38,6 +38,8 @@ export type DesignRoundPass = {
   subjects: string[]
   /** Why it went ahead, in words. */
   why: string
+  /** What the question said changes on screen, in the session's words, which Dan read first (#1138). */
+  onScreen: string
   /** The call written out whole (rules.ts callText): only a call whose own text this is goes through. */
   call: string
 }
