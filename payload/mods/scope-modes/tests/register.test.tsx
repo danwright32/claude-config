@@ -2728,6 +2728,33 @@ test('a package script whose body deploys is refused where deploying is not allo
   expect(await call($ as never, bash('cd /elsewhere && gh pr merge 1'))).toMatch(/which repository this reaches could not be told/)
 })
 
+// #1106: the live sync clone's pull is the config repository's deploy step, so a merge there is
+// installed the same night when the night says that repository may deploy, from any session's
+// folder. The config repository is the one the clone's own remotes name (o/claude-config here).
+test('asleep, claude-sync pull installs exactly when the config repository may deploy tonight; send, sync and install never (#1106)', withDeps, async ($, on) => {
+  const PULL = '~/claude-config-sync/claude-sync pull'
+  const { w, clock } = world(on, night({ mayDeploy: ['o/claude-config'], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] }))
+  await start($ as never, clock)
+  // From a checkout of o/r, which may never deploy: the pull deploys the config repository, not o/r.
+  expect(await call($ as never, bash(PULL))).toBe('ran')
+  expect(await call($ as never, bash(`bash ${PULL} 2>&1 | tail -20`))).toBe('ran')
+  // Every other claude-sync write, and a pull from anything but the live clone, stays refused.
+  for (const sub of ['send', 'sync', 'install-autosync'])
+    expect(await call($ as never, bash(`~/claude-config-sync/claude-sync ${sub}`))).toMatch(asRegExp(`Refused: sleep mode is on and Dan bans this while he sleeps, so this did not run claude-sync ${sub}.`))
+  expect(await call($ as never, bash('claude-sync pull'))).toMatch(/^Blocked overnight: this would run claude-sync pull, which installs the config, and which repository this reaches could not be told/)
+  expect(await call($ as never, bash(`SYNC_REPO=/repo ${PULL}`))).toMatch(/did not run claude-sync pull with its environment changed/)
+  // Merge only, on neither list, closed, or no lists in the record: the merge waits uninstalled.
+  for (const repos of [
+    { mayDeploy: [], mergeOnly: [{ repo: 'o/claude-config', mergeDeploys: false }], closed: [] },
+    { mayDeploy: ['o/r'], mergeOnly: [], closed: [] },
+    { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/claude-config', why: 'the question about o/claude-config was not answered in 10 minutes' }] },
+    undefined,
+  ]) {
+    w.files[CURRENT] = asleepRecord(repos === undefined ? {} : { repos })
+    expect({ repos, r: await call($ as never, bash(PULL)) }).toEqual({ repos, r: expect.stringMatching(/^Blocked overnight: this would run claude-sync pull, which installs the config, and /) })
+  }
+})
+
 test('awake, none of this applies', withDeps, async ($, on) => {
   const { clock } = world(on)
   await start($ as never, clock)
