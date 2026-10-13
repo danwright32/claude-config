@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { cleanName, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from '../hooks/name.ts'
+import { cleanName, describesImage, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from '../hooks/name.ts'
 import { repoName } from './mod-kit/hooks/repo.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
@@ -97,14 +97,64 @@ test('an opening that is only an image is not a request, so nothing names it yet
   expect(hasExchange([imageOnly(), { role: 'assistant', text: '', toolUses: [] }])).toBe(false)
 })
 
-test('after an image only opening, the reply that describes it is enough to name from', async () => {
-  const messages = [imageOnly(), { role: 'assistant' as const, text: 'The screenshot shows the invoice table overflowing its card.', toolUses: [] }]
+// Dan, on #1085 (2026-10-12): "wait for Dan's own words. Name the session from his first worded
+// message. If he has typed nothing after 3 turns, fall back to Claude's first reply that describes
+// the image." A reply that only asks what to do with the image named sessions "Image question".
+const reply = (text: string) => ({ role: 'assistant' as const, text, toolUses: [] })
+const ASKS = 'What would you like me to do with this image?'
+const DESCRIBES = 'The screenshot shows the invoice table overflowing its card.'
+
+test("after an image only opening, even a reply that describes it waits for Dan's own words", async () => {
+  expect(hasExchange([imageOnly(), reply(DESCRIBES)])).toBe(false)
+  expect(hasExchange([imageOnly(), reply(ASKS)])).toBe(false)
+  // Two image only turns are still not three.
+  expect(hasExchange([imageOnly(), reply(ASKS), imageOnly('[Image #2]'), reply(DESCRIBES)])).toBe(false)
+})
+
+test('an image only opening followed by a reply that does not describe it is named from his words, never the reply', async () => {
+  const messages = [imageOnly(), reply(ASKS), { role: 'user' as const, text: 'Fix the overflow in the invoice table', toolUses: [] }, reply('Looking at the table styles.')]
   expect(hasExchange(messages)).toBe(true)
   const p = namePrompt(messages)
-  expect(p).toContain('The screenshot shows the invoice table overflowing its card.')
-  // The placeholder is never handed over as the opening request, nor anywhere else.
-  expect(p).not.toContain('[Image #1]')
+  expect(p).toContain('Opening request:\nFix the overflow in the invoice table')
+  expect(p).not.toContain('[Image #')
+})
+
+test("when Dan has typed nothing after three turns, the first reply that describes an image names it", async () => {
+  const messages = [
+    imageOnly(),
+    reply(ASKS),
+    imageOnly('[Image #2]'),
+    reply('I see you have shared another image.'),
+    imageOnly('[Image #3]'),
+    reply(DESCRIBES),
+  ]
+  expect(hasExchange(messages)).toBe(true)
+  const p = namePrompt(messages)
+  expect(p).toContain(DESCRIBES)
+  // The replies that only ask about the image, or only say one arrived, are never handed over.
+  expect(p).not.toContain(ASKS)
+  expect(p).not.toContain('another image')
   expect(p).not.toContain('Opening request:')
+  expect(p).not.toContain('[Image #')
+})
+
+test('three image only turns with no reply describing any image still wait', async () => {
+  expect(hasExchange([imageOnly(), reply(ASKS), imageOnly('[Image #2]'), reply('Got it.'), imageOnly('[Image #3]'), reply('Should I compare these two?')])).toBe(false)
+})
+
+test('a reply describes an image by a statement of its own, not by a question or a bare acknowledgement', async () => {
+  expect(describesImage(DESCRIBES)).toBe(true)
+  expect(describesImage("You've shared a screenshot of the Slate dashboard with a broken chart.")).toBe(true)
+  // A short description using a word that can also mean arriving still describes (lessons review of #1085).
+  expect(describesImage('I see a broken chart in the header.')).toBe(true)
+  expect(describesImage('The table shows sent emails per day.')).toBe(true)
+  expect(describesImage('The screenshot shows sent emails.')).toBe(true)
+  expect(describesImage('I can see the screenshot.')).toBe(false)
+  expect(describesImage('Thanks for sharing the screenshot!')).toBe(false)
+  expect(describesImage(ASKS)).toBe(false)
+  expect(describesImage('I see you have shared an image. What should I do with it?')).toBe(false)
+  expect(describesImage('Got it. Thanks!')).toBe(false)
+  expect(describesImage('')).toBe(false)
 })
 
 test("after an image only opening, the person's next words are the opening request", async () => {

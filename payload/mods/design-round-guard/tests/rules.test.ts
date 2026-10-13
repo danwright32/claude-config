@@ -25,7 +25,7 @@ import {
   skipQuestion,
   subjectsOf,
   textsOf,
-  patternExtension,
+  patternMayBeLook,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -112,11 +112,57 @@ test('the look changing files a command only mentions are found by their names',
   expect(mentionedLookFiles(`cd src/app && python3 -c "open('(shop)/[id]/page.tsx','w')"`)).toEqual(['(shop)/[id]/page.tsx'])
 })
 
-// #1010 and its lessons review: a name whose extension is a pattern the shell may expand is held
-// only when the pattern can expand to a look changing extension.
-test('a pattern extension may be a look changing file only where it can expand to one', () => {
-  for (const w of ['app/page.ts[x]', 'out.*', 'site.c?s', 'x.{css,md}', 'a.[js]sx', 'View.swi*']) expect([w, patternExtension(w)]).toEqual([w, true])
-  for (const w of ['logs/x.l[o]g', 'x.{md,txt}', 'x.t?t', 'notes.m*', 'page.tsx', 'build/*']) expect([w, patternExtension(w)]).toEqual([w, false])
+// #1010 held a name whose EXTENSION is a pattern; #1015: a pattern anywhere in the name is judged by
+// every name it could expand to (`[t]ailwind.config.ts` slipped through, its extension literal and
+// its literal name no look file). A name whose literal parts rule out every look changing file
+// (`run-*.log`) is not one, and a pattern this cannot read is said to be one it cannot read.
+test('a name holding a pattern may be a look changing file exactly where some name it can expand to is one', () => {
+  for (const w of [
+    'app/page.ts[x]',
+    'out.*',
+    'site.c?s',
+    'x.{css,md}',
+    'a.[js]sx',
+    'View.swi*',
+    '[t]ailwind.config.ts',
+    'app/[t]okens.json',
+    'design-[t]okens.json',
+    'design.tokens.?son',
+    '[T]AILWIND.CONFIG.TS',
+    'tailwind.config.*',
+    'brand.tok*.json',
+    'build/*',
+    '*',
+    'x.{c{s,x}s,md}',
+    'page.[!j]sx',
+    // Any case counts: a capital C is read as the lower case one, and on the Mac's disk it is that file.
+    'x.[!c]ss',
+    // An escaped character is itself: this names the file `a*.css`.
+    'a\\*.css',
+    // A `*` runs past a dot: `notes.mine.css` is one of these. #1010 read only the extension and
+    // counted `notes.m*` out; the shell does not stop at the dot, so it counts.
+    'notes.m*',
+    'timing-test-post.l*',
+  ])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'look'])
+  for (const w of [
+    'logs/x.l[o]g',
+    'x.{md,txt}',
+    'x.t?t',
+    'run-*.log',
+    'notes.m?',
+    '[t]ailwind.config.json',
+    'tokens-[0-9].json',
+    'foo[0-9].json',
+    'x.[!cC]ss',
+    'page.[!jJtT]sx',
+    'x.[[:alpha:]]d',
+    'a\\*.log',
+  ])
+    expect([w, patternMayBeLook(w)]).toEqual([w, 'not'])
+  // A pattern with a group in it (bash's extglob, zsh's alternation and qualifiers) is read by no
+  // rule here, so it is said to be one that cannot be read.
+  for (const w of ['x.@(css|md)', '*.css(N)', 'x.(css|md)', 'x.*(.)']) expect([w, patternMayBeLook(w)]).toEqual([w, 'unread'])
 })
 
 test("the guard's own record in the plugin store is recognised, and nothing else there is", () => {

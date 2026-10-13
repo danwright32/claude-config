@@ -656,6 +656,13 @@ and open to his correction.
   recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
   the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.
 - After a `/clear` (a new session id with no fresh start event) the new conversation is not named.
+- A session that opens with only an image (#1085, Dan's decision on the issue, 2026-10-12: "wait for
+  Dan's own words") is named from his first message with words. If he has sent only images for 3
+  turns, it is named from Claude's first reply that describes one, and replies that only ask what
+  to do with an image, or only say one arrived, are left out of what Haiku reads. Which replies
+  describe is read from their sentences, not their meaning: a statement of 4 words or more that is
+  not a question nor a short acknowledgement. Until either is there, nothing is named and no failure
+  is said, so a session with one image and no words is never named, as decided.
 - The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
@@ -1173,7 +1180,17 @@ the ban list knowing that an action it does not name is approved.
   whose name has no read word is refused too, which fails closed);
   Supabase and psql writes; `git checkout` or `switch` in a primary checkout (H7); force pushes and
   branch deletes in every spelling git takes (`--forc` is `--force`; a merge with `--delete-branch`
-  included); `claude-sync` pull, sync and install.
+  included); `claude-sync` send, sync, apply-only and install (install-autosync, install-schedule),
+  by any path to the script, a shell's own options before it read past (`bash -x`, `-o pipefail`,
+  `--rcfile F`); a claude-sync a shell names after an option this cannot read or a script of its
+  own is refused whatever its subcommand. `claude-sync pull` is not on this list when it is the live sync
+  clone's (`~/claude-config-sync/claude-sync`, by that path, `bash` and the path, or `./claude-sync`
+  after a `cd` there): that pull is claude-config's deploy step, judged by phase 7 below (#1106).
+  Any other pull is refused here: a bare `claude-sync` (whichever copy PATH finds), another clone
+  or a development checkout (which installs whatever branch it is on), and a pull whose
+  environment the line changes where the words do not show it (any assignment, since the reader
+  takes it off the words and claude-sync reads `SYNC_REPO` and `CLAUDE_HOME`; `env` with a flag;
+  `sudo`; a file sourced in the line).
   Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
   managed settings file (#876) nothing is approved overnight.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
@@ -1288,12 +1305,17 @@ is still asked once at bedtime and closed if unanswered.
 - While asleep, every session's Bash calls are judged by effect (`hooks/mergedeploy.ts`, gh read by mod-kit's `$.modkit.gh`, commands through
   mod-kit's reader): merges (`gh pr merge` and `--auto`, `merge-when-ready.sh`, the REST merge
   endpoints, the GraphQL merge mutations, and a query that cannot be read), deploys (no build's own
-  deploy tool list, shared, `gh workflow run`, a workflow dispatch, and a package script by name or
-  by a body that deploys), and a push reaching a default branch, refused in every repository. The
+  deploy tool list, shared, `gh workflow run`, a workflow dispatch, a package script by name or
+  by a body that deploys, and `claude-sync pull`, claude-config's deploy step, #1106), and a push
+  reaching a default branch, refused in every repository. The
   repository is the one a command names (`--repo`, a `repos/` endpoint), else the one in the folder
   it runs in, followed as the #892 push hook does (a `cd` or `pushd` before it, a git `-C`); a folder
   it cannot follow (a variable, a pattern, `popd`, `--git-dir` or `--work-tree`) is a repository it
-  cannot tell, closed. This check runs first whenever the Mac is asleep, before any other mode's
+  cannot tell, closed. A claude-sync command runs in the clone its script lives in, whatever the
+  session's folder, so the live clone's pull is judged by the repository that clone's remotes name
+  (claude-config): it installs a night's merges exactly when that repository is `mayDeploy`
+  tonight, and waits for the morning when it is merge only, on neither list, closed, or the record
+  carries no lists. A bare `claude-sync`, found on PATH, is a repository that cannot be told. This check runs first whenever the Mac is asleep, before any other mode's
   route, so no merge reaches GitHub unjudged.
   The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
   (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.
@@ -2056,6 +2078,34 @@ direction is what follows.
   it was read as `/page.tsx`, at the top of the disk, and passed.
 - **The design rounds skill has an exit with nothing to render**: say so, build no switcher, and
   ask the guard's own question about the refused edit, where Not a look change lets it through.
+
+### What #1015 and #1057 changed, 2026-10-12
+
+- **A pattern anywhere in a written name is judged by every name it may expand to (#1015).** Only a
+  pattern in the extension was judged, so `echo x > [t]ailwind.config.ts` and `app/[t]okens.json`
+  passed. Now a shell write whose name the shell expands (a `*`, `?`, bracket, brace, or a group,
+  zsh's `(a|b)` or bash's `@(a|b)`) is compared with every look changing name (rules.ts
+  `patternMayBeLook`, the patterns walked against one another, in any case, since the Mac's disk
+  and shapeKind both ignore it). A `*` runs past a dot, so `notes.m*` counts (`notes.mine.css`),
+  which #1010 had counted out. A name whose literal parts rule every one out (`run-*.log`) passes,
+  and a pattern no rule reads is held, saying so.
+- **Its folder decides first.** A folder spelled from the top of the disk or from home with no
+  pattern in it is followed: in no checkout, the write passes whatever the name, so
+  `rm -f ~/.claude/state/ai-review/shown/timing-test-post.*` (refused on 2026-10-12 as "a pattern that
+  may name a look changing file") runs. In a checkout, the pattern waits on that issue's answer as a
+  named file does, and Dan's Skip them or Settled lets it through, where before it was refused as
+  a write that could not be followed. A relative folder is not followed (a cd earlier in the command
+  moves it, and only mod-kit's write reader follows a cd), so a relative pattern that may name a look
+  changing file is held as one whose checkout cannot be told.
+- **A guard older than the steps Claude read says so (#1057).** The skill is read fresh at every
+  use and the guard only when a session starts, so on 2026-10-09 a session followed the new skill
+  against the old guard and looped (#1046). The skill now states `<!-- design-round-guard contract: N
+  -->` and asks every question to carry `"contract": N`; the guard holds `CONTRACT`. A question
+  carrying a newer number, or the installed skill stating one, is refused before Dan is asked or
+  anything recorded: "this session's design round guard predates the design rounds steps you read
+  ... start a new session". `tools/check-mod-skill-contracts.sh` (run by
+  `tests/test-mod-skill-contracts.sh`) fails while the two numbers, or an example in the skill,
+  disagree, so they are raised together.
 
 ## Picker manners (#615), built 2026-10-04
 
