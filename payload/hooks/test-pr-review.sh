@@ -1297,6 +1297,13 @@ check_eq "#1063 and still refuses the merge until read" "1" "$rc"
 check "#1063 carrying the finding" "the third note is unclear" "$out"
 # Over its cap the OLDEST reviews give way, saying how many, and the newest is always given, so a
 # cap can never leave the history out without a word.
+# "Newest" is the head nearest this one, never the finish stamp: on CI (2026-10-13, PR #1109) the
+# reviews of H_A and H_B finished in the same second, the tie went to H_A by its sha, and the newer
+# review gave way. Stamped a second EARLIER here, so ordering by the stamp fails every time rather
+# than on whichever sha sorts first.
+HB_FILE="$(final_of "$H_B")"
+HA_FIN="$(meta "$(final_of "$H_A")" finished)"
+awk -v f="finished=$((HA_FIN - 1))" '/^finished=/ && !d { print f; d = 1; next } { print }' "$HB_FILE" > "$HB_FILE.tmp" && mv "$HB_FILE.tmp" "$HB_FILE"
 G commit -q --allow-empty -m "one more head"
 H_C="$(G rev-parse HEAD)"
 PR_REVIEW_HISTORY_MAX_BYTES=10 FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$H_C" --base-ref main --branch feat/hist >/dev/null
