@@ -566,6 +566,11 @@ TRACKER_TEST_FAIL_WRITE=1 run new-token
 if [ "$RC" -ne 0 ]; then ok; else bad "a new-token whose write fails reports failure (got $RC)"; fi
 check "and config.local.json is as it was" "$GOOD_TOKEN" "$(cat "$SK/config.local.json")"
 check_eq "and no half written copy is left in the skill folder" "" "$(cd "$SK" && ls -A | grep '^\.writing\.' || true)"
+# Not only a disk error: a run interrupted mid write removes its copy too.
+TRACKER_TEST_FAIL_WRITE=interrupt run new-token
+if [ "$RC" -ne 0 ]; then ok; else bad "a new-token interrupted mid write reports failure (got $RC)"; fi
+check "and config.local.json is as it was" "$GOOD_TOKEN" "$(cat "$SK/config.local.json")"
+check_eq "and no half written copy is left in the skill folder" "" "$(cd "$SK" && ls -A | grep '^\.writing\.' || true)"
 
 # --- a run killed mid write leaves the token only where nothing syncs ---------
 # new-token writes a temporary copy and renames it over config.local.json. A run killed between

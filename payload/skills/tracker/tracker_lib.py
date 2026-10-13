@@ -56,14 +56,20 @@ def write_local_json(path, data):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            # Test seam: "1" stands in for a full disk, "interrupt" for a run stopped by Ctrl-C.
             if os.environ.get("TRACKER_TEST_FAIL_WRITE") == "1":
                 raise OSError(28, "No space left on device (test seam)")
+            if os.environ.get("TRACKER_TEST_FAIL_WRITE") == "interrupt":
+                raise KeyboardInterrupt
             f.write("\n")
         os.chmod(tmp, 0o600)
-    except OSError as e:
-        # The half written copy may hold the token: removed, never left beside the original.
+    except BaseException as e:
+        # The half written copy may hold the token: removed whatever stopped the write (a full
+        # disk, an interrupt, a value json cannot write), never left beside the original.
         os.unlink(tmp)
-        raise Refusal("could not write %s (%s), so it was left as it was" % (path, e.strerror or e))
+        if isinstance(e, OSError):
+            raise Refusal("could not write %s (%s), so it was left as it was" % (path, e.strerror or e))
+        raise
     if os.environ.get("TRACKER_TEST_STOP_BEFORE_RENAME") == "1":
         os._exit(9)  # test seam: stands in for a run killed between the write and the rename
     os.replace(tmp, path)
