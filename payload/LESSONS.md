@@ -6026,6 +6026,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (Halo-lab-Trypennie/trypennie#531, 2026-10-09)
   SHORT: Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
 
+- **L1022. An exception keyed on the text a rule matched exempts every future match whenever that
+  text is constant, such as a key header line, so key each exception on where it lives and the
+  whole value, and check what else the same key admits before adding it.**
+  (danwright32/claude-config#1133, 2026-10-13)
+  SHORT: An exception keyed on matched text that is constant (a key header) exempts every match; key it on location and whole value.
+
 ## UX completeness
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
