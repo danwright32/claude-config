@@ -3915,10 +3915,9 @@ minting_lesson_files(){   # $1 = tree
 # lesson-entry-check.sh and fixed in the same session, a few minutes at most. Ten covers that with
 # room. Longer buys nothing: a lapsed reservation only means an unused number is offered again, and
 # a reservation never outlives the lesson it was for, because a written number is taken by the files.
+# Judged where it is used, in do_next_lesson, never at load: a bad value refused at load would stop
+# every command, the watcher's sync included, over a setting only next-lesson reads.
 LESSON_RESERVE_SECONDS="${SYNC_LESSON_RESERVE_SECONDS:-600}"
-case "$LESSON_RESERVE_SECONDS" in
-  ''|*[!0-9]*) die "SYNC_LESSON_RESERVE_SECONDS is set to '$LESSON_RESERVE_SECONDS', which is not a whole number of seconds, and bash would read it as zero, so no number would ever be reserved. NOTHING was done. Unset it to use the default of 600." ;;
-esac
 LESSON_RESERVATIONS_FILE="$CLAUDE_HOME/state/lesson-reservations.tsv"
 
 # A reservations file holding a line that cannot be read is REFUSED, in the main shell where a refusal
@@ -3960,47 +3959,57 @@ highest_taken_in_band(){   # $1 = tree  $2 = band start
   if [ "$reserved" -gt "$written" ]; then printf '%s' "$reserved"; else printf '%s' "$written"; fi
 }
 
-# The reservations lock: mkdir, which is atomic, holding the pid of whoever took it. A holder that has
-# died leaves it behind, so a lock whose pid is not running is taken over rather than waited on for
-# ever. The critical section reads a few files and writes one line, so ten seconds is a deadline,
-# not a wait anybody will see. SYNC_LESSON_LOCK_WAIT shortens it for the suite, which proves the
-# deadline fires without waiting ten seconds of real time for it (L524).
+# The reservations lock: a FILE holding the pid of whoever took it, created by hard linking a file
+# that already holds that pid. `ln` fails if the name exists, so taking it is atomic, and the lock
+# never exists without its pid in it: a lock made first and its pid written after (mkdir, then a
+# write) is left EMPTY by a run killed between the two, and an empty lock can never be told from one
+# being written this instant, so every later ask would wait out its deadline for ever after.
+#
+# A holder that has died leaves it behind, so a lock whose pid is not running is taken over rather
+# than waited on for ever. The critical section reads a few files and writes one line, so ten
+# seconds is a deadline, not a wait anybody will see. SYNC_LESSON_LOCK_WAIT shortens it for the
+# suite, which proves the deadline fires without waiting ten seconds of real time for it (L524).
 #
 # Every turn of the wait reaches the deadline check, a takeover attempt included: a takeover that
 # cannot happen (its break lock left behind by a killed run) used to `continue` straight back to the
 # top, which is a loop with no deadline and no sleep, spinning for ever.
 take_reservations_lock(){
-  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder max="${SYNC_LESSON_LOCK_WAIT:-10}"
+  local lock="$LESSON_RESERVATIONS_FILE.lock" t0 holder max="${SYNC_LESSON_LOCK_WAIT:-10}" mine
   case "$max" in ''|*[!0-9]*|0) max=10 ;; esac
   mkdir -p "$(dirname "$LESSON_RESERVATIONS_FILE")" || die "could not create $(dirname "$LESSON_RESERVATIONS_FILE"), so no lesson number could be reserved. NOTHING was minted."
+  mine="$lock.$$"
+  printf '%s\n' "$$" > "$mine" || die "could not write $mine, so no lesson number could be reserved. NOTHING was minted."
   t0="$(date +%s)"
-  while ! mkdir "$lock" 2>/dev/null; do
-    holder="$(cat "$lock/pid" 2>/dev/null || true)"
+  while ! ln "$mine" "$lock" 2>/dev/null; do
+    holder="$(cat "$lock" 2>/dev/null || true)"
     case "$holder" in
-      ''|*[!0-9]*) : ;;   # being written this instant, or unreadable: wait, never break on a guess
+      ''|*[!0-9]*) : ;;   # gone between the ln and the read, or unreadable: try again, never break on a guess
       *) kill -0 "$holder" 2>/dev/null || break_stale_reservations_lock "$lock" "$holder" ;;
     esac
-    [ "$(( $(date +%s) - t0 ))" -lt "$max" ] || die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that folder (and $lock.break if it is there)."
+    if [ "$(( $(date +%s) - t0 ))" -ge "$max" ]; then
+      rm -f "$mine"
+      die "another ask for a lesson number has held $lock for $(duration_in_words "$max"), so this one stopped rather than risk handing out the same number. NOTHING was minted. Ask again; if this repeats, delete that file (and $lock.break if it is there)."
+    fi
     sleep 0.1
   done
-  printf '%s\n' "$$" > "$lock/pid"
+  rm -f "$mine"
 }
-release_reservations_lock(){ rm -rf "$LESSON_RESERVATIONS_FILE.lock"; }
+release_reservations_lock(){ rm -f "$LESSON_RESERVATIONS_FILE.lock"; }
 
 # Taking over a lock whose holder died is itself serialised. Two waiters can both read the same dead
 # pid, and if each simply removed the lock, the second would remove the one the first had just
 # taken, and both would mint at once. So a takeover first takes $lock.break (mkdir, atomic), then
 # reads the pid AGAIN and removes the lock only if it still names the same dead holder. A lock taken
-# since holds no pid yet or a live one, and is left alone. A waiter that cannot take the break lock
+# since holds a live pid, and is left alone. A waiter that cannot take the break lock
 # simply waits its turn. Nothing can replace the stale lock between the re-read and the removal:
 # a new lock can only be made once the old one is gone, and the only remover of a dead holder's
 # lock is a takeover, which holds the break lock. A run killed in the instant between taking the
 # break lock and releasing it leaves it behind, and then no takeover can happen: every ask stops at
 # its ten second deadline naming both folders, which fails closed rather than minting twice.
-break_stale_reservations_lock(){   # $1 = lock dir  $2 = the dead holder's pid
+break_stale_reservations_lock(){   # $1 = lock file  $2 = the dead holder's pid
   mkdir "$1.break" 2>/dev/null || return 0
-  if [ "$(cat "$1/pid" 2>/dev/null || true)" = "$2" ] && ! kill -0 "$2" 2>/dev/null; then
-    rm -rf "$1"
+  if [ "$(cat "$1" 2>/dev/null || true)" = "$2" ] && ! kill -0 "$2" 2>/dev/null; then
+    rm -f "$1"
   fi
   rmdir "$1.break" 2>/dev/null || true
   return 0
@@ -4010,6 +4019,9 @@ break_stale_reservations_lock(){   # $1 = lock dir  $2 = the dead holder's pid
 # in either copy, are dropped in the same pass, which is what clears a reservation once it is used.
 do_next_lesson(){
   local num now written tmp who f
+  case "$LESSON_RESERVE_SECONDS" in
+    ''|*[!0-9]*) die "SYNC_LESSON_RESERVE_SECONDS is set to '$LESSON_RESERVE_SECONDS', which is not a whole number of seconds, and bash would read it as zero, so no number would ever be reserved. NOTHING was minted. Unset it to use the default of 600." ;;
+  esac
   require_readable_reservations
   lesson_band_with_room "$CLAUDE_HOME"
   take_reservations_lock

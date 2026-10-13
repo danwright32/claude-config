@@ -11374,23 +11374,23 @@ rm -f "$RVF"
 # out its deadline and refusing. The pid is one that has certainly exited: a shell that printed its
 # own and ended.
 rv_dead_pid="$(bash -c 'echo $$')"
-mkdir -p "$RVF.lock"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
 rv_stale_rc=0; rv_stale="$(_rv1148 next-lesson)" || rv_stale_rc=$?
 check "#1148 a lock left by an ask that died is taken over" "[ \"\$rv_stale_rc\" -eq 0 ] && grep -q '^L762\$' <<< \"\$rv_stale\""
-check "#1148 and released again afterwards" "[ ! -d '$RVF.lock' ]"
+check "#1148 and released again afterwards" "[ ! -e '$RVF.lock' ]"
 rm -f "$RVF"
 # The takeover must not remove a lock somebody took SINCE the dead holder was read. Two waiters that
 # both saw the dead pid would otherwise each remove the lock, the second removing the one the first
 # had just taken, and both would mint at once. Driven directly, with the tool sourced: the lock now
 # names a LIVE holder (this suite), and the takeover is asked to break it for the dead one it saw.
-mkdir -p "$RVF.lock"; printf '%s\n' "$$" > "$RVF.lock/pid"
+printf '%s\n' "$$" > "$RVF.lock"
 bash -c "export CLAUDE_HOME='$RVH' SYNC_REPO='$RVR' SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1; . '$SCRIPT' help >/dev/null 2>&1; break_stale_reservations_lock '$RVF.lock' '$rv_dead_pid'" >/dev/null 2>&1 || true
 check "#1148 a takeover leaves alone a lock taken since the dead holder was read" \
-  "[ \"\$(cat '$RVF.lock/pid' 2>/dev/null)\" = '$$' ]"
+  "[ \"\$(cat '$RVF.lock' 2>/dev/null)\" = '$$' ]"
 check "#1148 and leaves no takeover lock behind" "[ ! -d '$RVF.lock.break' ]"
-rm -rf "$RVF.lock"
+rm -f "$RVF.lock"
 # And end to end: a dead holder's lock in place while five sessions ask at once.
-mkdir -p "$RVF.lock"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
 rm -f "$WORK"/rv1148-stale-*.out
 for _rv_i in 1 2 3 4 5; do
   ( _rv1148 next-lesson > "$WORK/rv1148-stale-$_rv_i.out" ) &
@@ -11403,7 +11403,7 @@ rm -f "$RVF"
 # A takeover that cannot happen, its break lock left behind by a run killed mid takeover, must end at
 # the deadline and say so. It used to loop straight back without reaching the deadline or the sleep,
 # spinning for ever; the wait is shortened to one second so the deadline is proved in one.
-mkdir -p "$RVF.lock" "$RVF.lock.break"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock/pid"
+mkdir -p "$RVF.lock.break"; printf '%s\n' "$rv_dead_pid" > "$RVF.lock"
 rv_wedged_rc=0; rv_wedged="$(SYNC_LESSON_LOCK_WAIT=1 _rv1148 next-lesson)" || rv_wedged_rc=$?
 check "#1148 a takeover that cannot happen stops at its deadline" \
   "[ \"\$rv_wedged_rc\" -ne 0 ] && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_wedged\""
@@ -11414,6 +11414,11 @@ rm -rf "$RVF.lock" "$RVF.lock.break" "$RVF"
 rv_win_rc=0; rv_win="$(SYNC_LESSON_RESERVE_SECONDS=ten _rv1148 next-lesson)" || rv_win_rc=$?
 check "#1148 a reservation window that is not a number is refused" \
   "[ \"\$rv_win_rc\" -ne 0 ] && grep -q 'SYNC_LESSON_RESERVE_SECONDS' <<< \"\$rv_win\" && ! grep -qE '^L[0-9]+\$' <<< \"\$rv_win\""
+# Refused only where it is read. Judged at load, the same bad value stopped every command, the
+# watcher's sync included, over a setting only next-lesson uses.
+rv_win2_rc=0; rv_win2="$(SYNC_LESSON_RESERVE_SECONDS=ten _rv1148 lesson L760)" || rv_win2_rc=$?
+check "#1148 and a bad window stops nothing that does not reserve" \
+  "[ \"\$rv_win2_rc\" -eq 0 ] && ! grep -q 'SYNC_LESSON_RESERVE_SECONDS' <<< \"\$rv_win2\""
 rm -f "$RVF"
 
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
