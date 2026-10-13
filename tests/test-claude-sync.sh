@@ -3367,7 +3367,7 @@ for lj in "${LJ_SHAPES[@]}"; do
   check "#1089 $lj is not sent" "[ -n \"\$lj_tree\" ] && ! grep -qxF 'payload/skills/tracker/$lj' <<< \"\$lj_tree\""
 done
 check "#1089 nor a backup of a local file outside skills" \
-  "[ -n \"\$lj_tree\" ] && ! grep -qxF 'payload/hooks/settings.local.json.bak' <<< \"\$lj_tree\""
+  "[ -n \"\$lj_tree\" ] && ! grep -qF 'hooks/settings.local.json.bak' <<< \"\$lj_tree\""
 check "#1089 nor is any of their content anywhere in what was sent" \
   "! git -C '$LJB' grep -q 'MAC-A-ONLY' main -- payload 2>/dev/null"
 # The receiving side: this Mac's own copies survive a pull that mirrors with --delete. It already
