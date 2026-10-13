@@ -22,7 +22,3 @@ export const typedToast = (guard: string): string =>
 export const typedAnswerText = (t: TypedAnswer): string =>
   `Dan typed "${t.typed}" instead of choosing an answer, so it was not recorded, and ${t.still}. ` +
   `Tell him in one line that his typed answer was not recorded, because only choosing one of the answers counts; answer what he said if it asks something; then ${t.again}.`
-
-/** What Claude is told when the toast could not be shown: its line is then the only place Dan learns it. */
-export const typedUnshown = (t: TypedAnswer, why: string): string =>
-  `${typedAnswerText(t)} The toast that tells him could not be shown (${why}), so your line is the only place he learns it.`

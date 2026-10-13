@@ -12,6 +12,7 @@ import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 import { isDans } from './origin.ts'
+import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -319,6 +320,15 @@ export const register: Register = (on, options) => {
       press: async () => ({ isAnswered: false }),
       clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM'), isAppleTerminalTrusted),
       isDans: async ({ origin }) => isDans(origin),
+      // #1145: the one wording for a typed answer. The toast is shown here, $.ui being spelled only at
+      // its call site. A toast the engine cannot show it drops and logs itself, never throwing here
+      // (measured in tests/typed.test.ts), so Claude is told the same either way.
+      typedAnswer: async input => {
+        const missing = typedMissing(input)
+        if (missing) throw new Error(missing)
+        await built.ui.toast(typedToast(input.guard))
+        return typedAnswerText(input)
+      },
     }
     return { ...built, modkit }
   })
