@@ -88,6 +88,21 @@ export const absolutePath = (word: string, dir: string | undefined, home: string
   return `/${parts.join('/')}`
 }
 
+/**
+ * The folder a word whose name is a pattern lands in, as an absolute path (#1123): its folder part,
+ * or the folder the command is in for a bare name, named as a path is (a cd before it followed).
+ * Undefined where it cannot be named, and where the name may reach below that folder: a variable or
+ * a command's output in the name (its value may hold a slash), a ~ (another user's home), or a
+ * whole `**` (every folder below, with globstar). A slash inside a brace or bracket leaves a pattern
+ * in the folder part, which names no one folder.
+ */
+export const patternFolder = (word: string, dir: string | undefined, home: string): string | undefined => {
+  const cut = word.lastIndexOf('/')
+  const name = word.slice(cut + 1)
+  if (!/[*?[\]{}]/.test(name) || /[$`]/.test(name) || name === '**' || (cut < 0 && name.startsWith('~'))) return undefined
+  return cut < 0 ? dir : absolutePath(word.slice(0, cut) || '/', dir, home)
+}
+
 const baseOf = (p: string) => p.split('/').filter(Boolean).pop() ?? p
 
 // The operands of a command after its options, taking a value from the next word for the options
@@ -446,9 +461,11 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     }
     seen.add(key)
     const sources = extra?.sources
+    const folder = path ? undefined : patternFolder(word, dir, home)
     files.push({
       word: shown ?? asWritten.get(word) ?? word,
       ...(path ? { path } : {}),
+      ...(folder ? { folder } : {}),
       ...(sources && sources.length ? { sources } : {}),
       ...(extra?.edits ? { edits: true as const } : {}),
       ...(extra?.mayBeFolder ? { mayBeFolder: true as const } : {}),
@@ -467,7 +484,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       if (tree) had.tree = true
       return
     }
-    changes.push({ word: written, ...(path ? { path } : {}), does, ...(tree ? { tree: true as const } : {}) })
+    const folder = path ? undefined : patternFolder(word, dir, home)
+    changes.push({ word: written, ...(path ? { path } : {}), ...(folder ? { folder } : {}), does, ...(tree ? { tree: true as const } : {}) })
   }
   const abs = (p: string) => absolutePath(p, dir, home)
   const absAll = (ps: string[]) => ps.map(abs).filter((p): p is string => !!p)

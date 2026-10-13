@@ -179,23 +179,6 @@ export const isPattern = (word: string): boolean => {
  */
 export const isGroupPattern = (word: string): boolean => /\([^()]*\|[^()]*\)|[@!+*?]\(/.test(word)
 
-/**
- * The folder a pattern's name sits in, as an absolute path, when the word spells it out from the top
- * of the disk or from home with no pattern in it (`~/.claude/state/x/*.json`); undefined otherwise.
- * A relative folder is never followed here: a cd earlier in the command moves it, and only mod-kit's
- * write reader follows a cd (#1015).
- */
-export const patternFolder = (word: string, home: string): string | undefined => {
-  const cut = word.lastIndexOf('/')
-  if (cut < 0) return undefined
-  const folder = word.slice(0, cut) || '/'
-  if (/[*?[\]{}$`]/.test(folder.replace(/^\$(HOME\b|\{HOME\})/, ''))) return undefined
-  const fromHome = folder === '~' || folder.startsWith('~/') || /^\$(HOME\b|\{HOME\})/.test(folder)
-  if (fromHome && !home) return undefined
-  if (!fromHome && !folder.startsWith('/')) return undefined
-  return resolvePath(folder.replace(/^\$(HOME\b|\{HOME\})/, '~'), '/', home)
-}
-
 // Every look changing name (shapeKind) as a pattern, in lower case, the case shapeKind reads a name
 // in: each listed extension, each Tailwind config, and the design tokens names. TOKENS' run of
 // `.part`s is written as `*`, a little wider than the rule, so a pattern is never let through that

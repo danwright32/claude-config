@@ -837,9 +837,14 @@ test('#1010: a Next.js dynamic segment is followed as the folder it names, relat
 test('#1015: a pattern in a written name is held where it may expand to a tokens or Tailwind config file', withKit, async ($, on) => {
   const w = world($, on)
   // A folder held in a variable leaves only the folder unknown, never the name (lessons review of #1015).
-  for (const command of ['echo x > [t]ailwind.config.ts', 'echo x > app/[t]okens.json', "printf '{}' > design-[t]okens.json", 'rm -f tailwind.config.*', 'echo x > $D/app/page.ts[x]', 'echo x > "$D/[t]ailwind.config.ts"']) {
+  for (const command of ['cd "$D" && echo x > [t]ailwind.config.ts', 'echo x > $D/app/page.ts[x]', 'echo x > "$D/[t]ailwind.config.ts"']) {
     const why = refusalOf(await call($, { tool: 'Bash', command }))
     expect([command, why.includes('a pattern that may name a look changing file')]).toEqual([command, true])
+  }
+  // A relative one is placed in the session's folder, a checkout, so it waits on that issue (#1123).
+  for (const command of ['echo x > [t]ailwind.config.ts', 'echo x > app/[t]okens.json', "printf '{}' > design-[t]okens.json", 'rm -f tailwind.config.*']) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('issue #978 in slate'), why.includes('could not be followed')]).toEqual([command, true, false])
   }
   // Its folder followed into the checkout, it waits on that issue's answer like any look changing file.
   const why = refusalOf(await call($, { tool: 'Bash', command: 'echo x > /w/slate/[t]ailwind.config.ts' }))
@@ -865,6 +870,28 @@ test('#1015: a pattern in a folder outside every checkout, or whose literal part
     expect([command, refusalOf(await call($, { tool: 'Bash', command }))]).toEqual([command, ''])
   }
   expect(w.ran.length).toBe(7)
+})
+
+// claude-config#1123: the guard could not place a RELATIVE pattern (a cd before it moves its folder,
+// and only mod-kit's write reader follows a cd), so it held one as a write it could not follow. The
+// reader now gives the folder a pattern lands in, the cd followed, and the guard places it there.
+test('#1123: a relative pattern after a cd is placed in its folder: in a checkout it waits on that issue, outside every checkout it runs', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/other' })
+  for (const [command, shown] of [
+    ['cd /w/slate && echo x > app/[t]okens.json', 'app/[t]okens.json'],
+    ['cd /w/slate/src && rm -f *.css', 'src/*.css'],
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('issue #978 in slate'), why.includes(shown), why.includes('could not be followed')]).toEqual([command, true, true, false])
+  }
+  // A relative pattern in the session's own folder is placed there too.
+  const here = refusalOf(await call($, { tool: 'Bash', command: 'echo x > [t]ailwind.config.ts' }))
+  expect(here).toContain('issue #55 in other')
+  // Outside every checkout, it is in no project and runs.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cd /tmp/scratch && rm -f *.css' }))).toBe('')
+  // Once Dan answers for the issue, the placed pattern goes through.
+  await askSkip($, w, refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate && echo x > app/[t]okens.json' })), SKIP_YES)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'cd /w/slate && echo x > app/[t]okens.json' }))).toBe('')
 })
 
 test('#1015: a pattern the guard cannot read is held, saying so, and in a known checkout waits on its issue', withKit, async ($, on) => {

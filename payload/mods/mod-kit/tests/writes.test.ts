@@ -51,12 +51,42 @@ describe('writes: a bracketed route segment (#1010)', () => {
     ])
   })
   test('a bracket that is a pattern, anywhere else in the name, is still given as written, never guessed at', () => {
-    expect(read('echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]' }])
-    expect(read('echo x > app/[t]okens.json').files).toEqual([{ word: 'app/[t]okens.json' }])
+    expect(read('echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]', folder: `${CWD}/app` }])
+    expect(read('echo x > app/[t]okens.json').files).toEqual([{ word: 'app/[t]okens.json', folder: `${CWD}/app` }])
     expect(read('echo x > app/[a-z]*/page.tsx').files).toEqual([{ word: 'app/[a-z]*/page.tsx' }])
     expect(read('echo x > app/[!x]/page.tsx').files).toEqual([{ word: 'app/[!x]/page.tsx' }])
     // A range is a pattern too, even standing as a whole segment.
     expect(read('echo x > app/[a-z]/page.tsx').files).toEqual([{ word: 'app/[a-z]/page.tsx' }])
+  })
+})
+
+// claude-config#1123: a name holding a pattern has no path, and the reader gave nothing of where it
+// lands, so the design round guard could not place a RELATIVE pattern after a cd (#1015) and held
+// it as a write it could not follow. Its folder is given where the folder part names one, a cd
+// before it followed as for any path; the name is still given as written.
+describe('writes: the folder a pattern lands in (#1123)', () => {
+  test('a relative pattern after a cd is placed in the folder the cd moved to', () => {
+    expect(read('cd src/app && echo x > [t]okens.json').files).toEqual([{ word: '[t]okens.json', folder: `${CWD}/src/app` }])
+    expect(read('cd /w/slate && echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]', folder: '/w/slate/app' }])
+    expect(read('cd /tmp/scratch && rm -f *.css').changes).toEqual([{ word: '*.css', folder: '/tmp/scratch', does: 'remove' }])
+    expect(read('rm -f styles/{a,b}.css').changes).toEqual([{ word: 'styles/{a,b}.css', folder: `${CWD}/styles`, does: 'remove' }])
+  })
+  test('a folder spelled from the top of the disk or from home is given too', () => {
+    expect(read('rm -f ~/.claude/state/shown/*.json').changes).toEqual([{ word: '~/.claude/state/shown/*.json', folder: `${HOME}/.claude/state/shown`, does: 'remove' }])
+    expect(read('rm -f $HOME/x/*').changes).toEqual([{ word: '$HOME/x/*', folder: `${HOME}/x`, does: 'remove' }])
+    expect(read('echo x > /w/slate/[t]ailwind.config.ts').files).toEqual([{ word: '/w/slate/[t]ailwind.config.ts', folder: '/w/slate' }])
+  })
+  test('no folder where it cannot be named: a cd that cannot be followed, a variable, or a name that may reach below it', () => {
+    expect(read('cd $X && rm -f *.css').changes).toEqual([{ word: '*.css', does: 'remove' }])
+    expect(read('echo x > $D/*.css').files).toEqual([{ word: '$D/*.css' }])
+    // A variable in the name may hold a slash, so the name may land in a folder below.
+    expect(read('rm -f out/$N*.css').changes).toEqual([{ word: 'out/$N*.css', does: 'remove' }])
+    // A whole ** reaches every folder below with globstar.
+    expect(read('rm -f out/**').changes).toEqual([{ word: 'out/**', does: 'remove' }])
+    // A pattern in the folder part names no one folder.
+    expect(read('rm -f src/*/x.css').changes).toEqual([{ word: 'src/*/x.css', does: 'remove' }])
+    // A name with no pattern but a variable is not a pattern's folder either.
+    expect(read('echo x > out/$NAME').files).toEqual([{ word: 'out/$NAME' }])
   })
 })
 

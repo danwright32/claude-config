@@ -2147,9 +2147,13 @@ direction is what follows.
   `rm -f ~/.claude/state/ai-review/shown/timing-test-post.*` (refused on 2026-10-12 as "a pattern that
   may name a look changing file") runs. In a checkout, the pattern waits on that issue's answer as a
   named file does, and Dan's Skip them or Settled lets it through, where before it was refused as
-  a write that could not be followed. A relative folder is not followed (a cd earlier in the command
-  moves it, and only mod-kit's write reader follows a cd), so a relative pattern that may name a look
-  changing file is held as one whose checkout cannot be told.
+  a write that could not be followed. Since #1123 the folder is the one mod-kit's write reader gives
+  (`folder` on a write or change whose name is a pattern), so a relative pattern is placed too, a cd
+  before it followed: `cd /w/slate && echo x > app/[t]okens.json` waits on that issue's answer, and
+  `cd /tmp/scratch && rm -f *.css` runs. The guard's own reading of a spelled out folder went with
+  it. Where the reader cannot name the folder (a cd it cannot follow, a variable in the folder or in
+  the name, whose value may hold a slash, or a whole `**`), a pattern that may name a look changing
+  file is still held as one whose checkout cannot be told.
 - **A guard older than the steps Claude read says so (#1057).** The skill is read fresh at every
   use and the guard only when a session starts, so on 2026-10-09 a session followed the new skill
   against the old guard and looped (#1046). The skill now states `<!-- design-round-guard contract: N
