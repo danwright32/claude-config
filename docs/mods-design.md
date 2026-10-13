@@ -656,6 +656,13 @@ and open to his correction.
   recognisable, Dan's next message carries the name as `sessionTitle` only if that message shows
   the session still has no name. A different name on it, or a `/rename` of Dan's first, wins.
 - After a `/clear` (a new session id with no fresh start event) the new conversation is not named.
+- A session that opens with only an image (#1085, Dan's decision on the issue, 2026-10-12: "wait for
+  Dan's own words") is named from his first message with words. If he has sent only images for 3
+  turns, it is named from Claude's first reply that describes one, and replies that only ask what
+  to do with an image, or only say one arrived, are left out of what Haiku reads. Which replies
+  describe is read from their sentences, not their meaning: a statement of 4 words or more that is
+  not a question nor a short acknowledgement. Until either is there, nothing is named and no failure
+  is said, so a session with one image and no words is never named, as decided.
 - The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
@@ -2056,6 +2063,34 @@ direction is what follows.
   it was read as `/page.tsx`, at the top of the disk, and passed.
 - **The design rounds skill has an exit with nothing to render**: say so, build no switcher, and
   ask the guard's own question about the refused edit, where Not a look change lets it through.
+
+### What #1015 and #1057 changed, 2026-10-12
+
+- **A pattern anywhere in a written name is judged by every name it may expand to (#1015).** Only a
+  pattern in the extension was judged, so `echo x > [t]ailwind.config.ts` and `app/[t]okens.json`
+  passed. Now a shell write whose name the shell expands (a `*`, `?`, bracket, brace, or a group,
+  zsh's `(a|b)` or bash's `@(a|b)`) is compared with every look changing name (rules.ts
+  `patternMayBeLook`, the patterns walked against one another, in any case, since the Mac's disk
+  and shapeKind both ignore it). A `*` runs past a dot, so `notes.m*` counts (`notes.mine.css`),
+  which #1010 had counted out. A name whose literal parts rule every one out (`run-*.log`) passes,
+  and a pattern no rule reads is held, saying so.
+- **Its folder decides first.** A folder spelled from the top of the disk or from home with no
+  pattern in it is followed: in no checkout, the write passes whatever the name, so
+  `rm -f ~/.claude/state/ai-review/shown/timing-test-post.*` (refused on 2026-10-12 as "a pattern that
+  may name a look changing file") runs. In a checkout, the pattern waits on that issue's answer as a
+  named file does, and Dan's Skip them or Settled lets it through, where before it was refused as
+  a write that could not be followed. A relative folder is not followed (a cd earlier in the command
+  moves it, and only mod-kit's write reader follows a cd), so a relative pattern that may name a look
+  changing file is held as one whose checkout cannot be told.
+- **A guard older than the steps Claude read says so (#1057).** The skill is read fresh at every
+  use and the guard only when a session starts, so on 2026-10-09 a session followed the new skill
+  against the old guard and looped (#1046). The skill now states `<!-- design-round-guard contract: N
+  -->` and asks every question to carry `"contract": N`; the guard holds `CONTRACT`. A question
+  carrying a newer number, or the installed skill stating one, is refused before Dan is asked or
+  anything recorded: "this session's design round guard predates the design rounds steps you read
+  ... start a new session". `tools/check-mod-skill-contracts.sh` (run by
+  `tests/test-mod-skill-contracts.sh`) fails while the two numbers, or an example in the skill,
+  disagree, so they are raised together.
 
 ## Picker manners (#615), built 2026-10-04
 
