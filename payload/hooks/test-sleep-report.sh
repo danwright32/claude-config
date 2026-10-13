@@ -153,11 +153,28 @@ check_eq "an id not of a link's shape is never stamped" "None" "$(link_of_last)"
 note '{"kind":"finding","by":"aaaa1111","text":"no session"}' >/dev/null 2>&1
 check_eq "outside a session nothing is stamped" "None" "$(link_of_last)"
 
+# The writer stamps `by`, the local id of the session writing the note, when the caller gave none,
+# as it stamps the link (#1167): on 2026-10-12 every finding, question and issue note the overnight
+# session wrote lacked one, so the report said "a session that did not say" and could not count that
+# worker as heard from. Only an id of a local id's shape is stamped, and a `by` the caller gave is
+# never replaced.
+by_of_last(){ notes_of g5 | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("by"))'; }
+U0="cccc0000-0000-4000-8000-00000000c0de"
+CLAUDE_CODE_SESSION_ID=$U0 note '{"kind":"finding","text":"no by given"}' >/dev/null 2>&1
+check_eq "the writing session's id is stamped as by when the caller gave none" "$U0" "$(by_of_last)"
+CLAUDE_CODE_SESSION_ID=$U0 note '{"kind":"finding","by":"aaaa1111","text":"by given"}' >/dev/null 2>&1
+check_eq "a by the caller gave is never replaced" "aaaa1111" "$(by_of_last)"
+CLAUDE_CODE_SESSION_ID='cccc0000; rm -rf /' note '{"kind":"finding","text":"odd local id"}' >/dev/null 2>&1
+check_eq "an id not of a local id's shape is never stamped as by" "None" "$(by_of_last)"
+note '{"kind":"finding","text":"no session id"}' >/dev/null 2>&1
+check_eq "outside a session no by is stamped" "None" "$(by_of_last)"
+check_eq "and the note is written all the same" "no session id" "$(notes_of g5 | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("text"))')"
+
 # Twenty writers at once: every line lands whole (append mode, one write per note).
 for i in $(seq 1 20); do note "{\"kind\":\"finding\",\"by\":\"w$i\",\"text\":\"finding $i\"}" >/dev/null 2>&1 & done
 wait
-check_eq "twenty notes at once all land" 25 "$(notes_of g5 | wc -l | tr -d ' ')"
-check_eq "and every line is whole JSON" 25 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
+check_eq "twenty notes at once all land" 29 "$(notes_of g5 | wc -l | tr -d ' ')"
+check_eq "and every line is whole JSON" 29 "$(notes_of g5 | python3 -c 'import json,sys; print(sum(1 for l in sys.stdin if json.loads(l)))')"
 r="$(report_of g5)"
 missing=""; for i in $(seq 1 20); do [[ "$r" == *"finding $i"$'\n'* || "$r" == *"finding $i" ]] || missing="$missing $i"; done
 check_eq "the report after them carries every finding (#909)" "" "$missing"
@@ -292,13 +309,16 @@ mkdir -p "$SLEEPDIR/notes"
   # A plain done after another session's failure is no replacement GitHub confirmed: the failure stands.
   echo '{"v":1,"kind":"failed","at":1791445100000,"by":"bbbb2222","repo":"o/r","issue":23,"text":"tests would not build","generation":"g6"}'
   echo '{"v":1,"kind":"done","at":1791445200000,"by":"aaaa1111","repo":"o/r","issue":23,"text":"finished it later","generation":"g6"}'
+  # Noted done overnight, but merged only after wake (#1167).
+  echo '{"v":1,"kind":"done","at":1791445300000,"by":"aaaa1111","repo":"o/r","pr":42,"text":"Merged in the morning","generation":"g6"}'
   echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"eeee5555","generation":"g6"}'
 } > "$N"
-echo '[{"number":34,"title":"Split cache","url":"https://github.com/o/r/pull/34","mergedAt":"2026-10-08T07:05:00Z"},{"number":35,"title":"Nobody noted","url":"https://github.com/o/r/pull/35","mergedAt":"2026-10-08T08:00:00Z"},{"number":30,"title":"Before sleep","url":"https://github.com/o/r/pull/30","mergedAt":"2026-10-07T20:00:00Z"}]' > "$FAKE/gh-pr-o_r"
-echo '[{"number":12,"title":"Cache per account","url":"https://github.com/o/r/issues/12","closedAt":"2026-10-08T07:06:00Z","stateReason":"COMPLETED"},{"number":22,"title":"Finished by a subagent","url":"https://github.com/o/r/issues/22","closedAt":"2026-10-08T07:10:00Z","stateReason":"COMPLETED"}]' > "$FAKE/gh-issue-o_r"
+echo '[{"number":34,"title":"Split cache","url":"https://github.com/o/r/pull/34","mergedAt":"2026-10-08T07:05:00Z"},{"number":35,"title":"Nobody noted","url":"https://github.com/o/r/pull/35","mergedAt":"2026-10-08T08:00:00Z"},{"number":30,"title":"Before sleep","url":"https://github.com/o/r/pull/30","mergedAt":"2026-10-07T20:00:00Z"},{"number":41,"title":"After wake","url":"https://github.com/o/r/pull/41","mergedAt":"2026-10-08T12:32:00Z"}]' > "$FAKE/gh-pr-o_r"
+echo '[{"number":12,"title":"Cache per account","url":"https://github.com/o/r/issues/12","closedAt":"2026-10-08T07:06:00Z","stateReason":"COMPLETED"},{"number":22,"title":"Finished by a subagent","url":"https://github.com/o/r/issues/22","closedAt":"2026-10-08T07:10:00Z","stateReason":"COMPLETED"},{"number":24,"title":"Closed in the daytime","url":"https://github.com/o/r/issues/24","closedAt":"2026-10-08T13:00:00Z","stateReason":"COMPLETED"}]' > "$FAKE/gh-issue-o_r"
 echo '{"number":36,"title":"Not merged","mergedAt":null}' > "$FAKE/gh-pr-view-o_r-36"
 echo '{"number":38,"title":"Lagging search","mergedAt":"2026-10-08T07:30:00Z"}' > "$FAKE/gh-pr-view-o_r-38"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-view-o_r-39.fail"
+echo '{"number":42,"title":"Morning merge","mergedAt":"2026-10-08T12:40:00Z"}' > "$FAKE/gh-pr-view-o_r-42"
 echo '[{"number":5,"title":"Half","url":"u","mergedAt":"2026-10-08T03:40:00.123-04:00"}]' > "$FAKE/gh-pr-o_q"
 echo 'HTTP 500' > "$FAKE/gh-issue-o_q.fail"
 echo 'HTTP 502: Bad Gateway' > "$FAKE/gh-pr-o_s.fail"
@@ -330,8 +350,15 @@ check_eq "and is said once, never once per read (#926)" 1 "$(printf '%s\n' "$r" 
 calls="$(cat "$FAKE/calls")"
 has "gh is asked for merged PRs with an explicit limit" "[pr] [list] [-R] [o/r] [--state] [merged]" "$calls"
 has "with the limit" "[--limit] [200]" "$calls"
-has "searching from the moment sleep began" "[merged:>=2026-10-08T03:42:00Z]" "$calls"
-has "and closed issues the same way" "[closed:>=2026-10-08T03:42:00Z]" "$calls"
+has "searching from the moment sleep began to the woke note's time (#1167)" "[merged:2026-10-08T03:42:00Z..2026-10-08T11:05:00Z]" "$calls"
+has "and closed issues the same way" "[closed:2026-10-08T03:42:00Z..2026-10-08T11:05:00Z]" "$calls"
+# Rendered after wake, the night's report never takes the daytime's work as its own (#1167): on
+# 2026-10-12 a render at 3 PM ET listed PR #1127, merged 8:32 AM ET after wake, under Done. The
+# stand in answers past the search, so the script's own predicate is what is tested (L1014).
+lacks "a PR merged after wake is not the night's" "PR #41" "$r"
+lacks "nor an issue closed after wake" "issue #24" "$r"
+has "a PR noted done but merged only after wake is said as such" "o/r PR #42 was noted done, but GitHub shows it merged 8:40 AM ET, after the night ended at 7:05 AM ET" "$r"
+lacks "and is never listed as done overnight" "PR #42 Morning merge" "$r"
 check_eq "GitHub is asked about exactly the repos the notes name, no other" "o/q o/r o/s" \
   "$(printf '%s\n' "$calls" | grep '\[list\]' | sed -n 's/.*\[-R\] \[\([^]]*\)\].*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 # Heartbeats and claims (L13, L98).
@@ -487,6 +514,40 @@ calls="$(cat "$FAKE/calls")"
 has "the merged PRs are asked for with their branch, body and the issues they close" "headRefName,body,closingIssuesReferences" "$calls"
 has "the closed issues are asked for with the PRs that closed them" "closedByPullRequestsReferences" "$calls"
 
+# ---- a worker whose notes named nobody is heard from all the same (#1167) ----
+# The overnight session's own notes carry its id though the caller gave none, so the report counts
+# the worker as heard from rather than saying it never wrote a note.
+U2="bbbb2222-0000-4000-8000-000000000002"
+record g12 '["'"$U2"'"]' "$SLEEPDIR/ended/g12.json"
+CLAUDE_CODE_SESSION_ID=$U2 NOW=1791443000000 py note --record "$SLEEPDIR/ended/g12.json" --line '{"kind":"finding","repo":"o/t","text":"seen at 3:03"}' >/dev/null 2>&1
+CLAUDE_CODE_SESSION_ID=$U2 NOW=1791457000000 py note --record "$SLEEPDIR/ended/g12.json" --line '{"kind":"stopped","text":"queue empty"}' >/dev/null 2>&1
+echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"eeee5555","generation":"g12"}' >> "$SLEEPDIR/notes/g12.jsonl"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g12.json" --final >/dev/null 2>&1
+r="$(report_of g12)"
+has "a worker whose notes gave no by is heard from, by the id the writer stamped" "bbbb2222: last heard 6:56 AM ET" "$r"
+lacks "and is never said to have written nothing" "Session bbbb2222 ended unexpectedly" "$r"
+
+# ---- a final render with no woke or limit note (#1167) ----
+# Wake writes its note and then renders; when the note could not be written the render still runs,
+# and reads the night up to its own moment, never past the record's until (noon ET the day after,
+# when the night ends by itself), so a render long after cannot take the day's work as the night's.
+record g13 '[]' "$SLEEPDIR/ended/g13.json"
+echo '{"v":1,"kind":"done","at":1791443000000,"by":"aaaa1111","repo":"o/u","pr":7,"text":"merged overnight","generation":"g13"}' > "$SLEEPDIR/notes/g13.jsonl"
+echo '[{"number":7,"title":"Overnight","url":"u","mergedAt":"2026-10-08T07:00:00Z"},{"number":8,"title":"Past the bound","url":"u","mergedAt":"2026-10-09T04:00:00Z"}]' > "$FAKE/gh-pr-o_u"
+: > "$FAKE/calls"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g13.json" --final >/dev/null 2>&1
+r="$(report_of g13)"
+has "with no end note the search ends at the render's own moment" "[merged:2026-10-08T03:42:00Z..2026-10-08T11:05:00Z]" "$(cat "$FAKE/calls")"
+has "and the header says the night was read up to then, with no end note" "No woke or limit note was written, so the night is read up to 7:05 AM ET on Thu Oct 8." "$r"
+lacks "never as still asleep, waiting on a wake that has been" "Still asleep" "$r"
+has "what merged within it is done" "o/u PR #7 Overnight" "$r"
+: > "$FAKE/calls"
+NOW=$((SINCE + 86400000 + 4 * 3600000)) py render --record "$SLEEPDIR/ended/g13.json" --final >/dev/null 2>&1
+r="$(report_of g13)"
+has "rendered past the record's until, the search ends at the until" "[merged:2026-10-08T03:42:00Z..2026-10-09T03:42:00Z]" "$(cat "$FAKE/calls")"
+lacks "and what merged after it is not the night's" "PR #8" "$r"
+has "the header names that bound" "the night is read up to 11:42 PM ET on Thu Oct 8." "$r"
+
 # ---- paid usage with nothing to read, and the healthy night ----
 record g7 '["aaaa1111"]' "$SLEEPDIR/ended/g7.json"
 {
@@ -519,11 +580,11 @@ lacks "neither is left for Other notes" "## Other notes" "$r"
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 9 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 11 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
