@@ -6,6 +6,7 @@ anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.cla
 which is NOT loaded into the session.
 
 - L1027. Local dev and test servers must not report to production's error tracker, and alerts act only on production.
+- L767. Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
 - L490. A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.
 - L710. A gap the NEXT occurrence repairs is invisible on every occurrence but the last and reads as working, so check the LAST occurrence directly.
 - L706. A presence guard accepting any non-null value takes a zero as an answer, so an upstream exclusion arriving as zero silently suppresses the fallback.
