@@ -7345,6 +7345,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   root; only a result opened from a shared link had its own address.)
 
 ## External systems
+- **L1023. A reader that sorts free text from outside the system into a closed set of values by how
+  it BEGINS reads any new option sharing that beginning as the old one, with full confidence, so
+  match each known wording whole and refuse the rest rather than falling through to the closest
+  prefix.** (downbeat#572, 2026-10-13)
+  SHORT: Classifying outside free text by its PREFIX reads any new option sharing it as the old one, so match each known wording whole and refuse the rest.
 
 - **L477. A browser error reporter captures every uncaught error on the page, including ones
   thrown by scripts you never loaded**, so a page opened inside an in-app browser files that host
