@@ -111,7 +111,7 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
       REASON="reads the prompt and one skill file, neither of which piles up"; return 1 ;;
     ai-review-nudge.sh)
       # Measured where its fixture already lives, a real repository with real review files.
-      REASON="measured by test-ai-review-on-push.sh section 6b against 300 review files"; return 1 ;;
+      REASON="measured by test-ai-review-on-push.sh sections 6b and 6c against 300 review files of another repository and 300 of each kind of its own"; return 1 ;;
     project-list-nudge.sh)
       REASON="reads the project list Dan writes by hand in CLAUDE.md, a curated list rather than anything that piles up"; return 1 ;;
     stale-worktree-nudge.sh)
@@ -218,9 +218,13 @@ _ctl="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
 [ "$measured" -gt 0 ] && check "at least one hook was measured rather than exempted" ok \
   || check "at least one hook was measured rather than exempted" "none was"
 # The exemption pointing elsewhere is only as good as the test it points at.
-grep -q "300 more review files start no more processes" "$DIR/test-ai-review-on-push.sh" 2>/dev/null \
-  && check "the ai-review-nudge exemption points at a test that exists" ok \
-  || check "the ai-review-nudge exemption points at a test that exists" "test-ai-review-on-push.sh no longer carries section 6b"
+for _case in "300 more review files start no more processes" \
+             "300 unshown whole branch reviews of this repository start no more processes" \
+             "300 unshown push reviews of this repository start no more processes"; do
+  grep -qF "$_case" "$DIR/test-ai-review-on-push.sh" 2>/dev/null \
+    && check "the ai-review-nudge exemption points at a test that exists: $_case" ok \
+    || check "the ai-review-nudge exemption points at a test that exists: $_case" "test-ai-review-on-push.sh no longer carries it"
+done
 
 echo
 echo "passed: $pass, failed: $fail"

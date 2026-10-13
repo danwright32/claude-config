@@ -40,20 +40,38 @@
 # ar_capped_body, which ends by naming how many were left out and the file holding them all, and
 # once NUDGE_BUDGET characters have been printed the rest wait, unshown, for the next prompt.
 #
-# The lessons review of a whole branch (lib/pr-review.sh, kind=pr) is shown here too, under its own
-# heading. Showing it here does not allow the merge (claude-config#788): this reaches whichever
-# session prompts next, not necessarily the one merging, so it carries the findings' read key and
-# the merge gate waits for a merge presenting it.
+# NOT SHOWN HERE: the lessons review of a whole branch (lib/pr-review.sh, kind=pr, named
+# <key>-pr-<sha>.txt), since claude-config#1090 (Dan, 2026-10-12). The merge gate prints its
+# findings and issues their read key when it refuses a merge, which is where they must be read
+# anyway, and showing them here only added early sight that rarely reached anyone: branches are
+# mostly built by agents, which never fire UserPromptSubmit. They were 2,008 of the 2,010 finished
+# files on 2026-10-12, and walking them is what timed the hook out. They are dropped by NAME, in the
+# one awk that lists what is unshown, so none costs a process. A pending one past its deadline is
+# still settled below, so its marker cannot keep every session off the fast path.
 #
-# Nothing in either loop below may start a process per FILE: the state directory holds every
-# repository's reviews for 14 days (1,975 files on 2026-10-03), and one `basename` per file took the
-# hook to 15 to 17 s on a heavily loaded machine, past its 5 s timeout, so its output was discarded on
-# every prompt. Names are cut with parameter expansion; test-ai-review-on-push.sh section 6b counts
-# the processes started with and without 300 unrelated files and requires the two to be equal.
+# Nothing below may start a process per FILE, nor per review before the budget has decided to show
+# it: the state directory holds every repository's reviews for 14 days (1,975 files on 2026-10-03),
+# and one `basename` per file took the hook to 15 to 17 s on a heavily loaded machine, past its 5 s
+# timeout, so its output was discarded on every prompt; on 2026-10-12 a fresh session walked 1,200
+# reviews of its own repository, about 7 ms each, before the budget held them (9.7 to 10 s; against
+# a copy of the same folder, 4,453 files, at load 9, the old hook took 43.6 to 51.8 s for a fresh
+# claude-config session and this one 0.48 to 0.60 s, three runs each, 2026-10-12). Names
+# are cut with parameter expansion, and a review's cost is bounded in bash from its file before
+# anything is started for it. test-ai-review-on-push.sh sections 6b and 6c count the processes
+# started against 300 files of another repository, 300 branch reviews of this one, and 300 push
+# reviews of this one against 30, and require each pair to be equal.
+#
+# MARKED SHOWN ONLY ONCE IT IS OUT. The platform throws a hook's output away when it kills it at the
+# timeout, so a review recorded as shown the moment it was printed was, when the hook was then
+# killed, never seen and never shown again. What was shown is appended to the session's list as the
+# last write of the run, after everything else, so a run killed at any point before records nothing
+# and the next prompt shows it all again (section 6d).
 #
 # Housekeeping, only on the full path: finished files older than 14 days are removed, with their
-# delivery stamps. They are records of a push, not data anybody restores from. citations.tsv, the
-# ledger of which lessons reviews cite, is not a .txt and is never swept.
+# delivery stamps, and so are other sessions' shown/ records not touched in 14 days (a record is
+# touched on every full pass, so one that old lists only reviews already swept). They are records of
+# a push, not data anybody restores from. citations.tsv, the ledger of which lessons reviews cite,
+# is not a .txt and is never swept.
 #
 # Environment: AI_REVIEW_STATE_DIR and AI_REVIEW_DEADLINE_SECONDS, shared with the push hook through
 # lib/ai-review-common.sh.
@@ -79,12 +97,13 @@ fi
 # The per session record is named by the session id itself, which the regex above has already
 # confined to file safe characters, so the fast path hashes nothing and starts no process.
 SHOWN_DIR="$AR_STATE_DIR/shown"
-LIST=""
-[ -n "$session" ] && LIST="$SHOWN_DIR/$session.list"
+LIST=""; HELD=""
+[ -n "$session" ] && { LIST="$SHOWN_DIR/$session.list"; HELD="$SHOWN_DIR/$session.held"; }
 
-# Fast path: nothing written since this session last looked, and nothing pending.
+# Fast path: nothing written since this session last looked, nothing pending, and nothing held back
+# by the last pass for want of room (the .held marker, at the end).
 pending=( "$AR_STATE_DIR"/*.txt.pending )
-if [ -n "$LIST" ] && [ -f "$LIST" ] && [ "${#pending[@]}" -eq 0 ] \
+if [ -n "$LIST" ] && [ -f "$LIST" ] && [ "${#pending[@]}" -eq 0 ] && [ ! -e "$HELD" ] \
    && ! [ "$AR_STATE_DIR/.updated" -nt "$LIST" ]; then
   exit 0
 fi
@@ -99,7 +118,7 @@ if [ -z "$session" ]; then
   rest="${fields#*$'\x1f'}"
   session="${rest%%$'\x1f'*}"
   session="${session//[^A-Za-z0-9_-]/_}"
-  [ -n "$session" ] && LIST="$SHOWN_DIR/$session.list"
+  [ -n "$session" ] && { LIST="$SHOWN_DIR/$session.list"; HELD="$SHOWN_DIR/$session.held"; }
 fi
 [ -n "$cwd" ] || exit 0
 key="$(ar_repo_key "$cwd")" || exit 0
@@ -112,26 +131,29 @@ fi
 
 mkdir -p "$SHOWN_DIR" 2>/dev/null || true
 
+# What this run showed, written to the session's list only at the very end (see the header).
+shown_names=""
 mark_shown() {   # $1 = file name
-  [ -n "$LIST" ] || return 0
-  printf '%s\n' "$1" >> "$LIST" 2>/dev/null || true
+  shown_names="$shown_names$1"$'\n'
 }
 
-# This repository's finished reviews that this session has not been shown, in glob order, worked
-# out by ONE awk over every name at once. Testing each file against the session's list in bash was
-# a pattern match over the whole list per file, which with 916 reviews and a 468 line list took
-# 2.9 s at load 200 (measured 2026-10-03), most of the hook's 5 s timeout.
+# This repository's finished push reviews that this session has not been shown, in glob order,
+# worked out by ONE awk over every name at once. Testing each file against the session's list in
+# bash was a pattern match over the whole list per file, which with 916 reviews and a 468 line list
+# took 2.9 s at load 200 (measured 2026-10-03), most of the hook's 5 s timeout. A whole branch
+# review (<key>-pr-<sha>.txt) is the merge gate's to show, and is dropped here by its name.
 unshown_reviews() {
   [ "${#finished[@]}" -gt 0 ] || return 0
-  printf '%s\n' "${finished[@]##*/}" | awk -v prefix="$key-" -v list="$LIST" '
+  printf '%s\n' "${finished[@]##*/}" | awk -v prefix="$key-" -v branch="$key-pr-" -v list="$LIST" '
     BEGIN { if (list != "") while ((getline l < list) > 0) seen[l] = 1 }
-    index($0, prefix) == 1 && !($0 in seen)'
+    index($0, prefix) == 1 && index($0, branch) != 1 && !($0 in seen)'
 }
 
 now="$(date +%s)"
 NUDGE_LINES=20
 NUDGE_CHARS=300
 NUDGE_BUDGET=8000
+NUDGE_HEADING=400   # the heading line above a review's text, with the repository, branch and sha
 printed=0
 held=0
 
@@ -159,6 +181,26 @@ read_meta() {   # $1 = file -> sets m_repo m_branch m_sha m_started m_finished m
       dir=*) m_dir="${line#dir=}" ;;
       groups=*) m_groups="${line#groups=}" ;;
     esac
+  done < "$1"
+}
+
+# The most characters ar_capped_body can print for this review, worked out in bash from the file,
+# so the budget can decide BEFORE anything is started for the review (claude-config#1090). Each
+# body line prints at most NUDGE_CHARS characters and "...", and a line under that at its own length
+# plus whatever redaction adds: every rule in lib/review-redact.sed replaces a match of at least 9
+# characters with the 10 of [REDACTED], so a line grows by at most one ninth. Past NUDGE_LINES, the
+# line saying how many more and where they are. An upper bound, so a review let through by it never
+# pushes the output past the budget.
+body_bound() {   # $1 = finished review file -> sets bound
+  local line in_body=0 n=0 len
+  bound=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$in_body" -eq 0 ]; then [ -n "$line" ] || in_body=1; continue; fi
+    n=$((n + 1))
+    if [ "$n" -gt "$NUDGE_LINES" ]; then bound=$((bound + 120 + ${#1})); break; fi
+    len=$(( ${#line} + ${#line} / 9 + 1 ))
+    [ "$len" -gt "$NUDGE_CHARS" ] && len="$NUDGE_CHARS"
+    bound=$((bound + len + 4))
   done < "$1"
 }
 
@@ -209,46 +251,18 @@ for base in $todo; do
   IFS=$' \t\n'
   f="$AR_STATE_DIR/$base"
   if [ "$printed" -ge "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
+  # Decided on a bound read in bash, so a review held back has started nothing (claude-config#1090).
+  # A review is shown whole or held whole, and a later one only when it still fits, so the output
+  # never reaches the hook cap that would cut it silently (L351).
+  # A review that did not finish is reported by its heading alone, so it has no text to bound.
   read_meta "$f"
+  case "$m_status" in timeout|abandoned|empty) bound=0 ;; *) body_bound "$f" ;; esac
+  if [ "$printed" -gt 0 ] && [ $((printed + bound + NUDGE_HEADING)) -gt "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
   short="${m_sha:0:7}"
   took="$(elapsed_text $((${m_finished:-0} - ${m_started:-0})))"
-  body="$(ar_capped_body "$f" "$NUDGE_LINES" "$NUDGE_CHARS")"
-  # What a pull request review over the size cap left out (#583), counted with the rest: a review
-  # is shown whole or held whole, and a later one only when it still fits the budget, so the output
-  # never reaches the hook cap that would cut it silently (L351).
-  left_note=""
-  [ "$m_kind" = "pr" ] && left_note="$(ar_left_out_note "$f.leftout" "$m_status")"
-  cost=$((${#body} + ${#left_note} + 300))
-  if [ "$printed" -gt 0 ] && [ $((printed + cost)) -gt "$NUDGE_BUDGET" ]; then held=$((held + 1)); continue; fi
-  printed=$((printed + cost))
-  if [ "$m_kind" = "pr" ]; then
-    case "$m_status" in
-      ok)
-        if [ "${m_findings:-}" = "0" ]; then
-          printf 'Lessons review of the whole branch %s %s at %s found nothing, in %s.\n' \
-            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took"
-        else
-          noun="findings"; [ "${m_findings:-}" = "1" ] && noun="finding"
-          printf 'Lessons review of the whole branch %s %s at %s, finished in %s with %s %s (the full review is in %s). The merge waits until these have been read: check each against the code before acting on it.\n' \
-            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "$took" "${m_findings:-?}" "$noun" "$f"
-          # Showing them here is not proof the MERGING session saw them (#788), so the merge gate
-          # waits for this key, which only the messages carrying the findings hold.
-          rkrc=0; rk="$(ar_review_issue_key "$f")" || rkrc=$?
-          if [ "$rkrc" -eq 0 ] && [ -n "$rk" ]; then
-            printf 'Once read, merge with: PR_REVIEW_READ=%s <the merge command>\n' "$rk"
-          else
-            printf 'No read key could be made: %s.\n' "$(ar_review_key_failure "$rkrc" "$f" "bash ~/.claude/hooks/lib/pr-review.sh restart --dir <the repository> --sha ${m_sha:-<head>}")"
-          fi
-          printf '%s\n' "$body"
-        fi ;;
-      *) printf 'Lessons review of the whole branch %s %s at %s ended as %s, so the merge will be refused until it is run again:\n%s\n' \
-            "${m_repo:-this repository}" "${m_branch:-?}" "$short" "${m_status:-no status}" "$body" ;;
-    esac
-    # What a review over the size cap left out, so no report of it reads as covering them (#583).
-    [ -n "$left_note" ] && printf '%s\n' "$left_note"
-    mark_shown "$base"
-    continue
-  fi
+  body=""
+  [ "$bound" -gt 0 ] && body="$(ar_capped_body "$f" "$NUDGE_LINES" "$NUDGE_CHARS")"
+  printed=$((printed + ${#body} + NUDGE_HEADING))
   case "$m_status" in
     ok)
       printf 'AI review of %s, branch %s at %s (advisory, ran %s in the background after the push). Findings are one reviewer'"'"'s opinion: check each against the code before acting on it.\n' \
@@ -277,15 +291,27 @@ for base in $todo; do
 done
 IFS=$' \t\n'
 
-# Housekeeping and the fast path stamp: this session has now seen everything written so far.
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
+
+# Housekeeping. Another session's record is swept by its age; this session's own never is, since it
+# was read above and is appended to below.
 find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
-[ -n "$LIST" ] && { touch "$LIST" 2>/dev/null || true; }
-# Unless something was held back: then the list is dated before any write, so the next prompt takes
-# the full path and shows it, as the line above promises, rather than the fast path hiding it until
-# something else writes to the state folder (lessons review of #601).
-if [ -n "$LIST" ] && [ "$held" -gt 0 ]; then
-  touch -t 197001020000 "$LIST" 2>/dev/null || true
-  touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
+find "$SHOWN_DIR" -maxdepth 1 \( -name '*.list' -o -name '*.held' \) ! -name "${session:-.}.list" ! -name "${session:-.}.held" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+
+# Last, so a run killed at any point before it has recorded nothing (see the header): what was
+# shown, then the fast path stamp, since this session has now seen everything written so far.
+# Unless something was held back: then the .held marker keeps the next prompt off the fast path, so
+# it shows what was held, as the line above promises, rather than the fast path hiding it until
+# something else writes to the state folder (lessons review of #601). A marker rather than the list
+# dated to 1970 as before, which the sweep above would take for a record past 14 days and delete,
+# with everything that session had been shown.
+if [ -n "$LIST" ]; then
+  { printf '%s' "$shown_names" >> "$LIST"; } 2>/dev/null || true
+  touch "$LIST" 2>/dev/null || true
+  if [ "$held" -gt 0 ]; then
+    { : > "$HELD"; } 2>/dev/null || true
+  elif [ -e "$HELD" ]; then
+    rm -f "$HELD" 2>/dev/null || true
+  fi
 fi
 exit 0
