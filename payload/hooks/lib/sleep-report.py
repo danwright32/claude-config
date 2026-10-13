@@ -414,16 +414,20 @@ def build(record, notes, bad, final, now, github):
             done.insert(0, "As the sessions noted it; checked against GitHub at wake.")
         section("Done", done)
 
-    # A park or a failure a later done of the same issue replaced is not one (#1119): the queue
-    # lets the holder's done land over the driver's own end once a merged pull request closed the
-    # issue, so the issue is listed as done and never also as failed.
-    def replaced(n):
-        key = (n.get("repo"), n.get("issue"))
-        return n.get("issue") is not None and num(n.get("at")) and any(
-            d["kind"] == "done" and (d.get("repo"), d.get("issue")) == key and num(d.get("at")) and d["at"] > n["at"] for d in notes)
+    # A park or a failure the queue replaced is not one (#1119): it lets the holder's done land over
+    # the driver's own end once a merged pull request closed the issue, and that done note says so
+    # (`replaces`, by the same session, written after it). Only that one: a plain done after
+    # another session's failure leaves the failure listed (lessons review of 162acef). Ordered by
+    # when each was written, file order breaking a tie, as the claims above are.
+    def replaced(i, n):
+        key = (n.get("repo"), n.get("issue"), n.get("by"))
+        if n.get("issue") is None or not num(n.get("at")):
+            return False
+        return any(d["kind"] == "done" and d.get("replaces") == n["kind"] and (d.get("repo"), d.get("issue"), d.get("by")) == key
+                   and num(d.get("at")) and (d["at"], j) > (n["at"], i) for j, d in enumerate(notes))
     pf = []
-    for n in notes:
-        if n["kind"] in ("parked", "failed") and replaced(n):
+    for i, n in enumerate(notes):
+        if n["kind"] in ("parked", "failed") and replaced(i, n):
             continue
         if n["kind"] == "parked":
             pf.append("Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n)))

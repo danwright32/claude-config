@@ -425,7 +425,8 @@ _sq_done_over_end() {
     1) printf 'not-released\t%s\tanother session wrote to this claim first, so it was taken over\n' "$issue"; return 1 ;;
     *) _sq_refuse "$err"; return 3 ;;
   esac
-  _sq_note done "$self" "$slug" "$issue" "end (done)" "$text"
+  # The note says which end it replaced and the pull request, so the report hides only that end.
+  SLEEP_NOTE_REPLACES="$kind" SLEEP_NOTE_PR="$pr" _sq_note done "$self" "$slug" "$issue" "end (done)" "$text"
   printf 'released\t%s\tdone\n' "$issue"
 }
 
@@ -474,8 +475,8 @@ _sq_is_worktree() {
 }
 
 # sleep_work REPO_ROOT ISSUE: what the claim's work reads as now, for the overnight driver's circuit
-# breaker (#1119), two lines: `branch<TAB>SHA`, the tip of sleep/ISSUE, and `worktree<TAB>SHA`, what
-# the issue's reserved worktree has checked out on whatever branch; each empty when there is none.
+# breaker (#1119), two lines: `branch<TAB>SHA`, the tip of sleep/ISSUE, and `worktree<TAB>N`, how
+# many commits were made in the issue's reserved worktree on any branch; each empty when there is none.
 # A commit counts whoever made it: on 2026-10-12 a subagent of the claiming session committed #1106
 # in the reserved worktree on a branch of its own, and the breaker, reading only the sleep/ branch,
 # ended the claim as failed while the work merged. Refused (exit 3) when it cannot be read, which
@@ -488,7 +489,11 @@ sleep_work() {
   tip="$(git -C "$primary" for-each-ref --format='%(objectname)' "refs/heads/sleep/$issue" 2>/dev/null)" || { _sq_refuse "the branch sleep/$issue could not be read in $primary"; return 3; }
   path="$primary/.claude/worktrees/sleep-$issue"
   if [ -e "$path" ] && _sq_is_worktree "$path" "$common"; then
-    head="$(git -C "$path" rev-parse -q --verify HEAD 2>/dev/null)" || { _sq_refuse "what $path has checked out could not be read"; return 3; }
+    # The commits made there, on any branch: its own HEAD's reflog entries that record one. A
+    # branch switch moves HEAD without a commit, so counting what HEAD points at would read a
+    # switch as progress (lessons review of 162acef).
+    head="$(git -C "$path" reflog show --format=%gs HEAD 2>/dev/null)" || { _sq_refuse "the commits made in $path could not be read"; return 3; }
+    head="$(printf '%s\n' "$head" | grep -c -E '^(commit|merge |cherry-pick|revert|rebase( \(.*\))? \(finish\)|pull)')"
   fi
   printf 'branch\t%s\nworktree\t%s\n' "$tip" "$head"
 }

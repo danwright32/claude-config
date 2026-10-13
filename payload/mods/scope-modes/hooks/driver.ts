@@ -130,8 +130,8 @@ export const activeMs = (waits: Wait[], from: number, to: number) => Math.max(0,
 
 /**
  * What progress reads as now: this session's own notes that are not bookkeeping, and the work on the
- * issue it holds as `sleep-queue.sh work` reads it, the tip of its sleep/ branch and what its reserved
- * worktree has checked out, whoever committed it (#1119), never another worker's claim, whose commits
+ * issue it holds as `sleep-queue.sh work` reads it, the tip of its sleep/ branch and the commits made
+ * in its reserved worktree, whoever made them (#1119), never another worker's claim, whose commits
  * are not its own. Either reading missing makes the whole reading null, which counts as no
  * progress (a breaker that trips on an unreadable reading stops; one that resets on it loops).
  */

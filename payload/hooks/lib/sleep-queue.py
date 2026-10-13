@@ -445,6 +445,12 @@ def main(argv):
         # never reads its own park or failure back as the session's progress.
         if os.environ.get("SLEEP_NOTE_BY_DRIVER") == "1":
             n["driver"] = True
+        # A done the queue let land over the driver's own end (#1119) says which end it replaced
+        # and the pull request GitHub showed closing the issue, so the report hides only that end.
+        if kind == "done" and os.environ.get("SLEEP_NOTE_REPLACES") in ("failed", "parked"):
+            n["replaces"] = os.environ["SLEEP_NOTE_REPLACES"]
+        if kind == "done" and (os.environ.get("SLEEP_NOTE_PR") or "").isdigit():
+            n["pr"] = int(os.environ["SLEEP_NOTE_PR"])
         n["at"] = at
         print(json.dumps(n))
         return 0

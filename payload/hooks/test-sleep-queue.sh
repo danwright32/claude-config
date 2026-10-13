@@ -575,8 +575,9 @@ check_has "plainly" "none" "$out"
 # ---- the claim's work, whoever did it (#1119) ----
 # The overnight driver's circuit breaker counts a new commit as progress. On 2026-10-12 it ended
 # #1106 as failed while a subagent of the claiming session was committing in the claim's own
-# worktree on a branch of its own, so the reading is the claim's branch and whatever its reserved
-# worktree has checked out, read from git, never from who made the commit.
+# worktree on a branch of its own, so the reading is the claim's branch and the commits made in
+# its reserved worktree on any branch, read from git, never from who made the commit. Switching
+# branches there makes no commit, so it is no progress (lessons review of 162acef).
 session s10 "$((NOW - 1000))" null
 sleep_claim "$ROOT" 41 s10 >/dev/null
 out="$(sleep_work "$ROOT" 41)"; rc=$?
@@ -585,13 +586,16 @@ check_eq "both readings empty" "$(printf 'branch\t\nworktree\t')" "$out"
 wt41="$(sleep_worktree "$ROOT" 41 2>&1)"
 before="$(sleep_work "$ROOT" 41)"
 check_has "the claim's branch is read" "$(printf 'branch\t%s' "$(git -C "$ROOT" rev-parse refs/heads/sleep/41)")" "$before"
-check_has "and the worktree's checkout" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$before"
+check_has "and the commits made in the worktree, none yet" "$(printf 'worktree\t0')" "$before"
 # A subagent switches the reserved worktree to a branch of its own and commits there.
 git -C "$wt41" switch -q -c fix/41-by-a-subagent
 git -C "$wt41" -c user.email=sub@t -c user.name=sub commit -q --allow-empty -m "the subagent's work"
 after="$(sleep_work "$ROOT" 41)"
 check_not "a commit in the reserved worktree on another branch is the claim's work" "$before" "$after"
-check_has "read as that worktree's checkout" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$after"
+check_has "read as one commit made in that worktree" "$(printf 'worktree\t1')" "$after"
+# Switching back to the claim's branch, which already exists, makes no commit and is no progress.
+git -C "$wt41" switch -q sleep/41
+check_eq "a branch switch in the reserved worktree is no progress" "$after" "$(sleep_work "$ROOT" 41)"
 # A commit on the claim's branch made from anywhere else is its work too.
 git -C "$ROOT" -c user.email=x@t -c user.name=x commit-tree -m elsewhere "$(git -C "$ROOT" rev-parse 'HEAD^{tree}')" -p "$(git -C "$ROOT" rev-parse refs/heads/sleep/41)" > "$WORK/c41"
 git -C "$ROOT" update-ref refs/heads/sleep/41 "$(cat "$WORK/c41")"
@@ -608,7 +612,7 @@ check_has "saying so" "$(printf 'refused\t-\t')" "$out"
 check_eq "an issue that is no number is refused" 3 "$(sleep_work "$ROOT" 4x >/dev/null; echo $?)"
 out="$(bash "$LIB" work "$ROOT" 41)"; rc=$?
 check_eq "run as a command, the work reading answers" 0 "$rc"
-check_has "the same reading" "$(printf 'worktree\t%s' "$(git -C "$wt41" rev-parse HEAD)")" "$out"
+check_has "the same reading" "$(printf 'worktree\t1')" "$out"
 
 # ---- done after the driver ended a claim (#1119) ----
 # The breaker ends the claim as failed while the work goes on; when GitHub then shows the issue

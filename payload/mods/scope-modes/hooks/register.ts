@@ -1627,7 +1627,7 @@ const claimNow = async ($: EngineInterface, en: Enrolled): Promise<ClaimReading>
 }
 
 // The work on the issue this session holds, as the queue reads it (`sleep-queue.sh work`): the tip
-// of its sleep/ branch and what its reserved worktree has checked out, so a commit there is progress
+// of its sleep/ branch and the commits made in its reserved worktree, so a commit there is progress
 // whoever made it, a subagent on a branch of its own included (#1119). Only its own claim: another
 // worker's commits on its own claim are not this session's (#844). Nothing held reads as no work;
 // null when unreadable.
