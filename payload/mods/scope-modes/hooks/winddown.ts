@@ -183,6 +183,12 @@ export function settledByDan(r: Reading): boolean {
   return pr.state === 'OPEN' && !!pr.head && pr.head === d.head
 }
 
+/**
+ * Whether Dan's answer to leave this branch as it is (#1074) settled anything in this reading: less is
+ * outstanding with it than without it. Only then is the branch said to be left as it is by his choice.
+ */
+export const settledByBranchChoice = (r: Reading): boolean => !!r.branchLeft && outstanding({ ...r, branchLeft: undefined }).length > outstanding(r).length
+
 const ISSUE_REF = /(?:#|\bissue\s+)(\d+)\b/gi
 
 /**

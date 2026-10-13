@@ -78,6 +78,7 @@ import {
   newWork,
   outstanding,
   porcelainFiles,
+  settledByBranchChoice,
   settledByDan,
   type DeployState,
   type Reading,
@@ -2025,7 +2026,8 @@ const check = ($: EngineInterface, fresh = false): Promise<Checked | null> => {
         const b = repo && r.branch ? branchChoiceFor(branchChoices, repo, r.branch) : undefined
         const withChoice: Reading = { ...r, ...(d ? { choice: d } : {}), ...(b ? { branchLeft: b } : {}) }
         if (d && settledByDan(withChoice)) kept.push(d)
-        if (b && !keptBranches.includes(b)) keptBranches.push(b)
+        // Said as kept by his choice only where his answer settled something (lessons review).
+        if (b && settledByBranchChoice(withChoice) && !keptBranches.includes(b)) keptBranches.push(b)
         return outstanding(withChoice)
       }
       const left = toDo(reading, (await repoOfLink($, found?.url)) ?? (choices.length || branchChoices.length ? await sessionSlug($) : undefined))

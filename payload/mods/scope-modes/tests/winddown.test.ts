@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { branchesTouched, choiceFor, newWork, outstanding, porcelainFiles, settledByDan, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
@@ -259,6 +259,14 @@ describe("a branch that is not this session's, and Dan's answer to leave a branc
   test('his answer settles the branch here and a worktree on it, never the branch on GitHub', () => {
     expect(outstanding({ ...merged, branchHere: true, worktreeOnBranch: true, branchLeft: left })).toEqual([])
     expect(outstanding({ ...merged, branchHere: true, branchOnGitHub: true, branchLeft: left })).toEqual(['the branch scope-modes-616 still exists on GitHub'])
+  })
+  test('his answer is said as what kept a branch only where it settled something (lessons review)', () => {
+    expect(settledByBranchChoice({ ...merged, branchHere: true, branchLeft: left })).toBe(true)
+    // The branch went anyway: his answer kept nothing, so nothing is said of it.
+    expect(settledByBranchChoice({ ...merged, branchLeft: left })).toBe(false)
+    // A file changed since he answered: what is outstanding is the same with or without it.
+    expect(settledByBranchChoice({ ...inherited, branch: left.branch, branchHere: false, worktreeOnBranch: false, dirty: ['new.ts'], branchLeft: left })).toBe(false)
+    expect(settledByBranchChoice({ ...merged, branchHere: true })).toBe(false)
   })
   test('it settles the uncommitted files he was asked about, and a file changed since asks again', () => {
     const asked: Reading = { ...inherited, branch: left.branch, branchLeft: { ...left, files: ['notes.md'] } }
