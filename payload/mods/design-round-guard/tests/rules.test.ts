@@ -10,6 +10,7 @@ import {
   SKIP_YES,
   agentRefusal,
   callKey,
+  changedRuns,
   isModHook,
   modHookLogicOnly,
   onScreenProblem,
@@ -409,4 +410,32 @@ test('a mod hook edit is logic only when it touches no JSX line and names no dra
   // No change, or text the reader cannot follow, is never logic only.
   expect(modHookLogicOnly(TSX, TSX)).toBe(false)
   expect(modHookLogicOnly(TSX, swapIn("const re = /<Box>'/g", "const re = /<Box>'/g\nconst open = <Box>"))).toBe(false)
+})
+
+// #1158: a git checkout or restore puts back every edit since its source at once, each of which was
+// an edit of its own, so it is judged one run of changed lines at a time.
+test('changedRuns: each run of changed lines as its own step, the last step ending at the new text', () => {
+  const a = 'one\ntwo\nthree\nfour\nfive\n'
+  expect(changedRuns(a, a)).toEqual([])
+  // One run: the whole change, exactly.
+  expect(changedRuns(a, a.replace('three', 'THREE'))).toEqual([[a, a.replace('three', 'THREE')]])
+  // Two runs apart, each made alone, from the last back, so the texts chain from a to the new text.
+  const b = a.replace('two', 'TWO').replace('five', 'FIVE')
+  expect(changedRuns(a, b)).toEqual([
+    [a, a.replace('five', 'FIVE')],
+    [a.replace('five', 'FIVE'), b],
+  ])
+  // Lines added and taken away are runs too.
+  expect(changedRuns(a, a.replace('two\n', '')).map(([, after]) => after)).toEqual([a.replace('two\n', '')])
+  const grown = a.replace('one\n', 'one\nnew\n').replace('four\n', '')
+  const steps = changedRuns(a, grown)
+  expect(steps.length).toBe(2)
+  expect(steps[steps.length - 1]?.[1]).toBe(grown)
+  // A last line with no newline is a line like any other.
+  expect(changedRuns('x\ny', 'x\nz')).toEqual([['x\ny', 'x\nz']])
+  // Past the most it compares, the change is one run, judged whole.
+  const big = Array.from({ length: 2500 }, (_, i) => `line ${i}\n`)
+  const from = big.join('')
+  const to = big.map((l, i) => (i % 2 ? l.toUpperCase() : l)).join('')
+  expect(changedRuns(from, to)).toEqual([[from, to]])
 })

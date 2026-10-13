@@ -359,6 +359,62 @@ export const editedText = (before: string, tool: string, input: Record<string, u
   return text
 }
 
+// The most pairs of lines changedRuns compares; past it a change is one run, judged whole.
+const RUNS_MAX_CELLS = 4_000_000
+
+/**
+ * The texts a change from `before` to `after` passes through when it is made one run of changed lines
+ * at a time, each as [before, after] (#1158): the shape a git checkout or restore has when it puts back
+ * several edits at once, each of which was an edit of its own. A line diff (longest common subsequence)
+ * between the lines both texts do not share at their start and end; past RUNS_MAX_CELLS, the whole
+ * change is one run. No runs for equal texts.
+ */
+export const changedRuns = (before: string, after: string): [string, string][] => {
+  if (before === after) return []
+  const a = before.split(/(?<=\n)/)
+  const b = after.split(/(?<=\n)/)
+  let p = 0
+  while (p < a.length && p < b.length && a[p] === b[p]) p++
+  let s = 0
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++
+  const n = a.length - p - s
+  const m = b.length - p - s
+  if ((n + 1) * (m + 1) > RUNS_MAX_CELLS) return [[before, after]]
+  // lcs[i * (m + 1) + j]: the longest common run of lines from a[p + i] and b[p + j] on.
+  const lcs = new Uint32Array((n + 1) * (m + 1))
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      lcs[i * (m + 1) + j] = a[p + i] === b[p + j] ? (lcs[(i + 1) * (m + 1) + j + 1] as number) + 1 : Math.max(lcs[(i + 1) * (m + 1) + j] as number, lcs[i * (m + 1) + j + 1] as number)
+  // Each run as [where it starts in a, how many lines of a it replaces, the lines of b it puts there].
+  const runs: [number, number, string[]][] = []
+  let open: [number, number, string[]] | undefined
+  let i = 0
+  let j = 0
+  while (i < n || j < m) {
+    if (i < n && j < m && a[p + i] === b[p + j]) {
+      open = undefined
+      i++
+      j++
+      continue
+    }
+    if (!open) runs.push((open = [p + i, 0, []]))
+    if (j < m && (i === n || (lcs[i * (m + 1) + j + 1] as number) >= (lcs[(i + 1) * (m + 1) + j] as number))) open[2].push(b[p + j++] as string)
+    else {
+      open[1]++
+      i++
+    }
+  }
+  // Made from the last run back, so each earlier run's place in the text is unmoved.
+  const steps: [string, string][] = []
+  const text = [...a]
+  for (const [at, count, lines] of runs.reverse()) {
+    const was = text.join('')
+    text.splice(at, count, ...lines)
+    steps.push([was, text.join('')])
+  }
+  return steps
+}
+
 /** The screen files whose edits are judged by their text (dataOnlyChange): React's .tsx and .jsx. */
 export const judgedByText = (path: string): boolean => /\.(tsx|jsx)$/i.test(path)
 
@@ -700,30 +756,46 @@ export const subjectsOf = (at: { main: string; repo: string; session: string } &
 export const listed = (xs: readonly string[]): string => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 const named = (subjects: readonly DesignRoundSubject[]) => listed(subjects.map(s => s.label))
 
+// A refusal holds the change it refused, never the file (#1158): told "Do not change <file> any other
+// way", a session that had made an edit the guard let through could not undo it, so the edit stayed.
+const leaveIt = (f: string) => `Do not make this change to ${f} any other way; undoing an earlier edit of your own is judged by the lines it changes, as an edit is.`
+
+// What a refusal says of a git checkout or restore whose lines could not be measured (#1158), each
+// as unreadPutBack gives it, so the session is told why the whole file was judged.
+const unreadSaid = (unread: readonly string[]) => (unread.length ? `${unread.join(' ')} ` : '')
+
+/** One file a git checkout or restore puts back that could not be read, and why (#1158). */
+export const unreadPutBack = (file: string, why: string): string =>
+  `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
+
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
-export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[]): string => {
+export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
   const f = listed(files)
   const s = named(subjects)
   return (
     `Blocked: ${f} changes how the screen looks, and ${s} has no design round Dan has settled, nor his word to skip one. Dan decides the look, so take one of these two ways on and no other. ` +
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
-    `Do not change ${f} any other way.`
+    unreadSaid(unread) +
+    leaveIt(f)
   )
 }
 
 /** What a check with no call id reads ($.tool.check): the call would be refused, and making it says how to go on. */
-export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[]): string =>
+export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
   `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
+  unreadSaid(unread) +
   `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}".`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
-export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string): string => {
+export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
   const f = listed(files)
   return (
     `Blocked: ${f} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. A subagent never asks Dan. ` +
+    unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
-    `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. Do not change ${f} any other way.`
+    `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
+    leaveIt(f)
   )
 }
 

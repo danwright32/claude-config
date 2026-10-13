@@ -436,12 +436,14 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const unnamed: ModKitWrites['unnamed'] = []
   // What git itself changes (#1123), kept apart from files and changes, which the guards judge.
   const byGit: NonNullable<ModKitWrites['byGit']> = []
-  const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean) => {
+  const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean, from: string | undefined) => {
     // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
     // here; a pattern git matches itself, across folders, names no one folder (#1123).
     const path = word.startsWith(':') || patternIn(word) ? undefined : absolutePath(word, at, home)
-    if (!word || byGit.some(x => x.does === does && (path ? x.path === path : !x.path && x.word === word))) return
-    byGit.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), does, ...(tree && path ? { tree: true as const } : {}) })
+    // One file put back from two places is given once for each, so a reader judging what each puts
+    // back sees both (#1158).
+    if (!word || byGit.some(x => sameGitChange(x, { word, does, from, ...(path ? { path } : {}) }))) return
+    byGit.push({ word: asWritten.get(word) ?? word, ...(path ? { path } : {}), does, ...(tree && path ? { tree: true as const } : {}), ...(from === undefined ? {} : { from }) })
   }
   const seen = new Set<string>()
   let dir: string | undefined = cwd
@@ -679,7 +681,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
           const patches = [...operands(g.args, new Set(['-p', '-C', '--directory', '--exclude', '--include'])).ops, ...inputs]
           unnamed.push({ what: 'a patch', words: written, inputs: patches.map(p => absolutePath(p, at, home)).filter((p): p is string => !!p) })
         }
-      } else if (g?.sub) for (const [word, does, tree] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree)
+      } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree, from)
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
@@ -720,14 +722,14 @@ const GIT_VALUED = new Set(['-s', '--source', '--conflict', '--pathspec-from-fil
 
 /**
  * The files git itself changes for one of its subcommands (#1123), each as [word, what it does, the
- * whole of it]: git mv's destination written (and, onto one name that may be a folder, the source's
+ * whole of it, where a checkout or restore puts it back from (#1158)]: git mv's destination written (and, onto one name that may be a folder, the source's
  * own name inside it) and each source removed; git rm's paths removed (with -r, all under each),
  * from the index alone too with --cached, since that also leaves the file changed in git status; a
  * checkout of a path and a restore of the working tree writing what they name, all under each. A
  * dry run, a branch switch or creation, a checkout of one name (git may take it for a branch) and a
  * restore of the index alone name nothing.
  */
-const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remove', boolean][] => {
+const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remove', boolean, string?][] => {
   const { ops, opts } = operands([...args], GIT_VALUED)
   const flags = [...opts.keys()]
   // An option by any of its names, a short one also inside a cluster (-rf).
@@ -750,18 +752,30 @@ const gitOwn = (sub: string, args: readonly string[]): [string, 'write' | 'remov
     const tree = has('-r')
     return ops.map((p): [string, 'remove', boolean] => [p, 'remove', tree])
   }
+  // Where a checkout or restore puts each file back from (#1158), spelled as `git cat-file blob
+  // <from>:<path>` reads it: one side of a conflict (':2' ours, ':3' theirs), else the ref named, else
+  // the index (''), or HEAD for a restore of the index and the working tree together.
+  const side = has('--ours') ? ':2' : has('--theirs') ? ':3' : undefined
   if (sub === 'checkout') {
     if (has('-b', '-B', '--orphan')) return []
     const dd = args.indexOf('--')
     const paths = dd >= 0 ? args.slice(dd + 1) : ops.slice(1)
-    return paths.map((p): [string, 'write', boolean] => [p, 'write', true])
+    const from = side ?? (dd >= 0 ? operands(args.slice(0, dd), GIT_VALUED).ops[0] : ops[0]) ?? ''
+    return paths.map((p): [string, 'write', boolean, string] => [p, 'write', true, from])
   }
   if (sub === 'restore') {
-    if (has('-S', '--staged') && !has('-W', '--worktree')) return []
-    return ops.map((p): [string, 'write', boolean] => [p, 'write', true])
+    const staged = has('-S', '--staged')
+    if (staged && !has('-W', '--worktree')) return []
+    const named = opts.get('--source') ?? opts.get('-s')
+    const from = side ?? (typeof named === 'string' ? named : staged ? 'HEAD' : '')
+    return ops.map((p): [string, 'write', boolean, string] => [p, 'write', true, from])
   }
   return []
 }
+
+// Whether two of git's changes are one: the same file, the same change, put back from the same place.
+const sameGitChange = (a: { word: string; path?: string; does: string; from?: string }, b: { word: string; path?: string; does: string; from?: string }) =>
+  a.does === b.does && a.from === b.from && (b.path ? a.path === b.path : !a.path && a.word === b.word)
 
 // The words that change the folder a relative path is read against.
 const MOVES = new Set(['cd', 'pushd', 'popd'])
@@ -791,7 +805,7 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
   for (const u of from.unnamed) if (!into.unnamed.some(x => JSON.stringify(x) === JSON.stringify(u))) into.unnamed.push(u)
   for (const b of from.byGit ?? []) {
     const list = (into.byGit ??= [])
-    if (!list.some(x => x.does === b.does && (b.path ? x.path === b.path : !x.path && x.word === b.word))) list.push(b)
+    if (!list.some(x => sameGitChange(x, b))) list.push(b)
   }
 }
 

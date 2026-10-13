@@ -87,7 +87,8 @@ const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34e
 
 type Dialog = { answer?: string; afk?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
-type Init = { cwd?: string; files?: Record<string, string>; agents?: string[] }
+// `blobs`: what git holds, by the checkout and the `<from>:<path>` that reads it (#1158).
+type Init = { cwd?: string; files?: Record<string, string>; agents?: string[]; blobs?: Record<string, string> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
 
 // The Mac and Claude Code beneath the mod: each checkout's branch (a test may change it, or make it
@@ -97,7 +98,8 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
-  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const blobs: Record<string, string> = { ...(init.blobs ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
   const dialog: Dialog = {}
@@ -129,6 +131,14 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   }
   on('process.run', async ($, e) => {
     const [cmd, ...args] = e.argv.map(String)
+    // git reading what a checkout or restore puts back (#1158): `git -C <tree> cat-file blob <from>:<path>`.
+    if (cmd === 'git' && args[0] === '-C' && args[2] === 'cat-file' && args[3] === 'blob' && args.length === 5) {
+      gitRuns.push(e.argv.join(' '))
+      if (ctl.gitBlob === 'throws') throw new Error('spawn git ENOENT')
+      const text = blobs[`${args[1]} ${args[4]}`]
+      if (text === undefined) return { value: { exitCode: 128, stdout: '', stderr: `fatal: path '${args[4]}' does not exist\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      return { value: { exitCode: 0, stdout: text, stderr: '', isStdoutTruncated: ctl.gitBlob === 'truncated', isStderrTruncated: false } } as never
+    }
     if (cmd === '__modkit' && args[0] === 'writes') {
       const input = JSON.parse(String(args[1])) as { command: string; cwd: string; home: string }
       return ok(JSON.stringify(commandWrites(input.command, input.cwd, input.home)))
@@ -204,7 +214,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     ran.push({ tool: String(tool), input })
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs }
 }
 type W = ReturnType<typeof world>
 
@@ -1272,6 +1282,89 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
   w.files[MOD_HOOK] = MOD_TEXT.replace('// Whether the reply is the one offered.', 'const unclosed = <Box>')
   expect(refusalOf(await call($, edit('a.trim() === b.trim()', 'a === b')))).toContain(SKIP_QUESTION)
   expect(w.ran.length).toBe(3)
+})
+
+// #1158: on 2026-10-13 the guard let a subagent's logic Edit to account room's hook file through,
+// then refused the `git checkout HEAD -- <that file>` that tried to undo it, judging the restore as a
+// look change by the whole file, and told it not to change the file any other way, so the unwanted
+// edit stayed. A restore is judged by the lines it changes, as the edit was.
+const MOD_REL = 'payload/mods/demo/hooks/register.tsx'
+const MOD_PLUGIN = { '/w/slate/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }' }
+const LOGIC_EDIT = { tool: 'Edit', file_path: MOD_HOOK, old_string: 'a.trim() === b.trim()', new_string: 'a.trim().toLowerCase() === b.trim().toLowerCase()' }
+const EDITED = MOD_TEXT.replace('a.trim() === b.trim()', 'a.trim().toLowerCase() === b.trim().toLowerCase()')
+
+test('#1158: undoing a logic edit to a mod hook file with git checkout or git restore passes, as the edit did', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, ...MOD_PLUGIN }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: MOD_TEXT, [`/w/slate :${MOD_REL}`]: MOD_TEXT, [`/w/slate main:${MOD_REL}`]: MOD_TEXT } })
+  expect(refusalOf(await call($, LOGIC_EDIT))).toBe('')
+  // The stand-in core writes nothing, so the edit is made here.
+  w.files[MOD_HOOK] = EDITED
+  const undo = [`git checkout HEAD -- ${MOD_REL}`, `git restore ${MOD_REL}`, `git checkout -- ${MOD_HOOK}`, `git -C /w/slate restore --source=main ${MOD_REL}`, `cd payload/mods/demo && git checkout HEAD -- hooks/register.tsx`]
+  for (const command of undo) expect({ command, refusal: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, refusal: '' })
+  expect(w.ran.length).toBe(1 + undo.length)
+  // Each read what git puts back from the place the command names.
+  expect([...new Set(w.gitRuns.filter(r => r.includes('cat-file')))]).toEqual([
+    `git -C /w/slate cat-file blob HEAD:${MOD_REL}`,
+    `git -C /w/slate cat-file blob :${MOD_REL}`,
+    `git -C /w/slate cat-file blob main:${MOD_REL}`,
+  ])
+  // Two logic edits apart, undone by one restore, pass too: each run of changed lines is judged as
+  // the edit that made it was.
+  w.files[MOD_HOOK] = EDITED.replace("e.props.text, 'x')", "e.props.text, 'y')")
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toBe('')
+  // A restore that changes nothing changes nothing on screen.
+  w.files[MOD_HOOK] = MOD_TEXT
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toBe('')
+})
+
+test('#1158: a restore that changes what a file draws is asked about, as the same edit would be', withKit, async ($, on) => {
+  const drawnElsewhere = MOD_TEXT.replace("kind: 'left-rule'", "kind: 'box'")
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, ...MOD_PLUGIN, [RESULT]: RESULT_TEXT }, blobs: { [`/w/slate HEAD:${MOD_REL}`]: drawnElsewhere } })
+  const restore = (path: string) => call($, { tool: 'Bash', command: `git checkout HEAD -- ${path}` })
+  const why = refusalOf(await restore(MOD_REL))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain(MOD_REL)
+  // A logic change and a drawn one in the same restore: the drawn one holds it.
+  w.files[MOD_HOOK] = EDITED
+  expect(refusalOf(await restore(MOD_REL))).toContain(SKIP_QUESTION)
+  // An app page, by the same rule as its edits (#1010): a data prop put back passes, a class asked.
+  const RESULT_REL = 'src/app/my-offers/result/page.tsx'
+  w.blobs[`/w/slate HEAD:${RESULT_REL}`] = RESULT_TEXT.replace('xbc={xbc}', "xbc={leadXbc ?? ''}")
+  expect(refusalOf(await restore(RESULT_REL))).toBe('')
+  w.blobs[`/w/slate HEAD:${RESULT_REL}`] = RESULT_TEXT.replace('className="p-4"', 'className="p-8"')
+  expect(refusalOf(await restore(RESULT_REL))).toContain(SKIP_QUESTION)
+  // A stylesheet has no lines that draw nothing, so putting one back is asked about whole, as before.
+  expect(refusalOf(await restore('app/globals.css'))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+test('#1158: a restore git cannot read is held as a look change, and the refusal says why', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: EDITED, ...MOD_PLUGIN }, agents: ['agent-a1'] })
+  // The ref is missing: git exits 128.
+  const missing = refusalOf(await call($, { tool: 'Bash', command: `git checkout gone -- ${MOD_REL}` }))
+  expect(missing).toContain(SKIP_QUESTION)
+  expect(missing).toContain(`could not read what git puts back in ${MOD_REL}`)
+  expect(missing).toContain(`fatal: path 'gone:${MOD_REL}' does not exist`)
+  // A subagent is told the same.
+  const agent = refusalOf(await call($, { tool: 'Bash', command: `git checkout gone -- ${MOD_REL}`, agentId: 'agent-a1' }))
+  expect(agent).toContain('Stop')
+  expect(agent).toContain(`could not read what git puts back in ${MOD_REL}`)
+  // git that cannot be run, and an answer too long to read whole, say so too.
+  w.blobs[`/w/slate HEAD:${MOD_REL}`] = MOD_TEXT
+  w.ctl.gitBlob = 'throws'
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain(`git cat-file blob HEAD:${MOD_REL} could not be run`)
+  w.ctl.gitBlob = 'truncated'
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git checkout HEAD -- ${MOD_REL}` }))).toContain('gave more than could be read whole')
+  expect(w.ran).toEqual([])
+})
+
+test('#1158: a refusal holds the change it refused, never the file, so undoing an earlier edit stays open', withKit, async ($, on) => {
+  world($, on, { agents: ['agent-a1'] })
+  for (const extra of [{}, { agentId: 'agent-a1' }]) {
+    const why = refusalOf(await call($, { ...STYLE, ...extra }))
+    expect(why).toContain('Blocked')
+    expect(why).not.toContain('Do not change app/globals.css any other way')
+    expect(why).toContain('Do not make this change to app/globals.css any other way')
+  }
 })
 
 // #1151: the two commands a design round in a NurseDex session was refused on, 2026-10-13, word for

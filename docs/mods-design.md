@@ -2419,6 +2419,31 @@ write. An agent on #1158 ran a python heredoc editing `writes.test.ts`, whose ne
   data, a comment above the call, a URL in a test script), none a file the program opens. The
   Ovation program patching three design pages is still held for all three.
 
+### What #1158 changed, 2026-10-13
+
+On 2026-10-13 the guard let a subagent's logic Edit to account room's hook file through (#1138),
+then refused the `git checkout HEAD -- <that file>` that tried to undo it, since #1136 judged a
+restore as a look change by the whole file, and its refusal said "Do not change <file> any other
+way", so the edit it never wanted stayed.
+
+- **A restore is judged by the lines it changes, by the edit's rule.** mod-kit's write reader gives
+  each checkout of a path and each restore `from`, where git puts the file back from (the ref named,
+  `''` for the index, `HEAD` for `--staged --worktree`, `:2` or `:3` for `--ours` or `--theirs`), and
+  one file put back from two places once for each. For a `.tsx` or `.jsx` file the guard reads that
+  text with `git cat-file blob <from>:<path>` and judges the file as it is against it with the one
+  function an Edit is judged by (register.ts `nothingShown`: `dataOnlyChange`, or `modHookLogicOnly`
+  in a mod's hook file): whole, else one run of changed lines at a time (rules.ts `changedRuns`, a
+  line diff), since a restore puts back several edits at once, each judged on its own when it was
+  made. So undoing an edit the guard let through passes. An Edit or MultiEdit is judged run by run
+  too, and since a run is a part of the whole change, nothing judged whole before is held now.
+- **What git cannot give is said.** A missing ref, git failing or not running, or an answer too long
+  to read whole leaves the restore judged whole, as before, and the refusal says which file and why.
+- **A refusal holds the change, not the file.** It now says "Do not make this change to <file> any
+  other way", and that undoing an earlier edit of one's own is judged by the lines it changes.
+- Left as is: a stylesheet or other look file has no lines that draw nothing, so putting one back
+  still waits on a round. Dan's Not a look change lets one refused call through, so undoing an edit
+  he passed that way to a stylesheet is asked about again.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
