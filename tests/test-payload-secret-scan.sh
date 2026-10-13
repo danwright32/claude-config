@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# The payload this repository ships passes claude-sync's own secret scan.
+# Everything this repository publishes passes claude-sync's own secret scan.
 #
 # A send runs scan_secrets over everything it is about to publish and refuses outright on a hit,
 # so one token SHAPED placeholder blocks every sync from every Mac until somebody notices. That
-# happened when claude-config#675 shipped `"token": "REPLACE_BY_RUNNING_tracker.sh_new-token"` in
-# skills/tracker/config.example.json: a key named token, then 24 or more identifier characters,
-# which is exactly what the scan's assignment pattern looks for. Nothing ran the scan before
-# merge; it first ran on the next send.
+# happened when claude-config#675 shipped a token placeholder in skills/tracker/config.example.json
+# written as one unbroken run of letters and underscores: a key named token, then 24 or more
+# identifier characters, which is exactly what the scan's assignment pattern looks for. Nothing ran
+# the scan before merge; it first ran on the next send.
 #
-# So this runs the REAL function, cut out of claude-sync by name, never a copy of its patterns,
-# which would drift from the scan it stands for (L41). It reads the repository's real
-# .secret-allowlist, as the send does, over every file git would carry under payload/ (tracked,
-# plus untracked files that are not ignored, so the file just written is judged too, L456).
+# A send publishes the payload, and a push publishes the WHOLE tree: tests/, tools/, claude-sync,
+# the README. Until claude-config#1128 nothing scanned anything outside payload/ before it reached
+# GitHub, so this reads every file git would carry anywhere in the repository (tracked, plus
+# untracked files that are not ignored, so the file just written is judged too, L456). It is a
+# whole tree scanner, so scanners-before-push.sh runs it before every push and CI runs it on every
+# pull request.
+#
+# It runs the REAL function, cut out of claude-sync by name, never a copy of its patterns, which
+# would drift from the scan it stands for (L41, L370). It reads the repository's real
+# .secret-allowlist, as the send does.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/suite-deadline.sh" || {
@@ -62,31 +68,100 @@ run_scan(){
   printf 'SCAN-RC=%s\n' "$?"
 }
 
-# --- the shipped payload ---------------------------------------------------------
-# A copy holding exactly the files git would carry, so an ignored local file (a skill's
-# config.local.json, which the sync also leaves out) neither fails nor passes this.
-SHIPPED="$TMPROOT/shipped/payload"
-mkdir -p "$SHIPPED"
-listed="$(bash "$ROOT/payload/hooks/lib/repo-files.sh" "$ROOT" payload)" || listed=""
-n=0
-while IFS= read -r f; do
-  [ -n "$f" ] && [ -f "$ROOT/$f" ] || continue
-  mkdir -p "$TMPROOT/shipped/$(dirname "$f")"
-  cp "$ROOT/$f" "$TMPROOT/shipped/$f"
-  n=$((n+1))
-done <<< "$listed"
-[ "$n" -ge 100 ] && check "the scan reads the shipped payload ($n files)" ok \
-  || check "the scan reads the shipped payload ($n files)" "too few to be the real payload"
-[ -f "$SHIPPED/skills/tracker/config.example.json" ] && check "and the tracker's example config is among them" ok \
+# --- everything a push or a send publishes (claude-config#1128) -------------------
+# copy_tree <git root> <dest>: copies exactly the files git would carry from anywhere in <root>
+# into <dest>, so an ignored local file (a skill's config.local.json, which the sync also leaves
+# out) neither fails nor passes this. Prints how many it copied, and nothing when it could not
+# list or copy them, so a run that read nothing cannot pass as clean (L98).
+copy_tree(){
+  local root="$1" dest="$2" list
+  list="$(mktemp "$TMPROOT/tree-list.XXXXXX")" || return 1
+  bash "$ROOT/payload/hooks/lib/repo-files.sh" "$root" > "$list" || return 1
+  mkdir -p "$dest" || return 1
+  # One archive in and one out, rather than a copy per file: the tree is several hundred files.
+  tar -C "$root" -cf - -T "$list" | tar -C "$dest" -xf - || return 1
+  grep -c . "$list"
+}
+TREE="$TMPROOT/tree"
+n="$(copy_tree "$ROOT" "$TREE")" || n=0
+outside="$(cd "$TREE" 2>/dev/null && find . -type f ! -path './payload/*' | grep -c . || true)"
+[ "${n:-0}" -ge 300 ] && check "the scan reads every file the repository publishes ($n files)" ok \
+  || check "the scan reads every file the repository publishes (${n:-0} files)" "too few to be this repository"
+[ "${outside:-0}" -ge 20 ] && [ -f "$TREE/claude-sync" ] && [ -f "$TREE/README.md" ] \
+  && check "and they include the files outside payload/, claude-sync and the README among them ($outside)" ok \
+  || check "and they include the files outside payload/, claude-sync and the README among them (${outside:-0})" "the scan would see the payload only, which is the gap #1128 closed"
+[ -f "$TREE/payload/skills/tracker/config.example.json" ] && check "and the tracker's example config is among them" ok \
   || check "and the tracker's example config is among them" "missing, so the case that blocked sync is not being judged"
 
-out="$(run_scan "$SHIPPED" "$ROOT")"
+out="$(run_scan "$TREE" "$ROOT")"
 case "$out" in
-  *'SCAN-RC=0') check "the shipped payload passes claude-sync's secret scan" ok ;;
-  *) check "the shipped payload passes claude-sync's secret scan" "a send would refuse: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  *'SCAN-RC=0') check "everything the repository publishes passes claude-sync's secret scan" ok ;;
+  *) check "everything the repository publishes passes claude-sync's secret scan" "a push would publish, or a send would refuse: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 
 # --- the controls (L1) -----------------------------------------------------------
+# The whole tree run finds a credential planted OUTSIDE payload/, where nothing looked before #1128.
+# A throwaway repository, so the file is listed by the same helper as the real tree's files are.
+PT="$TMPROOT/planted-tree"
+mkdir -p "$PT/payload" "$PT/tools"
+git -C "$PT" init -q 2>/dev/null
+printf 'nothing secret\n' > "$PT/payload/clean.txt"
+printf '{ "token": "%s" }\n' "$(printf 'whole tree planted control' | shasum -a 256 | cut -c1-40)" > "$PT/tools/leak.json"
+pn="$(copy_tree "$PT" "$TMPROOT/planted-tree-copy")" || pn=0
+out="$(run_scan "$TMPROOT/planted-tree-copy" "$TMPROOT/planted-tree")"
+case "$pn:$out" in
+  2:*'possible secret found in: tools/leak.json'*'SCAN-RC=1') check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" ok ;;
+  *) check "#1128 control: the whole tree scan refuses a token planted outside payload/ and names its file" "copied $pn, got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+
+# A key written in capitals is still a key (#1128): API_TOKEN, CLIENT_SECRET, DB_PASSWORD, X_API_KEY
+# and a mixed case Api_Key each carry a value the scan must refuse. Each in its own file, so one
+# match cannot answer for the others.
+mkdir -p "$TMPROOT/upper/payload" "$TMPROOT/upper/repo"
+uv="$(printf 'uppercase key control' | shasum -a 256 | cut -c1-40)"
+for k in API_TOKEN CLIENT_SECRET DB_PASSWORD X_API_KEY Api_Key; do
+  printf 'export %s=%s\n' "$k" "$uv" > "$TMPROOT/upper/payload/$k.sh"
+done
+out="$(run_scan "$TMPROOT/upper/payload" "$TMPROOT/upper/repo")"
+for k in API_TOKEN CLIENT_SECRET DB_PASSWORD X_API_KEY Api_Key; do
+  case "$out" in
+    *'possible secret found in: '*"$k.sh"*'SCAN-RC=1') check "#1128 the scan refuses a key written as $k" ok ;;
+    *) check "#1128 the scan refuses a key written as $k" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+done
+# What stays outside the rule, said on every run rather than left to be found (L129). A capital
+# PASSWD would refuse every send today: the bug-bash suite in the payload expects a sudoers line,
+# NOPASSWD followed by an absolute path, and the path is a run of identifier characters. Whether to
+# accept that line, and how, is Dan's decision, not this suite's, so until then the key is matched
+# in lower case only.
+echo "NOTE: #1128 open decision: a key spelled PASSWD in capitals is not matched (sudoers NOPASSWD in payload/skills/bug-bash/test-bug-bash.sh); lower case passwd is."
+
+# The comment over scan_secrets says what it does, and once said it used a tool it never called
+# (#1128). unbacked_tool_claim <comment and body>: prints each external scanner the text names
+# that no line of code invokes.
+unbacked_tool_claim(){
+  local text="$1" tool code
+  code="$(printf '%s\n' "$text" | grep -v '^[[:space:]]*#' || true)"
+  for tool in gitleaks trufflehog detect-secrets; do
+    printf '%s\n' "$text" | grep -qi "$tool" || continue
+    printf '%s\n' "$code" | grep -qE "(^|[^A-Za-z_-])$tool([[:space:]]|\$)" || printf '%s\n' "$tool"
+  done
+}
+SCAN_DOC="$(awk '/^#/ { buf = buf $0 "\n"; next } /^scan_secrets\(\)\{/ { printf "%s", buf; exit } { buf = "" }' "$SCRIPT")"
+[ -n "$SCAN_DOC" ] && check "#1128 the comment over scan_secrets was read" ok \
+  || check "#1128 the comment over scan_secrets was read" "none found, so what it claims was not judged"
+claimed="$(unbacked_tool_claim "$SCAN_DOC
+$SCAN_SRC")"
+[ -z "$claimed" ] && check "#1128 scan_secrets names no scanner it does not call" ok \
+  || check "#1128 scan_secrets names no scanner it does not call" "it names $(printf '%s' "$claimed" | tr '\n' ' ') but never runs it"
+# Its control: the comment as it read before #1128, over the body it sat on.
+claimed="$(unbacked_tool_claim "# Block obvious credentials from being published. Uses gitleaks if installed,
+scan_secrets(){
+  grep -rIoE \"\$pat\" \"\$PAYLOAD\"
+}")"
+[ "$claimed" = gitleaks ] && check "#1128 control: a comment naming gitleaks over a body that never runs it is caught" ok \
+  || check "#1128 control: a comment naming gitleaks over a body that never runs it is caught" "got: '$claimed'"
+
 # The same run refuses a planted credential, so its silence above is a verdict.
 mkdir -p "$TMPROOT/planted/payload/skills/x" "$TMPROOT/planted/repo"
 # The planted token is a hash made here, never pieces of one written into this file (#1125).
@@ -97,14 +172,20 @@ case "$out" in
   *) check "control: the same scan refuses a planted token and names its file" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
 esac
 
-# And it refuses the placeholder that blocked sync, so this suite would have caught it.
-mkdir -p "$TMPROOT/old/payload/skills/tracker" "$TMPROOT/old/repo"
-printf '{\n  "url": "x",\n  "token": "REPLACE_BY_RUNNING_tracker.sh_new-token"\n}\n' > "$TMPROOT/old/payload/skills/tracker/config.example.json"
-out="$(run_scan "$TMPROOT/old/payload" "$TMPROOT/old/repo")"
-case "$out" in
-  *'possible secret found in: skills/tracker/config.example.json'*'SCAN-RC=1') check "control: the scan refuses the token shaped placeholder that blocked sync after #675" ok ;;
-  *) check "control: the scan refuses the token shaped placeholder that blocked sync after #675" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
-esac
+# And it refuses the placeholder that blocked sync, so this suite would have caught it. Read from
+# the commit that shipped it rather than written here, because this file is scanned too (#1128),
+# and a copy of it here would be the very placeholder the scan refuses.
+if git -C "$ROOT" cat-file -e 96ec0d97:payload/skills/tracker/config.example.json 2>/dev/null; then
+  mkdir -p "$TMPROOT/old/payload/skills/tracker" "$TMPROOT/old/repo"
+  git -C "$ROOT" show 96ec0d97:payload/skills/tracker/config.example.json > "$TMPROOT/old/payload/skills/tracker/config.example.json"
+  out="$(run_scan "$TMPROOT/old/payload" "$TMPROOT/old/repo")"
+  case "$out" in
+    *'possible secret found in: skills/tracker/config.example.json'*'SCAN-RC=1') check "control: the scan refuses the token shaped placeholder that blocked sync after #675" ok ;;
+    *) check "control: the scan refuses the token shaped placeholder that blocked sync after #675" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+  esac
+else
+  echo "UNMEASURED: the #675 placeholder control: commit 96ec0d97 is not in this clone's history"
+fi
 
 # Every path that ends a scan WITHOUT refusing clears the record of the last refusal
 # (claude-config#947), or a later pull blames a refusal that no longer applies. The early returns
@@ -233,10 +314,9 @@ cat > "$FX/tests/test-placeholder.sh" <<'EOF'
 FXP="kept token, invented for this test"
 write "{\"token\":\"$FXP\"}"
 EOF
-cat > "$FX/tests/test-visible.sh" <<'EOF'
-FXS='AKIAIOSFODNN7EXAMPLE'
-printf 'export AWS_KEY=%s\n' "$FXS"
-EOF
+# The fixture holds a whole AWS shaped key; this file holds none, since it is scanned too (#1128).
+fxa="AKIA$(printf '%s' "$fxv" | tr 'a-f' 'A-F' | cut -c1-16)"
+{ printf "FXS='%s'\n" "$fxa"; printf '%s\n' "printf 'export AWS_KEY=%s\\n' \"\$FXS\""; } > "$FX/tests/test-visible.sh"
 (cd "$FX" && ls tests) | sed 's|^|tests/|' > "$FX/list"
 out="$(assembled_lines "$FX" "$FX/list")"
 for want in tests/test-key-apart.sh:2 tests/test-escaped.sh:1 tests/test-halves.sh:1 tests/test-glued.sh:2 tests/test-glued-value.sh:2; do
