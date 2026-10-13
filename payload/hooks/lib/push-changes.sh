@@ -109,12 +109,13 @@ pc_diff() {   # $@ = pathspecs (a path, ".", or ":(exclude)..." items)
   [ "${PC_COMMIT_IN_CHAIN:-0}" -eq 1 ] || return 0
   git diff HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
   # One join against PC_FILES rather than a search per untracked file: a tree can hold hundreds of
-  # untracked files the push has nothing to do with.
+  # untracked files the push has nothing to do with. The list goes in through the environment, never
+  # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh).
   while IFS= read -r u; do
     [ -f "$u" ] || continue
     git diff --no-index -- /dev/null "$u" 2>/dev/null
   done < <(git ls-files --others --exclude-standard --full-name -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null \
-             | awk 'NR == FNR { if (NF) want[$0] = 1; next } ($0 in want)' <(printf '%s\n' "$PC_FILES") -)
+             | PC_WANT="$PC_FILES" awk 'BEGIN { n = split(ENVIRON["PC_WANT"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } ($0 in want)')
   return 0
 }
 
