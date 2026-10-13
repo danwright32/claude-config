@@ -3145,6 +3145,10 @@ out_rdpull="$(env "${RDENV[@]}" CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNA
 dbg "#1013 pull meeting a leftover: $out_rdpull"
 check "#1013 a pull removes a leftover of a file the shared repo deleted" "[ ! -e '$RDHB/$RDREL' ]"
 check "#1013 and one whose name git quotes in its listings" "[ ! -e \"\$RDHB/\$RDODD\" ]"
+# Named whole in the message: the list is joined with "; ", so a name holding a space is one file.
+rd_odd_named=0
+case "$out_rdpull" in *"removed $RDREL; $RDODD from this Mac"*|*"removed $RDODD; $RDREL from this Mac"*) rd_odd_named=1 ;; esac
+check "#1013 and the message names that file whole, space and all" "[ '$rd_odd_named' -eq 1 ]"
 check "#1013 and says so, naming the file and the commit that removed it" \
   "line_has \"\$out_rdpull\" 'removed' 'mods/scope-modes/hooks/ghargs\.ts' 'shared config deleted'"
 check "#1013 and never promises that leftover to the next send" \

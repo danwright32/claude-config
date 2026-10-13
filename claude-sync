@@ -5240,26 +5240,31 @@ $(printf '%s\n' "$leftovers" | cut -f1)
     if [ -e "$CLAUDE_HOME/$_lp" ]; then
       # Kept, it is met again on every apply, so it is said once per path and content, through the
       # record the send keeps for the same copy, so whichever meets it first speaks for both (L36).
+      # The stamp is the one refuse_resurrected_deletions writes for a leftover it keeps: the path
+      # under the home and the shasum of this Mac's copy. (Its "publishing" lines are a different
+      # record, keyed on the staged blob, for a different message.) The #1013 checks hold the two
+      # to one stamp: a send after this apply stays quiet.
       _lstamp="$(printf '%s %s' "$_lp" "$(shasum "$CLAUDE_HOME/$_lp" 2>/dev/null | awk 'NR==1{print $1}')")"
       grep -qxF -- "$_lstamp" "$RESURRECTED_REPORTED_FILE" 2>/dev/null && continue
       printf '%s\n' "$_lstamp" >> "$RESURRECTED_REPORTED_FILE" 2>/dev/null || true
-      lo_kept+="$_lp "
+      # Joined with "; ", never a space, so a name holding a space reads as one file.
+      lo_kept="${lo_kept:+$lo_kept; }$_lp"
       lo_where_kept="${lo_where_kept:+$lo_where_kept; }$_lw"
     else
-      lo_removed+="$_lp "
+      lo_removed="${lo_removed:+$lo_removed; }$_lp"
       lo_where_removed="${lo_where_removed:+$lo_where_removed; }$_lw"
     fi
   done <<LEFTOVERS
 $leftovers
 LEFTOVERS
   if [ -n "$lo_removed" ]; then
-    echo "claude-sync: removed ${lo_removed% } from this Mac: the shared config deleted it, and this copy was one the shared config itself once held, unchanged since, so it was a leftover rather than unsent work, and a send would have refused to publish it. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from git: $lo_where_removed." >&2
-    sync_log_line "removed ${lo_removed% }, a leftover copy of a file the shared config deleted"
+    echo "claude-sync: removed $lo_removed from this Mac: the shared config deleted it, and this copy was one the shared config itself once held, unchanged since, so it was a leftover rather than unsent work, and a send would have refused to publish it. Set SYNC_ACCEPT_DELETIONS=0 if you would rather decide file by file. It is recoverable from git: $lo_where_removed." >&2
+    sync_log_line "removed $lo_removed, a leftover copy of a file the shared config deleted"
   fi
   if [ -n "$lo_kept" ]; then
     local lo_why="this apply could not remove it"
     [ "${SYNC_ACCEPT_DELETIONS:-1}" = "0" ] && lo_why="SYNC_ACCEPT_DELETIONS=0"
-    echo "claude-sync: left ${lo_kept% } alone because $lo_why, but a send will not carry it: the shared config deleted it, and this copy is one the shared config itself once held, unchanged. Delete it yourself to accept the deletion, or change it and it publishes as your own. If you want the shared copy back: $lo_where_kept." >&2
+    echo "claude-sync: left $lo_kept alone because $lo_why, but a send will not carry it: the shared config deleted it, and this copy is one the shared config itself once held, unchanged. Delete it yourself to accept the deletion, or change it and it publishes as your own. If you want the shared copy back: $lo_where_kept." >&2
   fi
   local unloadable_here; unloadable_here="$(unloadable_skill_entries "$CLAUDE_HOME/skills")"
   while IFS= read -r _ap; do
