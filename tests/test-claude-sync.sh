@@ -19716,6 +19716,14 @@ printf 'NOTE the reader timed out after 600s on a batch of 2 lessons\nEND 0 less
 lt_refused "an output holding no tag" first "$WORK/lt-none.txt" "no tag"
 lt_refused "a pass that is neither first nor second" third "$WORK/lt-good.txt" "third"
 lt_refused "a tags file that is not there" first "$WORK/lt-absent.txt" "lt-absent"
+# An EMPTY settled file is still the settled side: the new tags are added to it, never mistaken for
+# tags already there (found by the PR lessons review of this change: awk's FNR == NR stays true past
+# an empty first file, so the tagger's rows were read as settled and nothing was recorded).
+: > "$LTR/lesson-tags-second.tsv"
+out_lte="$(lt_record second "$WORK/lt-good.txt")"; rc_lte=$?
+dbg "#566 an empty second pass file: $out_lte"
+check "#566 tags recorded into an empty tags file land there" \
+  "[ \$rc_lte -eq 0 ] && [ \"\$(cut -f1 '$LTR/lesson-tags-second.tsv' | tr '\n' ' ')\" = 'L3 L5 ' ]"
 
 section "== mods travel to the other Mac and are wired into settings.json (#606) =="
 # A mod is a Claude Code plugin folder (.claude-plugin/plugin.json plus a hooks module). Claude Code

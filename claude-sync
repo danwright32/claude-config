@@ -3049,9 +3049,11 @@ do_record_lesson_tags(){   # $1 = first|second  $2 = what tools/tag-lessons.py p
   case "$last" in END*) ;; *) refuse_tags "the last line of $src is not END, so the tagger refused or was cut short, and a partial set of tags is not recorded."; return 1 ;; esac
   # One awk pass over the settled tags then the new ones: every problem named, and the merged rows
   # printed only when there are none. Lines of the tagger's that are not rows (END, NOTE) are skipped;
-  # a row with a tag outside the three, or any other line starting with L, is a problem.
+  # a row with a tag outside the three, or any other line starting with L, is a problem. The two
+  # files are told apart by FILENAME, never by FNR == NR, which stays true past an EMPTY settled file
+  # and would read the new tags as settled ones (found by the PR lessons review of this change).
   merged="$(awk -F '\t' -v rel="$rel" '
-    FNR == NR { if ($0 ~ /^L[0-9]+\t/) have[$1] = $2; next }
+    FILENAME == ARGV[1] { if ($0 ~ /^L[0-9]+\t/) have[$1] = $2; next }
     /^(END|NOTE)/ { next }
     /^L[0-9]+\t(diff|design|operate)$/ {
       if (($1 in have) && have[$1] != $2) { bad = bad sprintf("%s is already tagged %s in %s and this says %s, and a settled tag is never overwritten. ", $1, have[$1], rel, $2); next }
