@@ -663,6 +663,16 @@ and open to his correction.
   describe is read from their sentences, not their meaning: a statement of 4 words or more that is
   not a question nor a short acknowledgement. Until either is there, nothing is named and no failure
   is said, so a session with one image and no words is never named, as decided.
+- Dan's words are the ones the engine marks as his (#1123): `prompt.submit`'s origin, typed at the
+  terminal (`composer`), sent from his phone (`bridge`), or a handoff's opening prompt he pressed
+  Use on (`plugin` `handoff` `asUser`), the rule goal-tracker reads a session's first request by. A
+  transcript message carries no origin, so before this a background task's notice or another
+  plugin's message read from it counted as his words and named a session he had opened with only
+  an image. The mod records his first worded message, his newest few and how many of his messages
+  carried only images as each enters; only those open the name, count as his image turns, or reach
+  Haiku as the person's. A record from before the change holds none, so such a session waits for
+  his next words. A slash command he types counts only if the engine passes it through
+  `prompt.submit`, which has not been measured (the transcript stores one with no origin).
 - The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod
@@ -902,9 +912,21 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   those count as the session's uncommitted work, in the finish
   check, the `open_cleanup_branch` question and its coverage, and the `leave_branch` question. A file
   it cannot attribute (another session's, a job's, or written by a route the reader cannot name, such
-  as a patch or `git mv`) never blocks, and the finish toast names it once: "Left uncommitted, since
+  as a script) never blocks, and the finish toast names it once: "Left uncommitted, since
   this session did not write them: ...". A note that cannot be made is toasted, as a branch note is.
   The #1051 case itself, a line a monthly job appended, is now not the session's and does not hold it.
+  Since #1123 what git itself changed counts too, so a session cannot finish with it uncommitted
+  while the toast names it as another's: git mv (the destination, and the source's own name inside
+  it), git rm (also `--cached`, which leaves the file changed in git status), a checkout of a path
+  and git restore of the working tree, which the write reader names apart as `byGit` so the guards
+  judging `files` and `changes` are unchanged; a patch git applies or am takes, by the paths its
+  patch file names (both sides of each diff, its `-p` and `--directory` honoured); and a stash git
+  pops or applies, by `git stash show --include-untracked --name-only` read before the call runs,
+  since a pop drops it (one that cannot be read is toasted once, and the call runs). The checkout
+  these are read in is git's `-C` folder or the session's; a cd earlier in the call is not followed,
+  knowingly loose, since stash and patch paths belong to the whole checkout. Still not attributed: a
+  checkout of one bare name (git may take it for a branch), a git pathspec pattern or `:/` path, and
+  a merge, cherry-pick or revert left uncommitted by a conflict.
 - How often GitHub is asked (#1037). The minute's check read every PR the session opened, plus one
   `gh issue view` per closing issue of each, every minute: about 2N GraphQL points a minute for N
   PRs, from the 5,000 an hour every gh command on the Mac shares (#1014). Measured on 2026-10-12
@@ -2193,9 +2215,13 @@ direction is what follows.
   `rm -f ~/.claude/state/ai-review/shown/timing-test-post.*` (refused on 2026-10-12 as "a pattern that
   may name a look changing file") runs. In a checkout, the pattern waits on that issue's answer as a
   named file does, and Dan's Skip them or Settled lets it through, where before it was refused as
-  a write that could not be followed. A relative folder is not followed (a cd earlier in the command
-  moves it, and only mod-kit's write reader follows a cd), so a relative pattern that may name a look
-  changing file is held as one whose checkout cannot be told.
+  a write that could not be followed. Since #1123 the folder is the one mod-kit's write reader gives
+  (`folder` on a write or change whose name is a pattern), so a relative pattern is placed too, a cd
+  before it followed: `cd /w/slate && echo x > app/[t]okens.json` waits on that issue's answer, and
+  `cd /tmp/scratch && rm -f *.css` runs. The guard's own reading of a spelled out folder went with
+  it. Where the reader cannot name the folder (a cd it cannot follow, a variable in the folder or in
+  the name, whose value may hold a slash, or a whole `**`), a pattern that may name a look changing
+  file is still held as one whose checkout cannot be told.
 - **A guard older than the steps Claude read says so (#1057).** The skill is read fresh at every
   use and the guard only when a session starts, so on 2026-10-09 a session followed the new skill
   against the old guard and looped (#1046). The skill now states `<!-- design-round-guard contract: N

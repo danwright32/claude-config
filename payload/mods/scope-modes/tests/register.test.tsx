@@ -268,6 +268,10 @@ type Opts = {
   dirty?: string[]
   /** The files git status names in those folders (#1051); app.ts unless said. */
   dirtyFiles?: string[]
+  /** What `git stash show --name-only` names in the newest stash (#1123), or how it fails; none by default. */
+  stash?: string[] | { fails: string }
+  /** Files that are there but cannot be read (#1123 lessons review). */
+  unreadableFiles?: string[]
   /** A `git switch -c` or `git checkout -b` that runs but leaves the checkout where it was (#1051). */
   switchFails?: boolean
   /** mod-kit's branch reader fails (#980), with what it threw. */
@@ -378,6 +382,7 @@ const world = (on: On, o: Opts = {}) => {
     return { value: undefined }
   })
   on('fs.read', ($, e) => {
+    if (o.unreadableFiles?.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
   })
@@ -558,6 +563,10 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'git' && a.includes('--list')) return ok(o.branchHere === false ? '' : `  ${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('ls-remote')) return o.branchOnGitHub === false ? fail(2) : ok(`abc\trefs/heads/${o.branch ?? 'scope-modes-616'}\n`)
     if (cmd === 'git' && a.includes('worktree')) return ok(o.worktrees ?? `worktree /repo\nbranch refs/heads/main\n`)
+    if (cmd === 'git' && a.includes('stash') && a.includes('show')) {
+      const s = o.stash ?? []
+      return 'fails' in s ? fail(1, s.fails) : ok(s.map(f => `${f}\n`).join(''))
+    }
     if (cmd === 'git' && a.includes('status')) return ok(o.dirty?.includes(a[a.indexOf('-C') + 1] as string) ? (o.dirtyFiles ?? ['app.ts']).map(f => ` M ${f}\n`).join('') : '')
     // What the overnight rules ask of the disk (#834): /repo is a primary checkout of o/r unless a
     // test says otherwise, and every other folder is in no repository.
@@ -3892,6 +3901,58 @@ for (const [how, wrote] of [
     expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
     expect(block).not.toContain('other/plan.md')
   })
+
+// #1123: a file git itself changed was never attributed, so the work was left uncommitted and the
+// finish toast named it as another session's.
+const PATCH = 'diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1 +1 @@\n-a\n+b\n'
+for (const [how, line, extra] of [
+  ['git mv', 'git mv old.ts app.ts', {}],
+  ['git rm', 'git rm --cached app.ts', {}],
+  ['a checkout of a path', 'git checkout main -- app.ts', {}],
+  ['git restore', 'git restore -s main app.ts', {}],
+  ['a patch git applies', 'git apply /tmp/fix.patch', { files: { '/tmp/fix.patch': PATCH } }],
+  ['a stash git pops', 'git stash pop', { stash: ['app.ts'] }],
+] as [string, string, Opts][])
+  test(`a file this session changed by ${how} is its own unfinished work, while another session's beside it is not (#1123)`, withDeps, async ($, on) => {
+    const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts', 'other/plan.md'], ...extra })
+    await start($ as never, clock)
+    expect(await call($ as never, bash(line, 'g1'))).toBe('ran')
+    await command($ as never, 'winddown')
+    const block = (await stop($ as never)).block ?? ''
+    expect(block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+    expect(block).not.toContain('other/plan.md')
+  })
+
+test("a patch that cannot be read is said, and the files the same call wrote by other routes are still the session's (#1123 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, unreadableFiles: ['/tmp/fix.patch'] })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo x > app.ts && git apply /tmp/fix.patch', 'g1'))).toBe('ran')
+  const said = w.toasts.filter(t => t.includes('the patch this call applied'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toMatch(/^Scope modes could not tell which files the patch this call applied changed \(.*EACCES: permission denied, open '\/tmp\/fix\.patch'\), so winding down may not count them as this session's\. Later failures go to the debug log\.$/)
+  await command($ as never, 'winddown')
+  expect((await stop($ as never)).block).toMatch(/^Winding down is not finished: there are uncommitted changes \(app\.ts\): /)
+})
+
+test('a checkout the patch applies in that cannot be found is said with that cause, not as a patch that could not be read (#1123 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], files: { '/tmp/fix.patch': PATCH }, workingTreeFails: 'the disk cannot read /repo' })
+  await start($ as never, clock)
+  await call($ as never, bash('git apply /tmp/fix.patch', 'g1'))
+  const said = w.toasts.filter(t => t.includes('the patch this call applied'))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain('the disk cannot read /repo')
+  expect(said[0]).not.toContain('EACCES')
+})
+
+test('a stash that cannot be read is said once, and the pop still runs (#1123)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['app.ts'], stash: { fails: 'fatal: not a git repository' } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git stash pop', 'g1'))).toBe('ran')
+  expect(await call($ as never, bash('git stash apply', 'g2'))).toBe('ran')
+  expect(w.toasts.filter(t => t.includes('could not read which files the stash'))).toEqual([
+    "Scope modes could not read which files the stash this call takes holds (fatal: not a git repository), so winding down may not count them as this session's. Later failures go to the debug log.",
+  ])
+})
 
 test("two calls finishing at once, the session's and an agent's, each keep the files they wrote (lessons review of #1108)", withDeps, async ($, on) => {
   const { clock } = world(on, { branch: 'main', dirty: ['/repo'], dirtyFiles: ['a.ts', 'b.ts', 'c.ts'] })

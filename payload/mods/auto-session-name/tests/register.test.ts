@@ -12,7 +12,7 @@ type Rename = 'set' | 'refused' | 'refused-for-mod' | 'unknown' | 'throws'
 // The repository the session runs in, as $.session.repo() answers it: none by default, so the
 // tests about naming itself see the name alone; 'throws' is a repository that cannot be read.
 type Repo = { root: string; remote: string | null } | null | 'throws'
-type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void>; repo?: Repo; kitFails?: boolean }
+type Opts = { replies?: Reply[]; rename?: Rename; messages?: Msg[]; messagesThrow?: boolean; holdHaiku?: Promise<void>; holdRename?: Promise<void>; repo?: Repo; kitFails?: boolean; dropsPrompts?: boolean }
 
 // mod-kit, standing in: a mod cannot import another mod's files, and a plugin in a test runs in its
 // own environment, so its repository reader asks the world (`__modkit`), which reads with a byte for
@@ -71,6 +71,8 @@ const world = (on: On, o: Opts = {}) => {
     messages: o.messages ?? exchange(),
     repo: o.repo ?? null,
     repoReads: 0,
+    // Whether the opening messages were sent through prompt.submit yet (start does it once).
+    isOpened: false,
   }
   const clock = mock.clock(on, { now: T0 })
   on('session.id', () => ({ value: 's1' }) as never)
@@ -112,6 +114,8 @@ const world = (on: On, o: Opts = {}) => {
     return { text: `Session renamed to: ${e.args}` }
   })
   on('classic.UserPromptSubmit', () => ({}))
+  // The engine beneath prompt.submit: the prompt enters as it arrived, unless the test drops it.
+  on('prompt.submit', ($, e) => (o.dropsPrompts ? { drop: 'held by a guard' } : { text: e.text }) as never)
   on('classic.SessionStart', () => ({}))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('ui.log', ($, e) => {
@@ -127,8 +131,32 @@ type T = {
   turn: { complete: (e: never) => Promise<unknown> }
   classic: { UserPromptSubmit: (e: never) => Promise<unknown>; SessionStart: (e: never) => Promise<unknown> }
   command: { run: (e: never) => Promise<unknown> }
+  prompt: { submit: (e: never) => Promise<unknown> }
 }
-const start = ($: T, isInteractive = true) => $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
+type World = ReturnType<typeof world>
+type Origin = { kind: string; name?: string; asUser?: true }
+const TYPED: Origin = { kind: 'composer' }
+const onlyImages = (text: string) => text.trim().length > 0 && text.replace(/\[Image #\d+\]/g, '').trim() === ''
+// A message reaching the session through prompt.submit, as the engine raises it, marked with where
+// it came from (#1123): Dan's Enter by default. An image only message carries its attachment, as
+// the engine's does.
+const send = ($: T, text: string, origin: Origin = TYPED) =>
+  $.prompt.submit({ text, origin, wait: false, ...(onlyImages(text) ? { attachments: [{ type: 'image', mediaType: 'image/png' }] } : {}) } as never)
+// Dan sends a message and it enters the transcript.
+const sends = async ($: T, w: World, text: string, origin: Origin = TYPED) => {
+  w.messages.push({ role: 'user', text, toolUses: [] })
+  await send($, text, origin)
+}
+// The session starts; the first time, the user messages the world opened with are sent as Dan's,
+// as he typed them before the mark.
+const start = async ($: T, w: World, isInteractive = true) => {
+  const r = await $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
+  if (!w.isOpened) {
+    w.isOpened = true
+    for (const m of w.messages) if (m.role === 'user') await send($, m.text)
+  }
+  return r
+}
 const turnEnds = ($: T, agentId?: string) =>
   $.turn.complete({ answer: 'done', durationMs: 10, isAborted: false, turnId: 't', reason: 'answer', ...(agentId ? { agentId } : {}) } as never)
 const prompt = ($: T, fields: Record<string, unknown> = {}) =>
@@ -136,7 +164,7 @@ const prompt = ($: T, fields: Record<string, unknown> = {}) =>
 
 test('an unnamed session is named once, ten minutes after it starts, silently', async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN - 1)
   expect(w.prompts.length).toBe(0)
   await w.clock.advance(1)
@@ -155,13 +183,13 @@ test('an unnamed session is named once, ten minutes after it starts, silently', 
 
 test('a session with nothing asked at ten minutes is named after its first exchange', async ($, on) => {
   const w = world(on, { messages: [] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.prompts.length).toBe(0)
   expect(w.renames.length).toBe(0)
   expect(w.logs).toEqual([])
   // The person asks; the turn is still running, so only the request is there.
-  w.messages.push(exchange()[0] as Msg)
+  await sends($, w, (exchange()[0] as Msg).text)
   await turnEnds($, undefined).catch(() => undefined)
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
@@ -181,14 +209,15 @@ const said = (text: string): Msg => ({ role: 'assistant', text, toolUses: [] })
 
 test('a session opened with only an image and a reply that asks about it waits for Dan, then is named from his words', async ($, on) => {
   const w = world(on, { messages: [image(1), said('What would you like me to do with this image?')], replies: ['Invoice table overflow fix'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   await turnEnds($)
   await w.clock.settle()
   // Only the image and a question about it: nothing to name from, and no failure.
   expect(w.prompts.length).toBe(0)
   expect(w.logs).toEqual([])
-  w.messages.push({ role: 'user', text: 'Fix the overflow in the invoice table', toolUses: [] }, said('Looking at the table styles.'))
+  await sends($, w, 'Fix the overflow in the invoice table')
+  w.messages.push(said('Looking at the table styles.'))
   await turnEnds($)
   await w.clock.settle()
   expect(w.prompts.length).toBe(1)
@@ -200,16 +229,18 @@ test('a session opened with only an image and a reply that asks about it waits f
 test('a session where Dan never types is named after three turns from the first reply that describes an image', async ($, on) => {
   const DESCRIBES = 'The screenshot shows the invoice table overflowing its card.'
   const w = world(on, { messages: [image(1), said(DESCRIBES)], replies: ['Invoice table overflow'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   await turnEnds($)
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
-  w.messages.push(image(2), said('What should I do with this one?'))
+  await sends($, w, image(2).text)
+  w.messages.push(said('What should I do with this one?'))
   await turnEnds($)
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
-  w.messages.push(image(3), said('Want me to compare them?'))
+  await sends($, w, image(3).text)
+  w.messages.push(said('Want me to compare them?'))
   await turnEnds($)
   await w.clock.settle()
   expect(w.prompts.length).toBe(1)
@@ -220,9 +251,97 @@ test('a session where Dan never types is named after three turns from the first 
   expect(w.logs).toEqual([])
 })
 
+// #1123: only Dan's own words open a session's name, as the engine marks where each message came
+// from (prompt.submit's origin). A background task's notice, or a message another plugin sends, is
+// not his, so a session he opened with only an image still waits for him (#1085).
+const NOTICE = '<task-notification> <summary>Background command "Run the suite" completed (exit code 0)</summary> </task-notification>'
+const PLUGIN_SAYS = 'The scope-modes plugin sent a message: Dan is up: sleep mode is off. Summarise the night for him.'
+
+test("a task notification is not Dan's words: an image only session waits for his, and is named from them", async ($, on) => {
+  const w = world(on, { messages: [image(1), said('What would you like me to do with this image?')], replies: ['Invoice table overflow fix'] })
+  await start($, w)
+  await w.clock.advance(10 * MIN)
+  await sends($, w, NOTICE, { kind: 'task-notification' })
+  w.messages.push(said('The suite finished with every test passing.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  expect(w.logs).toEqual([])
+  await sends($, w, 'Fix the overflow in the invoice table')
+  w.messages.push(said('Looking at the table styles.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toContain('Opening request:\nFix the overflow in the invoice table')
+  expect(w.prompts[0]).not.toContain('task-notification')
+  expect(w.renames.map(r => r.args)).toEqual(['Invoice table overflow fix'])
+})
+
+test("a message another plugin sends is not Dan's words, even one sent as a person's", async ($, on) => {
+  const w = world(on, { messages: [image(1), said('What would you like me to do with this image?')] })
+  await start($, w)
+  await w.clock.advance(10 * MIN)
+  await sends($, w, PLUGIN_SAYS, { kind: 'plugin', name: 'scope-modes' })
+  w.messages.push(said('Overnight two pull requests merged.'))
+  await turnEnds($)
+  await sends($, w, 'Carry on with the export', { kind: 'plugin', name: 'some-plugin', asUser: true })
+  w.messages.push(said('Carrying on with the export.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  expect(w.renames.length).toBe(0)
+})
+
+test("injected messages count as none of Dan's image turns, nor reach Haiku as the person's", async ($, on) => {
+  const DESCRIBES = 'The screenshot shows the invoice table overflowing its card.'
+  const w = world(on, { messages: [image(1), said(DESCRIBES)], replies: ['Invoice table overflow'] })
+  await start($, w)
+  await w.clock.advance(10 * MIN)
+  // Two more turns that are not Dan's: still one image turn of his, so nothing is named.
+  await sends($, w, NOTICE, { kind: 'task-notification' })
+  w.messages.push(said('The suite passed.'))
+  await turnEnds($)
+  await sends($, w, PLUGIN_SAYS, { kind: 'plugin', name: 'scope-modes' })
+  w.messages.push(said('Nothing changed overnight.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  await sends($, w, image(2).text)
+  w.messages.push(said('Want me to compare them?'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  await sends($, w, image(3).text)
+  w.messages.push(said('Should I fix both?'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toContain(DESCRIBES)
+  expect(w.prompts[0]).not.toContain('Person: <task-notification>')
+  expect(w.prompts[0]).not.toContain('Person: The scope-modes plugin')
+})
+
+for (const [who, origin] of [
+  ['from his phone through Remote Control', { kind: 'bridge' }],
+  ["a handoff's opening prompt he pressed Use on", { kind: 'plugin', name: 'handoff', asUser: true }],
+] as [string, Origin][]) {
+  test(`Dan's words ${who} open the name as typed ones do`, async ($, on) => {
+    const w = world(on, { messages: [], replies: ['Gmail send fix'] })
+    await start($, w)
+    await w.clock.advance(10 * MIN)
+    await sends($, w, 'Carry on with the Gmail send fix', origin)
+    w.messages.push(said('Reading the notes.'))
+    await turnEnds($)
+    await w.clock.settle()
+    expect(w.prompts.length).toBe(1)
+    expect(w.prompts[0]).toContain('Opening request:\nCarry on with the Gmail send fix')
+    expect(w.renames.map(r => r.args)).toEqual(['Gmail send fix'])
+  })
+}
+
 test('a first exchange before ten minutes does not name it early', async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await turnEnds($)
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
@@ -232,9 +351,10 @@ test('a first exchange before ten minutes does not name it early', async ($, on)
 
 test('a subagent finishing its turn is not an idle point of the session', async ($, on) => {
   const w = world(on, { messages: [] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
-  w.messages.push(...exchange())
+  await sends($, w, (exchange()[0] as Msg).text)
+  w.messages.push(exchange()[1] as Msg)
   await turnEnds($, 'agent-1')
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
@@ -246,7 +366,7 @@ test('a subagent finishing its turn is not an idle point of the session', async 
 test('a session resumed with a name is left alone', async ($, on) => {
   const w = world(on)
   await $.classic.SessionStart({ source: 'resume', session_title: 'Invoice rework' } as never)
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.prompts.length).toBe(0)
   expect(w.renames.length).toBe(0)
@@ -255,7 +375,7 @@ test('a session resumed with a name is left alone', async ($, on) => {
 
 test('a name Dan sets with /rename during the ten minutes wins', async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await w.clock.advance(4 * MIN)
   await $.command.run({ command: 'rename', args: 'My own name' } as never)
   await w.clock.advance(6 * MIN)
@@ -265,7 +385,7 @@ test('a name Dan sets with /rename during the ten minutes wins', async ($, on) =
 
 test('a name seen on a message during the ten minutes wins too', async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await prompt($, { session_title: 'Named elsewhere' })
   await w.clock.advance(10 * MIN)
   expect(w.prompts.length).toBe(0)
@@ -275,7 +395,7 @@ test('a name seen on a message during the ten minutes wins too', async ($, on) =
 test('a rename Dan makes while Haiku is answering wins over the name it returns', async ($, on) => {
   let release = () => undefined as void
   const w = world(on, { holdHaiku: new Promise<void>(r => (release = r)) })
-  await start($)
+  await start($, w)
   const due = w.clock.advance(10 * MIN)
   await w.clock.settle()
   await $.command.run({ command: 'rename', args: 'Mine' } as never)
@@ -287,13 +407,13 @@ test('a rename Dan makes while Haiku is answering wins over the name it returns'
 
 test('a reload of the mod does not name twice, nor restart the ten minutes', async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await w.clock.advance(6 * MIN)
   // A hot reload fires session.start again; the ten minutes still count from the first start.
-  await start($)
+  await start($, w)
   await w.clock.advance(4 * MIN)
   expect(w.renames.length).toBe(1)
-  await start($)
+  await start($, w)
   await w.clock.advance(20 * MIN)
   await turnEnds($)
   await w.clock.settle()
@@ -303,7 +423,7 @@ test('a reload of the mod does not name twice, nor restart the ten minutes', asy
 
 test('a claude -p run is never named', async ($, on) => {
   const w = world(on)
-  await start($, false)
+  await start($, w, false)
   await w.clock.advance(10 * MIN)
   await turnEnds($)
   await w.clock.settle()
@@ -313,7 +433,7 @@ test('a claude -p run is never named', async ($, on) => {
 
 test('a quoted reply with a dash is cleaned before it is used', async ($, on) => {
   const w = world(on, { replies: ['"Status bar - band layout."\nExtra words'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['Status bar band layout'])
   expect(w.logs).toEqual([])
@@ -321,7 +441,7 @@ test('a quoted reply with a dash is cleaned before it is used', async ($, on) =>
 
 test('an empty reply is refused with one line, and retried once at the next idle point', async ($, on) => {
   const w = world(on, { replies: ['  ', 'Second try name'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.length).toBe(0)
   expect(w.logs).toEqual(["Auto session name couldn't name this session: Haiku's reply was empty. It will try once more when the session is next idle."])
@@ -334,7 +454,7 @@ test('an empty reply is refused with one line, and retried once at the next idle
 
 test('a reply too long to be a name is refused', async ($, on) => {
   const w = world(on, { replies: ['This is a very long name that goes on well past six words', 'Short one'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.length).toBe(0)
   expect(w.logs[0]).toContain("Haiku's reply was too long to be a name")
@@ -342,7 +462,7 @@ test('a reply too long to be a name is refused', async ($, on) => {
 
 test('a failed call gives one line and exactly one retry, then gives up with a second line', async ($, on) => {
   const w = world(on, { replies: [{ failed: 'api-error' }, { failed: 'aborted' }, 'Never asked'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.logs).toEqual(["Auto session name couldn't name this session: Haiku returned an error (529). It will try once more when the session is next idle."])
   await turnEnds($)
@@ -360,14 +480,14 @@ test('a failed call gives one line and exactly one retry, then gives up with a s
 
 test('a model call the engine refuses is a failure that gives its reason', async ($, on) => {
   const w = world(on, { replies: ['throws'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.logs[0]).toContain('the call to Haiku was refused (model blocked by policy)')
 })
 
 test('an unreadable conversation is a failure that names it', async ($, on) => {
   const w = world(on, { messagesThrow: true })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.prompts.length).toBe(0)
   expect(w.logs[0]).toContain('the conversation could not be read (transcript unavailable)')
@@ -375,7 +495,7 @@ test('an unreadable conversation is a failure that names it', async ($, on) => {
 
 test('when /rename refuses a plugin, the name is set by sessionTitle on the next message', async ($, on) => {
   const w = world(on, { rename: 'refused' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.length).toBe(1)
   expect(w.logs).toEqual([])
@@ -388,7 +508,7 @@ test('when /rename refuses a plugin, the name is set by sessionTitle on the next
 
 test('when /rename rejects the call outright, the fallback route still names it', async ($, on) => {
   const w = world(on, { rename: 'throws' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect((await prompt($)).sessionTitle).toBe('Auto session name mod')
   expect(w.debug.join('\n')).toContain('/rename answered refused (no implementation for command.run)')
@@ -396,14 +516,14 @@ test('when /rename rejects the call outright, the fallback route still names it'
 
 test('when /rename says nothing, the next message checks the name took before setting it again', async ($, on) => {
   const w = world(on, { rename: 'unknown' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect((await prompt($, { session_title: 'Auto session name mod' })).sessionTitle).toBeUndefined()
 })
 
 test('a fallback name waiting for the next message gives way to a rename Dan makes first', async ($, on) => {
   const w = world(on, { rename: 'refused-for-mod' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   await $.command.run({ command: 'rename', args: 'Mine' } as never)
   expect((await prompt($)).sessionTitle).toBeUndefined()
@@ -411,14 +531,14 @@ test('a fallback name waiting for the next message gives way to a rename Dan mak
 
 test('a fallback name gives way to a different name already on the next message', async ($, on) => {
   const w = world(on, { rename: 'refused' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect((await prompt($, { session_title: 'Set some other way' })).sessionTitle).toBeUndefined()
 })
 
 test('a claude -p prompt never carries a fallback name', async ($, on) => {
   const w = world(on, { rename: 'refused' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect((await prompt($, { source: 'sdk' })).sessionTitle).toBeUndefined()
   expect((await prompt($)).sessionTitle).toBe('Auto session name mod')
@@ -427,7 +547,7 @@ test('a claude -p prompt never carries a fallback name', async ($, on) => {
 test('a name that shows up on a message while Haiku is answering wins over the name it returns', async ($, on) => {
   let release = () => undefined as void
   const w = world(on, { holdHaiku: new Promise<void>(r => (release = r)) })
-  await start($)
+  await start($, w)
   const due = w.clock.advance(10 * MIN)
   await w.clock.settle()
   await prompt($, { session_title: 'Named elsewhere' })
@@ -451,18 +571,18 @@ const waitSpy: { name: string; register: Register } = {
 
 test('a reload waits only for what is left of the ten minutes', { plugins: [waitSpy] }, async ($, on) => {
   const w = world(on)
-  await start($)
+  await start($, w)
   await w.clock.advance(6 * MIN)
-  await start($)
+  await start($, w)
   expect(w.debug.filter(l => l.startsWith('WAIT '))).toEqual([`WAIT ${10 * MIN}`, `WAIT ${4 * MIN}`])
 })
 
 test('two timers due at once (a reload while the first still runs) make one Haiku call', async ($, on) => {
   let release = () => undefined as void
   const w = world(on, { holdHaiku: new Promise<void>(r => (release = r)) })
-  await start($)
+  await start($, w)
   await w.clock.advance(6 * MIN)
-  await start($)
+  await start($, w)
   const due = w.clock.advance(4 * MIN)
   await w.clock.settle()
   release()
@@ -483,7 +603,7 @@ const failingState = (on: On) => {
 test('a state write that fails at the ten minute mark is said in one line, not lost', async ($, on) => {
   const s = failingState(on)
   const w = world(on)
-  await start($)
+  await start($, w)
   s.failing = true
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
@@ -497,7 +617,7 @@ test('a state write that fails at the ten minute mark is said in one line, not l
 test('a state write that fails after a turn ends is said in one line, not lost', async ($, on) => {
   const s = failingState(on)
   const w = world(on, { messages: [] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   s.failing = true
   await turnEnds($)
@@ -511,10 +631,34 @@ test('a state write that fails after a turn ends is said in one line, not lost',
   expect(w.logs.length).toBe(1)
 })
 
+test("Dan's message still enters when noting it for the name fails, and a line says so", async ($, on) => {
+  const s = failingState(on)
+  const w = world(on, { messages: [] })
+  await start($, w)
+  s.failing = true
+  const r = (await send($, 'Fix the export')) as { text?: string }
+  expect(r.text).toBe('Fix the export')
+  expect(w.logs.length).toBe(1)
+  expect(w.logs[0]).toContain("couldn't note your message")
+  expect(w.logs[0]).toContain('state store unavailable')
+})
+
+test("a message dropped on its way in is not noted as Dan's", async ($, on) => {
+  const w = world(on, { messages: [], dropsPrompts: true })
+  await start($, w)
+  await w.clock.advance(10 * MIN)
+  await send($, 'Fix the export')
+  w.messages.push(said('Nothing arrived.'))
+  await turnEnds($)
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+  expect(w.logs).toEqual([])
+})
+
 test("Dan's own /rename still answers when the bookkeeping write around it fails", async ($, on) => {
   const s = failingState(on)
   const w = world(on)
-  await start($)
+  await start($, w)
   s.failing = true
   const r = (await $.command.run({ command: 'rename', args: 'Mine', origin: { kind: 'user' } } as never)) as { text?: string }
   expect(r.text).toBe('Session renamed to: Mine')
@@ -523,7 +667,7 @@ test("Dan's own /rename still answers when the bookkeeping write around it fails
 // Lessons review of #657: only a /rename that took counts as Dan naming the session himself.
 test("a /rename of Dan's that is refused leaves the session to be named", async ($, on) => {
   const w = world(on, { rename: 'refused' })
-  await start($)
+  await start($, w)
   await $.command.run({ command: 'rename', args: 'x', origin: { kind: 'user' } } as never).catch(() => undefined)
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
@@ -532,7 +676,7 @@ test("a /rename of Dan's that is refused leaves the session to be named", async 
 
 test("a /rename of Dan's that throws leaves the session to be named", async ($, on) => {
   const w = world(on, { rename: 'throws' })
-  await start($)
+  await start($, w)
   await $.command.run({ command: 'rename', args: 'x', origin: { kind: 'user' } } as never).catch(() => undefined)
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
@@ -545,7 +689,7 @@ test('a failure from an attempt that lost its claim changes nothing for the one 
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { replies: ['', 'Taken over name'], holdHaiku: held })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   await w.clock.advance(3 * MIN + 1)
   await turnEnds($)
@@ -563,7 +707,7 @@ test('a /rename waiting through a long turn keeps its claim: one Haiku call and 
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   // The turn running at the ten minute mark goes on for four more minutes, then ends.
   await w.clock.advance(4 * MIN)
@@ -593,7 +737,7 @@ test('an attempt whose claim went stale during /rename does not overwrite the re
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { holdRename: held, replies: ['Name A', 'Name B'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
   // The first attempt waits in /rename and cannot keep its claim fresh, so it goes stale.
@@ -615,7 +759,7 @@ test('an attempt whose claim went stale during /rename does not overwrite the re
 test('a session whose ten minute write failed is named at the next idle point once the store recovers', async ($, on) => {
   const s = failingState(on)
   const w = world(on)
-  await start($)
+  await start($, w)
   s.failing = true
   await w.clock.advance(10 * MIN)
   await w.clock.settle()
@@ -635,7 +779,7 @@ const OVERTURE = { root: '/Users/x/Apps/Overture', remote: 'https://github.com/d
 
 test('the name is prefixed with the repository the session runs in, a worktree naming its parent', withKit, async ($, on) => {
   const w = world(on, { repo: CONFIG_WORKTREE })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['(claude-config) Auto session name mod'])
   expect(w.logs).toEqual([])
@@ -643,7 +787,7 @@ test('the name is prefixed with the repository the session runs in, a worktree n
 
 test('the repository is read when the name is set, so a session that moved is named for where it is', withKit, async ($, on) => {
   const w = world(on, { repo: CONFIG_WORKTREE })
-  await start($)
+  await start($, w)
   await w.clock.advance(5 * MIN)
   w.repo = OVERTURE
   await w.clock.advance(5 * MIN)
@@ -652,28 +796,28 @@ test('the repository is read when the name is set, so a session that moved is na
 
 test('the fallback route carries the prefix too', withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, rename: 'refused' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect((await prompt($)).sessionTitle).toBe('(overture) Auto session name mod')
 })
 
 test("a reply already carrying this repository's prefix is not doubled", withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, replies: ['(overture) Fix export'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['(overture) Fix export'])
 })
 
 test("a reply leading with a bracket of its own keeps it, after this repository's prefix", withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, replies: ['(v2) Fix export'] })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['(overture) (v2) Fix export'])
 })
 
 test('a session in no repository is named without a prefix', async ($, on) => {
   const w = world(on, { repo: null })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   // The repository was asked, and answered none.
   expect(w.repoReads).toBeGreaterThan(0)
@@ -688,7 +832,7 @@ test('the missing repository is still said when the last write of the record fai
   let release = () => {}
   const held = new Promise<void>(r => { release = r })
   const w = world(on, { repo: 'throws', holdRename: held })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
   s.failing = true
@@ -701,7 +845,7 @@ test('the missing repository is still said when the last write of the record fai
 // said as such, never a session in no repository.
 test("mod-kit's reader failing still names the session, without the prefix, and says so", withKit, async ($, on) => {
   const w = world(on, { repo: OVERTURE, kitFails: true })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
   expect(w.logs).toEqual(['Auto session name named this session without its repository in front: the repository could not be read (mod-kit is not loaded).'])
@@ -709,7 +853,7 @@ test("mod-kit's reader failing still names the session, without the prefix, and 
 
 test('a repository that cannot be read still names the session, without the prefix, and says so', async ($, on) => {
   const w = world(on, { repo: 'throws' })
-  await start($)
+  await start($, w)
   await w.clock.advance(10 * MIN)
   expect(w.renames.map(r => r.args)).toEqual(['Auto session name mod'])
   expect(w.logs).toEqual(['Auto session name named this session without its repository in front: the repository could not be read (git could not read the working copy).'])

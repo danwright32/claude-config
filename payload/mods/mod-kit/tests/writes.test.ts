@@ -51,12 +51,42 @@ describe('writes: a bracketed route segment (#1010)', () => {
     ])
   })
   test('a bracket that is a pattern, anywhere else in the name, is still given as written, never guessed at', () => {
-    expect(read('echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]' }])
-    expect(read('echo x > app/[t]okens.json').files).toEqual([{ word: 'app/[t]okens.json' }])
+    expect(read('echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]', folder: `${CWD}/app` }])
+    expect(read('echo x > app/[t]okens.json').files).toEqual([{ word: 'app/[t]okens.json', folder: `${CWD}/app` }])
     expect(read('echo x > app/[a-z]*/page.tsx').files).toEqual([{ word: 'app/[a-z]*/page.tsx' }])
     expect(read('echo x > app/[!x]/page.tsx').files).toEqual([{ word: 'app/[!x]/page.tsx' }])
     // A range is a pattern too, even standing as a whole segment.
     expect(read('echo x > app/[a-z]/page.tsx').files).toEqual([{ word: 'app/[a-z]/page.tsx' }])
+  })
+})
+
+// claude-config#1123: a name holding a pattern has no path, and the reader gave nothing of where it
+// lands, so the design round guard could not place a RELATIVE pattern after a cd (#1015) and held
+// it as a write it could not follow. Its folder is given where the folder part names one, a cd
+// before it followed as for any path; the name is still given as written.
+describe('writes: the folder a pattern lands in (#1123)', () => {
+  test('a relative pattern after a cd is placed in the folder the cd moved to', () => {
+    expect(read('cd src/app && echo x > [t]okens.json').files).toEqual([{ word: '[t]okens.json', folder: `${CWD}/src/app` }])
+    expect(read('cd /w/slate && echo x > app/page.ts[x]').files).toEqual([{ word: 'app/page.ts[x]', folder: '/w/slate/app' }])
+    expect(read('cd /tmp/scratch && rm -f *.css').changes).toEqual([{ word: '*.css', folder: '/tmp/scratch', does: 'remove' }])
+    expect(read('rm -f styles/{a,b}.css').changes).toEqual([{ word: 'styles/{a,b}.css', folder: `${CWD}/styles`, does: 'remove' }])
+  })
+  test('a folder spelled from the top of the disk or from home is given too', () => {
+    expect(read('rm -f ~/.claude/state/shown/*.json').changes).toEqual([{ word: '~/.claude/state/shown/*.json', folder: `${HOME}/.claude/state/shown`, does: 'remove' }])
+    expect(read('rm -f $HOME/x/*').changes).toEqual([{ word: '$HOME/x/*', folder: `${HOME}/x`, does: 'remove' }])
+    expect(read('echo x > /w/slate/[t]ailwind.config.ts').files).toEqual([{ word: '/w/slate/[t]ailwind.config.ts', folder: '/w/slate' }])
+  })
+  test('no folder where it cannot be named: a cd that cannot be followed, a variable, or a name that may reach below it', () => {
+    expect(read('cd $X && rm -f *.css').changes).toEqual([{ word: '*.css', does: 'remove' }])
+    expect(read('echo x > $D/*.css').files).toEqual([{ word: '$D/*.css' }])
+    // A variable in the name may hold a slash, so the name may land in a folder below.
+    expect(read('rm -f out/$N*.css').changes).toEqual([{ word: 'out/$N*.css', does: 'remove' }])
+    // A whole ** reaches every folder below with globstar.
+    expect(read('rm -f out/**').changes).toEqual([{ word: 'out/**', does: 'remove' }])
+    // A pattern in the folder part names no one folder.
+    expect(read('rm -f src/*/x.css').changes).toEqual([{ word: 'src/*/x.css', does: 'remove' }])
+    // A name with no pattern but a variable is not a pattern's folder either.
+    expect(read('echo x > out/$NAME').files).toEqual([{ word: 'out/$NAME' }])
   })
 })
 
@@ -214,6 +244,63 @@ describe('writes: downloads', () => {
     expect(read('wget --content-disposition https://x.com/get').unnamed.map(u => u.what)).toEqual(['a wget download the server names'])
     expect(read('wget -r https://x.com/docs/').unnamed.map(u => u.what)).toEqual(['a wget download of many files'])
     expect(read('wget -i urls.txt')).toEqual({ files: [], changes: [], unnamed: [{ what: 'a wget download of the addresses in a file', words: ['wget', '-i', 'urls.txt'], inputs: [`${CWD}/urls.txt`] }] })
+  })
+})
+
+// claude-config#1123: winding down (#1108) counts as a session's own unfinished work only the files
+// it wrote, and git itself changes files no other route here names: git mv, git rm, a checkout of a
+// path, git restore. The reader names them apart, in byGit, a cd and git -C followed, so the guards
+// that judge files and changes are not changed by it.
+describe('writes: what git itself changes (#1123)', () => {
+  const byGit = (command: string, cwd = CWD) => read(command, cwd).byGit ?? []
+  test('git mv writes the destination and removes each source, everything under it included', () => {
+    // Onto one name that may be a folder: the name alone, never all under it, which may hold another
+    // session's files (#1123 lessons review), and the source's own name inside it whole.
+    expect(byGit('git mv old.ts new.ts')).toEqual([
+      { word: 'new.ts', path: `${CWD}/new.ts`, does: 'write' },
+      { word: 'new.ts/old.ts', path: `${CWD}/new.ts/old.ts`, does: 'write', tree: true },
+      { word: 'old.ts', path: `${CWD}/old.ts`, does: 'remove', tree: true },
+    ])
+    expect(byGit('cd src && git mv -k a.ts b.ts lib/')).toEqual([
+      { word: 'lib/a.ts', path: `${CWD}/src/lib/a.ts`, does: 'write', tree: true },
+      { word: 'lib/b.ts', path: `${CWD}/src/lib/b.ts`, does: 'write', tree: true },
+      { word: 'a.ts', path: `${CWD}/src/a.ts`, does: 'remove', tree: true },
+      { word: 'b.ts', path: `${CWD}/src/b.ts`, does: 'remove', tree: true },
+    ])
+    expect(byGit('git mv -n a.ts b.ts')).toEqual([])
+  })
+  test('git rm removes what it names, from the index alone with --cached, and nothing in a dry run', () => {
+    expect(byGit('git rm -r --cached build')).toEqual([{ word: 'build', path: `${CWD}/build`, does: 'remove', tree: true }])
+    expect(byGit('git -C /repo rm notes.md')).toEqual([{ word: 'notes.md', path: '/repo/notes.md', does: 'remove' }])
+    expect(byGit('git rm --dry-run notes.md')).toEqual([])
+    // git's own pattern matches across folders (its * takes a slash), so it is given as written.
+    expect(byGit("git rm 'logs/*.log'")).toEqual([{ word: 'logs/*.log', does: 'remove' }])
+  })
+  test('a checkout of a path, or a restore, writes what it names, a folder with everything under it', () => {
+    expect(byGit('git checkout main -- app/page.tsx')).toEqual([{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx`, does: 'write', tree: true }])
+    expect(byGit('git checkout -- .')).toEqual([{ word: '.', path: CWD, does: 'write', tree: true }])
+    expect(byGit('git checkout HEAD~1 a.ts b.ts')).toEqual([
+      { word: 'a.ts', path: `${CWD}/a.ts`, does: 'write', tree: true },
+      { word: 'b.ts', path: `${CWD}/b.ts`, does: 'write', tree: true },
+    ])
+    expect(byGit('git restore --source=HEAD~2 -W src')).toEqual([{ word: 'src', path: `${CWD}/src`, does: 'write', tree: true }])
+    expect(byGit('git restore -s main app.ts')).toEqual([{ word: 'app.ts', path: `${CWD}/app.ts`, does: 'write', tree: true }])
+  })
+  test('a branch switch, a checkout of one name git may take for a branch, and an unstage name no file', () => {
+    expect(byGit('git checkout main')).toEqual([])
+    expect(byGit('git checkout -b fix/1123 origin/main')).toEqual([])
+    expect(byGit('git switch -c x')).toEqual([])
+    expect(byGit('git restore --staged app.ts')).toEqual([])
+  })
+  test("a pathspec git reads from the top of the checkout is given as written, never placed in the folder", () => {
+    expect(byGit('git checkout -- :/docs')).toEqual([{ word: ':/docs', does: 'write' }])
+  })
+  test('inside a command substitution too', () => {
+    expect(byGit('out=$(git rm -q notes.md)')).toEqual([{ word: 'notes.md', path: `${CWD}/notes.md`, does: 'remove' }])
+  })
+  test('the guards see none of it in files or changes', () => {
+    const r = read('git mv a.ts b.ts && git rm c.ts && git checkout -- d.ts')
+    expect([r.files, r.changes, r.unnamed]).toEqual([[], [], []])
   })
 })
 

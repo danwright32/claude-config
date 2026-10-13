@@ -313,16 +313,20 @@ export type ModKitGhApi = { method: string; endpoint: string | undefined; fields
  * set, read as its value (#743); a copy into a folder held in one keeps it (`$D/note.md`, #752).
  * A redirect's target is given as its own place in the command spells it; any other word is matched
  * to its spelling by string, so a literal word equal to a variable's value in the same command is
- * given as the variable (#752).
+ * given as the variable (#752). A word with no path whose name is a pattern (`*`, `?`, a bracket or
+ * a brace the shell expands) carries `folder`, the absolute folder it lands in, where its folder
+ * part (or, for a bare name, the folder the command is in) is named as a path would be, a cd before
+ * it followed (#1123); absent where that cannot be named or the name may reach below it (a variable
+ * in it, a whole `**`).
  */
-export type ModKitWrite = { word: string; path?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
+export type ModKitWrite = { word: string; path?: string; folder?: string; sources?: string[]; edits?: true; mayBeFolder?: true; tree?: true }
 
 /**
  * One change a command makes to a file that puts no content in it: removed, stamped (touch),
  * emptied (truncate, shred), made a folder (mkdir) or its mode or owner changed; `tree` when it
- * reaches everything under a folder. `word` and `path` as in a write.
+ * reaches everything under a folder. `word`, `path` and `folder` as in a write.
  */
-export type ModKitChange = { word: string; path?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true }
+export type ModKitChange = { word: string; path?: string; folder?: string; does: 'remove' | 'touch' | 'truncate' | 'folder' | 'mode'; tree?: true }
 
 /**
  * What a command changes: the files its words name content goes into, the other changes it makes
@@ -332,12 +336,19 @@ export type ModKitChange = { word: string; path?: string; does: 'remove' | 'touc
  * script file run on standard input, `sh < setup.sh` or `cat build.py | python3`, its files the inputs;
  * `targets`, for a program whose text names every file it writes, those files, absolute, so a reader
  * judges them rather than every path the text quotes, absent where the file of any write cannot be
- * named (#830)).
+ * named (#830)). `byGit`, present when there are any, is what git itself changes (#1123): git mv's
+ * destination written (onto one name, also the source's own name inside it) and each source
+ * removed, git rm's paths removed (also with --cached, which leaves each changed in git status), a
+ * checkout of a path and a restore of the working tree writing what they name; `tree` where all
+ * under it may change. `word` and `path` as in a write; a pathspec from the top of the checkout
+ * (`:/x`) or a pattern, which git matches across folders, has no path. Kept apart from `files` and
+ * `changes`, so the guards that judge those are unchanged by it; winding down reads it.
  */
 export type ModKitWrites = {
   files: ModKitWrite[]
   changes: ModKitChange[]
   unnamed: { what: string; words: string[]; inputs: string[]; into?: string; script?: true; targets?: string[] }[]
+  byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true }[]
 }
 
 /**

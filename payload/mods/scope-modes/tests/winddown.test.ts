@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, porcelainFiles, settledByBranchChoice, settledByDan, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
+import { branchesTouched, choiceFor, filesWritten, newWork, outstanding, patchedPaths, porcelainFiles, settledByBranchChoice, settledByDan, stashTaken, whoseFiles, type LeftBranch, type LeftClosed, type LeftOpen, type Reading } from '../hooks/winddown.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { commandWrites } from './mod-kit/hooks/writes.ts'
 
 const gitOf = (words: string[]) => (words[0] === 'git' ? { sub: words[1], args: words.slice(2) } : undefined)
 // Each command with its gh reading, by mod-kit's own reader (its byte for byte copy), as the mod reads it (#961).
@@ -319,6 +320,56 @@ describe('whose uncommitted files they are (#1108)', () => {
     // session's files; a made folder writes no file (lessons review).
     expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/out.txt', '/repo/dir', '/repo/dir/x.ts', '/repo/dir/x.ts/', '/repo/old.ts', '/repo/build', '/repo/build/', '/repo/gen.ts'])
     expect(whoseFiles(['dir/x.ts', 'dir/theirs.md', 'made/theirs.md'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['dir/x.ts'], others: ['dir/theirs.md', 'made/theirs.md'] })
+  })
+  // #1123: changes git itself made (mv, rm, a checkout of a path, a restore) were never counted, so a
+  // session could finish with that work uncommitted and the finish toast named it as another's.
+  test('what git itself changed, as the write reader names it, is the session\'s too, a folder with all under it', () => {
+    const writes = {
+      ...none,
+      byGit: [
+        { word: 'new.ts', path: '/repo/new.ts', does: 'write' as const, tree: true as const },
+        { word: 'old.ts', path: '/repo/old.ts', does: 'remove' as const },
+        { word: ':/docs', does: 'write' as const },
+      ],
+    }
+    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/new.ts', '/repo/new.ts/', '/repo/old.ts'])
+  })
+  test('a patch git applies names the files it changes: both sides of each diff, its strip and folder honoured', () => {
+    const patch = [
+      'diff --git a/src/app.ts b/src/app.ts',
+      'index 1..2 100644',
+      '--- a/src/app.ts',
+      '+++ b/src/app.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      'diff --git a/old name.md b/docs/new name.md',
+      'similarity index 90%',
+      'rename from old name.md',
+      'rename to docs/new name.md',
+      'diff --git a/gone.ts b/gone.ts',
+      'deleted file mode 100644',
+      '--- a/gone.ts',
+      '+++ /dev/null',
+    ].join('\n')
+    expect(patchedPaths([], patch)).toEqual(['src/app.ts', 'old name.md', 'docs/new name.md', 'gone.ts'])
+    expect(patchedPaths(['-p2'], '--- a/x/y.ts\t2026-01-01\n+++ b/x/y.ts\t2026-01-02\n')).toEqual(['y.ts'])
+    expect(patchedPaths(['--directory=sub', '-p', '0'], '--- y.ts\n+++ y.ts\n')).toEqual(['sub/y.ts'])
+    expect(patchedPaths([], 'not a patch')).toEqual([])
+    // A removed line reading "-- x" inside a hunk is no header.
+    expect(patchedPaths([], '--- a/k.ts\n+++ b/k.ts\n@@ -1,2 +1 @@\n--- a/not/a/path\n-x\n')).toEqual(['k.ts'])
+  })
+  test('a stash pop or apply names the stash it takes, the newest by default; any other stash command none', () => {
+    expect(stashTaken(['pop'])).toBe('stash@{0}')
+    expect(stashTaken(['apply', '--index', 'stash@{2}'])).toBe('stash@{2}')
+    expect(stashTaken(['pop', '-q', '1'])).toBe('1')
+    expect(stashTaken(['push', '-m', 'x'])).toBeUndefined()
+    expect(stashTaken(['list'])).toBeUndefined()
+    expect(stashTaken([])).toBeUndefined()
+  })
+  test("a git mv into an existing folder claims the moved file, never another session's file beside it (#1123 lessons review)", () => {
+    const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', '/Users/x').byGit }
+    expect(whoseFiles(['lib/a.ts', 'lib/theirs.ts'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['lib/a.ts'], others: ['lib/theirs.ts'] })
   })
   test('the uncommitted files are split into the ones this session wrote and the rest', () => {
     const written = ['/repo/app.ts', '/repo/build/', '/elsewhere/x.ts']

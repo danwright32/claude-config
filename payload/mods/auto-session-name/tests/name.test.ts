@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { cleanName, describesImage, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from '../hooks/name.ts'
+import type { SessionMessage } from 'claude-code'
+import { cleanName, type Dans, describesImage, hasExchange as hasExchangeFor, isDans, namePrompt as namePromptFor, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from '../hooks/name.ts'
 import { repoName } from './mod-kit/hooks/repo.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
@@ -10,6 +11,14 @@ const OPEN_Q = String.fromCharCode(0x201c)
 const CLOSE_Q = String.fromCharCode(0x201d)
 // The curly apostrophe in the work MacBook's checkout paths (Documents - Dan's MacBook Pro).
 const APOS = String.fromCharCode(0x2019)
+
+// What Dan sent, as the prompt.submit hook records it (#1123): in these tests every user message with
+// text is his, typed at the terminal, as the transcripts these shapes were measured from had it. A
+// tool result has no text and never passes through prompt.submit.
+const typed = (messages: readonly SessionMessage[]): Dans =>
+  messages.filter(m => m.role === 'user' && m.text.trim()).reduce((d, m) => withDans(d, m.text, false), NO_DANS)
+const hasExchange = (messages: readonly SessionMessage[]) => hasExchangeFor(messages, typed(messages))
+const namePrompt = (messages: readonly SessionMessage[]) => namePromptFor(messages, typed(messages))
 
 test('a plain reply is kept as it is', async () => {
   expect(cleanName('Fix the invoice table layout')).toEqual({ name: 'Fix the invoice table layout' })
@@ -177,6 +186,57 @@ test('an opening with an image and words is named from the words', async () => {
   const p = namePrompt(messages)
   expect(p).toContain('Opening request:\nWhy is this button misaligned on the settings page')
   expect(p).not.toContain('[Image #1]')
+})
+
+// #1123: whose words they are is the engine's mark at prompt.submit, never the transcript's role.
+test("Dan's words are his typed, phone and handoff messages; a notice, a peer's or another plugin's are not", async () => {
+  expect(isDans({ kind: 'composer' })).toBe(true)
+  expect(isDans({ kind: 'bridge' })).toBe(true)
+  expect(isDans({ kind: 'plugin', name: 'handoff', asUser: true })).toBe(true)
+  for (const o of [
+    { kind: 'task-notification' },
+    { kind: 'peer' },
+    { kind: 'peer-send-message' },
+    { kind: 'scheduled-trigger' },
+    { kind: 'unclassified' },
+    { kind: 'sdk' },
+    { kind: 'plugin', name: 'scope-modes' },
+    { kind: 'plugin', name: 'some-plugin', asUser: true },
+    { kind: 'plugin', name: 'handoff' },
+  ])
+    expect(isDans(o)).toBe(false)
+})
+
+test('a user message Dan was not recorded sending opens no name and is not read as the person', async () => {
+  const NOTICE = '<task-notification> <summary>Background command completed</summary> </task-notification>'
+  const messages = [imageOnly(), reply(ASKS), { role: 'user' as const, text: NOTICE, toolUses: [] }, reply('The command finished.')]
+  const his = withDans(NO_DANS, '[Image #1]', true)
+  expect(hasExchangeFor(messages, his)).toBe(false)
+  const later = [...messages, { role: 'user' as const, text: 'Fix the overflow', toolUses: [] }, reply('Looking.')]
+  const p = namePromptFor(later, withDans(his, 'Fix the overflow', false))
+  expect(p).toContain('Opening request:\nFix the overflow')
+  expect(p).toContain('Person: Fix the overflow')
+  expect(p).not.toContain('task-notification')
+})
+
+test("Dan's record keeps his first words and his newest few, and counts his image only messages", async () => {
+  let d = NO_DANS
+  d = withDans(d, '[Image #1]', true)
+  d = withDans(d, '', true)
+  d = withDans(d, '   ', false)
+  expect(d).toEqual({ words: [], imageTurns: 2 })
+  for (let i = 1; i <= 12; i++) d = withDans(d, `[Image #${i}] message ${i}`, true)
+  expect(d.words[0]).toBe('message 1')
+  expect(d.words.length).toBe(9)
+  expect(d.words.at(-1)).toBe('message 12')
+  expect(d.imageTurns).toBe(2)
+})
+
+test("Dan's first words recorded are the opening request even when the transcript shows them changed", async () => {
+  const d = withDans(NO_DANS, 'Fix the export', false)
+  const messages = [{ role: 'user' as const, text: 'Fix the export (rewritten by a hook)', toolUses: [] }, reply('On it.')]
+  expect(hasExchangeFor(messages, d)).toBe(true)
+  expect(namePromptFor(messages, d)).toContain('Opening request:\nFix the export')
 })
 
 test('the rename command answer is read by the shapes the built-in /rename prints', async () => {

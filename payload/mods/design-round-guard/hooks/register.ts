@@ -32,7 +32,6 @@ import {
   isGroupPattern,
   isPattern,
   isTestPath,
-  patternFolder,
   patternMayBeLook,
   relTo,
   shapeKind,
@@ -101,7 +100,8 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({ cwd: await $.se
 
 // One file a call would write: its absolute path, or only the word naming it when the reader could
 // not follow where that is; and the text it will hold, where the call carries it.
-type Target = { path?: string; word: string; text?: string }
+// `folder`, for a shell write whose name is a pattern, is where mod-kit's write reader placed it (#1123).
+type Target = { path?: string; folder?: string; word: string; text?: string }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -117,9 +117,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const command = String(input.command ?? '')
   const w = await $.modkit.writes({ command, cwd: at.cwd, home: at.home })
   const targets: Target[] = []
-  for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}) })
+  for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
-  for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}) })
+  for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}) })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {
@@ -260,11 +260,12 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   let why = ''
   for (const t of targets) {
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
-    // the checkout its folder is in, when that folder is spelled out from the top of the disk or home
-    // (a cd before it cannot move it). A folder in no checkout is in no project, whatever the name.
-    // A group (`x.(css|md)`) is read as a name by mod-kit, which follows its folder, a cd included.
+    // the checkout its folder is in, wherever mod-kit's write reader could place it (#1123): relative
+    // or spelled from the top of the disk or home, a cd before it followed. A folder in no checkout is
+    // in no project, whatever the name. A group (`x.(css|md)`) is read as a name by mod-kit, which
+    // gives it a path.
     if (tool === 'Bash' && (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word))) {
-      const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : patternFolder(t.word, at.home)
+      const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
       let tree: string | null | undefined
       if (folder !== undefined) {
         try {
