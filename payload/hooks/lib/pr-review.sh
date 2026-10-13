@@ -124,9 +124,9 @@ case "$PRR_MAX_GROUPS" in ''|*[!0-9]*|0) PRR_MAX_GROUPS=8 ;; esac
 PRR_HISTORY_MAX="${PR_REVIEW_HISTORY_MAX_BYTES:-16384}"
 case "$PRR_HISTORY_MAX" in ''|*[!0-9]*) PRR_HISTORY_MAX=16384 ;; esac
 # Reading the pull request's description and comments (claude-config#1161): tries in all and the
-# seconds between them, chosen rather than measured, and kept small because the read is made inside
-# the push and merge gates, whose hooks have 150 and 60 seconds. No retry is begun past
-# PRR_PR_READ_BUDGET seconds from the first try. PR_REVIEW_SLEEP is the command waited through, so a
+# seconds between them, chosen, not measured, and kept small because the read is made inside the
+# push and merge gates, whose hook timeouts in settings.hooks.json it must stay well inside. No
+# retry is begun past PRR_PR_READ_BUDGET seconds from the first try. PR_REVIEW_SLEEP is the command waited through, so a
 # test never waits on a clock (L524).
 PRR_PR_TRIES="${PR_REVIEW_PR_READ_TRIES:-3}"
 case "$PRR_PR_TRIES" in ''|*[!0-9]*|0) PRR_PR_TRIES=3 ;; esac
@@ -510,7 +510,8 @@ pr_item() {   # $1 = label, $2 = text, $3 = the most its text may take
   body="$(printf '%s\n' "$2" | awk '{ print "    " $0 }')"
   n="$(bytes_of "$body")"
   if [ "$n" -le "$3" ]; then printf '  %s:\n%s\n' "$1" "$body"; return; fi
-  printf '  %s, cut: the first %s of its %s bytes shown:\n%s\n' "$1" "$3" "$n" "$(printf '%s' "$body" | head -c "$3")"
+  # From a here string, never a pipe: head leaving early would fail the pipeline under pipefail.
+  printf '  %s, cut: the first %s of its %s bytes shown:\n%s\n' "$1" "$3" "$n" "$(head -c "$3" <<<"$body")"
 }
 
 pr_words() {   # $1 = the most its description and comments may take, in bytes
