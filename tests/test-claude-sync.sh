@@ -3165,7 +3165,15 @@ check "#1013 and says a send will not carry it, rather than that it goes up" \
 out_rdpull0b="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" pull 2>&1 || true)"
 check "#1013 and the next apply does not say it again" \
   "[ -f '$RDHB/$RDREL' ] && ! line_has \"\$out_rdpull0b\" 'ghargs\.ts' 'will not carry'"
-rm -f "$RDHB/$RDREL" "$RDHB/$RDODD" "$RDHB/$RDMOD/hooks/pulled-own.ts" "$RDR/.resurrected-reported"
+# And the send that meets the same kept copy next stays quiet too: both key the record on the path
+# and the digest of this Mac's copy, so whichever says it first speaks for both. The file the repo
+# never held is set aside first, so this send carries nothing else.
+rm -f "$RDHB/$RDMOD/hooks/pulled-own.ts"
+out_rdsend0="$(env "${RDENV[@]}" SYNC_ACCEPT_DELETIONS=0 CLAUDE_HOME="$RDHB" SYNC_REPO="$RDR" SYNC_HOSTNAME=oldMacB bash "$SCRIPT" send 2>&1 || true)"
+dbg "#1013 send after the apply said it: $out_rdsend0"
+check "#1013 and a send meeting the same kept copy does not say it a second time" \
+  "[ -f '$RDHB/$RDREL' ] && ! git -C '$RDB' cat-file -e 'main:payload/$RDREL' 2>/dev/null && ! line_has \"\$out_rdsend0\" 'NOT publishing' 'ghargs\.ts'"
+rm -f "$RDHB/$RDREL" "$RDHB/$RDODD" "$RDR/.resurrected-reported"
 
 printf 'export const ghargs = "version one"\n' > "$RDHB/$RDREL"
 # Untouched since B last received it, which was before the deletion reached B's clone. Aged rather
