@@ -2453,6 +2453,40 @@ way", so the edit it never wanted stayed.
   still waits on a round. Dan's Not a look change lets one refused call through, so undoing an edit
   he passed that way to a stylesheet is asked about again.
 
+### What #1171 changed, 2026-10-13
+
+Two follow ups from #1165.
+
+- **One scanner of python's comments and strings, in mod-kit.** Ask before saving's #940 reading
+  and mod-kit's `code` each scanned a python program's comments, triple quotes, prefixes and
+  backslashes with the same code. mod-kit now holds it (`pythonText` in `hooks/code.ts`) and gives
+  the spans, `$.modkit.pythonText({ code })`: each comment and string, an f-string or t-string
+  marked `formatted`. What a span means stays each guard's own rule: `code` blanks comments and
+  blocks spanning lines, and ask before saving still counts a memory file a quote closes as a path
+  (#940). A mod-kit that cannot answer (loaded before it had the member) leaves the program whole in
+  ask before saving, so it asks about every memory file the program names, said once.
+  `tools/check-mod-shared-parts.sh` fails a mod scanning them itself (a triple quote, a quote's
+  `.repeat(3)`, an f prefix class).
+- **A quoted heredoc names its files whatever `$` or backtick it holds.** The files a python program
+  names (`targets`, #830) were refused on any `$` or backtick, even under a quoted delimiter where
+  the shell expands nothing, so a heredoc editing a TypeScript test (template literals) or a shell
+  script lost its exact targets and both guards fell back on everything its text quoted. Now
+  `targets` and `code` are both given by mod-kit's one answer on whether the shell left the text as
+  written: from a quoted heredoc, or holding no `$` or backtick, and never in a command
+  substitution. An unquoted heredoc or a double quoted -c holding either still names nothing.
+- **That answer is given once, on every command.** `pipeline` marks a command `asWritten` where the
+  shell left its program's text as written, and ask before saving reads it in place of its own copy
+  of the rule (Dan, 2026-10-13). The write reader places its commands the same way, so a program a
+  command substitution runs is now marked there too: before, the write reader never marked one, and
+  gave such a program its files and its `code` as if the shell had left it alone.
+- Measured over the 4,670 distinct Bash commands running python in this Mac's transcripts: 3,367
+  programs the reader reports as writes, 721 of them named exactly before and 1,988 after. All 1,267
+  that gained were quoted heredocs holding a `$` or a backtick (620 Swift files, 400 shell scripts,
+  141 markdown, 66 `.ts`, 15 `.tsx`); none lost its targets or its `code`.
+- One #940 test's premise moved with it: the session's own command, a quoted heredoc holding
+  `$HOME`, is now judged by the file it names, and its sentence reading is pinned on the same program
+  importing os, whose files stay unnamed.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

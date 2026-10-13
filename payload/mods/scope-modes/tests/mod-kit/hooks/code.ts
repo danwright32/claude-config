@@ -1,3 +1,4 @@
+import type { ModKitPythonText } from '../types/index.d.ts'
 import type { Lang } from './program.ts'
 
 // What inline code can do, judged per language from that language's own surface (lessons review
@@ -472,8 +473,9 @@ const first = (rules: Rule[], code: string): string | undefined => {
 // which file it wrote. Named only when the judge's every write route found is an open for writing or
 // a pathlib write_text or write_bytes, each of a plain string literal or of a name bound once, by a
 // plain assignment, to one (or to Path of one). Anything else the judge reads as a write, a process,
-// code built at run time, a change of folder, a literal the shell may have expanded ($, a backtick)
-// or a string with an escape or a format in it leaves the files unnamed, and a reader falls back on
+// code built at run time, a change of folder, a path literal holding a $ or a backtick (which the
+// path resolver would read as the shell's, though python reads it as it is) or a string with an
+// escape or a format in it leaves the files unnamed, and a reader falls back on
 // what the text mentions. Like the judge, it reads the text, so a call inside a string counts too:
 // it can only add a file, never hide one.
 const PY_STRING = /^(?:[rRuUbB]|[rR][bB]|[bB][rR])?(['"])((?:(?!\1)[^\\\n$`])*)\1$/
@@ -623,14 +625,13 @@ const pythonTargets = (code: string): string[] | undefined => {
 /**
  * The files inline code writes, where its text names every one, or undefined when it cannot (any
  * language but python, so far, and a python program importing any module that can write a file). Relative paths are as written: the caller resolves them against the
- * folder the program runs in.
+ * folder the program runs in. `inline` must be the text python reads: the caller asks it only of a
+ * program the shell left as written (writes.ts's shellLeftAsWritten), since in an unquoted heredoc
+ * or a double quoted -c a $ or a backtick anywhere can become any code (lessons review of #846 at
+ * fc410a7, L280). Until #1171 this refused any $ or backtick itself, a quoted heredoc's included.
  */
 export const codeTargets = (lang: Lang, inline: string): string[] | undefined => {
   if (lang !== 'python') return undefined
-  // The text as written is what python reads only where the shell expanded nothing in it: in an
-  // unquoted heredoc or a double quoted -c a $ or a backtick anywhere can become any code (lessons
-  // review of #846 at fc410a7, L280). Whether it was quoted is not asked: refusing costs a question.
-  if (/[$`]/.test(inline)) return undefined
   if (!onlyQuietModules(inline)) return undefined
   return pythonTargets(SURFACES.python.canonical?.(inline) ?? inline)
 }
@@ -658,42 +659,59 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
   if (first(s.process, canonical) || first(s.dynamic, canonical)) return undefined
   const blank = (t: string) => t.replace(/[^\n]/g, ' ')
   let out = ''
+  let at = 0
+  for (const t of pythonText(inline)) {
+    out += inline.slice(at, t.from)
+    const body = inline.slice(t.from, t.to)
+    if (t.kind === 'comment') out += blank(body)
+    else if (t.kind === 'formatted' || !body.includes('\n')) out += body
+    else {
+      // The last word, kept with whatever space follows it (a .strip() makes it the whole).
+      const last = /[^\s]*\s*$/.exec(body)?.[0] ?? ''
+      out += blank(body.slice(0, body.length - last.length)) + last
+    }
+    at = t.to
+  }
+  out += inline.slice(at)
+  // A program that cuts text into parts may cut a block into the names it opens (`"""a.css\nb.css""".split()`,
+  // a JSON map of files), so where its code does, data cannot be told from names (lessons review).
+  return PARSES.test(out) ? undefined : out
+}
+
+/**
+ * Where a python program holds text rather than code (#1171, the one scanner for it): each comment
+ * after its `#`, and each string literal between its quotes, `formatted` for an f-string or a
+ * t-string, whose braces hold code. Read as python reads it: a backslash keeps a string open (in a
+ * raw string too), one with a single quote ends at its line, and one never closed runs to the end.
+ * What each reader does with a span is its own rule: codeOnly blanks comments and blocks spanning
+ * lines for the design round guard (#1165), and ask before saving takes a mention of lasting memory
+ * in text for a sentence unless a quote closes it (#940), reading these through $.modkit.pythonText.
+ */
+export const pythonText = (code: string): ModKitPythonText[] => {
+  const out: ModKitPythonText[] = []
   let i = 0
-  while (i < inline.length) {
-    const ch = inline[i] as string
+  while (i < code.length) {
+    const ch = code[i] as string
     if (ch === '#') {
-      const end = inline.indexOf('\n', i)
-      const to = end === -1 ? inline.length : end
-      out += `#${blank(inline.slice(i + 1, to))}`
+      const end = code.indexOf('\n', i)
+      const to = end === -1 ? code.length : end
+      out.push({ kind: 'comment', from: i + 1, to })
       i = to
       continue
     }
     if (ch !== "'" && ch !== '"') {
-      out += ch
       i++
       continue
     }
-    // A string literal, read as python reads it: a backslash keeps it open (in a raw string too), and
-    // one with a single quote ends at its line.
-    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(inline.slice(Math.max(0, i - 3), i))?.[1] ?? ''
-    const q = inline.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
+    const prefix = /(?:^|[^\w])([A-Za-z]{1,2})$/.exec(code.slice(Math.max(0, i - 3), i))?.[1] ?? ''
+    const q = code.startsWith(ch.repeat(3), i) ? ch.repeat(3) : ch
     let j = i + q.length
-    while (j < inline.length && !inline.startsWith(q, j) && (q.length === 3 || inline[j] !== '\n')) j += inline[j] === '\\' ? 2 : 1
-    const to = Math.min(j, inline.length)
-    const body = inline.slice(i + q.length, to)
-    const closed = inline.startsWith(q, to)
-    if (/[fFtT]/.test(prefix) || !body.includes('\n')) out += q + body
-    else {
-      // The last word, kept with whatever space follows it (a .strip() makes it the whole).
-      const last = /[^\s]*\s*$/.exec(body)?.[0] ?? ''
-      out += q + blank(body.slice(0, body.length - last.length)) + last
-    }
-    if (closed) out += q
-    i = to + (closed ? q.length : 0)
+    while (j < code.length && !code.startsWith(q, j) && (q.length === 3 || code[j] !== '\n')) j += code[j] === '\\' ? 2 : 1
+    const to = Math.min(j, code.length)
+    out.push({ kind: /[fFtT]/.test(prefix) ? 'formatted' : 'string', from: i + q.length, to })
+    i = to + (code.startsWith(q, to) ? q.length : 0)
   }
-  // A program that cuts text into parts may cut a block into the names it opens (`"""a.css\nb.css""".split()`,
-  // a JSON map of files), so where its code does, data cannot be told from names (lessons review).
-  return PARSES.test(out) ? undefined : out
+  return out
 }
 // Python's ways of cutting text into parts: str's split and partition, a pattern's matches, and the
 // parsers of structured text (json, yaml, toml, csv, ast, shlex, configparser).

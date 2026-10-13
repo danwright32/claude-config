@@ -90,6 +90,7 @@ const deps: { name: string; register: Register } = {
             return kit('isDans', input)
           },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+          pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),

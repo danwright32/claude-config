@@ -1,5 +1,5 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
-import { git, readLine, type Command, type Line } from './commands.ts'
+import { git, placed, readLine, type Command, type Line } from './commands.ts'
 import { codeOnly, codeTargets } from './code.ts'
 import { kindOf } from './program.ts'
 
@@ -694,8 +694,10 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       // A script file named as an operand, or a program file (awk -f), is not guessed at.
     } else if (p && 'unreadable' in p) unnamed.push({ what: onStdin, words: written, inputs: [] })
     else if (c.verdict) {
+      // Read as python reads it only where the shell cannot have changed it (#1165, #1171).
+      const asWritten = c.asWritten === true
       // The files it writes, where its text names every one and each resolves from here (#830).
-      const named = c.verdict.does === 'write files' && c.language && p && 'text' in p ? codeTargets(c.language, p.text) : undefined
+      const named = asWritten && c.verdict.does === 'write files' && c.language && p && 'text' in p ? codeTargets(c.language, p.text) : undefined
       const targets = named?.map(abs)
       const known = targets?.every((t): t is string => t !== undefined) ? { targets } : {}
       // Its text and the folder it runs in (#1151), so a guard reads the names in the program it runs,
@@ -704,10 +706,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
       const read = p && 'text' in p ? { program: p.text } : {}
       // And, where its files are not all named, its code: what it holds only as data blanked (#1165),
       // so a guard reads the names it can open, never those a block it puts in a file quotes. Only
-      // for a program the shell cannot have changed, as ask before saving reads one (#940): on
-      // standard input from a quoted heredoc, or holding no $ or backtick, never in a substitution.
-      const asWrittenByShell = p && 'text' in p && !c.substitution && ((p.stdin === true && (c.heredocs ?? []).some(h => h.quoted && !h.replaced && h.fd === undefined)) || !/[$`]/.test(p.text))
-      const code = !('targets' in known) && asWrittenByShell && c.language && p && 'text' in p ? codeOnly(c.language, p.text) : undefined
+      // for a program the shell cannot have changed, as ask before saving reads one (#940).
+      const code = !('targets' in known) && asWritten && c.language && p && 'text' in p ? codeOnly(c.language, p.text) : undefined
       unnamed.push({ what: p && 'text' in p && p.stdin ? onStdin : `an inline ${name} script`, words: written, inputs: [], ...known, ...read, ...(code === undefined ? {} : { code }), ...(dir ? { folder: dir } : {}) })
     }
     else if (c.script?.stdin) unnamed.push({ what: onStdin, words: written, inputs: absAll(c.script.files), script: true })
@@ -818,11 +818,14 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
 // the line changes folder, a relative path a substitution names is left as written (it may run
 // before the cd or after); a variable the line sets is not followed into a substitution, so a path
 // through one is left as written too.
-const lineWrites = (line: Line, cwd: string | undefined, home: string): ModKitWrites => {
-  const cmds = line.filter((c): c is Command => !('sub' in c))
+// Each command is placed as `pipeline` places it (substitution, asWritten), so a program a
+// substitution runs is one the shell may have changed here too (#1171: the write reader never
+// marked one, so its `code` was given for it).
+const lineWrites = (line: Line, cwd: string | undefined, home: string, inSubstitution = false): ModKitWrites => {
+  const cmds = line.filter((c): c is Command => !('sub' in c)).map(c => placed(c, inSubstitution))
   const out = writes(cmds, cwd, home)
   const at = cmds.some(c => MOVES.has(baseOf(c.words[0] ?? ''))) ? undefined : cwd
-  for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home))
+  for (const c of line) if ('sub' in c) merge(out, lineWrites(c.sub, at, home, true))
   return out
 }
 

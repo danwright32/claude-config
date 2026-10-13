@@ -142,6 +142,7 @@ test("a heredoc's body, and the program each command runs, are shared on $.modki
       language: 'python',
       program: { text: "import os; os.system('ls')", stdin: true },
       verdict: { does: 'run a process', seen: 'os.system' },
+      asWritten: true,
     },
   ])
 })
