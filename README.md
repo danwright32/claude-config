@@ -832,6 +832,16 @@ Each Mac mints lesson numbers from a band it owns, so two lessons written betwee
 claim the same number. `claude-sync next-lesson` prints the next free number in this Mac's band, and
 `check-lessons` fails on a duplicate anywhere in the file.
 
+A number is free only when neither copy holds it: the next number is one past the highest in this
+Mac's band across `~/.claude` AND the payload. The local copy covers a lesson written here and not
+sent yet; the payload covers a number already published that this Mac's copy no longer holds, whose
+references in filed issues nothing here can reach (claude-config#1140). `lesson-fanout.sh` refuses a
+number `lesson-faults` reports as used more than once, because `claude-sync lesson` answers with the
+first entry under that number and the sweep issues would carry whichever rule that is.
+
+`next-lesson` does not RESERVE the number it prints. Two sessions asking before either has written
+are offered the same one, and the duplicate check catches it only once both are written.
+
 An entry has to be written as `- **Lnnn. ...` to be a lesson at all. Everything here reads only that
 form, so one written any other way (a heading, a list item with the bold left off) is invisible to
 all of it at once: absent from the generated index that loads into every session, unretrievable by

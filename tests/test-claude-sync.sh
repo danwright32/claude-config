@@ -11217,6 +11217,46 @@ check "#513 while a real number is accepted, or the merge could never renumber a
 check "#513 the merge decides through that one predicate" \
   "grep -q 'usable_lesson_start' '$SCRIPT'"
 
+section "== a lesson number either copy holds is never minted again (claude-config#1140) =="
+# On 2026-10-13 L762 was minted twice on one Mac, and lesson-fanout.sh then filed twelve sweep
+# issues carrying the wrong lesson's text. The issue read it as next-lesson counting only the
+# payload; measured here, it counted only the LOCAL rule files, so the case the issue names (a lesson
+# written here and not yet sent) was already counted, and the opposite one was not: a number the
+# payload holds and this Mac's copy does not was offered again. That happens to a number already
+# PUBLISHED, so references to it exist where nothing local can reach them, and reusing it makes
+# every one of them ambiguous. The minter now takes the highest over BOTH copies, inside this
+# Mac's band, and the band's room is judged over the same files, or the two would disagree about
+# whether a band is full and the backstop inside next_lesson_number would refuse instead of rolling.
+NLR="$WORK/nl1140-repo"; NLH="$WORK/nl1140-home"
+mkdir -p "$NLR/payload" "$NLR/lesson-bands" "$NLH"
+echo 501 > "$NLR/lesson-bands/MacWork"
+printf '# rules\n@LESSONS.md\n' > "$NLH/CLAUDE.md"; cp "$NLH/CLAUDE.md" "$NLR/payload/CLAUDE.md"
+_nl1140(){ SYNC_HOSTNAME=MacWork SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 CLAUDE_HOME="$NLH" SYNC_REPO="$NLR" bash "$SCRIPT" "$@" 2>&1; }
+# The case the issue names: written here, not sent. Counted before this change and after it.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L762. written here, not sent.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_local="$(_nl1140 next-lesson)"
+check "#1140 a lesson written here and not yet sent is not offered again" "grep -q '^L763\$' <<< \"\$nl1140_local\""
+# The case that minted a duplicate: the payload holds L762 and this Mac's copy does not.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L762. already published.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_payload="$(_nl1140 next-lesson)"
+check "#1140 a number the payload holds is not offered again" "grep -q '^L763\$' <<< \"\$nl1140_payload\""
+nl1140_check="$(_nl1140 check-lessons)"
+check "#1140 and check-lessons names the same next free number" "grep -q 'next free: L763' <<< \"\$nl1140_check\""
+# The other Mac's band is still not this Mac's business: a payload number above the band moves nothing.
+printf -- '- **L760. a.** body\n- **L761. b.** body\n- **L1001. the other Mac.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_other="$(_nl1140 next-lesson)"
+check "#1140 a number in another Mac's band does not move this Mac's" "grep -q '^L762\$' <<< \"\$nl1140_other\""
+# Room is judged over the same files. The payload has used the band's last number and this Mac's copy
+# has not, so the band is full and must roll over, never refuse with the backstop's spill message.
+printf -- '- **L999. local top.** body\n' > "$NLH/LESSONS.md"
+printf -- '- **L999. local top.** body\n- **L1000. published top.** body\n' > "$NLR/payload/LESSONS.md"
+nl1140_full_rc=0; nl1140_full="$(_nl1140 next-lesson)" || nl1140_full_rc=$?
+check "#1140 a band the payload has filled rolls over rather than refusing" \
+  "[ \"\$nl1140_full_rc\" -eq 0 ] && grep -q '^L1001\$' <<< \"\$nl1140_full\""
+check "#1140 and never hands out a number past the band it was given" "! grep -q 'has no room in it' <<< \"\$nl1140_full\""
+
 section "== a skills entry that cannot load is not carried between Macs (#50) =="
 # payload/skills/humanizer/ and payload/skills/stop-slop/ hold no SKILL.md, so nothing can ever
 # load them, and two loose markdown files sat directly under skills/ where nothing reads them.

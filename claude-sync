@@ -3833,10 +3833,25 @@ lesson_files_in(){   # $1 = tree
   return 0
 }
 
-# Whether band $2 still holds a number that tree $1 has not used.
+# THE FILES A NUMBER IS MINTED AGAINST: the tree asked about AND the payload (claude-config#1140).
+# A number either copy holds is taken. The local tree alone missed a number the payload holds and
+# this Mac's copy does not, which is a number already PUBLISHED: on 2026-10-13 L762 was minted twice,
+# and lesson-fanout.sh filed twelve sweep issues carrying the wrong lesson's text. The payload alone
+# would miss a lesson written here and not sent yet, which is every lesson while a send is stuck.
+# One definition for the minter and the room check, because two readings of which numbers are taken
+# disagree about whether a band is full, and the backstop in next_lesson_number then refuses where
+# the band should have rolled over (L41).
+minting_lesson_files(){   # $1 = tree
+  lesson_files_in "$1"
+  [ "$1" = "$PAYLOAD" ] && return 0
+  [ -d "$PAYLOAD" ] || return 0
+  lesson_files_in "$PAYLOAD"
+}
+
+# Whether band $2 still holds a number that tree $1 (or the payload) has not used.
 lesson_band_has_room(){   # $1 = tree  $2 = band start
   local f files=() highest
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
   # Answered before the array is expanded: under set -u, bash 3.2 errors on expanding an EMPTY
   # array, and a tree with no rule files in it is the fixture every new clone starts from (L486).
   [ "${#files[@]}" -gt 0 ] || return 0
@@ -3896,7 +3911,7 @@ lesson_band_with_room(){   # $1 = tree
 
 next_lesson_number(){   # $1 = tree  $2 = this Mac's band, or empty for the whole range
   local f highest=0 n band="${2:-}" files=()
-  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(lesson_files_in "$1")
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(minting_lesson_files "$1")
   if [ -n "$band" ] && [ "${#files[@]}" -gt 0 ]; then
     highest="$(highest_lesson_in_band "$band" "${files[@]}")"
     if [ "$((highest + 1))" -gt "$((band + LESSON_BAND_SIZE - 1))" ]; then
@@ -6555,7 +6570,7 @@ settle_renumber_mentions(){   # $1 = merged file (tmp)  $2 = arriving file  $3 =
 
 # The highest lesson number visible in the given files, 0 when there are none.
 # The renumber must clear every number in use anywhere, not just the contested
-# one: next_lesson_number covers the local tree, this covers the two merge inputs.
+# one: next_lesson_number covers the local tree and the payload, this covers the two merge inputs.
 highest_lesson_in(){   # $@ = files
   local n
   n="$(grep -hoE '^- \*\*L[0-9]+\.' "$@" 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1 || true)"

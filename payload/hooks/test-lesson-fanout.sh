@@ -100,6 +100,14 @@ chmod +x "$TMP/bin/gh"
 
 cat >"$TMP/bin/claude-sync" <<'STUB'
 #!/usr/bin/env bash
+printf '%s home=%s notify=%s\n' "$*" "${CLAUDE_HOME:-<unset>}" "${SYNC_NO_NOTIFY:-<unset>}" >>"$FAKE/synccalls"
+# lesson-faults answers as the real one does: silent and 0 when the file is sound, otherwise the
+# sentence on stderr and 1. $FAKE/faults holds the sentence, copied from what the real tool printed
+# for a duplicate on 2026-10-13, so the shape the guard parses is the shape it will meet (L48).
+if [ "$1" = "lesson-faults" ]; then
+  [ -f "$FAKE/faults" ] || exit 0
+  cat "$FAKE/faults" >&2; exit 1
+fi
 [ "$1" = "lesson" ] || { echo "fake claude-sync: unhandled $*" >&2; exit 2; }
 f="$FAKE/lessons/$2.txt"
 [ -f "$f" ] || { echo "claude-sync: $2 is not in LESSONS.md" >&2; exit 1; }
@@ -313,6 +321,51 @@ check "many: L900 filed" "Lesson L900 sweep" "$(cat "$FAKE/created")"
 check "many: L901 filed" "Lesson L901 sweep" "$(cat "$FAKE/created")"
 ledger="$(cat "$CLAUDE_HOME/state/lesson-fanout.done")"
 check "many: both in the ledger" "L901 def7654321" "$ledger"
+
+# ---- 16. a number used twice is refused, before anything reaches GitHub (claude-config#1140) ----
+# On 2026-10-13 L762 named two lessons on one Mac, `claude-sync lesson L762` answered with the first,
+# and twelve sweep issues went out carrying the other project's rule. The wording below is what the
+# real lesson-faults printed for a duplicate, L90 included so a shorter number sharing the prefix is
+# in the same sentence as the real one.
+reset_world dup
+printf '%s\n' "claude-sync: the same lesson number is used twice, which silently breaks every reference to it: LESSONS.md: L90 used 2 times;LESSONS.md: L900 used 2 times. Renumber the later entry ('claude-sync next-lesson' prints the next free number)." >"$FAKE/faults"
+run L900
+check_eq "dup: exits nonzero" "1" "$rc"
+check "dup: says it refused that number" "REFUSED L900" "$out"
+check "dup: says which number is used twice, in the tool's own words" "L900 used 2 times" "$out"
+check "dup: says what to do" "next-lesson" "$out"
+check_eq "dup: nothing filed anywhere" "" "$(cat "$FAKE/created" 2>/dev/null)"
+check_not "dup: GitHub is never asked anything" "issue" "$(cat "$FAKE/calls")"
+check_eq "dup: not recorded as fanned out" "" "$(cat "$CLAUDE_HOME/state/lesson-fanout.done" 2>/dev/null)"
+check "dup: the guard reads the home the run reads" "lesson-faults home=$CLAUDE_HOME" "$(cat "$FAKE/synccalls")"
+check "dup: and asks for no desktop notification" "notify=1" "$(cat "$FAKE/synccalls")"
+
+# ---- 17. a duplicate of ANOTHER number, or another fault, refuses nothing ----
+reset_world otherdup
+printf '%s\n' "claude-sync: the same lesson number is used twice, which silently breaks every reference to it: LESSONS.md: L90 used 2 times;LESSONS.md: L9001 used 2 times. Renumber the later entry ('claude-sync next-lesson' prints the next free number)." >"$FAKE/faults"
+run L900
+check_eq "otherdup: exits 0" "0" "$rc"
+check "otherdup: still files" "Lesson L900 sweep" "$(cat "$FAKE/created")"
+check_not "otherdup: refuses nothing" "REFUSED" "$out"
+check "otherdup: and the lesson is read from the same home" "lesson L900 home=$CLAUDE_HOME" "$(cat "$FAKE/synccalls")"
+
+# ---- 18. only the duplicated number is held back in a run of several ----
+reset_world mixdup
+printf '%s\n' "claude-sync: the same lesson number is used twice, which silently breaks every reference to it: LESSONS.md: L900 used 2 times. Renumber the later entry ('claude-sync next-lesson' prints the next free number)." >"$FAKE/faults"
+run L900 L901
+check_eq "mixdup: exits nonzero" "1" "$rc"
+check "mixdup: the sound number is filed" "Lesson L901 sweep" "$(cat "$FAKE/created")"
+check_not "mixdup: the duplicated one is not" "Lesson L900 sweep" "$(cat "$FAKE/created")"
+check "mixdup: says so" "REFUSED L900" "$out"
+check "mixdup: and says the run is not complete" "NOT COMPLETE" "$out"
+
+# ---- 19. a claude-sync that cannot answer the question refuses the run, never skips the guard ----
+reset_world nofaults
+printf '%s\n' "claude-sync: unknown command 'lesson-faults' (try: push, pull)" >"$FAKE/faults"
+run L900
+check_eq "nofaults: exits nonzero" "1" "$rc"
+check "nofaults: says the duplicate check could not run" "could not check" "$out"
+check_eq "nofaults: nothing filed" "" "$(cat "$FAKE/created" 2>/dev/null)"
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
