@@ -463,7 +463,10 @@ ROWS
     # No open pull request and nothing raised here: nothing to say, as before the pull request
     # was read at all.
     [ "$wrc" -eq 3 ] && return 0
-    printf '===== EARLIER REVIEWS OF THIS PULL REQUEST: no earlier review of branch %s on this Mac raised a finding on a head this head descends from. A review on the other Mac may have, and what it raised and the answers given are known here only from the pull request'"'"'s description and comments =====\n' "$branch"
+    # Without a branch the label is the short commit, so the pull request is named instead.
+    local whose="branch $branch"
+    [ "$branch_known" = 1 ] || whose="pull request #$pr_arg"
+    printf '===== EARLIER REVIEWS OF THIS PULL REQUEST: no earlier review of %s on this Mac raised a finding on a head this head descends from. A review on the other Mac may have, and what it raised and the answers given are known here only from the pull request'"'"'s description and comments =====\n' "$whose"
     printf '%s\n' "$words"
     printf '===== END OF EARLIER REVIEWS =====\n\n'
     return 0
@@ -500,7 +503,9 @@ ROWS
 # here, which could raise it again as new. A review's findings reach the pull request as comments
 # beginning "Lessons review", written by whoever answers them (the refusal asks for that): 37 of the
 # 45 comments on the last 100 merged claude-config pull requests, all by the owner, measured
-# 2026-10-13. Such a comment is marked as recording a finding, and the block counts them.
+# 2026-10-13. The mark is wider than that wording on purpose: a comment whose FIRST LINE names the
+# lessons review anywhere ("More lessons review findings...", "On the lessons review at 4250ec8")
+# is marked as recording a finding, which took 40 of those 45, and the block counts them.
 #
 # A read that fails never stops the review: the block says it could not be read and why, so the
 # reviewer knows answers may exist that it was not shown, rather than reading their absence as none

@@ -1583,6 +1583,18 @@ check_eq "#1168 a restart records its own read, not the old failure" "read" "$(c
 out="$(prr check --dir "$REPO" --sha "$M_C" --base-ref main --branch feat/mac2)"
 check_not "#1168 and its verdict no longer says the read failed" "could not read the pull request" "$out"
 
+# With no branch to label it (a detached checkout, no --branch) and only --pr naming the pull
+# request, the block names the pull request, never the short commit as if it were a branch (lessons
+# review of this change).
+M_E="$(G commit -q --allow-empty -m "detached"; G rev-parse HEAD)"
+G checkout -q --detach "$M_E"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$M_E" --base-ref main --pr 77 >/dev/null
+wait_final "$M_E" || bad "#1168 the detached review finished"
+mblock="$(hist_block "$(cat "$FAKE_LOG/stdin")")"
+check "#1168 a review labelled by its commit names the pull request instead" "no earlier review of pull request #77 on this Mac" "$mblock"
+check_not "#1168 and never calls the commit a branch" "of branch ${M_E:0:7}" "$mblock"
+G checkout -q feat/mac2
+
 # The refusal says where an answer goes, so the next review, on either Mac, reads it.
 M_D="$(G commit -q --allow-empty -m "a finding"; G rev-parse HEAD)"
 FAKE_CLAUDE_OUT="$CF" mac_start "$M_D"

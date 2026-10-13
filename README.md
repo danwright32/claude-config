@@ -655,7 +655,8 @@ once, when the review starts, on every review that names a branch or a pull requ
 (claude-config#1168, Dan 2026-10-13: read the pull request each time). Each Mac keeps its reviews in
 its own state folder, so what a review on the other Mac raised is known here only from the pull
 request: a review's findings reach it as comments beginning "Lessons review" (the refusal asks for
-answers there), which the input marks and counts, and when this Mac raised nothing the block says
+answers there). The input marks and counts every comment whose first line names the lessons review,
+which also catches wordings like "On the lessons review at ...", and when this Mac raised nothing the block says
 so and gives the pull request's words alone. A branch with no open pull request and nothing raised
 here has no block at all. The pull request is the one the merge helper or the merge
 gate names (`--pr`), else the branch's open one, which is how a review the push gate or a commit
