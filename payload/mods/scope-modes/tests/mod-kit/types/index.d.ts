@@ -225,6 +225,14 @@ export type ModKit = {
    * click lands and says what to do instead elsewhere. Pass the render hook's `e`.
    */
   clickable: (site: ModKitClickSite) => Promise<boolean>
+  /**
+   * Whether a prompt is Dan's own words, given `prompt.submit`'s `e.origin` (#1135): only what he
+   * types, at the terminal or from his phone through Remote Control. A handoff's opening prompt he
+   * pressed Use on is not, nor is any other plugin's prompt sent as his, a task notification, a
+   * peer session or a schedule (Dan, 2026-10-13, for every mod). The one answer every mod asks, so
+   * no mod reads the origin's kind for this itself (tools/check-mod-shared-parts.sh).
+   */
+  isDans: (input: { origin: { readonly kind?: string } | undefined }) => Promise<boolean>
 }
 
 /** A repository as `$.modkit.repo` reads it: its GitHub owner/name and its name, each null when there is none. */

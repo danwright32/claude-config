@@ -168,6 +168,23 @@ const clickable = async ($: EngineInterface, e: ClickSite) => {
   }
 }
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Simpler could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.state.set(PROJECT, folderName(e.cwd))
@@ -217,7 +234,9 @@ export const register: Register = on => {
     return next(e)
   })
   on('prompt.submit', async ($, e, next) => {
-    const byDan = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
+    // Dan's own message, as mod-kit's one reader says (#1135): typed or from his phone, never a
+    // handoff's opening prompt or another plugin's.
+    const byDan = await dansWords($, e.origin)
     // Typing /simpler is pressing the button (#939), never typing past it.
     const isPress = /^\/simpler\s*$/.test(e.text.trim())
     if (byDan && !isPress && (await $.state.get(OFFER)).value) await $.state.set(OFFER, null)

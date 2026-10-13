@@ -3,6 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On, PromptOrigin, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { LONG_WORDS, REPORT_EVERY_MS, judge, requestText } from '../hooks/simpler.ts'
+import { isDans } from './mod-kit/hooks/origin.ts'
 
 const DAY = 24 * 60 * 60 * 1000
 const SURFACES = ['terminal', 'desktop'] as const
@@ -63,6 +64,11 @@ const world = (on: On, opts: { now?: number; store?: Record<string, unknown>; dr
     const [cmd, ...rest] = e.argv
     const path = rest.filter(a => !a.startsWith('-'))[0] ?? ''
     const r = (exitCode: number, stderr = '') => ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
+    // mod-kit's reader of whether a prompt is Dan's words (#1135), as the stand-in below asks it: its own copy.
+    if (cmd === '__modkit' && rest[0] === 'isDans') {
+      const { origin } = JSON.parse(rest[1] as string) as { origin: never }
+      return { value: { exitCode: 0, stdout: JSON.stringify(isDans(origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     if (cmd === 'mkdir' && rest.includes('-p')) return r(0)
     if (cmd === 'mkdir') {
       if (disk.mkdirFails) return r(1, disk.mkdirFails)
@@ -106,6 +112,14 @@ const modKit: { name: string; register: Register } = {
       }
       const modkit = {
         clickable: async () => (await built.env.get('NO_CLICKS')) !== '1',
+        // #1135: whether a prompt is Dan's words, asked of the world, which reads with mod-kit's own copy.
+        isDans: async (input: { origin: unknown }) => {
+          // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+          if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
+          const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout) as boolean
+        },
         press: never('press'),
         bandRow: never('bandRow'),
         clearBandRow: never('clearBandRow'),
@@ -299,6 +313,37 @@ test("disappears when Dan sends from the phone, not when a background task's not
   ui = await mountReply($, 'terminal')
   expect(await ui.find({ key: 'simpler' })).toBeUndefined()
   await ui.unmount()
+})
+
+// #1135: only what Dan types takes the button away, at the Mac or from his phone, as in every mod
+// (Dan, 2026-10-13): a handoff's opening prompt he pressed Use on is not his message, nor is a notice.
+for (const [who, origin, counts] of [
+  ['typed at the terminal', { kind: 'composer' }, true],
+  ['sent from his phone through Remote Control', { kind: 'bridge' }, true],
+  ["a handoff's opening prompt he pressed Use on", { kind: 'plugin', name: 'handoff', asUser: true }, false],
+  ['a background task notification', { kind: 'task-notification' }, false],
+] as [string, PromptOrigin, boolean][]) {
+  test(`a message ${who} ${counts ? 'takes the button away' : 'leaves the button'}`, KIT, async ($, on) => {
+    world(on)
+    await start($)
+    await answer($, LONG)
+    await submitAs($, origin)
+    const ui = await mountReply($, 'terminal')
+    if (counts) expect(await ui.find({ key: 'simpler' })).toBeUndefined()
+    else expect(await ui.find({ key: 'simpler' })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test("a reader mod-kit cannot answer leaves the button, said once", KIT, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await answer($, LONG)
+  for (let i = 0; i < 2; i++) await submitAs($, { kind: 'composer', breaks: true } as never)
+  const ui = await mountReply($, 'terminal')
+  expect(await ui.find({ key: 'simpler' })).toBeDefined()
+  await ui.unmount()
+  expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
 })
 
 test('pressing it submits the request as Dan, logs the press with the kind, and takes the button away', KIT, async ($, on) => {

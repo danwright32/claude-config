@@ -58,6 +58,7 @@ const kit: { name: string; register: Register } = {
           // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
           press: async () => ({ isAnswered: false }),
           clickable: async () => true,
+          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         },
       }
     })

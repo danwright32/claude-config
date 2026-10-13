@@ -71,6 +71,7 @@ const deps: { name: string; register: Register } = {
           // #939: a press raised by the kit's Button below, and whether a click lands; every Button here is clickable.
           press: async () => ({ isAnswered: false }),
           clickable: async () => true,
+          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),
@@ -117,6 +118,22 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 // What mod-kit's readers give for each request these tests make (commands, writes and git), each
 // measured from the reader itself (#712).
 const KIT = new Map<string, unknown>([
+  // #1136: what git itself changes, measured from mod-kit's readers on 2026-10-13.
+  ["commands {\"command\":\"git checkout main -- notes.txt\"}",[["git","checkout","main","--","notes.txt"]]],
+  ["git {\"words\":[\"git\",\"checkout\",\"main\",\"--\",\"notes.txt\"]}",{"sub":"checkout","args":["main","--","notes.txt"]}],
+  ["writes {\"command\":\"git checkout main -- notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}],
+  ["commands {\"command\":\"git restore notes.txt\"}",[["git","restore","notes.txt"]]],
+  ["git {\"words\":[\"git\",\"restore\",\"notes.txt\"]}",{"sub":"restore","args":["notes.txt"]}],
+  ["writes {\"command\":\"git restore notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true}]}],
+  ["commands {\"command\":\"git rm notes.txt\"}",[["git","rm","notes.txt"]]],
+  ["git {\"words\":[\"git\",\"rm\",\"notes.txt\"]}",{"sub":"rm","args":["notes.txt"]}],
+  ["writes {\"command\":\"git rm notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"remove"}]}],
+  ["commands {\"command\":\"git mv notes.txt docs/old.txt\"}",[["git","mv","notes.txt","docs/old.txt"]]],
+  ["git {\"words\":[\"git\",\"mv\",\"notes.txt\",\"docs/old.txt\"]}",{"sub":"mv","args":["notes.txt","docs/old.txt"]}],
+  ["writes {\"command\":\"git mv notes.txt docs/old.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"docs/old.txt","path":"/repo/docs/old.txt","does":"write"},{"word":"docs/old.txt/notes.txt","path":"/repo/docs/old.txt/notes.txt","does":"write","tree":true},{"word":"notes.txt","path":"/repo/notes.txt","does":"remove","tree":true}]}],
+  ["commands {\"command\":\"git rm -r src\"}",[["git","rm","-r","src"]]],
+  ["git {\"words\":[\"git\",\"rm\",\"-r\",\"src\"]}",{"sub":"rm","args":["-r","src"]}],
+  ["writes {\"command\":\"git rm -r src\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"src","path":"/repo/src","does":"remove","tree":true}]}],
   // #751: one command writing a file whose note fails beside one whose note lands, measured from
   // mod-kit's readers on 2026-10-05.
   ["commands {\"command\":\"echo x > unwritable.txt; echo y > fine.txt\"}", [["echo","x",">","unwritable.txt"],["echo","y",">","fine.txt"]]],
@@ -750,6 +767,33 @@ test('an rm of a file another open session edited is judged, and a Stop blocks i
   // Dan, 2026-10-04 (#700): a removal says remove, where #674 had kept the edit words.
   expect(w.sent[0]?.text).toBe('Another session wanted to remove "notes.txt" while you are working on it, so it was stopped. Nothing here was touched.')
   expect(w.edits).toEqual([])
+})
+
+// #1136: what git itself changes is judged as a shell write is (Dan, 2026-10-13): a checkout of a
+// path or a restore puts back a file another session is editing, git rm or a git mv takes it away.
+for (const [command, doing, said] of [
+  ['git checkout main -- notes.txt', 'edit', 'write /repo/notes.txt with the shell command: git checkout main -- notes.txt'],
+  ['git restore notes.txt', 'edit', 'write /repo/notes.txt with the shell command: git restore notes.txt'],
+  ['git rm notes.txt', 'remove', 'remove /repo/notes.txt with the shell command: git rm notes.txt'],
+  ['git mv notes.txt docs/old.txt', 'remove', 'remove /repo/notes.txt with the shell command: git mv notes.txt docs/old.txt'],
+] as const) {
+  test(`${command} on a file another open session edited is judged, and a Stop blocks it`, withDeps, async ($, on) => {
+    const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are still writing it."}' })
+    const r = await $.tool.call(bash(command, 'g1'))
+    expect(w.reached).not.toContain('Bash')
+    expect(w.prompts[0]?.prompt).toContain(said)
+    expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are still writing it. Leave it to the other session, or ask Dan.')
+    expect(w.sent[0]?.text).toBe(`Another session wanted to ${doing} "notes.txt" while you are working on it, so it was stopped. Nothing here was touched.`)
+    expect(w.edits).toEqual([])
+  })
+}
+
+test('git rm -r of a folder holding a file another session edited is judged on that file, and noted once it runs', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/src/deep/InvoiceTable.tsx'] })] })
+  await $.tool.call(bash('git rm -r src'))
+  expect(w.prompts[0]?.prompt).toContain('remove /repo/src and everything in it, including /repo/src/deep/InvoiceTable.tsx, with the shell command: git rm -r src')
+  expect(w.reached).toContain('Bash')
+  expect(w.edits).toEqual(['/repo/src'])
 })
 
 test('an rm of a file another open session edited, judged Proceed, says safe to remove', withDeps, async ($, on) => {

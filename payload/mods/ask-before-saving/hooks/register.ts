@@ -372,11 +372,37 @@ const agentRefusal = ({ files, guessed }: Targets) =>
 type AskInput = { questions?: { question?: unknown; header?: unknown; options?: unknown; multiSelect?: unknown }[]; answers?: unknown; metadata?: { source?: unknown; rule?: unknown } }
 type AskResult = { answers?: Record<string, unknown>; questions?: { question?: unknown }[]; response?: unknown; afkTimeoutMs?: unknown }
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`Ask before saving could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
-  // Dan's latest message of his own, typed or from his phone, read for the words that already make
-  // a rule permanent. A peer session's or a plugin's message never counts.
+  // Dan's latest message of his own, typed or from his phone as mod-kit's one reader says (#1135),
+  // read for the words that already make a rule permanent. A peer session's or a plugin's message,
+  // a handoff's opening prompt included, never counts.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') await $.state.set(promptRef, e.text)
+    if (await dansWords($, e.origin)) {
+      // Noting his words never holds up his message (L73): a note that cannot be made is said, and
+      // words in it that make a rule permanent then do not skip the question.
+      try {
+        await $.state.set(promptRef, e.text)
+      } catch (err) {
+        $.ui.log(`Ask before saving could not note your message (${err instanceof Error ? err.message : String(err)}), so words in it that make a rule permanent will not skip the question.`)
+      }
+    }
     return next(e)
   })
 

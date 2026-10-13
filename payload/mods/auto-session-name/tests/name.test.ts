@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionMessage } from 'claude-code'
-import { cleanName, type Dans, describesImage, hasExchange as hasExchangeFor, isDans, namePrompt as namePromptFor, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from '../hooks/name.ts'
+import { cleanName, type Dans, describesImage, hasExchange as hasExchangeFor, namePrompt as namePromptFor, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from '../hooks/name.ts'
 import { repoName } from './mod-kit/hooks/repo.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 
@@ -186,25 +186,6 @@ test('an opening with an image and words is named from the words', async () => {
   const p = namePrompt(messages)
   expect(p).toContain('Opening request:\nWhy is this button misaligned on the settings page')
   expect(p).not.toContain('[Image #1]')
-})
-
-// #1123: whose words they are is the engine's mark at prompt.submit, never the transcript's role.
-test("Dan's words are his typed, phone and handoff messages; a notice, a peer's or another plugin's are not", async () => {
-  expect(isDans({ kind: 'composer' })).toBe(true)
-  expect(isDans({ kind: 'bridge' })).toBe(true)
-  expect(isDans({ kind: 'plugin', name: 'handoff', asUser: true })).toBe(true)
-  for (const o of [
-    { kind: 'task-notification' },
-    { kind: 'peer' },
-    { kind: 'peer-send-message' },
-    { kind: 'scheduled-trigger' },
-    { kind: 'unclassified' },
-    { kind: 'sdk' },
-    { kind: 'plugin', name: 'scope-modes' },
-    { kind: 'plugin', name: 'some-plugin', asUser: true },
-    { kind: 'plugin', name: 'handoff' },
-  ])
-    expect(isDans(o)).toBe(false)
 })
 
 test('a user message Dan was not recorded sending opens no name and is not read as the person', async () => {

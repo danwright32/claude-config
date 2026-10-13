@@ -11,6 +11,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
 import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
+import { isDans } from './origin.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -317,6 +318,7 @@ export const register: Register = (on, options) => {
       // The bottom of every press (#939): reached only when no publisher's modkit.press hook took it.
       press: async () => ({ isAnswered: false }),
       clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM'), isAppleTerminalTrusted),
+      isDans: async ({ origin }) => isDans(origin),
     }
     return { ...built, modkit }
   })

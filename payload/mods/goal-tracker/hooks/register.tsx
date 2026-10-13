@@ -259,16 +259,10 @@ const paneStart = async ($: EngineInterface) => {
   await $.command.register({ name: 'goals', description: "Every open session's goal and progress" })
 }
 
-// Dan's own words: typed at the terminal, sent from his phone through Remote Control, or a handoff's
-// opening prompt, which the handoff mod submits as his when he presses its Use button (#706). The
-// one rule for every place this module asks whether a prompt is Dan's.
-type Origin = { kind: string; name?: string; asUser?: boolean }
-const isDans = (origin: Origin): boolean =>
-  origin.kind === 'composer' || origin.kind === 'bridge' || (origin.kind === 'plugin' && origin.name === 'handoff' && origin.asUser === true)
-
-// Closed by Dan's next message (picker): a slash command, /goals itself included, is not one.
-const paneOnPrompt = async ($: EngineInterface, e: { text: string; origin: Origin }) => {
-  if (isOpen && isDans(e.origin) && !e.text.trim().startsWith('/')) {
+// Closed by Dan's next message (picker): a slash command, /goals itself included, is not one. Whether
+// a prompt is his is asked once, by the prompt.submit hook below, of mod-kit's one reader (#1135).
+const paneOnPrompt = async ($: EngineInterface, e: { text: string }, isPerson: boolean) => {
+  if (isOpen && isPerson && !e.text.trim().startsWith('/')) {
     stopFollowing()
     // A close that fails never holds up Dan's message (L73); it is said in the debug log.
     try {
@@ -381,6 +375,23 @@ const beginAgain = async ($: EngineInterface) => {
   if (progress) progress = withWaiting(progress)
 }
 
+// Whether a prompt is Dan's own words, asked of mod-kit's one reader (#1135). One that cannot answer
+// (a mod-kit loaded before it had the reader, which a reload can leave, standing rule 5) reads the
+// prompt as not his, the side that changes nothing here, said once in the transcript; the prompt
+// itself always goes on (L73).
+let toldNoReader = false
+const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } | undefined): Promise<boolean> => {
+  try {
+    return await $.modkit.isDans({ origin })
+  } catch (err) {
+    if (!toldNoReader) {
+      toldNoReader = true
+      $.ui.log(`The goal tracker could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+    }
+    return false
+  }
+}
+
 export const register: Register = on => {
   // Everything the module keeps belongs to one session: a later start in the same process begins
   // again rather than reading the last one's (lessons review of #634).
@@ -483,10 +494,13 @@ export const register: Register = on => {
   })
 
   // Dan's first message is the goal text until a /goal is set; a slash command is not a request.
+  // Dan's own words are what he types, at the Mac or from his phone, as mod-kit's one reader says
+  // (#1135, Dan, 2026-10-13): a handoff's opening prompt he pressed Use on is not, which #706 had
+  // counted as the session's first request, nor is any other plugin's prompt or a notification.
   on('prompt.submit', async ($, e, next) => {
-    await paneOnPrompt($, e)
+    const isPerson = await dansWords($, e.origin)
+    await paneOnPrompt($, e, isPerson)
     const result = await next(e)
-    const isPerson = isDans(e.origin)
     const text = e.text.trim()
     // Dan sending a message is never a session waiting on his permission: a mark whose call could
     // not be matched as it returned is cleared here at the latest (lessons review of f0a8ff9).

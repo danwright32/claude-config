@@ -54,6 +54,7 @@ const modKit: { name: string; register: Register } = {
         screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
         press: async () => ({ isAnswered: false }),
         clickable: async () => true,
+        isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
       }
       return { ...built, modkit }
     })
@@ -522,6 +523,33 @@ test('shell writes to a look changing file are caught: redirects, sed in place, 
     BOTH_WAYS(why)
   }
   expect(w.ran).toEqual([])
+})
+
+// #1136: what git itself changes is judged too (Dan, 2026-10-13): a checkout of a path or a restore
+// puts back a look changing file, git rm and git mv take one away, and none had a round asked.
+test('git checkout of a path, git restore, git rm and git mv of a look changing file are held without a settled round', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const [command, shown] of [
+    ['git checkout main -- app/globals.css', 'app/globals.css'],
+    ['git restore app/page.tsx', 'app/page.tsx'],
+    ['git rm components/Header.tsx', 'components/Header.tsx'],
+    ['git mv app/old.css app/new.css', 'app/old.css'],
+    ['git -C /w/slate checkout HEAD~1 -- tailwind.config.ts', 'tailwind.config.ts'],
+  ] as [string, string][]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect([command, why.includes('issue #978 in slate'), why.includes(shown)]).toEqual([command, true, true])
+  }
+  expect(w.ran).toEqual([])
+})
+
+test('git putting back a file that changes no look, or a test, runs; a pathspec git matches across folders is held as one it cannot follow', withKit, async ($, on) => {
+  const w = world($, on)
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git checkout main -- lib/sync.ts' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git restore app/page.test.tsx' }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  const why = refusalOf(await call($, { tool: 'Bash', command: "git checkout main -- '*.css'" }))
+  expect(why).toContain('*.css')
+  expect(w.ran.length).toBe(2)
 })
 
 test("a subagent is refused like the main session and told to stop and report; Dan's answer in the main session lets its retry through", withKit, async ($, on) => {

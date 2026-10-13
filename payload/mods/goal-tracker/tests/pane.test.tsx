@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { isDans } from './mod-kit/hooks/origin.ts'
 
 // The /goals pane (Dan, 2026-10-04, docs/mods-design.md "Goals pane"): every open session on this
 // Mac, two lines each, ordered waiting on you, failed, stalled, working, done, the state word alone
@@ -14,6 +15,15 @@ const deps: { name: string; register: Register } = {
       const built = await next(e)
       return {
         ...built,
+        // mod-kit, standing in (#1135): whether a prompt is Dan's words is its one answer, asked of the
+        // world, which reads with a byte for byte copy of mod-kit's reader under tests/mod-kit.
+        modkit: {
+          isDans: async (input: { origin: unknown }) => {
+            const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout) as boolean
+          },
+        } as never,
         sessions: {
           list: async () => {
             const r = await built.process.run(['__sessions'])
@@ -34,6 +44,11 @@ type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfI
 const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean) => {
   const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0 }
   on('process.run', ($, e) => {
+    // mod-kit's reader, as the stand-in above asks it: mod-kit's own copy (#1135).
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
+      const { origin } = JSON.parse(String(e.argv[2])) as { origin: never }
+      return { value: { exitCode: 0, stdout: JSON.stringify(isDans(origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] !== '__sessions') return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
     const l = listing.now
     return { value: l === 'throws' ? { exitCode: 1, stdout: '', stderr: 'the sessions folder could not be read', isStdoutTruncated: false, isStderrTruncated: false } : { exitCode: 0, stdout: JSON.stringify(l), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -211,6 +226,24 @@ test('the pane closes itself when Dan next sends a message, and stops following'
   await clock.advance(30_000)
   expect(w.invalidated).toBe(after)
 })
+
+// #1135: only what Dan types closes it, at the Mac or from his phone, as in every mod (Dan,
+// 2026-10-13): a handoff's opening prompt he pressed Use on is not his message, nor is a task notification.
+for (const [who, origin, counts] of [
+  ['typed at the terminal', { kind: 'composer' }, true],
+  ['sent from his phone through Remote Control', { kind: 'bridge' }, true],
+  ["a handoff's opening prompt he pressed Use on", { kind: 'plugin', name: 'handoff', asUser: true }, false],
+  ['a background task notification', { kind: 'task-notification' }, false],
+] as [string, object, boolean][]) {
+  test(`a message ${who} ${counts ? 'closes the pane' : 'leaves the pane open'}`, withDeps, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    const w = world(on, { now: FIVE(0) })
+    await start($)
+    await goals($)
+    await $.prompt.submit({ text: 'thanks, carry on', origin, wait: false } as never)
+    expect(w.closed).toEqual(counts ? ['goals'] : [])
+  })
+}
 
 test('a message while the pane is shut closes nothing', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })

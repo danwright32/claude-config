@@ -9,6 +9,7 @@ import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
 import { branchAt } from './mod-kit/hooks/branch.ts'
+import { isDans } from './mod-kit/hooks/origin.ts'
 import { acknowledge, ackOff, ackOn, ackOnSaid, MODE_DEF } from '../hooks/modes.ts'
 
 // The three mods this one depends on, standing in (a mod cannot import another mod's files):
@@ -82,6 +83,12 @@ const deps: { name: string; register: Register } = {
           branch: async (input: { path: string }) => (await kit('branch', input)) ?? null,
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          // #1135: whether a prompt is Dan's words, read by the world with mod-kit's own copy.
+          isDans: async (input: { origin: unknown }) => {
+            // A mod-kit loaded before it had the reader (a reload can leave one, standing rule 5).
+            if ((input as { origin?: { breaks?: true } }).origin?.breaks) throw new TypeError('$.modkit.isDans is not a function')
+            return kit('isDans', input)
+          },
         },
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
@@ -501,6 +508,7 @@ const world = (on: On, o: Opts = {}) => {
       }
       if (a[0] === 'linkRepo' && (o.linkReaderFails || (o.linkReaderFailsOn !== undefined && (input.link ?? '').includes(o.linkReaderFailsOn)))) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
+      if (a[0] === 'isDans') return ok(JSON.stringify(isDans((input as { origin?: never }).origin)))
       const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
@@ -736,7 +744,8 @@ const start = async ($: $T, clock: { settle: () => Promise<void> }) => {
 }
 const command = async ($: $T, name: string, origin: string = 'composer') =>
   (await $.command.run({ command: name, args: '', origin: { kind: origin }, presentation: {} } as never)) as { text?: string; context?: string[] }
-const say = async ($: $T, text: string, origin: string = 'composer') => (await $.prompt.submit({ text, origin: { kind: origin }, wait: false } as never)) as { text: string; context?: string[] }
+const say = async ($: $T, text: string, origin: string | object = 'composer') =>
+  (await $.prompt.submit({ text, origin: typeof origin === 'string' ? { kind: origin } : origin, wait: false } as never)) as { text: string; context?: string[] }
 const bash = (command: string, id = 'c1') => ({ tool: 'Bash', command, tool_use_id: id }) as never
 const edit = (path: string, id = 'c1') => ({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', tool_use_id: id }) as never
 const call = async ($: $T, e: never) => {
@@ -762,6 +771,31 @@ test('the same phrase from another session, a plugin or a notification changes n
   for (const kind of ['peer', 'task-notification', 'unclassified']) await say($ as never, 'no coding yet', kind)
   expect(w.modes).toEqual([])
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
+})
+
+// #1135: only what Dan types switches a mode, at the Mac or from his phone, as in every mod (Dan,
+// 2026-10-13): a handoff's opening prompt he pressed Use on is not his words, nor is a task notification.
+for (const [who, origin, counts] of [
+  ['typed at the terminal', { kind: 'composer' }, true],
+  ['sent from his phone through Remote Control', { kind: 'bridge' }, true],
+  ["a handoff's opening prompt he pressed Use on", { kind: 'plugin', name: 'handoff', asUser: true }, false],
+  ['a background task notification', { kind: 'task-notification' }, false],
+] as [string, object, boolean][]) {
+  test(`a phrase ${who} ${counts ? 'turns no build on' : 'changes no mode'}`, withDeps, async ($, on) => {
+    const { w, clock } = world(on)
+    await start($ as never, clock)
+    await say($ as never, 'no coding yet, just research how the sync works', origin)
+    if (counts) expect(lastModes(w)).toEqual(['NO BUILD'])
+    else expect(w.modes).toEqual([])
+  })
+}
+
+test("a reader mod-kit cannot answer reads a phrase as not Dan's, so no mode switches, said once, and the prompt still goes on", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  for (let i = 0; i < 2; i++) expect((await say($ as never, 'no coding yet', { kind: 'composer', breaks: true })).text).toBe('no coding yet')
+  expect(w.modes).toEqual([])
+  expect(w.logs.filter((l: string) => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
 })
 
 test('/nobuild and /winddown say which mode turned on; /build turns it off and confirms', withDeps, async ($, on) => {

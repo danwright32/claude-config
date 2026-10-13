@@ -109,13 +109,6 @@ const words = (m: SessionMessage) => m.text.replace(IMAGE_PLACEHOLDER, ' ').repl
 export type Dans = { words: readonly string[]; imageTurns: number }
 export const NO_DANS: Dans = { words: [], imageTurns: 0 }
 
-// Dan's own words: typed at the terminal, sent from his phone through Remote Control, or a handoff's
-// opening prompt, which the handoff mod submits as his when he presses its Use button (#706), the
-// same rule goal-tracker reads a session's first request by. Every other origin is not his.
-type Origin = { kind: string; name?: string; asUser?: boolean }
-export const isDans = (origin: Origin): boolean =>
-  origin.kind === 'composer' || origin.kind === 'bridge' || (origin.kind === 'plugin' && origin.name === 'handoff' && origin.asUser === true)
-
 const said = (text: string) => cut(words({ text } as SessionMessage), OPENING_CHARS)
 
 /**
