@@ -94,8 +94,20 @@ findings_dir="${findings_dir%/}"
 findings_path="${findings_dir}/${findings_prefix}${hash}.txt"
 stamp_file="${findings_path%.txt}.$(basename "$transcript" .jsonl).manifest"
 seen_ledger=""
+kept_said=""
 if [ -f "$SPOOL_LIB" ]; then
-  seen_ledger="$(bash "$SPOOL_LIB" seen-ledger "$stamp_file" 2>/dev/null)" || seen_ledger=""
+  # THE MARKS ARE KEPT BESIDE THE SPOOL, AND BOTH COPIES ARE READ (#1019 follow-up). A clear writes
+  # its ledger in the temp directory because it is written exactly when the spool cannot be (L561);
+  # macOS's temp cleaner removes a file untouched for about three days, a mark must last the week of
+  # the ownership window, and this hook can write the spool. So every temp ledger, every project's and
+  # every session's, is copied into its kept copy here, on each working turn rather than only at a
+  # render with findings, because the cleaner does not wait for a review. Reading both means a mark is
+  # honoured whichever copy holds it, including ledgers written before this shipped.
+  kept_said="$(bash "$SPOOL_LIB" keep-ledgers "$findings_dir" "$findings_prefix" 2>&1)" || true
+  _kept_ledger="$(bash "$SPOOL_LIB" kept-ledger "$stamp_file" 2>/dev/null)" || _kept_ledger=""
+  _temp_ledger="$(bash "$SPOOL_LIB" seen-ledger "$stamp_file" 2>/dev/null)" || _temp_ledger=""
+  # One path per line; the reader skips an empty one.
+  seen_ledger="$(printf '%s\n%s' "$_kept_ledger" "$_temp_ledger")"
   pending=$(bash "$SPOOL_LIB" pending "$proj" "$transcript" "$render_stamp" "$seen_ledger" 2>/dev/null) || pending=""
   # Only a real FINDING earns the cooldown bypass. A harvest that FAILED is
   # reported whenever the review next speaks, but does not itself make it speak:
@@ -261,6 +273,12 @@ fi
 reason_args=(--instruction "$INSTRUCTION" --label "END OF TURN ISSUE REVIEW")
 if [ -n "$findings_file" ]; then reason_args+=(--findings "$findings_file"); fi
 if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
+# A seen ledger that could not be kept beside the spool rides in the REASON, not the findings file:
+# a review without findings writes no findings file, and this fault is the same whether or not there
+# are findings, so it goes out with whichever review speaks next (L98). It is a SECOND --extra beside
+# the held back count, and both go out: lib/review-reason.py collects --extra with action="append",
+# which test-review-reason.sh asserts with two of them.
+if [ -n "$kept_said" ]; then reason_args+=(--extra "$kept_said"); fi
 
 payload="$(python3 "$SELF_DIR/lib/review-reason.py" "${reason_args[@]}" 2>/dev/null)" || payload=""
 

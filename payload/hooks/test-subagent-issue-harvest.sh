@@ -2725,6 +2725,26 @@ else
   contains "another session's agent made" "$(bash "$SPOOL_LIB" pending "$CLEARK/proj" "$R1011_B" 2>/dev/null)" \
     && check "#1011 while the owning session is still offered it" ok \
     || check "#1011 while the owning session is still offered it" "it was hidden from its owner"
+  # --- and the mark outlives the temp directory (#1019 follow-up) -------------------------------
+  # The ledger above sits in the temp directory, which macOS's own cleaner empties of files untouched
+  # for about three days, while a seen mark has to last the week of the ownership window. The review
+  # that ran above has kept it beside the spool, so removing the temp copy, as the cleaner would, does
+  # not bring the finding back. The removal is DONE, never waited for (L290).
+  r1019_kept="$(bash "$SPOOL_LIB" kept-ledger "$(printf '%s' "$r1011_cmd" | awk '{print $NF}')" 2>/dev/null)"
+  case "$r1019_kept" in
+    "$CLAUDE_ISSUE_SPOOL_DIR"/*) [ -s "$r1019_kept" ] \
+        && check "#1019 a review keeps the seen ledger beside the spool" ok \
+        || check "#1019 a review keeps the seen ledger beside the spool" "nothing at $r1019_kept" ;;
+    *) check "#1019 a review keeps the seen ledger beside the spool" "kept path=[${r1019_kept:-<none>}]" ;;
+  esac
+  rm -f "$r1011_ledger"
+  r1019_f="$(r1011_review)"
+  contains "this session's own finding" "$(r1011_shown "$r1019_f")" \
+    && check "#1019 with the temp ledger gone the next review still fires" ok \
+    || check "#1019 with the temp ledger gone the next review still fires" "file=${r1019_f:-<none>}"
+  contains "another session's agent made" "$(r1011_shown "$r1019_f")" \
+    && check "#1019 and the other session's finding does not come back" "it came back" \
+    || check "#1019 and the other session's finding does not come back" ok
 fi
 
 # --- SPOOL SOURCE counts what this reader is shown or can file ------------------------------------

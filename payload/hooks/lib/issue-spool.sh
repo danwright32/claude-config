@@ -38,6 +38,10 @@
 #   issue-spool.sh sweep-stamps <dir> <prefix> remove the review's stamps, seen ledgers and
 #                                              findings files older than the ownership window,
 #                                              saying how many (#1019)
+#   issue-spool.sh kept-ledger <stamp>         where that stamp's seen marks are KEPT, beside the
+#                                              spool, past the temp cleaner
+#   issue-spool.sh keep-ledgers <dir> <prefix> copy every temp seen ledger in <dir> into its
+#                                              kept copy; names any it could not keep
 #   issue-spool.sh archive      <dir>          everything already filed
 #   issue-spool.sh clear <dir> [transcript] [stamp]
 #                                              move pending into the archive; with a stamp,
@@ -329,20 +333,25 @@ def unclaimed(ts):
     return (_sdt.datetime.now(_sdt.timezone.utc) - t).total_seconds() >= CLAIM_AFTER
 
 
-def load_seen_ledger(path, reader):
+def load_seen_ledger(paths, reader):
+    """The marks for <reader> in every ledger named, one path per line: the review reads the copy
+    kept beside the spool AND the one a clear wrote in the temp directory (#1019 follow-up)."""
     ids = set()
-    if not path or not reader:
+    if not paths or not reader:
         return ids
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            if fh.readline().strip() != _sos.environ.get("CLAUDE_SPOOL_LEDGER_HEADER", ""):
-                return ids
-            for ln in fh:
-                parts = ln.split()
-                if len(parts) == 2 and parts[0] == reader:
-                    ids.add(parts[1])
-    except OSError:
-        pass
+    for path in str(paths).split("\n"):
+        if not path:
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                if fh.readline().strip() != _sos.environ.get("CLAUDE_SPOOL_LEDGER_HEADER", ""):
+                    continue
+                for ln in fh:
+                    parts = ln.split()
+                    if len(parts) == 2 and parts[0] == reader:
+                        ids.add(parts[1])
+        except OSError:
+            pass
     return ids
 
 
@@ -366,6 +375,99 @@ issue_spool_seen_ledger() { # seen-ledger <stamp> -> the ledger path beside it
   esac
 }
 
+# WHERE THOSE MARKS ARE KEPT (#1019 follow-up). The clear writes its ledger in the temp directory,
+# beside the stamp, and that is deliberate: the ledger exists for the clear that cannot write the
+# spool, so it cannot live under the spool's root (L561). But a mark has to last the ownership window,
+# a week, and macOS's temp cleaner removes a file untouched for about three days (measured on
+# 2026-10-12: 522 review files in the temp directory, none older than 3.5 days), after which the
+# finding it hid came back. So the review, which runs as a hook and can write the spool, copies every
+# temp ledger into a kept one of the same name under `<spool root>/seen/`, and reads both. One
+# derivation, from the stamp, like the temp ledger's (L70).
+issue_spool_kept_ledger() { # kept-ledger <stamp> -> the kept copy of that stamp's ledger
+  local temp
+  temp="$(issue_spool_seen_ledger "${1:-}")" || return 1
+  printf '%s/seen/%s' "$(issue_spool_root)" "$(basename "$temp")"
+}
+
+# Copy the marks of every temp ledger in <dir> named <prefix>*.seen into its kept copy, adding only
+# marks the kept copy does not hold, through a write beside it and a rename, so a reader never sees a
+# half written ledger. COPY, never move: a clear can be appending to a temp ledger at that moment, and
+# a mark it adds after this read is copied at the next review, where a move would have lost it. The
+# temp ledger is left for the sweep and the OS cleaner. A kept ledger is rewritten only when it gains
+# a mark, so its age stays the age of its newest mark, which is what the sweep judges. Says nothing
+# when all went well; names each ledger it could not keep, and why, and exits 1 (L98, L11).
+issue_spool_keep_ledgers() { # keep-ledgers <dir> <prefix>
+  if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+    echo "issue-spool: keep-ledgers needs the review's temp directory and its file name prefix" >&2
+    return 2
+  fi
+  CLAUDE_SPOOL_LEDGER_HEADER="$ISSUE_SPOOL_LEDGER_HEADER" python3 - "$1" "$2" "$(issue_spool_root)/seen" <<'PY'
+import os, stat, sys, tempfile
+
+directory, prefix, kept_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+header = os.environ["CLAUDE_SPOOL_LEDGER_HEADER"]
+
+
+def marks(path):
+    """The lines of a ledger after its header, or None when it has no readable header."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            if fh.readline().strip() != header:
+                return None
+            return [" ".join(ln.split()) for ln in fh if len(ln.split()) == 2]
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return None
+
+
+try:
+    names = sorted(n for n in os.listdir(directory) if n.startswith(prefix) and n.endswith(".seen"))
+except OSError as exc:
+    print("issue-spool: could not list %s to keep the seen ledgers beside the spool: %s"
+          % (directory, exc.strerror or exc))
+    sys.exit(1)
+failed = []
+for name in names:
+    src = os.path.join(directory, name)
+    try:
+        if not stat.S_ISREG(os.lstat(src).st_mode):
+            continue
+    except OSError:
+        continue
+    new = marks(src)
+    if not new:
+        continue
+    dst = os.path.join(kept_dir, name)
+    held = marks(dst)
+    if held is None:
+        held = []  # an unreadable kept copy is started again rather than trusted (as the clear does)
+    have = set(held)
+    add = [m for m in new if m not in have and not have.add(m)]
+    if not add:
+        continue
+    try:
+        os.makedirs(kept_dir, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".keep-", dir=kept_dir)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(header + "\n")
+            for m in held + add:
+                out.write(m + "\n")
+        os.replace(tmp, dst)
+    except OSError as exc:
+        failed.append("%s (%s)" % (name, exc.strerror or exc))
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+if failed:
+    print("issue-spool: could not keep %d seen ledger(s) beside the spool in %s: %s. Their marks are "
+          "still read from %s, until the temp cleaner removes them; the next review tries again."
+          % (len(failed), kept_dir, "; ".join(failed), directory))
+    sys.exit(1)
+PY
+}
+
 # REMOVE THE REVIEW'S SPENT BOOKKEEPING (#1019). The review hook writes, under its temp directory, a
 # findings file per project, a stamp per session (`<prefix><hash>.<session>.manifest`) and, when a
 # clear could not rewrite the spool, a seen ledger beside the stamp. Nothing removed any of them. A
@@ -374,46 +476,60 @@ issue_spool_seen_ledger() { # seen-ledger <stamp> -> the ledger path beside it
 # no longer reads it; and a stamp or findings file that old belongs to a render long superseded. The
 # window is CLAIM_AFTER from ISSUE_SPOOL_SEEN_PY, the same definition those readers use, so the sweep
 # cannot outrun them (L70). Only plain files whose name starts with <prefix> and ends in one of the
-# three suffixes are touched. Says how many it removed, nothing when there were none, and names each
-# file it could not remove and why, exiting 1 (L98, L11).
+# three suffixes are touched, and the kept ledgers under `<spool root>/seen/` the same way. Says how
+# many it removed, nothing when there were none, and names each file it could not remove and why,
+# exiting 1 (L98, L11).
 issue_spool_sweep_stamps() { # sweep-stamps <dir> <prefix>
   if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
     echo "issue-spool: sweep-stamps needs the review's temp directory and its file name prefix" >&2
     return 2
   fi
-  CLAUDE_SPOOL_SEEN_PY="$ISSUE_SPOOL_SEEN_PY" python3 - "$1" "$2" <<'PY'
+  CLAUDE_SPOOL_SEEN_PY="$ISSUE_SPOOL_SEEN_PY" python3 - "$1" "$2" "$(issue_spool_root)/seen" <<'PY'
 import os, stat, sys, time
 exec(os.environ["CLAUDE_SPOOL_SEEN_PY"])
 
-directory, prefix = sys.argv[1], sys.argv[2]
-try:
-    names = os.listdir(directory)
-except OSError as exc:
-    print("issue-spool: could not list %s to remove the review's spent stamp files: %s"
-          % (directory, exc.strerror or exc))
-    sys.exit(1)
+directory, prefix, kept_dir = sys.argv[1], sys.argv[2], sys.argv[3]
 now = time.time()
-removed, failed = 0, []
-for name in sorted(names):
-    if not name.startswith(prefix) or not name.endswith((".manifest", ".seen", ".txt")):
-        continue
-    path = os.path.join(directory, name)
+removed, failed, places, unlisted = 0, [], [], []
+# The temp directory holds all three kinds; the kept ledgers beside the spool (#1019 follow-up) are
+# judged by the same window, since a kept ledger is rewritten only when it gains a mark.
+for where, suffixes, required in ((directory, (".manifest", ".seen", ".txt"), True),
+                                  (kept_dir, (".seen",), False)):
+    # A directory that cannot be listed is a failure named below with the rest, never an exit here:
+    # what the other directory's pass removed has to be reported either way.
     try:
-        st = os.lstat(path)
+        names = os.listdir(where)
     except FileNotFoundError:
-        continue  # another review swept it first
+        if required:
+            unlisted.append("%s (it is not there)" % where)
+        continue  # with no kept ledger yet, nothing to sweep there
     except OSError as exc:
-        failed.append("%s (%s)" % (name, exc.strerror or exc))
+        unlisted.append("%s (%s)" % (where, exc.strerror or exc))
         continue
-    if not stat.S_ISREG(st.st_mode) or now - st.st_mtime < CLAIM_AFTER:
-        continue
-    try:
-        os.remove(path)
-        removed += 1
-    except FileNotFoundError:
-        continue
-    except OSError as exc:
-        failed.append("%s (%s)" % (name, exc.strerror or exc))
+    here = 0
+    for name in sorted(names):
+        if not name.startswith(prefix) or not name.endswith(suffixes):
+            continue
+        path = os.path.join(where, name)
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue  # another review swept it first
+        except OSError as exc:
+            failed.append("%s (%s)" % (path, exc.strerror or exc))
+            continue
+        if not stat.S_ISREG(st.st_mode) or now - st.st_mtime < CLAIM_AFTER:
+            continue
+        try:
+            os.remove(path)
+            here += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failed.append("%s (%s)" % (path, exc.strerror or exc))
+    if here:
+        removed += here
+        places.append(where)
 if CLAIM_AFTER % 86400 == 0:
     window = "%d day" % (CLAIM_AFTER // 86400)
 else:
@@ -421,10 +537,13 @@ else:
 if removed:
     print("Housekeeping, nothing to act on: removed %d of the review's own stamp, seen ledger and "
           "findings files from %s, each untouched for longer than the %s ownership window and so spent."
-          % (removed, directory, window))
+          % (removed, " and ".join(places), window))
+if unlisted:
+    print("issue-spool: could not look in %s for the review's spent files, so none there were removed."
+          % "; ".join(unlisted))
 if failed:
-    print("issue-spool: could not remove %d spent review file(s) from %s: %s"
-          % (len(failed), directory, "; ".join(failed)))
+    print("issue-spool: could not remove %d spent review file(s): %s" % (len(failed), "; ".join(failed)))
+if failed or unlisted:
     sys.exit(1)
 PY
 }
@@ -1794,6 +1913,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     seen-ledger)  issue_spool_seen_ledger "${1:-}" ;;
     sweep-stamps) issue_spool_sweep_stamps "${1:-}" "${2:-}" ;;
+    kept-ledger)  issue_spool_kept_ledger "${1:-}" ;;
+    keep-ledgers) issue_spool_keep_ledgers "${1:-}" "${2:-}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;
