@@ -645,7 +645,11 @@ export const codeTargets = (lang: Lang, inline: string): string[] | undefined =>
  * line break staying, so the text keeps its shape. Undefined where data cannot be told from code: any
  * language but python, a program that runs a process or builds code at run time (exec, eval,
  * compile), either of which can run what a string holds, and one whose code cuts text into parts
- * (PARSES), which can cut a block into the names it opens.
+ * (PARSES), which can cut a block into the names it opens. Like the #940 reading of the same text
+ * (ask before saving's withoutPythonText), it reads the text, not what the program does with it: a
+ * name sliced or searched out of a block at run time is not seen, as a name built at run time
+ * (`'app/' + x + '.tsx'`) never was. Following a block's value to every call it reaches is a parse
+ * of python this reader does not make (lessons review of #1165).
  */
 export const codeOnly = (lang: Lang, inline: string): string | undefined => {
   if (lang !== 'python') return undefined

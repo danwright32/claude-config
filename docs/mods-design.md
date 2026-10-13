@@ -2398,6 +2398,11 @@ write. An agent on #1158 ran a python heredoc editing `writes.test.ts`, whose ne
   whether a program runs a process or builds code, so the blanking is there. Ask before saving does
   not read `code`: its #940 reading counts a memory file a quote closes as a path even inside a
   string, a choice made there, so its behaviour is unchanged (108 of 108 of its tests, untouched).
+- **What it does not see, as #940's reading does not.** It reads the text, not what the program
+  does with it: a name a program slices or searches out of a block at run time is not seen, as a
+  name built at run time (`'app/' + x + '.tsx'`) never was. Cutting a block into a list of names is
+  the common way such a name reaches an open, and that one asks. Following a block's value to every
+  call it reaches would be a parse of python mod-kit does not make (lessons review).
 - Measured over 66 real python3 commands from this Mac's transcripts that open or quote a look file,
   and the held one: 64 programs judged by their text, 50 given `code`, and 8 that lost a name, the
   held one's `app/page.tsx` and seven others, every one data (a doc comment in a Swift block, test
