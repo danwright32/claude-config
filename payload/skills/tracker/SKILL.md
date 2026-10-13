@@ -86,8 +86,10 @@ Do this once, on one Mac; the `/exec` URL and the token stay the same:
 5. Check it, without changing anything, by asking to update a Link no row has:
    `bash tracker.sh update 'https://example.invalid/check-update' 'Check' '{"My Actions":"x"}'`
    The answer `no row has the Link https://example.invalid/check-update; nothing was changed`
-   means update is live. `the deployed web app predates update` means step 4 did not deploy a
-   new version. `bad token` or `token not set` means the TOKEN line does not hold the token from
+   means update is live. `did not say which sheet it is attached to` means the deployed script is
+   older than the current `apps-script.gs` (step 4 did not deploy a new version, or the link in
+   `config.local.json` belongs to a script in another sheet): see "Turning on the sheet check"
+   below. `bad token` or `token not set` means the TOKEN line does not hold the token from
    `config.local.json`: set it as in step 3 and deploy a new version again.
 
 ## Turning on the sheet check (one time, after claude-config#1080)
