@@ -19688,7 +19688,7 @@ check "#566 the rows already there are kept as they were, and the stale END coun
 check "#566 the second pass's file is not touched by the first" \
   "[ \"\$(grep -c . '$LTR/lesson-tags-second.tsv')\" = 3 ]"
 check "#566 and the tags are committed, so the next sync carries them" \
-  "git -C '$LTR' log -1 --format=%s -- lesson-tags.tsv | grep -q 'L3 L5'"
+  "case \"\$(git -C '$LTR' log -1 --format=%s -- lesson-tags.tsv)\" in *'L3 L5'*) true ;; *) false ;; esac"
 check "#566 leaving the working tree clean" "[ -z \"\$(git -C '$LTR' status --porcelain 2>/dev/null)\" ]"
 check "#566 and it says what it recorded" "case \"\$out_lt\" in *lesson-tags.tsv*) true ;; *) false ;; esac"
 lt_commits(){ git -C "$LTR" log --oneline | grep -c .; }
