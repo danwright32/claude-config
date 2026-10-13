@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { AutoSessionNameRecord as Rec } from '../types/index.d.ts'
-import { cleanName, hasExchange, namePrompt, renameOutcome, repoLabel, withRepo } from './name.ts'
+import { cleanName, hasExchange, isDans, namePrompt, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from './name.ts'
 
 // Auto session name (claude-config#635), behaviour agreed with Dan on 2026-10-04: ten minutes after
 // an interactive session starts (or after its first exchange, when nothing was asked by then) it is
@@ -56,6 +56,7 @@ const fresh = (sessionId: string, now: number, isInteractive: boolean | null, kn
   pendingTitle: null,
   madeName: null,
   claim: null,
+  dans: { words: [], imageTurns: 0 },
 })
 
 // A failed attempt: one dim line saying why, then either one retry at the next idle point or none.
@@ -125,14 +126,15 @@ const attempt = async ($: EngineInterface): Promise<void> => {
       return fail($, `the conversation could not be read (${errText(err)})`, mine)
     }
     // Nothing asked and answered yet: the first exchange's end tries again, and this is no failure.
-    if (!hasExchange(messages)) {
+    const dans = claimed.dans ?? NO_DANS
+    if (!hasExchange(messages, dans)) {
       await release()
       return
     }
 
     let reply: string
     try {
-      const r = await $.model.complete({ model: 'haiku', prompt: namePrompt(messages), maxTokens: 60, effort: 'low', timeoutMs: HAIKU_MS })
+      const r = await $.model.complete({ model: 'haiku', prompt: namePrompt(messages, dans), maxTokens: 60, effort: 'low', timeoutMs: HAIKU_MS })
       if (!r.isAnswered) return fail($, haikuWhy(r as { reason?: string; status?: number }), mine)
       reply = r.text
     } catch (err) {
@@ -250,6 +252,27 @@ export const register: Register = on => {
     if (apply) {
       $.ui.log(`${MOD}: named by sessionTitle on this message`, { to: 'debug' })
       return { ...result, sessionTitle: apply }
+    }
+    return result
+  })
+
+  // What Dan sends, read where the engine marks each message's origin (#1123): a transcript message
+  // carries no such mark, so a task's notice or another plugin's message read from it looked like
+  // his words and named a session he had opened with only an image (#1085). Recorded once the
+  // message has entered (a dropped one never did), and never in the way of the message itself.
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    if (!isDans(e.origin) || result.drop !== undefined) return result
+    const hasImages = (e.attachments ?? []).some(a => a.type === 'image')
+    try {
+      await update($, cur => {
+        if (!cur || cur.outcome !== 'waiting') return undefined
+        const before = cur.dans ?? NO_DANS
+        const after = withDans(before, result.text, hasImages)
+        return after === before ? undefined : { ...cur, dans: { words: [...after.words], imageTurns: after.imageTurns } }
+      })
+    } catch (err) {
+      $.ui.log(`${WHO} couldn't note your message for naming this session: ${errText(err)}. It names the session from a later message of yours.`)
     }
     return result
   })

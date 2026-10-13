@@ -663,6 +663,16 @@ and open to his correction.
   describe is read from their sentences, not their meaning: a statement of 4 words or more that is
   not a question nor a short acknowledgement. Until either is there, nothing is named and no failure
   is said, so a session with one image and no words is never named, as decided.
+- Dan's words are the ones the engine marks as his (#1123): `prompt.submit`'s origin, typed at the
+  terminal (`composer`), sent from his phone (`bridge`), or a handoff's opening prompt he pressed
+  Use on (`plugin` `handoff` `asUser`), the rule goal-tracker reads a session's first request by. A
+  transcript message carries no origin, so before this a background task's notice or another
+  plugin's message read from it counted as his words and named a session he had opened with only
+  an image. The mod records his first worded message, his newest few and how many of his messages
+  carried only images as each enters; only those open the name, count as his image turns, or reach
+  Haiku as the person's. A record from before the change holds none, so such a session waits for
+  his next words. A slash command he types counts only if the engine passes it through
+  `prompt.submit`, which has not been measured (the transcript stores one with no origin).
 - The `session-namer.sh` hook, which titled every session `<project>-<MMDD>` on the first prompt,
   is retired in the same change (Dan, picker, 2026-10-04, over keeping both and over keeping only
   the hook). While it ran, every session had a name long before the 10 minute mark, so this mod

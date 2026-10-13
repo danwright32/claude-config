@@ -44,6 +44,13 @@ export type AutoSessionNameRecord = {
    * it (a claim older than a few minutes belongs to an attempt a reload cut off, and is taken over).
    */
   claim: { id: string; at: number } | null
+  /**
+   * What Dan himself has sent (#1123), read at prompt.submit where the engine marks each message's
+   * origin: his worded messages' words (the first, then the newest few) and how many of his
+   * messages carried only images. Only these open the name. Absent on a record written before it
+   * was added, which reads as nothing sent yet, so such a session waits for his next words.
+   */
+  dans?: { words: string[]; imageTurns: number }
 }
 
 declare module 'claude-code' {
