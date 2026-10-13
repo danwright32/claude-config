@@ -2308,6 +2308,23 @@ we have the question presented in plain terms so I actually know what is going t
   (a toast's or a log line's words) passes, as it does in a mod's `.ts` files, which were never
   held. An app's screen files are not judged this way: a className can live outside JSX there.
 
+### What #1145 changed, 2026-10-13
+
+- **The grey card leads in plain words.** It is drawn when the call is refused, before the session
+  has said what changes on screen, so it reads "Claude wants to make an edit that may change how
+  something looks on screen, for <the issue> ... The file is <the file>." and says Claude will tell
+  him in plain words what would change. Redrawing the card with the session's sentence once the
+  question carries it was considered and not built: mod-kit keeps a card by its call's id and draws
+  it when Claude Code draws that result row, and nothing measured shows Claude Code drawing a row
+  already in the transcript again, so the sentence is in the question that follows instead.
+  The cards for an issue or record it could not read lead the same way.
+- **One wording for a typed answer, in mod-kit.** `$.modkit.typedAnswer({ guard, typed, still,
+  again })` shows Dan the toast and returns what Claude is told; the design round guard and ask
+  before saving both use it, and `tools/check-mod-shared-parts.sh` fails a mod saying it itself.
+  Ask before saving now keeps a save waiting after a typed answer, so the same question can be asked
+  again, and says so for the lesson's picker too; before, Claude was told to act on what Dan said
+  and he was told nothing.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

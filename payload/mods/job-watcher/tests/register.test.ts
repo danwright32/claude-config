@@ -20,6 +20,7 @@ const deps: { name: string; register: Register } = {
           press: async () => ({ isAnswered: false }),
           clickable: async () => true,
           isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
           blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },

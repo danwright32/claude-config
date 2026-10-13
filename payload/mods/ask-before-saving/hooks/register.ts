@@ -103,6 +103,18 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
 let saves = 0
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
+// Dan typed an answer instead of choosing one (#1145): nothing is recorded, and mod-kit's one
+// wording, shared with the design round guard, tells him so in a toast and tells Claude to say so,
+// answer what he said and ask the same question again. A mod-kit that cannot (one loaded before it
+// had the member) is said, so Claude knows Dan was not told.
+const typedSaid = async ($: EngineInterface, typed: string, parts: { still: string; again: string }): Promise<string> => {
+  try {
+    return await $.modkit.typedAnswer({ guard: 'Ask before saving', typed, ...parts })
+  } catch (err) {
+    return `Dan typed "${typed}" instead of choosing, so nothing is recorded, and ${parts.still}; mod-kit could not tell him so (${message(err)}). Tell him that in one line, answer what he said, then ${parts.again}.`
+  }
+}
+
 /** The scope modes mod's noun (#841) as its contract has it; it may not be loaded at all. */
 type ScopeModes = {
   isAsleep: () => Promise<boolean>
@@ -614,8 +626,9 @@ export const register: Register = on => {
       if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so the lesson is not approved. Ask him again when he is back.`)
       if (chosen === LESSON_PROJECT) return say(`Dan answered ${LESSON_PROJECT}: do not add it to ${file}. Save it to this project's memory instead; that save is asked about as usual.`)
       if (chosen === LESSON_SKIP) return say(`Dan answered ${LESSON_SKIP}: nothing is saved.`)
-      if (chosen !== LESSON_ADD)
-        return say(`Dan did not choose ${LESSON_ADD}${typeof chosen === 'string' && chosen.trim() ? `, he answered in his own words: "${chosen}"` : ''}. The lesson is not approved; act on what he said.`)
+      if (typeof chosen === 'string' && chosen.trim() && chosen !== LESSON_ADD)
+        return say(await typedSaid($, chosen, { still: 'the lesson is not approved', again: 'ask him the same question again, with the same metadata and the rule as it then stands' }))
+      if (chosen !== LESSON_ADD) return say(`Dan did not choose ${LESSON_ADD}, and gave no answer, so the lesson is not approved. Ask him again, or leave it.`)
       const made: AskBeforeSavingApproval = { id: `lesson-${++saves}`, key: `lesson:${rule}`, files: [file], until: (await $.clock.now()) + APPROVAL_MS, lesson: rule }
       await update($, approvalsRef, a => [...(a ?? []), made])
       lapseAfter($, APPROVAL_MS, made)
@@ -661,6 +674,11 @@ export const register: Register = on => {
       if (out.afkTimeoutMs !== undefined) return say(`Dan did not answer: the dialog closed by itself while he was away, so nothing was saved. Ask him again about saving to ${where} when he is back.`)
       if (typeof chosen !== 'string' || !chosen.trim()) return say(`Dan gave no answer about saving to ${where}, so nothing was saved. Ask him again, or leave it.`)
 
+      // A typed answer is no answer of his to this save (#1145): the save stays waiting on the same
+      // question, which Claude is told to ask again.
+      if (chosen !== NOT_AT_ALL && chosen !== THIS_SESSION && chosen !== FOR_GOOD)
+        return say(await typedSaid($, chosen, { still: `nothing was saved to ${where}`, again: 'ask him the same question again, with the same metadata' }))
+
       // Answered: the waiting question is taken out, whatever the answer.
       await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
       if (chosen === NOT_AT_ALL) return say(`Dan answered Not at all to saving this to ${where}: nothing was saved. Do not save it.`)
@@ -670,9 +688,6 @@ export const register: Register = on => {
         $.ui.invalidate('prompt.section')
         return say(`Dan answered Just this session to saving this to ${where}: nothing was written. It is in your system prompt as a rule for this session only.`)
       }
-      if (chosen !== FOR_GOOD)
-        return say(`Dan answered in his own words instead of choosing: "${chosen}". Nothing was saved. Act on what he said; sending the save again asks him again.`)
-
       // For good (#738): approved by what it saves (the key taken where the save was refused, so the
       // file named), for a while, and Claude told, in this result, to send the call again, given whole
       // since a compaction may take the call out of its context.

@@ -23,6 +23,7 @@ const deps: { name: string; register: Register } = {
             if (r.exitCode !== 0) throw new Error(r.stderr)
             return JSON.parse(r.stdout) as boolean
           },
+          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         } as never,
         sessions: {
           list: async () => {

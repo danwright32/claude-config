@@ -14,9 +14,8 @@ import {
   modHookLogicOnly,
   onScreenProblem,
   sourceSpans,
-  TYPED_TOAST,
-  typedSettled,
-  typedSkip,
+  settledTyped,
+  skipTyped,
   dataOnlyChange,
   editedText,
   isOwnRecord,
@@ -335,15 +334,15 @@ test("the skip question's plain sentence is required, one sentence long, and nam
   for (const t of [onScreenProblem('', files), onScreenProblem('Changes register.tsx', files)]) expect(DASHES.test(String(t))).toBe(false)
 })
 
-test('a typed answer is said to Dan and to Claude as not recorded, with the question to ask again', () => {
+// #1145: the wording is mod-kit's ($.modkit.typedAnswer); the guard gives its two parts.
+test("a typed answer's two parts, what stays as it was and how to ask again", () => {
   const subjects = [{ key: 'k', label: 'issue #978 in slate' }]
-  const t = typedSkip('which page?', ['app/page.tsx'], subjects)
-  expect(t).toContain('"which page?"')
-  expect(t).toContain('not recorded')
-  expect(t).toContain('ask him the same question again')
-  expect(typedSettled('fine')).toContain(`ask him "${SETTLED_QUESTION}" again`)
-  expect(TYPED_TOAST).toContain('not recorded')
-  for (const x of [t, typedSettled('fine'), TYPED_TOAST]) expect(DASHES.test(x)).toBe(false)
+  const t = skipTyped(['app/page.tsx'], subjects)
+  expect(t.still).toContain('app/page.tsx')
+  expect(t.still).toContain('issue #978 in slate')
+  expect(t.again).toBe('ask him the same question again, with the same metadata')
+  expect(settledTyped().again).toBe(`ask him "${SETTLED_QUESTION}" again, with the same metadata`)
+  for (const x of [t.still, t.again, settledTyped().still, settledTyped().again]) expect(DASHES.test(x)).toBe(false)
 })
 
 // #1138: a mod's own hook files, judged by what they draw.

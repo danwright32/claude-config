@@ -1063,6 +1063,20 @@ for m in dans-skips dans-handoff dans-double; do
     || check "and names $m, pointing it at modkit.isDans" "$out"
 done
 case "$out" in *clean-asks-dans*) check "a mod asking the kit, or asking only whether a message came from the phone, passes" "$out" ;; *) check "a mod asking the kit, or asking only whether a message came from the phone, passes" ok ;; esac
+# #1145: telling Dan or Claude that his typed answer was not recorded, in a mod's own words, as the
+# design round guard did in #1138 beside ask before saving's other wording. Each fails the run,
+# pointed at $.modkit.typedAnswer; a mod asking the kit passes.
+M9T="$TMPROOT/m9t"
+mkmodsrc "$M9T" clean-asks-typed "const text = await \$.modkit.typedAnswer({ guard: 'X', typed, still: 'nothing was saved', again: 'ask him again' })"
+mkmodsrc "$M9T" typed-toast "export const TYPED_TOAST = 'X: your typed answer was not recorded, because only choosing one of the answers counts.'"
+mkmodsrc "$M9T" typed-claude "const said = \`Tell him in one line that his typed answer was not recorded; then ask again.\`"
+out="$(bash "$SHARED" "$M9T" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod saying a typed answer was not recorded in its own words fails the run" ok || check "a mod saying a typed answer was not recorded in its own words fails the run" "exit=$code out=$out"
+for m in typed-toast typed-claude; do
+  printf '%s\n' "$out" | grep "$m keeps its own typed-answer" | grep -q 'modkit.typedAnswer(' && check "and names $m, pointing it at modkit.typedAnswer" ok \
+    || check "and names $m, pointing it at modkit.typedAnswer" "$out"
+done
+case "$out" in *clean-asks-typed*) check "a mod asking the kit to say a typed answer was not recorded passes" "$out" ;; *) check "a mod asking the kit to say a typed answer was not recorded passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.
