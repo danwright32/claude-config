@@ -1583,6 +1583,13 @@ check_eq "#1168 a restart records its own read, not the old failure" "read" "$(c
 out="$(prr check --dir "$REPO" --sha "$M_C" --base-ref main --branch feat/mac2)"
 check_not "#1168 and its verdict no longer says the read failed" "could not read the pull request" "$out"
 
+# A comment with an empty body has no first line to look for the mark in, and must not stop the
+# comments after it being read (lessons review of this change: jq erred on it, silenced).
+conv_json OPEN "Adds the mac file." "$MANSWER" ""
+M_F="$(G commit -q --allow-empty -m "empty comment"; G rev-parse HEAD)"
+FAKE_CLAUDE_OUT='No issues found.' mac_start "$M_F"
+check "#1168 a comment with an empty body does not hide the comments before it" "$MANSWER" "$(hist_block "$(cat "$FAKE_LOG/stdin")")"
+
 # With no branch to label it (a detached checkout, no --branch) and only --pr naming the pull
 # request, the block names the pull request, never the short commit as if it were a branch (lessons
 # review of this change).

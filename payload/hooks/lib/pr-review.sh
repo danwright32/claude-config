@@ -621,6 +621,8 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
   local avail=$((cap - $(bytes_of "$head"$'\n'"$notes")))
   # Newest first, kept while they fit, then put back in the order they were written. A comment whose
   # first line names the lessons review records a finding and the answer it got (#1168), marked so.
+  # An empty body splits into no lines at all, so its first line is taken as empty, never null, which
+  # jq cannot match and would stop the whole read on, silenced.
   local found_mark=", recording a lessons review finding" found=0
   while IFS= read -r -d $'\x1e' rec; do
     if [ "$left" -eq 0 ]; then
@@ -635,7 +637,7 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
   done < <(printf '%s' "$prr_pr_env" | jq -j --argjson ok "$trusted" --arg mark "$found_mark" '[(.view.comments // [])[]
     | select((.authorAssociation // "") as $a | $ok | index($a))] | reverse | .[]
     | ((.body // "") | gsub("\r"; "")) as $b
-    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if ($b | split("\n")[0] | test("lessons review"; "i")) then $mark else "" end)\u001f\($b)\u001e"' 2>/dev/null)
+    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if ((($b | split("\n"))[0] // "") | test("lessons review"; "i")) then $mark else "" end)\u001f\($b)\u001e"' 2>/dev/null)
   [ "$found" -gt 0 ] && notes="$notes  ($found comment(s) below record a lessons review finding and the answer it got, from a review on either Mac.)"$'\n'
   [ "$left" -gt 0 ] && notes="$notes  ($left older comment(s) left out: the pull request's words take at most $cap bytes of the history budget, PR_REVIEW_HISTORY_MAX_BYTES.)"$'\n'
   [ -n "$items" ] || [ "$left" -gt 0 ] || items="  no comments by people with write access."$'\n'
