@@ -18,6 +18,7 @@ import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, op
 //   Supabase and psql writes;
 // - git checkout or switch in a primary checkout (H7);
 // - force pushes and branch deletes;
+//   none of these three in a throwaway repository under the temp folder (#1124), below;
 // - claude-sync send, sync, apply-only and install, and a pull from anywhere but the live sync clone
 //   or with its environment changed. The live clone's pull is the config repository's deploy step
 //   (#1106), judged against the night's lists by phase 7 (mergedeploy.ts), never here.
@@ -104,6 +105,165 @@ export const resolveDir = (word: string | undefined, dir: string | null, home: s
   return `/${out.join('/')}`
 }
 
+// ---- the temp folder (#1124) ----
+
+// A repository under the temp folder is a throwaway one a test or a check built, nobody's checkout:
+// on 2026-10-13 sleep mode refused suites that build them, and an agent reworded its commands to
+// get past it, which is the route around a rule that refuses on a word. So git there is judged by
+// where its writes land: a branch switch, a branch delete or a force push to another temp path
+// goes ahead, and the same reaching a real checkout or a remote stays refused. The temp folder is
+// /tmp and macOS's per user one under /var/folders, as a path the line spells or a folder mktemp
+// makes there. A symlink under it, or GIT_DIR in the session's own environment, is not followed:
+// the wake check reads what really happened.
+const TEMP = /^\/(?:private\/)?(?:tmp|var\/folders\/[^/]+\/[^/]+\/T)(?:\/|$)/
+// Where a mktemp folder or $TMPDIR stands in a word: a folder of its own under a name at the root
+// that nothing has, so that climbing out of it (`$T/../..`) leaves the temp folder, as it does on
+// the disk, and anything that asks the disk about it finds nothing there. Only a folder below the
+// mark is in the temp folder; the mark itself stands for the unknown folder above them all.
+const MARK = '/.overnight-temp-folder'
+const MARKED = /^\/\.overnight-temp-folder\/[^/]+/
+export const inTemp = (p: string | null): boolean => p !== null && (TEMP.test(p) || MARKED.test(p))
+// TMPDIR as the line spells it, for mktemp's template or a folder: trusted only while the line
+// itself does not set it, since then it may be anywhere.
+const TMPDIR_WORD = /^(?:\$TMPDIR|\$\{TMPDIR\}|\$\{TMPDIR:-\/tmp\/?\})(?:\/|$)/
+const unquote = (w: string) => w.replace(/^(['"])(.*)\1$/, '$2')
+// Whether a mktemp's arguments make its file or folder in the temp folder, as mktemp places it
+// (measured on this Mac, 2026-10-13): with no template, or with -t, in TMPDIR; a template naming a
+// folder, in that folder; a template naming none, in the folder it runs in (`mktemp -d x.XXXXXX`
+// made ./x.MuRXQ2), unless -p or --tmpdir gives its folder. Each folder must be spelled in the temp
+// folder, every flag one mktemp takes; anything else is not known to be there (lessons review of
+// b0538c5: a bare template was read as in TMPDIR).
+const MKTEMP_FLAGS = new Set(['-d', '-u', '-q', '--directory', '--dry-run', '--quiet'])
+const mktempInTemp = (args: string, tmpdirTrusted: boolean): boolean => {
+  const words = args.trim().split(/\s+/).filter(Boolean).map(unquote)
+  // Anything the shell would expand, but TMPDIR as above, can put the template anywhere.
+  const expands = (w: string) => /[$`()\\]/.test(tmpdirTrusted ? w.replace(TMPDIR_WORD, '') : w)
+  const there = (w: string) => !expands(w) && !w.split('/').includes('..') && (TEMP.test(w) || (tmpdirTrusted && TMPDIR_WORD.test(w)))
+  // The folder a bare template goes in: given by -p or --tmpdir, TMPDIR by -t, else none known.
+  let base: 'given' | 'tmpdir' | undefined
+  const templates: string[] = []
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i] as string
+    if (expands(w)) return false
+    if (MKTEMP_FLAGS.has(w) || /^-[duq]+$/.test(w) || w.startsWith('--suffix=')) continue
+    if (w === '-t') {
+      base = base ?? 'tmpdir'
+      i++
+      continue
+    }
+    if (w === '--tmpdir') {
+      base = base ?? 'tmpdir'
+      continue
+    }
+    if (w === '-p' || w.startsWith('--tmpdir=')) {
+      if (!there(w === '-p' ? (words[++i] ?? '') : w.slice('--tmpdir='.length))) return false
+      base = 'given'
+      continue
+    }
+    if (w.startsWith('-')) return false
+    templates.push(w)
+  }
+  const tmpdirOk = (b: typeof base) => b === 'given' || (b === 'tmpdir' && tmpdirTrusted)
+  if (!templates.length) return tmpdirOk(base ?? 'tmpdir')
+  return templates.every(w => (w.includes('/') ? there(w) : tmpdirOk(base)))
+}
+const MKTEMP = /\$\(\s*mktemp\b([^)]*)\)/g
+/**
+ * How the words of one Bash call read a folder in the temp folder: `$(mktemp ...)` making one
+ * there, a variable every assignment of which in the line is such a mktemp, and $TMPDIR while the
+ * line does not set it, each put in a word as a path under MARK. A variable set any other way
+ * anywhere in the line (a second assignment, a for or a read, ${T:-x}) is left as written, so the
+ * folder cannot be resolved and whatever needed it is judged as before.
+ */
+export const tempWords = (raw: string): ((word: string) => string) => {
+  // TMPDIR named anywhere but to expand it (an assignment, read, for, printf -v, declare, unset)
+  // may change it, as for any variable below (lessons review of b0538c5).
+  const tmpdirTrusted = !/(?<![\w$])(?<!\$\{)TMPDIR(?!\w)/.test(raw)
+  const vars = new Set<string>()
+  for (const m of raw.matchAll(/(?<![\w$])([A-Za-z_]\w*)=(?=["']?\$\(\s*mktemp\b)/g)) vars.add(m[1] as string)
+  const fromMktemp = (at: number, name: string): boolean => {
+    const rest = raw.slice(at + name.length + 1).replace(/^["']/, '')
+    const m = /^\$\(\s*mktemp\b([^)]*)\)/.exec(rest)
+    return m !== null && mktempInTemp(m[1] as string, tmpdirTrusted)
+  }
+  for (const name of [...vars]) {
+    // Every place the line names it other than to expand it must be one of those assignments.
+    for (const m of raw.matchAll(new RegExp(`(?<![\\w$])(?<!\\$\\{)${name}(?!\\w)`, 'g'))) {
+      const at = m.index ?? 0
+      if (raw[at + name.length] !== '=' || !fromMktemp(at, name)) {
+        vars.delete(name)
+        break
+      }
+    }
+  }
+  return (word: string) => {
+    let w = word.replace(MKTEMP, (all, args: string) => (mktempInTemp(args, tmpdirTrusted) ? `${MARK}/mktemp` : all))
+    if (tmpdirTrusted) w = w.replace(TMPDIR_WORD, m => (m.endsWith('/') ? `${MARK}/TMPDIR/` : `${MARK}/TMPDIR`))
+    return w.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)(?!\w)/g, (all, a?: string, b?: string) => (vars.has((a ?? b) as string) ? `${MARK}/${a ?? b}` : all))
+  }
+}
+// git told to use another repository's git folder or work tree (a global option such as the git
+// folder's, a config one, a second -C that git would add to the first, or GIT_DIR in the line) may
+// run somewhere other than the folder it names with -C or a cd, so that folder being a temp one
+// says nothing. Read from the words before the subcommand mod-kit's reading found, never from a
+// list of git's options here: anything there but one -C and its folder counts.
+const gitElsewhere = (words: readonly string[], g: NonNullable<Cmd['git']>, raw: string): boolean => {
+  const globals = g.sub === undefined ? words.slice(1) : words.slice(1, words.length - g.args.length - 1)
+  const plain = globals.length === 0 || (globals.length === 2 && globals[0] === '-C')
+  return !plain || /(?:^|[^\w$])GIT_(?:DIR|WORK_TREE|COMMON_DIR)=/.test(raw)
+}
+// The repositories a push writes to, as git names them: the repository after its flags, and
+// --repo. Each a temp path, as written or relative to the folder git runs in: a remote's name or a
+// URL may be GitHub, and a push naming none goes to the branch's remote.
+const PUSH_VALUED = new Set(['-o', '--push-option', '--receive-pack', '--exec', '--repo'])
+const pushesToTemp = (args: readonly string[], where: string | null, home: string, expand: (w: string) => string): boolean => {
+  const dests: string[] = []
+  let positional = false
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if (a.startsWith('--repo=')) dests.push(a.slice('--repo='.length))
+    else if (PUSH_VALUED.has(a)) {
+      if (a === '--repo') dests.push(args[i + 1] ?? '')
+      i++
+    } else if (!a.startsWith('-') && !positional) {
+      positional = true
+      dests.push(a)
+    }
+  }
+  if (!dests.length) return false
+  return dests.every(d => {
+    const p = d.replace(/^file:\/\//, '')
+    if (!(expand(p).startsWith('/') || p.startsWith('.'))) return false
+    return inTemp(resolveIn(p, where, home, expand))
+  })
+}
+// A folder a word names, resolved against the folder before it, with the temp folder's words read
+// as tempWords reads them. A climb (`..`) out of a mktemp folder or $TMPDIR, or from a folder
+// reached through one, cannot be followed: the marks stand for folders whose parents nobody knows,
+// so `$TMPDIR/../Users/x/repo` would otherwise read as inside the mark (lessons review of 214d3ce).
+const resolveIn = (word: string, dir: string | null, home: string, expand: (w: string) => string): string | null => {
+  const w = expand(word)
+  const marked = w !== word || (dir !== null && (dir === MARK || dir.startsWith(`${MARK}/`)))
+  if (marked && w.split('/').includes('..')) return null
+  return resolveDir(w, dir, home)
+}
+
+// Whether code that can run a process names git where a process would run it (#1124), rather than
+// the word anywhere: on 2026-10-13 a python edit was refused for writing "Scanning git work" and
+// "import subprocess" into a file. git runs from code when it starts a quoted string or a shell
+// command inside one (`['git', ...]`, `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or when
+// a git subcommand or option follows it. Prose naming git with neither (a git repository, the
+// .gitignore, --git-dir) runs nothing; prose that reads as a command ("then git push") still counts.
+const GIT_SUBCOMMANDS: ReadonlySet<string> = new Set(['add', 'am', 'apply', 'archive', 'bisect', 'blame', 'branch', 'bundle', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'config', 'describe', 'diff', 'fetch', 'filter-branch', 'filter-repo', 'format-patch', 'fsck', 'gc', 'grep', 'init', 'log', 'ls-files', 'ls-remote', 'ls-tree', 'merge', 'mv', 'notes', 'pull', 'push', 'range-diff', 'rebase', 'reflog', 'remote', 'repack', 'replace', 'reset', 'restore', 'revert', 'rev-list', 'rev-parse', 'rm', 'shortlog', 'show', 'show-ref', 'sparse-checkout', 'stash', 'status', 'submodule', 'switch', 'tag', 'update-index', 'update-ref', 'worktree'])
+export const runsGit = (text: string): boolean => {
+  if (/(?:['"`]|;|&&|\|\||\||\$\(|\(|\n)[ \t]*(?:[\w.~/-]*\/)?git(?=[\s'"`;|&)]|$)/.test(text)) return true
+  for (const m of text.matchAll(/(?<![\w.$/-])git[ \t]+(-[\w-]*|[a-z][\w-]*)/g)) {
+    const next = m[1] as string
+    if (next.startsWith('-') || GIT_SUBCOMMANDS.has(next)) return true
+  }
+  return false
+}
+
 // ---- git ----
 
 const shortFlags = (args: readonly string[]) => args.filter(a => /^-[A-Za-z]+$/.test(a)).join('')
@@ -137,18 +297,40 @@ const checkoutMoves = (args: readonly string[]): boolean => {
 }
 const GIT_PUTS_BACK = new Set(['checkout', 'restore', 'rm', 'mv', 'apply', 'am'])
 
-const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look): Promise<string | undefined> => {
+// How a call reads the temp folder (#1124): `temp`, its words as tempWords reads them; `elsewhere`,
+// whether git was told to use another repository's git folder or work tree; `worktrees`, whether
+// any git in the line adds or moves a worktree, which can put a real repository's branches there.
+type TempReading = { temp: (w: string) => string; elsewhere: boolean; worktrees: boolean }
+const gitRefusal = async (g: NonNullable<Cmd['git']>, dir: string | null, home: string, look: Look, t: TempReading): Promise<string | undefined> => {
   const sub = g.sub ?? ''
   const args = g.args
   if (GIT_PUTS_BACK.has(sub) && args.some(isLessons)) return 'write to LESSONS.md'
-  if (sub === 'push') return pushRefusal(args)
+  // The folder git runs in, and whether it is a throwaway repository under the temp folder.
+  const where = g.dir === undefined ? dir : resolveIn(g.dir, dir, home, t.temp)
+  const throwaway = !t.elsewhere && inTemp(where)
+  // A branch deleted there is one of its own only in a repository of its own: a linked worktree
+  // of a real repository under the temp folder shares that repository's branches (lessons review
+  // of 214d3ce). A folder mktemp makes in this line is new, so it is one unless the line adds a
+  // worktree; a folder the line spells is asked of the disk, and one it cannot answer for refuses.
+  // $TMPDIR is no new folder and its mark names nothing the disk can be asked about, so a branch
+  // delete under it refuses (lessons review of ad5d3a5).
+  const ownBranches = async () => {
+    if (!throwaway || t.worktrees || where === null) return false
+    if (where === `${MARK}/TMPDIR` || where.startsWith(`${MARK}/TMPDIR/`)) return false
+    if (where.startsWith(`${MARK}/`)) return true
+    return (await look.isPrimary(where)) === true
+  }
+  if (sub === 'push') {
+    const why = pushRefusal(args)
+    return why && (t.elsewhere || !pushesToTemp(args, where, home, t.temp)) ? why : undefined
+  }
   if (sub === 'branch') {
     const short = shortFlags(args)
-    return args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D') ? 'delete a branch' : undefined
+    return (args.some(a => spells(a, ['--delete'])) || short.includes('d') || short.includes('D')) && !(await ownBranches()) ? 'delete a branch' : undefined
   }
-  if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return 'delete a branch'
+  if (sub === 'update-ref' && args.includes('-d') && args.some(a => a.startsWith('refs/heads/'))) return (await ownBranches()) ? undefined : 'delete a branch'
   if (sub === 'switch' || (sub === 'checkout' && checkoutMoves(args))) {
-    const where = g.dir === undefined ? dir : resolveDir(g.dir, dir, home)
+    if (throwaway) return undefined
     const primary = where === null ? null : await look.isPrimary(where)
     if (primary === null) return `run git ${sub} where it could not be told whether this is a primary checkout`
     return primary ? `run git ${sub} in a primary checkout` : undefined
@@ -377,6 +559,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   if (!call.commands.some(c => name(c.words[0]) === 'gh') && wrapped(call) && /\bgh\b/.test(call.raw)) return UNRESOLVED
   let dir: string | null = call.cwd
   const stack: (string | null)[] = []
+  const temp = tempWords(call.raw)
+  const worktrees = call.commands.some(c => c.git?.sub === 'worktree')
   for (const c of call.commands) {
     let words = c.words
     while (['npx', 'bunx'].includes(name(words[0]))) words = words.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
@@ -390,7 +574,8 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
       continue
     }
     if (cmd === 'cd' || cmd === 'pushd') {
-      dir = resolveDir(words.slice(1).find(a => !a.startsWith('-') || a === '-'), dir, call.home)
+      const to = words.slice(1).find(a => !a.startsWith('-') || a === '-')
+      dir = to === undefined ? resolveDir(to, dir, call.home) : resolveIn(to, dir, call.home, temp)
       continue
     }
     if (cmd === 'popd') {
@@ -403,7 +588,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // claude-sync, which would reach what the list bans past every rule above.
     if (c.program && 'unreadable' in c.program) return 'run code this reader cannot read'
     if (c.verdict?.does === 'unreadable') return 'run code this reader cannot read'
-    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && /\b(?:gh|git|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text))
+    if (c.verdict?.does === 'run a process' && c.program && 'text' in c.program && (/\b(?:gh|psql|mysql|mariadb|supabase|claude-sync)\b/.test(c.program.text) || runsGit(c.program.text)))
       return 'run code that runs gh, git or a database client, which cannot be judged'
     // gh as a word of any other command, outside quotes: a wrapper the reader does not look past
     // (setsid, stdbuf, chronic, one nobody has written yet) runs it, so it is refused whatever the
@@ -411,7 +596,7 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
     // running it are let through; a command missing from that list fails closed.
     if (cmd !== 'gh' && !NAMES_ONLY.has(cmd) && !(cmd === 'command' && /^-[vV]$/.test(words[1] ?? '')) && words.slice(1).some((w, i) => (w === 'gh' || w.endsWith('/bin/gh')) && runsGh(words[i + 2]))) return UNRESOLVED
     if (c.git) {
-      const why = await gitRefusal(c.git, dir, call.home, look)
+      const why = await gitRefusal(c.git, dir, call.home, look, { temp, elsewhere: gitElsewhere(c.words, c.git, call.raw), worktrees })
       if (why) return why
       continue
     }

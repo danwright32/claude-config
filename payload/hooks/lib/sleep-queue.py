@@ -6,6 +6,7 @@ into place) and hands this the answers as files. Nothing here writes anything, s
 is tested on fixtures alone.
 
   state  ISSUE_DIR SELF REGISTRY NOW   what one issue's claim says now (one line, see claim_state)
+  ended  ISSUE_DIR SELF                whether done may replace its end (see ended_by, #1119)
   queue  key=value...                  the night's queue for one repository, as tab separated
                                        lines; keys: repo limit issues prs branches accounts
                                        unanswered claims registry now self, and goal (optional)
@@ -188,6 +189,24 @@ def claim_state(issue_dir, registry, self_id):
     if st == "unknown":
         return "unknown", nxt, attempts, why
     return "held", nxt, attempts, "session %s holds it since %d" % (sid, since)
+
+
+def ended_by(issue_dir, self_id):
+    """Whether done may replace the claim's end (#1119): (line, True) with KIND NEXT WHY when its
+    newest entry is a failed or parked end written by SELF, which only the holder can write, so the
+    work was SELF's; else (why not, False). Whether GitHub shows it done is the shell's to ask."""
+    es = entries(issue_dir)
+    if not es:
+        return "no claim yet", False
+    n, last, _ = es[-1]
+    if last is None:
+        return "claim entry %d cannot be read" % n, False
+    kind = last.get("kind")
+    if kind not in ("failed", "parked"):
+        return "ended: %s" % kind if kind in ENDS else "its newest entry is %s, not an end done can replace" % kind, False
+    if last.get("session") != self_id:
+        return "ended %s by session %s" % (kind, last.get("session")), False
+    return "%s\t%d\t%s" % (kind, n + 1, " ".join(str(last.get("why") or "").split())), True
 
 
 # ---- the queue ----
@@ -386,6 +405,10 @@ def main(argv):
         st, nxt, attempts, why = claim_state(argv[2], Registry(argv[4], int(argv[5])), argv[3])
         print("%s\t%d\t%d\t%s" % (st, nxt, attempts, why))
         return 0
+    if cmd == "ended" and len(argv) == 4:
+        line, ok = ended_by(argv[2], argv[3])
+        print(line)
+        return 0 if ok else 1
     if cmd == "queue":
         a = {}
         for kv in argv[2:]:
@@ -422,6 +445,12 @@ def main(argv):
         # never reads its own park or failure back as the session's progress.
         if os.environ.get("SLEEP_NOTE_BY_DRIVER") == "1":
             n["driver"] = True
+        # A done the queue let land over the driver's own end (#1119) says which end it replaced
+        # and the pull request GitHub showed closing the issue, so the report hides only that end.
+        if kind == "done" and os.environ.get("SLEEP_NOTE_REPLACES") in ("failed", "parked"):
+            n["replaces"] = os.environ["SLEEP_NOTE_REPLACES"]
+        if kind == "done" and (os.environ.get("SLEEP_NOTE_PR") or "").isdigit():
+            n["pr"] = int(os.environ["SLEEP_NOTE_PR"])
         n["at"] = at
         print(json.dumps(n))
         return 0

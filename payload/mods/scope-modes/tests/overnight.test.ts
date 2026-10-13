@@ -17,7 +17,9 @@ const github = async (remote: string) => githubRepo(remote)
 const HOME = '/Users/x'
 const CWD = '/Users/x/repo'
 const REPOS: Record<string, string> = { '/Users/x/repo': 'o/r', '/Users/x/wt': 'o/r', '/Users/x/theirs': 'other/x' }
-const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true }
+// Under the temp folder (#1124): two throwaway repositories of their own, and a linked worktree of
+// a real repository someone put there, which shares that repository's branches.
+const PRIMARY: Record<string, boolean> = { '/Users/x/repo': true, '/Users/x/wt': false, '/Users/x/theirs': true, '/tmp/t3': true, '/private/var/folders/kd/abc/T/x': true, '/tmp/wt': false }
 const under = <T>(map: Record<string, T>, dir: string): T | null => {
   for (const [k, v] of Object.entries(map)) if (dir === k || dir.startsWith(`${k}/`)) return v
   return null
@@ -347,7 +349,7 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
     expect(await bash('git checkout -- .')).toBe('run git checkout in a primary checkout')
   })
   test('one whose checkout cannot be told is refused', async () => {
-    expect(await bash('git checkout main', { cwd: '/tmp/somewhere' })).toBe('run git checkout where it could not be told whether this is a primary checkout')
+    expect(await bash('git checkout main', { cwd: '/Users/x/somewhere' })).toBe('run git checkout where it could not be told whether this is a primary checkout')
   })
   test('force pushes', async () => {
     for (const c of ['git push --force', 'git push -f origin x', 'git push -uf origin x', 'git push --force-with-lease origin x', 'git push origin +x', 'git push origin HEAD:+main', 'git push origin --force-with-lease=x:abc x', 'git push --force-if-includes --force-with-lease origin x', 'git push -fu origin x', 'git push --mirror', 'git push --forc origin x', 'git push --force-with origin x', 'git push --mirr'])
@@ -386,6 +388,128 @@ describe('the checkout, force pushes, branch deletes and the live config', () =>
     const unread = 'run claude-sync through a shell whose options or script could not be read'
     for (const c of ['bash --weird /tmp/x ~/claude-config-sync/claude-sync pull', 'bash ./other.sh ~/claude-config-sync/claude-sync pull', 'zsh --unknown /tmp/x ~/claude-config-sync/claude-sync send'])
       expect({ c, r: await bash(c) }).toEqual({ c, r: unread })
+  })
+})
+
+// #1124: on 2026-10-13 sleep mode refused suites that build throwaway repositories and an inline
+// python edit whose text held the word git, and an agent reworded its commands to get past it. Git
+// is judged by where it lands: a repository under the temp folder is nobody's checkout, so its
+// branch switches, branch deletes and force pushes to another temp path go ahead, while the same
+// writes reaching a real checkout or a remote stay refused. The disk is never asked about a temp
+// folder (the stand in Look knows none of them, so any question would refuse).
+describe('git in throwaway repositories under the temp folder (#1124)', () => {
+  const unknown = 'run git checkout where it could not be told whether this is a primary checkout'
+  test('a branch switch, a branch delete and a force push between temp repositories go ahead', async () => {
+    for (const c of [
+      'cd /tmp/t1 && git init -q && git checkout -b feature',
+      'git -C /private/tmp/t2 switch -c x',
+      'git -C /var/folders/kd/abc/T/tmp.1 checkout main',
+      'cd /private/var/folders/kd/abc/T/x && git branch -D old && git update-ref -d refs/heads/gone',
+      'T=$(mktemp -d); cd "$T" && git init -q && git checkout -b feature && git branch -D feature',
+      'T=$(mktemp -d) && git -C "$T/repo" switch -c y',
+      'cd "$(mktemp -d)" && git init -q && git switch -c z',
+      'export WORK=$(mktemp -d -t sq) && git -C "${WORK}/r" checkout -b a',
+      'T=$(mktemp -d -p /tmp foo.XXXXXX) && git -C "$T" switch -c b2',
+      'T=$(mktemp -d /tmp/foo.XXXXXX) && git -C "$T" switch -c b3',
+      'T="$(mktemp -d "${TMPDIR:-/tmp}/suite.XXXXXX")"; git -C "$T" checkout -b b',
+      'cd "$TMPDIR/scratch" && git checkout -b c',
+      'git -C /tmp/t1 push --force /tmp/bare.git main',
+      'cd /tmp/t1 && git push -f ../bare.git main && git push ../bare.git :old',
+      'git -C /tmp/t1 push --force file:///tmp/bare.git main',
+      'T=$(mktemp -d); git -C "$T/clone" push --force "$T/bare.git" HEAD:main',
+      `bash -c 'cd /tmp/t3 && git checkout -b x && git branch -D y'`,
+      'bash payload/skills/tracker/test-scan-flow.sh 2>&1 | tail -5',
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
+  test('the same writes reaching a real checkout or a remote are still refused', async () => {
+    // A remote named or addressed from a temp repository may be GitHub.
+    expect(await bash('cd /tmp/t1 && git push --force origin main')).toBe('force push')
+    expect(await bash('git -C /tmp/t1 push origin --delete x')).toBe('delete a branch')
+    expect(await bash('git -C /tmp/t1 push -f https://github.com/o/r.git main')).toBe('force push')
+    expect(await bash('git -C /tmp/t1 push -f')).toBe('force push')
+    // A temp repository pushing into a real one's folder, or climbing out of the temp folder.
+    expect(await bash('git -C /tmp/t1 push --force /Users/x/repo main')).toBe('force push')
+    expect(await bash('cd /tmp/t1 && git push -f ../../Users/x/repo main')).toBe('force push')
+    expect(await bash('cd /tmp/t1/../../Users/x/repo && git checkout main')).toBe('run git checkout in a primary checkout')
+    expect(await bash('git -C /tmp/../Users/x/repo branch -D x')).toBe('delete a branch')
+    // A variable is a temp folder only when every way the line sets it is mktemp making one there.
+    expect(await bash('git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); T=/Users/x/repo; git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); for T in /Users/x/repo; do git -C "$T" checkout main; done')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); read T; git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d "$HOME/x.XXXX"); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d -p /Users/x/repo); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); git -C "${T:-/Users/x/repo}" checkout main')).toBe(unknown)
+    expect(await bash('T=$(mktemp -d); git -C "$T/../.." checkout main')).toBe(unknown)
+    expect(await bash('cd "$TMPDIR/.." && git checkout main')).toBe(unknown)
+    // A climb out of a mktemp folder or $TMPDIR, however far, is no longer known to be in it
+    // (lessons review of 214d3ce).
+    expect(await bash('cd "$TMPDIR/../Users/x/repo" && git branch -D y')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); cd "$T" && cd ../../Users/x/repo && git branch -D y')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); git -C "$T/../Users/x/repo" update-ref -d refs/heads/y')).toBe('delete a branch')
+    // A linked worktree of a real repository under the temp folder shares its branches, so a
+    // branch delete there is refused; so is one where the disk cannot say, and one in a line
+    // that adds a worktree (lessons review of 214d3ce).
+    expect(await bash('git -C /tmp/wt branch -D main')).toBe('delete a branch')
+    expect(await bash('cd /tmp/wt && git update-ref -d refs/heads/main')).toBe('delete a branch')
+    expect(await bash('git -C /tmp/unknown branch -D main')).toBe('delete a branch')
+    expect(await bash('T=$(mktemp -d); git worktree add "$T/wt" && git -C "$T/wt" branch -D main')).toBe('delete a branch')
+    // A folder under $TMPDIR is not new, and the disk cannot be asked about it by name, so a
+    // branch delete there is refused (lessons review of ad5d3a5).
+    expect(await bash('cd "$TMPDIR/wt" && git branch -D main')).toBe('delete a branch')
+    expect(await bash('git -C "${TMPDIR}/wt" update-ref -d refs/heads/main')).toBe('delete a branch')
+    // Switching branches in such a worktree is as in any linked worktree: allowed, as before.
+    expect(await bash('git -C /tmp/wt switch -c x')).toBeUndefined()
+    expect(await bash('T=$(mktemp -d); cd "$T" && git branch -D x && cd /Users/x/repo && git branch -D y')).toBe('delete a branch')
+    // TMPDIR set in the line itself may be anywhere, so mktemp's folder is no longer known.
+    expect(await bash('TMPDIR=/Users/x/repo; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('export TMPDIR=/Users/x/repo; cd "$TMPDIR" && git checkout main')).toBe(unknown)
+    // TMPDIR changed any other way too (lessons review of b0538c5).
+    expect(await bash('read TMPDIR; T=$(mktemp -d); git -C "$T" checkout main')).toBe(unknown)
+    expect(await bash('for TMPDIR in /Users/x/repo; do cd "$TMPDIR" && git checkout main; done')).toBe(unknown)
+    expect(await bash('printf -v TMPDIR %s /Users/x/repo; T=$(mktemp -d -t x); git -C "$T" checkout main')).toBe(unknown)
+    // A template naming no folder is made in the folder mktemp runs in, never TMPDIR (lessons
+    // review of b0538c5, measured: mktemp -d x.XXXXXX made ./x.MuRXQ2).
+    expect(await bash('T=$(mktemp -d foo.XXXXXX); cd "$T" && git checkout main')).toBe(unknown)
+    expect(await bash('cd "$(mktemp -d foo.XXXXXX)" && git branch -D x')).toBe('delete a branch')
+    // git told to use another repository's git folder is not the temp folder's.
+    expect(await bash('git --git-dir=/Users/x/repo/.git -C /tmp/t1 checkout main')).toBe(unknown)
+    expect(await bash('GIT_DIR=/Users/x/repo/.git git -C /tmp/t1 checkout main')).toBe(unknown)
+    expect(await bash('git -C /tmp/t1 --work-tree=/Users/x/repo checkout main')).toBe(unknown)
+    expect(await bash('git -C /tmp/t1 -c core.worktree=/Users/x/repo checkout main')).toBe(unknown)
+    expect(await bash('git -C /Users/x/repo -C /tmp/t1 branch -D x')).toBe('delete a branch')
+    // And the real checkout as before.
+    expect(await bash('git checkout main')).toBe('run git checkout in a primary checkout')
+    expect(await bash('git branch -D x')).toBe('delete a branch')
+  })
+  test('code naming git is refused only where it would run git, never for the word in prose', async () => {
+    const runs = 'run code that runs gh, git or a database client, which cannot be judged'
+    // The refused edit of 2026-10-13: a heredoc python program writing a file whose new text says
+    // "import subprocess" and "Scanning git work", which runs no git at all.
+    const edit = [
+      "python3 - tracker_lib.py <<'PY'",
+      'import sys',
+      'p = sys.argv[1]; t = open(p).read()',
+      `t = t.replace('''import sys\\n''', '''import subprocess\\nimport sys\\n''')`,
+      `t = t.replace('''x''', '''the commands behind /tracker --scan (SKILL.md "Scanning git work")''')`,
+      "open(p, 'w').write(t)",
+      'PY',
+    ].join('\n')
+    expect(await bash(edit)).toBeUndefined()
+    expect(await bash(`python3 -c "import subprocess; print('a local git repository, the .gitignore, --git-dir and github.com')"`)).toBeUndefined()
+    for (const c of [
+      `python3 -c "import subprocess; subprocess.run(['git', 'push', '--force'])"`,
+      `python3 -c "import subprocess; subprocess.run('git checkout main', shell=True)"`,
+      `python3 -c "import os; os.system('cd /x && git branch -D y')"`,
+      `python3 -c "import subprocess; g = '/usr/bin/git'; subprocess.run([g, 'push'])"`,
+      `node -e "require('child_process').execSync('git branch -D x')"`,
+      `node -e "require('child_process').execSync(\\\`git \${sub}\\\`)"`,
+      `python3 -c "import subprocess; subprocess.run(['/usr/bin/env', 'git', 'push', '-f'])"`,
+      `python3 -c "import subprocess; subprocess.run(['sudo', '-u', 'x', 'sh', '-c', 'umask 0; git push -f'])"`,
+      `python3 -c "import subprocess; print('then run git push')"`,
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: runs })
   })
 })
 

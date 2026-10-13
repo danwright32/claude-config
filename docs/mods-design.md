@@ -1133,6 +1133,21 @@ changing it:
   the reason as text, and `released` for a claim given back (`free`, `unstarted`). The report says
   a claim given back was given back, never that it ended unexpectedly, judging the order by each
   note's `at`. A note that cannot be written is said on stderr and never undoes the claim.
+- An end the overnight driver wrote while the work went on (the breaker's `failed`, or a park) is
+  replaced by the holder's own `release ... done` once GitHub shows the issue's last close was a
+  merged pull request's (#1119): the issue was finished, and the report showed it as failed. Only
+  this session's own failed or parked end, only when the issue's last closed event names a merged
+  pull request as its closer (one GraphQL read, `closer` in the issue source), and a read that
+  fails refuses. The `done` entry and note name the pull request and the end they replaced, which
+  stays in the history. The note carries `replaces` (the end) and `pr`, and the report hides only
+  an end such a note by the same session replaced, so a plain done after another session's
+  failure leaves the failure listed.
+- `work REPO_ROOT ISSUE` prints the claim's work for the driver's breaker (phase 8): `branch` with
+  the tip of `sleep/N` and `worktree` with how many commits were made in the reserved worktree on
+  any branch (its HEAD's reflog entries that record a commit, merge, cherry-pick, revert or
+  finished rebase), each empty when there is none. A branch switch there makes no commit, so it
+  is no progress. A folder at the reserved path that is not this repository's worktree reads
+  as none, since git would otherwise walk up from it and read the primary checkout.
 
 ### Sleep mode phase 8: keeping enrolled sessions working, safely (#844), built
 
@@ -1148,8 +1163,11 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
   stops the session with a `stopped` note rather than loop on a count it cannot keep.
 - Progress is recorded state only: this session's notes that are not bookkeeping (heartbeat, wait,
-  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the tip of the
-  `sleep/N` branch of the issue it holds (`git for-each-ref`), never another worker's branch. A
+  usage, stopped, and every note the driver writes itself, marked `driver: true`) and the work on
+  the issue it holds as `sleep-queue.sh work` reads it: the tip of its `sleep/N` branch and the
+  commits made in its reserved worktree on any branch, so a commit there counts whoever made it
+  (#1119: on 2026-10-12 the breaker ended #1106 as failed while a subagent of the claiming session
+  committed it in that worktree on a branch of its own). Never another worker's claim. A
   reading that cannot be taken is no progress. The Stop, the API error and the minute's tick take
   turns, so none writes back a stale counter over another's, and every stop, a stop whose counter
   could not be saved included, ends the claim in hand through the queue rather than leave it held. The circuit breaker lets the session stop, with a `failed` note (the
@@ -1230,6 +1248,34 @@ the ban list knowing that an action it does not name is approved.
   `sudo`; a file sourced in the line).
   Both hooks are classic events, listed in `tools/sec-default-bypassed-hooks.tsv`: without the
   managed settings file (#876) nothing is approved overnight.
+- Git is judged by where its writes land (#1124). On 2026-10-13 sleep mode refused suites that
+  build throwaway repositories and an inline python edit whose text held the word git, and an
+  agent reworded its commands to get past it. A repository under the temp folder (`/tmp`,
+  `/private/tmp` or the per user one under `/var/folders`) is nobody's checkout, so a branch
+  switch or a branch delete there goes ahead, and so does a force push or a branch delete by push
+  whose destination is a temp path (as written, `file://`, or relative to the folder git runs in).
+  The folder is a path the line spells there, or one `mktemp` makes there in the same line: a
+  `$(mktemp ...)` word, a variable every assignment of which in the line is such a mktemp, or
+  `$TMPDIR` while the line names TMPDIR only to expand it (an assignment, `read`, `for` or
+  `printf -v` of it makes it unknown). mktemp puts a template naming no folder in the folder it
+  runs in, not TMPDIR (measured), so such a template counts only with `-p` or `--tmpdir`. Each stands for a folder under a made up name at
+  the root, and any climb (`..`) out of one, or from a folder reached through one, cannot be
+  followed, so it is no longer known to be in the temp folder (`$TMPDIR/../Users/x/repo` would
+  otherwise read as under the mark). A branch delete there needs a repository of its own: a
+  folder the line spells is asked of the disk and goes ahead only as a primary checkout, since a
+  linked worktree of a real repository under the temp folder shares that repository's branches; a
+  mktemp folder is new, so it goes ahead unless the line runs `git worktree`; one under `$TMPDIR`
+  is neither new nor askable by name, so it refuses. Still refused: a push to a remote by name or URL
+  (it may be GitHub) or to a real folder, a climb out of the temp folder, a variable set any other
+  way (a second assignment, `for`, `read`, `${T:-x}`), a mktemp template or `-p` outside the temp
+  folder or built by the shell, TMPDIR set in the line, and git given `--git-dir`, `--work-tree`
+  or `GIT_DIR` in the line. Not followed: a symlink under the temp folder, and GIT_DIR in the
+  session's own environment; the wake check reads what really happened. A suite run from its file
+  is not read at all, as before. Inline code that can run a process is refused for git only where
+  git would run: starting a quoted string or a shell command inside one (`['git', ...]`,
+  `'/usr/bin/git'`, `"cd x && git push"`, a backtick), or followed by a git subcommand or option;
+  a git repository, the .gitignore or `--git-dir` in prose runs nothing. gh, the database clients
+  and claude-sync are still refused by the word in such code.
 - The wake check (`hooks/wakecheck.ts`), at `/wake` and when the record ends by itself: issues
   created (events and search, since either can lag), milestones touched and deploy runs in each
   repository with an event overnight, each repository the night's notes name (a private one the
