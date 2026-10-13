@@ -2610,6 +2610,58 @@ printf '%s\n' "$out_lk3" | grep -E '^ +FAIL +test-locked\.sh.*suite lock' > /dev
   || check "#1083 and says it was the lock" "out=$out_lk3"
 
 # ---------------------------------------------------------------------------
+# A SUITE THAT RAN BUT COULD NOT MEASURE judged nothing, and did not fail (claude-config#1146).
+#
+# The secret scan once could not copy the tree it scans and reported a failing scan over "(0
+# files)". It now says SUITE-UNMEASURED <why> and exits 3, and the pre push scanner gate reads that
+# line as a fault in its own run. The runner reads the same line the same way the lock refusal is
+# read: NOT RUN with the reason here, a failure under CI, where a run must never go green without
+# measuring (L411, L98).
+# ---------------------------------------------------------------------------
+UNM_MARK="SUITE""-UNMEASURED"
+mk_unmeasured_suite() { # mk_unmeasured_suite <dir> <name> <failed count in its score>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf %s\\\\n "%s the whole tree could not be copied: tar: x: Cannot stat"\n' "'%s'" "$UNM_MARK"
+    printf 'printf %s\\\\n "%s passed=4 failed=%s"\n' "'%s'" "$MARK" "$3"
+    printf 'exit %s\n' "$( [ "$3" -eq 0 ] && echo 3 || echo 1 )"
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+UM="$TMPROOT/dir-unmeasured"
+mk_suite "$UM" beside 0
+mk_unmeasured_suite "$UM" blind 0
+out_um="$(env -u CI bash "$RUNNER" "$UM" 2>&1)"; code_um=$?
+[ "$code_um" -eq 0 ] \
+  && check "#1146 a suite that could not measure does not fail the run here" ok \
+  || check "#1146 a suite that could not measure does not fail the run here" "exit=$code_um out=$out_um"
+printf '%s\n' "$out_um" | grep -E '^ +NOT RUN +test-blind\.sh.*could not measure.*tar: x: Cannot stat' > /dev/null \
+  && check "#1146 and it is reported as NOT RUN, with its reason" ok \
+  || check "#1146 and it is reported as NOT RUN, with its reason" "out=$out_um"
+printf '%s\n' "$out_um" | grep -E '^ +FAIL +test-blind\.sh' > /dev/null \
+  && check "#1146 and never as FAIL" "out=$out_um" || check "#1146 and never as FAIL" ok
+printf '%s\n' "$out_um" | grep -E '^ALL 1 SUITES THAT COULD RUN PASSED, and 1 could not run here$' > /dev/null \
+  && check "#1146 and the verdict keeps the shape claude-sync reads" ok \
+  || check "#1146 and the verdict keeps the shape claude-sync reads" "out=$out_um"
+case "$out_um" in
+  *"They audit the repository"*) check "#1146 and the summary gives its own reason, not the no repository one" "out=$out_um" ;;
+  *"measured nothing"*) check "#1146 and the summary gives its own reason, not the no repository one" ok ;;
+  *) check "#1146 and the summary gives its own reason, not the no repository one" "out=$out_um" ;;
+esac
+out_um2="$(CI=true bash "$RUNNER" "$UM" 2>&1)"; code_um2=$?
+[ "$code_um2" -ne 0 ] && printf '%s\n' "$out_um2" | grep -E '^ +FAIL +test-blind\.sh.*could not measure' > /dev/null \
+  && check "#1146 under CI a suite that could not measure fails the run, saying so" ok \
+  || check "#1146 under CI a suite that could not measure fails the run, saying so" "exit=$code_um2 out=$out_um2"
+# Not a way out of being judged: a score with failures in it is judged by the score.
+UM3="$TMPROOT/dir-unmeasured-and-failing"
+mk_unmeasured_suite "$UM3" blindandbad 2
+out_um3="$(env -u CI bash "$RUNNER" "$UM3" 2>&1)"; code_um3=$?
+[ "$code_um3" -ne 0 ] && printf '%s\n' "$out_um3" | grep -E '^ +FAIL +test-blindandbad\.sh' > /dev/null \
+  && check "#1146 a suite that could not measure and also counts failures still fails" ok \
+  || check "#1146 a suite that could not measure and also counts failures still fails" "exit=$code_um3 out=$out_um3"
+
+# ---------------------------------------------------------------------------
 # HOW BUSY THE MACHINE WAS when a suite failed (claude-config#1083, L356).
 #
 # On 2026-10-10 one pull reported 32 of 94 suites failing and a rerun minutes later passed them all, on a Mac
