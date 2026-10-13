@@ -19,7 +19,9 @@
 # gates, block-red-merge.sh and pr-review-gate.sh, as a hook payload, and merges only when both allow
 # it. Green, up to date, pinned and reviewed are therefore judged by the one implementation of each
 # rule, never by a second copy here (L263, L370). What this file decides is only WHEN to ask: it waits
-# while the head's checks are unfinished or its review is still running (pr-review.sh check exit 3),
+# while the head's checks are unfinished, while a workflow run GitHub has created for the head has not
+# finished (its checks may not have registered yet, claude-config#1087), or while its review is still
+# running (pr-review.sh check exit 3),
 # and it updates the branch while the head is behind. A wrong "wait" costs time and ends at the
 # deadline; a wrong "ready" is refused by the gates. Neither can merge anything they would refuse.
 #
@@ -164,27 +166,29 @@ ask_gate(){   # $1 = gate script, $2 = command text
 READ_TRIES="$(num_or "${MWR_READ_TRIES:-}" 4)"; [ "$READ_TRIES" -ge 1 ] || READ_TRIES=1
 READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
 read_err=""
+reading=""
+announce_retry(){ say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."; }
+# The loop itself is mt_retry_read, shared with block-red-merge.sh's own reads (claude-config#1081).
 with_retries(){   # $1 = what is being read, for the line it says; $2 = the reader
-  local try=1 rc
-  while :; do
-    "$2"; rc=$?
-    [ "$rc" -eq 2 ] || return "$rc"
-    [ "$try" -lt "$READ_TRIES" ] || return 2
-    say "GitHub did not answer reading $1 (try $try of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
-    "$SLEEP" "$READ_WAIT"
-    try=$((try + 1))
-  done
+  reading="$1"
+  mt_retry_read "$READ_TRIES" "$READ_WAIT" "$SLEEP" "" announce_retry "$2"
 }
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
 read_pr(){   # sets view_env
+  local rc
   view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
-  [ "$(printf '%s' "$view_env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
-  read_err="$(printf '%s' "$view_env" | jq -r '.error // ""' 2>/dev/null)"
-  if [ "$(printf '%s' "$view_env" | jq -r '(.notFound // false) or ((.wrongRepo // "") != "")' 2>/dev/null)" != "true" ] && mt_gh_transient "$read_err"; then
-    return 2
-  fi
-  read_err="${read_err:-no answer}"
-  return 1
+  mt_view_class "$view_env"; rc=$?
+  read_err="$MT_VIEW_ERR"
+  [ "$rc" -eq 1 ] && read_err="${read_err:-no answer}"
+  return "$rc"
+}
+# The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
+# runs_pending. Asked as the account that could see the pull request.
+read_runs(){
+  local rc
+  mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
+  runs_pending="$MT_RUNS_PENDING"; read_err="$MT_RUNS_ERR"
+  return "$rc"
 }
 read_compare(){   # sets compare, crc, behind
   compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
@@ -254,8 +258,21 @@ while :; do
   checks_open="$(printf '%s' "$view" | jq '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_upcase) | select(IN("", "PENDING", "EXPECTED"))] | length')"
   if [ "$checks_open" -gt 0 ]; then
     waiting="checks still running ($checks_open of $checks_total)"
-  elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
-    waiting="checks still running (none reported yet)"
+  else
+    # NOTHING OPEN IS NOT EVERYTHING DONE (claude-config#1087). The rollup lists only the checks that
+    # have registered, and a workflow run can exist for minutes before its jobs do (a concurrency
+    # group, a queue): Slate #3645 was merged on one fast green check from another workflow while
+    # its CI run sat pending. So before the checks read as finished, the runs GitHub has created for
+    # this head are read too, and any that has not finished is waited on, by whatever name its
+    # checks will carry. Read only here, where the head would otherwise read as finished, so it costs
+    # one REST call a look at the end of a wait, never during it.
+    with_retries "which workflow runs #$pr's head ${head:0:7} has" read_runs; rrc=$?
+    [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read which workflow runs GitHub has for #$pr's head ${head:0:7} ($read_err$(tried "$rrc")), so nothing here can tell whether CI is still to report on it. Nothing was merged."
+    if [ -n "$runs_pending" ]; then
+      waiting="checks still running (workflow runs not finished: $runs_pending)"
+    elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
+      waiting="checks still running (none reported yet)"
+    fi
   fi
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
   case "$rev_rc" in

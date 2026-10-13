@@ -70,6 +70,12 @@ case "$*" in
     b="$(rd behind)"; st=ahead; [ "$b" != 0 ] && st=diverged
     printf '{"status":"%s","ahead_by":1,"behind_by":%s}\n' "$st" "$b"
     ;;
+  "api repos/acme/widget/actions/runs"*)
+    # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
+    # writes some to runs, the shape a repository whose runs have all finished answers with too.
+    fail_read runs
+    if [ -s "$ST/runs" ]; then cat "$ST/runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    ;;
   "pr update-branch"*)
     [ -e "$ST/update-fails" ] && { echo "GraphQL: merge conflict between base and head (updatePullRequestBranch)" >&2; exit 1; }
     nh="$(head -1 "$ST/next-heads")"; tail -n +2 "$ST/next-heads" > "$ST/next-heads.tmp"; mv "$ST/next-heads.tmp" "$ST/next-heads"
@@ -393,6 +399,71 @@ printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/compare/main...x": 
 out="$(env -u MWR_READ_RETRY_SECONDS bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
 check_eq "#1061 with no retry setting it still stops when GitHub stays unreachable" "1" "$rc"
 check_eq "#1061 the default retry waits are 20 seconds each, a minute in all" "20 20 20" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
+
+# =================================================================================================
+# 9. A fast check reporting first is not the head's CI (claude-config#1087). On 2026-10-12 Slate
+#    #3645 was merged at 22:25:56 with one check on its head, a green one from a separate fast
+#    workflow, while its CI run had existed since 22:24:52 waiting on a concurrency group: its jobs
+#    were created at 22:26:05. The helper read "every reported check is green" as "the head is green".
+#    The run itself is the record that more is coming, so an unfinished workflow run for the head is
+#    waited on like a pending check, whatever its checks will be called.
+# =================================================================================================
+FAST='[{"__typename":"CheckRun","name":"merge-gap","workflowName":"Merge-gap guard","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-12T22:24:49Z"}]'
+FAST_CI_RUNNING='[{"__typename":"CheckRun","name":"merge-gap","workflowName":"Merge-gap guard","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-12T22:24:49Z"},{"__typename":"CheckRun","name":"build","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-12T22:26:07Z"}]'
+FAST_CI_GREEN='[{"__typename":"CheckRun","name":"merge-gap","workflowName":"Merge-gap guard","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-12T22:24:49Z"},{"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-12T22:26:07Z"}]'
+RUNS_CI_PENDING='{"total_count":2,"workflow_runs":[{"name":"CI","status":"pending","conclusion":null},{"name":"Merge-gap guard","status":"completed","conclusion":"success"}]}'
+RUNS_CI_RUNNING='{"total_count":2,"workflow_runs":[{"name":"CI","status":"in_progress","conclusion":null},{"name":"Merge-gap guard","status":"completed","conclusion":"success"}]}'
+RUNS_DONE='{"total_count":2,"workflow_runs":[{"name":"CI","status":"completed","conclusion":"success"},{"name":"Merge-gap guard","status":"completed","conclusion":"success"}]}'
+
+fresh "$OLD" 0 "$FAST"
+printf '%s' "$RUNS_CI_PENDING" > "$ST/runs"
+printf '%s\n%s\n' \
+  "printf '%s' '$FAST_CI_RUNNING' > \"\$ST/rollup\"; printf '%s' '$RUNS_CI_RUNNING' > \"\$ST/runs\"" \
+  "printf '%s' '$FAST_CI_GREEN' > \"\$ST/rollup\"; printf '%s' '$RUNS_DONE' > \"\$ST/runs\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 a head whose only reported check is a fast green one still merges once its CI is green" "0" "$rc"
+check "#1087 it waited, naming the run whose checks had not registered" "CI (pending)" "$out"
+check_eq "#1087 it looked three times: the fast check alone, CI running, CI green" "2" "$(count sleeps '^30$')"
+check_eq "#1087 the gates were asked only once, after CI finished" "1" "$(grep -c 'gh pr merge' "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+check_eq "#1087 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+check "#1087 the runs were read for the head being merged" "actions/runs?head_sha=$OLD" "$(cat "$ST/gh-calls")"
+
+# No check has reported at all, past the grace for a fresh head, but a run exists: still waited on.
+fresh "$OLD" 0 '[]'
+printf '%s' '{"total_count":1,"workflow_runs":[{"name":"CI","status":"queued","conclusion":null}]}' > "$ST/runs"
+printf '%s\n' "printf '%s' '$FAST_CI_GREEN' > \"\$ST/rollup\"; printf '%s' '$RUNS_DONE' > \"\$ST/runs\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 a head with no checks yet but a queued run merges only after it" "0" "$rc"
+check "#1087 waiting on the queued run" "CI (queued)" "$out"
+check_eq "#1087 after one wait" "1" "$(count sleeps '^30$')"
+
+# Every run finished, checks green: merged at the first look, no wait added (the control).
+fresh "$OLD" 0 "$FAST_CI_GREEN"
+printf '%s' "$RUNS_DONE" > "$ST/runs"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 control: finished runs and green checks merge at once" "0" "$rc"
+check_eq "#1087 control: with no wait" "0" "$(count sleeps '^30$')"
+
+# The runs read is retried like the others, and a read that never succeeds stops: not knowing
+# whether CI is still to come is not knowing it is not (L42).
+fresh "$OLD" 0 "$FAST_CI_GREEN"
+printf '%s\n' 'Get "https://api.github.com/repos/acme/widget/actions/runs": net/http: TLS handshake timeout' > "$ST/runs-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 a runs read that fails once and then answers still merges" "0" "$rc"
+check_eq "#1087 after one retry wait" "1" "$(count sleeps '^7$')"
+
+fresh "$OLD" 0 "$FAST_CI_GREEN"
+printf '%s\n' 'gh: Server Error (HTTP 502)' > "$ST/runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 a runs read that keeps failing stops" "1" "$rc"
+check "#1087 saying what it could not read" "could not read which workflow runs" "$out"
+check_eq "#1087 and nothing was merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$FAST_CI_GREEN"
+printf '%s\n' 'gh: Resource not accessible by integration (HTTP 403)' > "$ST/runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1087 a runs read GitHub refuses stops at once" "1" "$rc"
+check_eq "#1087 with no retry wait" "0" "$(count sleeps '^7$')"
 
 echo
 echo "passed: $pass, failed: $fail"
