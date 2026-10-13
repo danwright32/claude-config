@@ -20,7 +20,10 @@ mods/scope-modes/hooks/sleep.ts; this script is handed a record and writes for i
                                          happened, so a render failure after it is said on stderr
                                          and still exits 0, so nobody writes the note twice.
   render  --record PATH [--final]        the report again. --final is the wake render: done read
-                                         from GitHub, sessions and claims that went quiet flagged.
+                                         from GitHub between sleep's start and its end (the woke or
+                                         limit note; with neither, the render's own moment, never
+                                         past the record's until, #1167), sessions and claims that
+                                         went quiet flagged.
 
 Every other phase writes through sleep_note in lib/sleep.sh, never this file's notes directly.
 
@@ -53,7 +56,8 @@ report knows, and the fields each reads (every other field is kept, and shown no
                                             that the ban list exists to stop, read from GitHub
   unmeasured text                           the overnight check: a read it could not make
 
-`by` is the session id that wrote it. `link`, stamped by the writer when the caller gave none, is
+`by` is the session id that wrote it, stamped by the writer when the caller gave none from the
+local session id (CLAUDE_CODE_SESSION_ID), the id the record names its workers by (#1167). `link`, stamped by the writer when the caller gave none, is
 the claude.ai session link of the session writing it (CLAUDE_CODE_BRIDGE_SESSION_ID), so what that
 session's subagents merge is credited to it at wake (#1159). `usage` is {costUsd?, rateLimits?:
 [{kind, percentUsed, resetsAt?}]}, as $.session.usage() reads it. A note of a kind not listed is shown under Other notes.
@@ -94,7 +98,9 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # own branch, as sleep-queue.sh names it.
 SESSION_ID = re.compile(r"^session_[A-Za-z0-9]+$")
 SESSION_LINK = re.compile(r"claude\.ai/code/(session_[A-Za-z0-9]+)")
-SESSION_LOCAL = re.compile(r"Claude-Session: local ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
+UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+LOCAL_ID = re.compile(r"^%s$" % UUID)
+SESSION_LOCAL = re.compile(r"Claude-Session: local (%s)" % UUID)
 CLAIM_BRANCH = re.compile(r"^sleep/([1-9][0-9]*)$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
@@ -250,6 +256,12 @@ def append_note(record_path, record, line):
     bridge = os.environ.get("CLAUDE_CODE_BRIDGE_SESSION_ID", "")
     if note.get("link") is None and SESSION_ID.match(bridge):
         note["link"] = bridge
+    # And its local id as `by`, the id the record names its workers by, when the caller gave none,
+    # so a worker whose notes named nobody is still heard from (#1167). A `by` the caller gave is
+    # never replaced, and a value not of a local id's shape is never stamped.
+    local = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if note.get("by") is None and LOCAL_ID.match(local):
+        note["by"] = local
     if note.get("at") is None:
         note["at"] = now_ms()
     elif not (num(note["at"]) and 0 <= note["at"] < 1e14):
@@ -286,14 +298,30 @@ def read_power():
     return "power unknown (%s)" % first
 
 
-def gh_list(repo, what, since, deadline):
-    """Merged PRs or closed issues in a repo since sleep began: (items, None) or (None, why)."""
+def night_end(record, notes, now):
+    """When the night ended, as (ms, the note that says so or None), the one bound every reading of
+    the night ends at (#1167): the woke or limit note; with neither, this moment, but never past the
+    record's until, when the night ends by itself. Without it a render after wake took the day's
+    merges for the night's (PR #1127, merged 8:32 AM ET after wake, listed under the night of
+    2026-10-12)."""
+    ended = [n for n in notes if n["kind"] in ENDED and num(n.get("at"))]
+    if ended:
+        return ended[-1]["at"], ended[-1]
+    until = record.get("until")
+    return (min(now, until) if num(until) else now), None
+
+
+def gh_list(repo, what, since, until, deadline):
+    """Merged PRs or closed issues in a repo between sleep's start and the night's end:
+    (items, None) or (None, why)."""
     left = int(deadline - time.monotonic())
     if left <= 0:
         return None, "the report ran out of its %d seconds for GitHub before reaching it" % GH_TOTAL_S
     field = "mergedAt" if what == "pr" else "closedAt"
     words = ["gh", what, "list", "-R", repo, "--state", "merged" if what == "pr" else "closed",
-             "--search", "%s:>=%s" % ("merged" if what == "pr" else "closed", iso(since)),
+             # Whole seconds, the end rounded up so the search never cuts inside the bound's own
+             # second; the bound itself is applied to the millisecond below.
+             "--search", "%s:%s..%s" % ("merged" if what == "pr" else "closed", iso(since), iso(until + 999)),
              # What ties each to a session (#1159): a PR's branch, body and the issues it closes; the
              # PRs that closed an issue.
              "--json", "number,title,url,%s,%s" % (field, "headRefName,body,closingIssuesReferences" if what == "pr"
@@ -322,7 +350,7 @@ def gh_list(repo, what, since, deadline):
         # read is kept and said, never dropped (L215).
         if at is None:
             undated.append(it)
-        elif at >= since:
+        elif since <= at <= until:
             out.append(dict(it, at=at))
     return {"items": out, "undated": undated, "full": len(items) >= GH_LIMIT}, None
 
@@ -341,9 +369,9 @@ def text_of(n):
 
 def build(record, notes, bad, final, now, github):
     since = record["since"]
-    ended = [n for n in notes if n["kind"] in ENDED and num(n.get("at"))]
-    end_note = ended[-1] if ended else None
-    end_at = end_note["at"] if end_note else now
+    end_at, end_note = night_end(record, notes, now)
+    if final and not end_note and num(github.get("until")):
+        end_at = github["until"]  # the bound GitHub was read to, so the header names the same one
     out = ["# Sleep report, night of %s" % night_title(record.get("night")), ""]
 
     start = next((n for n in notes if n["kind"] == "start"), None)
@@ -354,8 +382,11 @@ def build(record, notes, bad, final, now, github):
         head += " Woke at %s." % et_when(end_at)
     elif end_note:
         head += " Ended by itself at %s%s." % (et_when(end_at), ": %s" % end_note["reason"] if end_note.get("reason") else "")
-    else:
+    elif not final and end_at == now:
         head += " Still asleep as of %s; this report is checked against GitHub at wake." % et_when(now)
+    else:
+        # Rendered at wake when the woke note could not be written, or past the record's until.
+        head += " No woke or limit note was written, so the night is read up to %s." % et_when(end_at)
     out.append(head)
     workers = [w for w in record.get("workers") or [] if isinstance(w, str)]
     if workers:
@@ -587,8 +618,11 @@ def credit(repo, p, who):
     return None, ("its body names %s, which wrote no note tonight" % " and ".join(named)) if named else None
 
 
-def github_done(record, notes):
+def github_done(record, notes, now):
     since = record["since"]
+    until, end_note = night_end(record, notes, now)
+    # How a merge after the bound is said: the night's end when a note says it, else only the bound.
+    past = ("after the night ended at %s" if end_note else "after %s, as far as this report reads the night") % et_time(until)
     repos = sorted({n["repo"] for n in notes if isinstance(n.get("repo"), str) and REPO.match(n["repo"])})
     done, flags = [], []
     noted_prs = {(n.get("repo"), n.get("pr")) for n in notes if n.get("pr") is not None}
@@ -604,7 +638,7 @@ def github_done(record, notes):
             done.append("%s: %s (as noted, unchecked: %s)" % (where(n), text_of(n), "it names no repo GitHub can be asked about" if bad_repo else "it names no PR or issue"))
     # Every repository is read before any is judged: an issue in one can be closed by a PR in another,
     # and whether that PR is accounted for decides the issue (#1159).
-    reads = {repo: (gh_list(repo, "pr", since, deadline), gh_list(repo, "issue", since, deadline)) for repo in repos}
+    reads = {repo: (gh_list(repo, "pr", since, until, deadline), gh_list(repo, "issue", since, until, deadline)) for repo in repos}
     who = tonight(record, notes)
     credits = {}
     for repo, ((prs, _), _) in reads.items():
@@ -643,7 +677,7 @@ def github_done(record, notes):
             for n in notes:
                 if n["kind"] == "done" and n.get("repo") == repo and n.get("pr") is not None and n["pr"] not in merged and ("pr", n["pr"]) not in asked:
                     asked.add(("pr", n["pr"]))
-                    confirm(repo, "pr", n["pr"], since, deadline, done, flags)
+                    confirm(repo, "pr", n["pr"], (since, until, past), deadline, done, flags)
         if issues:
             if issues["full"]:
                 flags.append("GitHub returned %d closed issues for %s, the most asked for, so some may be missing." % (GH_LIMIT, repo))
@@ -663,8 +697,8 @@ def github_done(record, notes):
             for n in notes:
                 if n["kind"] == "done" and n.get("repo") == repo and n.get("pr") is None and n.get("issue") is not None and n["issue"] not in closed and ("issue", n["issue"]) not in asked:
                     asked.add(("issue", n["issue"]))
-                    confirm(repo, "issue", n["issue"], since, deadline, done, flags)
-    return {"done": done, "flags": flags}
+                    confirm(repo, "issue", n["issue"], (since, until, past), deadline, done, flags)
+    return {"done": done, "flags": flags, "until": until}
 
 
 def unread_line(repo, failed):
@@ -680,9 +714,11 @@ def unread_line(repo, failed):
     return "%s could not be read from GitHub for %s (%s)." % (names, repo, "; ".join("%s: %s" % f for f in failed))
 
 
-def confirm(repo, what, number, since, deadline, done, flags):
+def confirm(repo, what, number, night, deadline, done, flags):
     """A noted done the search did not return is read by its number before it is called wrong: a
-    search answers from an index that can lag (L1014, L119)."""
+    search answers from an index that can lag (L1014, L119). `night` is (since, until, how a time
+    past until is said), the same bound the search used (#1167)."""
+    since, until, past = night
     field = "mergedAt" if what == "pr" else "closedAt"
     verb = "merged" if what == "pr" else "closed"
     label = "PR" if what == "pr" else "issue"
@@ -703,8 +739,12 @@ def confirm(repo, what, number, since, deadline, done, flags):
             else:
                 j = json.loads(p.stdout)
                 at = parse_iso(j.get(field)) if isinstance(j, dict) else None
-                if at is not None and at >= since:
+                if at is not None and since <= at <= until:
                     done.append("%s %s #%s %s, %s %s (found by its number; GitHub's search had not listed it)" % (repo, label, number, j.get("title") or "", verb, et_time(at)))
+                    return
+                if at is not None and at > until:
+                    # Done, but in the day: never the night's, and never said as not done (L11).
+                    flags.append("%s %s #%s was noted done, but GitHub shows it %s %s, %s." % (repo, label, number, verb, et_time(at), past))
                     return
         except subprocess.TimeoutExpired:
             why = "gh did not answer within %d seconds" % min(GH_TIMEOUT_S, left)
@@ -795,7 +835,7 @@ def render(record_path, record, final):
     if final:
         # GitHub's reads take up to GH_TOTAL_S, so they run before the lock, never holding every
         # other render behind them; done is read from GitHub, the notes again under the lock.
-        github = github_done(record, read_notes(path)[0])
+        github = github_done(record, read_notes(path)[0], now_ms())
     with RenderLock(path[:-len(".jsonl")] + ".render.lock"):
         return _render_locked(path, record, final, github)
 
