@@ -311,7 +311,7 @@ IFS=$' \t\n'
 
 # Housekeeping. Another session's record is swept by its age; this session's own never is, since it
 # was read above and is appended to below.
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.prread' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 find "$SHOWN_DIR" -maxdepth 1 \( -name '*.list' -o -name '*.held' \) ! -name "${session:-.}.list" ! -name "${session:-.}.held" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 
 # Last, so a run killed at any point before it has recorded nothing (see the header): what was

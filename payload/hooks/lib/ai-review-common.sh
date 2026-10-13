@@ -374,7 +374,11 @@ $f
 # missing is still counted.
 #
 # Tab separated: finished, host, repo, repo dir, sha, base, status, findings, seconds, files the
-# findings name (comma joined), lessons they cite (comma joined).
+# findings name (comma joined), lessons they cite (comma joined), and since claude-config#1168 what
+# reading the pull request's description and comments at the review's start came to (read, none for
+# no open pull request, failed, or empty where it was never asked, as on every row written before)
+# and what gh said, from <review>.prread beside the review. A failed read is counted here, with the
+# review's other outcomes, so a read that keeps failing shows in pr-review-report.sh (L77).
 AR_PR_LEDGER="$AR_STATE_DIR/pr-reviews.tsv"
 AR_PR_OPENED="$AR_STATE_DIR/pr-opened.tsv"
 
@@ -383,7 +387,17 @@ ar_host() { local h; h="${AI_REVIEW_HOST:-$(hostname 2>/dev/null)}"; printf '%s'
 ar_pr_ledger() {   # $1 = a finished pr review file, $2 = the repository's directory
   [ -f "$1" ] || return 1
   mkdir -p "$AR_STATE_DIR" 2>/dev/null
-  awk -v host="$(ar_host)" -v dir="$2" -F '\t' '
+  # The outcome is what precedes the first tab; what gh said is the rest, put on one line with no
+  # tab, so it can never add a column or a row.
+  local pr_read="" pr_said="" rec=""
+  [ -f "$1.prread" ] && rec="$(cat "$1.prread" 2>/dev/null)"
+  if [ -n "$rec" ]; then
+    pr_read="${rec%%$'\t'*}"; pr_read="${pr_read%%$'\n'*}"
+    case "$rec" in *$'\t'*) pr_said="${rec#*$'\t'}" ;; esac
+    pr_said="$(printf '%s' "$pr_said" | tr '\t\r\n' '   ' | awk '{ $1 = $1; print substr($0, 1, 300) }')"
+  fi
+  # Through the environment, never -v, which would turn a backslash gh printed into an escape.
+  AR_PR_READ="$pr_read" AR_PR_SAID="$pr_said" awk -v host="$(ar_host)" -v dir="$2" -F '\t' '
     BEGIN { FS = "\n" }
     !body && /^$/ { body = 1; next }
     !body { i = index($0, "="); if (i) m[substr($0, 1, i - 1)] = substr($0, i + 1); next }
@@ -399,7 +413,7 @@ ar_pr_ledger() {   # $1 = a finished pr review file, $2 = the repository's direc
     }
     END {
       secs = (m["finished"] ~ /^[0-9]+$/ && m["started"] ~ /^[0-9]+$/) ? m["finished"] - m["started"] : ""
-      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m["finished"], host, m["repo"], dir, m["sha"], m["base"], m["status"], m["findings"], secs, files, lessons
+      printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", m["finished"], host, m["repo"], dir, m["sha"], m["base"], m["status"], m["findings"], secs, files, lessons, ENVIRON["AR_PR_READ"], ENVIRON["AR_PR_SAID"]
     }' "$1" >> "$AR_PR_LEDGER" 2>/dev/null
 }
 

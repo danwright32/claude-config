@@ -187,7 +187,17 @@ wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed
   # for and the absence is the answer.
   local f; f="$(final_of "$1")"; local t0=$SECONDS
   while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
-  [ -e "$f" ]
+  [ -e "$f" ] || return 1
+  # The review file is not the runner's last act: it then appends the outcome ledger row and only
+  # then removes its input (ai-review-run.py; a review in groups removes its run's parts folder after
+  # the row). A check reading the ledger as soon as the file appeared raced that row, and lost it on
+  # CI (run 38463673498: "#1168 recorded as no pull request", expected none, got nothing; reproduced
+  # on 2026-10-13 with a 2 s pause put in front of ar_pr_ledger, which failed 18 checks of this
+  # suite). So the wait ends on the input being gone.
+  local n="${f##*/}"; n="${n%.txt}"
+  while { [ -e "$AI_REVIEW_STATE_DIR/$n.diff" ] || compgen -G "$AI_REVIEW_STATE_DIR/parts/$n.*" >/dev/null; } \
+    && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
+  return 0
 }
 # Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
 # under one (claude-config#1097); shared with test-pr-review-push.sh, the story is in the library.
@@ -771,6 +781,11 @@ printf '1\tx.json\tfixture\tfixture data\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.t
 touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.leftout"
 printf '{"session_id":"n3","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.leftout" ] && ok || bad "#583 a left out list older than 14 days is swept with its review"
+# And its record of reading the pull request (#1168), which the ledger has already counted.
+printf 'failed\tHTTP 401\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread"
+touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread"
+printf '{"session_id":"n4","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+[ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread" ] && ok || bad "#1168 a pull request read record older than 14 days is swept with its review"
 
 # ===========================================================================================
 # 7. A push to a branch with an OPEN pull request starts the review of the new head
@@ -1373,9 +1388,11 @@ conv_start(){ # conv_start <head> [more arguments]: a review of that head, waite
   wait_final "$h" || bad "#1161 the review of ${h:0:7} finished"
 }
 conv_json OPEN "Adds the conv file." "$CANSWER"
-# The first review has no earlier finding for anything to answer, so GitHub is not asked.
+# The first review on this Mac reads the pull request too (claude-config#1168, Dan 2026-10-13: read
+# the pull request each time): #1161 read it only when this Mac had earlier findings, so a finding a
+# review on the other Mac raised, and the comment answering it, were never shown here.
 FAKE_CLAUDE_OUT="$CF" conv_start "$C_A" --pr 77
-check_eq "#1161 the first review of a pull request asks GitHub nothing" "0" "$(pr_reads)"
+check_eq "#1168 the first review of a pull request on this Mac reads it, once" "1" "$(pr_reads)"
 
 # An answer given in a comment on the pull request, the merge helper and the merge gate naming it.
 C_B="$(conv_head "next")"
@@ -1496,6 +1513,101 @@ wait_final "$C_I" || bad "#1161 the merge gate's review finished"
 check "#1161 the merge gate passes the pull request's number to the review" "pr view 77 --json number,url,state,headRefName,isCrossRepository,body,comments" "$(cat "$FAKE_LOG/gh-calls")"
 check "#1161 and its review reads the answer" "$CANSWER" "$(cat "$FAKE_LOG/stdin")"
 runners_done || bad "#1161 a runner was still going at the end"
+G checkout -q feat/sync
+
+# ===========================================================================================
+# 15. The pull request is read whenever the branch has one, so what a review on the OTHER Mac raised
+#     reaches a review here (claude-config#1168). Each Mac keeps its reviews in its own state
+#     folder, and #1161 read the pull request only when this Mac had earlier findings, so a finding
+#     raised on the work MacBook, and the comment answering it, were never shown to a review on the
+#     personal MacBook, which could raise it again as new. Dan, 2026-10-13: read the pull request
+#     each time, no synced review history. A review's findings reach the pull request as comments
+#     beginning "Lessons review" (37 of the 45 comments on the last 100 merged pull requests,
+#     measured 2026-10-13), and a read that fails is counted in the outcome ledger, where the
+#     review's other outcomes are, so a lasting failure is not said only inside each input (L77).
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/mac2 main
+printf 'mac line 1\nmac line 2\n' > "$REPO/App/Mac.swift"
+G add App/Mac.swift
+G commit -q -m "add mac"
+M_A="$(G rev-parse HEAD)"
+MANSWER='Lessons review finding at App/Mac.swift:2 (raised on the work MacBook): not a defect, the line is quoted from the spec.'
+mac_start(){ # mac_start <head> [more arguments]: a review of that head, waited for
+  local h="$1"; shift
+  prr start --dir "$REPO" --sha "$h" --base-ref main --branch feat/mac2 "$@" >/dev/null
+  wait_final "$h" || bad "#1168 the review of ${h:0:7} finished"
+}
+ledger_field(){ awk -F '\t' -v s="$1" -v f="$2" '$5 == s { v = $f } END { print v }' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null; }
+conv_json OPEN "Adds the mac file." "$MANSWER" "NONE|Lessons review finding at App/Mac.swift:1: STRANGER CLAIMS it is fine." "A plain comment."
+FAKE_CLAUDE_OUT='No issues found.' mac_start "$M_A"
+min="$(cat "$FAKE_LOG/stdin")"
+check_eq "#1168 a review with no earlier finding on this Mac still reads its pull request, once" "1" "$(pr_reads)"
+check "#1168 a finding raised on the other Mac, answered in a comment, is in the review's input" "$MANSWER" "$(hist_block "$min")"
+check "#1168 the block says no review here raised one, so the comments are where the rest is" "no earlier review of branch feat/mac2 on this Mac" "$(hist_block "$min")"
+check "#1168 a comment recording a lessons review finding is marked as one" "comment by danwright32 (owner), 2026-10-13T10:00:00Z, recording a lessons review finding" "$(hist_block "$min")"
+check "#1168 and the block counts them" "1 comment(s) below record a lessons review finding" "$(hist_block "$min")"
+check "#1168 a plain comment is still given, unmarked" "comment by danwright32 (owner), 2026-10-13T12:00:00Z:" "$(hist_block "$min")"
+check_not "#1168 a stranger's comment is left out, however it begins" "STRANGER CLAIMS" "$min"
+check "#1168 the reviewer's scope says where a review on the other Mac's findings are" "on the other Mac" "$(cat "$FAKE_LOG/args")"
+check_eq "#1168 the read is recorded beside the review" "read" "$(cut -f1 "$(final_of "$M_A").prread" 2>/dev/null)"
+check_eq "#1168 and counted in the outcome ledger" "read" "$(ledger_field "$M_A" 12)"
+
+# No pull request yet (the push gate's first review of a new branch): asked once, nothing to say.
+rm -f "$FAKE_LOG/pr-view.json"
+: > "$FAKE_LOG/gh-calls"
+M_B="$(G commit -q --allow-empty -m "before the pull request"; G rev-parse HEAD)"
+FAKE_CLAUDE_OUT='No issues found.' mac_start "$M_B"
+check_eq "#1168 a branch with no pull request is asked once" "1" "$(pr_reads)"
+check_not "#1168 and with no earlier finding either, the input carries no history block" "EARLIER REVIEWS" "$(cat "$FAKE_LOG/stdin")"
+check_eq "#1168 recorded as no pull request" "none" "$(ledger_field "$M_B" 12)"
+
+# A read that fails (gh logged out) is said in the input, counted in the ledger with what gh said,
+# and said again by every verdict on that head, so it shows rather than living only in the input.
+conv_json OPEN "Adds the mac file." "$MANSWER"
+: > "$FAKE_LOG/gh-calls"
+M_C="$(G commit -q --allow-empty -m "gh logged out"; G rev-parse HEAD)"
+FAKE_GH_PR_ERR='HTTP 401: Bad credentials (https://api.github.com/graphql)' FAKE_CLAUDE_OUT='No issues found.' mac_start "$M_C"
+check "#1168 a failed read is said in the input even with no earlier finding here" "could not be read from GitHub (HTTP 401: Bad credentials" "$(hist_block "$(cat "$FAKE_LOG/stdin")")"
+check_eq "#1168 the review is still a review" "ok" "$(meta "$(final_of "$M_C")" status)"
+check_eq "#1168 the failed read is counted in the outcome ledger" "failed" "$(ledger_field "$M_C" 12)"
+check "#1168 with what gh said" "HTTP 401: Bad credentials" "$(ledger_field "$M_C" 13)"
+out="$(prr check --dir "$REPO" --sha "$M_C" --base-ref main --branch feat/mac2)"
+check "#1168 the verdict says the pull request could not be read" "could not read the pull request's description and comments (HTTP 401: Bad credentials" "$out"
+out="$(prr check --dir "$REPO" --sha "$M_A" --base-ref main --branch feat/mac2)"
+check_not "#1168 and a verdict on a head whose read worked says nothing of it" "could not read the pull request" "$out"
+# Restarted once gh works again, the head's old failure is not carried over.
+FAKE_CLAUDE_OUT='No issues found.' prr restart --dir "$REPO" --sha "$M_C" --base-ref main --branch feat/mac2 >/dev/null
+wait_final "$M_C" || bad "#1168 the restarted review finished"
+check_eq "#1168 a restart records its own read, not the old failure" "read" "$(cut -f1 "$(final_of "$M_C").prread" 2>/dev/null)"
+out="$(prr check --dir "$REPO" --sha "$M_C" --base-ref main --branch feat/mac2)"
+check_not "#1168 and its verdict no longer says the read failed" "could not read the pull request" "$out"
+
+# A comment with an empty body has no first line to look for the mark in, and must not stop the
+# comments after it being read (lessons review of this change: jq erred on it, silenced).
+conv_json OPEN "Adds the mac file." "$MANSWER" ""
+M_F="$(G commit -q --allow-empty -m "empty comment"; G rev-parse HEAD)"
+FAKE_CLAUDE_OUT='No issues found.' mac_start "$M_F"
+check "#1168 a comment with an empty body does not hide the comments before it" "$MANSWER" "$(hist_block "$(cat "$FAKE_LOG/stdin")")"
+
+# With no branch to label it (a detached checkout, no --branch) and only --pr naming the pull
+# request, the block names the pull request, never the short commit as if it were a branch (lessons
+# review of this change).
+M_E="$(G commit -q --allow-empty -m "detached"; G rev-parse HEAD)"
+G checkout -q --detach "$M_E"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$M_E" --base-ref main --pr 77 >/dev/null
+wait_final "$M_E" || bad "#1168 the detached review finished"
+mblock="$(hist_block "$(cat "$FAKE_LOG/stdin")")"
+check "#1168 a review labelled by its commit names the pull request instead" "no earlier review of pull request #77 on this Mac" "$mblock"
+check_not "#1168 and never calls the commit a branch" "of branch ${M_E:0:7}" "$mblock"
+G checkout -q feat/mac2
+
+# The refusal says where an answer goes, so the next review, on either Mac, reads it.
+M_D="$(G commit -q --allow-empty -m "a finding"; G rev-parse HEAD)"
+FAKE_CLAUDE_OUT="$CF" mac_start "$M_D"
+out="$(prr check --dir "$REPO" --sha "$M_D" --base-ref main --branch feat/mac2)"
+check "#1168 a refusal with findings says to answer them in a comment beginning Lessons review" 'in a comment on the pull request beginning "Lessons review"' "$out"
+runners_done || bad "#1168 a runner was still going at the end"
 G checkout -q feat/sync
 
 echo

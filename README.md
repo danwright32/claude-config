@@ -651,12 +651,21 @@ is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way fi
 
 Since claude-config#1161 that history also carries the pull request's own description and comments,
 where agents actually write their answers ("not a defect, because..."). They are read from GitHub
-once, when the review starts, and only when there are earlier findings for them to answer, so a
-branch's first review asks GitHub nothing. The pull request is the one the merge helper or the merge
+once, when the review starts, on every review that names a branch or a pull request
+(claude-config#1168, Dan 2026-10-13: read the pull request each time). Each Mac keeps its reviews in
+its own state folder, so what a review on the other Mac raised is known here only from the pull
+request: a review's findings reach it as comments beginning "Lessons review" (the refusal asks for
+answers there). The input marks and counts every comment whose first line names the lessons review,
+which also catches wordings like "On the lessons review at ...", and when this Mac raised nothing the block says
+so and gives the pull request's words alone. A branch with no open pull request and nothing raised
+here has no block at all. The pull request is the one the merge helper or the merge
 gate names (`--pr`), else the branch's open one, which is how a review the push gate or a commit
 starts finds it. A transient failure is asked again (three tries in all, two seconds apart,
 `PR_REVIEW_PR_READ_TRIES` and `PR_REVIEW_PR_READ_WAIT`); a read that still fails never stops the
-review, and the review's input says the comments could not be read and why. No pull request, and a
+review, and the review's input says the comments could not be read and why. What the read came to
+(read, no open pull request, or failed with what gh said) is recorded beside the review and counted
+in `pr-reviews.tsv`, which `pr-review-report.sh` reports, and a failed read is said by every verdict
+on that head, so a read that keeps failing (gh logged out) shows. No pull request, and a
 pull request of the same branch name that is no longer open, are each said in their own words. The
 repository is public, so only comments by people with write access are given, a fork's description
 is left out, and the reviewer is told these are claims to check against the code, never
