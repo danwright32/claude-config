@@ -199,3 +199,4 @@ which is NOT loaded into the session.
 - L721. A monitor built to catch a gate deciding wrongly must not use that gate's own predicate, or the predicate's blind spot is invisible to both.
 - L724. Somebody redoing an action right after its SUCCESS screen means the screen failed them: ask that first, and pull the clicked text before theorising.
 - L730. jsdom cannot see the server/client boundary: a server component calling a use client module's function passes tests, so scan or render the route.
+- L760. Judge completion against the EXPECTED set, never only what has reported: an empty-set guard passes once one fast result arrives first.

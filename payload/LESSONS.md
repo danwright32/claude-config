@@ -2692,6 +2692,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   called `holdsAView()` from `SaveForm`; its own vitest file rendered it in jsdom and passed.)
   SHORT: jsdom cannot see the server/client boundary: a server component calling a use client module's function passes tests, so scan or render the route.
 
+- **L760. A completion check must compare what has reported against the set it EXPECTS, because
+  guarding only the empty case passes as soon as one fast result arrives from another source, before
+  the rest have even registered.** (claude-config#1087, 2026-10-12)
+  SHORT: Judge completion against the EXPECTED set, never only what has reported: an empty-set guard passes once one fast result arrives first.
+
 ## Data safety
 
 - **L285. A store that several independent consumers draw from must be drained by the same key
@@ -5587,6 +5592,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
 
 ## Security and privacy
+
+- **L761. A pattern that keeps a secret-bearing file out of git or a sync (an ignore rule, an exclude
+  list) must also match that file's copies, such as .bak, .orig and ~ backups, because a backup is the
+  first thing anyone makes before editing it, and the copy carries the same secret past a pattern that
+  names only the original.** (claude-config#1089, 2026-10-12)
+  SHORT: A pattern keeping a secret file out of git or a sync must also match its .bak, .orig and ~ copies.
 
 - **L18. Enforce authorization at the database layer, not only in application code.**
   Row-level security with WITH CHECK on every self-write policy, column guards on
@@ -9995,6 +10006,13 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   SHORT: In a JS test, attach a may-reject promise's handler before the next await: a rejection landing during it fails the run though every test passed.
 
 ## Pipeline speed
+
+- **L759. Keep every repository checkout and its worktrees outside a cloud synced folder such as
+  iCloud Desktop & Documents, because each install, build and worktree becomes sync churn that
+  saturates the machine's file watching and makes local gates fail for reasons unrelated to the
+  change.**
+  (slate#3638, 2026-10-12)
+  SHORT: Keep repo checkouts and worktrees out of cloud synced folders, whose sync churn starves file watching and fails local gates.
 
 - **L395. A speed improvement claimed from ONE reading per arm cannot be told from noise**, because
   the same code run twice on the same machine routinely differs by more than the effect being
