@@ -161,12 +161,11 @@ def parse_json_arg(text, what):
 def set_authors(args):
     if len(args) != 1:
         raise Refusal("usage: tracker.sh set-authors '<JSON list of your names or emails>'")
-    authors = parse_json_arg(args[0], "authors")
-    if not isinstance(authors, list) or not authors or not all(isinstance(a, str) and a.strip() for a in authors):
-        raise Refusal("the authors must be a JSON list of at least one name or email, each non empty; nothing was written")
+    # The same check the scan makes when it reads them back, so what is saved is what it accepts.
+    authors = text_list({"authors": parse_json_arg(args[0], "authors")}, "authors", "set-authors", required=True)
     src = CONFIG if os.path.exists(CONFIG) else EXAMPLE
     data = read_object(src)
-    data["authors"] = [a.strip() for a in authors]
+    data["authors"] = authors
     write_local_json(CONFIG, data)
     print("Saved %d author%s to %s." % (len(authors), "" if len(authors) == 1 else "s", CONFIG))
 
