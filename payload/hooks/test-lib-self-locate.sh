@@ -44,13 +44,13 @@ case "${TMPROOT%/}" in
 esac
 trap 'rm -rf "$TMPROOT"' EXIT
 
-# The pattern, ASSEMBLED so this file holds no occurrence of the thing it forbids: dirname applied
-# to the file's own path, BASH_SOURCE in any index or brace spelling, or $0.
+# The command's name, ASSEMBLED so this file holds no occurrence of the thing it forbids.
 _D="dir""name"
-PATTERN="${_D}[[:space:]]+\"?\\\$(\\{?BASH_SOURCE|\\{?0([^0-9]|$))"
 
-# Every uncommented line holding one, as "<path>:<line>", for the shell files under a lib/ folder
-# named on stdin relative to $1. One grep over all of them, never one per file (L297).
+# Every uncommented line applying it to the file's own path, as "<path>:<line>", for the shell files
+# under a lib/ folder named on stdin relative to $1. The path is BASH_SOURCE in any index or brace
+# spelling, $0, or a variable this same file assigned from either, and options (`--`) before it are
+# read past: each spelling left out would be exempt (L217). One awk over all of them (L297).
 sites_in(){   # $1 = root; stdin = repo relative paths
   local root="$1" rel
   local files=()
@@ -58,9 +58,34 @@ sites_in(){   # $1 = root; stdin = repo relative paths
     case "$rel" in lib/*.sh|*/lib/*.sh) [ -f "$root/$rel" ] && files+=("$rel") ;; esac
   done
   [ "${#files[@]}" -gt 0 ] || return 0
-  # -H always, or a single file is printed without its name and the comment filter misreads it.
-  (cd "$root" && grep -HnE "$PATTERN" -- "${files[@]}" 2>/dev/null) \
-    | awk '{ t = $0; sub(/^[^:]*:[0-9]+:/, "", t); if (t !~ /^[[:space:]]*#/) { split($0, p, ":"); print p[1] ":" p[2] } }'
+  (cd "$root" && awk -v D="$_D" '
+    # The name of the parameter a "$..." word at the start of s expands, or "" when it is not one.
+    function param(s,    t) {
+      sub(/^"/, "", s)
+      if (substr(s, 1, 1) != "$") return ""
+      s = substr(s, 2); sub(/^\{/, "", s)
+      if (s ~ /^0([^0-9]|$)/) return "0"
+      if (match(s, /^[A-Za-z_][A-Za-z_0-9]*/)) return substr(s, 1, RLENGTH)
+      return ""
+    }
+    FNR == 1 { split("", own) }
+    /^[[:space:]]*#/ { next }
+    {
+      # A variable given the file s own path keeps meaning it for the rest of this file.
+      rest = $0
+      while (match(rest, /[A-Za-z_][A-Za-z_0-9]*="?\$\{?(BASH_SOURCE|0([^0-9]|$))/)) {
+        a = substr(rest, RSTART, RLENGTH); sub(/=.*/, "", a); own[a] = 1
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      rest = $0
+      while (match(rest, D "[[:space:]]+")) {
+        rest = substr(rest, RSTART + RLENGTH)
+        arg = rest
+        while (match(arg, /^-[^[:space:]]*[[:space:]]+/)) arg = substr(arg, RLENGTH + 1)
+        p = param(arg)
+        if (p == "BASH_SOURCE" || p == "0" || (p != "" && (p in own))) { print FILENAME ":" FNR; break }
+      }
+    }' "${files[@]}" 2>/dev/null)
   return 0
 }
 
@@ -78,10 +103,17 @@ mkdir -p "$TMPROOT/plant/hooks/lib" "$TMPROOT/plant/hooks/other"
   printf '# E="$(%s "${BASH_SOURCE[0]}")"  <- a comment about one, not one\n' "$_D"
   printf 'F="$(%s "$transcript")"\n' "$_D"
   printf 'G="${BASH_SOURCE[0]%%/*}"\n'
+  printf 'H="$(%s -- "${BASH_SOURCE[0]}")"\n' "$_D"
+  printf 'self="${BASH_SOURCE[0]}"\n'
+  printf 'I="$(cd "$(%s "$self")" && pwd)"\n' "$_D"
+  printf 'other="$1"; J="$(%s "$other")"\n' "$_D"
 } > "$TMPROOT/plant/hooks/lib/planted.sh"
 printf 'A="$(%s "${BASH_SOURCE[0]}")"\n' "$_D" > "$TMPROOT/plant/hooks/other/not-a-lib.sh"
-planted="$(printf '%s\n' hooks/lib/planted.sh hooks/other/not-a-lib.sh | sites_in "$TMPROOT/plant" | tr '\n' ' ')"
-[ "$planted" = "hooks/lib/planted.sh:2 hooks/lib/planted.sh:3 hooks/lib/planted.sh:4 hooks/lib/planted.sh:5 hooks/lib/planted.sh:6 " ] \
+# A variable holding its own path is followed within its own file only: the next file's `self` is
+# somebody else's.
+printf 'K="$(%s "$self")"\n' "$_D" > "$TMPROOT/plant/hooks/lib/second.sh"
+planted="$(printf '%s\n' hooks/lib/planted.sh hooks/other/not-a-lib.sh hooks/lib/second.sh | sites_in "$TMPROOT/plant" | tr '\n' ' ')"
+[ "$planted" = "hooks/lib/planted.sh:2 hooks/lib/planted.sh:3 hooks/lib/planted.sh:4 hooks/lib/planted.sh:5 hooks/lib/planted.sh:6 hooks/lib/planted.sh:10 hooks/lib/planted.sh:12 " ] \
   && check "the scan names every spelling in a library, and not a comment, another path, the fix or a file outside lib/" ok \
   || check "the scan names every spelling in a library, and not a comment, another path, the fix or a file outside lib/" "it named: ${planted:-nothing}"
 
