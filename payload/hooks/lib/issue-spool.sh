@@ -35,6 +35,9 @@
 #                                              shown is pending
 #   issue-spool.sh seen-ledger <stamp>         where a clear given <stamp> records the seen marks
 #                                              it could not write into the spool (#1011)
+#   issue-spool.sh sweep-stamps <dir> <prefix> remove the review's stamps, seen ledgers and
+#                                              findings files older than the ownership window,
+#                                              saying how many (#1019)
 #   issue-spool.sh archive      <dir>          everything already filed
 #   issue-spool.sh clear <dir> [transcript] [stamp]
 #                                              move pending into the archive; with a stamp,
@@ -363,6 +366,69 @@ issue_spool_seen_ledger() { # seen-ledger <stamp> -> the ledger path beside it
   esac
 }
 
+# REMOVE THE REVIEW'S SPENT BOOKKEEPING (#1019). The review hook writes, under its temp directory, a
+# findings file per project, a stamp per session (`<prefix><hash>.<session>.manifest`) and, when a
+# clear could not rewrite the spool, a seen ledger beside the stamp. Nothing removed any of them. A
+# file of those three kinds untouched for the OWNERSHIP WINDOW is spent: every mark in a ledger is for
+# a record at least that old, which `unclaimed` already treats as anybody's to file, so `seen_here`
+# no longer reads it; and a stamp or findings file that old belongs to a render long superseded. The
+# window is CLAIM_AFTER from ISSUE_SPOOL_SEEN_PY, the same definition those readers use, so the sweep
+# cannot outrun them (L70). Only plain files whose name starts with <prefix> and ends in one of the
+# three suffixes are touched. Says how many it removed, nothing when there were none, and names each
+# file it could not remove and why, exiting 1 (L98, L11).
+issue_spool_sweep_stamps() { # sweep-stamps <dir> <prefix>
+  if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+    echo "issue-spool: sweep-stamps needs the review's temp directory and its file name prefix" >&2
+    return 2
+  fi
+  CLAUDE_SPOOL_SEEN_PY="$ISSUE_SPOOL_SEEN_PY" python3 - "$1" "$2" <<'PY'
+import os, stat, sys, time
+exec(os.environ["CLAUDE_SPOOL_SEEN_PY"])
+
+directory, prefix = sys.argv[1], sys.argv[2]
+try:
+    names = os.listdir(directory)
+except OSError as exc:
+    print("issue-spool: could not list %s to remove the review's spent stamp files: %s"
+          % (directory, exc.strerror or exc))
+    sys.exit(1)
+now = time.time()
+removed, failed = 0, []
+for name in sorted(names):
+    if not name.startswith(prefix) or not name.endswith((".manifest", ".seen", ".txt")):
+        continue
+    path = os.path.join(directory, name)
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        continue  # another review swept it first
+    except OSError as exc:
+        failed.append("%s (%s)" % (name, exc.strerror or exc))
+        continue
+    if not stat.S_ISREG(st.st_mode) or now - st.st_mtime < CLAIM_AFTER:
+        continue
+    try:
+        os.remove(path)
+        removed += 1
+    except FileNotFoundError:
+        continue
+    except OSError as exc:
+        failed.append("%s (%s)" % (name, exc.strerror or exc))
+if CLAIM_AFTER % 86400 == 0:
+    window = "%d day" % (CLAIM_AFTER // 86400)
+else:
+    window = "%d second" % CLAIM_AFTER
+if removed:
+    print("Housekeeping, nothing to act on: removed %d of the review's own stamp, seen ledger and "
+          "findings files from %s, each untouched for longer than the %s ownership window and so spent."
+          % (removed, directory, window))
+if failed:
+    print("issue-spool: could not remove %d spent review file(s) from %s: %s"
+          % (len(failed), directory, "; ".join(failed)))
+    sys.exit(1)
+PY
+}
+
 issue_spool_read_keys() { # read-keys <dir> [session-transcript]
   local primary legacy
   primary="$(issue_spool_key "${1:-$PWD}" "${2:-}")"
@@ -391,7 +457,7 @@ issue_spool_read_keys() { # read-keys <dir> [session-transcript]
 # Echo the pending keys, other than the ones already named, whose first record names a cwd belonging to
 # this project. One line read per pending file, so the cost is a handful of reads.
 issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
-  local dir="${1:-$PWD}" root mine file key cwd named matched
+  local dir="${1:-$PWD}" root mine file key cwd named matched="" unstamped=()
   shift || true
   named=" $* "
   mine="$(issue_spool_key "$dir")"
@@ -413,27 +479,83 @@ issue_spool_keys_written_from() { # keys-written-from <dir> [already-named...]
       printf '%s\n' "$key"
       continue
     fi
-    # Then the cwds, for every record written before the stamp existed. Deduplicated, because a
-    # file holds one cwd repeated far more often than it holds many, and each distinct one costs a
-    # digest.
-    matched=0
-    while IFS= read -r cwd; do
-      [ -n "$cwd" ] || continue
-      [ "$matched" -eq 1 ] && continue
-      [ "$(issue_spool_key "$cwd")" = "$mine" ] && { matched=1; continue; }
+    unstamped+=("$file")
+  done
+  [ "${#unstamped[@]}" -gt 0 ] || return 0
+  # Then the cwds, for every record written before the stamp existed, read out of every remaining
+  # file by ONE parser in one pass. Deduplicated per file, because a file holds one cwd repeated far
+  # more often than it holds many, and each distinct one costs a digest.
+  #
+  # PARSED AS JSON, never pulled out with sed (#1020). The writers store a record with json.dumps, so
+  # a path holding a character outside ASCII is on disk as an escape: the work MacBook's projects sit
+  # under `Documents - Dan<U+2019>s MacBook Pro`, sed handed on the escape undecoded, and the path was
+  # hashed as a directory that does not exist, so the record belonged to no project.
+  while IFS="$(printf '\t')" read -r key cwd; do
+    [ -n "$key" ] && [ -n "$cwd" ] || continue
+    case " $matched " in *" $key "*) continue ;; esac
+    if [ "$(issue_spool_key "$cwd")" != "$mine" ]; then
       # A worktree resolves through the checkout it belongs to, which is what its own key would
       # have been while it still existed. Pure string work, so it costs nothing and it is the only
       # thing that can reach the backlog written from a worktree that has since been removed.
       case "$cwd" in
-        */.claude/worktrees/*)
-          [ "$(issue_spool_key "${cwd%/.claude/worktrees/*}")" = "$mine" ] && matched=1 ;;
+        */.claude/worktrees/*) [ "$(issue_spool_key "${cwd%/.claude/worktrees/*}")" = "$mine" ] || continue ;;
+        *) continue ;;
       esac
-    done <<KEYS_FROM_CWDS
-$(sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | sort -u)
-KEYS_FROM_CWDS
-    [ "$matched" -eq 1 ] || continue
+    fi
+    matched="$matched $key"
     printf '%s\n' "$key"
-  done
+  done <<KEYS_FROM_CWDS
+$(issue_spool_record_cwds "${unstamped[@]}")
+KEYS_FROM_CWDS
+}
+
+# "<key><TAB><cwd>" for each distinct `cwd` named by the records of each spool file given, decoded as
+# JSON. A line that does not parse is still asked for its cwd by pattern, and that string decoded as a
+# JSON string where it can be, because a damaged line still names the directory it came from. A cwd
+# holding a tab or a newline cannot be carried on one line, so it is left out.
+issue_spool_record_cwds() { # record-cwds <spool file>...
+  python3 - "$@" <<'PY'
+import json, os, re, sys
+
+RAW_CWD = re.compile(r'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def cwd_of(line):
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        rec = None
+    if isinstance(rec, dict):
+        cwd = rec.get("cwd")
+        return cwd if isinstance(cwd, str) else None
+    found = RAW_CWD.findall(line)
+    if not found:
+        return None
+    try:
+        return json.loads('"%s"' % found[-1])
+    except ValueError:
+        return found[-1]
+
+
+out = sys.stdout.buffer
+for path in sys.argv[1:]:
+    key = os.path.basename(path)[: -len(".jsonl")]
+    seen = set()
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                cwd = cwd_of(raw.decode("utf-8", "surrogateescape"))
+                if not cwd or cwd in seen or "\t" in cwd or "\n" in cwd:
+                    continue
+                seen.add(cwd)
+                try:
+                    out.write(("%s\t%s\n" % (key, cwd)).encode("utf-8", "surrogateescape"))
+                except UnicodeEncodeError:
+                    continue
+    except OSError as exc:
+        print("issue-spool: could not read %s to see which project its records came from: %s"
+              % (path, exc.strerror or exc), file=sys.stderr)
+PY
 }
 
 # A record is one line of JSON. Anything else breaks the one-record-per-line
@@ -1671,6 +1793,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     seen-ledger)  issue_spool_seen_ledger "${1:-}" ;;
+    sweep-stamps) issue_spool_sweep_stamps "${1:-}" "${2:-}" ;;
     archive)      f="$(issue_spool_archive_path "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; exit 0 ;;
     clear)        issue_spool_clear "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     file-errors)  issue_spool_file_errors "${1:-$PWD}" "${2:-}" ;;

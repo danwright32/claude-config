@@ -32,6 +32,16 @@ case "${WORK%/}" in
 esac
 WORK="$(cd "$WORK" && pwd)"
 trap 'rm -rf "$WORK"' EXIT
+# The temp directory this suite was STARTED with, kept so the end of the file can prove that
+# nothing the hook writes landed there (claude-config#1019).
+REAL_TMPDIR="${TMPDIR:-/tmp}"
+# Every file the hook under test writes (the findings, each session's stamp, the cooldown and muted
+# stamps) goes under $TMPDIR, and this suite left them all in the real one, one set per throwaway
+# project per run (claude-config#1019). Pointed at this run's own directory, the way
+# test-subagent-issue-harvest.sh already does, so the hook still computes the names it computes in
+# production and the trap above reclaims the lot (L2).
+export TMPDIR="$WORK/tmp"
+mkdir -p "$TMPDIR"
 
 # Pinned to a throwaway spool, so this suite is structurally unable to write into
 # the real one (L2). A sibling suite did exactly that 120 times before it was noticed.
@@ -186,10 +196,33 @@ TRANSCRIPT="$WORK/transcript.jsonl"
   printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}'
 } > "$TRANSCRIPT"
 
+# Every project a review ran for, so the end of the file can look for their files. A FILE, because
+# run_review is called inside $(...), and a subshell's additions to an array never reach this one.
+REVIEWED="$WORK/reviewed-projects.list"; : > "$REVIEWED"
 run_review() { # run_review <project dir>
+  printf '%s\n' "$1" >> "$REVIEWED"
   printf '{"transcript_path":"%s","stop_hook_active":false}' "$TRANSCRIPT" | \
     CLAUDE_PROJECT_DIR="$1" bash "$HOOK"
 }
+# The findings file a review's reason points at.
+named_in() {
+  printf '%s' "$1" | python3 -c '
+import re, sys
+m = re.search(r"waiting in (\S+?)\. They", sys.stdin.read())
+print(m.group(1) if m else "")
+'
+}
+# The command on the line after TO FILE THESE in a findings file, exactly as written.
+clear_line_of() { awk 'f { sub(/^  /, ""); print; exit } /^TO FILE THESE/ { f = 1 }' "$1" 2>/dev/null; }
+# Whether <text> holds <needle>, and whether it holds <line> as a whole line. Matched in the shell
+# rather than through `producer | grep -q`, which leaves on its first match and kills the producer, so
+# under pipefail a match can report as a failure (test-pipefail-shortcircuit.sh).
+holds() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+has_line() { case "
+$1
+" in *"
+$2
+"*) return 0 ;; esac; return 1; }
 reason_of() {
   printf '%s' "$1" | python3 -c '
 import json, sys
@@ -454,6 +487,175 @@ case "$mo_plain" in
   *) check "#256 text holding no finding is passed through" "out=$mo_plain" ;;
 esac
 
+# ---------------------------------------------------------------------------
+# A project folder with a curly apostrophe in its name (claude-config#1020).
+# ---------------------------------------------------------------------------
+# The work MacBook keeps its projects under `Documents - Dan<U+2019>s MacBook Pro`. The clear line was
+# written with printf %q, which under the bash macOS ships (3.2) renders that apostrophe as one raw
+# byte followed by octal escapes: a reader sees a replacement character, and a line retyped from
+# what was shown names a different directory and so reads different keys. The character is BUILT,
+# so this file holds no byte a reader could mistake for a plain apostrophe.
+CURLY="$(printf '\xe2\x80\x99')"
+APOS_PROJ="$WORK/Documents - Dan${CURLY}s MacBook Pro/proj"
+mkdir -p "$APOS_PROJ"
+APOS_MARK="r1020 a finding from the folder with a curly apostrophe"
+bash "$DIR/lib/issue-spool.sh" note "$APOS_PROJ" "$APOS_MARK" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+apos_file="$(named_in "$(reason_of "$(run_review "$APOS_PROJ")")")"
+apos_line="$(clear_line_of "$apos_file")"
+[ -n "$apos_line" ] \
+  && check "#1020 the review writes a clear line for a project under a curly apostrophe" ok \
+  || check "#1020 the review writes a clear line for a project under a curly apostrophe" "file=[$apos_file]"
+case "$apos_line" in
+  *"$APOS_PROJ"*) check "#1020 the line carries the project path exactly as it is spelled" ok ;;
+  *) check "#1020 the line carries the project path exactly as it is spelled" "line=$apos_line" ;;
+esac
+case "$apos_line" in
+  *"\$'"*|*\\[0-7][0-7][0-7]*) check "#1020 and holds no octal escapes" "line=$apos_line" ;;
+  *) check "#1020 and holds no octal escapes" ok ;;
+esac
+printf '%s' "$apos_line" | python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null \
+  && check "#1020 and is valid UTF-8, so nobody is shown a replacement character" ok \
+  || check "#1020 and is valid UTF-8, so nobody is shown a replacement character" "line=$apos_line"
+# And it still WORKS when run as it stands, which is the one use the line has.
+apos_said="$(eval "$apos_line" 2>&1)"
+holds "$(bash "$DIR/lib/issue-spool.sh" archive "$APOS_PROJ" "$TRANSCRIPT" 2>/dev/null)" "$APOS_MARK" \
+  && check "#1020 and run verbatim it files the finding" ok \
+  || check "#1020 and run verbatim it files the finding" "said=${apos_said:0:400}"
+
+# A plain ASCII apostrophe is the one character single quoting has to escape.
+SQ_PROJ="$WORK/Dan's proj"
+mkdir -p "$SQ_PROJ"
+SQ_MARK="r1020 a finding from a folder with a plain apostrophe"
+bash "$DIR/lib/issue-spool.sh" note "$SQ_PROJ" "$SQ_MARK" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+sq_line="$(clear_line_of "$(named_in "$(reason_of "$(run_review "$SQ_PROJ")")")")"
+sq_said="$(eval "$sq_line" 2>&1)"
+holds "$(bash "$DIR/lib/issue-spool.sh" archive "$SQ_PROJ" "$TRANSCRIPT" 2>/dev/null)" "$SQ_MARK" \
+  && check "#1020 a folder with a plain apostrophe still gets a line that runs" ok \
+  || check "#1020 a folder with a plain apostrophe still gets a line that runs" "line=$sq_line said=${sq_said:0:300}"
+
+# A record written before records carried their project key is attributed by its `cwd`, which the
+# writer stores as JSON, so the curly apostrophe is on disk as a six character JSON escape (backslash,
+# u, then its code point in hex), never as the character itself. Pulled out
+# with sed, that escape was never decoded, the path hashed as written, and the file belonged to no
+# project. The fixture is written by the same json.dumps the writers use, with no project key, and
+# under a key the project's own directory does not produce, which is the shape such a record has.
+KW_DIR="$WORK/Documents - Dan${CURLY}s MacBook Pro/keyed"
+mkdir -p "$KW_DIR"
+KW_KEY="0123456789ab"
+python3 -c '
+import json, sys
+print(json.dumps({"ts": "2026-10-09T00:00:00Z", "status": "found", "agent": "tester",
+                  "cwd": sys.argv[1], "findings": ["r1020 a record keyed only by its cwd"]}))
+' "$KW_DIR" > "$CLAUDE_ISSUE_SPOOL_DIR/$KW_KEY.jsonl"
+# Escaped, not raw: the character is absent from the bytes and the record still decodes to the path.
+kw_raw="$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$KW_KEY.jsonl")"
+case "$kw_raw" in *"$CURLY"*) false ;; *) true ;; esac \
+  && python3 -c 'import json, sys; sys.exit(json.loads(sys.argv[1])["cwd"] != sys.argv[2])' "$kw_raw" "$KW_DIR" \
+  && check "#1020 the fixture holds the apostrophe as a JSON escape, as the writers store it" ok \
+  || check "#1020 the fixture holds the apostrophe as a JSON escape, as the writers store it" "$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$KW_KEY.jsonl")"
+has_line "$(bash "$DIR/lib/issue-spool.sh" read-keys "$KW_DIR" 2>/dev/null)" "$KW_KEY" \
+  && check "#1020 a record's escaped cwd is decoded, so the project reads that record's key" ok \
+  || check "#1020 a record's escaped cwd is decoded, so the project reads that record's key" "keys=$(bash "$DIR/lib/issue-spool.sh" read-keys "$KW_DIR" 2>&1 | tr '\n' ' ')"
+# A line cut off part way (a crash mid write) does not parse, and still names the directory it came
+# from: its cwd is read by pattern and decoded the same way.
+KW_CUT="0123456789ac"
+python3 -c '
+import sys
+line = open(sys.argv[1]).read()
+sys.stdout.write(line[: line.index(", \"findings\"")] + ", \"findi")
+' "$CLAUDE_ISSUE_SPOOL_DIR/$KW_KEY.jsonl" > "$CLAUDE_ISSUE_SPOOL_DIR/$KW_CUT.jsonl"
+python3 -c 'import json, sys; json.loads(open(sys.argv[1]).read())' "$CLAUDE_ISSUE_SPOOL_DIR/$KW_CUT.jsonl" 2>/dev/null \
+  && check "#1020 the cut off fixture really does not parse" "it parsed" \
+  || check "#1020 the cut off fixture really does not parse" ok
+has_line "$(bash "$DIR/lib/issue-spool.sh" read-keys "$KW_DIR" 2>/dev/null)" "$KW_CUT" \
+  && check "#1020 a damaged line's escaped cwd is decoded too" ok \
+  || check "#1020 a damaged line's escaped cwd is decoded too" "keys=$(bash "$DIR/lib/issue-spool.sh" read-keys "$KW_DIR" 2>&1 | tr '\n' ' ') line=$(cat "$CLAUDE_ISSUE_SPOOL_DIR/$KW_CUT.jsonl")"
+rm -f "$CLAUDE_ISSUE_SPOOL_DIR/$KW_CUT.jsonl"
+# The control: a different folder beside it does not claim that key (L159).
+mkdir -p "$WORK/Documents - Dan${CURLY}s MacBook Pro/other"
+has_line "$(bash "$DIR/lib/issue-spool.sh" read-keys "$WORK/Documents - Dan${CURLY}s MacBook Pro/other" 2>/dev/null)" "$KW_KEY" \
+  && check "#1020 and another folder does not read it" "it claimed $KW_KEY" \
+  || check "#1020 and another folder does not read it" ok
+rm -f "$CLAUDE_ISSUE_SPOOL_DIR/$KW_KEY.jsonl"
+
+# ---------------------------------------------------------------------------
+# The review's per session bookkeeping is removed once it is spent (claude-config#1019).
+# ---------------------------------------------------------------------------
+# Every render that shows findings writes a stamp named per SESSION, and a clear that cannot rewrite
+# the spool writes a seen ledger beside it. Nothing removed either, so one Slate project held 26
+# stamps on 2026-10-09. Both are spent once the ownership window has passed: a mark in a ledger stops
+# counting the moment its record is old enough for anybody to claim, which is that window, and a
+# stamp that old names a render that has been superseded. Ages are SET with touch, never waited for.
+SW="${TMPDIR:-/tmp}"; SW="${SW%/}"
+sw_old_manifest="$SW/claude-issue-findings-aaaaaaaaaaaa.oldsession.manifest"
+sw_old_seen="$SW/claude-issue-findings-aaaaaaaaaaaa.oldsession.seen"
+sw_old_txt="$SW/claude-issue-findings-aaaaaaaaaaaa.txt"
+sw_recent_seen="$SW/claude-issue-findings-bbbbbbbbbbbb.recentsession.seen"
+sw_unrelated="$SW/claude-unrelated-file.manifest"
+sw_dir="$SW/claude-issue-findings-cccccccccccc.adirectory.manifest"
+for f in "$sw_old_manifest" "$sw_old_seen" "$sw_old_txt" "$sw_recent_seen" "$sw_unrelated"; do
+  printf 'x\n' > "$f"
+done
+mkdir -p "$sw_dir"
+touch -t 202001010000 "$sw_old_manifest" "$sw_old_seen" "$sw_old_txt" "$sw_unrelated" "$sw_dir"
+# One day old: inside the default seven day window, so it must survive (the window is a window, not
+# "anything older than now").
+python3 -c 'import os, sys, time; t = time.time() - 86400; os.utime(sys.argv[1], (t, t))' "$sw_recent_seen"
+SW_PROJ="$(mktemp -d "$WORK/sweep.XXXXXX")"
+bash "$DIR/lib/issue-spool.sh" note "$SW_PROJ" "r1019 a finding whose review sweeps" "test-suite" "$TRANSCRIPT" >/dev/null 2>&1
+sw_file="$(named_in "$(reason_of "$(run_review "$SW_PROJ")")")"
+sw_gone=0
+for f in "$sw_old_manifest" "$sw_old_seen" "$sw_old_txt"; do [ -e "$f" ] || sw_gone=$((sw_gone + 1)); done
+[ "$sw_gone" -eq 3 ] \
+  && check "#1019 a render removes stamps, ledgers and findings files older than the window" ok \
+  || check "#1019 a render removes stamps, ledgers and findings files older than the window" "$sw_gone of 3 removed"
+[ -e "$sw_recent_seen" ] \
+  && check "#1019 and keeps a ledger still inside the window" ok \
+  || check "#1019 and keeps a ledger still inside the window" "it was removed"
+[ -e "$sw_unrelated" ] \
+  && check "#1019 and leaves a file that is not the review's alone" ok \
+  || check "#1019 and leaves a file that is not the review's alone" "it was removed"
+[ -d "$sw_dir" ] \
+  && check "#1019 and removes nothing that is not a plain file" ok \
+  || check "#1019 and removes nothing that is not a plain file" "the directory was removed"
+sw_stamp="$(clear_line_of "$sw_file" | awk '{print $NF}')"
+[ -n "$sw_stamp" ] && [ -f "$sw_stamp" ] \
+  && check "#1019 and keeps the stamp it has just written" ok \
+  || check "#1019 and keeps the stamp it has just written" "stamp=[$sw_stamp]"
+grep -q "removed 3 " "$sw_file" 2>/dev/null \
+  && check "#1019 and says how many it removed" ok \
+  || check "#1019 and says how many it removed" "file=$(tail -3 "$sw_file" 2>/dev/null)"
+# Said ABOVE the clear line: review/issue-review.md tells the reader the file ends with it.
+[ -n "$sw_stamp" ] && [ "$(awk 'NF { last = $0 } END { sub(/^  /, "", last); print last }' "$sw_file")" = "$(clear_line_of "$sw_file")" ] \
+  && check "#1019 and the findings file still ends with the clear line" ok \
+  || check "#1019 and the findings file still ends with the clear line" "file ends: $(tail -2 "$sw_file" 2>/dev/null)"
+rm -rf "$sw_recent_seen" "$sw_unrelated" "$sw_dir"
+
+# A file the sweep cannot remove is NAMED, with the reason, and the sweep fails; a sweep that removed
+# nothing and said nothing would read exactly like one with nothing to remove (L98, L11).
+SWF="$WORK/sweep-fail"; mkdir -p "$SWF"
+printf 'x\n' > "$SWF/claude-issue-findings-dddddddddddd.s.manifest"
+touch -t 202001010000 "$SWF/claude-issue-findings-dddddddddddd.s.manifest"
+chmod a-w "$SWF"
+if ( : > "$SWF/.probe" ) 2>/dev/null; then
+  rm -f "$SWF/.probe"; chmod u+w "$SWF"
+  echo "UNMEASURED: #1019 a directory the sweep cannot write cannot be made here (chmod does not restrict this user)"
+else
+  swf_said="$(bash "$DIR/lib/issue-spool.sh" sweep-stamps "$SWF" "claude-issue-findings-" 2>&1)"
+  swf_rc=$?
+  chmod u+w "$SWF"
+  [ "$swf_rc" -ne 0 ] \
+    && check "#1019 a sweep that cannot remove a spent file fails" ok \
+    || check "#1019 a sweep that cannot remove a spent file fails" "exit 0, said=${swf_said:0:300}"
+  case "$swf_said" in
+    *"could not remove 1 "*"dddddddddddd.s.manifest"*) check "#1019 and names the file it could not remove" ok ;;
+    *) check "#1019 and names the file it could not remove" "said=${swf_said:0:300}" ;;
+  esac
+  [ -f "$SWF/claude-issue-findings-dddddddddddd.s.manifest" ] \
+    && check "#1019 and the file is still there" ok \
+    || check "#1019 and the file is still there" "it is gone"
+fi
+
 # --- the hook stays quiet when nothing happened ---
 # It fires on Stop, so a chat-only turn must not trigger a review. An absent
 # transcript is the cheapest stand-in for "nothing to review".
@@ -472,6 +674,29 @@ else
   fail=$((fail + 1))
   echo "FAIL: the hook is not valid bash"
 fi
+
+# --- and nothing the hook wrote landed in the temp directory this suite was started with ---
+# Every review above writes a findings file, a stamp and a cooldown stamp under $TMPDIR. Before
+# claude-config#1019 this suite did not point TMPDIR at its own directory, so each run left them in
+# the real one (52 stamps from throwaway projects on the personal MacBook on 2026-10-09). Asked of
+# the files themselves, by each reviewed project's hash, rather than of the export (L322).
+leaked="$(python3 - "$REAL_TMPDIR" "$REVIEWED" <<'PY'
+import hashlib, os, sys
+real = sys.argv[1]
+with open(sys.argv[2], encoding="utf-8", errors="surrogateescape") as fh:
+    projects = [ln.rstrip("\n") for ln in fh if ln.strip()]
+hashes = {hashlib.sha1(p.encode("utf-8", "surrogateescape")).hexdigest()[:12] for p in projects}
+try:
+    names = os.listdir(real)
+except OSError:
+    names = []
+print(" ".join(sorted(n for n in names if n.startswith("claude-") and any(h in n for h in hashes))))
+PY
+)"
+reviews_run="$(grep -c . "$REVIEWED" 2>/dev/null || true)"
+[ "${reviews_run:-0}" -gt 0 ] && [ -z "$leaked" ] \
+  && check "#1019 the suite leaves nothing in the temp directory it was started with" ok \
+  || check "#1019 the suite leaves nothing in the temp directory it was started with" "reviews=${reviews_run:-0} leaked: ${leaked:0:400}"
 
 echo
 echo "passed: $pass, failed: $fail"
