@@ -719,6 +719,68 @@ got="$(set -u; PATH="$ghstub/none:$PATH" mt_pr_view 7 "number,state,url" acme/wi
 eq "$(printf '%s' "$got" | jq -r '.found, .notFound' 2>/dev/null | tr '\n' ' ')" "false true " "under set -u with no other account, it answers not found rather than failing"
 rm -rf "$ghstub"
 
+echo "merge-target: mt_pr_view asks other accounts only when the answer can mean the repository is hidden (claude-config#1173)"
+# "no pull requests found for branch" and "Could not resolve to a PullRequest" are answers GitHub
+# can only give about a repository the account CAN see, so no other account can change them, and
+# asking each one cost about 2 s per read (8 samples, 2026-10-13). "Could not resolve to a
+# Repository" and a 404 are what a repository only another account can see looks like (measured
+# 2026-08-30 on nursedexapp/nursedex), so those still go on to the other accounts. The active
+# account's error text below is gh's own, captured from the real gh on 2026-10-13.
+ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
+cat > "$ghstub/gh" <<'EOS'
+#!/usr/bin/env bash
+printf '%s|%s\n' "${GH_TOKEN:-active}" "$*" >> "$MT_GH_LOG"
+case "$*" in
+  "auth status"*) printf 'Logged in to github.com account other1 (keyring)\n' ;;
+  "auth token -u other1") printf 'tok-other1\n' ;;
+  "pr view"*)
+    if [ -z "${GH_TOKEN:-}" ]; then cat "$MT_GH_ACTIVE_ERR" >&2; exit 1; fi
+    if [ -s "$MT_GH_OTHER_ERR" ]; then cat "$MT_GH_OTHER_ERR" >&2; exit 1; fi
+    printf '{"number":7,"state":"OPEN","url":"https://github.com/acme/widget/pull/7"}\n' ;;
+  *) exit 3 ;;
+esac
+EOS
+chmod +x "$ghstub/gh"
+export MT_GH_LOG="$ghstub/log" MT_GH_ACTIVE_ERR="$ghstub/active-err" MT_GH_OTHER_ERR="$ghstub/other-err"
+# One row per answer: the active account's error, then whether the other accounts are asked.
+while IFS='|' read -r want_others active_err; do
+  : > "$MT_GH_LOG"; : > "$MT_GH_OTHER_ERR"
+  printf '%s\n' "$active_err" > "$MT_GH_ACTIVE_ERR"
+  got="$(PATH="$ghstub:$PATH" mt_pr_view "" "number,state,url" acme/widget "")"
+  asked="$(grep -c 'auth status' "$MT_GH_LOG")"
+  if [ "$want_others" = final ]; then
+    eq "$asked" "0" "[$active_err] is final: the other accounts are not listed"
+    eq "$(grep -c '^tok-' "$MT_GH_LOG")" "0" "[$active_err] is final: no other account's token asks again"
+    eq "$(printf '%s' "$got" | jq -r '[.found, .notFound, .error, .wrongRepo] | map(tostring) | join(" ")')" "false true  " "[$active_err] answers not found, with no error"
+  else
+    eq "$asked" "1" "[$active_err] can mean the repository is hidden: the other accounts are listed"
+    eq "$(printf '%s' "$got" | jq -r '.found, .account' | tr '\n' ' ')" "true other1 " "[$active_err] and the account that can see it answers"
+  fi
+done <<'ROWS'
+final|no pull requests found for branch "fix/1173-no-pr-yet"
+final|GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)
+others|GraphQL: Could not resolve to a Repository with the name 'acme/widget'. (repository)
+others|gh: Not Found (HTTP 404)
+others|Post "https://api.github.com/graphql": dial tcp: lookup api.github.com: no such host
+ROWS
+# Failure paths. The active account cannot see the repository and the other account's read fails in
+# transit: not found must not be claimed, because nobody who could see the repository answered.
+: > "$MT_GH_LOG"
+printf '%s\n' "GraphQL: Could not resolve to a Repository with the name 'acme/widget'. (repository)" > "$MT_GH_ACTIVE_ERR"
+printf '%s\n' 'Post "https://api.github.com/graphql": read: connection reset by peer' > "$MT_GH_OTHER_ERR"
+got="$(PATH="$ghstub:$PATH" mt_pr_view "" "number,state,url" acme/widget "")"
+eq "$(printf '%s' "$got" | jq -r '[.found, .notFound] | map(tostring) | join(" ")')" "false false" "a hidden repository whose other account then fails is not reported as not found"
+eq "$(printf '%s' "$got" | jq -r '.error')" 'Post "https://api.github.com/graphql": read: connection reset by peer' "and it carries the other account's error"
+# And the other way round: the active account's transport failure is never final, and another
+# account's "no pull requests found" ends the walk there, still not claiming not found, because the
+# active account's failure is unexplained.
+: > "$MT_GH_LOG"
+printf '%s\n' 'Post "https://api.github.com/graphql": read: connection reset by peer' > "$MT_GH_ACTIVE_ERR"
+printf '%s\n' 'no pull requests found for branch "fix/1173-no-pr-yet"' > "$MT_GH_OTHER_ERR"
+got="$(PATH="$ghstub:$PATH" mt_pr_view "" "number,state,url" acme/widget "")"
+eq "$(printf '%s' "$got" | jq -r '[.found, .notFound] | map(tostring) | join(" ")')" "false false" "an unexplained failure from the active account still keeps not found from being claimed"
+rm -rf "$ghstub"
+
 echo "merge-target: mt_gh_transient tells a GitHub that did not answer from one that refused (claude-config#1061)"
 
 # Worth asking again: the transport failed, or GitHub's own server did. The first two are the

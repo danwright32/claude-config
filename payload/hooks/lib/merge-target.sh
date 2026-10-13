@@ -1045,7 +1045,8 @@ mt_usable_answer() {  # $1 = json, $2 = remote slug
 #
 # And "gh said nothing" is itself two causes (claude-config#463). notFound is true
 # when every attempt was answered with gh's own not found (no such pull request,
-# no such repository, a 404): the pull request is not there to judge. Anything
+# no such repository, a 404): the pull request is not there to judge. An answer that
+# proves the account could see the repository ends the walk there (#1173). Anything
 # else, a network or auth failure, leaves notFound false and puts gh's first
 # line in `error`, because that is "could not confirm", a different fault with a
 # different remedy (L11). A found answer carries `account`, empty for the active
@@ -1098,8 +1099,17 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
     fi
     err=""
     [ -n "$errf" ] && err=$(awk 'NF { print; exit }' "$errf")
+    # Not found comes in two kinds (claude-config#1173). "no pull requests found" and "Could not
+    # resolve to a PullRequest" are answers GitHub gives only about a repository this account CAN
+    # see, and every account that can see a repository sees the same pull requests, so they are
+    # final: asking the others cost a token check per account and about 2 s per read (8 samples,
+    # 2026-10-13), on every lessons review started before its branch has a pull request. "Could not
+    # resolve to a Repository" and a 404 are what a repository only another account can see looks
+    # like, which is the case the walk exists for, so those go on to the next account.
     case "$err" in
-      *"Could not resolve to a PullRequest"*|*"Could not resolve to a Repository"*|*"no pull requests found"*|*"HTTP 404"*)
+      *"Could not resolve to a PullRequest"*|*"no pull requests found"*)
+        notfound=1; break ;;
+      *"Could not resolve to a Repository"*|*"HTTP 404"*)
         notfound=1 ;;
       *) [ -z "$other" ] && other="${err:-gh printed nothing}" ;;
     esac
