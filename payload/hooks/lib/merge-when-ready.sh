@@ -64,7 +64,10 @@
 
 set -uo pipefail
 
-MWR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+MWR_LIB="${BASH_SOURCE[0]%/*}"; [ "$MWR_LIB" != "${BASH_SOURCE[0]}" ] || MWR_LIB=.
+MWR_LIB="$(cd "${MWR_LIB:-/}" && pwd)"
 MWR_HOOKS="$(cd "$MWR_LIB/.." && pwd)"
 RED_GATE="${MWR_RED_GATE:-$MWR_HOOKS/block-red-merge.sh}"
 REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"

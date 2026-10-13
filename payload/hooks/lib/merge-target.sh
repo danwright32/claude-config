@@ -94,8 +94,12 @@
 # command. This file had a second reader of its own that saw only a LEADING cd, so a merge written
 # after an assignment was judged in the session's folder (claude-config#463). One reader, not two
 # (L613, L370).
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+_MT_LIB="${BASH_SOURCE[0]%/*}"; [ "$_MT_LIB" != "${BASH_SOURCE[0]}" ] || _MT_LIB=.
+_MT_LIB="$(cd "${_MT_LIB:-/}" && pwd)"
 # shellcheck source=push-scope.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/push-scope.sh"
+. "$_MT_LIB/push-scope.sh"
 
 # THE ONE DECLARATION of a repo's own merge tool. Every question anybody asks about
 # these tools is answered from here.
@@ -275,7 +279,7 @@ MTRTK
 #
 # A caller asking several questions of one command calls ps__read on it in its own shell first, so
 # this, which runs in a subshell wherever it is read from, finds the reading already made.
-MT_SHELL_WORDS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell-words.py"
+MT_SHELL_WORDS="$_MT_LIB/shell-words.py"
 mt_raw_segments() {  # $1 = command
   local rc i end text
   ps__read "$1"; rc=$?

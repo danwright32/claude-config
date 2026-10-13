@@ -37,7 +37,10 @@
 # GitHub read goes through one source, `gh` here, or the command SLEEP_QUEUE_SOURCE names, which the
 # tests use so that nothing reaches GitHub.
 
-_SQ_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
+# caller's folder (claude-config#1104, test-lib-self-locate.sh).
+_SQ_LIB="${BASH_SOURCE[0]%/*}"; [ "$_SQ_LIB" != "${BASH_SOURCE[0]}" ] || _SQ_LIB=.
+_SQ_LIB="$(cd "${_SQ_LIB:-/}" && pwd)"
 if ! . "$_SQ_LIB/sleep.sh"; then
   echo "refused	-	sleep-queue.sh could not load sleep.sh beside it, so whether the Mac is asleep cannot be read" >&2
   return 3 2>/dev/null || exit 3
