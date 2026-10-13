@@ -1022,6 +1022,14 @@ placeholder in a shipped template is the usual cause: a key named `token`, `secr
 `+`, `/` or `-` reads as a credential, so write placeholders with spaces or angle brackets
 (`<set by tracker.sh new-token>`).
 
+When it cannot read the tree it scans it says so rather than failing a scan it never made (#1146).
+The tree is listed and copied while other processes write in it, so a file can be listed and gone
+before the copy reaches it; the copy is then listed and made again, three attempts in all. A tree
+that still cannot be listed or copied prints `SCAN-UNMEASURED <what, and why>` and the suite exits
+3, which the pre push scanner gate reports as a fault in its own run, with that reason, and holds
+the push (nothing was scanned), never as a scanner that found something. Any whole tree scanner
+can say the same in the same line.
+
 The same suite refuses a test that gets a token past the scan by how it is WRITTEN rather than by
 what it is: a key in one place and its value in a variable, a value printed from two halves, or
 quoted pieces glued together (#1125). It reads every test file the way the shell joins it and runs
