@@ -128,10 +128,15 @@ nopython_bin() {  # prints a bin directory holding everything these hooks need E
 }
 
 run_nopython() {  # $1 = hook, $2 = transcript  -> the hook run with no python3 on PATH
-  local hook="$1" transcript="$2"
+  local hook="$1" transcript="$2" proj bin
+  # Made BEFORE the stripped PATH is in force. As a second prefix assignment beside PATH, the
+  # mktemp ran under that PATH, which holds no mktemp, so every hook here ran with an EMPTY project
+  # dir and the runner saw only `command not found` (claude-config#1044).
+  proj="$(mktemp -d "$WORK/proj.XXXXXX")" || { echo "FAIL: could not make a project dir for $hook"; return 1; }
+  bin="$(nopython_bin)"
   printf '{"transcript_path":"%s","stop_hook_active":false}' "$transcript" | \
-    PATH="$(nopython_bin)" \
-    CLAUDE_PROJECT_DIR="$(mktemp -d "$WORK/proj.XXXXXX")" \
+    PATH="$bin" \
+    CLAUDE_PROJECT_DIR="$proj" \
     STOP_HOOK_NOTICE_DIR="$NOTICE_DIR" \
     bash "$hook" 2>&1
 }

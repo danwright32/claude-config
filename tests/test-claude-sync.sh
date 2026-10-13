@@ -1549,6 +1549,10 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         # investigations looking for a bug in the suite (L80, L148). The orphan case is named
         # explicitly, because it is the commonest reason a live run is here that nobody expects.
         echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. $_lk_evidence Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it to finish. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        # The one line run-all-tests.sh reads, so this refusal is reported as NOT RUN with its
+        # holder rather than as a failed suite (claude-config#1083). Only the two refusals for a
+        # lock another run really holds say it; a lock this cannot read or take is a fault here.
+        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, started ${_lk_age}s ago"
         exit 5
       else
         echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
@@ -1562,6 +1566,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         # one, and a kill aimed at it would land on an unrelated local process. Distinct causes,
         # distinct remedies (L11, L111).
         echo "test suite: another run is already going: a suite run on $_lk_host, which is not this machine, process $_lk_pid there, started ${_lk_age}s ago. Refusing rather than queueing behind it. Nothing here can end it, and its process id means nothing on this machine, so wait for it, clear $SUITE_LOCK yourself if that machine is gone, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, not this machine, started ${_lk_age}s ago"
         exit 5
       fi
       # 30 minutes against a full run, which was measured at 123 seconds on 2026-08-17 and at 243
@@ -7687,6 +7692,10 @@ check "#32 a second run does not start while one is going" "[ '$_held_rc' -ne 0 
 check "#32 it names the run that holds the lock"  "grep -q '$$' <<< \"\$_held\""
 check "#32 it says how long that run has been going" "grep -qE '[0-9]+s' <<< \"\$_held\""
 check "#32 and runs none of the checks"           "! grep -q '^PASS=' <<< \"\$_held\""
+# In the one line the runner reads, naming the holder, so the refusal is reported as NOT RUN rather
+# than as a failed suite (claude-config#1083).
+check "#1083 the refusal says so in the line the runner reads, naming the holder" \
+  "grep -qE '^SUITE-LOCK-REFUSED process $$ on ' <<< \"\$_held\""
 
 # A crashed run must not wedge the suite for good. The owner being gone is the evidence, not the
 # clock, because this lock only ever holds a process id from THIS machine.
@@ -7770,6 +7779,8 @@ check "#32 an ancient lock from another machine is broken" "[ '$_fold_rc' -eq 0 
 _mklock "$_lockdir/foreign-new" "$$" "some-other-mac" "$((_now - 5))"
 _fnew="$(_try_lock "$_lockdir/foreign-new")"; _fnew_rc=$?
 check "#32 a fresh lock from another machine is respected" "[ '$_fnew_rc' -ne 0 ]"
+check "#1083 and that refusal is said in the runner's line too, naming the other machine" \
+  "grep -qE '^SUITE-LOCK-REFUSED process $$ on some-other-mac, not this machine' <<< \"\$_fnew\""
 
 # The one that would break everything if it were wrong. #27 runs the suite as a subprocess, so a
 # nested run meeting its own parent's lock would refuse and every one of those checks would fail.

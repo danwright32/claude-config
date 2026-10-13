@@ -38,11 +38,30 @@
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
 #   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
+#   CI                        "true" makes a suite refused its lock a FAIL rather than NOT RUN (#1083)
+#   LOAD_AVERAGE_CMD, LOAD_AVERAGE_CORES   the load average printed beside a failure, set for tests
+#                             (lib/load-average.sh)
+#
+# Agreed lines a suite may print, each read exactly: `SUITE-RESULT passed=<n> failed=<n>` (its
+# score), `SUITE-NOT-RUN <reason>` (it cannot run in a copy with no repository), and
+# `SUITE-LOCK-REFUSED <who holds it>` (another run of it holds its lock, reported as NOT RUN). Any
+# line saying `command not found` fails the suite whatever else it printed (#1044).
 
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 SELF_DIR="${SELF%/*}"
+
+# How busy the machine was when a suite finished, printed beside a failure (claude-config#1083,
+# L356). Read through the one shared reader. A copy without it still runs every suite, and every
+# failure then SAYS the figure is missing rather than printing nothing, which would read as a quiet
+# machine (L90).
+if [ -f "$SELF_DIR/lib/load-average.sh" ]; then
+  . "$SELF_DIR/lib/load-average.sh"
+else
+  load_average_one_minute(){ :; }
+  load_average_note(){ printf 'load average could not be read: %s/lib/load-average.sh is missing' "$SELF_DIR"; }
+fi
 
 # This script's own directory holds `test-*.sh` files, and one of them tests this
 # script, so a bare run discovers that suite and runs it, and it runs this script
@@ -351,6 +370,29 @@ suite_checks(){   # suite_checks <suite path> -> whole checks, or nothing
 # about what a score is (L263).
 suite_result_line(){   # suite_result_line <a suite's output> -> the exact line, or nothing
   printf '%s\n' "$1" | grep -E '^SUITE-RESULT passed=[0-9]+ failed=[0-9]+$' | tail -1
+}
+
+# Every line where the shell said a command did not exist (claude-config#1044). A case that calls a
+# helper before it is defined prints this on stderr and carries on, adding no pass and no fail, so
+# the suite's own result line is clean and a check that never ran reads as one that passed (L98).
+# Matched as the plain words, because that is what bash, sh and zsh all have in common; a suite
+# that genuinely needs to print them can say what it means another way.
+suite_missing_commands(){   # suite_missing_commands <a suite's output> -> those lines, or nothing
+  printf '%s\n' "$1" | grep -F 'command not found' || true
+}
+
+# Whether a run's output counts as clean by the same rules the verdict below applies to the first
+# run: no missing command, and no failures on its result line where it printed one. The flake
+# recheck judged by exit status alone, so a second run that exited 0 while still counting failures
+# or still calling a missing helper was called FLAKY, which sends a reader looking for randomness
+# that is not there (L11, L30).
+suite_output_clean(){   # suite_output_clean <a suite's output> -> 0 when clean
+  local r f
+  [ -z "$(suite_missing_commands "$1")" ] || return 1
+  r="$(suite_result_line "$1")"
+  [ -n "$r" ] || return 0
+  f="${r#*failed=}"
+  [ "$f" -eq 0 ]
 }
 
 # How many checks that line reports: passed PLUS failed, which is how many checks RAN. Passed alone
@@ -796,6 +838,9 @@ LIVECOPY
     ( SECONDS=0
       HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; _src=$?
       printf '%s' "$SECONDS" > "$WORK/$idx.sec"
+      # The load the moment it finished, read for every suite because a failure is only known once
+      # its output is judged below, by which time the moment has passed (claude-config#1083).
+      load_average_one_minute > "$WORK/$idx.load" 2>/dev/null
       printf '%s' "$_src" > "$WORK/$idx.rc" ) &
     lane_pid[$lane]=$!
   done <<LAUNCH
@@ -922,6 +967,9 @@ slow_profile=""
 unmeasured_names=""
 notrun=0
 notrun_names=""
+# The subset of those refused their lock (#1083), whose remedy is different from having no repository.
+lock_names=""
+lock_count=0
 divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
@@ -956,13 +1004,44 @@ DIVISIONS
     esac
     case "$code" in ''|*[!0-9]*) code=1; out="$out
 run-all-tests: this suite left no exit status, so it was killed or never started." ;; esac
+    # The load when it finished, kept for the failure line below (claude-config#1083).
+    load_now="$(cat "$WORK/$idx.load" 2>/dev/null)"
     idx=$((idx + 1))
+    # Read before every other outcome, because it outranks them: a suite that called something that
+    # does not exist is failed whatever else it said, including that it could not run (#1044).
+    cnf_lines="$(suite_missing_commands "$out")"
+    # A suite REFUSED ITS LOCK because another run of it holds it (claude-config#1083). It did not
+    # run, so it is not a pass (L98), and nothing about its code was judged, so it is not a FAIL
+    # either (L11): counting it as one made a Mac busy with several agents read as broken code. Said
+    # in one agreed shape carrying who holds the lock, so the reader knows what to wait for.
+    #
+    # Two limits, so this cannot become a way out of being judged (L70). A suite that ALSO printed a
+    # score ran, and is judged by the score. And under CI, where one job owns the runner and nothing
+    # else should be holding the lock, a refusal means the suite never ran on the run that decides
+    # the merge, so it fails there.
+    lock_line="$(printf '%s\n' "$out" | grep -E '^SUITE-LOCK-REFUSED ' | tail -1)"
+    if [ -n "$lock_line" ] && [ -z "$cnf_lines" ] && [ -z "$(suite_result_line "$out")" ]; then
+      lock_holder="${lock_line#SUITE-LOCK-REFUSED }"
+      if [ "${CI:-}" = "true" ]; then
+        failed=$((failed + 1))
+        failed_names="$failed_names $name"
+        printf '  FAIL  %-38s %-26s %s\n' "$name" "refused the suite lock" "$dur"
+        printf '          It is held by %s. Under CI nothing else should hold it, so this suite never ran.\n' "$lock_holder"
+        continue
+      fi
+      notrun=$((notrun + 1))
+      notrun_names="$notrun_names $name"
+      lock_names="$lock_names $name"
+      lock_count=$((lock_count + 1))
+      printf '  NOT RUN %-37s %s\n' "$name" "refused the suite lock, held by $lock_holder"
+      continue
+    fi
     # A suite that could not run HERE, said in one agreed shape exactly as the score is
     # (claude-config#155). Its own outcome, never folded into ok and never into FAIL: a suite that
     # did not run must not read as one that passed (L98), and it must not read as broken code
     # either, or the reader is sent looking for a fault that is not there (L11).
     nr_line="$(printf '%s\n' "$out" | grep -E '^SUITE-NOT-RUN ' | tail -1)"
-    if [ -n "$nr_line" ]; then
+    if [ -n "$nr_line" ] && [ -z "$cnf_lines" ]; then
       nr_reason="${nr_line#SUITE-NOT-RUN }"
       if [ "$repo_present" -eq 1 ]; then
         # It says it cannot run, and the runner found a repository, so the two disagree. That is a
@@ -1051,7 +1130,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       fi
       [ -n "$summary" ] || summary="(no result line, and no tally could be read)"
     fi
-    if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; }; then
+    if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; } || [ -n "$cnf_lines" ]; then
       failed=$((failed + 1))
       failed_names="$failed_names $name"
       # Was it a FLAKE? Run it once more and say so (claude-config#245).
@@ -1084,7 +1163,9 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # with the command when that command is the LAST thing in it, so the plain form left the
         # suite's PPID pointing at this script again and `kill -9 "$PPID"` went on killing the
         # runner. Something after it keeps a real process in between.
-        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" >/dev/null 2>&1; _fl_rc=$?; exit "$_fl_rc" ) &
+        # Its output is kept, because a recheck is judged by the same rules as the first run, not
+        # by its exit status alone (claude-config#1044).
+        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) &
         _fl_pid=$!
         _fl_waited=0
         while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do
@@ -1098,13 +1179,21 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
           _flake=" (recheck timed out after ${_fl_max}s)"
-        elif wait "$_fl_pid"; then
+        elif wait "$_fl_pid" && suite_output_clean "$(cat "$WORK/$((idx - 1)).recheck" 2>/dev/null)"; then
           _flake=" FLAKY"
           flaky=$((flaky + 1))
           flaky_names="$flaky_names $name"
         fi
       fi
       printf '  FAIL  %-38s %-26s %s%s\n' "$name" "$summary" "$dur" "$_flake"
+      # How busy the machine was when it finished, beside the failure rather than in a log nobody
+      # reads with it, so a failure caused by load reads as one (claude-config#1083, L356).
+      printf '          %s\n' "$(load_average_note "$load_now")"
+      # The missing command, named first because it is why a suite with a clean score is red.
+      if [ -n "$cnf_lines" ]; then
+        printf '          It said command not found, so something it called does not exist and whatever called it never ran:\n'
+        printf '%s\n' "$cnf_lines" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/            /'
+      fi
       # And WHY. A one line verdict is enough on a machine where you can just run the suite
       # again; it is useless where you cannot, which is the whole point of running these
       # somewhere else (claude-config#101). The failing lines are printed, and the count is
@@ -1131,9 +1220,11 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           carry = 0
         }
       ' || true)"
-      [ -n "$detail" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
+      # Where the missing command is the only reason, its lines above are the detail, and the tail
+      # of the output would only print them a second time.
+      [ -n "$detail" ] || [ -n "$cnf_lines" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
       shown="$(printf '%s\n' "$detail" | grep -c . || true)"
-      printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
+      [ -z "$detail" ] || printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
       if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
         printf '          ...and %s more line(s) not shown\n' "$(( shown - FAIL_DETAIL_MAX ))"
       fi
@@ -1378,9 +1469,18 @@ fi
 if [ "$notrun" -gt 0 ]; then
   # Named and counted, above the verdict, because the verdict below deliberately no longer says
   # "ALL n SUITES PASSED" when some of them never ran (claude-config#155, L98).
+  # The block keeps its one shape and lists every suite that did not run, because claude-sync reads
+  # the names from it. The REASON below it is said per cause, since the two need different remedies
+  # and the repository one is wrong for a suite that only met a held lock (claude-config#1083, L11).
   echo "$notrun SUITE(S) COULD NOT RUN HERE:$notrun_names"
-  echo "  They audit the repository, and this is a copy with no repository above it."
-  echo "  Run them from the checkout to have them verified."
+  if [ "$(( notrun - lock_count ))" -gt 0 ]; then
+    echo "  They audit the repository, and this is a copy with no repository above it."
+    echo "  Run them from the checkout to have them verified."
+  fi
+  if [ "$lock_count" -gt 0 ]; then
+    echo "  Refused the suite lock, because another run of the same suite held it:$lock_names"
+    echo "  Nothing about their code was judged. Run them again once that run has finished."
+  fi
   echo
 fi
 if [ "$failed" -eq 0 ] && [ -z "$empty_dirs" ]; then

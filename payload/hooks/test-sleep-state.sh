@@ -121,7 +121,10 @@ fi
 
 # With no python3 the record cannot be read, which is said by name and reads as awake (L490).
 nopy="$WORK/nopy"; mkdir -p "$nopy"
-for t in bash sed sysctl date cat; do p="$(command -v "$t" 2>/dev/null)" && ln -s "$p" "$nopy/$t"; done
+# dirname too: sleep.sh finds its own folder with it when sourced, and without it that lookup said
+# `command not found`, which the runner now fails a suite for (claude-config#1044). Only python3 is
+# what this case is about.
+for t in bash sed sysctl date cat dirname; do p="$(command -v "$t" 2>/dev/null)" && ln -s "$p" "$nopy/$t"; done
 if PATH="$nopy" command -v python3 >/dev/null 2>&1; then
   echo "FAIL: the bare PATH still reaches python3, so the no python3 case proves nothing"; fail=$((fail + 1))
 else
