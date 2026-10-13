@@ -163,6 +163,22 @@ run
 check "#1045 an assignment after a declaration's end is still judged" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: it was taken as declared")"
 says "#1045 and the finding names it" "$OUT" "ANSWER"
 
+# The words INSIDE an array initializer or an unquoted substitution are values, not names: in
+# `local list=(two LEAKED) when=$(date +%s)` only list and when are declared, so a later global
+# that happens to share a word with the value is still a global (lessons review of #1103).
+cat > "$FIX/a.sh" <<'EOF'
+LEAKED=""
+inside(){
+  local list=(two LEAKED) when=$(date +%s)
+  LEAKED="set"
+  printf '%s %s' "${list[0]}" "$when"
+}
+x="$(inside)"
+EOF
+run
+check "#1045 a word inside an array initializer is not declared" "$([ "$RC" -ne 0 ] && echo ok || echo "exit $RC: it was taken as declared")"
+says "#1045 and the global sharing it is named" "$OUT" "LEAKED"
+
 # A heredoc body is another language's code, not this shell's.
 cat > "$FIX/a.sh" <<'OUTER'
 convert(){

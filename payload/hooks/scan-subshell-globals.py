@@ -123,6 +123,14 @@ def split_declaration(rest):
             break
         i += 1
     decl = rest[:end]
+    # The words inside `( )` are VALUES, an array's members or a substitution's command, never
+    # names: shlex does not know parentheses, so `list=(two LEAKED)` would declare LEAKED (lessons
+    # review of #1103). Innermost groups first, until none is left.
+    while True:
+        bare = re.sub(r"\([^()]*\)", "", decl)
+        if bare == decl:
+            break
+        decl = bare
     try:
         words = shlex.split(decl, posix=True)
     except ValueError:
