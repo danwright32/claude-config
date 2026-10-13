@@ -2964,13 +2964,14 @@ out="$(CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$S
 check "push aborts on detected secret"   "[ $rc -ne 0 ]"
 check "message names offending file"     "grep -q 'possible secret found in: hooks/leak\.sh' <<< \"\$out\""
 # override lets it through if the user insists
-SYNC_SKIP_SECRET_SCAN=1 CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
-check "override bypasses the scan"       "[ -f '$SR/payload/hooks/leak.sh' ]"
+SYNC_SKIP_SECRET_SCAN=1 CLAUDE_HOME="$SS" SYNC_REPO="$SR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1; rc_ss=$?
+# By the exit as well as the file, which a refused push leaves staged too (#1133).
+check "override bypasses the scan"       "[ \$rc_ss -eq 0 ] && [ -f '$SR/payload/hooks/leak.sh' ]"
 # clean content is unaffected
 SS2="$WORK/sshome2"; mkdir -p "$SS2/hooks"; echo '{"hooks":{}}' > "$SS2/settings.json"; echo 'echo hello world' > "$SS2/hooks/ok.sh"
 SR2="$WORK/ssrepo2"; mkdir -p "$SR2"
-CLAUDE_HOME="$SS2" SYNC_REPO="$SR2" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
-check "clean payload pushes fine"        "[ -f '$SR2/payload/hooks/ok.sh' ]"
+CLAUDE_HOME="$SS2" SYNC_REPO="$SR2" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1; rc_ss2=$?
+check "clean payload pushes fine"        "[ \$rc_ss2 -eq 0 ] && [ -f '$SR2/payload/hooks/ok.sh' ]"
 
 section "== allowlist accepts a known secret by fingerprint; new ones still blocked (issue #3) =="
 SA="$WORK/sahome"; mkdir -p "$SA/hooks"; echo '{"hooks":{}}' > "$SA/settings.json"
@@ -2978,11 +2979,15 @@ SA="$WORK/sahome"; mkdir -p "$SA/hooks"; echo '{"hooks":{}}' > "$SA/settings.jso
 sa_key="AKIA$(printf 'allowlist accepts a known secret' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)"
 echo "KEY=$sa_key" > "$SA/hooks/known.sh"
 SAR="$WORK/sarepo"; mkdir -p "$SAR"
-fp="$(printf '%s' "$sa_key" | shasum -a 256 | cut -d' ' -f1)"
+# An entry is the fingerprint of where the value lives in the repository and the value (#1133).
+fp="$(printf '%s:%s' payload/hooks/known.sh "$sa_key" | shasum -a 256 | cut -d' ' -f1)"
 printf '%s  # accepted test key\n' "$fp" > "$SAR/.secret-allowlist"
-CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 bash "$SCRIPT" push >/dev/null 2>&1
-check "allowlisted secret passes"        "[ -f '$SAR/payload/hooks/known.sh' ]"
-echo '-----BEGIN RSA PRIVATE KEY-----' > "$SA/hooks/new.sh"
+CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1; rc_sa=$?
+# By the exit, not by the file alone: the scan runs after the payload is staged, so a refused push
+# leaves the file there too (#1133).
+check "allowlisted secret passes"        "[ \$rc_sa -eq 0 ] && [ -f '$SAR/payload/hooks/known.sh' ]"
+# The same key in another file is not the value that entry accepted (#1133).
+echo "KEY=$sa_key" > "$SA/hooks/new.sh"
 out3="$(CLAUDE_HOME="$SA" SYNC_REPO="$SAR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc3=$?
 check "non-allowlisted secret blocks"     "[ $rc3 -ne 0 ]"
 check "block names the new file"          "grep -q 'possible secret found in: hooks/new\.sh' <<< \"\$out3\""
@@ -3493,7 +3498,9 @@ section "== watch: a failed sync leaves a durable log line, not just a transient
 WLBARE="$WORK/wlbare.git"; git init -q --bare "$WLBARE"
 WLR="$WORK/wlrepo"; git clone -q "$WLBARE" "$WLR"
 WLC="$WORK/wlhome"; mkdir -p "$WLC/hooks"
-echo '-----BEGIN RSA PRIVATE KEY-----' > "$WLC/hooks/leak.sh"
+# Made here from a hash (claude-config#1128), never a private key header written into this file,
+# which the repository's scan would refuse with no exception able to accept it (#1133).
+echo "export AWS_KEY=AKIA$(printf 'watch logs a failed sync' | shasum -a 256 | tr 'a-f' 'A-F' | cut -c1-16)" > "$WLC/hooks/leak.sh"
 echo '{"hooks":{}}' > "$WLC/settings.json"
 WLEMIT="$WORK/wl-emit-fswatch"; printf '#!/usr/bin/env bash\necho 1\n' > "$WLEMIT"; chmod +x "$WLEMIT"
 WLNOTIFIER="$WORK/wl-fake-notifier"; printf '#!/usr/bin/env bash\ntrue\n' > "$WLNOTIFIER"; chmod +x "$WLNOTIFIER"
@@ -19666,6 +19673,30 @@ lk_counts "$WORK/lk-sample.txt" MacCount " AT 2026-10-09T15:00:00Z"; printf 'SAM
 lk_refused "counts carrying sampled sentences" "$WORK/lk-sample.txt" "SAMPLE"
 out_lkno="$(lk_record "$WORK/lk-absent.txt")"; rc_lkno=$?
 check "#566 a counts file that is not there is refused" "[ \$rc_lkno -ne 0 ]"
+
+section "== a send scans the records the sync commits outside the payload before they leave this Mac (claude-config#1133) =="
+# record-lesson-counts commits lesson-counts/<host>.tsv, and the next send pushes it with the
+# payload, so a credential in it would reach the shared repo with only the payload scanned. Its own
+# refusals cover the format, never what a row holds. The planted value is made here from a hash.
+SOB="$WORK/scanout-bare.git"; git init -q --bare -b main "$SOB"
+SOR="$WORK/scanout-repo"; git clone -q "$SOB" "$SOR" 2>/dev/null
+mkdir -p "$SOR/payload"; echo '{"hooks":{}}' > "$SOR/payload/settings.hooks.json"; echo '# rules' > "$SOR/payload/CLAUDE.md"
+git -C "$SOR" checkout -q -b main 2>/dev/null || true
+git -C "$SOR" add -A && git -C "$SOR" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$SOR" push -q -u origin main
+SOH="$WORK/scanout-home"; mkdir -p "$SOH"; echo '{"hooks":{}}' > "$SOH/settings.json"; echo '# rules' > "$SOH/CLAUDE.md"
+CLAUDE_HOME="$SOH" SYNC_REPO="$SOR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push >/dev/null 2>&1
+so_tip="$(git -C "$SOB" rev-parse main 2>/dev/null)"
+printf 'HOST MacScan DAYS 60 READ 1 UNREAD 0 AT 2026-10-13T12:00:00Z\nL1\t3\t4\t0 api_key=%s\nEND 1 lessons\n' \
+  "$(printf 'a send scans its records' | shasum -a 256 | cut -c1-40)" > "$WORK/scanout-counts.txt"
+out_so_rec="$(SYNC_HOSTNAME=MacScan SYNC_NO_NOTIFY=1 CLAUDE_HOME="$SOH" SYNC_REPO="$SOR" bash "$SCRIPT" record-lesson-counts "$WORK/scanout-counts.txt" 2>&1)"; rc_so_rec=$?
+dbg "#1133 record-lesson-counts said: $out_so_rec"
+check "#1133 precondition: the counts are recorded and committed, unpushed" \
+  "[ \$rc_so_rec -eq 0 ] && [ \"\$(git -C '$SOR' rev-list --count origin/main..HEAD)\" = 1 ]"
+out_so="$(SYNC_HOSTNAME=MacScan CLAUDE_HOME="$SOH" SYNC_REPO="$SOR" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1)"; rc_so=$?
+dbg "#1133 the send said: $out_so"
+check "#1133 the send refuses a credential in the counts it committed" "[ \$rc_so -ne 0 ]"
+check "#1133 and names the counts file" "grep -q 'possible secret found in: lesson-counts/MacScan\.tsv' <<< \"\$out_so\""
+check "#1133 and the shared repo never receives it" "[ \"\$(git -C '$SOB' rev-parse main 2>/dev/null)\" = '$so_tip' ]"
 
 section "== the daily re-rank job commits the tags of this Mac's new lessons (claude-config#566) =="
 # The monthly re-rank refuses while any lesson is untagged, and lessons arrive weekly, so the daily
