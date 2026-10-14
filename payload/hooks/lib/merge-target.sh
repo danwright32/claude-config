@@ -485,8 +485,9 @@ mt__might_merge() {  # $1 = command or payload
 #
 # The cheap substring test comes first, so an ordinary command (which is every
 # command in every session, since both blocking gates ask this before anything
-# else) is answered by one glob and no subshell. Only a command with a `gh api` at a command start is
-# handed to the python reader, so gh pr merge is answered as cheaply as before.
+# else) is answered by one glob and no subshell. Only a command with a `gh api`, or a flag in front of gh's subcommand
+# or action, at a command start is handed to the python reader (claude-config#1181, #1186), so gh pr
+# merge is answered as cheaply as before.
 #
 # The heads are CAPTURED and then searched, never piped into the search. A quiet
 # grep leaves on its first match, so a merge with commands after it killed the
@@ -505,7 +506,9 @@ mt_is_pr_merge() {  # $1 = command
   grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF && return 0
 $heads
 MTEOF
-  grep -Eq '(^|/)gh[[:space:]]+api([[:space:]]|$)' <<MTEOF || return 1
+  # gh also takes a subcommand's flags written in front of it, `gh -R o/x pr merge 7` or `gh pr -R o/x
+  # merge 7` (claude-config#1186), and where the subcommand is behind a flag only the reader can find it.
+  grep -Eq '(^|/)gh[[:space:]]+(api([[:space:]]|$)|-|pr[[:space:]]+-)' <<MTEOF || return 1
 $heads
 MTEOF
   mt_reader_missing && return 0
@@ -789,7 +792,10 @@ MTSEOF
     if [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
       printf '%s\n' "$seg"; return 0
     fi
-    [ "$b" = "api" ] && printf '%s\n' "$seg"
+    # A gh api call, and a gh command with a flag in front of its subcommand or its action, whose
+    # subcommand only the reader can find (claude-config#1186): each is read in order with the rest.
+    case "$b" in api|-*) printf '%s\n' "$seg"; continue ;; esac
+    case "$b:$c" in pr:-*) printf '%s\n' "$seg" ;; esac
   done <<MTSEOF
 $(mt_command_segments "$1")
 MTSEOF
@@ -903,6 +909,10 @@ mt__node_target() {  # $1 = node id
 # gate that reads the wrong pull request is worse than one that reads none (L75). It refuses rather
 # than letting the merge through, because letting through what cannot be judged is the gap #1181
 # closes (L42). test-merge-target.sh fails when a merge gate stops asking it.
+#
+# Despite its name it answers for gh pr merge too where the repository flag cannot be read (an -R
+# value gh refuses, or one with no value, claude-config#1186): read as naming no repository, that
+# merge would be judged as this folder's pull request, the same wrong reading as an API merge's.
 mt_api_merge_untold() {  # $1 = command
   MT_API_WHY=""; MT_API_ROUTE=""; MT_API_PIN=""
   mt__might_merge "$1" || return 1
@@ -923,6 +933,8 @@ mt_api_merge_untold() {  # $1 = command
     many) MT_API_WHY="this command's GraphQL mutation merges more than one pull request, and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record. Run each merge as a command of its own." ;;
     noid) MT_API_WHY="this command merges a pull request through the GitHub API ($MT_SEL_DETAIL), but the pull request id it names cannot be read here: it is neither written in the mutation nor passed with -f. Write the id into the mutation or pass it with -f, or merge with gh pr merge." ;;
     endpoint) MT_API_WHY="this command merges a pull request through the GitHub API, but which repository its endpoint names ($MT_SEL_DETAIL) cannot be read here. Name it as repos/<owner>/<name>/pulls/<number>/merge, or merge with gh pr merge." ;;
+    repo) MT_API_WHY="this command names the repository to merge in as \"$MT_SEL_DETAIL\" (with -R or --repo), which is not a repository gh can read: gh takes owner/name, with a host in front for GitHub Enterprise, and refuses to run anything else. So no gate can tell which pull request it merges, and judging this folder's pull request in its place would judge the wrong one. Name the repository as owner/name." ;;
+    norepo) MT_API_WHY="this command gives -R or --repo no value, so which repository it merges in cannot be read here, and gh refuses to run it. Name the repository as owner/name after the flag, or leave the flag out to merge in this folder's repository." ;;
     *) MT_API_WHY="this command merges a pull request through the GitHub API in a way nothing here can read. Merge with gh pr merge instead." ;;
   esac
   return 0

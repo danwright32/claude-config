@@ -235,6 +235,16 @@ describe('what a command does, by effect', () => {
     // A row where the two differ says why, or the difference is an accident nobody chose.
     expect(API_MERGE_CASES.filter(c => c.gates !== undefined && !c.why).map(c => c.command)).toEqual([])
   })
+  // #1186: and the repository each merge is about, where the table names one: every merge act the
+  // mod reads from the row is about that repository, or about one that cannot be told (null).
+  test('every merge in the shared table that names a repository is about that repository (#1186)', () => {
+    const withRepo = API_MERGE_CASES.filter(c => c.repo !== undefined)
+    expect(withRepo.length).toBeGreaterThan(10)
+    const wrong = withRepo
+      .map(c => ({ command: c.command, repos: acts(c.command).filter(a => a.kind === 'merge').map(a => a.repo) }))
+      .filter((r, i) => r.repos.length === 0 || r.repos.some(x => x !== withRepo[i]?.repo))
+    expect(wrong).toEqual([])
+  })
   test('reads are not merges: viewing a PR, reading its merge state, a GraphQL query', () => {
     expect(kinds('gh pr view 12 --json mergeable')).toEqual([])
     expect(kinds('gh api repos/o/r/pulls/12/merge')).toEqual([])

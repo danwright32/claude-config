@@ -749,6 +749,15 @@ out="$(fire_gate "sudo -u dan $API_REST")"; rc=$?
 check_eq "#1181 a REST merge behind sudo is refused until the findings are read" "2" "$rc"
 out="$(FAKE_NODE_JSON="$API_NODE" fire_gate "$API_ENQ")"; rc=$?
 check_eq "#1181 the merge queue's mutation, which names no merge, is refused before the findings are read" "2" "$rc"
+# A repository flag in front of the subcommand is the same merge (claude-config#1186): before, this
+# gate did not see a merge in `gh -R acme/widget pr merge 7` at all. Written with + for each space, so
+# the list is one word per merge.
+FRONT_FLAG_MERGES="gh+-R+acme/widget+pr+merge+7+--squash rtk+gh+--repo=acme/widget+pr+merge+7+--squash gh+pr+-R+acme/widget+merge+7"
+for c in $FRONT_FLAG_MERGES; do
+  c="${c//+/ }"
+  out="$(fire_gate "$c")"; rc=$?
+  check_eq "#1186 a merge with the repository flag in front is refused until the findings are read [$c]" "2" "$rc"
+done
 out="$(fire_gate "PR_REVIEW_READ=$ak $API_REST")"; rc=$?
 check_eq "#1181 and allowed with the read key, so it was judged as that pull request" "0" "$rc"
 out="$(FAKE_NODE_JSON="$API_NODE" fire_gate "PR_REVIEW_READ=$ak $API_GQL")"; rc=$?
@@ -761,6 +770,18 @@ for c in "gh api 'repos/{owner}/{repo}/pulls/7/merge'" "gh api -X PUT 'repos/{ow
   out="$(fire_gate "$c")"; rc=$?
   check_eq "#1181 a gh api call that merges nothing passes untouched [$c]" "0|" "$rc|$out"
 done
+# Presenting the read key is what the gate allows on, so with a merge's flag in front it is the
+# same pull request the key was issued for (claude-config#1186; the refusals before the key are above).
+for c in $FRONT_FLAG_MERGES; do
+  c="${c//+/ }"
+  out="$(fire_gate "PR_REVIEW_READ=$ak $c")"; rc=$?
+  check_eq "#1186 and allowed with the read key, so it was judged as that pull request [$c]" "0" "$rc"
+done
+# The failure path: a repository flag gh cannot read is refused by name, key or not, never judged as
+# the checkout's pull request.
+out="$(fire_gate "PR_REVIEW_READ=$ak gh -R nonsense pr merge 7 --squash")"; rc=$?
+check_eq "#1186 a repository flag gh cannot read is refused, key or not" "2" "$rc"
+check "#1186 by name" '"nonsense"' "$out"
 rm -f "$FAKE_LOG/pr-view.json"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"

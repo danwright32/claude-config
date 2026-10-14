@@ -1640,6 +1640,35 @@ dir=$(make_repo with-tool "$GREEN")
 out=$(run_hook "$dir" "gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge' -f sha=$HEAD_SHA")
 if denied "$out" && holds "$out" "not through the GitHub API"; then pass; else fail "#1181 an API merge in a repo with its own merge tool was not refused for the tool: $out"; fi
 rm -rf "$dir"
+
+echo "block-red-merge: a repository flag in front of the subcommand (claude-config#1186)"
+
+# gh reads `gh -R other/repo pr merge 7` as a merge in other/repo; before #1186 this gate did not see
+# a merge in it at all, so a red pull request merged with the flag in front was let through unjudged.
+two_repos FAILURE
+for c in "gh -R other/repo pr merge 7 $PIN" "gh --repo=other/repo pr merge 7 $PIN" "rtk gh -Rother/repo pr merge 7 $PIN" \
+         "gh pr -R other/repo merge 7 $PIN" "gh -R other/repo api -X PUT 'repos/{owner}/{repo}/pulls/7/merge' -f sha=$HEAD_SHA"; do
+  : > "$GH_CALL_LOG"
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1186 a red merge with the repository flag in front was not refused as red [$c]: $out"; fi
+  if asked_about "pr view 7 --repo other/repo"; then pass; else fail "#1186 the gate did not read the pull request in the repository the flag names [$c]: $(cat "$GH_CALL_LOG")"; fi
+done
+rm -rf "$dir"
+two_repos SUCCESS
+out=$(run_hook "$dir" "gh -R other/repo pr merge 7 $PIN")
+if denied "$out"; then fail "#1186 a green merge with the repository flag in front, pinned to its head, was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "gh -R other/repo pr merge 7 --squash")
+if denied "$out" && holds "$out" "--match-head-commit $HEAD_SHA"; then pass; else fail "#1186 an unpinned merge with the repository flag in front was not told to pin: $out"; fi
+rm -rf "$dir"
+
+# THE FAILURE PATH: a repository flag gh cannot read is refused by name, and no pull request is read
+# in its place, the checkout's least of all.
+two_repos SUCCESS
+: > "$GH_CALL_LOG"
+out=$(run_hook "$dir" "gh -R nonsense pr merge 7 $PIN")
+if denied "$out" && holds "$out" 'as \"nonsense\"' && holds "$out" 'owner/name'; then pass; else fail "#1186 a merge naming the repository nonsense was not refused by name: $out"; fi
+if asked_about "pr view"; then fail "#1186 a merge naming an unreadable repository was judged as some pull request anyway: $(cat "$GH_CALL_LOG")"; else pass; fi
+rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG
 
 echo "  $passed passed, $failed failed"
