@@ -73,6 +73,8 @@ let turnRunning = false
 // A /login in this session that returned before the login file named another account: the file is
 // read every LOGIN_POLL_MS until it does, for LOGIN_WAIT_MS at most (#1200).
 let loginWatch: { cancel: () => void } | undefined
+// The session has ended (not a /clear, after which it carries on): nothing writes its facts again.
+let ended = false
 let chain: Promise<unknown> = Promise.resolve()
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
@@ -353,7 +355,7 @@ const read = async ($: EngineInterface) => {
 const adoptAccount = async ($: EngineInterface, h: string, before: string, isCurrent: () => boolean = () => true) => {
   try {
     const now = await readAccount($, h)
-    if (!isCurrent()) return false
+    if (ended || !isCurrent()) return false
     if (JSON.stringify(now) !== JSON.stringify((await $.state.get(accountRef)).value ?? null)) {
       await $.state.set(accountRef, now)
       await writeFacts($)
@@ -434,6 +436,7 @@ export const register: Register = on => {
     // it reads no git or GitHub and writes no file.
     if (!e.isInteractive) return next(e)
     interactive = true
+    ended = false
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
@@ -481,12 +484,16 @@ export const register: Register = on => {
   on('command.run', { command: 'login' }, async ($, e, next) => {
     if (!interactive || !home) return next(e)
     const h = home
-    const before = keyOf((await $.state.get(accountRef)).value)
+    // Unknown before the login, any login read after it is another one.
+    const before = await $.state.get(accountRef).then(
+      r => keyOf(r.value),
+      () => '',
+    )
     try {
       return await next(e)
     } finally {
       stopLoginWatch()
-      if (!(await adoptAccount($, h, before))) await watchLogin($, h, before)
+      if (!ended && !(await adoptAccount($, h, before))) await watchLogin($, h, before)
     }
   })
 
@@ -533,8 +540,12 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    // A /login still awaited would write the facts file of a session that has ended.
-    stopLoginWatch()
+    // A /login still awaited would write the facts file of a session that has ended. A /clear ends
+    // only the conversation, and the session's account is still the one a /login is landing.
+    if (e.reason !== 'clear') {
+      ended = true
+      stopLoginWatch()
+    }
     if (home && SESSION_ID.test(e.sessionId)) {
       await $.process.run(['rm', '-f', `${dirOf(home)}/${e.sessionId}.json`]).catch(() => undefined)
       if (writtenId === e.sessionId) writtenId = undefined
