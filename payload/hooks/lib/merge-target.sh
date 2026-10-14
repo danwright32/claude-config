@@ -410,17 +410,6 @@ MTEOF
   return 0
 }
 
-mt_command_heads() {  # $1 = command
-  local seg first second third rest
-  while IFS= read -r seg; do
-    first=""; second=""; third=""; rest=""
-    read -r first second third rest <<MTEOF
-$seg
-MTEOF
-    printf '%s %s %s\n' "$first" "$second" "$third"
-  done < <(mt_command_segments "$1")
-}
-
 # True when this ONE segment causes a merge, by any route other than the direct command.
 #
 # Reads MT_MERGE_TOOLS, so a tool added to the declaration is recognised here with
@@ -480,37 +469,37 @@ mt__might_merge() {  # $1 = command or payload
 # while the overnight judge in the scope-modes mod refused both, so the two recognisers disagreed
 # (L450); payload/mods/scope-modes/tests/api-merge-cases.ts now holds them to one table.
 #
-# The leading `(^|/)` lets gh be called by an absolute path without letting the phrase match inside a
-# quoted word.
+# Which gh subcommand each command runs is read by lib/push-scope.sh's ps_runs_at, the one reading of gh
+# every gate asks (claude-config#1188), from the reading ps__read already holds: past assignments, rtk,
+# env and sudo, and past gh's flags written in front of the subcommand or action (`gh -R o/x pr merge
+# 7`, `gh pr -R o/x merge 7`, #1186), with no start of its own. gh is matched by name or by path.
 #
 # The cheap substring test comes first, so an ordinary command (which is every
 # command in every session, since both blocking gates ask this before anything
-# else) is answered by one glob and no subshell. Only a command with a `gh api`, or a flag in front of gh's subcommand
-# or action, at a command start is handed to the python reader (claude-config#1181, #1186), so gh pr
-# merge is answered as cheaply as before.
-#
-# The heads are CAPTURED and then searched, never piped into the search. A quiet
-# grep leaves on its first match, so a merge with commands after it killed the
-# writer still holding their heads, and under the pipefail both gates run with
-# that death made the answer "not a merge": `<merge> && echo merged` walked past
-# both gates on most runs (found testing #382, L183).
+# else) is answered by one glob and no subshell. Only a command with a `gh api` at a command start is
+# handed to lib/merge-selector.py (claude-config#1181), so gh pr merge is answered as cheaply as before.
 #
 # With the reader missing, a `gh api` call that names a merge cannot be told from a read, so it is
 # answered as a merge and every gate then refuses by naming the missing reader (mt_reader_missing),
-# never lets it through as nothing (L490).
+# never lets it through as nothing (L490). With nothing able to read the command at all, the crude
+# cut is asked with ps_runs_gh's crude reading, which can only see more merges than are there.
 mt_is_pr_merge() {  # $1 = command
   mt__might_merge "$1" || return 1
-  local heads
-  ps__read "$1" || :
-  heads="$(mt_command_heads "$1")"
-  grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF && return 0
-$heads
-MTEOF
-  # gh also takes a subcommand's flags written in front of it, `gh -R o/x pr merge 7` or `gh pr -R o/x
-  # merge 7` (claude-config#1186), and where the subcommand is behind a flag only the reader can find it.
-  grep -Eq '(^|/)gh[[:space:]]+(api([[:space:]]|$)|-|pr[[:space:]]+-)' <<MTEOF || return 1
-$heads
-MTEOF
+  local i end api=0 seg
+  if ps__read "$1" || [ "$?" -eq 3 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      ps_runs_at gh "$i" pr merge && return 0
+      [ "$PS_RUN_SUB" = api ] && api=1
+      i=$((i + 1))
+    done
+  else
+    while IFS= read -r seg; do
+      ps_runs_gh "$seg" pr merge && return 0
+      ps_runs_gh "$seg" api && api=1
+    done < <(ps__crude_cut "$1")
+  fi
+  [ "$api" -eq 1 ] || return 1
   mt_reader_missing && return 0
   mt__read_selector "$1"
   [ -n "$MT_SEL_ROUTE" ]
@@ -779,23 +768,26 @@ mt_merge_each() {  # $1 = command, $2 = session cwd
 # Every `gh api` command is handed over too, one per line (claude-config#1181), because whether a call
 # merges is the reader's question (lib/merge-selector.py): it reads them in order and answers for the
 # first that merges, so a read of the same pull request before the merge is never taken for it.
+#
+# Which command is which is read by ps_runs_at (lib/push-scope.sh), the one reading of gh every gate
+# asks, past gh's flags written in front of the subcommand (claude-config#1186, #1188). Each command
+# is handed over from its own name on (PS__R_CMD): `rtk gh pr merge`, `then gh pr merge` and an
+# assignment in front are the same merge, and the selector reads it from a command start.
 mt__selector_input() {  # $1 = command
-  local seg a b c d
-  ps__read "$1" || :
-  # Each command from its own name on (mt_command_segments): `rtk gh pr merge`, `then gh pr merge`
-  # and an assignment in front are the same merge, and the selector reads `gh` at a command start.
+  local i end seg
+  if ps__read "$1" || [ "$?" -eq 3 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      seg="${PS__R_CMD[$i]}"; seg="${seg//$'\n'/ }"
+      if ps_runs_at gh "$i" pr merge; then printf '%s\n' "$seg"; return 0; fi
+      [ "$PS_RUN_SUB" = api ] && printf '%s\n' "$seg"
+      i=$((i + 1))
+    done
+    return 0
+  fi
   while IFS= read -r seg; do
-    read -r a b c d <<MTSEOF
-$seg
-MTSEOF
-    [ "${a##*/}" = "gh" ] || continue
-    if [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
-      printf '%s\n' "$seg"; return 0
-    fi
-    # A gh api call, and a gh command with a flag in front of its subcommand or its action, whose
-    # subcommand only the reader can find (claude-config#1186): each is read in order with the rest.
-    case "$b" in api|-*) printf '%s\n' "$seg"; continue ;; esac
-    case "$b:$c" in pr:-*) printf '%s\n' "$seg" ;; esac
+    if ps_runs_gh "$seg" pr merge; then printf '%s\n' "$seg"; return 0; fi
+    ps_runs_gh "$seg" api && printf '%s\n' "$seg"
   done <<MTSEOF
 $(mt_command_segments "$1")
 MTSEOF

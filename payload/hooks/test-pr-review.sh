@@ -220,14 +220,21 @@ for c in 'gh pr create --fill' \
          'GH_TOKEN=$(gh auth token -u danwright32) gh pr create --title x --body y' \
          'cd /tmp/x && gh pr create --base main' \
          'rtk gh pr create --fill' \
-         '/opt/homebrew/bin/gh pr create -f'; do
+         '/opt/homebrew/bin/gh pr create -f' \
+         'gh -R o/x pr create --fill' \
+         'gh pr -R o/x create --fill' \
+         'gh --repo=o/x pr create --fill' \
+         'env GH_TOKEN=x gh pr --repo o/x create --fill' \
+         'sudo gh -Ro/x pr create --fill'; do
   is_create "$c" && ok || bad "a pull request creation is recognised: $c"
 done
 for c in 'echo "gh pr create"' \
          'gh pr view 12' \
          'git commit -m "then gh pr create"' \
          $'cat <<EOF > notes.md\ngh pr create --fill\nEOF' \
-         'GH_TOKEN=$(gh auth token -u x) gh pr list'; do
+         'GH_TOKEN=$(gh auth token -u x) gh pr list' \
+         'gh -R o/x pr view 12' \
+         'gh --fill pr create'; do
   is_create "$c" && bad "a command that only mentions it is not a creation: $c" || ok
 done
 

@@ -18,14 +18,19 @@ hook that slow is killed and the command goes unscreened.
       start answers them all (claude-config#1040). Each record is "<dir>" 0x1c "<text>" 0x1c
       "<its words, 0x1f between them>" 0x1c "<its git -C directory>" 0x1c "<1 when the text read
       on its own is exactly this one command, else 0>" 0x1c "<the command from its name on, past
-      leading reserved words and assignments>" 0x1c "<those assignments, one per line>" 0x1e. Exit
-      3 as commands; see read() and command_rest().
+      leading reserved words and assignments>" 0x1c "<those assignments, one per line>" 0x1c "<the
+      gh or git subcommand it runs, tool_field: tool 0x1d sub 0x1d act 0x1d words, or empty>"
+      0x1e. Exit 3 as commands; see read(), command_rest(), gh_path() and git_path().
+  shell-words.py tool       stdin: one command
+      the gh or git subcommand it runs, as gh and git themselves find it past the options written in
+      front (tool_field), or nothing when it runs neither, exit 0 either way (claude-config#1188).
   shell-words.py words      stdin: one command
       its words as the shell reads them, quotes removed, joined by 0x1f, past any leading reserved
       word (then, do, else, ...), so the first word is the command's own; see command_words().
   shell-words.py gitdir     stdin: one command
       the directory its `git -C` options name, several composed as git composes them, or nothing
-      when it is not git or names no -C; see git_dir().
+      when it is not git or names no -C, past reserved words, assignments, rtk, env and sudo; see
+      git_dir().
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
@@ -405,35 +410,28 @@ def command_words(text):
     return words[i:]
 
 
-GIT_VALUED = {"-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
-
-
-def git_dir(text):
-    """The directory ONE command's `git -C` options move git to, or "" when it names none.
+def git_dir(rest):
+    """The directory ONE command's `git -C` options move git to, or "" when it names none, from its
+    text from its own name on (command_rest), read by git_path, the one reading of git: so `do git -C
+    <wt> push` (#1017) and `env GIT_DIR=x git -C <wt> push` (#1188) both name <wt>.
 
     Several -C compose the way git composes them: each relative one is taken from the one before
-    (claude-config#589). Read past leading reserved words and assignments (command_words), so
-    `do git -C <wt> push` names <wt> (#1017). Only a leading tilde is expanded; a variable stays as
-    written, so the caller refuses it.
+    (claude-config#589). Only a leading tilde is expanded; a variable stays as written, so the caller
+    refuses it.
     """
-    words = command_words(text)
-    i, n = 0, len(words)
-    while i < n and ASSIGNMENT.match(words[i]):
-        i += 1
-    if i < n and words[i].split("/")[-1] == "rtk":
-        i += 1
-    if i >= n or words[i].split("/")[-1] != "git":
+    found = git_read(command_words(rest))
+    if not found:
         return ""
-    i += 1
+    front = found[1]
     where = ""
-    while i < n and words[i].startswith("-"):
-        if words[i] == "-C" and i + 1 < n:
-            p = words[i + 1]
+    k = 0
+    while k < len(front):
+        w = front[k]
+        if w == "-C" and k + 1 < len(front):
+            p = front[k + 1]
             p = os.path.expanduser(p) if p.startswith("~") else p
             where = p if (not where or p.startswith("/")) else os.path.join(where, p)
-            i += 2
-        else:
-            i += 2 if words[i] in GIT_VALUED else 1
+        k += 2 if w in GIT_VALUED else 1
     return where
 
 
@@ -555,6 +553,11 @@ def command_rest(text):
     caller reads its arguments the way it always has.
     """
     s = text.lstrip()
+    # A subshell or group opening a command the crude cut left whole, `( cd x && git push )` or
+    # `(git push)`, is not part of it (claude-config#439): an opener glued to the name is peeled off,
+    # one standing alone is passed over. The commands reading never leaves one.
+    while s.startswith("(") and not s.startswith("(("):
+        s = s[1:].lstrip()
     while True:
         m = re.match(r"(\S+)(\s+|$)", s)
         if not m or m.group(1) not in RESERVED:
@@ -571,8 +574,15 @@ def command_rest(text):
 # while the mods' one reader (mod-kit hooks/commands.ts, RUNNERS, whose option letters these are)
 # read them as the merge; and that reader did not know rtk, which this one did. Both now read all
 # three, and payload/mods/scope-modes/tests/api-merge-cases.ts holds them to it, route by route.
+#
+# The shell's own exec and command run the word after them too (`exec git push`, `command gh issue
+# create`), and skill-audit.py's script scan read both before it moved onto this reading (#1188).
+# `command -v gh` then reads as a gh command with no subcommand, which no gate asks about. The mods'
+# reader does not list these two, so for them the gates see more than the overnight judge does.
 RUNNERS = {
     "rtk": ("", set()),
+    "exec": ("a", set()),
+    "command": ("", set()),
     "env": ("CPSu", {"--chdir", "--split-string", "--unset"}),
     "sudo": ("CDghpRrTtUu", {"--chdir", "--chroot", "--close-from", "--command-timeout", "--group", "--host",
                              "--other-user", "--prompt", "--role", "--type", "--user"}),
@@ -642,6 +652,139 @@ def past_runners(rest):
     return rest, assigns
 
 
+# ---- gh and git: which subcommand a command runs -----------------------------------------------
+# The ONE reading of which gh or git subcommand a command runs (claude-config#1188). Every gate asks
+# it: the merge gates through lib/merge-selector.py, the bash gates through lib/push-scope.sh
+# (ps_runs_gh, ps_runs_git, and the push, commit and add questions built on them), the issue gates
+# through gh_issue_scan.py, so a spelling one gate sees is seen by all. Each gate used to read the
+# command by WORD POSITION, gh then pr then create as its first three words, git then a few options
+# then push, each with its own idea of what may stand in front, and the copies disagreed: the merge
+# gates read gh's flags in front of the subcommand (#1186) while the closing keyword check did not,
+# and the push gates read rtk in front of git while nothing read env or sudo. test-gh-reader.sh fails
+# on a hook that matches a gh or git subcommand by word position again.
+#
+# Both are read from the command's own name on: past reserved words (then, do, !), leading
+# assignments and any rtk, env or sudo in front, by command_rest, the one reading of those. A
+# subshell or group opener glued to the name, `(git push`, is the crude cut's and is not part of it.
+#
+# gh takes a subcommand's flags written IN FRONT of it: `gh -R o/x pr create`, `gh pr -R o/x create`,
+# `gh -X PUT api repos/o/x/pulls/7/merge` (measured on gh 2.89.0, 2026-10-14). Its command library
+# (cobra) finds the subcommand by passing over the flags first, then hands every flag, wherever it
+# stood, to that subcommand. Cobra passes over a flag with no `=` in it as one that TAKES the next
+# word, unless it is a flag it knows takes none, and at the head of a gh command those are only gh's
+# own --help (-h) and --version (`gh help` lists no other flag of its own). A word of more than two
+# characters after a single dash (`-Rowner/x`, `-XPUT`) carries its value. So `gh --squash pr merge 7`
+# is a command named merge to gh, which it has none of, and it runs nothing (measured: `gh --web pr
+# view 1` answers `unknown command "view"`).
+GH_NO_VALUE = {"--help", "-h", "--version"}
+# git's own options in front of its subcommand that take the next word as their value (`git -C <dir>
+# push`, `git -c k=v commit`); every other option there stands alone. The subcommand is the first
+# word that is not an option (git.c handle_options).
+GIT_VALUED = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
+
+
+def gh_path(words):
+    """The words after `gh` as gh reads them: (sub, act, front, after). sub and act are the
+    subcommand and its action as cobra finds them (empty when absent; `api` takes no action), front
+    is the words written in front of the action, in order, for the subcommand to read as its own,
+    and after is every word after the action (after `api` for gh api)."""
+    path, front = [], []
+    j, n = 0, len(words)
+    while j < n:
+        w = words[j]
+        if w == "--":
+            break
+        if w.startswith("-") and len(w) > 1:
+            front.append(w)
+            takes = "=" not in w and w not in GH_NO_VALUE and (w.startswith("--") or len(w) == 2)
+            if takes and j + 1 < n:
+                front.append(words[j + 1])
+                j += 1
+            j += 1
+            continue
+        path.append(w)
+        j += 1
+        if len(path) == 2 or path[0] == "api":
+            break
+    sub = path[0] if path else ""
+    act = path[1] if len(path) > 1 else ""
+    return sub, act, front, words[j:]
+
+
+def git_path(words):
+    """The words after `git` as git reads them: (sub, front, after). sub is the subcommand (empty
+    when there is none), front git's own options before it, after every word after it."""
+    j, n = 0, len(words)
+    while j < n and words[j].startswith("-") and words[j] != "-":
+        j += 2 if words[j] in GIT_VALUED else 1
+    j = min(j, n)
+    if j >= n:
+        return "", words[:n], []
+    return words[j], words[:j], words[j + 1:]
+
+
+def tool_read(words):
+    """For one command's words from its own name on (past reserved words, assignments and runners):
+    ("gh", sub, act, front, after) for gh, ("git", sub, "", front, after) for git, by name or by
+    path; None for any other command."""
+    if not words:
+        return None
+    name = words[0].lstrip("({").split("/")[-1]
+    if name == "gh":  # gh-reader: the one reading of which program a command runs
+        return ("gh",) + gh_path(list(words[1:]))
+    if name == "git":  # gh-reader: the one reading of which program a command runs
+        sub, front, after = git_path(list(words[1:]))
+        return ("git", sub, "", front, after)
+    return None
+
+
+def git_read(words):
+    """tool_read's (sub, front, after) when the command is git; None otherwise."""
+    found = tool_read(words)
+    return found[1:2] + found[3:] if found and found[0] == "git" else None  # gh-reader: the one reading
+
+
+def git_command(words):
+    """tool_command's (sub, front, after) when the command is git; None otherwise."""
+    found = tool_command(words)
+    return found[1:2] + found[3:] if found and found[0] == "git" else None  # gh-reader: the one reading
+
+
+def tool_command(words):
+    """tool_read for one command's words as a caller split them, from its first word: past reserved
+    words, leading assignments and any rtk, env or sudo in front, read by command_rest, so a caller
+    with words of its own (gh_issue_scan.py, merge-selector.py, push-scope.sh's add reader) sees
+    `rtk gh issue create` and `env GH_TOKEN=x gh pr merge` exactly as the bash gates do."""
+    if not words:
+        return None
+    first = words[0].lstrip("({")
+    words = ([first] if first else []) + list(words[1:])
+    if not words:
+        return None
+    rest, _ = command_rest(shlex.join(words))
+    return tool_read(command_words(rest))
+
+
+def gh_command(words):
+    """tool_command's (sub, act, front, after) when the command is gh; None otherwise."""
+    found = tool_command(words)
+    return found[1:] if found and found[0] == "gh" else None  # gh-reader: the one reading
+
+
+def tool_field(rest):
+    """One command's reading for lib/push-scope.sh, from its text from its own name on (command_rest):
+    tool 0x1d sub 0x1d act 0x1d its words joined by 0x1f, or "" when it runs neither gh nor git. A gh
+    command's words are the flags written in front then the words after the action, all the
+    subcommand's own; a git command's are the words after its subcommand, git's own options in front
+    being read by git_dir."""
+    found = tool_read(command_words(rest))
+    if found is None:
+        return ""
+    tool, sub, act, front, after = found
+    words = front + after if tool == "gh" else after
+    return tool + "\x1d" + sub + "\x1d" + act + "\x1d" + "\x1f".join(words)
+
+
 def read(s):
     """The commands reading, each record with its words, its git -C directory and whether it is alone.
 
@@ -657,7 +800,8 @@ def read(s):
     out = []
     for d, t in records:
         rest, assigns = command_rest(t)
-        fields = (d, t, "\x1f".join(command_words(t)), git_dir(t), "1" if alone(t) else "0", rest, assigns)
+        fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if alone(t) else "0", rest, assigns,
+                  tool_field(rest))
         out.append("\x1c".join(fields) + "\x1e")
     return "".join(out), rc
 
@@ -668,7 +812,12 @@ def main(argv):
     if mode == "words":
         sys.stdout.write("\x1f".join(command_words(data)))
     elif mode == "gitdir":
-        sys.stdout.write(git_dir(data))
+        sys.stdout.write(git_dir(command_rest(data)[0]))
+    elif mode == "tool":
+        # One command's gh or git reading (tool_field), for a command lib/push-scope.sh holds no
+        # reading of. Exit 0 with nothing printed for a command that runs neither, so any other exit
+        # is a reader that failed, which the caller must not take for "runs neither" (L42).
+        sys.stdout.write(tool_field(command_rest(data)[0]))
     elif mode == "bare":
         sys.stdout.write(bare(data))
     elif mode == "read":
@@ -689,7 +838,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text\n")
         return 64
     return 0
 

@@ -189,6 +189,9 @@ if [ -n "$repo" ]; then
 fi
 if ! gh issue create --repo "$repo" --title "$t"; then exit 1; fi
 [ -n "$repo" ] && gh issue create --repo "$repo" --title "$t"
+gh -R "$repo" issue create --title "$t"
+env GH_TOKEN="$tok" gh issue --repo "$repo" create --title "$t"
+echo "gh -R x issue create is quoted here and is not a call"
 SH
 scan
 [ "$rc" -eq 1 ] && ok || bad "a script filing issues without their fields fails the scan (rc=$rc)" "$out"
@@ -200,7 +203,10 @@ fires S1 13 "a call after &&"
 has "$out" "$FILE:2:" && bad "a comment naming the command is not a call" "$out" || ok
 has "$out" "$FILE:5:" && bad "labels given on a continuation line count" "$out" || ok
 has "$out" "$FILE:8:" && bad "labels passed through an array count" "$out" || ok
-has "$out" "findings=5" && ok || bad "exactly the five bare calls are flagged" "$out"
+fires S1 14 "#1188 a call with -R in front of issue"
+fires S1 15 "#1188 a call behind env with --repo between issue and create"
+has "$out" "$FILE:16:" && bad "#1188 a quoted mention is not a call" "$out" || ok
+has "$out" "findings=7" && ok || bad "exactly the seven bare calls are flagged" "$out"
 
 # --- nothing to scan is not a pass -------------------------------------------------------------
 mkdir -p "$TMP/none"

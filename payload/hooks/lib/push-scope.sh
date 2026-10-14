@@ -171,14 +171,14 @@ ps__runs_git_sub() {   # $1 = command, $2 = the git subcommand
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
     while [ "$i" -lt "$end" ]; do
       case "${PS__R_TEXT[$i]}" in
-        *"$sub"*) ps__words_git_sub "${PS__R_WORDS[$i]}" "${PS__R_TEXT[$i]}" "$sub" && return 0 ;;
+        *"$sub"*) ps_runs_at git "$i" "$sub" && return 0 ;;
       esac
       i=$((i + 1))
     done
     return 1
   fi
   while IFS= read -r seg; do
-    case "$seg" in *"$sub"*) ps__segment_git_sub "$seg" "$sub" && return 0 ;; esac
+    case "$seg" in *"$sub"*) ps_runs_git "$seg" "$sub" && return 0 ;; esac
   done < <(ps__crude_cut "$cmd")
   return 1
 }
@@ -208,7 +208,8 @@ ps__crude_cut() {   # $1 = command
 # PS__R_TEXT, the command as written; PS__R_WORDS, its words as the shell reads them, 0x1f between;
 # PS__R_GITDIR, the directory its `git -C` options name; PS__R_CMD, the command from its own name on,
 # past leading reserved words (then, do, {, !, time) and assignments, as written; PS__R_ASSIGNS, those
-# assignments, one per line, outer quotes removed. A command that read on its own is exactly
+# assignments, one per line, outer quotes removed; PS__R_TOOL, the gh or git subcommand it runs as gh
+# and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git). A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
 # Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
@@ -220,13 +221,13 @@ PS__M_ENV=""
 PS__HIT=0
 PS__REC=0
 PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
-PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=()
+PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=()
 # How many readings are kept before they are all dropped, which bounds what a lookup compares.
 PS__M_MAX=256
 
 ps__forget() {
   PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
-  PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=()
+  PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=()
 }
 
 # Reads $1 unless this shell already holds its reading, and points PS__HIT at it. Returns 0 for a
@@ -236,7 +237,7 @@ ps__forget() {
 # not blank. Never call it in a command substitution where the answer matters: what it keeps would
 # stay in the subshell.
 ps__read() {   # $1 = command
-  local env="$PATH"$'\x1f'"$PS_SHELL_WORDS" k n out rc rec dir text words gitdir alone first count cmd assigns
+  local env="$PATH"$'\x1f'"$PS_SHELL_WORDS" k n out rc rec dir text words gitdir alone first count cmd assigns tool
   if [ "$env" != "$PS__M_ENV" ]; then ps__forget; PS__M_ENV="$env"; fi
   n=${#PS__M_KEY[@]}
   k=0
@@ -257,10 +258,11 @@ ps__read() {   # $1 = command
   local -a alone_at=()
   while IFS= read -r -d $'\x1e' rec; do
     # Split by read, never by pattern removal, which tries every prefix of a 26 KB command.
-    IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns <<< "$rec"
-    assigns="${assigns%$'\n'}"
+    IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns tool <<< "$rec"
+    # The last field takes read's trailing newline.
+    tool="${tool%$'\n'}"; assigns="${assigns%$'\n'}"
     PS__R_DIR+=("$dir"); PS__R_TEXT+=("$text"); PS__R_WORDS+=("$words"); PS__R_GITDIR+=("$gitdir")
-    PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns")
+    PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool")
     [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
     count=$((count + 1))
   done < <(printf '%s' "$out")
@@ -270,7 +272,7 @@ ps__read() {   # $1 = command
   for k in ${alone_at[@]+"${alone_at[@]}"}; do
     PS__R_DIR+=(""); PS__R_TEXT+=("${PS__R_TEXT[$k]}")
     PS__R_WORDS+=("${PS__R_WORDS[$k]}"); PS__R_GITDIR+=("${PS__R_GITDIR[$k]}")
-    PS__R_CMD+=("${PS__R_CMD[$k]}"); PS__R_ASSIGNS+=("${PS__R_ASSIGNS[$k]}")
+    PS__R_CMD+=("${PS__R_CMD[$k]}"); PS__R_ASSIGNS+=("${PS__R_ASSIGNS[$k]}"); PS__R_TOOL+=("${PS__R_TOOL[$k]}")
     PS__M_KEY+=("${PS__R_TEXT[$k]}"); PS__M_RC+=(0)
     PS__M_FIRST+=($((${#PS__R_TEXT[@]} - 1))); PS__M_COUNT+=(1)
   done
@@ -278,7 +280,7 @@ ps__read() {   # $1 = command
 }
 
 # Sets PS__REC to the index of a record whose text is exactly $1, in any reading this shell holds,
-# and fails when there is none. A question about one command handed in as text (ps__seg_words,
+# and fails when there is none. A question about one command handed in as text (ps__runs_tool,
 # ps_git_c_target) answers from the reading that command came from rather than asking python again.
 ps__record_of() {   # $1 = one command's text
   local i=0 n=${#PS__R_TEXT[@]}
@@ -325,110 +327,10 @@ ps__shell_commands() {   # $1 = command
   return "$rc"
 }
 
-# One segment's words as the shell reads them, quotes removed and a quoted word holding a space
-# kept whole, joined by 0x1f for `IFS=$'\x1f' read -r -a` (claude-config#589). The ONE word reader
-# for the segment questions below, so a fix to how a segment is read reaches every one of them.
-# A segment python cannot read (an unbalanced quote, no python3) falls back to whitespace words,
-# the direction that still lets a push be seen and the gates fire.
-#
-# Leading reserved words (then, do, else, elif, if, while, until, {, !, time) are looked past, so the
-# first word is the command's own (#1017): read by lib/shell-words.py from the RESERVED list its
-# commands reader already uses, so one list says which word is the command. A segment that is a
-# command of a reading this shell holds is answered from that reading (claude-config#1040).
-ps__seg_words() {   # $1 = one segment
-  local words=""
-  if ps__record_of "$1"; then
-    words="${PS__R_WORDS[$PS__REC]}"
-  elif [ -f "$PS_SHELL_WORDS" ]; then
-    words="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" words 2>/dev/null)" || words=""
-  fi
-  ps__words_or_split "$words" "$1"
-}
-
-# The words, or when there are none the segment split on whitespace: the reading that still lets a
-# push be seen when python had nothing to say about it.
-ps__words_or_split() {   # $1 = words joined by 0x1f, possibly empty  $2 = the segment
-  if [ -n "$1" ]; then printf '%s' "$1"
-  else printf '%s\n' "$2" | awk '{ $1 = $1; gsub(/ /, "\037"); printf "%s", $0 }'
-  fi
-}
-
-ps__segment_is_push() { ps__segment_git_sub "$1" push; }
-
-ps__segment_git_sub() {   # $1 = one segment, $2 = the git subcommand
-  ps__words_git_sub "" "$1" "$2" read
-}
-
-ps__words_git_sub() {   # $1 = the segment's words (0x1f between)  $2 = the segment  $3 = the git subcommand  [$4 = read]
-  # Tokenize the way the shell does, quotes and all (claude-config#589). This used to split on
-  # whitespace on the grounds that quoting only matters for arguments it skips, and it matters for
-  # exactly those: `git -C "/a b/wt" push` became -C, "/a, b/wt", push, the skip after -C landed on
-  # b/wt" as if it were the subcommand, and the push was not seen as a push at all, so every global
-  # push gate stood down on it. The crude split is kept only for when python3 cannot read the
-  # segment (an unbalanced quote), which is the direction that still fires the gates. The words come
-  # from the reading the caller already holds; with $4 set they are read here instead.
-  local seg="$2" sub="$3" words
-  local -a tok
-  if [ "${4:-}" = read ]; then words="$(ps__seg_words "$seg")"
-  elif [ -n "$1" ]; then words="$1"
-  else words="$(ps__words_or_split "" "$seg")"; fi
-  IFS=$'\x1f' read -r -a tok <<< "$words"
-  local i=0 n=${#tok[@]} t
-
-  # A subshell or group opening the segment, `(git push)` or `( cd x && git push )`, is
-  # not part of the command (claude-config#439): an opener glued to the first word is
-  # peeled off it, one standing alone is skipped. Then leading environment assignments,
-  # SKIP_TEST_CHECK=1 git push, which can follow an opener.
-  local first=1
-  while [ "$i" -lt "$n" ]; do
-    t="${tok[$i]}"
-    if [ "$first" -eq 1 ]; then
-      while :; do
-        case "$t" in
-          \(*|\{*) t="${t#?}" ;;
-          *) break ;;
-        esac
-      done
-      tok[$i]="$t"
-      first=0
-    fi
-    case "$t" in
-      '') i=$((i+1)) ;;
-      [A-Za-z_]*=*) i=$((i+1)) ;;
-      *) break ;;
-    esac
-  done
-  [ "$i" -lt "$n" ] || return 1
-
-  # The binary, with any leading path stripped. `rtk git push` is the same push:
-  # the rtk-rewrite hook rewrites git commands, so a hook that only knew about
-  # bare `git` would silently stop firing.
-  t="${tok[$i]##*/}"
-  if [ "$t" = "rtk" ]; then
-    i=$((i+1))
-    [ "$i" -lt "$n" ] || return 1
-    t="${tok[$i]##*/}"
-  fi
-  [ "$t" = "git" ] || return 1
-  i=$((i+1))
-
-  # Walk to the subcommand, skipping git's own options. The two-part options
-  # must consume their argument, or `git -C /some/path status` would read as a
-  # command whose subcommand is a path.
-  while [ "$i" -lt "$n" ]; do
-    t="${tok[$i]}"
-    case "$t" in
-      -C|-c|--git-dir|--work-tree|--namespace|--exec-path)
-        i=$((i+2)) ;;
-      -*) i=$((i+1)) ;;
-      [A-Za-z_]*=*) i=$((i+1)) ;;
-      # `(cd x && git push)` leaves `push)` as the last word of its segment.
-      "$sub"|"$sub)"*|"$sub}"*) return 0 ;;
-      *) return 1 ;;   # some other subcommand
-    esac
-  done
-  return 1
-}
+# Does this ONE segment run `git push`? Asked by linux-sections-before-push.sh of each segment it
+# reads the destinations of, through ps_runs_git, the one reading of git, whose PS_RUN_ARGS then hold
+# the push's own words (claude-config#1188).
+ps__segment_is_push() { ps_runs_git "$1" push; }
 
 # Is this command a `gh pr create`, in COMMAND POSITION (claude-config#560)? Split where the shell
 # would, like ps_is_git_push, so one quoted in an argument or written in a heredoc body is not a
@@ -442,62 +344,80 @@ ps_is_gh_pr_create() {   # $1 = command
   if ps__read "$cmd" || [ "$?" -eq 3 ]; then
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
     while [ "$i" -lt "$end" ]; do
-      case "${PS__R_TEXT[$i]}" in *create*) ps__segment_is_pr_create "${PS__R_TEXT[$i]}" && return 0 ;; esac
+      case "${PS__R_TEXT[$i]}" in *create*) ps_runs_gh "${PS__R_TEXT[$i]}" pr create && return 0 ;; esac
       i=$((i + 1))
     done
     return 1
   fi
   while IFS= read -r seg; do
-    case "$seg" in *create*) ps__segment_is_pr_create "$seg" && return 0 ;; esac
+    case "$seg" in *create*) ps_runs_gh "$seg" pr create && return 0 ;; esac
   done < <(ps__crude_cut "$cmd")
   return 1
 }
 
-ps__segment_is_pr_create() {   # $1 = one segment
-  local -a w
-  IFS=$'\x1f' read -r -a w <<< "$(ps__segment_command_words "$1")"
-  [ "${#w[@]}" -gt 0 ] || return 1
-  [ "${w[0]##*/}" = "gh" ] || return 1
-  [ "${w[1]:-}" = "pr" ] || return 1
-  case "${w[2]:-}" in create|create\)*|create\}*) return 0 ;; esac
-  return 1
+# Does this ONE command run `gh <sub> [<act>]`, or `git <sub>`, as gh and git themselves read it
+# (claude-config#1188)? Past reserved words, assignments and any rtk, env or sudo in front, and past
+# the options written in front of the subcommand: gh's (`gh -R o/x pr create`, `gh pr -R o/x create`),
+# which gh hands to the subcommand as its own, and git's (`git -C <dir> push`). Read by
+# lib/shell-words.py's tool_field, the one reading of gh and git that every gate asks, the merge
+# gates included; before #1188 each gate read the command by word position, so a flag in front
+# walked a pull request creation past the closing keyword and push scope checks, and env or sudo in
+# front of git walked a push past every push gate. On success PS_RUN_SUB, PS_RUN_ACT and PS_RUN_ARGS
+# hold the reading: for gh the subcommand's words, the flags written in front first; for git the
+# words after its subcommand. A command of a reading this shell holds is answered from it, with no
+# start.
+#
+# With nothing to read it (no python3, no lib/shell-words.py, or a reader that failed), any command
+# naming the program and the words asked about is taken for one, so a gate refuses or asks rather
+# than letting the command past unread (L42, L490). A trailing ) or } on the last word asked about
+# is the crude cut's, `(cd x && gh pr create)`.
+ps_runs_gh() { ps__runs_tool "$1" gh "$2" "${3:-}"; }
+ps_runs_git() { ps__runs_tool "$1" git "$2"; }
+
+ps__runs_tool() {   # $1 = one command, $2 = gh | git, $3 = the subcommand, $4 = gh's action, or empty for any
+  local field
+  if ps__record_of "$1"; then
+    ps__tool_field "${PS__R_TOOL[$PS__REC]}" "$2" "$3" "${4:-}"; return
+  fi
+  if [ -f "$PS_SHELL_WORDS" ] && command -v python3 >/dev/null 2>&1 \
+    && field="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" tool 2>/dev/null)"; then
+    ps__tool_field "$field" "$2" "$3" "${4:-}"; return
+  fi
+  local -a words
+  local w tool=0 sub=0 act=0
+  PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
+  [ -n "${4:-}" ] || act=1
+  read -r -a words <<< "$1"
+  for w in ${words[@]+"${words[@]}"}; do
+    w="${w#[(\{]}"; w="${w%%[)\}]*}"
+    [ "${w##*/}" = "$2" ] && tool=1   # gh-reader: the crude reading, when there is no other
+    [ "$w" = "$3" ] && sub=1
+    [ "$w" = "${4:-}" ] && act=1
+  done
+  [ "$tool$sub$act" = 111 ] || return 1
+  PS_RUN_SUB="$3"; PS_RUN_ACT="${4:-}"
 }
 
-# One segment's words from the command it runs onward, joined by 0x1f: past leading environment
-# assignments (one whose value is a command substitution holding spaces included), an opening ( or
-# {, and `rtk` in front, which runs the same command. Fails when the segment runs no command. The
-# one reading of command position for the gh questions here (ps_is_gh_pr_create, and
-# check-gh-watch-interval.sh since claude-config#1014), so both see a command the same way.
-ps__segment_command_words() {   # $1 = one segment
-  local -a tok
-  # The same shell reading as ps__segment_is_push (#589): a quoted assignment holding a space,
-  # GH_TOKEN="a b" gh pr create, split on whitespace left `b"` as the command.
-  IFS=$'\x1f' read -r -a tok <<< "$(ps__seg_words "$1")"
-  local i=0 n=${#tok[@]} t depth=0 opens closes
-  while [ "$i" -lt "$n" ]; do
-    t="${tok[$i]}"
-    # Inside an assignment's $( ... ): consume words until the parentheses balance.
-    if [ "$depth" -gt 0 ]; then
-      opens="${t//[^(]/}"; closes="${t//[^)]/}"
-      depth=$((depth + ${#opens} - ${#closes}))
-      i=$((i+1)); continue
-    fi
-    case "$t" in
-      \(*|\{*) t="${t#?}"; tok[$i]="$t"; [ -n "$t" ] || { i=$((i+1)); continue; } ;;
-    esac
-    case "$t" in
-      [A-Za-z_]*=*)
-        opens="${t//[^(]/}"; closes="${t//[^)]/}"
-        depth=$(( ${#opens} - ${#closes} )); [ "$depth" -lt 0 ] && depth=0
-        i=$((i+1)) ;;
-      *) break ;;
-    esac
-  done
-  [ "$i" -lt "$n" ] || return 1
-  t="${tok[$i]##*/}"
-  if [ "$t" = "rtk" ]; then i=$((i+1)); [ "$i" -lt "$n" ] || return 1; fi
-  local IFS=$'\x1f'
-  printf '%s' "${tok[*]:$i}"
+# ps_runs_gh and ps_runs_git for the command at record $2 of a reading this shell holds (ps__read,
+# PS__M_FIRST), for a caller walking the records itself: no lookup of the record by its text, and no
+# start. Fails, with PS_RUN_SUB still naming what it does run, when it runs something else.
+ps_runs_at() {   # $1 = gh | git, $2 = record index, $3 = subcommand, $4 = gh's action, or empty for any
+  ps__tool_field "${PS__R_TOOL[$2]}" "$1" "$3" "${4:-}"
+}
+
+ps__tool_field() {   # $1 = a tool_field, $2 = gh | git, $3 = subcommand, $4 = action or empty
+  local field="$1" tool
+  PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
+  [ -n "$field" ] || return 1
+  tool="${field%%$'\x1d'*}"; field="${field#*$'\x1d'}"
+  [ "$tool" = "$2" ] || return 1
+  PS_RUN_SUB="${field%%$'\x1d'*}"; field="${field#*$'\x1d'}"
+  PS_RUN_ACT="${field%%$'\x1d'*}"; field="${field#*$'\x1d'}"
+  PS_RUN_SUB="${PS_RUN_SUB%%[)\}]*}"; PS_RUN_ACT="${PS_RUN_ACT%%[)\}]*}"
+  # To the end of the field, never a line: a --body runs over several.
+  [ -n "$field" ] && IFS=$'\x1f' read -r -d '' -a PS_RUN_ARGS < <(printf '%s' "$field")
+  [ "$PS_RUN_SUB" = "$3" ] || return 1
+  [ -z "${4:-}" ] || [ "$PS_RUN_ACT" = "$4" ]
 }
 
 # Which repository is this push about? The hook payload's cwd is the SESSION's
@@ -812,25 +732,29 @@ ps__read_adds() {   # $1 = command  $2 = scope | takes
   # platform's limit on argument and environment size, and python then never starts at all.
   #
   # The reserved words that lead a command (then, do, else, ...) are looked past, read from
-  # lib/shell-words.py's RESERVED, the list the push recogniser uses, so `if x; then git add -A; fi`
-  # is an add here as it is to ps_is_git_add (lessons review of #1017). With that file missing the
-  # list is empty, which only reads fewer adds, the reading every release before #1017 had.
+  # lib/shell-words.py's tool_command, the one reading of git the push recogniser uses, so `if x; then
+  # git add -A; fi` (lessons review of #1017) and `env X=1 git -C <dir> add -A` (#1188) are adds here
+  # as they are to ps_is_git_add. With that file missing, any segment naming git and add is one.
   # -B: loading shell-words.py as a module would otherwise leave a bytecode cache in the hooks' lib/.
   printf '%s' "$1" | PS_MODE="${2:-scope}" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
 import importlib.util, os, re, shlex, sys
 cmd = sys.stdin.read()
 mode = os.environ.get("PS_MODE", "scope")
-RESERVED = set()
 try:
     spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])
     shell_words = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shell_words)
-    RESERVED = shell_words.RESERVED
+    git_command = shell_words.git_command
 except Exception:
-    pass
+    # With no reader of git, any segment naming git and add is an add, the words after add its own:
+    # the reading that sees more adds, never fewer (L42).
+    def git_command(toks):
+        names = [t.lstrip("({").split("/")[-1] for t in toks]
+        if "git" in names and "add" in toks:  # gh-reader: the crude reading, when there is no other
+            return ("add", [], toks[toks.index("add") + 1:])
+        return None
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
 saw_add, takes_all, tracked, unreadable, paths = False, False, False, False, []
 for seg in re.split(r"&&|\|\||;|\||\n", cmd):
@@ -838,28 +762,19 @@ for seg in re.split(r"&&|\|\||;|\||\n", cmd):
         toks, readable = shlex.split(seg, posix=True), True
     except ValueError:
         toks, readable = seg.split(), False
-    i = 0
-    while i < len(toks):
-        t = toks[i].lstrip("({")
-        if t == "" or ASSIGN.match(t) or t in RESERVED:
-            i += 1
-            continue
-        toks[i] = t
-        break
-    if i < len(toks) and toks[i].split("/")[-1] == "rtk":
-        i += 1
-    if i >= len(toks) or toks[i].split("/")[-1] != "git":
-        continue
-    j = i + 1
-    while j < len(toks) and toks[j].startswith("-"):
-        j += 2 if toks[j] in ("-C", "-c") else 1
-    if j >= len(toks) or toks[j] != "add":
+    while toks and toks[0].strip("({") == "":
+        toks = toks[1:]
+    # Which git subcommand it runs, from the one reading of git (shell-words.py git_command,
+    # claude-config#1188): past reserved words, assignments, rtk, env and sudo, and the options
+    # git takes itself.
+    found = git_command(toks)
+    if not found or found[0].rstrip(")}") != "add":
         continue
     saw_add = True
     if not readable:
         unreadable = True
     skip = False
-    for a in toks[j + 1:]:
+    for a in found[2]:
         if skip:
             skip = False
             continue

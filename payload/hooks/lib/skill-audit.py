@@ -38,6 +38,7 @@ Exit: 0 clean, 1 findings, 2 a folder is missing or holds nothing to check.
 """
 
 import ast
+import importlib.util
 import os
 import re
 import sys
@@ -422,12 +423,28 @@ def exits_python(path: str, rel: str):
     return findings
 
 
-# In command position: the start of a line however indented, after an operator (`;`, `&&`, `||`,
-# `|`, `(`, `$(`, `!`), or after a keyword that starts a command. A command position anchored to
-# column 0 alone missed every indented call inside a block (the PR #936 lessons review).
-GH_CREATE = re.compile(
-    r"(?:^|[;&|(!]|\$\(|\b(?:then|do|else|if|elif|while|until|time|exec|command)\b)\s*gh\s+issue\s+create\b"
-)
+# Whether a line of a script RUNS `gh issue create`, read by lib/shell-words.py, the one reading of a
+# command every gate asks (claude-config#1188): each command the shell would run, a substitution's
+# and an indented one inside a block included (the PR #936 lessons review), past reserved words,
+# assignments, rtk, env, sudo, exec and command, and past gh's flags written in front of the
+# subcommand. A comment or a quoted mention is no command. Loaded by its path, never by name.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location(
+    "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
+SW = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(SW)
+
+
+def runs_gh_issue_create(cmd: str) -> bool:
+    try:
+        records = SW.commands(cmd)
+    except SW.Unreadable:
+        records = SW.crude_commands(cmd)
+    for _, text in records:
+        found = SW.tool_read(SW.command_words(SW.command_rest(text)[0]))
+        if found and found[:3] == ("gh", "issue", "create"):
+            return True
+    return False
 
 
 def shell_commands(text: str):
@@ -455,7 +472,7 @@ def exits_shell(path: str, rel: str):
     except OSError as exc:
         return [f"{rel}: could not be read, so it could not be checked: {exc}"]
     for n, cmd in shell_commands(text):
-        if not GH_CREATE.search(cmd):
+        if not runs_gh_issue_create(cmd):
             continue
         missing = []
         if "--milestone" not in cmd and not re.search(r"(?:^|\s)-m\s", cmd):

@@ -57,6 +57,12 @@ refused "gh run watch at 5 seconds" "gh run watch 123456 -i 5"
 # A quote never closed leaves only the crude cut at every separator, which still holds the watcher;
 # this used to stand the guard down in silence (claude-config#1065).
 refused "after a quote never closed, read by the crude cut" "echo don't; gh pr checks 12 --watch"
+# gh takes the subcommand's flags in front of it (claude-config#1188).
+refused "#1188 -R in front of pr checks" "gh -R acme/widget pr checks 12 --watch"
+refused "#1188 -R between run and watch" "gh run -R acme/widget watch 123456"
+refused "#1188 --repo=x in front, behind env" "env GH_TOKEN=x gh --repo=acme/widget pr checks 12 --watch -i 5"
+judge "gh -R acme/widget pr checks 12 --watch"
+check "#1188 the command it suggests keeps the flag that was in front" "gh pr checks -R acme/widget 12 --watch --interval 60" "$out"
 
 judge "gh pr checks 12 --watch"
 check "#1014 the refusal says what the default costs" "every 10 seconds" "$out"

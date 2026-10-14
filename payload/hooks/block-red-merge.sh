@@ -612,7 +612,6 @@ esac
 # finds nothing, and refuses, so the blind spot can only refuse a merge, never let one through.
 merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when there is none
   local cmd="$1" n=${#1} i=0 c="" quote="" start=0 end seg
-  local head='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([^[:space:]]*/)?gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)'
   local fd='[[:space:]]([0-9]+)$'
   while [ "$i" -le "$n" ]; do
     c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
@@ -626,7 +625,10 @@ merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when 
       "'"|'"') quote="$c" ;;
       ""|"|"|"&"|";"|">"|"<"|"("|")"|$'\n')
         seg="${cmd:$start:$((i - start))}"
-        if [[ "$seg" =~ $head ]]; then
+        # Which stretch runs the merge is the one reading of gh's (ps_runs_gh, claude-config#1188):
+        # past assignments, rtk, env and sudo, and gh's flags written in front of the subcommand, so
+        # `gh -R o/x pr merge 7` is told where its flag goes like any other merge.
+        if case "$seg" in *merge*) true ;; *) false ;; esac && ps_runs_gh "$seg" pr merge; then
           end=$i
           if [ "$c" = ">" ] || [ "$c" = "<" ]; then
             [[ "$seg" =~ $fd ]] && end=$((end - ${#BASH_REMATCH[1]}))

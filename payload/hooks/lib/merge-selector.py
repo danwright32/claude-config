@@ -33,9 +33,11 @@
 # Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is about
 # that view. A newline starts a new command the way a semicolon does, and the walk stops at the first
 # token it cannot read.
+import importlib.util
 import os
 import re
 import shlex
+import sys
 
 cmd = os.environ.get("MT_CMD", "")
 # A newline starts a new command the way a semicolon does, and a backslash before one does not.
@@ -45,51 +47,25 @@ lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
 lex.whitespace_split = True
 OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
 ENDERS = OPENERS | {")", "}"}
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 # ---- where gh finds its subcommand ------------------------------------------------------------
 # gh takes a subcommand's flags written IN FRONT of it: `gh -R o/x pr merge 7`, `gh pr -R o/x merge
-# 7`, `gh -X PUT api repos/o/x/pulls/7/merge` (claude-config#1186; measured on gh 2.89.0, 2026-10-14).
-# Its command library (cobra) finds the subcommand by passing over the flags first, then hands every
-# flag, wherever it stood, to that subcommand. So the reading here does the same: it finds the
-# subcommand and action as cobra finds them, and reads the flags in front as the subcommand's own.
+# 7`, `gh -X PUT api repos/o/x/pulls/7/merge` (claude-config#1186). Which subcommand a command runs is
+# read by lib/shell-words.py (gh_command, gh_path), the one reading of gh every gate asks, the bash
+# gates through lib/push-scope.sh's ps_runs_gh (claude-config#1188): it finds the subcommand and
+# action as gh's command library does and hands back the flags in front as the subcommand's own. It
+# lived here for #1186; a copy here and another in each bash gate is how a flag in front came to be
+# read by the merge gates and not by the closing keyword check (L613).
 #
-# Cobra passes over a flag with no `=` in it as one that TAKES the next word, unless it is a flag it
-# knows takes none, and at the head of a gh command those are only gh's own --help (-h) and
-# --version (`gh help` lists no other flag of its own). A word of more than two characters after a
-# single dash (`-Rowner/x`, `-XPUT`) carries its value. So `gh --squash pr merge 7` is a command
-# named merge to gh, which it has none of, and it runs nothing (measured: `gh --web pr view 1`
-# answers `unknown command "view"`); the overnight judge refuses it anyway, and the shared table says
-# why the two differ there.
-GH_NO_VALUE = {"--help", "-h", "--version"}
-
-
-def gh_path(words):
-    """The words after `gh` as gh reads them: (sub, act, front, after). sub and act are the
-    subcommand and its action as cobra finds them (empty when absent; `api` takes no action), front
-    is the words written in front of the action, in order, for the subcommand to read as its own,
-    and after is every word after the action (after `api` for gh api)."""
-    path, front = [], []
-    j, n = 0, len(words)
-    while j < n:
-        w = words[j]
-        if w == "--":
-            break
-        if w.startswith("-") and len(w) > 1:
-            front.append(w)
-            takes = "=" not in w and w not in GH_NO_VALUE and (w.startswith("--") or len(w) == 2)
-            if takes and j + 1 < n:
-                front.append(words[j + 1])
-                j += 1
-            j += 1
-            continue
-        path.append(w)
-        j += 1
-        if len(path) == 2 or path[0] == "api":
-            break
-    sub = path[0] if path else ""
-    act = path[1] if len(path) > 1 else ""
-    return sub, act, front, words[j:]
+# `gh --squash pr merge 7` is a command named merge to gh, which it has none of, and it runs nothing
+# (measured: `gh --web pr view 1` answers `unknown command "view"`); the overnight judge refuses it
+# anyway, and the shared table says why the two differ there.
+# Loaded as a module by its path, never leaving a bytecode cache in the hooks' lib/.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location(
+    "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
+SW = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(SW)
 
 
 # ---- the repository flag -----------------------------------------------------------------------
@@ -482,21 +458,21 @@ found = None
 at_start, i, n = True, 0, len(toks)
 while i < n:
     t = toks[i]
-    if at_start and ASSIGN.match(t):
-        i += 1
-        continue
-    if at_start and t.split("/")[-1] == "gh":
-        k = i + 1
+    if at_start and t not in ENDERS:
+        k = i
         while k < n and toks[k] not in ENDERS:
             k += 1
-        # The subcommand as gh finds it, past any of its flags written in front (claude-config#1186).
-        sub, act, front, after = gh_path(toks[i + 1:k])
-        if sub == "pr" and act == "merge":
-            found = read_pr_merge(front + after)
-        elif sub == "api":
-            found = read_api(front, after)
-        if found:
-            break
+        # The command from its first word to the next separator, read by the one reading of gh: past
+        # its assignments, any rtk, env or sudo, and gh's flags written in front of the subcommand.
+        g = SW.gh_command(toks[i:k])
+        if g:
+            sub, act, front, after = g
+            if sub == "pr" and act == "merge":
+                found = read_pr_merge(front + after)
+            elif sub == "api":
+                found = read_api(front, after)
+            if found:
+                break
         i = k
         at_start = False
         continue

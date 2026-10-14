@@ -76,6 +76,22 @@ PY
   && check "two on separate lines are both found" ok \
   || check "two on separate lines are both found" "got $(ask count "$(printf 'gh issue create -t a\ngh issue create -t b')")"
 
+# gh takes the subcommand's flags in front of it, and rtk, env or sudo can stand in front of gh
+# (claude-config#1188), read by lib/shell-words.py, the one reading every gate asks.
+for c in 'gh -R o/x issue create -t x' 'gh issue -R o/x create -t x' 'gh --repo=o/x issue create -t x' \
+         'rtk gh issue create -t x' 'env GH_TOKEN=x gh issue create -t x' 'sudo -u dan gh issue create -t x'; do
+  [ "$(ask count "$c")" = "1" ] && check "#1188 a create is found: $c" ok || check "#1188 a create is found: $c" "got $(ask count "$c")"
+done
+[ "$(ask titles 'gh -R o/x issue --milestone M create -t "the title"')" = "the title" ] \
+  && check "#1188 its flags are read wherever they stand" ok \
+  || check "#1188 its flags are read wherever they stand" "got $(ask titles 'gh -R o/x issue --milestone M create -t "the title"')"
+[ "$(ask milestones 'gh issue -m M create -t x')" = "M" ] \
+  && check "#1188 a flag between issue and create is the create's own" ok \
+  || check "#1188 a flag between issue and create is the create's own" "got $(ask milestones 'gh issue -m M create -t x')"
+[ "$(ask count 'gh --title issue create -t x')" = "0" ] \
+  && check "#1188 a flag in front takes the next word, as gh does, so this runs no create" ok \
+  || check "#1188 a flag in front takes the next word, as gh does, so this runs no create" "got $(ask count 'gh --title issue create -t x')"
+
 # ---------------------------------------------------------------------------
 # And the things that only LOOK like creates. A gate that fires on these is a gate people learn to
 # override.

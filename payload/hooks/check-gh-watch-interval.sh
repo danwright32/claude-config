@@ -49,20 +49,19 @@ cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 
 # The gh watcher in one segment, judged: prints the refusal and returns 0 when it is too fast.
+# The subcommand is found as gh itself finds it, past flags written in front of it (`gh -R o/x pr
+# checks 12 --watch`, `gh run -R o/x watch 7`), by lib/push-scope.sh's ps_runs_gh, the one reading of
+# gh every gate asks (claude-config#1188); w is then the subcommand's own words, flags in front first.
 too_fast() {   # $1 = one segment
-  local -a w
-  IFS=$'\x1f' read -r -a w <<< "$(ps__segment_command_words "$1")"
-  [ "${#w[@]}" -ge 3 ] || return 1
-  [ "${w[0]##*/}" = "gh" ] || return 1
   local kind default
-  case "${w[1]} ${w[2]}" in
-    "pr checks") kind="pr checks"; default=10 ;;
-    "run watch") kind="run watch"; default=3 ;;
-    *) return 1 ;;
-  esac
+  if ps_runs_gh "$1" pr checks; then kind="pr checks"; default=10
+  elif ps_runs_gh "$1" run watch; then kind="run watch"; default=3
+  else return 1
+  fi
+  local -a w=(${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})
   local i n=${#w[@]} t watching=0 interval=""
   [ "$kind" = "run watch" ] && watching=1
-  for ((i = 3; i < n; i++)); do
+  for ((i = 0; i < n; i++)); do
     t="${w[$i]}"
     case "$t" in
       --watch) watching=1 ;;
@@ -78,7 +77,7 @@ too_fast() {   # $1 = one segment
   fi
   # The command as it should be: the same words, any interval of its own replaced.
   local -a fixed=("gh" "$kind")
-  for ((i = 3; i < n; i++)); do
+  for ((i = 0; i < n; i++)); do
     t="${w[$i]}"
     case "$t" in
       --interval=*|-i?*) continue ;;
