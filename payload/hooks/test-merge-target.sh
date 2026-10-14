@@ -637,6 +637,10 @@ eq "$MT_API_PIN" "abc123" "#1186 a pin written in front of the subcommand pins t
 # gh takes the LAST repository flag it is given (measured on gh 2.89.0: `-R a -R b` reads b, and so
 # does `-R b` after the action with `-R a` in front), so the gates read the last one too.
 eq "$(mt_repo_flag "gh pr merge 7 -R acme/other -R acme/widget")" "acme/widget" "#1186 the last repository flag is the one gh reads"
+# A repository flag in front of `api` that names its own host keeps that host once, never with
+# --hostname's added again in front of it (lessons review of #1186).
+eq "$(mt_repo_flag "gh -R ghe.example.com/o/r api --hostname ghe.example.com -X PUT 'repos/{owner}/{repo}/pulls/7/merge'")" "ghe.example.com/o/r" "#1186 a host the repository flag names is not doubled by --hostname"
+eq "$(mt_repo_flag "gh -R o/r api --hostname ghe.example.com -X PUT 'repos/{owner}/{repo}/pulls/7/merge'")" "ghe.example.com/o/r" "#1186 and --hostname still names the host of an owner/name flag"
 # Short flags clustered as gh reads them (pflag): the one taking a value takes the rest of the word or
 # the next word, so a body is never the number and a repository in a cluster is still read.
 eq "$(mt_pr_number "gh pr merge -sb 42")" "" "#1186 a body given in a cluster is not the pull request"

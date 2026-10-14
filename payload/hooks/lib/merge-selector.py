@@ -65,9 +65,10 @@ GH_NO_VALUE = {"--help", "-h", "--version"}
 
 
 def gh_path(words):
-    """The words after `gh` as gh reads them: (sub, act, flags) where sub and act are the subcommand
-    and its action as cobra finds them (empty when absent; `api` takes no action), and flags are the
-    words written in front of the action, in order, for the subcommand to read as its own."""
+    """The words after `gh` as gh reads them: (sub, act, front, after). sub and act are the
+    subcommand and its action as cobra finds them (empty when absent; `api` takes no action), front
+    is the words written in front of the action, in order, for the subcommand to read as its own,
+    and after is every word after the action (after `api` for gh api)."""
     path, front = [], []
     j, n = 0, len(words)
     while j < n:
@@ -368,13 +369,13 @@ def arg_value(args, name, variables):
 
 
 def read_api(front, after):
-    """The merge a gh api call makes, as read_api_route reads it from its flags written in front of
-    `api` and the words after it, held to a repository flag among those in front (claude-config#1186).
-    Only those: after `api` the overnight judge reads -R as a flag of gh api's taking no value, as gh
-    api's own flag table would, so its value is the endpoint there and the call no merge to either. gh api itself takes no -R and refuses a call carrying one, but
-    the overnight judge reads the flag as naming the repository of an endpoint written with gh's
-    placeholders, and the shared table holds the two to one answer: that repository when gh can
-    read it, a refusal when it cannot."""
+    """The merge a gh api call makes, as read_api_route reads it from the flags written in front of
+    `api` and the words after it, held to a repository flag in front (claude-config#1186). gh api
+    takes no -R and refuses a call carrying one, but the overnight judge reads one in front as
+    naming the repository of an endpoint written with gh's placeholders, and the shared table holds
+    the two to one answer: that repository when gh can read it, a refusal when it cannot. Only one in
+    front counts, because after `api` both read -R as taking no value, its value as the endpoint,
+    and the call as no merge."""
     named, rest = MISSING, []
     j, n = 0, len(front)
     while j < n:
@@ -459,7 +460,9 @@ def read_api_route(args, named):
         kind, repo = "repo", norm(named)
     if kind == "untold" or (kind == "checkout" and host and host != "github.com"):
         return {"route": "untold", "why": "endpoint", "detail": endpoint}
-    if repo and host and host != "github.com":
+    # --hostname names the host of an owner/name; a repository flag that names its own host
+    # (ghe.example.com/o/r) keeps that one, never with this one added in front again.
+    if repo and host and host != "github.com" and repo.count("/") == 1:
         repo = host + "/" + repo
     return {"route": "rest", "repo": repo, "number": m.group(1), "pin": sent.get("sha") or ""}
 
