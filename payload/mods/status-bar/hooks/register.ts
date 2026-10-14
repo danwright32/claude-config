@@ -9,8 +9,8 @@ import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from '.
 // - the always-shown facts stay on the classic status line under the prompt, drawn by
 //   statusline.sh beside this file, which reads what only this mod knows (when the prompt cache
 //   goes cold) from one small file per session that this mod writes;
-// - what needs a look (a scope mode, a failing or running PR, jobs, unpushed commits) is the amber
-//   line in the band above the prompt, and the Compact row under it, both published through
+// - what needs a look (a scope mode, a failing or running PR, jobs, unpushed commits) is the
+//   line in the band above the prompt, amber with work only going along in lavender, and the Compact row under it, both published through
 //   mod-kit, which draws the band once for every mod.
 
 const MIN = 60_000

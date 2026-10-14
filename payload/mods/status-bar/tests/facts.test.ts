@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { checksOf, compactDue, lookParts, span, unpushedOf } from '../hooks/facts.ts'
+import { checksOf, compactDue, LAVENDER, lookParts, span, unpushedOf } from '../hooks/facts.ts'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -167,6 +167,33 @@ describe('lookParts', () => {
   test('no reading of unpushed commits yet, or none to push, is no item', () => {
     expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: null, now })).toEqual([])
     expect(lookParts({ modes: [], pr: null, jobs: [], unpushed: fresh(0), now })).toEqual([])
+  })
+  // Dan, 2026-10-14: "I don't like that the waiting indicator is yellow." Work that is only going
+  // along (a job running or waiting, PR checks running) is lavender; amber is kept for what needs a
+  // look, so the two read apart at a glance.
+  const colorOf = (parts: ReturnType<typeof lookParts>, text: string) => parts.find(p => p.text === text)?.color
+  test('running and waiting jobs and running PR checks are lavender; what needs a look stays amber', () => {
+    const jobs = [
+      { label: 'a', runMs: MIN, kept: false, stuck: false, state: 'running' as const },
+      { label: 'drift run', runMs: 20 * MIN, kept: true, stuck: false, state: 'waiting' as const },
+      { label: 'b', runMs: MIN, kept: false, stuck: true, state: 'stalled' as const },
+    ]
+    const running = lookParts({ modes: ['AWAY'], pr: { number: 9, checks: 'running', readAt: now, isStale: false }, jobs, agents: [{ name: 'fix CI', quietMs: 34 * MIN }], unpushed: fresh(1), now })
+    expect(colorOf(running, 'AWAY')).toBe('warning')
+    expect(colorOf(running, 'PR #9 checks running')).toBe(LAVENDER)
+    expect(colorOf(running, 'agent fix CI quiet 34m, left to Claude')).toBe('warning')
+    expect(colorOf(running, '1 job not progressing, left to Claude')).toBe('warning')
+    expect(colorOf(running, 'drift run waiting 20m')).toBe(LAVENDER)
+    expect(colorOf(running, '1 job running')).toBe(LAVENDER)
+    expect(colorOf(running, '1 unpushed commit')).toBe('warning')
+    const failing = lookParts({ modes: [], pr: { number: 9, checks: 'failing', readAt: now, isStale: false }, jobs: [], unpushed: null, now })
+    expect(colorOf(failing, 'PR #9 checks failing')).toBe('warning')
+  })
+  test("a background agent's jobs are lavender unless one of them is stalled", () => {
+    const fine = [{ label: 'npm test', runMs: MIN, kept: false, stuck: false, state: 'running' as const, owner: 'fix CI' }]
+    expect(colorOf(lookParts({ modes: [], pr: null, jobs: fine, unpushed: null, now }), 'agent fix CI: 1 job running')).toBe(LAVENDER)
+    const mixed = [...fine, { label: 'wait', runMs: MIN, kept: false, stuck: true, state: 'stalled' as const, owner: 'fix CI' }]
+    expect(colorOf(lookParts({ modes: [], pr: null, jobs: mixed, unpushed: null, now }), 'agent fix CI: 1 job not progressing, left to the agent, 1 job running')).toBe('warning')
   })
 })
 
