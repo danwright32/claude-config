@@ -289,9 +289,18 @@ function readDeployJob(slug, rec) {
   }
   if (rec.rollback) {
     const rb = rec.rollback;
+    const liveStartMs = Date.parse(live.startedAt);
     workflowRuns(slug, rb.workflow, null).forEach(function (run) {
-      if (!(Date.parse(run.created_at) > Date.parse(live.startedAt))) return;
+      // A time that does not parse compares false against everything (L50), which would skip
+      // this rollback and keep the deploy live, so either missing time counts as "after".
+      const runMs = Date.parse(run.created_at);
+      const timed = !Number.isNaN(runMs) && !Number.isNaN(liveStartMs);
+      if (timed && runMs <= liveStartMs) return;
       const o = jobOutcome(slug, run, rb.job, rb.step, [0], rb.unchangedExits);
+      if (!timed && o.outcome !== 'none') {
+        doubts.push('a rollback (' + rb.workflow + ' run ' + run.id + ') has no readable time, so whether it ran after that deploy cannot be told');
+        return;
+      }
       if (o.outcome === 'none') return;
       if (o.outcome === 'running') doubts.push('a rollback (' + rb.workflow + ' ' + o.what + ') is running now');
       else {

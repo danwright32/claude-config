@@ -415,6 +415,13 @@ const LIVE_203 = { sha: sha(203), at: '2026-10-07T09:10:00Z', step: 'success' };
   check(r.d[203] === 'unconfirmed', 'a rollback still running makes the live commit unconfirmed', JSON.stringify(r.d) + r.all);
 }
 {
+  // A time that does not parse compares false against everything (L50), which would skip the
+  // rollback and keep claiming the deploy live. It lands on the cautious side instead.
+  const r = slateGather([LIVE_203], [{ at: 'sometime', step: 'success' }]);
+  check(r.d[203] === 'unconfirmed' && /time/.test((r.slate.deploy || {}).unconfirmed || ''),
+    'a rollback run whose start time does not parse is treated as one that may have run after the deploy', JSON.stringify(r.slate.deploy) + r.all);
+}
+{
   const r = slateGather([LIVE_203], [{ at: '2026-10-07T08:00:00Z', step: 'success' }]);
   check(r.d[203] === 'live', 'a rollback older than the newest deploy is superseded by it', JSON.stringify(r.d) + r.all);
 }
