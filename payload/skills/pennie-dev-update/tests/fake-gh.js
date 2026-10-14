@@ -17,7 +17,22 @@
 //     "runs":    { "owner/name": { "<workflow file>": [ <workflow runs, newest first> ] } },
 //     "jobs":    { "<run id>": [ <jobs of that run> ] },
 //     "annotations": { "<job id>": [ <check run annotations> ] },
-//     "checkRuns": { "owner/name": { "<sha>": [ <check runs on that commit> ] } } }
+//     "checkRuns": { "owner/name": { "<sha>": [ <check runs on that commit> ] } },
+//     "signedIn": [ "<login>", ... ],
+//     "access":  { "owner/name": [ "<login>", ... ] },
+//     "issueCommands": true, "issueExit": <exit code of an issue command> }
+//
+// Accounts (claude-config#1182). A call is made AS the account whose token is in GH_TOKEN, and one
+// with no GH_TOKEN would be made as the ACTIVE account, which is refused outright: the skill must
+// scope every call, so an unscoped one fails the case rather than quietly succeeding. `gh auth
+// token --hostname github.com -u <login>` answers a token for a login in signedIn (every login,
+// when signedIn is absent) and fails as gh does for any other. Every other `gh auth` subcommand is
+// refused, so a switch of the active account can never pass. A repo listed in access answers 404,
+// as GitHub does for a private repo, to any account not listed beside it. The tokens are made up
+// here and carry the login, so the log records the ACCOUNT a call was made as, never a token.
+//
+// issueCommands lets `gh issue ...` and `gh label ...` through, for the cases that drive the issue
+// check's commands through `gather.js gh`; they print what they were asked and change nothing.
 
 const fs = require('fs');
 
@@ -28,16 +43,52 @@ function die(code, msg) { process.stderr.write(msg + '\n'); process.exit(code); 
 
 record(JSON.stringify(args));
 
+let scenario;
+try { scenario = JSON.parse(fs.readFileSync(process.env.FAKE_GH_SCENARIO, 'utf8')); }
+catch (e) { die(8, 'fake gh: no readable scenario: ' + e.message); }
+
+const TOKEN_PREFIX = 'fake-gh-token-for-';
+function signedIn(login) { return !scenario.signedIn || scenario.signedIn.indexOf(login) !== -1; }
+
+if (args[0] === 'auth') {
+  const u = args.indexOf('-u') !== -1 ? args.indexOf('-u') : args.indexOf('--user');
+  const login = u === -1 ? null : args[u + 1];
+  if (args[1] !== 'token' || !login || args[args.indexOf('--hostname') + 1] !== 'github.com') {
+    record('REFUSED auth ' + args.slice(1).join(' '));
+    die(9, 'fake gh: only the token of one named github.com account is served');
+  }
+  // A token already in the environment is what gh would answer with, whoever was asked about,
+  // so a caller that leaves its own GH_TOKEN in place reads as the wrong account.
+  if (process.env.GH_TOKEN) { process.stdout.write(process.env.GH_TOKEN + '\n'); process.exit(0); }
+  if (!signedIn(login)) die(1, 'no oauth token found for github.com account ' + login);
+  process.stdout.write(TOKEN_PREFIX + login + '\n');
+  process.exit(0);
+}
+
+const token = process.env.GH_TOKEN;
+const as = token ? (token.indexOf(TOKEN_PREFIX) === 0 ? token.slice(TOKEN_PREFIX.length) : 'UNKNOWN TOKEN') : null;
+record('AS ' + (as || 'ACTIVE'));
+if (!as) { record('REFUSED unscoped'); die(9, 'fake gh: a call made as the active account, with no GH_TOKEN'); }
+function canSee(slug) {
+  const list = scenario.access && scenario.access[slug];
+  return !list || list.indexOf(as) !== -1;
+}
+
+if ((args[0] === 'issue' || args[0] === 'label') && scenario.issueCommands) {
+  const r = args.indexOf('--repo');
+  const slug = r === -1 ? null : args[r + 1];
+  if (!slug) die(2, 'fake gh: no --repo');
+  if (!canSee(slug)) die(1, 'GraphQL: Could not resolve to a Repository with the name \'' + slug + '\'. (repository)');
+  process.stdout.write('fake gh ran ' + args.join(' ') + ' as ' + as + '\n');
+  process.exit(Number(scenario.issueExit || 0));
+}
+
 const WRITES = ['-X', '--method', '-f', '-F', '--field', '--raw-field', '--input'];
 if (args[0] !== 'api') { record('REFUSED not an api read'); die(9, 'fake gh: only `gh api` reads are served'); }
 if (args.some(function (a) { return WRITES.indexOf(a) !== -1; })) {
   record('REFUSED write'); die(9, 'fake gh: a write was attempted');
 }
 const route = args.filter(function (a) { return a !== 'api'; })[0] || '';
-
-let scenario;
-try { scenario = JSON.parse(fs.readFileSync(process.env.FAKE_GH_SCENARIO, 'utf8')); }
-catch (e) { die(8, 'fake gh: no readable scenario: ' + e.message); }
 
 const clean = route.replace(/^\//, '');
 const [routePath, query] = clean.split('?');
@@ -49,6 +100,7 @@ Object.keys(scenario.failRoute || {}).forEach(function (part) {
 });
 
 function failFor(slug) {
+  if (!canSee(slug)) die(1, 'gh: Not Found (HTTP 404)');
   if (scenario.fail && scenario.fail[slug]) die(1, scenario.fail[slug]);
 }
 
