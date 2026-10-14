@@ -13,7 +13,7 @@ import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
-import { loginStarted, registerLogin } from './login.ts'
+import { loginStarted, readAccount, registerLogin } from './login.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
@@ -292,6 +292,13 @@ export const register: Register = (on, options) => {
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.
       login: async () => undefined,
+      // The one reader of the login file (#1205); null when there is no home folder to find it in.
+      account: async () => {
+        const home = await built.env.get('HOME')
+        return home
+          ? readAccount({ exists: path => built.fs.exists(path), read: path => built.fs.read(path), log: text => void built.ui.log(text, { to: 'debug' }) }, home)
+          : null
+      },
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
       branch: async ({ path }) =>

@@ -120,25 +120,18 @@ const writeFacts = async ($: EngineInterface) => {
 }
 
 // The account this session runs on, the one its limits belong to (#815): the Mac's login as it
-// stands at session start. Read then and not again, because the login file names whatever the Mac is
-// logged in to NOW, which another session's Switch changes under this one; the one exception is a
-// /login in this session, which does change this session's account (#1200). No login at all (an API
-// key) is an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
-const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAccount | null> => {
+// stands at session start, read through mod-kit's one reader of the login file (#1205). Read then and
+// not again, because the login file names whatever the Mac is logged in to NOW, which another
+// session's Switch changes under this one; a /login in this session, which does change this
+// session's account, arrives as modkit.login (#1200). No login at all (an API key) is an empty
+// record; a file that cannot be read, or a mod-kit that cannot answer, is null, said as unknown,
+// never as no login (L11).
+const readAccount = async ($: EngineInterface): Promise<StatusBarAccount | null> => {
   try {
-    // No login file at all is no claude.ai login, like an empty one; only a file that is there and
-    // cannot be read or parsed is unknown.
-    if (!(await $.fs.exists(`${h}/.claude.json`))) return {}
-    const o = (JSON.parse(await $.fs.read(`${h}/.claude.json`)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
-    const out: StatusBarAccount = {}
-    if (!o || typeof o !== 'object') return out
-    for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName', 'organizationType'] as const) {
-      const v = o[k]
-      if (typeof v === 'string') out[k] = v
-    }
-    return out
+    const a = await $.modkit.account()
+    return a ? { ...a } : null
   } catch (err) {
-    $.ui.log(`status-bar: ~/.claude.json could not be read, so the status line shows this session's account as unknown: ${msg(err)}`, { to: 'debug' })
+    $.ui.log(`status-bar: mod-kit could not read the login file, so the status line shows this session's account as unknown: ${msg(err)}`, { to: 'debug' })
     return null
   }
 }
@@ -391,7 +384,7 @@ export const register: Register = on => {
     if (home) {
       // Read once a session: a second session.start in the same process (a reload of the mod) keeps
       // the account first read, since the login file may name another session's Switch by then.
-      if ((await $.state.get(accountRef)).value === undefined) await $.state.set(accountRef, await readAccount($, home))
+      if ((await $.state.get(accountRef)).value === undefined) await $.state.set(accountRef, await readAccount($))
       const made = await $.process.run(['mkdir', '-p', dirOf(home)]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
       if (made.exitCode === 0) await writeFacts($)
       else cannotSave($, made.stderr.trim() || `mkdir exited ${made.exitCode}`)

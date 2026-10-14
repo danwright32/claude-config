@@ -171,6 +171,13 @@ export type ModKit = {
    */
   login: (input: ModKitLogin) => Promise<void>
   /**
+   * This session's account as the login file names it now, the one reader of that file every mod
+   * uses (#1205): its fields, `{}` for no claude.ai login, null for a file that could not be read.
+   * Read it at a session's start; after that only `modkit.login` says the session's account changed,
+   * since the file also changes when another session switches the Mac.
+   */
+  account: () => Promise<ModKitAccount | null>
+  /**
    * The git working tree an absolute path sits in: the nearest folder at or above it holding a
    * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
    * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, a

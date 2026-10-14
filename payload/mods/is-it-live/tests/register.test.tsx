@@ -45,6 +45,7 @@ const modKit: { name: string; register: Register } = {
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+        account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
         // #951: the session's repository, asked of the world (a plugin in a test runs in its own
         // environment), which reads with a byte for byte copy of mod-kit's own reader.
         repo: async (input: { root?: string | null; remote: string | null }) => {

@@ -20,6 +20,8 @@ const follower: { name: string; register: Register } = {
       $.ui.toast(`login ${JSON.stringify(e.account)}`)
       return next(e)
     })
+    // Asks mod-kit for the session's account as the login file names it, the one reader every mod uses.
+    on('tool.call', { tool: 'Bash' }, async $ => ({ deny: `account ${JSON.stringify(await $.modkit.account())}` }))
   },
 }
 const withFollower = { plugins: [follower] }
@@ -53,6 +55,7 @@ const world = (on: On, then: (files: Record<string, string>) => void = () => und
     return { value: undefined } as never
   })
   on('ui.log', () => ({ value: undefined }) as never)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   return { files, toasts, clock }
 }
 type S = { session: { start: (e: never) => Promise<unknown>; end: (e: never) => Promise<unknown> }; command: { run: (e: object) => Promise<{ text?: string }> } }
@@ -148,4 +151,28 @@ test('another slash command raises nothing', withFollower, async ($, on) => {
   await runLogin($, clock, 'help')
   await clock.advance(2 * SEC)
   expect(logins(toasts)).toEqual([])
+})
+
+// The one reader of the login file every mod uses at its session's start (lessons review of #1205):
+// the status bar and the account room each kept their own before.
+const askAccount = async ($: unknown) => {
+  const out = await ($ as { tool: { call: (e: never) => Promise<{ deny?: string }> } }).tool.call({ tool: 'Bash', command: 'x' } as never)
+  return JSON.parse(String(out.deny ?? '').slice('account '.length)) as unknown
+}
+
+test("modkit.account reads the login file's account fields and nothing else", withFollower, async ($, on) => {
+  const { clock } = world(on)
+  await start($, clock)
+  expect(await askAccount($)).toEqual(account('acct-1'))
+})
+
+test('modkit.account is no account with no login file, and unknown for one that cannot be read', withFollower, async ($, on) => {
+  const { files, clock } = world(on)
+  await start($, clock)
+  delete files[LOGIN]
+  expect(await askAccount($)).toEqual({})
+  files[LOGIN] = 'not json'
+  expect(await askAccount($)).toBeNull()
+  files[LOGIN] = '{}'
+  expect(await askAccount($)).toEqual({})
 })

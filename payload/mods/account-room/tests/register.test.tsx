@@ -52,6 +52,22 @@ const modKit: { name: string; register: Register } = {
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
         login: async () => undefined,
+        // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
+        account: async () => {
+          const path = '/Users/x/.claude.json'
+          try {
+            if (!(await built.fs.exists(path))) return {}
+            const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
+            const out: Record<string, string> = {}
+            for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName', 'organizationType']) {
+              const v = o?.[k]
+              if (typeof v === 'string') out[k] = v
+            }
+            return out
+          } catch {
+            return null
+          }
+        },
       }
       return { ...built, modkit }
     })
@@ -121,6 +137,22 @@ const modKitToday: { name: string; register: Register } = {
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
         // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
         login: async () => undefined,
+        // #1205: mod-kit's one reader of the login file, as it reads: its fields, {} for none, null unreadable.
+        account: async () => {
+          const path = '/Users/x/.claude.json'
+          try {
+            if (!(await built.fs.exists(path))) return {}
+            const o = (JSON.parse(await built.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
+            const out: Record<string, string> = {}
+            for (const k of ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress', 'organizationName', 'organizationType']) {
+              const v = o?.[k]
+              if (typeof v === 'string') out[k] = v
+            }
+            return out
+          } catch {
+            return null
+          }
+        },
       }
       return { ...built, modkit }
     })

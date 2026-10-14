@@ -20,12 +20,20 @@ const FIELDS = ['accountUuid', 'organizationUuid', 'displayName', 'emailAddress'
 
 const reason = (err: unknown) => String((err as Error)?.message ?? err)
 
+/** What reading the login file needs, as functions, since mod-kit's noun code cannot pass its $ along. */
+export type LoginFileIo = { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string>; log: (text: string) => void }
+export const ioOf = ($: EngineInterface): LoginFileIo => ({
+  exists: path => $.fs.exists(path),
+  read: path => $.fs.read(path),
+  log: text => void $.ui.log(text, { to: 'debug' }),
+})
+
 /** The login file's account: its fields, `{}` for no claude.ai login, null for a file that cannot be read (L11). */
-export const readAccount = async ($: EngineInterface, home: string): Promise<ModKitAccount | null> => {
+export const readAccount = async (io: LoginFileIo, home: string): Promise<ModKitAccount | null> => {
   const path = `${home}/.claude.json`
   try {
-    if (!(await $.fs.exists(path))) return {}
-    const o = (JSON.parse(await $.fs.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
+    if (!(await io.exists(path))) return {}
+    const o = (JSON.parse(await io.read(path)) as { oauthAccount?: Record<string, unknown> }).oauthAccount
     const out: ModKitAccount = {}
     if (!o || typeof o !== 'object') return out
     for (const k of FIELDS) {
@@ -34,7 +42,7 @@ export const readAccount = async ($: EngineInterface, home: string): Promise<Mod
     }
     return out
   } catch (err) {
-    $.ui.log(`mod-kit: ~/.claude.json could not be read after /login, so the account is unknown: ${reason(err)}`, { to: 'debug' })
+    io.log(`mod-kit: ~/.claude.json could not be read, so the account is unknown: ${reason(err)}`)
     return null
   }
 }
@@ -61,13 +69,13 @@ export const registerLogin = (on: On) => {
   on('command.run', { command: 'login' }, async ($, e, next) => {
     const h = await $.env.get('HOME').catch(() => undefined)
     if (!h) return next(e)
-    const before = loginKey(await readAccount($, h))
+    const before = loginKey(await readAccount(ioOf($), h))
     try {
       return await next(e)
     } finally {
       stop()
       try {
-        let last = await readAccount($, h)
+        let last = await readAccount(ioOf($), h)
         if (!ended) await $.modkit.login({ account: last })
         if (!ended && !landed(last, before)) {
           const until = (await $.clock.now()) + WAIT_MS
@@ -75,7 +83,7 @@ export const registerLogin = (on: On) => {
             void (async () => {
               if (watch !== mine) return
               if (ended) return stop()
-              const now = await readAccount($, h)
+              const now = await readAccount(ioOf($), h)
               // Raised only when the file says something new, so a second's read of the same file
               // is not another login for every mod to take in.
               if (JSON.stringify(now) !== JSON.stringify(last)) {

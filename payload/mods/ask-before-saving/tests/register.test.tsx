@@ -69,6 +69,7 @@ const modKit: { name: string; register: Register } = {
           return JSON.parse(r.stdout)
         },
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+        account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
         bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
         clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },

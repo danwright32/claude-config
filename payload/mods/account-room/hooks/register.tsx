@@ -57,6 +57,8 @@ const serialWrites = queue()
 // The live reading is read, combined and written back in one turn, so two measurements arriving
 // together cannot each combine over the same old value and drop the other's window (L443).
 const serialLive = queue()
+// Each login mod-kit raises is followed in turn, so two cannot interleave over the record (#1205).
+const serialLogin = queue()
 // Things said once per session, so a fault that repeats on every reading is not a note per reading.
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
@@ -661,26 +663,29 @@ const finishAsk = async ($: EngineInterface, name: string | null, close: boolean
   await recompute($)
 }
 
-type LoginFile = { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown; organizationType?: unknown }
-
 /**
- * This session's account as the login file names it now: the record, 'none' for no Claude login
- * (an API key session), 'unreadable' for a file that could not be read. Each is logged as itself,
- * never one taken for another (L11).
+ * This session's account as the login file names it now, read through mod-kit's one reader of that
+ * file (#1205): the record, 'none' for no Claude login (an API key session), 'unreadable' for a file
+ * that could not be read or a mod-kit that could not answer. Each is logged as itself, never one
+ * taken for another (L11).
  */
 const readSession = async ($: EngineInterface, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none' | 'unreadable'> => {
-  let acct: LoginFile | undefined
+  let acct: ModKitAccount | null
   try {
-    acct = (JSON.parse((await readText($, `${home}/.claude.json`)) ?? '{}') as { oauthAccount?: LoginFile }).oauthAccount
+    acct = await $.modkit.account()
   } catch (err) {
-    $.ui.log(`account-room: ~/.claude.json could not be read, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
+    $.ui.log(`account-room: mod-kit could not read the login file, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
+    return 'unreadable'
+  }
+  if (acct === null) {
+    $.ui.log("account-room: ~/.claude.json could not be read, so this session's account is unknown", { to: 'debug' })
     return 'unreadable'
   }
   return sessionFrom($, acct, home, isInteractive)
 }
 
 /** A session record from the login file's account, as read at start or raised by mod-kit after a /login. */
-const sessionFrom = async ($: EngineInterface, acct: LoginFile | undefined, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none'> => {
+const sessionFrom = async ($: EngineInterface, acct: ModKitAccount | undefined, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none'> => {
   if (!acct || typeof acct.accountUuid !== 'string' || typeof acct.organizationUuid !== 'string') {
     $.ui.log('account-room: no Claude account is logged in (an API key session?), so nothing is recorded', { to: 'debug' })
     return 'none'
@@ -838,7 +843,8 @@ export const register: Register = (on, options) => {
   on('modkit.login', async ($, e, next) => {
     const account = e.account
     $.clock.after(0, () => {
-      void followLogin($, account)
+      // One at a time, in the order raised: the first read and a later one can land together.
+      void serialLogin(() => followLogin($, account))
     })
     return next(e)
   })
