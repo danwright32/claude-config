@@ -15,10 +15,22 @@
 # This does the babysitting. It does NOT relax the rule.
 #
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
-# script, so before it merges this hands the EXACT merge command it is about to run to the same two
-# gates, block-red-merge.sh and pr-review-gate.sh, as a hook payload, and merges only when both allow
-# it. Green, up to date, pinned and reviewed are therefore judged by the one implementation of each
-# rule, never by a second copy here (L263, L370). What this file decides is only WHEN to ask: it waits
+# script, so before it merges this hands the EXACT merge command it is about to run to the same
+# gates, block-red-merge.sh, pr-review-gate.sh and require-changelog-tag.sh, as a hook payload, and
+# merges only when every one allows it. Green, up to date, pinned, reviewed and carrying its
+# changelog record are therefore judged by the one implementation of each rule, never by a second
+# copy here (L263, L370).
+#
+# EVERY merge gate, not a chosen few (claude-config#1178). This asked only the first two, so the
+# changelog record gate never saw a merge made here. Slate #3645 merged through it with no
+# changelog/* label (its run is quoted in #1087), one of nine unlabelled Slate merges between
+# 2026-10-07 and 2026-10-12, all after this helper shipped, lost from the manager update until
+# somebody read them by hand. test-merge-when-ready.sh checks the gates named here against every
+# PreToolUse Bash hook in the hooks block that recognises a merge, so a gate added there and not
+# here fails the suite. The changelog gate is also asked once BEFORE the wait: a record does not
+# depend on the head or its checks, so a missing one is known at once, and finding it after a CI
+# run and a lessons review costs both (L667). It is asked again at the merge, because a label can
+# be taken off while this waits. What this file decides is only WHEN to ask: it waits
 # while the head's checks are unfinished, while a workflow run GitHub has created for the head has not
 # finished (its checks may not have registered yet, claude-config#1087), or while its review is still
 # running (pr-review.sh check exit 3),
@@ -60,7 +72,7 @@
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
 # MWR_HEARTBEAT_SECONDS (300), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
-# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_REVIEW_LIB.
+# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_REVIEW_LIB.
 
 set -uo pipefail
 
@@ -71,6 +83,7 @@ MWR_LIB="$(cd "${MWR_LIB:-/}" && pwd)"
 MWR_HOOKS="$(cd "$MWR_LIB/.." && pwd)"
 RED_GATE="${MWR_RED_GATE:-$MWR_HOOKS/block-red-merge.sh}"
 REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"
+CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
@@ -211,7 +224,7 @@ read_back(){   # sets after
   return 1
 }
 
-polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
+record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
@@ -232,6 +245,15 @@ while :; do
   esac
   [ -n "$head" ] && [ -n "$base" ] || stop 1 "Stopped: GitHub did not report the head commit or base branch of #$pr. Nothing was merged."
   if [ "$head" != "$head_seen" ]; then head_seen="$head"; head_since="$(now)"; fi
+
+  # The changelog record, once, at the first look that finds the pull request open: before any
+  # update, wait or lessons review, since none of them can change it (#1178, L667).
+  if [ -z "$record_asked" ]; then
+    record_asked=1
+    if ! why="$(ask_gate "$CHANGELOG_GATE" "$(merge_text "$head")")"; then
+      stop 1 "Stopped: require-changelog-tag.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
+    fi
+  fi
 
   # Behind its base: update, and go round for the new head.
   with_retries "whether #$pr contains the tip of $base" read_compare; rrc=$?
@@ -308,7 +330,10 @@ while :; do
   if ! why="$(ask_gate "$REVIEW_GATE" "$review_cmd")"; then
     stop 1 "Stopped: pr-review-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
-  say "Head ${head:0:7} is green, up to date with $base and reviewed; both gates allow it. Merging, pinned to that head."
+  if ! why="$(ask_gate "$CHANGELOG_GATE" "$cmd")"; then
+    stop 1 "Stopped: require-changelog-tag.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
   # Judged by the state it leaves, never by what gh printed: --delete-branch from a worktree can fail
   # after the merge has landed.
