@@ -3261,6 +3261,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (nursedex#1170, 2026-10-13)
   SHORT: Local dev and test servers must not report to production's error tracker, and alerts act only on production.
 
+- **L767. When code checks several independent candidates to choose one, catch and judge each
+  candidate's failure on its own, so one broken candidate is skipped rather than failing the whole
+  choice; a shared batch call or a concurrent map lets one rejection take down every member.**
+  (slate#3700, 2026-10-13)
+  SHORT: Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
+
 - **L490. A guard that parses its input through an external interpreter (jq, python, awk) must
   assert that interpreter is present before parsing, and refuse by name when it is not.** An absent
   parser hands back EMPTY input, and every predicate over empty input reads as nothing to refuse, so
