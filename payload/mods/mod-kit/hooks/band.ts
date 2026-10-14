@@ -66,6 +66,31 @@ export const clicksReach = (site: ClickSite): boolean => {
 export const appleTerminalTrusted = (options: unknown): boolean =>
   !!options && typeof options === 'object' && (options as { appleTerminalMouseReporting?: unknown }).appleTerminalMouseReporting === true
 
+/**
+ * Whether turning this Mac's appleTerminalMouseReporting setting on would draw, as a button, what
+ * is drawn here as text to type (#1190): Apple Terminal in the fullscreen layout with the setting off.
+ * Derived from clicksReach itself, so it can never name a site the setting does not change: not the
+ * main screen, an unmeasured layout, tmux or screen, or an unnamed terminal.
+ */
+export const settingWouldHelp = (site: ClickSite): boolean => !clicksReach(site) && clicksReach({ ...site, isAppleTerminalTrusted: true })
+
+/** Whether any of these lines holds a button, which is drawn as text to type where a click may not land. */
+export const holdsButton = (lines: readonly ModKitBandLine[]): boolean => lines.some(l => Array.isArray(l) && l.some(p => 'button' in p))
+
+/** The command that turns this Mac's appleTerminalMouseReporting setting on (#1012). */
+export const TURN_ON_BUTTONS = `echo '{"appleTerminalMouseReporting":"true"}' | claude plugin configure mod-kit@inline --values-stdin`
+
+/**
+ * What mod-kit says, once per Mac, the first time it draws a button as text where the setting would
+ * draw it as a button (#1190; Dan, 2026-10-14: "why does my work mac want me to type step 1 done
+ * instead of clicking a done button"). The setting is each Mac's own, which the sync never carries,
+ * so one Mac can show buttons while the other shows text.
+ */
+export const BUTTONS_OFF_NOTICE =
+  'Buttons are off on this Mac, so each one shows as text to type. To turn them on, run this once, then start a new session:\n' +
+  `${TURN_ON_BUTTONS}\n` +
+  'Buttons then work in each Terminal tab where View > Allow Mouse Reporting is ticked (Cmd R turns it on and off). In a tab where it is not ticked, a button does nothing when clicked.'
+
 // The name Apple Terminal gives itself in TERM_PROGRAM.
 const APPLE_TERMINAL = 'Apple_Terminal'
 // The multiplexers, which name themselves rather than the terminal behind them, Apple Terminal among
