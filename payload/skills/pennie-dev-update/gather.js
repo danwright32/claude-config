@@ -10,11 +10,17 @@
 //                    [--live owner/name=SHA@ISO]... [--since ISO [--confirm-skip]]
 //   gather.js commit-state --gathered P --draft P --repo owner/name
 //                    [--listed N,N,...] [--headings 'A|B'] [--state P]
+//   gather.js gh [--config P] -- <gh command naming its repo with --repo owner/name>
 //
 // gather prints one JSON document (and writes it to --out): per repo, its window, every merged
 // PR in it with its changelog record and whether it reached production, what to hold back, and
 // any refusal with its reason. It only ever READS from GitHub, through `gh api`, by owner/name,
 // so it runs from any directory and needs no local checkout.
+//
+// Every call is made as the GitHub account repos.json names for the repo, through that account's
+// token in the call's own environment, whichever account gh has active (claude-config#1182).
+// `gather.js gh` runs the issue check's own gh commands (SKILL.md section 9) the same way: it is
+// the only part of this file that can change anything on GitHub, and only what it is told to run.
 //
 // Whether a PR reached production comes from the repo's deploy record (repos.json deployRecord).
 // PET's lives in its database, so it is read by hand and handed over with --live. Slate's and
@@ -49,6 +55,11 @@ const DEPLOY_SCAN = 30;            // newest deploy runs, or merges, read lookin
 const EXIT_ANNOTATION = /Process completed with exit code (\d+)/;
 const RECORD_KINDS = ['actions_deploy_job', 'deploy_check_run'];
 const DEPENDABOT = 'dependabot[bot]';
+const GH_HOST = 'github.com';
+// A GitHub login: letters, digits and single hyphens, at most 39 characters.
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+// The one command that signs an account in to gh, without asking which host or protocol.
+const SIGN_IN = 'gh auth login --hostname ' + GH_HOST + ' --git-protocol https --web';
 
 class Refusal extends Error {}
 class Unreachable extends Error {}
@@ -61,6 +72,8 @@ function parseArgs(argv) {
   const out = { _: [], live: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // Everything after a bare -- is a gh command for `gather.js gh`, passed on word for word.
+    if (a === '--') { out.rest = argv.slice(i + 1); break; }
     if (!a.startsWith('--')) { out._.push(a); continue; }
     const key = a.slice(2);
     if (key === 'confirm-skip') { out.confirmSkip = true; continue; }
@@ -113,6 +126,11 @@ function loadConfig(file) {
     if (typeof r.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r.repo)) {
       refuse(r.name + ' in ' + file + ' has repo ' + JSON.stringify(r.repo) + ', which is not owner/name.');
     }
+    // No account would mean reading as whichever one gh has active, so it is never a default.
+    if (typeof r.account !== 'string' || !LOGIN.test(r.account)) {
+      refuse(r.name + ' in ' + file + ' has account ' + JSON.stringify(r.account) + ', which is not a GitHub login. Every repo names '
+        + 'the account it is read as, the one that can see it, so the active account never decides.');
+    }
     if (r.deployRecord !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(r.deployRecordFrom || ''))) {
       refuse(r.name + ' names a deploy record but no deployRecordFrom date (YYYY-MM-DD) saying where it starts.');
     }
@@ -164,11 +182,59 @@ function loadEntry() {
 
 // ---------------------------------------------------------------- GitHub, read only
 
-function gh(apiPath) {
-  const bin = process.env.PENNIE_DEV_UPDATE_GH || 'gh';
-  const r = spawnSync(bin, ['api', apiPath], { encoding: 'utf8', timeout: GH_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024 });
-  if (r.error) throw new Unreachable('gh could not run for ' + apiPath + ': ' + r.error.message);
-  if (r.status !== 0) throw new Unreachable('gh api ' + apiPath + ' failed (exit ' + r.status + '): ' + (r.stderr || r.stdout || '').trim());
+// Every repo is read as the GitHub account repos.json names for it (claude-config#1182), never as
+// whichever account gh has active. Dan runs sessions under different accounts at once, so the
+// active one is whatever the last switch left, and on the personal MacBook it is danwright32,
+// which GitHub answers 404 for Try-Pennie's private repos: every Pennie repo read as unreachable.
+// So the account's token is taken from gh's own store and handed to each call in that call's
+// environment only, as hooks/lib/merge-target.sh and hooks/lib/lesson-fanout.sh scope theirs. The
+// active account is never switched, and a token is never printed, logged or written anywhere.
+
+function ghBin() { return process.env.PENNIE_DEV_UPDATE_GH || 'gh'; }
+
+// The environment one gh call runs in. A GH_TOKEN or GITHUB_TOKEN the caller already carries is
+// removed first: either would win over gh's store, so the call would run as THAT account, and gh
+// answers `auth token` with it whoever is asked about.
+function ghEnv(token) {
+  const e = Object.assign({}, process.env);
+  delete e.GH_TOKEN;
+  delete e.GITHUB_TOKEN;
+  if (token) e.GH_TOKEN = token;
+  return e;
+}
+
+// account -> { account, token } or { refusal }, asked of gh once per account per run.
+const ACCOUNTS = new Map();
+function readAs(account, who) {
+  if (!ACCOUNTS.has(account)) {
+    const r = spawnSync(ghBin(), ['auth', 'token', '--hostname', GH_HOST, '-u', account],
+      { encoding: 'utf8', timeout: GH_TIMEOUT_MS, env: ghEnv(null) });
+    if (r.error) throw new Unreachable('gh could not run to find the token of ' + account + ': ' + r.error.message);
+    const token = r.status === 0 ? String(r.stdout || '').trim() : '';
+    // gh prints the token on stdout and only its complaint on stderr, so stderr is safe to quote.
+    ACCOUNTS.set(account, token ? { account: account, token: token } : {
+      refusal: 'is read as the GitHub account ' + account + ', which is not signed in to gh on this Mac (gh found no token for it: '
+        + (String(r.stderr || '').trim() || 'exit ' + r.status) + '), so it was not read as any other account either. Sign it in with: '
+        + SIGN_IN + ' and choose ' + account + ' in the browser. gh makes a newly signed in account the active one, so switch back '
+        + 'afterwards if another session relies on the account active now.',
+    });
+  }
+  const got = ACCOUNTS.get(account);
+  if (got.refusal) refuse(who + ' ' + got.refusal);
+  return got;
+}
+
+function gh(as, apiPath) {
+  // A read with no account would run as whichever one is active, the fault this exists to end.
+  if (!as || !as.token) throw new Error('gather.js read ' + apiPath + ' without naming the account to read it as.');
+  const r = spawnSync(ghBin(), ['api', apiPath], { encoding: 'utf8', timeout: GH_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024, env: ghEnv(as.token) });
+  if (r.error) throw new Unreachable('gh could not run for ' + apiPath + ' (read as ' + as.account + '): ' + r.error.message);
+  if (r.status !== 0) {
+    const said = String(r.stderr || r.stdout || '').trim();
+    throw new Unreachable('gh api ' + apiPath + ', read as ' + as.account + ', failed (exit ' + r.status + '): ' + said
+      + (/HTTP 404|Not Found/.test(said) ? '. GitHub also answers 404 when ' + as.account + ' cannot see a private repo, so check that it '
+        + 'still has access, and that repos.json names the account that does' : ''));
+  }
   try { return JSON.parse(r.stdout); }
   catch (e) { throw new Unreachable('gh api ' + apiPath + ' returned something that is not JSON: ' + String(r.stdout).slice(0, 200)); }
 }
@@ -176,10 +242,11 @@ function gh(apiPath) {
 // Every closed PR, page by page in creation order, so a PR opened during the read lands on a
 // later page rather than shifting one already read (L746). A short read reports as a quiet week,
 // so the pages are read until one comes back short, and the count is checked against search.
-function mergedPulls(slug) {
+function mergedPulls(rc) {
+  const slug = rc.slug;
   const seen = new Map();
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const batch = gh('repos/' + slug + '/pulls?state=closed&sort=created&direction=asc&per_page=' + PER_PAGE + '&page=' + page);
+    const batch = gh(rc.as, 'repos/' + slug + '/pulls?state=closed&sort=created&direction=asc&per_page=' + PER_PAGE + '&page=' + page);
     if (!Array.isArray(batch)) throw new Unreachable('the pulls list for ' + slug + ' page ' + page + ' was not a list.');
     batch.forEach(function (p) {
       if (!p || !p.merged_at) return;
@@ -197,21 +264,23 @@ function mergedPulls(slug) {
   refuse(slug + ' has more than ' + (MAX_PAGES * PER_PAGE) + ' closed PRs, past what this reads; raise MAX_PAGES on purpose.');
 }
 
-function searchCount(slug, startMs) {
+function searchCount(rc, startMs) {
+  const slug = rc.slug;
   const after = iso(startMs).replace(/Z$/, '+00:00');
   const q = 'repo:' + slug + ' is:pr is:merged merged:>' + after;
-  const r = gh('search/issues?q=' + encodeURIComponent(q) + '&per_page=1');
+  const r = gh(rc.as, 'search/issues?q=' + encodeURIComponent(q) + '&per_page=1');
   if (!r || typeof r.total_count !== 'number') throw new Unreachable('the search count for ' + slug + ' came back without a total.');
   return r.total_count;
 }
 
 // Is mergeSha an ancestor of liveSha? Asked of GitHub, which always has both, never of a local
 // clone, which may not have fetched the live sha (claude-config#679).
-function isLive(slug, pr, liveSha) {
+function isLive(rc, pr, liveSha) {
+  const slug = rc.slug;
   if (!pr.merge_commit_sha) refuse('#' + pr.number + ' in ' + slug + ' has no merge commit, so whether it is live could not be checked.');
   let status;
   // per_page=1: only the status is read, so the commit list it would otherwise carry is not fetched.
-  try { status = gh('repos/' + slug + '/compare/' + pr.merge_commit_sha + '...' + liveSha + '?per_page=1').status; }
+  try { status = gh(rc.as, 'repos/' + slug + '/compare/' + pr.merge_commit_sha + '...' + liveSha + '?per_page=1').status; }
   // A failed call is GitHub not answering, so the repo is unreachable, never refused (L11).
   catch (e) {
     if (e instanceof Unreachable) throw new Unreachable('whether #' + pr.number + ' is live could not be checked: ' + e.message);
@@ -230,9 +299,10 @@ function isLive(slug, pr, liveSha) {
 //              or a failure whose exit code is an unchangedExit)
 //   running    the job is still going
 //   unknown    anything else: a cancelled step, an exit code that does not say, or none on record
-function jobOutcome(slug, run, jobName, stepName, liveExits, unchangedExits) {
+function jobOutcome(rc, run, jobName, stepName, liveExits, unchangedExits) {
+  const slug = rc.slug;
   const what = 'run ' + run.id + ' (' + String(run.head_sha || '').slice(0, 9) + ')';
-  const got = gh('repos/' + slug + '/actions/runs/' + run.id + '/jobs?per_page=100');
+  const got = gh(rc.as, 'repos/' + slug + '/actions/runs/' + run.id + '/jobs?per_page=100');
   if (!got || !Array.isArray(got.jobs)) throw new Unreachable('the jobs of ' + what + ' in ' + slug + ' were not a list.');
   const job = got.jobs.filter(function (j) { return j && j.name === jobName; })[0];
   // A run not finished whose job is not listed yet is queued or just starting: it may be about
@@ -256,7 +326,7 @@ function jobOutcome(slug, run, jobName, stepName, liveExits, unchangedExits) {
   if (step.conclusion !== 'failure') {
     return { outcome: 'unknown', what: what, at: at, why: 'the step "' + stepName + '" of ' + what + ' ended ' + step.conclusion + ', so where it left production is not recorded' };
   }
-  const notes = gh('repos/' + slug + '/check-runs/' + job.id + '/annotations');
+  const notes = gh(rc.as, 'repos/' + slug + '/check-runs/' + job.id + '/annotations');
   if (!Array.isArray(notes)) throw new Unreachable('the annotations of ' + what + ' in ' + slug + ' were not a list.');
   const hit = notes.map(function (a) { return a && EXIT_ANNOTATION.exec(String(a.message || '')); }).filter(Boolean)[0];
   if (!hit) {
@@ -268,9 +338,10 @@ function jobOutcome(slug, run, jobName, stepName, liveExits, unchangedExits) {
   return { outcome: 'unknown', what: what, at: at, exit: code, why: what + ' failed with exit code ' + code + ', which does not say production ended on one whole version' };
 }
 
-function workflowRuns(slug, file, branch) {
+function workflowRuns(rc, file, branch) {
+  const slug = rc.slug;
   const q = '?' + (branch ? 'event=push&branch=' + encodeURIComponent(branch) + '&' : '') + 'per_page=' + DEPLOY_SCAN;
-  const got = gh('repos/' + slug + '/actions/workflows/' + file + '/runs' + q);
+  const got = gh(rc.as, 'repos/' + slug + '/actions/workflows/' + file + '/runs' + q);
   if (!got || !Array.isArray(got.workflow_runs)) throw new Unreachable('the runs of ' + file + ' in ' + slug + ' were not a list.');
   return got.workflow_runs;
 }
@@ -278,12 +349,12 @@ function workflowRuns(slug, file, branch) {
 // Slate: the newest deploy run that left a version serving 100%, then anything since that may have
 // changed production without saying to what: a deploy that may have left a split, or a rollback,
 // whose target commit GitHub does not record.
-function readDeployJob(slug, rec) {
-  const runs = workflowRuns(slug, rec.workflow, rec.branch);   // newest first, as GitHub lists them
+function readDeployJob(rc, rec) {
+  const runs = workflowRuns(rc, rec.workflow, rec.branch);   // newest first, as GitHub lists them
   const doubts = [];
   let live = null;
   for (let i = 0; i < runs.length && !live; i++) {
-    const o = jobOutcome(slug, runs[i], rec.job, rec.step, rec.liveExits, rec.unchangedExits);
+    const o = jobOutcome(rc, runs[i], rec.job, rec.step, rec.liveExits, rec.unchangedExits);
     if (o.outcome === 'live') live = { sha: runs[i].head_sha, at: o.at, startedAt: o.startedAt, what: o.what, exit: o.exit };
     else if (o.outcome === 'unknown') doubts.push(o.why);
   }
@@ -294,13 +365,13 @@ function readDeployJob(slug, rec) {
   if (rec.rollback) {
     const rb = rec.rollback;
     const liveStartMs = Date.parse(live.startedAt);
-    workflowRuns(slug, rb.workflow, null).forEach(function (run) {
+    workflowRuns(rc, rb.workflow, null).forEach(function (run) {
       // A time that does not parse compares false against everything (L50), which would skip
       // this rollback and keep the deploy live, so either missing time counts as "after".
       const runMs = Date.parse(run.created_at);
       const timed = !Number.isNaN(runMs) && !Number.isNaN(liveStartMs);
       if (timed && runMs <= liveStartMs) return;
-      const o = jobOutcome(slug, run, rb.job, rb.step, [0], rb.unchangedExits);
+      const o = jobOutcome(rc, run, rb.job, rb.step, [0], rb.unchangedExits);
       if (!timed && o.outcome !== 'none') {
         doubts.push('a rollback (' + rb.workflow + ' run ' + run.id + ') has no readable time, so whether it ran after that deploy cannot be told');
         return;
@@ -323,12 +394,13 @@ function readDeployJob(slug, rec) {
 // Sonar: the newest merge whose Cloudflare Pages check run, from Cloudflare's own app, succeeded.
 // Only merge commits are read: a branch commit carried onto main by a merge has a PREVIEW build on
 // it, which says nothing about production (3 of Sonar's main commits had one, 2026-10-13).
-function readDeployCheck(slug, rec, all) {
+function readDeployCheck(rc, rec, all) {
+  const slug = rc.slug;
   const merges = all.slice().reverse().slice(0, DEPLOY_SCAN);
   for (let i = 0; i < merges.length; i++) {
     const pr = merges[i];
     if (!pr.merge_commit_sha) continue;
-    const got = gh('repos/' + slug + '/commits/' + pr.merge_commit_sha + '/check-runs?check_name=' + encodeURIComponent(rec.checkName));
+    const got = gh(rc.as, 'repos/' + slug + '/commits/' + pr.merge_commit_sha + '/check-runs?check_name=' + encodeURIComponent(rec.checkName));
     if (!got || !Array.isArray(got.check_runs)) throw new Unreachable('the check runs on #' + pr.number + ' in ' + slug + ' were not a list.');
     const ok = got.check_runs.filter(function (c) {
       return c && c.name === rec.checkName && c.app && c.app.slug === rec.app && c.status === 'completed' && c.conclusion === 'success';
@@ -410,14 +482,17 @@ function gatherRepo(ctx, repoCfg) {
     refuse('--live was given for ' + slug + ', whose deploy record (' + recordName(repoCfg) + ') gather.js reads from GitHub itself. Leave --live off for it.');
   }
 
-  const all = mergedPulls(slug);
+  // The account before the first read: one not signed in refuses this repo by name, never reads
+  // it as some other account, and never reports it as a quiet week (claude-config#1182).
+  const rc = { slug: slug, as: readAs(repoCfg.account, repoCfg.name + ' (' + slug + ')') };
+  const all = mergedPulls(rc);
 
   // A record on GitHub is read only once a PR needs a verdict, so a quiet window costs nothing.
   // A failed read makes the repo unreachable, never a PR live or held (L11).
   function liveFromGitHub() {
     const rec = repoCfg.deployRecord;
     let got;
-    try { got = rec.kind === 'deploy_check_run' ? readDeployCheck(slug, rec, all) : readDeployJob(slug, rec); }
+    try { got = rec.kind === 'deploy_check_run' ? readDeployCheck(rc, rec, all) : readDeployJob(rc, rec); }
     catch (e) {
       if (e instanceof Unreachable) throw new Unreachable('the deploy record (' + recordName(repoCfg) + ') could not be read: ' + e.message);
       throw e;
@@ -432,7 +507,7 @@ function gatherRepo(ctx, repoCfg) {
     // Production may have changed since the newest deploy that reached 100%, to a commit nobody
     // recorded, so no PR is claimed live or held: each is held back and checked again next run.
     if (live.unconfirmed) return 'unconfirmed';
-    return isLive(slug, pr, live.sha) ? 'live' : 'held';
+    return isLive(rc, pr, live.sha) ? 'live' : 'held';
   }
 
   if (startMs === null) {
@@ -458,7 +533,7 @@ function gatherRepo(ctx, repoCfg) {
 
   out.window = { start: iso(startMs), end: iso(ctx.nowMs), startExclusive: true, source: source };
   const inWindow = all.filter(function (p) { return Date.parse(p.merged_at) > startMs; });
-  const total = searchCount(slug, startMs);
+  const total = searchCount(rc, startMs);
   if (total !== inWindow.length) {
     refuse('the PR list holds ' + inWindow.length + ' merges after ' + iso(startMs) + ' but GitHub search counts ' + total
       + '. A short read reports as a quiet week, so this repo is refused. Run again; if it persists, the search index is behind.');
@@ -651,6 +726,54 @@ function cmdCommitState(args) {
   return 0;
 }
 
+// ---------------------------------------------------------------- gh, as the repo's account
+
+// The repos one gh command names: --repo X, --repo=X, -R X, and the repos/<owner>/<name> path of
+// a `gh api` call.
+function reposNamed(words) {
+  const named = [];
+  words.forEach(function (w, i) {
+    if ((w === '--repo' || w === '-R') && i + 1 < words.length) named.push(words[i + 1]);
+    else if (w.indexOf('--repo=') === 0) named.push(w.slice('--repo='.length));
+  });
+  if (words[0] === 'api') {
+    words.slice(1).forEach(function (w) {
+      const m = /^\/?repos\/([^/?#]+\/[^/?#]+)/.exec(w);
+      if (m) named.push(m[1]);
+    });
+  }
+  return named;
+}
+
+// The issue check (SKILL.md section 9) runs its gh commands through here, so each one runs as the
+// account that owns the repo it names, exactly as the reads above do. gh's own output and exit
+// code come back unchanged, so a failed edit is never reported as done.
+function cmdGh(args) {
+  const usage = 'Usage: gather.js gh [--config P] -- <gh command naming its repo with --repo owner/name>';
+  if (!args.rest) refuse(usage);
+  const words = args.rest;
+  if (words.length === 0) refuse('gather.js gh was given no gh command after --. ' + usage);
+  if (words[0] === 'auth') {
+    refuse('gather.js gh does not run gh auth commands: the account comes from repos.json, and the active account is never switched.');
+  }
+  const configPath = args.config || path.join(__dirname, 'repos.json');
+  const cfg = loadConfig(configPath);
+  const named = reposNamed(words);
+  const distinct = Array.from(new Set(named.map(function (n) { return n.toLowerCase(); })));
+  if (distinct.length === 0) {
+    refuse('The gh command names no repo (--repo owner/name, or an api path under repos/owner/name), so which account runs it '
+      + 'cannot be told. It was not run.');
+  }
+  if (distinct.length > 1) refuse('The gh command names ' + distinct.join(' and ') + ', so which account runs it cannot be told. It was not run.');
+  const entry = cfg.repos.filter(function (r) { return r.repo.toLowerCase() === distinct[0]; })[0];
+  if (!entry) refuse(named[0] + ' is not in ' + configPath + ', so the account to run it as is not recorded. It was not run.');
+  const as = readAs(entry.account, entry.name + ' (' + entry.repo + ')');
+  const r = spawnSync(ghBin(), words, { stdio: 'inherit', timeout: GH_TIMEOUT_MS, env: ghEnv(as.token) });
+  if (r.error) refuse('gh could not run (' + r.error.message + '), so the command did not take effect.');
+  if (r.status === null) refuse('gh was stopped (' + r.signal + ') before it finished, so whether the command took effect is not known.');
+  return r.status;
+}
+
 // ---------------------------------------------------------------- main
 
 function main(argv) {
@@ -658,7 +781,9 @@ function main(argv) {
   const cmd = args._[0];
   if (cmd === 'gather') return cmdGather(args);
   if (cmd === 'commit-state') return cmdCommitState(args);
-  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\']');
+  if (cmd === 'gh') return cmdGh(args);
+  refuse('Usage: gather.js gather [options] | gather.js commit-state --gathered P --draft P --repo owner/name [--listed N,N] [--headings \'A|B\']'
+    + ' | gather.js gh [--config P] -- <gh command with --repo owner/name>');
 }
 
 try {

@@ -49,6 +49,7 @@ fs.chmodSync(FAKE_GH, 0o755);
 const NOW = '2026-10-08T16:00:00Z';
 const PET = 'acme/pet';
 const SONAR = 'acme/sonar';
+const ACCOUNT = 'acme-bot';
 
 function sha(n) { return ('f' + String(n)).padEnd(40, '0'); }
 function pr(n, mergedAt, opts) {
@@ -79,7 +80,13 @@ function workspace(scenario, config, state) {
     out: path.join(dir, 'gathered.json'),
   };
   fs.writeFileSync(files.scenario, JSON.stringify(scenario));
-  fs.writeFileSync(files.config, JSON.stringify(config || defaultConfig()));
+  // Every repo is read as a named account (claude-config#1182), so a case that does not name one
+  // reads as ACCOUNT. A case that sets the key itself, even to undefined, keeps what it set.
+  const cfg = JSON.parse(JSON.stringify(config || defaultConfig()));
+  (cfg.repos || []).forEach(function (r, i) {
+    if (r && !Object.prototype.hasOwnProperty.call((config || defaultConfig()).repos[i], 'account')) r.account = ACCOUNT;
+  });
+  fs.writeFileSync(files.config, JSON.stringify(cfg));
   if (state !== undefined) {
     fs.mkdirSync(path.dirname(files.state), { recursive: true });
     fs.writeFileSync(files.state, typeof state === 'string' ? state : JSON.stringify(state));
@@ -93,7 +100,11 @@ function defaultConfig() {
   ] };
 }
 function env(ws, extra) {
-  return Object.assign({}, process.env, {
+  // A token the session running these tests happens to carry is never handed on: a case that
+  // wants one in the caller's environment sets it in extra.
+  const base = Object.assign({}, process.env);
+  delete base.GH_TOKEN; delete base.GITHUB_TOKEN;
+  return Object.assign(base, {
     HOME: HOME,
     TZ: 'America/New_York',
     PATH: POISON + path.delimiter + process.env.PATH,
@@ -135,7 +146,7 @@ const LIVE_OK = ['--live', PET + '=' + sha(900) + '@2026-10-08T10:00:00Z'];
   check(r.code === 0, 'a clean gather exits 0', r.all);
   check(s && JSON.stringify(nums(s.prs)) === '[3,5]',
     'the window is strictly after lastEnd: the PR merged AT lastEnd is not listed again, an unmerged PR never is', s && JSON.stringify(nums(s.prs)));
-  check(s && s.window.start === T && s.window.end === NOW, 'the window runs from lastEnd to --now', s && JSON.stringify(s.window));
+  check(s && s.window && s.window.start === T && s.window.end === NOW, 'the window runs from lastEnd to --now', s && JSON.stringify(s.window));
   const log = fs.existsSync(ws.ghLog) ? fs.readFileSync(ws.ghLog, 'utf8') : '(gh was never called)';
   check(/merged:>2026-09-28T18:30:00\+00:00/.test(decodeURIComponent(log)),
     'the count cross check asks for merges strictly after the same instant', log);
@@ -631,6 +642,164 @@ function sonarGather(checkRuns, extra) {
     .reduce(function (a, x) { return a.concat(['--live', x.repo + '=' + sha(900) + '@2026-10-08T10:00:00Z']); }, []));
   check(r.code === 0 && r.json && r.json.repos.length === shipped.repos.length,
     'the shipped repos.json is accepted, every repo in it gathered', r.all);
+}
+
+// ---------------------------------------------------------------- accounts (claude-config#1182)
+//
+// Each repo is read as the account repos.json names for it, through that account's token in the
+// one call's own environment, whichever account gh has active. On the personal MacBook the active
+// account is danwright32, which GitHub answers 404 for Try-Pennie's private repos.
+
+const WORK = 'pennie-bot';
+const PERSONAL = 'personal-bot';
+const FAKE_TOKEN = 'fake-gh-token-for-';
+function calls(ws) {
+  const out = [];
+  const text = fs.existsSync(ws.ghLog) ? fs.readFileSync(ws.ghLog, 'utf8') : '';
+  text.split('\n').forEach(function (line) {
+    if (line.charAt(0) === '[') out.push({ args: JSON.parse(line), as: null });
+    else if (line.indexOf('AS ') === 0 && out.length) out[out.length - 1].as = line.slice(3);
+  });
+  return out;
+}
+function slugOf(call) {
+  if (call.args[0] !== 'api') {
+    const r = call.args.indexOf('--repo');
+    return r === -1 ? null : call.args[r + 1];
+  }
+  const route = decodeURIComponent(call.args[1] || '');
+  const m = /^\/?repos\/([^/]+\/[^/?]+)/.exec(route) || /repo:(\S+)/.exec(route);
+  return m && m[1];
+}
+function twoAccountWorkspace(scenarioExtra, petAccount) {
+  return workspace(Object.assign({
+    pulls: { [PET]: [pr(10, '2026-10-02T12:00:00Z')], [SONAR]: [pr(20, '2026-10-02T12:00:00Z')] },
+    compare: { [PET]: { [sha(10) + '...' + sha(900)]: 'ahead' } },
+    access: { [PET]: [WORK], [SONAR]: [PERSONAL] },
+  }, scenarioExtra || {}), { repos: [
+    { name: 'PET', repo: PET, account: petAccount || WORK, deployRecord: 'build_history', deployRecordFrom: '2026-07-29', changelogFrom: '2026-08-31' },
+    { name: 'Sonar', repo: SONAR, account: PERSONAL, changelogFrom: '2026-09-28' },
+  ] }, { [PET]: { lastEnd: '2026-10-01T00:00:00Z' }, [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+}
+function noTokenIn(r, ws, name) {
+  const outFile = fs.existsSync(ws.out) ? fs.readFileSync(ws.out, 'utf8') : '';
+  check(r.all.indexOf(FAKE_TOKEN) === -1 && outFile.indexOf(FAKE_TOKEN) === -1, name, r.all);
+}
+
+// Signed in: each repo is read as its own account, and only as that account.
+{
+  const ws = twoAccountWorkspace();
+  const r = gather(ws, LIVE_OK);
+  const p = repoOf(r, PET), s = repoOf(r, SONAR);
+  check(r.code === 0 && p && p.status === 'ok' && s && s.status === 'ok',
+    'two repos owned by two accounts are both read, neither as the active account', r.all);
+  const api = calls(ws).filter(function (c) { return c.args[0] === 'api'; });
+  const petCalls = api.filter(function (c) { return slugOf(c) === PET; });
+  const sonarCalls = api.filter(function (c) { return slugOf(c) === SONAR; });
+  check(petCalls.length > 0 && petCalls.every(function (c) { return c.as === WORK; }),
+    'every read of a repo is made as the account repos.json names for it', JSON.stringify(petCalls));
+  check(sonarCalls.length > 0 && sonarCalls.every(function (c) { return c.as === PERSONAL; }),
+    'a second account\'s repo is read as that second account in the same run', JSON.stringify(sonarCalls));
+  check(api.length === petCalls.length + sonarCalls.length, 'every read names the repo it is made for', JSON.stringify(api));
+  const asked = calls(ws).filter(function (c) { return c.args[0] === 'auth'; });
+  check(asked.length === 2, 'each account\'s token is asked for once per run, not once per read', JSON.stringify(asked));
+  noTokenIn(r, ws, 'no token reaches the output, the terminal or the gathered file');
+}
+
+// A token already in the caller's environment is not what any repo is read with.
+{
+  const ws = twoAccountWorkspace();
+  const r = gather(ws, LIVE_OK, { GH_TOKEN: 'a token the session already had', GITHUB_TOKEN: 'another one' });
+  const api = calls(ws).filter(function (c) { return c.args[0] === 'api'; });
+  check(r.code === 0 && api.length > 0 && api.every(function (c) { return c.as === (slugOf(c) === PET ? WORK : PERSONAL); }),
+    'a GH_TOKEN the caller carries is neither asked about nor used: each repo is still read as its own account', r.all + JSON.stringify(api));
+}
+
+// Not signed in: the repo is refused by account name, with the command that signs it in, before
+// any read of it, and never reported as a quiet week.
+{
+  const ws = twoAccountWorkspace({ signedIn: [PERSONAL] });
+  const r = gather(ws, LIVE_OK);
+  const p = repoOf(r, PET), s = repoOf(r, SONAR);
+  check(p && p.status === 'refused', 'a repo whose account is not signed in is refused, not read as quiet', p && JSON.stringify(p));
+  check(p && p.reason.indexOf(WORK) !== -1 && /not signed in/.test(p.reason),
+    'the refusal names the account that is not signed in', p && p.reason);
+  check(p && p.reason.indexOf('gh auth login --hostname github.com --git-protocol https --web') !== -1,
+    'the refusal gives the one command that signs the account in', p && p.reason);
+  check(!calls(ws).some(function (c) { return c.args[0] === 'api' && slugOf(c) === PET; }),
+    'a repo whose account is not signed in is never read as some other account', JSON.stringify(calls(ws)));
+  check(s && s.status === 'ok', 'another account\'s repo is still read when one account is not signed in', s && JSON.stringify(s));
+  check(r.code === 3, 'a run with an account not signed in exits 3', r.code);
+  check(new RegExp('PET: refused: .*' + WORK).test(r.err), 'the terminal names the repo and the account', r.err);
+  noTokenIn(r, ws, 'no token reaches the output when an account is not signed in');
+}
+
+// 404: the account is signed in but GitHub does not show it the repo.
+{
+  const ws = twoAccountWorkspace({ access: { [PET]: ['someone-else'], [SONAR]: [PERSONAL] } });
+  const r = gather(ws, LIVE_OK);
+  const p = repoOf(r, PET);
+  check(p && p.status === 'unreachable' && /404/.test(p.reason), 'a 404 makes the repo unreachable, never quiet', p && JSON.stringify(p));
+  check(p && p.reason.indexOf(WORK) !== -1, 'a 404 names the account the repo was read as', p && p.reason);
+  check(p && /cannot see a private repo/.test(p.reason), 'a 404 says what else it can mean, an account without access', p && p.reason);
+}
+
+// A repo with no account recorded refuses the run: the active account is never a fallback.
+{
+  const ws = workspace({ pulls: { [SONAR]: [] } }, { repos: [{ name: 'Sonar', repo: SONAR, account: undefined }] }, {});
+  const r = gather(ws);
+  check(r.code === 1 && /Sonar/.test(r.err) && /account/.test(r.err), 'a repos.json entry with no account refuses the run', r.all);
+  check(calls(ws).length === 0, 'nothing is read when an entry names no account', JSON.stringify(calls(ws)));
+}
+{
+  const ws = workspace({ pulls: { [SONAR]: [] } }, { repos: [{ name: 'Sonar', repo: SONAR, account: 'two words' }] }, {});
+  const r = gather(ws);
+  check(r.code === 1 && /two words/.test(r.err), 'an account that is not a GitHub login refuses the run', r.all);
+}
+
+// `gather.js gh`: the issue check's own gh commands, run as the account of the repo they name.
+function ghVia(ws, ghArgs, extra) {
+  return run(GATHER, ['gh', '--config', ws.config, '--'].concat(ghArgs), ws, extra);
+}
+{
+  const ws = twoAccountWorkspace({ issueCommands: true });
+  const r = ghVia(ws, ['issue', 'edit', '5', '--repo', PET, '--add-label', 'user-facing'], { GH_TOKEN: 'a token the session already had' });
+  const ran = calls(ws).filter(function (c) { return c.args[0] === 'issue'; });
+  check(r.code === 0 && ran.length === 1 && ran[0].as === WORK && /as pennie-bot/.test(r.out),
+    'an issue command runs as the account of the repo it names, its output passed through', r.all + JSON.stringify(ran));
+  noTokenIn(r, ws, 'an issue command prints no token');
+  const r2 = ghVia(ws, ['label', 'create', 'user-facing', '--repo', SONAR, '--color', '0E8A16']);
+  const ran2 = calls(ws).filter(function (c) { return c.args[0] === 'label'; });
+  check(r2.code === 0 && ran2.length === 1 && ran2[0].as === PERSONAL, 'a label command runs as the account of its repo', r2.all);
+  const r3 = ghVia(ws, ['api', 'repos/' + PET + '/issues?state=open&per_page=100']);
+  const ran3 = calls(ws).filter(function (c) { return c.args[0] === 'api'; });
+  check(ran3.length === 1 && ran3[0].as === WORK, 'an api read through gather.js gh runs as the account of the repo in its path', r3.all);
+}
+{
+  const ws = twoAccountWorkspace({ issueCommands: true, issueExit: 4 });
+  const r = ghVia(ws, ['issue', 'edit', '5', '--repo', PET, '--add-label', 'user-facing']);
+  check(r.code === 4, 'gh\'s own exit code comes back unchanged, so a failed edit is never reported as done', r.code);
+}
+{
+  const ws = twoAccountWorkspace({ issueCommands: true, signedIn: [PERSONAL] });
+  const r = ghVia(ws, ['issue', 'edit', '5', '--repo', PET, '--add-label', 'user-facing']);
+  check(r.code === 1 && r.err.indexOf(WORK) !== -1 && r.err.indexOf('gh auth login --hostname github.com --git-protocol https --web') !== -1,
+    'an issue command for an account not signed in is refused by name with the sign in command', r.all);
+  check(!calls(ws).some(function (c) { return c.args[0] === 'issue'; }), 'and the command never runs as anybody else', JSON.stringify(calls(ws)));
+}
+{
+  const ws = twoAccountWorkspace({ issueCommands: true });
+  [
+    [['issue', 'edit', '5', '--add-label', 'user-facing'], /names no repo/, 'a command naming no repo is refused'],
+    [['issue', 'edit', '5', '--repo', 'acme/other'], /acme\/other/, 'a repo not in repos.json is refused, by name'],
+    [['issue', 'edit', '5', '--repo', PET, '-R', SONAR], /acme\/pet.*acme\/sonar|acme\/sonar.*acme\/pet/, 'a command naming two repos is refused'],
+    [['auth', 'switch', '--user', WORK], /auth/, 'a gh auth command is refused, so nothing switches the active account'],
+    [[], /gh/, 'gather.js gh with no command is refused'],
+  ].forEach(function (c) {
+    const r = ghVia(ws, c[0]);
+    check(r.code === 1 && c[1].test(r.err), c[2], r.all);
+  });
+  check(calls(ws).length === 0, 'no refused command ever reaches gh', JSON.stringify(calls(ws)));
 }
 
 // ---------------------------------------------------------------- commit-state

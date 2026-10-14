@@ -43,10 +43,32 @@ Sonar issues by whether an agent would bump into them.
 **Run it from any directory, including one that is not a git repo at all.** Every repo it
 touches comes from `repos.json`, never from the working directory.
 
-So **every `gh` command must carry `--repo <owner>/<name>` explicitly** (or name the repo in its
+So **every gh command must carry `--repo <owner>/<name>` explicitly** (or name the repo in its
 API path). This is not a style preference. Dan's usual working directory for PET is the folder
-*above* the git repo, which is not a repo at all, so a bare `gh issue edit` there fails or, worse,
-resolves to whatever repo happens to be nearby.
+*above* the git repo, which is not a repo at all, so an issue edit with no repo named there fails
+or, worse, resolves to whatever repo happens to be nearby.
+
+### Which account reads each repo
+
+**Every repo is read as the GitHub account `repos.json` names for it (`account`), whichever account
+gh has active** (claude-config#1182). Dan runs sessions under different GitHub accounts at once, and
+on the personal MacBook the active one is danwright32, which GitHub answers 404 for Try-Pennie's
+private repos. `gather.js` takes the named account's token from gh's own store and hands it to each
+call in that call's environment only, the way the merge helper does. **Never switch the active
+account** (`gh auth switch`): other sessions are using it.
+
+So **no gh command in this skill runs bare.** The issue check's commands (section 9) run through
+`gather.js gh`, which runs the command as the account of the repo it names, refuses one that names
+no repo, two repos or a repo missing from `repos.json`, and passes gh's own output and exit code
+back unchanged:
+
+```bash
+node ~/.claude/skills/pennie-dev-update/gather.js gh -- issue list --repo <owner>/<name> --state all --limit 200
+```
+
+If the account is not signed in to gh on this Mac, `gather.js` refuses that repo by name and prints
+the one command that signs it in. Tell Dan exactly that, with the command; never report the repo as
+quiet, and never read it as another account.
 
 **No step needs a local checkout.** Gathering, the changelog records and the deploy check all ask
 GitHub by `owner/name`, so `repos.json` records no path. The paths it used to carry were typed by
@@ -64,6 +86,7 @@ Read `repos.json` beside this file:
 { "repos": [
   { "name": "PET",
     "repo": "Try-Pennie/project-enrollment-tracker",
+    "account": "dwright-pennie",
     "deployRecord": "build_history",
     "deployRecordFrom": "2026-07-29",
     "changelogFrom": "2026-08-31" }
@@ -97,7 +120,8 @@ skill, which is the correct state for a product managers cannot use yet.
 Having no `lastEnd` makes its next run its first appearance, which introduces the product
 (section 2) and then behaves exactly like PET forever after.
 
-An entry needs only `name` and `repo`. Give it `changelogFrom` from the day its pull requests
+An entry needs `name`, `repo` and `account`, the GitHub account that can see the repo
+(`dwright-pennie` for Try-Pennie's). Give it `changelogFrom` from the day its pull requests
 carry changelog records (section 3), and `deployRecord` with `deployRecordFrom` only if it has a
 verified deploy record (section 4): a name read by hand and passed with `--live`, or one of the
 records `gather.js` reads from GitHub itself, measured against the repo's real merges first.
@@ -641,12 +665,16 @@ never to decide.
 
 ### What it does
 
-For each issue judged user-facing:
+Every gh command here, the reads that find the candidates included, runs through `gather.js gh`
+so it runs as the repo's account (section 1, "Which account reads each repo"). For each issue
+judged user-facing:
 
 ```bash
-gh issue edit <n> --repo <owner>/<name> --add-label user-facing
-gh issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label priority-p2
+node ~/.claude/skills/pennie-dev-update/gather.js gh -- issue edit <n> --repo <owner>/<name> --add-label user-facing
+node ~/.claude/skills/pennie-dev-update/gather.js gh -- issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label priority-p2
 ```
+
+A non zero exit is gh's own: the edit did not happen, so report it as failed, never as changed.
 
 - Add the **`user-facing`** label. This is the durable record of the judgment, so the priority
   change has a visible reason and later runs can see what was already decided.
@@ -654,7 +682,7 @@ gh issue edit <n> --repo <owner>/<name> --remove-label priority-p3 --add-label p
   those alone.
 - Already p2: label only, no priority change.
 - Create the label if missing:
-  `gh label create user-facing --repo <owner>/<name> --color 0E8A16 --description "A manager would notice this"`
+  `node ~/.claude/skills/pennie-dev-update/gather.js gh -- label create user-facing --repo <owner>/<name> --color 0E8A16 --description "A manager would notice this"`
 
 ### Across runs
 
@@ -686,11 +714,14 @@ files in the session scratchpad.
 
    Exit 0 is every repo gathered, 3 is at least one refused or unreachable (say which and why,
    carry on with the rest), 1 is the whole run refused. Each repo's `status` is `ok`,
-   `first_appearance` (section 2: introduce it, list nothing), `refused` or `unreachable`.
+   `first_appearance` (section 2: introduce it, list nothing), `refused` or `unreachable`. A repo
+   refused because its account is not signed in names the account and the command that signs it
+   in; give Dan both, word for word.
 3. Classify (section 5) the `ok` repos' PRs. Read bodies where ambiguous.
 4. Draft in the format (section 6), applying the accuracy pass (section 7).
 5. Write it, run `lint-post.js` until it is clean, and open it in BBEdit (section 8).
-6. Run the issue check (section 9) and print what it changed.
+6. Run the issue check (section 9), every gh command through `gather.js gh` so it runs as the
+   repo's account, and print what it changed.
 7. Commit the state, once per repo that was `ok` or `first_appearance`, naming the PRs the post
    listed and the headings it used:
 

@@ -3,6 +3,7 @@
     {
       "name": "Slate",
       "repo": "Try-Pennie/slate",
+      "account": "dwright-pennie",
       "deployRecord": {
         "kind": "actions_deploy_job",
         "workflow": "ci.yml",
@@ -24,6 +25,7 @@
     {
       "name": "PET",
       "repo": "Try-Pennie/project-enrollment-tracker",
+      "account": "dwright-pennie",
       "deployRecord": "build_history",
       "deployRecordFrom": "2026-07-29",
       "changelogFrom": "2026-08-31"
@@ -31,6 +33,7 @@
     {
       "name": "Sonar",
       "repo": "Try-Pennie/sonar",
+      "account": "dwright-pennie",
       "deployRecord": {
         "kind": "deploy_check_run",
         "checkName": "Cloudflare Pages",
@@ -40,6 +43,7 @@
       "changelogFrom": "2026-09-28"
     }
   ],
+  "_accountNote": "account is the GitHub account each repo is read as (claude-config#1182). gather.js takes that account's token from gh's own store and hands it to each gh call in that call's environment only, so the repo is read as an account that can see it whichever account gh has active, and the active account is never switched (Dan runs sessions under different accounts at once). On the personal MacBook the active account is danwright32, which GitHub answers 404 for Try-Pennie's private repos, so before this every Pennie repo read as unreachable there. dwright-pennie is the account that can see Try-Pennie's repos; a repo owned by another account names that account here. An entry with no account is refused, never read as the active one, and an account not signed in to gh on this Mac refuses its repos by name with the command that signs it in. The issue check (SKILL.md section 9) runs its gh commands through `gather.js gh` for the same reason.",
   "_deployRecordNote": "deployRecord says how gather.js proves a merge reached production (SKILL.md section 4). A string names a record read by hand and passed with --live (PET's build_history table). An object is read from GitHub by gather.js itself (claude-config#1177). Slate, actions_deploy_job: the deploy job of the CI run on main, judged by the exit code of its 'Deploy gradually' step, which the runner records as the annotation 'Process completed with exit code N'. The two exit lists are Slate's DEPLOY.md table: liveExits end with the new version serving 100%, unchangedExits end with production as it was. Any other code (20 may still be split at 10%, 22 changed by something else, 24 unknown), and any Rollback run since, makes every change unconfirmed until a later deploy reaches 100%, because GitHub does not record which commit a rollback put back. Sonar, deploy_check_run: the Cloudflare Pages check run on a merge commit, from Cloudflare's own app. Measured 2026-10-13: Slate had 175 merges since 2026-10-04, every one reached 100%, 165 through a deploy of its own, a median of 11 minutes after merge (90th percentile 19, longest 15 hours, behind a deploy that exited 11), and no Rollback run yet. Sonar had 72 merges since 2026-09-25: 71 with a successful Pages run about 30 seconds after merge, and one (#123) with no check run at all, live through the next merge. Neither record can see a deploy or a rollback done by hand outside GitHub (wrangler from a laptop, the Pages dashboard).",
   "_slateNote": "Slate joined the rotation on 2026-10-02, the day of its launch post (Dan chose this over waiting). Its state was seeded at PR #2999, the newest merge before that post.",
   "_changelogNote": "changelogFrom is the START DATE from which every merged pull request in that repo carries a changelog record: a changelog/visible, changelog/technical or changelog/none label, plus a '## Changelog' block in the body for the visible ones. Enforced at merge time by ~/.claude/hooks/require-changelog-tag.sh, which gates ONLY repos listed here WITH this field, and only from that day onward, so a repo can be given its launch date in advance. A repo listed without the field is not gated, which is what lets the pull request adding the date merge. A value that is not a YYYY-MM-DD date is refused loudly rather than read as 'not yet'. Before the date there are no records and the update falls back to reading titles and bodies by hand. See pet/docs/changelog-records.md and PET #1186. Please preserve this field when rewriting this file: losing it silently disables the gate.",

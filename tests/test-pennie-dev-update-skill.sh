@@ -149,6 +149,19 @@ for step in 'gather.js gather' 'gather.js commit-state' 'lint-post.js'; do
   case "$sequence" in *"$step"*) check "the sequence runs $step" ok ;; *) check "the sequence runs $step" "section 10 never says $step" ;; esac
 done
 
+# ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
+# personal MacBook is danwright32, and GitHub answers it 404 for Try-Pennie's private repos. So
+# every gh command the skill shows runs through `gather.js gh`, which runs it as the account
+# repos.json names for the repo. The bare form is a code block line that STARTS with gh, or an
+# inline command in backticks that starts with gh and names its repo with --repo (every command
+# the skill gives does, section 1). A prose mention such as "never `gh pr list`" names no repo.
+bare_gh="$(grep -n -E '^[[:space:]]*gh (issue|label|api|pr|search|repo|run|workflow) ' "$SKILL" || true)"
+bare_gh="$bare_gh$(grep -n -E '`gh [a-z]+ [^`]*--repo' "$SKILL" || true)"
+if [ -z "$bare_gh" ]; then check "every gh command in the skill runs as the repo's account, through gather.js gh" ok
+else check "every gh command in the skill runs as the repo's account, through gather.js gh" "$bare_gh"; fi
+case "$sequence" in *'gather.js gh'*) check "the sequence runs the issue check through gather.js gh" ok ;;
+  *) check "the sequence runs the issue check through gather.js gh" "section 10 never says gather.js gh" ;; esac
+
 echo "passed: $pass   failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
