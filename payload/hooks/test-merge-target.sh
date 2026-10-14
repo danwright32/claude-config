@@ -569,6 +569,184 @@ if nopy mt_is_pr_merge "npm run merge -- 680"; then
   fail "a wrapper route was read as the direct merge, which is what the refusal keys on"
 else pass; fi
 
+echo "merge-target: a merge through the GitHub API (claude-config#1181)"
+
+# THE SHARED TABLE. The overnight judge in the scope-modes mod and these gates are two recognisers of
+# one question, in two languages, so they share a table rather than code: every row is held here to
+# the gates' answer (`gates` where the two differ on purpose, else `merge`), and mergedeploy.test.ts
+# holds the mod to `merge` on the same rows. A route one of them learns and the other does not fails
+# a suite (L450). Each row is one line of JSON inside the TypeScript file.
+NO_GH="$(mktemp -d)"
+printf '#!/usr/bin/env bash\necho "no gh in this case" >&2\nexit 1\n' > "$NO_GH/gh"; chmod +x "$NO_GH/gh"
+API_CASES="$HOOK_DIR/../mods/scope-modes/tests/api-merge-cases.ts"
+api_rows="$(python3 - "$API_CASES" <<'PY' 2>&1
+import json, re, sys
+for line in open(sys.argv[1]):
+    s = line.strip()
+    if not s.startswith('{"command"'):
+        continue
+    row = json.loads(s.rstrip(","))
+    want = row.get("gates", row["merge"])
+    print(("yes" if want else "no") + "\x1f" + row["command"])
+PY
+)"
+n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
+# The control: a table that read as empty would agree with any recogniser at all (L98).
+if [ "$n_rows" -ge 20 ]; then pass; else fail "#1181 the shared table read as $n_rows rows from $API_CASES: $api_rows"; fi
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
+  want="${row%%$'\x1f'*}"; c="${row#*$'\x1f'}"
+  # No gh reaches GitHub from here: a GraphQL row's node is never resolved by a question of merge or not.
+  got=no; PATH="$NO_GH:$PATH" mt_runs_merge "$c" </dev/null && got=yes
+  eq "$got" "$want" "#1181 the gates' recogniser on the shared table row: $c"
+  # Every route in the table is a DIRECT merge, so the blocking gates' question answers the same.
+  got=no; PATH="$NO_GH:$PATH" mt_is_pr_merge "$c" </dev/null && got=yes
+  eq "$got" "$want" "#1181 the direct merge question on the shared table row: $c"
+done <<< "$api_rows"
+
+# rtk in front, which rtk-rewrite.sh writes in front of every gh command, is the same merge here (the
+# table leaves wrappers out; its header says why).
+if mt_is_pr_merge "rtk gh api -X PUT repos/acme/widget/pulls/7/merge"; then pass; else fail "#1181 rtk in front hid a REST merge"; fi
+
+# The reading behind the table's wrapper rows (lib/shell-words.py past_runners): each runner's options
+# and settings are passed over, and env -S, whose command is a string split at run time, is left as
+# a command named env rather than guessed at.
+eq "$(mt_command_segments 'env -i -u GH_HOST -C /tmp GH_TOKEN="a b" gh pr merge 7')" "gh pr merge 7" "#1181 env's options and settings are passed over"
+eq "$(mt_command_segments 'sudo --user=dan -g staff -- gh pr merge 7')" "gh pr merge 7" "#1181 sudo's options are passed over"
+eq "$(mt_command_segments 'env -S "gh pr merge 7"')" 'env -S "gh pr merge 7"' "#1181 env -S is left as it stands"
+eq "$(mt_command_segments 'sudo')" "sudo" "#1181 a runner with nothing after it is itself"
+# A setting env gives the merge is the merge's own, so the lessons review's read key can ride on it.
+eq "$(mt_presented_read_key 'env PR_REVIEW_READ=ab12 gh pr merge 7' mt_runs_merge)" "ab12" "#1181 a read key env sets is presented by the merge"
+eq "$(mt_pr_number "sudo env GH_TOKEN=x rtk gh pr merge 9 --match-head-commit abc")" "9" "#1181 and the number behind every runner is read"
+
+# WHICH pull request a REST merge names, and in which repository: its endpoint's, in every spelling.
+eq "$(mt_pr_number "gh api -X PUT repos/acme/widget/pulls/7/merge")" "7" "#1181 a REST merge names its number"
+eq "$(mt_repo_flag "gh api -X PUT repos/acme/widget/pulls/7/merge")" "acme/widget" "#1181 and its repository"
+eq "$(mt_repo_flag "gh api --method=PUT https://api.github.com/repos/acme/widget/pulls/7/merge")" "acme/widget" "#1181 a full address names the same repository"
+eq "$(mt_pr_number "gh api -X put /repos/acme/widget/pulls/12/merge -f merge_method=squash")" "12" "#1181 a leading slash and a lower case method"
+# gh's own placeholders name the directory's repository, which gh fills in: none is named here, so
+# the gates read the checkout's, as they do for a gh pr merge with no --repo.
+eq "$(mt_repo_flag "gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge'")" "" "#1181 placeholders name no repository of their own"
+eq "$(mt_pr_number "gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge'")" "7" "#1181 and still name the number"
+# A read of the same pull request BEFORE the merge is never taken for it (L75).
+eq "$(mt_pr_number "gh api repos/acme/other/pulls/9 --jq .mergeable && $MERGE 7 --repo acme/widget")" "7" "#1181 a gh api read before a merge is not the merge"
+eq "$(mt_repo_flag "gh api repos/acme/other/pulls/9 --jq .mergeable && $MERGE 7 --repo acme/widget")" "acme/widget" "#1181 nor its repository"
+
+# A GraphQL merge names a NODE, which GitHub resolves. A fake gh answers the lookup, logging each
+# call, so the cases can say how often GitHub was asked.
+NODE_DIR="$(mktemp -d)"
+cat > "$NODE_DIR/gh" <<'GH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$NODE_LOG"
+case "$*" in
+  "auth status"*) [ -n "${NODE_ACCOUNTS:-}" ] && for a in $NODE_ACCOUNTS; do printf '  Logged in to github.com account %s (keyring)\n' "$a"; done; exit 0 ;;
+  "auth token"*) printf 'tok-%s\n' "$4"; exit 0 ;;
+  "api graphql"*)
+    if [ -n "${NODE_FAIL:-}" ]; then printf '%s\n' "$NODE_FAIL" >&2; exit 1; fi
+    printf '%s\n' "${NODE_ANSWER:-}" ;;
+esac
+GH
+chmod +x "$NODE_DIR/gh"
+PR_NODE='{"data":{"node":{"__typename":"PullRequest","number":42,"repository":{"nameWithOwner":"acme/widget"}}}}'
+GQL="gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_kwDOA1\", expectedHeadOid: \"a1b2c3\"}) { clientMutationId } }'"
+GQL_VAR="gh api graphql -f query='mutation(\$id: ID!, \$sha: GitObjectID) { mergePullRequest(input: {pullRequestId: \$id, expectedHeadOid: \$sha}) { clientMutationId } }' -f id=PR_kwDOA1 -f sha=d4e5f6"
+node_q() {  # $1 = answer, $2 = failure, $3.. = a function and its arguments ; prints the function's output
+  local a="$1" f="$2"; shift 2
+  ( export PATH="$NODE_DIR:$PATH" NODE_LOG="$NODE_DIR/log" NODE_ANSWER="$a" NODE_FAIL="$f"; "$@" )
+}
+eq "$(node_q "$PR_NODE" "" mt_pr_number "$GQL")" "42" "#1181 a GraphQL merge's number is its node's, as GitHub says"
+eq "$(node_q "$PR_NODE" "" mt_repo_flag "$GQL")" "acme/widget" "#1181 and so is its repository"
+eq "$(node_q "$PR_NODE" "" mt_pr_number "$GQL_VAR")" "42" "#1181 a node passed as a -f variable is read too"
+grep -q 'id=PR_kwDOA1' "$NODE_DIR/log" && pass || fail "#1181 the lookup did not ask about the node the mutation names: $(cat "$NODE_DIR/log")"
+
+# mt_api_merge_untold: the question every gate asks before mt_pr_number. Each route, and the pin.
+untold() {  # $1 = answer, $2 = failure, $3 = command ; prints "rc|route|pin|why"
+  ( export PATH="$NODE_DIR:$PATH" NODE_LOG="$NODE_DIR/log" NODE_ANSWER="$1" NODE_FAIL="$2"
+    mt_api_merge_untold "$3"; rc=$?; printf '%s|%s|%s|%s' "$rc" "$MT_API_ROUTE" "$MT_API_PIN" "$MT_API_WHY" )
+}
+eq "$(untold "" "" "gh api -X PUT repos/acme/widget/pulls/7/merge -f sha=a1b2c3")" "1|rest|a1b2c3|" "#1181 a REST merge is told, with the sha it pins"
+eq "$(untold "$PR_NODE" "" "$GQL")" "1|graphql|a1b2c3|" "#1181 a GraphQL merge whose node resolves is told, with its expectedHeadOid"
+eq "$(untold "$PR_NODE" "" "$GQL_VAR")" "1|graphql|d4e5f6|" "#1181 and a pin passed as a variable"
+eq "$(untold "" "" "$MERGE 7 --squash")" "1|pr||" "#1181 gh pr merge is the direct route, never untold"
+eq "$(untold "" "" "gh api repos/acme/widget/pulls/7/merge")" "1|||" "#1181 a GET of the merge endpoint is no merge"
+eq "$(untold "" "" "ls")" "1|||" "#1181 nor is anything else"
+
+# THE FAILURE PATHS: a merge whose pull request cannot be named is refused, never let through and
+# never judged as the current branch's pull request (L75, L42).
+got="$(untold "" "gh: Could not resolve to a node with the global id of 'PR_kwDOA1'" "$GQL")"
+case "$got" in 0\|graphql\|*"PR_kwDOA1"*"no logged-in account can see"*) pass ;; *) fail "#1181 a node GitHub cannot resolve is not refused by name: $got" ;; esac
+eq "$(node_q "" "gh: Could not resolve to a node with the global id of 'PR_kwDOA1'" mt_pr_number "$GQL")" "" "#1181 and names no number, so nothing reads the current branch's instead"
+got="$(untold '{"data":{"node":{"__typename":"Issue"}}}' "" "$GQL")"
+case "$got" in 0\|*"is a node of type Issue, not a pull request"*) pass ;; *) fail "#1181 a node that is an issue is not refused as one: $got" ;; esac
+got="$(untold "" "error connecting to api.github.com" "$GQL")"
+case "$got" in 0\|*"error connecting to api.github.com"*) pass ;; *) fail "#1181 a lookup that could not reach GitHub does not say what gh said: $got" ;; esac
+# Asked as every logged-in account in turn, as mt_pr_view asks, and never with the shared one switched.
+: > "$NODE_DIR/log"
+( export PATH="$NODE_DIR:$PATH" NODE_LOG="$NODE_DIR/log" NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_kwDOA1'" NODE_ACCOUNTS="first second"; mt_api_merge_untold "$GQL" ) >/dev/null
+eq "$(grep -c '^api graphql' "$NODE_DIR/log")" "3" "#1181 a node not found is asked of the active account and each other logged-in one"
+if grep -q 'auth switch' "$NODE_DIR/log"; then fail "#1181 the lookup switched the shared gh account"; else pass; fi
+got="$(untold "" "" "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \$id}) { clientMutationId } }'")"
+case "$got" in 0\|untold\|*"pull request id it names cannot be read"*) pass ;; *) fail "#1181 a node id nothing passes is not refused: $got" ;; esac
+got="$(untold "" "" "gh api graphql -f query='mutation { a: mergePullRequest(input: {pullRequestId: \"PR_1\"}) { clientMutationId } b: mergePullRequest(input: {pullRequestId: \"PR_2\"}) { clientMutationId } }'")"
+case "$got" in 0\|untold\|*"more than one pull request"*) pass ;; *) fail "#1181 two merges in one mutation are not refused: $got" ;; esac
+got="$(untold "" "" "gh api graphql -F query=@merge.graphql")"
+case "$got" in 0\|untold\|*"@merge.graphql"*) pass ;; *) fail "#1181 a document read from a file is not refused by name: $got" ;; esac
+got="$(untold "" "" "gh api -X PUT 'repos/{owner}/widget/pulls/7/merge'")"
+case "$got" in 0\|untold\|*"repos/{owner}/widget/pulls/7/merge"*) pass ;; *) fail "#1181 an endpoint whose repository cannot be told is not refused: $got" ;; esac
+
+# Resolved ONCE per gate: the gate asks mt_api_merge_untold in its own shell, and the number and the
+# repository it reads afterwards, each in a subshell, take the remembered answer.
+: > "$NODE_DIR/log"
+got="$( export PATH="$NODE_DIR:$PATH" NODE_LOG="$NODE_DIR/log" NODE_ANSWER="$PR_NODE"
+  mt_api_merge_untold "$GQL"; printf '%s|%s' "$(mt_pr_number "$GQL")" "$(mt_repo_flag "$GQL")" )"
+eq "$got" "42|acme/widget" "#1181 the remembered answer is the one GitHub gave"
+eq "$(grep -c '^api graphql' "$NODE_DIR/log")" "1" "#1181 one gate asks GitHub about the node once"
+rm -rf "$NODE_DIR"
+
+# With no python3, a gh api call naming a merge cannot be told from a read, so it is answered as a
+# merge and every gate refuses by naming the reader, rather than letting it through as nothing (L490).
+if nopy mt_is_pr_merge "gh api -X PUT repos/acme/widget/pulls/7/merge" >/dev/null; then pass; else
+  fail "#1181 with no python3 an API merge read as no merge at all"; fi
+if nopy mt_is_pr_merge "gh api repos/acme/widget/issues/7" >/dev/null; then
+  fail "#1181 with no python3 a gh api call naming no merge was read as one"; else pass; fi
+# And the reader is the selector file too: without it the merge's own words cannot be read.
+if ( MT_SELECTOR="$nopy_root/no-such-selector.py"; mt_reader_missing ); then pass; else
+  fail "#1181 with lib/merge-selector.py missing the library does not report its reader as missing"; fi
+case "$( MT_SELECTOR="$nopy_root/no-such-selector.py"; mt_reader_absent_why )" in
+  *merge-selector.py*) pass ;;
+  *) fail "#1181 the sentence about an absent merge-selector.py does not name it" ;;
+esac
+
+# EVERY MERGE GATE asks it. A gate that judges a merge by mt_pr_number without asking first would judge
+# an API merge it cannot name as the current branch's pull request, so each one is listed from the
+# hooks block, not by hand (L96), and must call mt_api_merge_untold before its first mt_pr_number.
+SETTINGS_FILE="$HOOK_DIR/../settings.hooks.json"
+[ -f "$SETTINGS_FILE" ] || SETTINGS_FILE="$HOOK_DIR/../settings.json"
+merge_gates="$(jq -r '.hooks.PreToolUse[]? | select((.matcher // "") | test("(^|[|])Bash($|[|])")) | .hooks[]? | .command' "$SETTINGS_FILE" 2>/dev/null \
+  | sed 's#.*/##' | sort -u | while IFS= read -r h; do
+      [ -f "$HOOK_DIR/$h" ] && grep -Eq 'mt_runs_merge|mt_is_pr_merge' "$HOOK_DIR/$h" && printf '%s\n' "$h"
+    done)"
+case "$merge_gates" in *block-red-merge.sh*) pass ;; *) fail "#1181 control: the hooks block lists no block-red-merge.sh as a merge gate: [$merge_gates]" ;; esac
+while IFS= read -r h; do
+  [ -n "$h" ] || continue
+  ask="$(grep -n 'mt_api_merge_untold "\$command"' "$HOOK_DIR/$h" | awk -F: 'NR == 1 { print $1 }')"
+  first="$(grep -n 'mt_pr_number "\$command"' "$HOOK_DIR/$h" | awk -F: 'NR == 1 { print $1 }')"
+  if [ -n "$ask" ] && { [ -z "$first" ] || [ "$ask" -lt "$first" ]; }; then pass; else
+    fail "#1181 $h judges a merge without asking mt_api_merge_untold before its first mt_pr_number"; fi
+done <<< "$merge_gates"
+# And none of them is registered behind an `if` filter: Claude Code then runs it only for commands the
+# filter names, and `Bash(gh pr merge*)` kept block-red-merge.sh and the changelog gate from ever
+# seeing an API merge, or the changelog gate a repo's own merge tool, whatever their recogniser said.
+behind_if="$(jq -r '.hooks.PreToolUse[]? | select((.matcher // "") | test("(^|[|])Bash($|[|])")) | .hooks[]? | select(.if != null) | .command' "$SETTINGS_FILE" 2>/dev/null \
+  | sed 's#.*/##' | sort -u)"
+filtered=""
+while IFS= read -r h; do
+  [ -n "$h" ] || continue
+  case $'\n'"$merge_gates"$'\n' in *$'\n'"$h"$'\n'*) filtered+="$h " ;; esac
+done <<< "$behind_if"
+eq "$filtered" "" "#1181 no merge gate is registered behind an if filter narrower than its recogniser"
+rm -rf "$NO_GH"
+
 rm -rf "$nopy_root"
 
 echo "merge-target: where a gate looked for the pull request (#470)"

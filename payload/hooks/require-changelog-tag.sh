@@ -44,10 +44,17 @@
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+payload=$(cat)
+
+# It runs before EVERY Bash command (claude-config#1181): it used to be registered behind an `if` of
+# `Bash(gh pr merge*)`, so Claude Code never ran it for a merge through the GitHub API, or for a
+# repo's own merge tool, whatever mt_runs_merge said (#351 taught the recogniser the tools; the
+# filter kept them from it). So the commonest case leaves here, before anything is loaded, by the
+# words every merge route names (mt__might_merge in lib/merge-target.sh).
+case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
+
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
-
-payload=$(cat)
 
 REGISTRY="${CHANGELOG_REGISTRY:-$HOME/.claude/skills/pennie-dev-update/repos.json}"
 
@@ -79,7 +86,7 @@ if ps_reader_missing jq python3; then
   [ -f "$REGISTRY" ] || exit 0
   case "$payload" in
     *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
-    *merge*)
+    *)
       refuse_no_reader "neither jq nor python3 is on PATH" \
         "require-changelog-tag.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
         "jq or python3" ;;
@@ -194,6 +201,14 @@ if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
   done <<< "$t_all"
   [ -n "$gated" ] || exit 0
   deny "Cannot judge this merge's changelog record: $span_why (One of them, $gated, may be gated by the changelog registry.) Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+fi
+
+# A merge through the GitHub API whose pull request cannot be named (claude-config#1181). Nothing
+# here can then say which repository it is in either, so whether the registry gates it cannot be
+# told, and cannot tell is never "not gated" (L490). Asked in this shell, so a GraphQL merge's node is
+# resolved once and the repository and number read below take that answer.
+if mt_api_merge_untold "$command"; then
+  deny "Cannot judge this merge's changelog record: $MT_API_WHY Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
 # WHICH repository, resolved the way gh itself resolves it: the merge's own --repo, -R or pull

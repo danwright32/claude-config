@@ -561,7 +561,85 @@ def command_rest(text):
             break
         s = s[m.end():]
     assigns, rest = split(s)
-    return rest, "\n".join(assigns)
+    rest, more = past_runners(rest)
+    return rest, "\n".join(assigns + more)
+
+
+# The words that only run the command after them, each with the short options that take a value and
+# the long ones that take the next word (claude-config#1181). `env GH_TOKEN=x gh pr merge 7` and
+# `sudo gh pr merge 7` were commands named env and sudo to every merge gate, so they merged unjudged,
+# while the mods' one reader (mod-kit hooks/commands.ts, RUNNERS, whose option letters these are)
+# read them as the merge; and that reader did not know rtk, which this one did. Both now read all
+# three, and payload/mods/scope-modes/tests/api-merge-cases.ts holds them to it, route by route.
+RUNNERS = {
+    "rtk": ("", set()),
+    "env": ("CPSu", {"--chdir", "--split-string", "--unset"}),
+    "sudo": ("CDghpRrTtUu", {"--chdir", "--chroot", "--close-from", "--command-timeout", "--group", "--host",
+                             "--other-user", "--prompt", "--role", "--type", "--user"}),
+}
+
+
+def first_word(s):
+    """(the first word of s with its quotes removed, the text after it as written), or (None, s)."""
+    s = s.lstrip()
+    if not s:
+        return None, s
+    lex = shlex.shlex(s, posix=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        w = lex.get_token()
+    except ValueError:
+        return None, s
+    if w is None:
+        return None, s
+    return w, s[lex.instream.tell():]
+
+
+def past_runners(rest):
+    """The command past any rtk, env or sudo in front of it, each with its options, and the NAME=value
+    settings env or sudo gives it, which are the command's own assignments as much as a leading one.
+    A runner whose command cannot be read from its words (env -S, which splits a string into one) is
+    left as it stands, the command then being that runner's."""
+    assigns = []
+    for _ in range(8):
+        w, after = first_word(rest)
+        if w is None or w.split("/")[-1] not in RUNNERS:
+            break
+        values, longs = RUNNERS[w.split("/")[-1]]
+        s = after
+        while True:
+            opt, after_opt = first_word(s)
+            if opt is None:
+                return rest, assigns
+            if opt == "--":
+                s = after_opt
+                break
+            if opt == "-":
+                s = after_opt
+                continue
+            if opt.startswith("--"):
+                if opt.split("=", 1)[0] == "--split-string":
+                    return rest, assigns
+                if "=" not in opt and opt in longs:
+                    _, after_opt = first_word(after_opt)
+                s = after_opt
+                continue
+            if opt.startswith("-") and len(opt) > 1:
+                letters = opt[1:]
+                if w.split("/")[-1] == "env" and "S" in letters:
+                    return rest, assigns
+                at = next((k for k, ch in enumerate(letters) if ch in values), None)
+                # A value flag takes the rest of its word, or the next word when it ends the word.
+                if at is not None and at == len(letters) - 1:
+                    _, after_opt = first_word(after_opt)
+                s = after_opt
+                continue
+            break
+        more, s = split(s)
+        assigns.extend(more)
+        rest = s
+    return rest, assigns
 
 
 def read(s):

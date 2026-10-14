@@ -212,7 +212,8 @@ MTEOF
 
 # Every command as "<its leading assignments, 0x1d between>" 0x1f "<its text as written>" 0x1f "<the
 # command from its name on>", one per line (newlines inside a command made spaces), both read by the one reading (ps__read: lib/shell-words.py's command_rest, so the
-# reserved words come from the same RESERVED list the push walker uses), with `rtk` in front dropped.
+# reserved words come from the same RESERVED list the push walker uses), past any rtk, env or sudo in front
+# (shell-words.py past_runners, #1181), and with `rtk` in front dropped here too.
 # With nothing to read the command, the crude cut and the bash assignment split, which can only see
 # more commands than are there (L42).
 mt__commands() {  # $1 = command
@@ -459,39 +460,69 @@ MTEOF
   return 1
 }
 
-# True when a segment runs the gh merge command itself. The leading `(^|/)` lets
-# gh be called by an absolute path without letting the phrase match inside a
+# The cheap first test every merge question starts with: a command that could merge a pull request at
+# all names a merge somewhere in it. Every route does, but not always in lower case (claude-config
+# #1181): gh pr merge, a merge tool, the REST merge endpoint and mergePullRequest say "merge",
+# enablePullRequestAutoMerge says "Merge", and the merge queue's enqueuePullRequest says neither. The
+# gates that filter a payload before they load this library (pr-review-gate.sh, block-red-merge.sh,
+# require-changelog-tag.sh) use the same three words, and each one's suite drives a GraphQL merge
+# through it.
+mt__might_merge() {  # $1 = command or payload
+  case "$1" in *merge*|*Merge*|*enqueuePullRequest*) return 0 ;; esac
+  return 1
+}
+
+# True when a segment merges a pull request DIRECTLY: the gh merge command itself, or the GitHub API
+# asked to merge one (claude-config#1181), by its REST merge endpoint or a GraphQL mutation, as
+# lib/merge-selector.py reads them. A merge through the API is no more a repo's own tool than gh pr
+# merge is, so every gate judges it, and block-red-merge.sh refuses it where the repo carries a commit
+# pinned tool exactly as it refuses gh pr merge. Before #1181 these routes were no merge to any gate,
+# while the overnight judge in the scope-modes mod refused both, so the two recognisers disagreed
+# (L450); payload/mods/scope-modes/tests/api-merge-cases.ts now holds them to one table.
+#
+# The leading `(^|/)` lets gh be called by an absolute path without letting the phrase match inside a
 # quoted word.
 #
 # The cheap substring test comes first, so an ordinary command (which is every
 # command in every session, since both blocking gates ask this before anything
-# else) is answered by one glob and no subshell.
+# else) is answered by one glob and no subshell. Only a command with a `gh api` at a command start is
+# handed to the python reader, so gh pr merge is answered as cheaply as before.
 #
 # The heads are CAPTURED and then searched, never piped into the search. A quiet
 # grep leaves on its first match, so a merge with commands after it killed the
 # writer still holding their heads, and under the pipefail both gates run with
 # that death made the answer "not a merge": `<merge> && echo merged` walked past
 # both gates on most runs (found testing #382, L183).
+#
+# With the reader missing, a `gh api` call that names a merge cannot be told from a read, so it is
+# answered as a merge and every gate then refuses by naming the missing reader (mt_reader_missing),
+# never lets it through as nothing (L490).
 mt_is_pr_merge() {  # $1 = command
-  case "$1" in *merge*) ;; *) return 1 ;; esac
+  mt__might_merge "$1" || return 1
   local heads
   ps__read "$1" || :
   heads="$(mt_command_heads "$1")"
-  grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF
+  grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' <<MTEOF && return 0
 $heads
 MTEOF
+  grep -Eq '(^|/)gh[[:space:]]+api([[:space:]]|$)' <<MTEOF || return 1
+$heads
+MTEOF
+  mt_reader_missing && return 0
+  mt__read_selector "$1"
+  [ -n "$MT_SEL_ROUTE" ]
 }
 
-# True when a segment causes a merge by any route: the direct command, a repo's
-# own merge wrapper in command position (as the first token, or the second when
-# the first is an interpreter), or `npm run merge`, which is how one of those
+# True when a segment causes a merge by any route: the direct command or the GitHub API
+# (mt_is_pr_merge), a repo's own merge wrapper in command position (as the first token, or the second
+# when the first is an interpreter), or `npm run merge`, which is how one of those
 # wrappers is invoked and which a basename match cannot see, because what follows
 # `npm run` is a script name rather than a path.
 #
 # `merge` has to match EXACTLY there: `npm run merge-ready` only reports and
 # merges nothing, so a prefix match would fire on every look at a pull request.
 mt_runs_merge() {  # $1 = command
-  case "$1" in *merge*) ;; *) return 1 ;; esac
+  mt__might_merge "$1" || return 1
   ps__read "$1" || :
   mt_is_pr_merge "$1" && return 0
   local seg
@@ -504,13 +535,21 @@ mt_runs_merge() {  # $1 = command
 # The pull request number if the command names one; empty otherwise, in which
 # case gh resolves it from the current branch, which is also what the merge
 # itself would do.
+#
+# A merge through the GitHub API names its number in the endpoint (REST), or names the pull request
+# by its node id (GraphQL), which GitHub resolves (mt__node_target); one whose pull request cannot be
+# read (mt_api_merge_untold) answers EMPTY here, and every gate refuses it before asking this, because
+# empty means the current branch's pull request, which is not the one that merge names (L75).
 mt_pr_number() {  # $1 = command
-  local direct seg prev tok
+  local seg prev tok
   local -a MT_TOKENS
   ps__read "$1" || :
-  direct="$(mt__merge_selector "$(mt__selector_input "$1")")"
-  direct="${direct#*$'\t'}"
-  [ -n "$direct" ] && { printf '%s' "$direct"; return; }
+  mt__read_selector "$1"
+  case "$MT_SEL_ROUTE" in
+    graphql) mt__node_target "$MT_SEL_NODE" && printf '%s' "$MT_NODE_PR"; return ;;
+    untold) return ;;
+  esac
+  [ -n "$MT_SEL_PR" ] && { printf '%s' "$MT_SEL_PR"; return; }
 
   # A wrapper takes the number as its FIRST POSITIONAL argument, and reading it beats
   # inferring one from the current branch, which after a merge is the thing most likely
@@ -733,6 +772,10 @@ mt_merge_each() {  # $1 = command, $2 = session cwd
 # start and its number was lost. With no such segment it is handed nothing, so a command that runs
 # no gh merge names no pull request: the whole command used to be read instead, and with no heredoc
 # stripper of its own left that would read a number out of a heredoc body (claude-config#1040).
+#
+# Every `gh api` command is handed over too, one per line (claude-config#1181), because whether a call
+# merges is the reader's question (lib/merge-selector.py): it reads them in order and answers for the
+# first that merges, so a read of the same pull request before the merge is never taken for it.
 mt__selector_input() {  # $1 = command
   local seg a b c d
   ps__read "$1" || :
@@ -742,25 +785,163 @@ mt__selector_input() {  # $1 = command
     read -r a b c d <<MTSEOF
 $seg
 MTSEOF
-    if [ "${a##*/}" = "gh" ] && [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
-      printf '%s' "$seg"; return 0
+    [ "${a##*/}" = "gh" ] || continue
+    if [ "$b" = "pr" ] && [ "$c" = "merge" ]; then
+      printf '%s\n' "$seg"; return 0
     fi
+    [ "$b" = "api" ] && printf '%s\n' "$seg"
   done <<MTSEOF
 $(mt_command_segments "$1")
 MTSEOF
   return 0
 }
 
-# WHICH pull request, and in WHICH repository, the gh merge invocation itself names. One
+# The selector's one line, read into MT_SEL_REPO, MT_SEL_PR, MT_SEL_ROUTE, MT_SEL_NODE, MT_SEL_PIN,
+# MT_SEL_WHY and MT_SEL_DETAIL (lib/merge-selector.py's header says what each holds). Split by
+# parameter expansion, never `IFS=$'\t' read`, which collapses the empty fields a tab separates.
+mt__read_selector() {  # $1 = command
+  local sel k
+  local -a f=()
+  sel="$(mt__merge_selector "$(mt__selector_input "$1")")"
+  for k in 1 2 3 4 5 6; do
+    f+=("${sel%%$'\t'*}")
+    case "$sel" in *$'\t'*) sel="${sel#*$'\t'}" ;; *) sel="" ;; esac
+  done
+  f+=("$sel")
+  MT_SEL_REPO="${f[0]}"; MT_SEL_PR="${f[1]}"; MT_SEL_ROUTE="${f[2]}"; MT_SEL_NODE="${f[3]}"
+  MT_SEL_PIN="${f[4]}"; MT_SEL_WHY="${f[5]}"; MT_SEL_DETAIL="${f[6]}"
+}
+
+# Which pull request a GraphQL node id is, asked of GitHub (claude-config#1181). A merge mutation
+# names the pull request by its node id rather than a number, and every gate needs the number and the
+# repository to read its checks, its lessons review and its changelog record.
+#
+# Sets MT_NODE_REPO (owner/name) and MT_NODE_PR and returns 0, or sets MT_NODE_ERR to what went wrong
+# and returns 1. Asked as the active account first, then each other logged-in account, scoping the
+# token per call and never switching the shared one, as mt_pr_view asks: a node in a repository only
+# another account can see is "not found" to this one (measured 2026-10-13: a node GitHub cannot
+# resolve exits 1 with `Could not resolve to a node with the global id of '<id>'`). A node that IS
+# found but is not a pull request (an issue's id, say) is final, and says what it is.
+#
+# A node id names one pull request for good, so the answer is remembered in MT__NODE_MEMO for the
+# shell that asked: a gate asks mt_api_merge_untold in its own shell first, and every mt_pr_number
+# and mt_repo_flag after it, each in a subshell of that shell, reads the answer rather than asking
+# GitHub again. Read with jq, as mt_pr_view reads its answers.
+MT__NODE_MEMO=""
+MT__NODE_QUERY='query($id: ID!) { node(id: $id) { __typename ... on PullRequest { number repository { nameWithOwner } } } }'
+mt__node_target() {  # $1 = node id
+  local node="$1" account token out rc errf err row type nwo num other="" notfound=0 rest
+  MT_NODE_REPO=""; MT_NODE_PR=""; MT_NODE_ERR=""
+  if [ -n "$node" ]; then
+    case "$MT__NODE_MEMO" in
+      "$node"$'\t'*)
+        rest="${MT__NODE_MEMO#*$'\t'}"; MT_NODE_REPO="${rest%%$'\t'*}"; MT_NODE_PR="${rest#*$'\t'}"
+        return 0 ;;
+    esac
+  else
+    MT_NODE_ERR="the mutation names no pull request id"; return 1
+  fi
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-node.XXXXXX" 2>/dev/null) || errf=""
+  local -a queue=("" "@others")
+  local qi=0
+  while [ "$qi" -lt "${#queue[@]}" ]; do
+    account="${queue[$qi]}"; qi=$((qi + 1))
+    if [ "$account" = "@others" ]; then
+      # shellcheck disable=SC2207
+      queue+=($(gh auth status 2>/dev/null | grep -oE 'account [A-Za-z0-9_.-]+' | awk '{print $2}' | sort -u))
+      continue
+    fi
+    if [ -z "$account" ]; then
+      out=$(gh api graphql -f query="$MT__NODE_QUERY" -f id="$node" 2>"${errf:-/dev/null}"); rc=$?
+    else
+      token=$(gh auth token -u "$account" 2>/dev/null) || continue
+      [ -n "$token" ] || continue
+      out=$(GH_TOKEN="$token" gh api graphql -f query="$MT__NODE_QUERY" -f id="$node" 2>"${errf:-/dev/null}"); rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+      row=$(printf '%s' "$out" | jq -r '[.data.node.__typename // "", .data.node.repository.nameWithOwner // "", (.data.node.number // "" | tostring)] | @tsv' 2>/dev/null) || row=""
+      type="${row%%$'\t'*}"; rest="${row#*$'\t'}"; nwo="${rest%%$'\t'*}"; num="${rest#*$'\t'}"
+      if [ "$type" = "PullRequest" ] && [ -n "$nwo" ] && [ -n "$num" ]; then
+        MT_NODE_REPO="$nwo"; MT_NODE_PR="$num"
+        MT__NODE_MEMO="$node"$'\t'"$nwo"$'\t'"$num"
+        [ -n "$errf" ] && rm -f "$errf"
+        return 0
+      fi
+      if [ -n "$type" ]; then
+        MT_NODE_ERR="$node is a node of type $type, not a pull request"
+        [ -n "$errf" ] && rm -f "$errf"
+        return 1
+      fi
+      [ -z "$other" ] && other="gh answered with nothing this could read"
+      continue
+    fi
+    err=""
+    [ -n "$errf" ] && err=$(awk 'NF { print; exit }' "$errf")
+    case "$err" in
+      *"Could not resolve to a node"*) notfound=1 ;;
+      *) [ -z "$other" ] && other="${err:-gh printed nothing}" ;;
+    esac
+  done
+  [ -n "$errf" ] && rm -f "$errf"
+  if [ -n "$other" ]; then MT_NODE_ERR="$other"
+  elif [ "$notfound" = 1 ]; then MT_NODE_ERR="no logged-in account can see a node with the id $node"
+  else MT_NODE_ERR="no logged-in account could be asked"; fi
+  return 1
+}
+
+# Does this command merge through the GitHub API a pull request nothing here can name? Returns 0 and
+# sets MT_API_WHY to the sentence a gate refuses with when it does; returns 1 otherwise (claude-config
+# #1181). Either way it sets MT_API_ROUTE to how the first merge is made (pr, rest, graphql, untold,
+# or empty for none) and MT_API_PIN to the commit the merge pins (--match-head-commit, sha=,
+# expectedHeadOid), which block-red-merge.sh holds to the head it read.
+#
+# Call it in the gate's OWN shell, never in $( ): a GraphQL merge's node is resolved here once, and
+# the answer is remembered there for every question asked after it (mt__node_target).
+#
+# Every merge gate asks it before mt_pr_number: a merge whose pull request cannot be read would
+# otherwise be judged as the current branch's pull request, which is not the one it merges, and a
+# gate that reads the wrong pull request is worse than one that reads none (L75). It refuses rather
+# than letting the merge through, because letting through what cannot be judged is the gap #1181
+# closes (L42). test-merge-target.sh fails when a merge gate stops asking it.
+mt_api_merge_untold() {  # $1 = command
+  MT_API_WHY=""; MT_API_ROUTE=""; MT_API_PIN=""
+  mt__might_merge "$1" || return 1
+  ps__read "$1" || :
+  mt__read_selector "$1"
+  MT_API_ROUTE="$MT_SEL_ROUTE"; MT_API_PIN="$MT_SEL_PIN"
+  case "$MT_SEL_ROUTE" in
+    graphql)
+      mt__node_target "$MT_SEL_NODE" && return 1
+      MT_API_WHY="this command merges pull request node $MT_SEL_NODE through the GitHub API, and GitHub could not say which pull request that is ($MT_NODE_ERR), so no gate can read its checks, its lessons review or its changelog record. Check the id, or merge with gh pr merge <number> --repo <owner>/<name>."
+      return 0 ;;
+    untold) ;;
+    *) return 1 ;;
+  esac
+  case "$MT_SEL_WHY" in
+    doc) MT_API_WHY="this command sends GitHub a GraphQL document that is not written in the command (it comes from ${MT_SEL_DETAIL:---input}), so nothing here can read whether it merges a pull request, or which one. Write the query into the command with -f query='...', or merge with gh pr merge." ;;
+    spread) MT_API_WHY="this command's GraphQL mutation runs its fields through a fragment, so nothing here can read whether it merges a pull request, or which one. Write the fields into the mutation itself, or merge with gh pr merge." ;;
+    many) MT_API_WHY="this command's GraphQL mutation merges more than one pull request, and a merge gate judges one pull request per command, so the merges after the first would land with no gate having read their checks, their lessons review or their changelog record. Run each merge as a command of its own." ;;
+    noid) MT_API_WHY="this command merges a pull request through the GitHub API ($MT_SEL_DETAIL), but the pull request id it names cannot be read here: it is neither written in the mutation nor passed with -f. Write the id into the mutation or pass it with -f, or merge with gh pr merge." ;;
+    endpoint) MT_API_WHY="this command merges a pull request through the GitHub API, but which repository its endpoint names ($MT_SEL_DETAIL) cannot be read here. Name it as repos/<owner>/<name>/pulls/<number>/merge, or merge with gh pr merge." ;;
+    *) MT_API_WHY="this command merges a pull request through the GitHub API in a way nothing here can read. Merge with gh pr merge instead." ;;
+  esac
+  return 0
+}
+
+# WHICH pull request, and in WHICH repository, the merge the command runs names. One
 # reading, because gh takes both from that one command and a gate that reads either without
 # the other asks one repository about another repository's pull request (claude-config#470).
 #
-# Prints "<repository>\t<number>", either side empty when the command does not name it.
+# Prints the one line lib/merge-selector.py prints, whose header says what each of its seven tab
+# separated fields holds; mt__read_selector reads it into variables. The reading itself, gh pr merge's
+# and the GitHub API's (claude-config#1181), lives in that file rather than inline here, because the
+# API routes need a GraphQL reader too, and one file holds both readings of one question.
 #
 # gh takes the repository from --repo or -R before anything about the directory it runs in,
 # so a gate asking gh about the directory is asking about a different repository whenever the
 # two differ. Measured 2026-09-19 merging danwright32/backstage#26 from an Ovation session:
-# refused as "gh returned nothing", because Ovation has no pull request 26.
+# refused as "gh returned nothing", because Ovation has no pull request 26. A REST merge names
+# its repository in its endpoint, which gh honours the same way.
 #
 # A pull request given as a LINK names both, and the link wins over a --repo beside it, which
 # is what gh does with the two together: measured 2026-09-19, gh pr view with the cli/cli
@@ -775,88 +956,24 @@ MTSEOF
 # trailing .git) come back as one. A host other than github.com is kept whole, so it can never
 # compare equal to a github.com remote and is refused downstream rather than read as one.
 #
-# IT NEEDS python3, and mt_reader_missing below is how a gate says so. See that comment before
-# reaching for a fallback reader.
+# IT NEEDS python3 and lib/merge-selector.py, and mt_reader_missing below is how a gate says so.
+# See that comment before reaching for a fallback reader.
+MT_SELECTOR="$_MT_LIB/merge-selector.py"
 mt__merge_selector() {  # $1 = command
-  MT_CMD="$1" python3 -c '
-import os, re, shlex
-cmd = os.environ.get("MT_CMD", "")
-# A newline starts a new command the way a semicolon does, and a backslash before one does not.
-# shlex reads both as ordinary whitespace, so they are rewritten before it sees them.
-cmd = cmd.replace("\\\n", " ").replace("\n", " ; ")
-lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
-lex.whitespace_split = True
-OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
-ENDERS = OPENERS | {")", "}"}
-ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-# The flags gh pr merge takes a VALUE for. A value is neither a flag nor the pull request, so
-# without this list a commit sha or a message would be read as the thing being merged.
-VALUED = {"--repo", "-R", "--body", "-b", "--body-file", "-F", "--subject", "-t",
-          "--match-head-commit", "--author-email", "-A"}
-LINK = re.compile(r"^(?:[a-z]+://)?([^/\s]+[.][^/\s]+)/([^/\s]+)/([^/\s]+)/pull/([0-9]+)(?:[/?#].*)?$")
-def norm(v):
-    v = re.sub(r"^[a-z]+://", "", v.strip())
-    v = re.sub(r"[.]git$", "", v.rstrip("/"))
-    if v.lower().startswith("github.com/"):
-        v = v[len("github.com/"):]
-    return v
-toks = []
-while True:
-    try:
-        t = lex.get_token()
-    except ValueError:
-        break
-    if t is None or t == lex.eof:
-        break
-    toks.append(t)
-repo, link_repo, number = "", "", ""
-at_start, i, n = True, 0, len(toks)
-while i < n:
-    t = toks[i]
-    if at_start and ASSIGN.match(t):
-        i += 1
-        continue
-    if at_start and t.split("/")[-1] == "gh" and toks[i + 1:i + 3] == ["pr", "merge"]:
-        j = i + 3
-        while j < n and toks[j] not in ENDERS:
-            a = toks[j]
-            if a in ("--repo", "-R") and j + 1 < n and toks[j + 1] not in ENDERS:
-                repo = repo or norm(toks[j + 1])
-                j += 2
-                continue
-            if a.startswith("--repo="):
-                repo = repo or norm(a[len("--repo="):])
-            elif a.startswith("-R") and len(a) > 2:
-                repo = repo or norm(a[2:])
-            elif a in VALUED:
-                j += 2
-                continue
-            elif a.startswith("-"):
-                pass
-            else:
-                m = LINK.match(a)
-                if m and not link_repo:
-                    host, owner, name = m.group(1), m.group(2), re.sub(r"[.]git$", "", m.group(3))
-                    link_repo = owner + "/" + name
-                    if host.lower() != "github.com":
-                        link_repo = host + "/" + link_repo
-                    number = number or m.group(4)
-                elif a.isdigit() and not number:
-                    number = a
-            j += 1
-        break
-    at_start = t in OPENERS
-    i += 1
-print((link_repo or repo) + "\t" + number, end="")
-' 2>/dev/null
+  MT_CMD="$1" python3 "$MT_SELECTOR" 2>/dev/null
 }
 
 # The repository the merge NAMES, as owner/name; empty when it names none (claude-config#463,
-# #470). The flag or the link, read by mt__merge_selector above, which holds the reasoning.
+# #470). The flag or the link, read by mt__merge_selector above, which holds the reasoning; for a
+# REST merge through the API, its endpoint's; for a GraphQL one, the repository GitHub says its
+# pull request node is in (mt__node_target).
 mt_repo_flag() {  # $1 = command ; prints owner/name, or nothing
-  local sel
-  sel="$(mt__merge_selector "$(mt__selector_input "$1")")"
-  printf '%s' "${sel%%$'\t'*}"
+  mt__read_selector "$1"
+  if [ "$MT_SEL_ROUTE" = graphql ]; then
+    mt__node_target "$MT_SEL_NODE" && printf '%s' "$MT_NODE_REPO"
+    return 0
+  fi
+  printf '%s' "$MT_SEL_REPO"
 }
 
 # WHETHER the reader above is installed at all, and what to say when it is not (claude-config#475).
@@ -889,7 +1006,10 @@ mt_reader_missing() {  # true when the reader mt__merge_selector needs is not in
   # The cd in force for the merge is read by lib/shell-words.py (#1017). Without it ps_cd_target
   # answers nothing, and mt_repo_dir would judge the merge in the session directory instead
   # (lessons review of #1056, L490), so a missing file is a missing reader too.
-  [ ! -f "$PS_SHELL_WORDS" ]
+  [ ! -f "$PS_SHELL_WORDS" ] && return 0
+  # The merge's own words are read by lib/merge-selector.py (#1181), and without it the number and
+  # the repository come back empty exactly as they do with no python3.
+  [ ! -f "$MT_SELECTOR" ]
 }
 
 # The sentence every gate says it with, in the gates' shared vocabulary rather than one wording
@@ -899,6 +1019,12 @@ mt_reader_absent_why() {
     ps_reader_absent_why "$PS_SHELL_WORDS is missing" \
       'lib/push-scope.sh reads which directory a cd puts the merge in with it, and without that reading this gate would judge the merge in the session directory instead of the repository it runs in.' \
       'the hooks again with claude-sync pull, which restores lib/shell-words.py,'
+    return
+  fi
+  if [ ! -f "$MT_SELECTOR" ] && ! ps_reader_missing python3; then
+    ps_reader_absent_why "$MT_SELECTOR is missing" \
+      'lib/merge-target.sh reads the merge'\''s own arguments with it: which pull request this command names and in which repository, by gh pr merge or through the GitHub API, and without that reading this gate would answer about whatever pull request gh resolves from the current branch instead.' \
+      'the hooks again with claude-sync pull, which restores lib/merge-selector.py,'
     return
   fi
   ps_reader_absent_why 'python3 is not on PATH' \

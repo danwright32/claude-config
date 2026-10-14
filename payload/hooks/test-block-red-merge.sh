@@ -929,6 +929,13 @@ case "$*" in
     if [ -f "$f" ]; then cat "$f"; exit 0; fi
     echo "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)" >&2
     exit 1 ;;
+  # Which pull request a GraphQL merge's node is (claude-config#1181): GH_NODE_JSON, else GitHub's
+  # own answer for a node it cannot resolve.
+  "api graphql"*)
+    printf '%s\n' "$*" >> "${GH_NODE_LOG:-/dev/null}"
+    if [ -n "${GH_NODE_FAIL:-}" ]; then printf '%s\n' "$GH_NODE_FAIL" >&2; exit 1; fi
+    if [ -n "${GH_NODE_JSON:-}" ]; then printf '%s\n' "$GH_NODE_JSON"; exit 0; fi
+    echo "gh: Could not resolve to a node with the global id of 'PR_x'" >&2; exit 1 ;;
   "api "*)
     if [ -n "${GH_API_BROKEN:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
     # GH_API_FAILS: a file of errors, one spent per probe, so a probe can fail some number of times
@@ -1538,6 +1545,102 @@ rm -f "$f"
 rm -rf "$dir"
 unset FIXTURE GH_CALL_LOG
 rm -f "$BRM_SLEEP_LOG"; unset BRM_SLEEP_LOG
+
+echo "block-red-merge: a merge through the GitHub API is judged as gh pr merge is (claude-config#1181)"
+
+# Before #1181 every one of these walked past this gate unjudged: the recogniser did not know the
+# routes, and the hook was registered behind an `if` of Bash(gh pr merge*), so Claude Code never ran
+# it for them at all. The routes are the ones the overnight judge in the scope-modes mod refuses.
+REST="gh api -X PUT repos/other/repo/pulls/7/merge -f merge_method=squash"
+GQL_MUT() {  # $1 = the mutation's field, $2 = extra input ; a GraphQL merge of node PR_x
+  printf "gh api graphql -f query='mutation { %s(input: {pullRequestId: \"PR_x\"%s}) { clientMutationId } }'" "$1" "$2"
+}
+NODE_OTHER='{"data":{"node":{"__typename":"PullRequest","number":7,"repository":{"nameWithOwner":"other/repo"}}}}'
+
+two_repos SUCCESS
+out=$(run_hook "$dir" "$REST -f sha=$HEAD_SHA")
+if denied "$out"; then fail "#1181 a green REST merge pinned to its head was refused: $out"; else pass; fi
+if asked_about "pr view 7 --repo other/repo"; then pass; else fail "#1181 a REST merge did not make the gate read the pull request its endpoint names: $(cat "$GH_CALL_LOG")"; fi
+rm -rf "$dir"
+
+two_repos FAILURE
+out=$(run_hook "$dir" "$REST -f sha=$HEAD_SHA")
+if denied "$out" && holds "$out" "is not green: tests=FAILURE"; then pass; else fail "#1181 a red REST merge was not refused as red: $out"; fi
+out=$(run_hook "$dir" "gh api --method=put /repos/other/repo/pulls/7/merge -f sha=$HEAD_SHA")
+if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1181 a red REST merge spelled --method=put with a leading slash was not refused: $out"; fi
+out=$(run_hook "$dir" "rtk gh api -XPUT repos/other/repo/pulls/7/merge -f sha=$HEAD_SHA")
+if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1181 a red REST merge behind rtk was not refused: $out"; fi
+rm -rf "$dir"
+
+# The pin, in the API's own words: unpinned is refused with the parameter to add, and a pin to
+# another commit is refused as worse than none.
+two_repos SUCCESS
+out=$(run_hook "$dir" "$REST")
+if denied "$out" && holds "$out" "-f sha=$HEAD_SHA"; then pass; else fail "#1181 an unpinned REST merge was not told to add -f sha=: $out"; fi
+out=$(run_hook "$dir" "$REST -f sha=0000000000000000000000000000000000000000")
+if denied "$out" && holds "$out" "pins 0000000000000000000000000000000000000000"; then pass; else fail "#1181 a REST merge pinned to another commit was not refused: $out"; fi
+rm -rf "$dir"
+
+# GraphQL: the node is asked of GitHub, and the pull request it is judged as the one GitHub names.
+two_repos SUCCESS
+out=$(GH_NODE_JSON="$NODE_OTHER" run_hook "$dir" "$(GQL_MUT mergePullRequest ", expectedHeadOid: \"$HEAD_SHA\"")")
+if denied "$out"; then fail "#1181 a green GraphQL merge pinned to its head was refused: $out"; else pass; fi
+if asked_about "pr view 7 --repo other/repo"; then pass; else fail "#1181 a GraphQL merge did not make the gate read the pull request its node is: $(cat "$GH_CALL_LOG")"; fi
+out=$(GH_NODE_JSON="$NODE_OTHER" run_hook "$dir" "$(GQL_MUT mergePullRequest "")")
+if denied "$out" && holds "$out" "expectedHeadOid" && holds "$out" "$HEAD_SHA"; then pass; else fail "#1181 an unpinned GraphQL merge was not told to add expectedHeadOid: $out"; fi
+rm -rf "$dir"
+two_repos FAILURE
+for field in mergePullRequest enablePullRequestAutoMerge enqueuePullRequest; do
+  out=$(GH_NODE_JSON="$NODE_OTHER" run_hook "$dir" "$(GQL_MUT "$field" ", expectedHeadOid: \"$HEAD_SHA\"")")
+  if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1181 a red pull request merged by $field was not refused as red: $out"; fi
+done
+rm -rf "$dir"
+
+# THE FAILURE PATH: a node GitHub cannot resolve is refused by name, never judged as the current
+# branch's pull request.
+two_repos SUCCESS
+out=$(GH_NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_x'" run_hook "$dir" "$(GQL_MUT mergePullRequest "")")
+if denied "$out" && holds "$out" "GitHub could not say which pull request that is"; then pass; else fail "#1181 a GraphQL merge whose node cannot be resolved was not refused by name: $out"; fi
+if asked_about "pr view"; then fail "#1181 a node that could not be resolved was judged as some pull request anyway: $(cat "$GH_CALL_LOG")"; else pass; fi
+out=$(run_hook "$dir" "gh api graphql -F query=@merge.graphql")
+if denied "$out" && holds "$out" "@merge.graphql"; then pass; else fail "#1181 a GraphQL document read from a file was not refused: $out"; fi
+rm -rf "$dir"
+
+# Calls that are not merges pass untouched: a GET of the same endpoint, another PUT, a query.
+two_repos FAILURE
+: > "$GH_CALL_LOG"
+for c in "gh api repos/other/repo/pulls/7/merge" "gh api -X GET repos/other/repo/pulls/7/merge" \
+         "gh api -X PUT repos/other/repo/pulls/7 -f title=merge" \
+         "gh api graphql -f query='query { repository(owner: \"other\", name: \"repo\") { pullRequest(number: 7) { mergeable } } }'"; do
+  out=$(run_hook "$dir" "$c")
+  if [ -z "$out" ]; then pass; else fail "#1181 a gh api call that merges nothing was not let through untouched [$c]: $out"; fi
+done
+if [ -s "$GH_CALL_LOG" ]; then fail "#1181 a gh api call that merges nothing made the gate ask GitHub: $(cat "$GH_CALL_LOG")"; else pass; fi
+rm -rf "$dir"
+
+# Behind a word that only runs the command after it (env and its settings, sudo and its options, rtk):
+# before #1181 `env GH_TOKEN=x gh pr merge` and `sudo gh pr merge` were commands named env and sudo here.
+two_repos FAILURE
+for c in "env GH_TOKEN=x gh pr merge 7 --repo other/repo $PIN" "env -u GH_HOST GH_TOKEN=x gh pr merge 7 --repo other/repo $PIN" \
+         "sudo -u dan -E gh pr merge 7 --repo other/repo $PIN" \
+         "sudo env GH_TOKEN=x rtk gh api -X PUT repos/other/repo/pulls/7/merge -f sha=$HEAD_SHA"; do
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && holds "$out" "is not green"; then pass; else fail "#1181 a red merge behind a runner was not refused as red [$c]: $out"; fi
+done
+rm -rf "$dir"
+two_repos SUCCESS
+out=$(run_hook "$dir" "env GH_TOKEN=x gh pr merge 7 --repo other/repo $PIN")
+if denied "$out"; then fail "#1181 a green merge behind env, pinned to its head, was refused: $out"; else pass; fi
+out=$(run_hook "$dir" "sudo gh pr merge 7 --repo other/repo --squash")
+if denied "$out" && holds "$out" "--match-head-commit $HEAD_SHA"; then pass; else fail "#1181 an unpinned merge behind sudo was not told to pin: $out"; fi
+rm -rf "$dir"
+
+# A repo carrying a commit pinned merge tool refuses the API as it refuses gh pr merge, by name.
+dir=$(make_repo with-tool "$GREEN")
+out=$(run_hook "$dir" "gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge' -f sha=$HEAD_SHA")
+if denied "$out" && holds "$out" "not through the GitHub API"; then pass; else fail "#1181 an API merge in a repo with its own merge tool was not refused for the tool: $out"; fi
+rm -rf "$dir"
+unset FIXTURE GH_CALL_LOG
 
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"

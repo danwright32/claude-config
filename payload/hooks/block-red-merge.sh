@@ -1,5 +1,6 @@
 #!/bin/bash
-# Block `gh pr merge` unless that PR's checks are positively green.
+# Block `gh pr merge`, or a merge through the GitHub API (claude-config#1181), unless that PR's checks
+# are positively green.
 #
 # Why this exists: on 2026-07-28 a PR was merged while its test run was failing.
 # The command printed "conclusion=failure" and then merged anyway, because the
@@ -40,10 +41,16 @@ set -uo pipefail
 # copies would drift silently, each passing its own tests while disagreeing about
 # which pull request it is looking at.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+payload=$(cat)
+
+# It runs before EVERY Bash command (claude-config#1181): it used to be registered behind an `if` of
+# `Bash(gh pr merge*)`, so Claude Code never ran it for a merge through the GitHub API whatever the
+# recogniser said. So the commonest case leaves here, before anything is loaded, by the words every
+# merge route names (mt__might_merge in lib/merge-target.sh), as pr-review-gate.sh always has.
+case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
+
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
-
-payload=$(cat)
 
 # What this gate REFUSES with when a tool it reads through is not installed. On stderr with exit 2
 # rather than through deny() below, because deny() builds its JSON with jq and jq is one of the
@@ -64,13 +71,13 @@ refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what t
 # either can still read a payload, so the commoner absence costs this gate nothing.
 #
 # With NEITHER installed nothing here can tell a merge from an `ls`, so what is refused is narrowed
-# by the same cheap substring mt_is_pr_merge uses as its own first filter: a payload with no
-# "merge" anywhere in it cannot be one. Refusing every Bash command instead would be a gate nobody
+# by the same cheap substring mt_is_pr_merge uses as its own first filter, already asked above: a
+# payload naming no merge anywhere in it cannot be one. Refusing every Bash command instead would be a gate nobody
 # keeps, and the override habit it teaches protects nothing at all (L36, L54).
 if ps_reader_missing jq python3; then
   case "$payload" in
     *ALLOW_RED_MERGE=1*) exit 0 ;;
-    *merge*)
+    *)
       refuse_no_reader "neither jq nor python3 is on PATH" \
         "block-red-merge.sh reads this command out of the hook payload, which is JSON, with one of them, so with neither installed it cannot tell whether this command merges a pull request at all, let alone which one." \
         "jq or python3" ;;
@@ -148,6 +155,20 @@ mt_reader_missing && deny "Refusing to merge: $(mt_reader_absent_why) Verifying 
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
   deny "Refusing to merge: $span_why"
 fi
+
+# A merge through the GitHub API (claude-config#1181): its pull request is named by its endpoint, or
+# by a GraphQL node GitHub resolves here, once, in this shell, so every read below takes that answer.
+# One that cannot be named is refused: read as the current branch's pull request, another pull
+# request's checks would answer for it. Also sets MT_API_ROUTE and MT_API_PIN, which the commit pin
+# at the foot of the file reads.
+if mt_api_merge_untold "$command"; then
+  deny "Refusing to merge: $MT_API_WHY"
+fi
+# How this merge is made, in the words a refusal names it by.
+case "$MT_API_ROUTE" in
+  rest|graphql) merge_route="the GitHub API" ;;
+  *) merge_route="gh pr merge" ;;
+esac
 
 # The PR number if the command names one; otherwise gh resolves it from the
 # current branch, which is also what the merge itself would do.
@@ -231,7 +252,7 @@ if [ -n "$pinned_tool" ]; then
   case "$command" in
     *SKIP_MERGE_TOOL=1*) ;;
     *)
-      deny "This repo merges through its own commit pinned tool ($pinned_tool), not through gh pr merge. Run: $pinned_how . It judges the checks against the commit at the head and hands GitHub that commit, so a push landing in the seconds between the two cannot be merged unjudged, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
+      deny "This repo merges through its own commit pinned tool ($pinned_tool), not through $merge_route. Run: $pinned_how . It judges the checks against the commit at the head and hands GitHub that commit, so a push landing in the seconds between the two cannot be merged unjudged, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
       ;;
   esac
 fi
@@ -308,7 +329,7 @@ if [ -n "$foreign" ]; then
       mt_pinned_tool_remote "$repo_flag" "$view_account" read_again; remote_rc=$?
       remote_tool="$MT_REMOTE_TOOL"
       if [ "$remote_rc" = 0 ]; then
-        deny "$repo_flag merges through its own commit pinned tool ($remote_tool), not through gh pr merge. From a checkout of $repo_flag, run: $(mt_pinned_how_for "$remote_tool" "${pr:-}") . It judges the checks against the commit at the head and hands GitHub that commit, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
+        deny "$repo_flag merges through its own commit pinned tool ($remote_tool), not through $merge_route. From a checkout of $repo_flag, run: $(mt_pinned_how_for "$remote_tool" "${pr:-}") . It judges the checks against the commit at the head and hands GitHub that commit, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
       elif [ "$remote_rc" = 2 ]; then
         deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
       fi
@@ -432,7 +453,9 @@ bad=$(printf '%s' "$verdicts" | jq -r '[.[] | select(.result | IN("SUCCESS","NEU
 # applies to all of them.
 #
 # gh pr merge takes --match-head-commit, and GitHub refuses the merge when the head has moved, so
-# every repo gets that protection from one flag.
+# every repo gets that protection from one flag. A merge through the GitHub API carries the same pin
+# in its own words (claude-config#1181): the REST merge endpoint's `sha` parameter, and the GraphQL
+# mutation's `expectedHeadOid`, each refused by GitHub when the head has moved.
 #
 # Reached only on a POSITIVE green reading, deliberately: the empty-rollup paths above exit before
 # this, because the pin protects a VERDICT and there is no verdict in a repo with no CI. Requiring
@@ -625,23 +648,44 @@ merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when 
   return 1
 }
 
-bounds=$(merge_invocation_bounds "$command") || bounds=""
+bounds=""
 invocation=""
-if [ -n "$bounds" ]; then
-  inv_start=${bounds% *}
-  inv_end=${bounds#* }
-  invocation="${command:$inv_start:$((inv_end - inv_start))}"
-fi
-
-pinned_sha=$(printf '%s' "$invocation" \
-  | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
-  | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
+case "$MT_API_ROUTE" in
+  rest|graphql)
+    # Read from the API call's own words by lib/merge-selector.py: `-f sha=<commit>` on the REST
+    # endpoint, `expectedHeadOid` in the mutation's input (written there or passed as a variable).
+    pinned_sha="$MT_API_PIN"
+    case "$pinned_sha" in *[!0-9a-fA-F]*) pinned_sha="" ;; esac
+    ;;
+  *)
+    bounds=$(merge_invocation_bounds "$command") || bounds=""
+    if [ -n "$bounds" ]; then
+      inv_start=${bounds% *}
+      inv_end=${bounds#* }
+      invocation="${command:$inv_start:$((inv_end - inv_start))}"
+    fi
+    pinned_sha=$(printf '%s' "$invocation" \
+      | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
+      | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
+    # A merge behind env or sudo is not one this scan finds at the head of a command, so where it
+    # found no invocation the pin is the one lib/merge-selector.py read from the merge's own words,
+    # which stop at the first pipe or separator just as this scan does (claude-config#1181).
+    if [ -z "$bounds" ] && [ -z "$pinned_sha" ]; then
+      pinned_sha="$MT_API_PIN"
+      case "$pinned_sha" in *[!0-9a-fA-F]*) pinned_sha="" ;; esac
+    fi
+    ;;
+esac
 
 if [ -z "$pinned_sha" ]; then
   # The flag goes on the gh invocation itself, before any pipe, redirection or later command, so the
   # command handed back is the one that actually pins. Where the invocation could not be found, say
   # where the flag belongs rather than guess at a line that could hand it to something else.
-  if [ -n "$bounds" ]; then
+  if [ "$MT_API_ROUTE" = rest ]; then
+    suggestion="Add -f sha=$head_sha to the API call itself, which GitHub's merge endpoint takes as the head the pull request must still have."
+  elif [ "$MT_API_ROUTE" = graphql ]; then
+    suggestion="Add expectedHeadOid: \"$head_sha\" to the mutation's input, which GitHub takes as the head the pull request must still have."
+  elif [ -n "$bounds" ]; then
     suggestion="Run: ${command:0:$inv_end} --match-head-commit $head_sha${command:$inv_end} ."
   else
     suggestion="Add --match-head-commit $head_sha to the gh pr merge invocation itself, before any pipe, redirection or following command."

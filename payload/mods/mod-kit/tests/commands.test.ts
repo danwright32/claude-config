@@ -122,6 +122,9 @@ describe('commands', () => {
     expect(commands('caffeinate -i -t 60 python3 run.py')).toEqual([['python3', 'run.py']])
     expect(commands('doas -u root rm -rf /x')).toEqual([['rm', '-rf', '/x']])
     expect(commands('nohup nice -n 5 timeout 60 python3 -c x')).toEqual([['python3', '-c', 'x']])
+    // #1181: rtk-rewrite.sh writes rtk in front of every gh and git command, and rtk runs it.
+    expect(commands('rtk gh pr merge 7 --squash')).toEqual([['gh', 'pr', 'merge', '7', '--squash']])
+    expect(commands('sudo env GH_TOKEN=x rtk git push')).toEqual([['git', 'push']])
   })
   test('xargs runs the command after its own options, and a shell it runs is read as its commands', () => {
     expect(commands(`ls | xargs sh -c 'rm a'`)).toEqual([['ls'], ['rm', 'a']])
