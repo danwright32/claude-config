@@ -99,7 +99,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
-  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; existsFails?: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   const blobs: Record<string, string> = { ...(init.blobs ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -164,7 +164,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
   })
-  on('fs.exists', ($, e) => ({ value: files[e.path] !== undefined }) as never)
+  // A file is there when the test put it there, and a folder when a file the test put is under it.
+  on('fs.exists', ($, e) => {
+    if (ctl.existsFails) throw new Error(`EIO: ${e.path}`)
+    return { value: files[e.path] !== undefined || Object.keys(files).some(f => f.startsWith(`${e.path}/`)) } as never
+  })
   on('fs.read', ($, e) => {
     reads.push(e.path)
     const t = files[e.path]
@@ -1439,6 +1443,94 @@ test('#1151: a look edit in the project is still held, however the command names
   // And a stylesheet written into the project by a heredoc is a look edit, as ever.
   expect(refusalOf(await sh(`cat > /w/slate/app/site.css <<'EOF'\na{}\nEOF`))).toContain(SKIP_QUESTION)
   expect(w.ran).toEqual([])
+})
+
+// #1191: Slate, 2026-10-14, running /design-rounds for slate#3718. Round one's files were in the
+// session's scratchpad (<scratchpad>/3718/round1/: builder.js, screen.base.css, screen.css, spec.json),
+// and a Bash call embedding the fonts into screen.css and running make-switcher.py was refused twice:
+// from the shared checkout on a detached head ("could not tell which issue or branch it belongs to")
+// and from a worktree on the issue's branch ("issue #3718 ... has no design round Dan has settled").
+// The program named the round's folder and joined each bare name onto it, and the guard placed those
+// names in the folder the program ran in, the checkout. The session's id is s1, so its scratchpad is
+// <temp>/claude-<uid>/<project>/s1/scratchpad, wherever the temp folder is.
+const ROUND = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'
+const ROUND_SPACED = '/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'
+const SWITCHER = 'python3 ~/.claude/skills/design-rounds/make-switcher.py'
+// The ways a program names a round's files without a cd: joined onto the folder by os.path.join, by
+// pathlib, through a variable the shell fills in, and from a program that also runs the switcher.
+const roundShapes = (round: string) => [
+  `python3 - <<'PY'\nimport base64, os\nd = '${round}'\nfont = base64.b64encode(open('/Users/dan/Library/Fonts/Inter.woff2', 'rb').read()).decode()\ncss = open(os.path.join(d, 'screen.base.css')).read().replace('INTER_WOFF2', font)\nopen(os.path.join(d, 'screen.css'), 'w').write(css)\nPY\n${SWITCHER} '${round}/spec.json' '${round}/switcher.html'`,
+  `python3 - <<'PY'\nfrom pathlib import Path\nd = Path('${round}')\n(d / 'screen.css').write_text((d / 'screen.base.css').read_text())\nPY`,
+  `R='${round}'; python3 - <<PY\ncss = open("$R/screen.base.css").read()\nopen("$R/screen.css", "w").write(css)\nPY\n${SWITCHER} "$R/spec.json" "$R/switcher.html"`,
+  `python3 - <<'PY'\nimport os, subprocess\nd = '${round}'\nopen(os.path.join(d, 'screen.css'), 'w').write(open(os.path.join(d, 'screen.base.css')).read())\nsubprocess.run(['python3', '/Users/dan/.claude/skills/design-rounds/make-switcher.py', d + '/spec.json', d + '/switcher.html'], check=True)\nPY`,
+]
+
+test("#1191: a design round's own files in the session's scratchpad pass on an issue with no settled round, with no issue or branch asked for", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', files: { '/w/slate/src/app/globals.css': 'a{}', '/w/slate-wt/src/app/globals.css': 'a{}' } })
+  w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'
+  // The issue's second refusal: from a worktree on the issue's branch.
+  for (const command of roundShapes(ROUND)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  // The first: from the shared checkout on a detached head. A command touching only the scratchpad
+  // needs no issue or branch, so none is read.
+  w.branches['/w/slate'] = ''
+  w.at.cwd = '/w/slate'
+  w.gitRuns.length = 0
+  for (const command of roundShapes(ROUND)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  // A scratchpad whose temp folder has a space in its name.
+  for (const command of roundShapes(ROUND_SPACED)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > "${ROUND_SPACED}/screen.css" <<'EOF'\na{}\nEOF` }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${ROUND_SPACED}/switcher.html`, content: '<!doctype html>' }))).toBe('')
+  expect(w.gitRuns.filter(g => g.includes('branch --show-current'))).toEqual([])
+  expect(w.ran.length).toBe(14)
+  expect(Object.keys(w.store)).toEqual([])
+})
+
+test("#1191: the session's scratchpad passes wherever its temp folder is, even inside a checkout; another session's does not", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/.tmp/claude-501/-w-slate/s1/scratchpad/3718/round1/screen.css', content: 'a{}' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f /w/slate/.tmp/claude-501/-w-slate/s1/scratchpad/3718/round1/*.html' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/.tmp/claude-501/-w-slate/s2/scratchpad/3718/round1/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
+  // A folder merely called scratchpad is no session's scratchpad.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/scratchpad/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(2)
+})
+
+test("#1191: the product's own files stay held, alone or in one command with a round's files", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', files: { '/w/slate-wt/src/app/globals.css': 'a{}', '/w/slate-wt/src/app/page.tsx': 'x' } })
+  w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'
+  const held = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  // The same write, to the checkout's globals.css.
+  expect(await held(`python3 - <<'PY'\nimport os\nd = '/w/slate-wt/src/app'\nopen(os.path.join(d, 'globals.css'), 'w').write('a{}')\nPY`)).toContain('issue #3718 in slate')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate-wt/src/app/globals.css', content: 'a{}' }))).toContain('issue #3718 in slate')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: '/w/slate-wt/src/app/globals.css', old_string: 'a{}', new_string: 'a{color:red}' }))).toContain(SKIP_QUESTION)
+  // One command writing a round's file and a product file: the product file is held, by a name the
+  // program opens, a new file in one of the product's folders, a name the shell writes, or a path.
+  const mixed = (product: string) => `python3 - <<'PY'\nimport os\nd = '${ROUND}'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nopen(${product}, 'w').write('a{}')\nPY`
+  expect(await held(mixed("'src/app/globals.css'"))).toContain('src/app/globals.css')
+  expect(await held(mixed("'src/app/booker.css'"))).toContain('src/app/booker.css')
+  expect(await held(mixed("'/w/slate-wt/src/app/globals.css'"))).toContain('src/app/globals.css')
+  expect(await held(`cat > ${ROUND}/screen.css <<'EOF'\na{}\nEOF\ncp ${ROUND}/screen.css src/app/globals.css`)).toContain('src/app/globals.css')
+  // A program naming another session's scratchpad is read as before: its bare names are in its folder.
+  expect(await held(`python3 - <<'PY'\nimport os\nd = '/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/3718/round1'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nPY`)).toContain('screen.css')
+  // Where the disk cannot say whether a name is the project's, it is read as the project's, and held.
+  w.ctl.existsFails = true
+  expect(await held(roundShapes(ROUND)[0] as string)).toContain('screen.css')
+  expect(w.ran).toEqual([])
+})
+
+// #1191: a refused round file sent Claude to /design-rounds, which it was already running, and Dan's
+// "Run /design-rounds" sent it there again: every way on led back to the refusal. Each now says where
+// a round's own files go, which the guard never holds.
+test("#1191: the refusal and Dan's Run /design-rounds both say where a round's own files go", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const why = refusalOf(await call($, STYLE))
+  expect(why).toContain("this session's scratchpad")
+  const agent = refusalOf(await call($, { ...STYLE, agentId: 'agent-a1' }))
+  expect(agent).toContain("this session's scratchpad")
+  const told = contextOf(await askSkip($, w, why, SKIP_NO))
+  expect(told).toContain("this session's scratchpad")
+  w.branches['/w/slate'] = ''
+  expect(refusalOf(await call($, STYLE))).toContain("this session's scratchpad")
 })
 
 // #1165: since #1151 a program was judged by every look file name its text holds, so a python

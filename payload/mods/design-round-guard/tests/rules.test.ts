@@ -33,6 +33,8 @@ import {
   subjectsOf,
   textsOf,
   patternMayBeLook,
+  inScratchpad,
+  namesScratchpad,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -190,6 +192,27 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
   expect(subjectsOf({ ...at, branch: 'release-2026', isDefault: true, issues: [2026] })[0]?.key).toBe('record:/Users/dan/Apps/slate|branch:release-2026|session:s1')
   // An issue named on the settled question, whatever the branch.
   expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: 'record:/Users/dan/Apps/slate|issue:12', label: 'issue #12 in slate' }])
+})
+
+// #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
+// session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
+test("the session's scratchpad is known by the session's id, wherever its temp folder is", () => {
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1/screen.css', 's1')).toBe(true)
+  expect(inScratchpad('/tmp/claude-501/-Users-dan-slate/s1/scratchpad', 's1')).toBe(true)
+  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css', 's1')).toBe(true)
+  // Another session's, a folder merely called scratchpad, a name that only starts like it, and no id.
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/screen.css', 's1')).toBe(false)
+  expect(inScratchpad('/w/slate/scratchpad/screen.css', 's1')).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpads/screen.css', 's1')).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/screen.css', '')).toBe(false)
+  // An id is matched as written, never as a pattern.
+  expect(inScratchpad('/private/tmp/claude-501/x/s1x/scratchpad/screen.css', 's1.')).toBe(false)
+  // A command naming it, quoted or not, or with a space in the temp folder's name.
+  expect(namesScratchpad("d = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'", 's1')).toBe(true)
+  expect(namesScratchpad('R="/Users/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"', 's1')).toBe(true)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s2/scratchpad'", 's1')).toBe(false)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1')).toBe(false)
+  expect(namesScratchpad('cd scratchpad && ls', 's1')).toBe(false)
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {

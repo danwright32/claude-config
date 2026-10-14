@@ -70,6 +70,23 @@ export const isTestPath = (path: string): boolean => {
   return false
 }
 
+// The session's scratchpad (#1191), as Claude Code hands every session one: a folder named
+// scratchpad under <temp>/claude-<uid>/<project>/<session id>/. Known by the session's own id, as
+// `$.session.id()` gives it, with the temp folder left open, since TMPDIR or CLAUDE_CODE_TMPDIR can
+// put it anywhere, a folder with a space in its name included. So another session's scratchpad, and
+// a project folder merely called scratchpad, are not this one.
+const scratchpadAt = (session: string): string => `/claude-\\d+/[^/\\n]+/${session.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/scratchpad`
+
+/**
+ * Whether an absolute path is in the session's scratchpad, where a design round's working files go
+ * (#1191): a file for choosing a design with, never a screen of the product, so never held.
+ */
+export const inScratchpad = (path: string, session: string): boolean =>
+  session !== '' && !/(^|\/)\.\.(\/|$)/.test(path) && new RegExp(`^(?:/[^\\n]*)?${scratchpadAt(session)}(?:/|$)`).test(path)
+
+/** Whether a command's text names the session's scratchpad anywhere, quoted or not (#1191). */
+export const namesScratchpad = (text: string, session: string): boolean => session !== '' && new RegExp(`${scratchpadAt(session)}(?![\\w.-])`).test(text)
+
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */
 export const relTo = (path: string, root: string): string => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
@@ -777,6 +794,13 @@ const unreadSaid = (unread: readonly string[]) => (unread.length ? `${unread.joi
 export const unreadPutBack = (file: string, why: string): string =>
   `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
 
+/**
+ * Where a design round's own files go (#1191), said wherever an edit is held: a round's files held
+ * in the project sent Claude to /design-rounds, which it was already running, so every way on led
+ * back to the refusal.
+ */
+export const ROUND_FILES = `A design round's own working files (its builder, stylesheet, spec and switcher) go in this session's scratchpad, which the guard never holds: if this is one, write it there, naming it by its full path or after a cd there.`
+
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
 export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
   const f = listed(files)
@@ -786,6 +810,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     unreadSaid(unread) +
+    `${ROUND_FILES} ` +
     leaveIt(files)
   )
 }
@@ -794,7 +819,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
 export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
   `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
   unreadSaid(unread) +
-  `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}".`
+  `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}". ${ROUND_FILES}`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
 export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
@@ -804,6 +829,7 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
     unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
+    `${ROUND_FILES} ` +
     leaveIt(files)
   )
 }
@@ -835,7 +861,7 @@ export const unreadableCard = (files: readonly string[]) => ({
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
 export const unsure = (files: readonly string[], why: string): string =>
   `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
-  `Check out the issue's branch (a detached head names none) and try again, or ask Dan.`
+  `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
 export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>

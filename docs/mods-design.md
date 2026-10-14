@@ -2499,6 +2499,40 @@ Two follow ups from #1165.
   `$HOME`, is now judged by the file it names, and its sentence reading is pinned on the same program
   importing os, whose files stay unnamed.
 
+### What #1191 changed, 2026-10-14
+
+Running /design-rounds for Slate's #3718, round one's files sat in the session's scratchpad
+(`<scratchpad>/3718/round1/`), and one Bash call embedding the fonts into `screen.css` and running
+`make-switcher.py` was refused twice: from the shared checkout on a detached head ("could not tell
+which issue or branch it belongs to"), and from a worktree on the issue's branch ("issue #3718 in
+Slate has no design round Dan has settled"). The only way through was the skip question's Not a
+look change, a stretch of what it means, and Dan first read it as a choice to run design rounds,
+which looped straight back to the refusal. The program named the round's folder and joined each
+bare name onto it (`os.path.join(d, 'screen.css')`), and the guard placed those names in the folder
+the program ran in, the checkout (#1151's reading). Reproduced in the guard's tests with four
+shapes: os.path.join, pathlib, a variable the shell fills in, and a program that also runs the
+switcher; a cd to the round's folder already passed.
+
+- **The session's scratchpad is never held.** Claude Code hands every session
+  `<temp>/claude-<uid>/<project>/<session id>/scratchpad`. The guard knows it by the session's id
+  from `$.session.id()`, the temp folder left open since TMPDIR or CLAUDE_CODE_TMPDIR can move it,
+  a space in its name included. A write there passes before any checkout or branch is read, so a
+  command touching only it needs no issue or branch; another session's scratchpad, and a project
+  folder merely called scratchpad, are judged as any folder.
+- **A mentioned name is read in the scratchpad when the command names it and the project has no
+  such name.** A guess from a program's text (or a command's, where the program is not read) is a
+  relative name; where the command names this session's scratchpad and the name's first part is
+  not on the disk in the folder the guess would place it, it is the round's file. A first part
+  that is there (`src/app/globals.css`, a new `src/app/booker.css`, an existing top level file) is
+  read in the project and held as before, and so is any name the disk cannot answer for.
+- **The gap, chosen over holding every round.** A new look changing file at the very top of a
+  checkout, written by a program in the same command as a round's files, passes. Reading the
+  folder a program joins a name onto would mean following python's values, which mod-kit does not.
+- **Where a round's files go is now said.** The design rounds skill never named a place; it now
+  says the session's scratchpad under `<issue number>/round<N>/`. Every refusal says so too, as does
+  Dan's Run /design-rounds, so a session sent to run rounds is told where their files go rather
+  than meeting the same refusal again.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

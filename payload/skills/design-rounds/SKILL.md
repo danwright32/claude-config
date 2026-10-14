@@ -92,6 +92,14 @@ python3 ~/.claude/skills/design-rounds/make-switcher.py spec.json switcher.html
 The spec names the round, the builder, and the options. Run the script with no
 arguments for the exact shape, and see `example/` for a working one.
 
+**A round's files go in this session's scratchpad**, under `<issue number>/round<N>/`: the
+builder, the stylesheet, the spec, the switcher and its picker file. They are working files for
+choosing with, never screens of the product, so the design round guard never holds a file there,
+and needs no issue or branch for it. Name them by their full path, after a cd there, or joined onto
+a folder the command names by its full path. The same files written into the project's checkout
+are held like any screen edit until Dan answers Settled (claude-config#1191: a round for Slate's
+#3718 was refused twice for its own files, and the only way on looked like a skip).
+
 | It gives you | Why |
 | --- | --- |
 | Tabs, arrow keys, and a jump key per option | Comparing is the whole activity, so it has to be one keystroke |
