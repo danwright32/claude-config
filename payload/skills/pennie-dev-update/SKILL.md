@@ -99,7 +99,8 @@ Having no `lastEnd` makes its next run its first appearance, which introduces th
 
 An entry needs only `name` and `repo`. Give it `changelogFrom` from the day its pull requests
 carry changelog records (section 3), and `deployRecord` with `deployRecordFrom` only if it has a
-verified deploy record (section 4).
+verified deploy record (section 4): a name read by hand and passed with `--live`, or one of the
+records `gather.js` reads from GitHub itself, measured against the repo's real merges first.
 
 ---
 
@@ -123,8 +124,9 @@ state, not config.
 - **Start** = `lastEnd` for that repo, exclusive. **End** = now. That is the whole rule.
 - **No gaps, ever**, because each window begins exactly where the last one ended. No date is
   asked for and none is needed.
-- **`heldBack`** carries PR numbers that merged but had not reached production last run. Add
-  them to this run's candidate set regardless of the window.
+- **`heldBack`** carries PR numbers that merged but had not reached production last run, or
+  could not be confirmed live (section 4). Add them to this run's candidate set regardless of
+  the window.
 - **`headings`** is the previous run's section names. See section 6.
 
 ### First appearance
@@ -278,10 +280,12 @@ So: read every title. No mechanical shortcut is trustworthy.
 A merged PR is not a shipped change (LESSONS L4). A post announcing something managers cannot
 see is the one failure that would make them stop trusting these updates.
 
-PET records one row per **verified** deploy in `build_history`, appended by
-`scripts/record-build-history.js` only after the live site is confirmed serving the new build.
-Measured 2026-08-31: 94 rows, all 94 carrying `commit_sha`.
+Every repo names its deploy record in `repos.json` as `deployRecord`, and each record gives one
+thing: the **live commit**, the newest commit known to be serving everyone. Three records exist:
 
+**PET, `build_history` (read by hand).** PET records one row per **verified** deploy in
+`build_history`, appended by `scripts/record-build-history.js` only after the live site is
+confirmed serving the new build. Measured 2026-08-31: 94 rows, all 94 carrying `commit_sha`.
 Read the newest row yourself (the one step `gather.js` cannot do, since it needs the database):
 
 ```sql
@@ -290,24 +294,50 @@ where commit_sha is not null order by recorded_at desc limit 1;
 ```
 
 and hand it over as `--live <owner>/<name>=<commit_sha>@<recorded_at>`. A repo whose
-`repos.json` entry names a `deployRecord` is refused without it.
+`deployRecord` is a name like this is refused without it.
 
-A PR is live when its merge commit is an ancestor of that sha. `gather.js` asks GitHub's compare
-endpoint, never a local checkout, which may not have fetched the live sha at all: `ahead` or
-`identical` means live, `behind` or `diverged` means not live yet, and an error means the check
+**Slate, `actions_deploy_job` (read by `gather.js` from GitHub).** Slate deploys from the
+`deploy` job of its CI run on main, through a 10% canary that is probed and then promoted to 100%
+or put back (Try-Pennie/slate#3165). The exit code of the job's "Deploy gradually" step says
+where production ended (Slate's DEPLOY.md), and GitHub keeps it as the annotation "Process
+completed with exit code N". The live commit is the newest run whose step succeeded or exited
+with a `liveExits` code (the new version serving 100%); an `unchangedExits` code (production put
+back as it was, the canary failing at 10% among them) is passed over. Any other ending since then,
+or any Rollback run since then, makes the live commit unknown, because GitHub does not record
+which commit a rollback put back (`unconfirmed`, below). Measured 2026-10-13: 175 merges since
+2026-10-04, all 175 reached 100%, a median of 11 minutes after merge, 90th percentile 19 minutes,
+longest 15 hours (waiting behind a deploy that exited 11); no Rollback run had ever been made.
+
+**Sonar, `deploy_check_run` (read by `gather.js` from GitHub).** Sonar is built and deployed by
+Cloudflare Pages, which writes a "Cloudflare Pages" check run on each merge commit. The live
+commit is the newest merge whose check run, from Cloudflare's own app, succeeded. Pages swaps in
+a whole version at once, so there is no canary to tell apart. Measured 2026-10-13: 71 of 72
+merges since 2026-09-25 had a successful run, about 30 seconds after merge; the 72nd (#123) had
+no check run at all and went live with the next merge.
+
+**What neither GitHub record can see:** a deploy or a rollback done by hand outside GitHub
+(`wrangler` from a laptop for Slate, the Pages dashboard for Sonar). Pass nothing for these two:
+`gather.js` refuses a `--live` for a repo whose record it reads itself.
+
+A PR is live when its merge commit is an ancestor of the live commit. `gather.js` asks GitHub's
+compare endpoint, never a local checkout, which may not have fetched the live sha at all: `ahead`
+or `identical` means live, `behind` or `diverged` means not live yet, and an error means the check
 could not be made, which makes the repo `unreachable` rather than holding the PR.
 
-Four cases that must stay distinct (L11, L98), each a `deploy` value or a refusal in the output:
+Seven cases that must stay distinct (L11, L98), each a `deploy` value or a refusal in the output:
 
 | Situation | What to do |
 |---|---|
-| Merge commit is an ancestor of the live sha (`live`) | List it |
+| Merge commit is an ancestor of the live commit (`live`) | List it |
 | Merged, not yet live (`held`) | Hold it back; it is in the repo's `heldBack`. Say so in the terminal |
-| Merged before the record exists, PET before 2026-07-29 (`uncovered`) | List it, with the note that the deploy record does not cover this period. Do NOT hold back a whole backdated run |
+| Production may have changed to a commit nobody recorded since the newest full deploy: a Slate deploy that may have left the 10% split standing (exit 20), was interfered with (22) or failed without saying (24, or no exit code), or a Rollback run (`unconfirmed`) | **Do not list it, and do not call it held.** It is in `heldBack` and checked again next run. Tell Dan in the terminal, in these words or close: "N Slate changes could not be confirmed live", with the reason from the repo's note |
+| Merged before the record exists, PET before 2026-07-29, Slate before 2026-10-04, Sonar before 2026-09-25 (`uncovered`) | List it, with the note that the deploy record does not cover this period. Do NOT hold back a whole backdated run |
 | `build_history` has no row in the last 3 days (refused) | **Refuse.** The recorder has stopped, so an empty answer means "cannot tell", not "nothing shipped" |
+| No run or merge `gather.js` read reached production, or a successful deploy job has no "Deploy gradually" step (refused) | **Refuse**, naming the record. The record has stopped or changed shape, so holding everything would read as a quiet week |
+| GitHub fails to answer for the deploy record (`unreachable`) | Skip the repo with GitHub's own error, as for any unreachable repo |
 
 A repo with no deploy record at all (`unchecked`): list everything, and say the check could not
-run for it.
+run for it. No repo is like this today.
 
 ---
 
@@ -646,8 +676,9 @@ the backlog is not acceptable even when authorised.
 The scripts sit beside this file, at `~/.claude/skills/pennie-dev-update/`. Keep this run's
 files in the session scratchpad.
 
-1. For each repo with a `deployRecord`, read its newest row (section 4).
-2. Gather, with one `--live` per such repo (and `--only <name>` when Dan asked for one product):
+1. For each repo whose `deployRecord` is a name read by hand (PET's `build_history`), read its
+   newest row (section 4). Slate's and Sonar's are read by `gather.js` itself.
+2. Gather, with one `--live` per repo read by hand (and `--only <name>` when Dan asked for one product):
 
    ```bash
    node ~/.claude/skills/pennie-dev-update/gather.js gather --live <owner>/<name>=<commit_sha>@<recorded_at> --out <scratchpad>/gathered.json
@@ -668,5 +699,6 @@ files in the session scratchpad.
    ```
 
    Leave out `--listed` for a first appearance and for a repo the post listed nothing from.
-8. Tell Dan: the window covered, how many changes, how many held back and why, and what the
-   issue check changed.
+8. Tell Dan: the window covered, how many changes, how many held back and why, how many could
+   not be confirmed live and why (never folded into the held count), and what the issue check
+   changed.

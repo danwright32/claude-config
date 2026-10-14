@@ -16,6 +16,12 @@
 // any refusal with its reason. It only ever READS from GitHub, through `gh api`, by owner/name,
 // so it runs from any directory and needs no local checkout.
 //
+// Whether a PR reached production comes from the repo's deploy record (repos.json deployRecord).
+// PET's lives in its database, so it is read by hand and handed over with --live. Slate's and
+// Sonar's live on GitHub, so gather reads them itself (claude-config#1177): Slate's CI deploy job,
+// with the exit code of the step that touches production, plus its Rollback runs; and Sonar's
+// Cloudflare Pages check run on the merge commit.
+//
 // commit-state is the only writer of the state file, and it refuses without the draft: if a run
 // dies before the draft exists, the boundary must not move, or that period is skipped for ever.
 //
@@ -37,6 +43,11 @@ const MAX_PAGES = 200;             // 20,000 PRs, far past any repo here; a guar
 const GH_TIMEOUT_MS = 120000;      // a gh call that hangs is a failure, never a wait (L110)
 const RECORDER_STALE_DAYS = 3;     // build_history with no row this recent: the recorder stopped
 const MAX_SEED_WALK = 200;         // newest merges walked looking for a live one on a first run
+const DEPLOY_SCAN = 30;            // newest deploy runs, or merges, read looking for the live one
+// The line the Actions runner annotates a failed step with. It is the only place GitHub keeps a
+// step's exit code, and Slate's exit code is what says where production ended (its DEPLOY.md).
+const EXIT_ANNOTATION = /Process completed with exit code (\d+)/;
+const RECORD_KINDS = ['actions_deploy_job', 'deploy_check_run'];
 const DEPENDABOT = 'dependabot[bot]';
 
 class Refusal extends Error {}
@@ -105,8 +116,45 @@ function loadConfig(file) {
     if (r.deployRecord !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(r.deployRecordFrom || ''))) {
       refuse(r.name + ' names a deploy record but no deployRecordFrom date (YYYY-MM-DD) saying where it starts.');
     }
+    if (r.deployRecord !== undefined) checkDeployRecord(r, file);
   });
   return cfg;
+}
+
+// A deploy record is either a NAME (a string: read by hand and handed over with --live, PET's
+// build_history) or an object gather reads from GitHub itself. A field missing from the object
+// would make every PR read as held or every deploy as unseen, so each one is refused by name.
+function checkDeployRecord(r, file) {
+  const rec = r.deployRecord;
+  const where = r.name + '\'s deployRecord in ' + file;
+  if (typeof rec === 'string') { if (!rec.trim()) refuse(where + ' is an empty name.'); return; }
+  if (!rec || typeof rec !== 'object' || RECORD_KINDS.indexOf(rec.kind) === -1) {
+    refuse(where + ' has kind ' + JSON.stringify(rec && rec.kind) + ', which gather.js cannot read. It reads '
+      + RECORD_KINDS.join(' and ') + ', or a name read by hand and passed with --live.');
+  }
+  function text(obj, key, label) {
+    if (typeof obj[key] !== 'string' || !obj[key].trim()) refuse(where + ' has no ' + label + '.');
+  }
+  function codes(obj, key, label) {
+    if (!Array.isArray(obj[key]) || !obj[key].every(Number.isInteger)) refuse(where + ' has no ' + label + ' list of exit codes.');
+  }
+  if (rec.kind === 'deploy_check_run') { text(rec, 'checkName', 'checkName'); text(rec, 'app', 'app'); return; }
+  ['workflow', 'branch', 'job', 'step'].forEach(function (k) { text(rec, k, k); });
+  codes(rec, 'liveExits', 'liveExits');
+  codes(rec, 'unchangedExits', 'unchangedExits');
+  if (rec.liveExits.indexOf(0) === -1) refuse(where + ' does not list exit 0 among liveExits, so a deploy that succeeded would never count.');
+  if (rec.rollback !== undefined) {
+    if (!rec.rollback || typeof rec.rollback !== 'object') refuse(where + ' has a rollback that is not an object.');
+    ['workflow', 'job', 'step'].forEach(function (k) { text(rec.rollback, k, 'rollback ' + k); });
+    codes(rec.rollback, 'unchangedExits', 'rollback unchangedExits');
+  }
+}
+
+function readByHand(repoCfg) { return typeof repoCfg.deployRecord === 'string'; }
+function recordName(repoCfg) {
+  const rec = repoCfg.deployRecord;
+  if (typeof rec === 'string') return rec;
+  return rec.kind === 'deploy_check_run' ? 'the ' + rec.checkName + ' check run' : 'the ' + rec.job + ' job in ' + rec.workflow;
 }
 
 function loadEntry() {
@@ -174,6 +222,112 @@ function isLive(slug, pr, liveSha) {
   refuse('GitHub answered ' + JSON.stringify(status) + ' comparing #' + pr.number + ' with the live sha, so whether it is live could not be checked.');
 }
 
+// ---------------------------------------------------------------- deploy records on GitHub
+
+// Where one run of an Actions job left production, judged by the step that touches it:
+//   live       the step reached production (exit 0, or a failure whose exit code is a liveExit)
+//   none       production was never touched, or was put back as it was (not started, skipped,
+//              or a failure whose exit code is an unchangedExit)
+//   running    the job is still going
+//   unknown    anything else: a cancelled step, an exit code that does not say, or none on record
+function jobOutcome(slug, run, jobName, stepName, liveExits, unchangedExits) {
+  const what = 'run ' + run.id + ' (' + String(run.head_sha || '').slice(0, 9) + ')';
+  const got = gh('repos/' + slug + '/actions/runs/' + run.id + '/jobs?per_page=100');
+  if (!got || !Array.isArray(got.jobs)) throw new Unreachable('the jobs of ' + what + ' in ' + slug + ' were not a list.');
+  const job = got.jobs.filter(function (j) { return j && j.name === jobName; })[0];
+  // A run on main superseded while pending is cancelled before its jobs exist: it touched nothing.
+  if (!job) return { outcome: 'none', what: what };
+  if (job.status !== 'completed') return { outcome: 'running', what: what };
+  const at = job.completed_at;
+  const step = (job.steps || []).filter(function (s) { return s && typeof s.name === 'string' && s.name.indexOf(stepName) === 0; })[0];
+  if (!step) {
+    if (job.conclusion === 'success') {
+      refuse('the ' + jobName + ' job of ' + what + ' succeeded but has no step named "' + stepName
+        + '", so the deploy record has changed shape. Update deployRecord in repos.json.');
+    }
+    return { outcome: 'none', what: what, at: at };
+  }
+  if (step.conclusion === 'success') return { outcome: 'live', what: what, at: at, exit: 0, startedAt: job.started_at };
+  if (step.conclusion === 'skipped' || step.conclusion === null || step.conclusion === undefined) return { outcome: 'none', what: what, at: at };
+  if (step.conclusion !== 'failure') {
+    return { outcome: 'unknown', what: what, at: at, why: 'the step "' + stepName + '" of ' + what + ' ended ' + step.conclusion + ', so where it left production is not recorded' };
+  }
+  const notes = gh('repos/' + slug + '/check-runs/' + job.id + '/annotations');
+  if (!Array.isArray(notes)) throw new Unreachable('the annotations of ' + what + ' in ' + slug + ' were not a list.');
+  const hit = notes.map(function (a) { return a && EXIT_ANNOTATION.exec(String(a.message || '')); }).filter(Boolean)[0];
+  if (!hit) {
+    return { outcome: 'unknown', what: what, at: at, why: 'the step "' + stepName + '" of ' + what + ' failed with no exit code on record, so where it left production cannot be told' };
+  }
+  const code = Number(hit[1]);
+  if (liveExits.indexOf(code) !== -1) return { outcome: 'live', what: what, at: at, exit: code, startedAt: job.started_at };
+  if (unchangedExits.indexOf(code) !== -1) return { outcome: 'none', what: what, at: at, exit: code };
+  return { outcome: 'unknown', what: what, at: at, exit: code, why: what + ' failed with exit code ' + code + ', which does not say production ended on one whole version' };
+}
+
+function workflowRuns(slug, file, branch) {
+  const q = '?' + (branch ? 'event=push&branch=' + encodeURIComponent(branch) + '&' : '') + 'per_page=' + DEPLOY_SCAN;
+  const got = gh('repos/' + slug + '/actions/workflows/' + file + '/runs' + q);
+  if (!got || !Array.isArray(got.workflow_runs)) throw new Unreachable('the runs of ' + file + ' in ' + slug + ' were not a list.');
+  return got.workflow_runs;
+}
+
+// Slate: the newest deploy run that left a version serving 100%, then anything since that may have
+// changed production without saying to what: a deploy that may have left a split, or a rollback,
+// whose target commit GitHub does not record.
+function readDeployJob(slug, rec) {
+  const runs = workflowRuns(slug, rec.workflow, rec.branch);   // newest first, as GitHub lists them
+  const doubts = [];
+  let live = null;
+  for (let i = 0; i < runs.length && !live; i++) {
+    const o = jobOutcome(slug, runs[i], rec.job, rec.step, rec.liveExits, rec.unchangedExits);
+    if (o.outcome === 'live') live = { sha: runs[i].head_sha, at: o.at, startedAt: o.startedAt, what: o.what, exit: o.exit };
+    else if (o.outcome === 'unknown') doubts.push(o.why);
+  }
+  if (!live) {
+    refuse('none of the newest ' + runs.length + ' runs of the ' + rec.job + ' job in ' + rec.workflow
+      + ' put a version into production, so whether anything is live cannot be told' + (doubts.length ? ' (' + doubts.join('; ') + ')' : '') + '.');
+  }
+  if (rec.rollback) {
+    const rb = rec.rollback;
+    workflowRuns(slug, rb.workflow, null).forEach(function (run) {
+      if (!(Date.parse(run.created_at) > Date.parse(live.startedAt))) return;
+      const o = jobOutcome(slug, run, rb.job, rb.step, [0], rb.unchangedExits);
+      if (o.outcome === 'none') return;
+      if (o.outcome === 'running') doubts.push('a rollback (' + rb.workflow + ' ' + o.what + ') is running now');
+      else {
+        doubts.push('a rollback (' + rb.workflow + ' ' + o.what + ', ' + (o.exit === undefined ? 'no exit code on record' : 'exit code ' + o.exit)
+          + ') ran after that deploy, and GitHub does not record which commit it put back');
+      }
+    });
+  }
+  return {
+    sha: live.sha, recordedAt: live.at,
+    source: 'the ' + rec.job + ' job of ' + rec.workflow + ' ' + live.what + (live.exit ? ', exit code ' + live.exit : ''),
+    unconfirmed: doubts.length ? 'the newest deploy that reached 100% is ' + live.what + ', but since then ' + doubts.join('; ') : null,
+  };
+}
+
+// Sonar: the newest merge whose Cloudflare Pages check run, from Cloudflare's own app, succeeded.
+// Only merge commits are read: a branch commit carried onto main by a merge has a PREVIEW build on
+// it, which says nothing about production (3 of Sonar's main commits had one, 2026-10-13).
+function readDeployCheck(slug, rec, all) {
+  const merges = all.slice().reverse().slice(0, DEPLOY_SCAN);
+  for (let i = 0; i < merges.length; i++) {
+    const pr = merges[i];
+    if (!pr.merge_commit_sha) continue;
+    const got = gh('repos/' + slug + '/commits/' + pr.merge_commit_sha + '/check-runs?check_name=' + encodeURIComponent(rec.checkName));
+    if (!got || !Array.isArray(got.check_runs)) throw new Unreachable('the check runs on #' + pr.number + ' in ' + slug + ' were not a list.');
+    const ok = got.check_runs.filter(function (c) {
+      return c && c.name === rec.checkName && c.app && c.app.slug === rec.app && c.status === 'completed' && c.conclusion === 'success';
+    });
+    if (ok.length) {
+      return { sha: pr.merge_commit_sha, recordedAt: ok[0].completed_at, source: 'the ' + rec.checkName + ' check run on #' + pr.number, unconfirmed: null };
+    }
+  }
+  refuse('none of the newest ' + merges.length + ' merges in ' + slug + ' carries a successful ' + rec.checkName + ' check run from ' + rec.app
+    + ', so whether anything is live cannot be told.');
+}
+
 // ---------------------------------------------------------------- one repo
 
 function parseLive(values) {
@@ -225,10 +379,10 @@ function gatherRepo(ctx, repoCfg) {
     startMs = instant(prior.lastEnd, slug + ' lastEnd in the state file');
   }
 
-  // The deploy record, checked before anything else is read: a stopped recorder means every
-  // answer below is "cannot tell", not "nothing shipped".
+  // A record read by hand is checked before anything else is read: a stopped recorder means
+  // every answer below is "cannot tell", not "nothing shipped".
   let live = null;
-  if (repoCfg.deployRecord) {
+  if (repoCfg.deployRecord && readByHand(repoCfg)) {
     live = ctx.live[key];
     if (!live) {
       refuse(repoCfg.name + ' has a deploy record (' + repoCfg.deployRecord + ') and it was not read. Run the query in SKILL.md section 4 and pass --live '
@@ -238,15 +392,35 @@ function gatherRepo(ctx, repoCfg) {
       refuse(repoCfg.deployRecord + ' has no row in the last ' + RECORDER_STALE_DAYS + ' days (newest ' + live.recordedAt
         + '), so the recorder has stopped and an empty answer would mean "cannot tell", not "nothing shipped".');
     }
-    out.deploy = { kind: repoCfg.deployRecord, liveSha: live.sha, recordedAt: live.recordedAt, coversFrom: repoCfg.deployRecordFrom };
-  }
-  function deployOf(pr) {
-    if (!live) return 'unchecked';
-    if (ctx.entry.localDay(new Date(pr.merged_at)) < repoCfg.deployRecordFrom) return 'uncovered';
-    return isLive(slug, pr, live.sha) ? 'live' : 'held';
+    out.deploy = { kind: repoCfg.deployRecord, liveSha: live.sha, recordedAt: live.recordedAt, coversFrom: repoCfg.deployRecordFrom, source: '--live', unconfirmed: null };
+  } else if (repoCfg.deployRecord && ctx.live[key]) {
+    refuse('--live was given for ' + slug + ', whose deploy record (' + recordName(repoCfg) + ') gather.js reads from GitHub itself. Leave --live off for it.');
   }
 
   const all = mergedPulls(slug);
+
+  // A record on GitHub is read only once a PR needs a verdict, so a quiet window costs nothing.
+  // A failed read makes the repo unreachable, never a PR live or held (L11).
+  function liveFromGitHub() {
+    const rec = repoCfg.deployRecord;
+    let got;
+    try { got = rec.kind === 'deploy_check_run' ? readDeployCheck(slug, rec, all) : readDeployJob(slug, rec); }
+    catch (e) {
+      if (e instanceof Unreachable) throw new Unreachable('the deploy record (' + recordName(repoCfg) + ') could not be read: ' + e.message);
+      throw e;
+    }
+    out.deploy = { kind: rec.kind, liveSha: got.sha, recordedAt: got.recordedAt, coversFrom: repoCfg.deployRecordFrom, source: got.source, unconfirmed: got.unconfirmed };
+    return got;
+  }
+  function deployOf(pr) {
+    if (!repoCfg.deployRecord) return 'unchecked';
+    if (ctx.entry.localDay(new Date(pr.merged_at)) < repoCfg.deployRecordFrom) return 'uncovered';
+    if (!live) live = liveFromGitHub();
+    // Production may have changed since the newest deploy that reached 100%, to a commit nobody
+    // recorded, so no PR is claimed live or held: each is held back and checked again next run.
+    if (live.unconfirmed) return 'unconfirmed';
+    return isLive(slug, pr, live.sha) ? 'live' : 'held';
+  }
 
   if (startMs === null) {
     out.status = 'first_appearance';
@@ -256,6 +430,7 @@ function gatherRepo(ctx, repoCfg) {
     for (let i = 0; i < newestFirst.length && i < MAX_SEED_WALK; i++) {
       const pr = newestFirst[i];
       const d = deployOf(pr);
+      if (d === 'unconfirmed') refuse(repoCfg.name + ' cannot be introduced: whether anything is live could not be confirmed, because ' + live.unconfirmed + '.');
       if (d === 'held') { out.heldBack.push(pr.number); continue; }
       out.seed = { number: pr.number, mergedAt: pr.merged_at, deploy: d };
       break;
@@ -287,7 +462,7 @@ function gatherRepo(ctx, repoCfg) {
   });
 
   const candidates = carried.concat(inWindow).sort(function (a, b) { return Date.parse(a.merged_at) - Date.parse(b.merged_at) || a.number - b.number; });
-  const counts = { inWindow: inWindow.length, searchCount: total, carried: carried.length, recorded: 0, handJudged: 0, gaps: 0, dependency: 0, held: 0, uncovered: 0, unchecked: 0 };
+  const counts = { inWindow: inWindow.length, searchCount: total, carried: carried.length, recorded: 0, handJudged: 0, gaps: 0, dependency: 0, held: 0, unconfirmed: 0, uncovered: 0, unchecked: 0 };
   candidates.forEach(function (pr) {
     const record = recordOf(ctx.entry, repoCfg, pr);
     const deploy = deployOf(pr);
@@ -296,6 +471,7 @@ function gatherRepo(ctx, repoCfg) {
     else if (record.kind === 'dependency') counts.dependency++;
     else counts.recorded++;
     if (deploy === 'held') { counts.held++; out.heldBack.push(pr.number); }
+    if (deploy === 'unconfirmed') { counts.unconfirmed++; out.heldBack.push(pr.number); }
     if (deploy === 'uncovered') counts.uncovered++;
     if (deploy === 'unchecked') counts.unchecked++;
     out.prs.push({
@@ -306,6 +482,10 @@ function gatherRepo(ctx, repoCfg) {
   });
   out.counts = counts;
   if (counts.uncovered) out.notes.push('The deploy record does not cover ' + counts.uncovered + ' PR(s) merged before ' + repoCfg.deployRecordFrom + '; they are listed without a check.');
+  if (counts.unconfirmed) {
+    out.notes.push(counts.unconfirmed + ' PR(s) could not be confirmed live, because ' + out.deploy.unconfirmed
+      + '. They are held back, not listed as shipped, and checked again next run.');
+  }
   if (counts.unchecked) out.notes.push(repoCfg.name + ' has no deploy record, so whether its ' + counts.unchecked + ' PR(s) reached production could not be checked.');
   if (counts.gaps) out.notes.push(counts.gaps + ' PR(s) merged after the changelog cutover carry no valid record: something merged around the gate.');
   return out;
@@ -362,7 +542,8 @@ function cmdGather(args) {
     if (r.status === 'ok') {
       const c = r.counts;
       line += ', ' + r.prs.length + ' PR(s) from ' + r.window.start + ' to ' + r.window.end + ': ' + c.recorded + ' carried a record, '
-        + c.handJudged + ' judged by hand, ' + c.gaps + ' gap(s), ' + c.dependency + ' dependency update(s); ' + c.held + ' held back';
+        + c.handJudged + ' judged by hand, ' + c.gaps + ' gap(s), ' + c.dependency + ' dependency update(s); ' + c.held + ' held back'
+        + (c.unconfirmed ? ', ' + c.unconfirmed + ' unconfirmed' : '');
     } else if (r.status === 'first_appearance') {
       line += r.seed ? ', introduced in general; boundary would seed at #' + r.seed.number + ' (' + r.seed.mergedAt + ')' : '';
     } else {
@@ -434,6 +615,7 @@ function cmdCommitState(args) {
       const p = byNumber.get(n);
       if (!p) refuse('#' + n + ' is not among the PRs gathered for ' + repo.repo + ', so it cannot have been listed.');
       if (p.deploy === 'held') refuse('#' + n + ' had not reached production when gathered, so it cannot be listed.');
+      if (p.deploy === 'unconfirmed') refuse('#' + n + ' could not be confirmed live when gathered, so it cannot be listed as shipped.');
       if (newest === null || Date.parse(p.mergedAt) > Date.parse(newest)) newest = p.mergedAt;
     });
     const was = entryNow.lastEnd ? Date.parse(entryNow.lastEnd) : -Infinity;
