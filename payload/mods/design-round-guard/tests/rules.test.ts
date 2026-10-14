@@ -35,7 +35,12 @@ import {
   patternMayBeLook,
   inScratchpad,
   namesScratchpad,
+  joinedOnly,
   tempRoots,
+  ROUND_FILES,
+  checked,
+  unsure,
+  unreadable,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -231,6 +236,37 @@ test("the session's scratchpad is known by the session's id, under Claude Code's
   expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1', tmp)).toBe(false)
   expect(namesScratchpad("d = '/w/slate/tmp/claude-501/x/s1/scratchpad'", 's1', tmp)).toBe(false)
   expect(namesScratchpad('cd scratchpad && ls', 's1', tmp)).toBe(false)
+})
+
+// #1191, lessons review: a name read as a round's file must be one the text joins onto a folder.
+test('a name is joined only where every place the text spells it joins it onto a folder', () => {
+  expect(joinedOnly("open(os.path.join(d, 'screen.css'), 'w')", 'screen.css')).toBe(true)
+  expect(joinedOnly('fs.writeFileSync(path.join(d, "screen.css"), x)', 'screen.css')).toBe(true)
+  expect(joinedOnly("(d / 'screen.css').write_text(x)", 'screen.css')).toBe(true)
+  expect(joinedOnly('open("$R/screen.css", "w")', 'R/screen.css')).toBe(true)
+  expect(joinedOnly("p = os.path.join(d, 'a.css')\nq = d / 'a.css'", 'a.css')).toBe(true)
+  // Opened as written, in a list, after a call inside the join, or spelled nowhere: not joined.
+  expect(joinedOnly("open('index.html', 'w')", 'index.html')).toBe(false)
+  expect(joinedOnly("open(os.path.join(d, 'a.css'))\nopen('a.css', 'w')", 'a.css')).toBe(false)
+  expect(joinedOnly("for f in ['a.css']: open(f, 'w')", 'a.css')).toBe(false)
+  expect(joinedOnly("os.path.join(os.getcwd(), 'a.css')", 'a.css')).toBe(false)
+  expect(joinedOnly("x = 'b.css' // 'a.css'", 'a.css')).toBe(false)
+  expect(joinedOnly('open("x")', 'a.css')).toBe(false)
+  expect(joinedOnly('', '')).toBe(false)
+  // A longer name holding it is another name.
+  expect(joinedOnly("os.path.join(d, 'screen.css')\nopen('app/screen.css')", 'screen.css')).toBe(true)
+})
+
+// #1191: every refusal of a look changing edit says where a round's own files go, so a round the
+// guard held is never sent back to /design-rounds, which held it.
+test("every refusal of a look changing edit says a design round's files go in the session's scratchpad", () => {
+  const subjects = [{ key: 'k', label: 'issue #3718 in slate' }]
+  const files = ['src/app/globals.css']
+  expect(ROUND_FILES).toContain("this session's scratchpad")
+  for (const said of [refusal('t1', files, subjects), agentRefusal(files, subjects, 't2'), checked(files, subjects), unsure(files, 'a detached head names no branch'), unreadable(files, subjects, 'EIO')]) {
+    expect(said).toContain(ROUND_FILES)
+    expect(DASHES.test(said)).toBe(false)
+  }
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {

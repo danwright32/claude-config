@@ -28,6 +28,7 @@ import {
   isModHook,
   isOwnRecord,
   isSwiftUI,
+  joinedOnly,
   judgedByText,
   listed,
   lookKindIn,
@@ -104,9 +105,10 @@ import {
 //   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
 // - Since #1191: a design round's working files go in the session's scratchpad (rules.ts
 //   inScratchpad: Claude Code's temp folder, the session's id), in no checkout, so never held and
-//   needing no issue or branch; a name a program only mentions is read there, not in the project,
-//   when the command names that scratchpad and the project has nothing of that name (guessAt). Every
-//   refusal says where a round's files go, so a held round is never sent back to /design-rounds.
+//   needing no issue or branch; a name a program only mentions and only joins onto a folder is read
+//   there, not in the project, when the command names that scratchpad and the project has nothing
+//   of that name (guessAt). Every refusal of a look changing edit says where a round's files go, so
+//   a held round is never sent back to /design-rounds.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -135,18 +137,19 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 
 // A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
-// (#1191): where the command names the session's scratchpad, a relative name whose first part is not
-// on the disk in `folder` is one the program joins onto the scratchpad folder it names (a round's
-// screen.css, as `os.path.join(d, 'screen.css')` or `d / 'screen.css'` writes it), never a file of the
-// project in `folder`. A name whose first part is there (src/app/globals.css, src/app/new.css, an
-// existing top level file) is still read in `folder`, and one the disk cannot answer for is too. The
-// gap this leaves, decided on #1191: a new look changing file at the very top of a checkout, written
-// by a program in the same command as a round's files, passes.
-const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean): Promise<Target | undefined> => {
+// (#1191): where the command names the session's scratchpad, a relative name that `text` (where it
+// was found) only ever joins onto a folder held elsewhere (rules.ts joinedOnly: `os.path.join(d,
+// 'screen.css')`, `d / 'screen.css'`, `$R/screen.css`) and whose first part is not on the disk in
+// `folder` is one joined onto the scratchpad folder the command names, never a file of the project.
+// A name opened as written (`open('index.html')`), or whose first part is there (src/app/globals.css,
+// src/app/new.css, an existing top level file), is still read in `folder`, and so is one the disk
+// cannot answer for. What it cannot see (lessons review): the folder a join's variable holds, so a
+// new top level look file joined onto the checkout by a program that also names the scratchpad passes.
+const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string): Promise<Target | undefined> => {
   if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
   if (folder === undefined) return { word: m }
   const path = resolvePath(m, folder, at.home)
-  if (!scratch || inScratchpad(path, at.session, at.temps)) return { path, word: m }
+  if (!scratch || inScratchpad(path, at.session, at.temps) || !joinedOnly(text, m)) return { path, word: m }
   const first = m.split('/').find(p => p !== '' && p !== '.') ?? m
   const there = await $.fs.exists(resolvePath(first, folder, at.home)).catch(() => true)
   return there ? { path, word: m } : undefined
@@ -200,8 +203,9 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // Its own words count too: a file handed to it as an argument (`python3 - app/site.css <<EOF`,
       // read as sys.argv) is one it may write (lessons review of #1151). A -c program is one of its
       // words, read as its code instead.
-      for (const m of mentionedLookFiles([u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n'))) {
-        const t = await guessAt($, m, u.folder, at, scratch)
+      const read = [u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n')
+      for (const m of mentionedLookFiles(read)) {
+        const t = await guessAt($, m, u.folder, at, scratch, read)
         if (t) targets.push(t)
       }
       continue
@@ -212,7 +216,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
     for (const t of texts)
       for (const m of mentionedLookFiles(t)) {
-        const g = await guessAt($, m, at.cwd, at, named)
+        const g = await guessAt($, m, at.cwd, at, named, t)
         if (g) targets.push(g)
       }
   }

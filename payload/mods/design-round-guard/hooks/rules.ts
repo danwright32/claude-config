@@ -98,6 +98,33 @@ export const inScratchpad = (path: string, session: string, roots: readonly stri
 export const namesScratchpad = (text: string, session: string, roots: readonly string[]): boolean =>
   session !== '' && roots.length > 0 && new RegExp(`(?<![^\\s'"=(:])${scratchpadAt(session, roots)}(?![\\w.-])`).test(text)
 
+/**
+ * Whether every place a text spells a relative name joins it onto a folder held elsewhere, never
+ * opening it as written (#1191, lessons review): `os.path.join(d, 'screen.css')` or `path.join(d,
+ * 'screen.css')` (no call inside the join before it), pathlib's `d / 'screen.css'`, or the shell's
+ * `$R/screen.css`, which mentionedLookFiles reads as `R/screen.css`. A name opened as it is
+ * (`open('index.html')`), in a list, or anywhere else is not, and nor is a name the text never spells.
+ */
+export const joinedOnly = (text: string, name: string): boolean => {
+  if (!name) return false
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    const before = text[i - 1] ?? ''
+    const after = text[i + name.length] ?? ''
+    // Only the name as a whole word: not a longer name holding it (`app/screen.css`, `screen.css.map`).
+    if (/[\w./~@+*[\]()-]/.test(before) || /[\w.-]/.test(after)) continue
+    seen = true
+    if (before === '$') continue
+    const line = text.slice(text.lastIndexOf('\n', i - 1) + 1, i)
+    if (!/['"]$/.test(line)) return false
+    const head = line.slice(0, -1)
+    if (/\/\s*$/.test(head) && !/\/\/\s*$/.test(head)) continue
+    if (/\b(?:join|joinpath|resolve)\([^()]*,\s*$/.test(head)) continue
+    return false
+  }
+  return seen
+}
+
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */
 export const relTo = (path: string, root: string): string => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
@@ -876,7 +903,7 @@ export const unsure = (files: readonly string[], why: string): string =>
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
 export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan.`
+  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
 
 /** A write to the guard's own record: only Dan's answers may write it. */
 export const forged = (path: string): string =>

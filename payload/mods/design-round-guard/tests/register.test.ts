@@ -1525,6 +1525,13 @@ test("#1191: the product's own files stay held, alone or in one command with a r
   expect(await held(`cat > ${ROUND}/screen.css <<'EOF'\na{}\nEOF\ncp ${ROUND}/screen.css src/app/globals.css`)).toContain('src/app/globals.css')
   // A program naming another session's scratchpad is read as before: its bare names are in its folder.
   expect(await held(`python3 - <<'PY'\nimport os\nd = '/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/3718/round1'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nPY`)).toContain('screen.css')
+  // Lessons review: naming the scratchpad in a comment or a string lets nothing else through. A new
+  // file the program opens as written, by a name that is not joined onto a folder, is the project's.
+  // Each a program whose files mod-kit cannot all name, so it is judged by the names its text
+  // mentions, as a join is: one opening from a list, and one beside a round's joined file.
+  expect(await held(`python3 - <<'PY'\n# the round is in ${ROUND}\nfor f in ['index.html']:\n    open(f, 'w').write('x')\nPY`)).toContain('index.html')
+  expect(await held(`python3 - <<'PY'\nimport os\nd = '${ROUND}'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nopen('booker.css', 'w').write('a{}')\nPY`)).toContain('booker.css')
+  expect(await held(`python3 - <<'PY'\nimport os\nd = '${ROUND}'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nopen('screen.css', 'w').write('a{}')\nPY`)).toContain('screen.css')
   // Where the disk cannot say whether a name is the project's, it is read as the project's, and held.
   w.ctl.existsFails = true
   expect(await held(roundShapes(ROUND)[0] as string)).toContain('screen.css')
@@ -1544,6 +1551,11 @@ test("#1191: the refusal and Dan's Run /design-rounds both say where a round's o
   expect(told).toContain("this session's scratchpad")
   w.branches['/w/slate'] = ''
   expect(refusalOf(await call($, STYLE))).toContain("this session's scratchpad")
+  w.branches['/w/slate'] = '978-design-round-guard'
+  w.ctl.storeGetFails = true
+  const unread = refusalOf(await call($, STYLE))
+  expect(unread).toContain('could not be read')
+  expect(unread).toContain("this session's scratchpad")
 })
 
 // #1165: since #1151 a program was judged by every look file name its text holds, so a python

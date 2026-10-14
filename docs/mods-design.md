@@ -2523,19 +2523,27 @@ switcher; a cd to the round's folder already passed.
   through, since the session's id is no secret from Claude; so a folder shaped like the scratchpad
   anywhere else, another session's, and a project folder merely called scratchpad are judged as
   any folder.
-- **A mentioned name is read in the scratchpad when the command names it and the project has no
-  such name.** A guess from a program's text (or a command's, where the program is not read) is a
-  relative name; where the command names this session's scratchpad and the name's first part is
-  not on the disk in the folder the guess would place it, it is the round's file. A first part
-  that is there (`src/app/globals.css`, a new `src/app/booker.css`, an existing top level file) is
-  read in the project and held as before, and so is any name the disk cannot answer for.
-- **The gap, chosen over holding every round.** A new look changing file at the very top of a
-  checkout, written by a program in the same command as a round's files, passes. Reading the
-  folder a program joins a name onto would mean following python's values, which mod-kit does not.
+- **A joined name is read in the scratchpad when the command names it and the project has no such
+  name.** A guess from a program's text (or a command's, where the program is not read) is a
+  relative name. Where the command names this session's scratchpad, every place the text spells
+  the name joins it onto a folder (`os.path.join(d, 'screen.css')`, `path.join`, pathlib's
+  `d / 'screen.css'`, the shell's `$R/screen.css`), and its first part is not on the disk in the
+  folder the guess would place it, it is the round's file. A first part that is there
+  (`src/app/globals.css`, a new `src/app/booker.css`, an existing top level file) is read in the
+  project and held as before, and so is any name the disk cannot answer for. The join requirement
+  came from the lessons review: keyed only on the command naming the scratchpad, a comment naming
+  it let `open('index.html', 'w')` in the same program through.
+- **The gap, chosen over holding every round.** The guard reads text, not the folder a join's
+  variable holds, so a new look changing file at the very top of a checkout, joined onto the
+  checkout by a program that also names the scratchpad, passes. Following the variable would mean
+  following python's values, which mod-kit does not.
 - **Where a round's files go is now said.** The design rounds skill never named a place; it now
-  says the session's scratchpad under `<issue number>/round<N>/`. Every refusal says so too, as does
+  says the session's scratchpad under `<issue number>/round<N>/`. Every refusal of a look changing
+  edit (the missing round, the subagent's, the one whose issue or branch cannot be told, the one
+  whose record cannot be read, and the preview a check with no call id gets) says so too, as does
   Dan's Run /design-rounds, so a session sent to run rounds is told where their files go rather
-  than meeting the same refusal again.
+  than meeting the same refusal again. The refusals of a write to the guard's own record and of a
+  call the guard could not check say nothing of rounds, which they are not about.
 
 ## Picker manners (#615), built 2026-10-04
 
