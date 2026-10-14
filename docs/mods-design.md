@@ -359,6 +359,10 @@ the spec rather than chosen afresh, and open to Dan changing:
   shows, since the turn's next request warms it and Dan has nothing to do; context above 70% still
   brings the row. A compaction of the conversation (the Compact row, `/compact`, the threshold)
   clears the clock as a `/clear` does, so the status line shows no cache until the next request.
+  Since Claude Code 2.1.299 the security default sends `session.compact` past every mod, so that
+  reset runs only while the managed settings file keeps it out of first place (#876, #1185,
+  listed in `tools/sec-default-bypassed-hooks.tsv`); the Compact row resets the clock itself
+  either way.
 - The Supabase project sits beside the repository where a project has one, `SB bidspoke-prod`
   (#697): #610's spec kept it and nothing recorded it dropped, while the rounds drew claude-config,
   which has none. Read as the old status line read it (`SUPABASE_PROJECT_NAME`, else the subdomain

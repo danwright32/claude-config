@@ -114,12 +114,14 @@ password, so it is made by hand once per Mac. Both Macs have had it since 2026-1
 
 Why it is needed: on a Team or Enterprise account (Dan's is one), or on any Mac with managed
 settings, Claude Code's built-in security default seats itself ahead of every plugin and sends
-every `classic.*`, `prompt.section` and `prompt.context` hook past the user tier our mods load in,
+every `classic.*`, `prompt.section` and `prompt.context` hook (and, since 2.1.299, every
+`session.compact` and `prompt.attachment` hook) past the user tier our mods load in,
 so those hooks never run and only a debug log line says so (#875). A managed `prependPlugins` list
 that leaves it out moves it to last, where it still loads. Without the file, the mod hooks listed
 in `tools/sec-default-bypassed-hooks.tsv` (scope-modes and manual-steps refusing a turn end, the
 prompt text of ask-before-saving, picker-manners and manual-steps, goal-tracker's permission and
-idle notices, auto-session-name) silently do nothing. The cost Dan accepted: any installed plugin
+idle notices, auto-session-name, status-bar resetting its cache clock after a compaction) silently
+do nothing. The cost Dan accepted: any installed plugin
 can then also sit ahead of the security default's checks.
 
 Create it:
@@ -1668,7 +1670,8 @@ set; it never counts that as every mod failing (#740). A failure carrying no ver
 exit code and the last lines of output instead of an empty reason.
 It also fails a mod whose hook is on an event Claude Code's built-in security default sends past
 the user tier every mod loads in (#875): every `classic.*` event, `prompt.section`, `prompt.context`,
-`prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`. Seated outermost for a
+`prompt.compose`, `skill.prompt`, `attribution.text` and `settings.read`, and since Claude Code
+2.1.299 `prompt.attachment` and `session.compact` too (#1185). Seated outermost for a
 Team or Enterprise organization, it routes each of those straight past our mods, so such a hook
 never runs and only a debug log line says so (`bypassed by cc-plugin-sec-default`). Both Macs keep
 it out of first place with the managed settings file in "Setting up a new Mac" above, so these
@@ -1676,8 +1679,13 @@ hooks do run there, but only while that file is in place (#876). A check that mu
 every mod's `tool.call` hook and the settings hooks still belongs in `tool.check`. The hooks on
 these events are listed by mod and event in `tools/sec-default-bypassed-hooks.tsv`, each with the
 issue deciding it (#876), so a new one is a decision to depend on that file rather than an
-accident, and a listing for a hook that has gone fails too. This part reads only the files, so it holds on CI. Where a
-`claude` binary is found, the list is compared with that build's own routes, and a difference fails.
+accident, and a listing for a hook that has gone fails too. This part reads only the files, so it holds on CI, and it
+uses every route listed whatever build is installed, so a hook that is dead on the newest build fails
+on a Mac still running an older one. Where a `claude` binary is found, its routes are compared with
+the ones listed for that build (each route is listed with the first build known to route it, read
+from `claude --version`, every route when the version cannot be read), and a difference fails, so
+the next build that adds or drops a route fails on the first Mac to install it while the other Mac
+and CI stay as they were.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
 TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed once per checkout
 with `npm ci --prefix tools/typescript`, and on CI before the suites; `TSC_BIN` overrides it, and
