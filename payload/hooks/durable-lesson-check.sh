@@ -38,27 +38,28 @@ parsed="$(ps_parse_payload "$payload" raw)" || exit 0
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 
-# Does any shell segment RUN `gh issue create` (leading tokens, after stripping simple
-# leading env assignments), as opposed to merely mentioning it?
+# Does any command the shell would run RUN `gh issue create`, as opposed to merely mentioning it?
+# Asked of lib/push-scope.sh's one reading (ps_runs_gh), which finds the subcommand as gh itself does,
+# past flags in front (`gh -R o/x issue create`, `gh issue -R o/x create`) and past rtk, env or sudo
+# (claude-config#1188; the first three words were read before, and missed each of those).
 is_create=0
-while IFS= read -r seg; do
+ps__read "$cmd" || :
+segs="$(ps__shell_segments "$cmd")"
+[ "$?" -eq 1 ] && segs="$(ps__crude_cut "$cmd" | tr '\n' '\036')"
+while IFS= read -r -d $'\x1e' seg; do
   # Documented override: an inline SKIP_LESSON_CHECK=1 prefix. It is judged PER
   # SEGMENT, because it belongs to the one command it prefixes. Reading it across
   # the whole call let a genuine create sitting in a later segment go unexamined.
   if grep -Eq '(^|[[:space:]])SKIP_LESSON_CHECK=1([[:space:]]|$)' <<< "$seg"; then
     continue
   fi
-  stripped="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//')"
-  head_tokens="$(printf '%s' "$stripped" | awk '{print $1, $2, $3}')"
-  if grep -Eq '(^|/)gh[[:space:]]+issue[[:space:]]+create([[:space:]]|$)' <<< "$head_tokens"; then
+  if ps_runs_gh "$seg" issue create; then
     # A help invocation files nothing, so there is no issue to draw a lesson from.
-    if grep -Eq '(^|[[:space:]])(--help|-h)([[:space:]]|$)' <<< "$stripped"; then
-      continue
-    fi
+    case " ${PS_RUN_ARGS[*]-} " in *" --help "*|*" -h "*) continue ;; esac
     is_create=1
     break
   fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
+done < <(printf '%s' "$segs")
 [ "$is_create" -eq 1 ] || exit 0
 
 # Cooldown: several creates in one turn get one combined evaluation.

@@ -634,6 +634,21 @@ merge is stopped. An empty one (`--repo=`) is no repository to gh, which reads t
 judged that way. The table carries each spelling, behind each wrapper, with the repository both
 recognisers must read.
 
+Which gh or git subcommand a command runs is read in one place, `lib/shell-words.py` (claude-config#1188),
+and every hook asks it rather than keeping a reading of its own: the merge gates, the closing keyword
+check, the push scope check and the lessons review's start on a pull request creation, the durable
+lesson check and the issue field gates, the gh watch interval check, the push, commit and add
+questions, the payload write gate and the skill helper scan. It reads past reserved words,
+assignments and any rtk, env, sudo, exec or command in front, and past the flags gh and git take in
+front of their subcommand, so `gh -R o/x pr create`, `gh pr -R o/x edit 3`, `env A=1 git push` and
+`sudo git commit` are seen by every gate (before, a flag in front walked a pull request past the
+closing keyword check, and env or sudo in front of git walked a push past every push gate). The bash
+gates ask it through `ps_runs_gh`, `ps_runs_git` and `ps_runs_at` in `lib/push-scope.sh`, from the
+one reading of the command they already hold. `test-gh-reader.sh` runs `lib/word-position-scan.py`,
+which fails on a hook that reads a gh or git subcommand by word position again; the only lines it
+allows carry `gh-reader:` with a reason, in the reader itself and in the crude readings a few callers
+keep for when it cannot be loaded, which see more commands than are there, never fewer.
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).

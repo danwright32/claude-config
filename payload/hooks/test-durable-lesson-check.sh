@@ -51,6 +51,19 @@ T=$(mktemp -d)
 out=$(run_hook "$(payload 'git add -A && gh issue create -t "t" -b "b"')" "$T")
 check "fires on chained segment" fires "$out"
 
+# 2b. gh takes the subcommand's flags in front of it, and rtk, env or sudo can stand in front of gh
+# (claude-config#1188): each is the same create.
+for c in 'gh -R o/x issue create -t "t" -b "b"' 'gh issue -R o/x create -t "t" -b "b"' \
+         'gh --repo=o/x issue create -t "t"' 'rtk gh issue create -t "t"' 'env GH_TOKEN=x gh issue create -t "t"' \
+         'sudo gh issue --repo o/x create -t "t"'; do
+  T=$(mktemp -d)
+  out=$(run_hook "$(payload "$c")" "$T")
+  check "#1188 fires on: $c" fires "$out"
+done
+T=$(mktemp -d)
+out=$(run_hook "$(payload 'gh -R o/x issue create --help')" "$T")
+check "#1188 silent on --help behind a flag in front" silent "$out"
+
 # 3. Silent when the command merely mentions gh issue create in a payload.
 T=$(mktemp -d)
 out=$(run_hook "$(payload 'echo "run gh issue create later"')" "$T")

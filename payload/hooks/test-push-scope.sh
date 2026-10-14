@@ -401,6 +401,20 @@ if ps_is_gh_pr_create 'GH_TOKEN="a b" gh pr create --fill'; then check "#589 a p
 else check "#589 a pr create after a quoted assignment with a space is seen" "not seen"; fi
 if ps_is_gh_pr_create 'echo "gh pr create --fill"'; then check "#589 a pr create inside a quoted argument is still not a creation" "seen"
 else check "#589 a pr create inside a quoted argument is still not a creation" ok; fi
+# gh takes the subcommand's flags in front of it, and env or sudo can stand in front of gh or git
+# (claude-config#1188): each is the same creation, push or commit.
+for c in 'gh -R o/x pr create --fill' 'gh pr -R o/x create --fill' 'gh --repo=o/x pr create' \
+         'rtk gh -R o/x pr create' 'env GH_TOKEN=x gh pr --repo o/x create' 'sudo -u dan gh -Ro/x pr create'; do
+  if ps_is_gh_pr_create "$c"; then check "#1188 a pr create is seen: $c" ok; else check "#1188 a pr create is seen: $c" "not seen"; fi
+done
+if ps_is_gh_pr_create 'gh --fill pr create'; then check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" "seen"
+else check "#1188 a flag in front that takes pr, as gh reads it, is no pr create" ok; fi
+for c in "env A=1 git push" "sudo git push origin main" "env -u X sudo -E git -C \"$SP\" push"; do
+  if ps_is_git_push "$c"; then check "#1188 a push behind env or sudo is seen: $c" ok; else check "#1188 a push behind env or sudo is seen: $c" "not seen"; fi
+done
+if ps_is_git_commit "env A=1 git commit -m x"; then check "#1188 a commit behind env is seen" ok; else check "#1188 a commit behind env is seen" "not seen"; fi
+got="$(ps_git_c_target "env A=1 git -C \"$SP\" push")"
+[ "$got" = "$SP" ] && check "#1188 the -C directory of a push behind env is read" ok || check "#1188 the -C directory of a push behind env is read" "got [$got]"
 got="$(ps_repo_dir "git -C \"$RD/target\" push" "$S" 2>/dev/null)"
 [ "$got" = "$RD/target" ] && check "#589 a quoted -C path without a space resolves" ok \
   || check "#589 a quoted -C path without a space resolves" "got [$got]"

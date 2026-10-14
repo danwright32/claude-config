@@ -808,6 +808,9 @@ gh pr merge 7 --squash; echo done => gh pr merge 7 --squash --match-head-commit 
 echo start && gh pr merge 7 --squash | tail -1 => echo start && gh pr merge 7 --squash --match-head-commit SHA | tail -1
 gh pr merge 7 --squash => gh pr merge 7 --squash --match-head-commit SHA
 gh pr merge 7 --squash --body "a | b; c" | cat => gh pr merge 7 --squash --body "a | b; c" --match-head-commit SHA | cat
+env GH_TOKEN=x gh pr merge 7 --squash | cat => env GH_TOKEN=x gh pr merge 7 --squash --match-head-commit SHA | cat
+rtk gh pr --squash=true merge 7; echo done => rtk gh pr --squash=true merge 7 --match-head-commit SHA; echo done
+sudo gh --squash=true pr merge 7 2>&1 | tail -1 => sudo gh --squash=true pr merge 7 --match-head-commit SHA 2>&1 | tail -1
 CASES
 
 # And the suggestion's own mistake is refused when somebody runs it: a pin after the pipe is handed

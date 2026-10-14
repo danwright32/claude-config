@@ -1468,7 +1468,9 @@ is still asked once at bedtime and closed if unanswered.
   the subcommand (`gh -R o/x pr merge 7`) is read by both, and a value gh cannot read is a
   repository that cannot be told to both. A flag this judge does not know in front of a subcommand
   (`gh pr -R o/x merge 7`, `gh -X PUT api ...`) it still refuses as unreadable, where the gates read
-  it as gh does; the table leaves the repository off those rows and says why.
+  it as gh does; the table leaves the repository off those rows and says why. Since #1188 the
+  gates' reading is the one every hook shares (`hooks/lib/shell-words.py`), and it also looks past
+  the shell's `exec` and `command` in front of gh or git, which this judge does not.
 
 ### Sleep mode phase 2: nothing pages Dan while asleep (#841), built
 

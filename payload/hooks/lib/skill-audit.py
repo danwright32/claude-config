@@ -38,6 +38,7 @@ Exit: 0 clean, 1 findings, 2 a folder is missing or holds nothing to check.
 """
 
 import ast
+import importlib.util
 import os
 import re
 import sys
@@ -422,12 +423,43 @@ def exits_python(path: str, rel: str):
     return findings
 
 
-# In command position: the start of a line however indented, after an operator (`;`, `&&`, `||`,
-# `|`, `(`, `$(`, `!`), or after a keyword that starts a command. A command position anchored to
-# column 0 alone missed every indented call inside a block (the PR #936 lessons review).
-GH_CREATE = re.compile(
-    r"(?:^|[;&|(!]|\$\(|\b(?:then|do|else|if|elif|while|until|time|exec|command)\b)\s*gh\s+issue\s+create\b"
-)
+# Whether a line of a script RUNS `gh issue create`, read by lib/shell-words.py, the one reading of a
+# command every gate asks (claude-config#1188): each command the shell would run, a substitution's
+# and an indented one inside a block included (the PR #936 lessons review), past reserved words,
+# assignments, rtk, env, sudo, exec and command, and past gh's flags written in front of the
+# subcommand. A comment or a quoted mention is no command. Loaded by its path, never by name, and
+# only by the check that needs it, so a reader that cannot be loaded fails that check by name and
+# leaves this file's other checks running (the lessons review of #1188).
+SHELL_WORDS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py")
+_SW = None
+
+
+def shell_words():
+    """The loaded reader, or raises ImportError naming the file when it cannot be loaded."""
+    global _SW
+    if _SW is None:
+        sys.dont_write_bytecode = True
+        try:
+            spec = importlib.util.spec_from_file_location("shell_words", SHELL_WORDS)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            raise ImportError(f"{SHELL_WORDS} could not be loaded ({type(exc).__name__}: {exc})") from exc
+        _SW = module
+    return _SW
+
+
+def runs_gh_issue_create(cmd: str) -> bool:
+    SW = shell_words()
+    try:
+        records = SW.commands(cmd)
+    except SW.Unreadable:
+        records = SW.crude_commands(cmd)
+    for _, text in records:
+        found = SW.tool_read(SW.command_words(SW.command_rest(text)[0]))
+        if found and found[:3] == ("gh", "issue", "create"):
+            return True
+    return False
 
 
 def shell_commands(text: str):
@@ -455,8 +487,18 @@ def exits_shell(path: str, rel: str):
     except OSError as exc:
         return [f"{rel}: could not be read, so it could not be checked: {exc}"]
     for n, cmd in shell_commands(text):
-        if not GH_CREATE.search(cmd):
+        # A line whose text names neither cannot run one, so it is never read: the reading is not
+        # started for every line of every helper, and a reader that cannot be loaded is reported
+        # only for a helper that has a call to check (the lessons review of #1188).
+        if "gh" not in cmd or "create" not in cmd:
             continue
+        try:
+            if not runs_gh_issue_create(cmd):
+                continue
+        except ImportError as exc:
+            # A reader that cannot be loaded finds nothing, which is what a clean script looks like,
+            # so it is a finding of its own rather than a pass (L98, L11).
+            return [f"{rel}: its gh issue create calls could not be checked: {exc}"]
         missing = []
         if "--milestone" not in cmd and not re.search(r"(?:^|\s)-m\s", cmd):
             missing.append("a milestone")

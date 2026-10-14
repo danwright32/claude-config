@@ -54,6 +54,18 @@ run "a PR body that negates a close"  $BLOCK 'gh pr create --title x --body "It 
 run "a commit message that negates"   $BLOCK 'git commit -m "this does not fix #12"'
 run "a PR edit that negates"          $BLOCK 'gh pr edit 12 --body "does not resolve #5"'
 
+# --- gh takes the subcommand's flags in front of it (#1188): the same creation and edit ---
+run "#1188 -R in front of pr create"           $BLOCK 'gh -R o/x pr create --title x --body "It does not close #897."'
+run "#1188 -R between pr and create"           $BLOCK 'gh pr -R o/x create --title x --body "It does not close #897."'
+run "#1188 --repo=x in front of pr edit"       $BLOCK 'gh --repo=o/x pr edit 12 --body "does not resolve #5"'
+run "#1188 --repo between pr and edit"         $BLOCK 'gh pr --repo o/x edit 12 --body "does not resolve #5"'
+run "#1188 behind rtk"                         $BLOCK 'rtk gh -R o/x pr create --title x --body "It does not close #897."'
+run "#1188 behind env with a setting"          $BLOCK 'env GH_TOKEN=x gh -R o/x pr create --title x --body "It does not close #897."'
+run "#1188 behind sudo"                        $BLOCK 'sudo gh pr -R o/x edit 12 --body "does not resolve #5"'
+run "#1188 a commit with git -C in front"      $BLOCK 'git -C /tmp commit -m "this does not fix #12"'
+run "#1188 a commit behind env"                $BLOCK 'env A=1 git commit -m "this does not fix #12"'
+run "#1188 control: a flag in front of pr view" $ALLOW 'gh -R o/x pr view 12 --json body --jq ".body" | grep "does not close #5"'
+
 # --- A genuine close must sail through, or the hook is useless ---
 run "a real close"                    $ALLOW 'gh pr create --title x --body "Closes #897."'
 run "the safe phrasing"               $ALLOW 'gh pr create --title x --body "Part of #897, which stays open."'

@@ -89,6 +89,13 @@ case "$o1" in *'LISTED alpha'*) check "and carries what the audit reported" ok ;
               *) check "and carries what the audit reported" "out=$o1" ;; esac
 case "$o1" in *'AUDIT_ON_LINUX=1'*) check "and it really asked for the Linux run" ok ;;
               *) check "and it really asked for the Linux run" "out=$o1" ;; esac
+# The push is read by the one reading of git (claude-config#1188), so env or sudo in front of git is
+# the same push; before, only rtk was looked past and these walked past every push gate.
+for pc in 'env GIT_TRACE=0 git push' 'sudo -E git push' 'env -u X git -c a.b=c push'; do
+  run "$R1" "$pc"
+  [ "$RC" -eq 2 ] && check "#1188 a push behind a runner is judged: $pc" ok \
+                  || check "#1188 a push behind a runner is judged: $pc" "rc=$RC out=$OUT"
+done
 
 # --- the Linux runner could not run at all: the push goes through, and the hook SAYS so. Measured
 #     on 2026-09-21 while timing what a push waits on (claude-config#523): docker is installed on
