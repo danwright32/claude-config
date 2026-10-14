@@ -38,6 +38,7 @@ import {
   joinedOnly,
   addedOntoFolder,
   shellBraces,
+  afterVariable,
   shellVarPath,
   tempRoots,
   ROUND_FILES,
@@ -293,6 +294,13 @@ test("a name after the shell's braced variable names that variable, and is never
   expect(addedOntoFolder('cp "${A}/x.css" "${B}/x.css"', '/x.css')).toBe(false)
   expect(addedOntoFolder('open("${A_LONG_ROUND_FOLDER_NAME}/x.css")', '/x.css')).toBe(false)
   expect(joinedOnly('cp "${A}/x.css" "${B}/x.css"', 'x.css')).toBe(false)
+  // Spelled after a shell variable and after a python one: after a variable, so not at the root,
+  // but not joined either.
+  const mixed = 'open("${APP}/x.css")\nopen(f"{d}/x.css", "w")'
+  expect(afterVariable(mixed, '/x.css')).toBe(true)
+  expect(joinedOnly(mixed, 'x.css')).toBe(false)
+  expect(afterVariable('open("${APP}/x.css")\nopen("/x.css")', '/x.css')).toBe(false)
+  expect(afterVariable('open("${APP}/x.css")', 'x.css')).toBe(false)
 })
 
 // #1191: every refusal of a look changing edit says where a round's own files go, so a round the

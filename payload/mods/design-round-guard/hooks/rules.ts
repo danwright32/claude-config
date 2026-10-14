@@ -141,6 +141,24 @@ export const shellBraces = (text: string, name: string): string[] | undefined =>
 }
 
 /**
+ * Whether every place a text spells a name that looks absolute follows a variable of any kind, the
+ * shell's braces, an f-string's or a `+ "` (lessons review of #1194). Such a name is in a folder the
+ * guard cannot read, never at the disk's root, so where neither shellBraces nor addedOntoFolder takes
+ * it whole it is read in the program's folder, and not as a joined name.
+ */
+export const afterVariable = (text: string, name: string): boolean => {
+  if (!name.startsWith('/')) return false
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
+    seen = true
+    const head = text.slice(Math.max(0, i - 64), i)
+    if (!SHELL_BRACE.test(head) && !addedOnto(head)) return false
+  }
+  return seen
+}
+
+/**
  * Whether every place a text spells a relative name joins it onto a folder held elsewhere, never
  * opening it as written (#1191, lessons review): `os.path.join(d, 'screen.css')` or `path.join(d,
  * 'screen.css')` (no call inside the join before it), pathlib's `d / 'screen.css'`, or (#1194) a
@@ -157,9 +175,14 @@ export const joinedOnly = (text: string, name: string): boolean => {
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     const before = text[i - 1] ?? ''
     const after = text[i + name.length] ?? ''
-    if (before === '/' && !/[\w.-]/.test(after) && addedOnto(text.slice(Math.max(0, i - 65), i - 1))) {
-      seen = true
-      continue
+    if (before === '/' && !/[\w.-]/.test(after)) {
+      const head = text.slice(Math.max(0, i - 65), i - 1)
+      // After the shell's braces the folder is the variable's value, never a join (lessons review).
+      if (SHELL_BRACE.test(head)) return false
+      if (addedOnto(head)) {
+        seen = true
+        continue
+      }
     }
     // Only the name as a whole word: not a longer name holding it (`app/screen.css`, `screen.css.map`).
     if (/[\w./~@+*[\]()-]/.test(before) || /[\w.-]/.test(after)) continue

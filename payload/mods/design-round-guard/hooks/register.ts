@@ -24,6 +24,7 @@ import {
   dataOnlyChange,
   addedOntoFolder,
   shellBraces,
+  afterVariable,
   editedText,
   forged,
   inScratchpad,
@@ -164,8 +165,10 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
   const text = unbrace(read)
   const command = unbrace(shell)
   const added = addedOntoFolder(text, said)
-  const m = added ? said.slice(1) : said
-  if (!added && /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
+  // After variables of more than one kind: in a folder the guard cannot read, never the root's.
+  const relative = added || (braces === undefined && afterVariable(text, said))
+  const m = relative ? said.slice(1) : said
+  if (!relative && /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
   const set = shellVarPath(command, text, m)
   if (set !== undefined && (set.startsWith('/') || /^~(\/|$)/.test(set) || folder !== undefined)) return { path: resolvePath(set, folder ?? '/', at.home), word: m }
   if (folder === undefined) return { word: m }
