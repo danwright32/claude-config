@@ -2513,6 +2513,60 @@ Two follow ups from #1165.
   `$HOME`, is now judged by the file it names, and its sentence reading is pinned on the same program
   importing os, whose files stay unnamed.
 
+### What #1191 changed, 2026-10-14
+
+Running /design-rounds for Slate's #3718, round one's files sat in the session's scratchpad
+(`<scratchpad>/3718/round1/`), and one Bash call embedding the fonts into `screen.css` and running
+`make-switcher.py` was refused twice: from the shared checkout on a detached head ("could not tell
+which issue or branch it belongs to"), and from a worktree on the issue's branch ("issue #3718 in
+Slate has no design round Dan has settled"). The only way through was the skip question's Not a
+look change, a stretch of what it means, and Dan first read it as a choice to run design rounds,
+which looped straight back to the refusal. The program named the round's folder and joined each
+bare name onto it (`os.path.join(d, 'screen.css')`), and the guard placed those names in the folder
+the program ran in, the checkout (#1151's reading). Reproduced in the guard's tests with four
+shapes: os.path.join, pathlib, a variable the shell fills in, and a program that also runs the
+switcher; a cd to the round's folder already passed.
+
+- **The session's scratchpad is known by Claude Code's own temp folder and the session's id.**
+  Claude Code hands every session `<temp>/claude-<uid>/<project>/<session id>/scratchpad`, where
+  `<temp>` is `CLAUDE_CODE_TMPDIR` when set and `/tmp` otherwise (also spelled under `/private` on
+  macOS). The guard reads that setting from the environment and the id from `$.session.id()`, a
+  space in the folder's name included. A named write there is in no checkout and passes with no
+  issue or branch read, as it did. The first version took the temp folder as anything, and the
+  lessons review found that let `<checkout>/app/claude-1/x/<session id>/scratchpad/page.tsx`
+  through, since the session's id is no secret from Claude; so a folder shaped like the scratchpad
+  anywhere else, another session's, and a project folder merely called scratchpad are judged as
+  any folder.
+- **A joined name is read in the scratchpad when the command names it and the project has no such
+  name.** A guess from a program's text (or a command's, where the program is not read) is a
+  relative name. Where the command names this session's scratchpad, every place the text spells
+  the name joins it onto a folder (`os.path.join(d, 'screen.css')`, `path.join`, pathlib's
+  `d / 'screen.css'`), and its first part is not on the disk in the folder the guess would place
+  it, it is the round's file. A first part that is there (`src/app/globals.css`, a new
+  `src/app/booker.css`, an existing top level file) is read in the project and held as before, and
+  so is any name the disk cannot answer for. The join requirement came from the lessons review:
+  keyed only on the command naming the scratchpad, a comment naming it let
+  `open('index.html', 'w')` in the same program through.
+- **A name through a shell variable lands where the command sets it.** The shell's
+  `$R/screen.css` (read by mentionedLookFiles as `R/screen.css`) was first counted as joined, and
+  the lessons review found its disk check then looked for a project folder named `R` or `APP`,
+  which is never there, so `$APP/globals.css` passed beside any mention of the scratchpad. Now
+  `rules.ts shellVarPath` reads the command's own assignment of the variable, when it is set once,
+  or always alike, to a literal, and the name is judged at that path: in the scratchpad it passes,
+  in the project it is held. A variable the command does not set is read as any name, in the
+  program's folder.
+- **The gap, chosen over holding every round.** The guard reads text, not the folder a join's
+  variable holds, so a new look changing file at the very top of a checkout, joined onto the
+  checkout by a program that also names the scratchpad, passes. Following the variable would mean
+  following python's values, which mod-kit does not.
+- **Where a round's files go is now said.** The design rounds skill never named a place; it now
+  says the session's scratchpad under `<issue number>/round<N>/`. Every refusal of a look changing
+  edit (the missing round, the subagent's, the one whose issue or branch cannot be told, the one
+  whose record cannot be read, and the preview a check with no call id gets) says so too, as does
+  Dan's Run /design-rounds, so a session sent to run rounds is told where their files go rather
+  than meeting the same refusal again. The refusals of a write to the guard's own record and of a
+  call the guard could not check say nothing of rounds, which they are not about.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

@@ -70,6 +70,91 @@ export const isTestPath = (path: string): boolean => {
   return false
 }
 
+// The session's scratchpad (#1191), as Claude Code hands every session one:
+// <temp>/claude-<uid>/<project>/<session id>/scratchpad, where <temp> is CLAUDE_CODE_TMPDIR when it is
+// set and /tmp otherwise (Claude Code's own default), each also in the /private spelling macOS gives
+// /tmp and /var. Known by the session's own id, as `$.session.id()` gives it, and only under that
+// temp folder: a folder shaped like it anywhere else, a checkout included, is any folder, since the
+// session's id is no secret from Claude (lessons review of #1191). Another session's scratchpad, and
+// a project folder merely called scratchpad, are not this one.
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** The temp folders the session's scratchpad may be under, from Claude Code's CLAUDE_CODE_TMPDIR (#1191). */
+export const tempRoots = (tmpdir: string | undefined): string[] => {
+  const t = tmpdir?.trim().replace(/\/+$/, '')
+  const root = t && t.startsWith('/') && !/(^|\/)\.\.?(\/|$)/.test(t) ? t : '/tmp'
+  return /^\/(tmp|var)(\/|$)/.test(root) ? [root, `/private${root}`] : [root]
+}
+const scratchpadAt = (session: string, roots: readonly string[]): string =>
+  `(?:${roots.map(esc).join('|')})/claude-\\d+/[^/\\n]+/${esc(session)}/scratchpad`
+
+/**
+ * Whether an absolute path is in the session's scratchpad, where a design round's working files go
+ * (#1191): a file for choosing a design with, never a screen of the product.
+ */
+export const inScratchpad = (path: string, session: string, roots: readonly string[]): boolean =>
+  session !== '' && roots.length > 0 && !/(^|\/)\.\.(\/|$)/.test(path) && new RegExp(`^${scratchpadAt(session, roots)}(?:/|$)`).test(path)
+
+/** Whether a command's text names the session's scratchpad anywhere, quoted or not (#1191). */
+export const namesScratchpad = (text: string, session: string, roots: readonly string[]): boolean =>
+  session !== '' && roots.length > 0 && new RegExp(`(?<![^\\s'"=(:])${scratchpadAt(session, roots)}(?![\\w.-])`).test(text)
+
+/**
+ * Whether every place a text spells a relative name joins it onto a folder held elsewhere, never
+ * opening it as written (#1191, lessons review): `os.path.join(d, 'screen.css')` or `path.join(d,
+ * 'screen.css')` (no call inside the join before it) or pathlib's `d / 'screen.css'`. A name opened
+ * as it is (`open('index.html')`), in a list, or anywhere else is not, and nor is a name the text
+ * never spells. Nor is the shell's `$R/screen.css` (mentionedLookFiles reads it as `R/screen.css`),
+ * whose folder is the variable's value, read by shellVarPath instead (lessons review of #1191: read
+ * as joined, its disk check looked for a project folder named after the variable).
+ */
+export const joinedOnly = (text: string, name: string): boolean => {
+  if (!name) return false
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    const before = text[i - 1] ?? ''
+    const after = text[i + name.length] ?? ''
+    // Only the name as a whole word: not a longer name holding it (`app/screen.css`, `screen.css.map`).
+    if (/[\w./~@+*[\]()-]/.test(before) || /[\w.-]/.test(after)) continue
+    seen = true
+    const line = text.slice(text.lastIndexOf('\n', i - 1) + 1, i)
+    if (!/['"]$/.test(line)) return false
+    const head = line.slice(0, -1)
+    if (/\/\s*$/.test(head) && !/\/\/\s*$/.test(head)) continue
+    if (/\b(?:join|joinpath|resolve)\([^()]*,\s*$/.test(head)) continue
+    return false
+  }
+  return seen
+}
+
+/**
+ * Where a name the shell spells through a variable (`$R/screen.css`, which mentionedLookFiles reads
+ * as `R/screen.css`) lands, from `command`'s own assignment of that variable (#1191, lessons review):
+ * its value joined with the rest of the name, when every place `text` spells the name follows a `$`
+ * and the command sets the variable once, or always to the same value, to a literal (bare, or in
+ * quotes with no `$` or backtick in it). Undefined otherwise, as for a variable set nowhere in the
+ * command, which the caller reads as it reads any name. The value may be relative, for the caller to
+ * place.
+ */
+export const shellVarPath = (command: string, text: string, name: string): string | undefined => {
+  const slash = name.indexOf('/')
+  const v = name.slice(0, slash)
+  if (slash <= 0 || !/^[A-Za-z_]\w*$/.test(v)) return undefined
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
+    if (text[i - 1] !== '$') return undefined
+    seen = true
+  }
+  if (!seen) return undefined
+  const values = new Set<string>()
+  for (const m of command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))`, 'g'))) values.add(m[1] ?? m[2] ?? m[3] ?? '')
+  // A value built another way (`R="$X/y"`, `R=$(pwd)`) is set too, and cannot be read.
+  if (new RegExp(`(?:^|[\\s;&|(])${v}=["]?[$\`]`).test(command)) return undefined
+  const [value] = [...values]
+  if (values.size !== 1 || !value) return undefined
+  return `${value.replace(/\/+$/, '')}/${name.slice(slash + 1)}`
+}
+
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */
 export const relTo = (path: string, root: string): string => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
 
@@ -777,6 +862,13 @@ const unreadSaid = (unread: readonly string[]) => (unread.length ? `${unread.joi
 export const unreadPutBack = (file: string, why: string): string =>
   `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
 
+/**
+ * Where a design round's own files go (#1191), said wherever an edit is held: a round's files held
+ * in the project sent Claude to /design-rounds, which it was already running, so every way on led
+ * back to the refusal.
+ */
+export const ROUND_FILES = `A design round's own working files (its builder, stylesheet, spec and switcher) go in this session's scratchpad, which the guard never holds: if this is one, write it there, naming it by its full path or after a cd there.`
+
 /** What the main session reads when a look changing edit is refused: the files, and the two ways on (plan point 3). */
 export const refusal = (id: string, files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string => {
   const f = listed(files)
@@ -786,6 +878,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
     `1. Start /design-rounds; once Dan answers ${SETTLED_YES} to its closing question, "${SETTLED_QUESTION}", asked with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}", "contract": ${CONTRACT}}, look changing edits on ${s} go through. ` +
     `2. Ask Dan one AskUserQuestion, with metadata {"source": "${SKIP_SOURCE}:${id}", "onScreen": "${ON_SCREEN_HINT}", "contract": ${CONTRACT}} and the question "${SKIP_QUESTION}"; the guard words the question and its answers itself, leading with your sentence and naming the file after it, and only his own choice of ${SKIP_YES} lets look changing edits on ${s} go ahead without a round, or his ${NOT_LOOK}, when nothing on screen changes, lets this one edit through. ` +
     unreadSaid(unread) +
+    `${ROUND_FILES} ` +
     leaveIt(files)
   )
 }
@@ -794,7 +887,7 @@ export const refusal = (id: string, files: readonly string[], subjects: readonly
 export const checked = (files: readonly string[], subjects: readonly DesignRoundSubject[], unread: readonly string[] = []): string =>
   `Blocked: ${listed(files)} changes how the screen looks, and ${named(subjects)} has no design round Dan has settled, nor his word to skip one. ` +
   unreadSaid(unread) +
-  `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}".`
+  `Making the call itself is refused with the two ways on: /design-rounds, or asking Dan "${SKIP_QUESTION}". ${ROUND_FILES}`
 
 /** What a subagent reads: refused like the main session, never asking Dan itself (plan point 2). */
 export const agentRefusal = (files: readonly string[], subjects: readonly DesignRoundSubject[], id: string, unread: readonly string[] = []): string => {
@@ -804,6 +897,7 @@ export const agentRefusal = (files: readonly string[], subjects: readonly Design
     unreadSaid(unread) +
     `Stop this change and report it to the main session as waiting on Dan, with this line word for word: "${SKIP_SOURCE}:${id}", and one plain sentence saying what on screen the change alters (which control or area, on which screen), or that nothing visible changes, which the main session's question to Dan leads with. ` +
     `The main session starts /design-rounds or asks Dan "${SKIP_QUESTION}", and once he answers, the change can be made again. ` +
+    `${ROUND_FILES} ` +
     leaveIt(files)
   )
 }
@@ -835,11 +929,11 @@ export const unreadableCard = (files: readonly string[]) => ({
 /** Failing closed when the issue or branch cannot be told (#978: "saying so"). */
 export const unsure = (files: readonly string[], why: string): string =>
   `Blocked: ${listed(files)} changes how the screen looks, and the design round guard could not tell which issue or branch it belongs to (${why}), so it cannot tell whether Dan settled its design or skipped design rounds for it. ` +
-  `Check out the issue's branch (a detached head names none) and try again, or ask Dan.`
+  `Check out the issue's branch (a detached head names none) and try again, or ask Dan. ${ROUND_FILES}`
 
 /** Failing closed when the record of Dan's answers cannot be read: never read as no answer, nor as one. */
 export const unreadable = (files: readonly string[], subjects: readonly DesignRoundSubject[], why: string): string =>
-  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan.`
+  `Blocked: ${listed(files)} changes how the screen looks, and the design round guard's record of Dan's answers could not be read (${why}), so it cannot tell whether he settled a design round for ${named(subjects)}. Try again; if it keeps failing, tell Dan. ${ROUND_FILES}`
 
 /** A write to the guard's own record: only Dan's answers may write it. */
 export const forged = (path: string): string =>

@@ -24,9 +24,11 @@ import {
   dataOnlyChange,
   editedText,
   forged,
+  inScratchpad,
   isModHook,
   isOwnRecord,
   isSwiftUI,
+  joinedOnly,
   judgedByText,
   listed,
   lookKindIn,
@@ -37,14 +39,18 @@ import {
   patternMayBeLook,
   relTo,
   shapeKind,
+  shellVarPath,
   mentionedLookFiles,
   mentionsStore,
+  namesScratchpad,
   modHookLogicOnly,
   modManifestOf,
   onScreenProblem,
   pathsOf,
   predates,
   READS_ONLY,
+  ROUND_FILES,
+  tempRoots,
   textsOf,
   refusal,
   resolvePath,
@@ -98,6 +104,12 @@ import {
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
 //   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
+// - Since #1191: a design round's working files go in the session's scratchpad (rules.ts
+//   inScratchpad: Claude Code's temp folder, the session's id), in no checkout, so never held and
+//   needing no issue or branch; a name a program only mentions and only joins onto a folder is read
+//   there, not in the project, when the command names that scratchpad and the project has nothing
+//   of that name (guessAt). Every refusal of a look changing edit says where a round's files go, so
+//   a held round is never sent back to /design-rounds.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -114,8 +126,40 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-type Where = { cwd: string; home: string }
-const whereOf = async ($: EngineInterface): Promise<Where> => ({ cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
+// `session`, the session's id, and `temps`, the temp folders Claude Code may keep it under, which
+// together name its scratchpad (#1191).
+type Where = { cwd: string; home: string; session: string; temps: string[] }
+const whereOf = async ($: EngineInterface): Promise<Where> => ({
+  cwd: await $.session.cwd(),
+  home: (await $.env.get('HOME')) ?? '',
+  session: await $.session.id(),
+  temps: tempRoots(await $.env.get('CLAUDE_CODE_TMPDIR')),
+})
+
+// A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
+// (#1151); only the word where that folder is unknown. Undefined for a design round's working file
+// (#1191): where the command names the session's scratchpad, a relative name that `text` (where it
+// was found) only ever joins onto a folder held elsewhere (rules.ts joinedOnly: `os.path.join(d,
+// 'screen.css')`, `d / 'screen.css'`) and whose first part is not on the disk in
+// `folder` is one joined onto the scratchpad folder the command names, never a file of the project.
+// A name opened as written (`open('index.html')`), or whose first part is there (src/app/globals.css,
+// src/app/new.css, an existing top level file), is still read in `folder`, and so is one the disk
+// cannot answer for. What it cannot see (lessons review): the folder a join's variable holds, so a
+// new top level look file joined onto the checkout by a program that also names the scratchpad passes.
+// A name the shell spells through a variable (`$R/screen.css`) is where the command's own literal
+// assignment of it puts it (rules.ts shellVarPath), judged as any path, so `$APP/globals.css` with
+// APP the project's folder is held; one the command does not set is read as any name (lessons review).
+const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
+  if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
+  const set = shellVarPath(command, text, m)
+  if (set !== undefined && (set.startsWith('/') || /^~(\/|$)/.test(set) || folder !== undefined)) return { path: resolvePath(set, folder ?? '/', at.home), word: m }
+  if (folder === undefined) return { word: m }
+  const path = resolvePath(m, folder, at.home)
+  if (!scratch || inScratchpad(path, at.session, at.temps) || !joinedOnly(text, m)) return { path, word: m }
+  const first = m.split('/').find(p => p !== '' && p !== '.') ?? m
+  const there = await $.fs.exists(resolvePath(first, folder, at.home)).catch(() => true)
+  return there ? { path, word: m } : undefined
+}
 
 // One file a call would write: its absolute path, or only the word naming it when the reader could
 // not follow where that is; and the text it will hold, where the call carries it.
@@ -137,6 +181,8 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const command = String(input.command ?? '')
   const w = await $.modkit.writes({ command, cwd: at.cwd, home: at.home })
   const targets: Target[] = []
+  // Whether the command names the session's scratchpad, where a round's files go (#1191).
+  const scratch = namesScratchpad(command, at.session, at.temps)
   for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}) })
@@ -163,16 +209,22 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // Its own words count too: a file handed to it as an argument (`python3 - app/site.css <<EOF`,
       // read as sys.argv) is one it may write (lessons review of #1151). A -c program is one of its
       // words, read as its code instead.
-      for (const m of mentionedLookFiles([u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n'))) {
-        const placed = /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m) || u.folder !== undefined
-        targets.push(placed ? { path: resolvePath(m, u.folder ?? '/', at.home), word: m } : { word: m })
+      const read = [u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n')
+      for (const m of mentionedLookFiles(read)) {
+        const t = await guessAt($, m, u.folder, at, scratch, read, command)
+        if (t) targets.push(t)
       }
       continue
     }
     // Otherwise what the command, and any patch or script file it reads, mentions is the guess.
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
-    for (const t of texts) for (const m of mentionedLookFiles(t)) targets.push({ path: resolvePath(m, at.cwd, at.home), word: m })
+    const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
+    for (const t of texts)
+      for (const m of mentionedLookFiles(t)) {
+        const g = await guessAt($, m, at.cwd, at, named, t, command)
+        if (g) targets.push(g)
+      }
   }
   // A write the words do not name, or a destination the reader could not follow, may be the record
   // when the command names the plugin store at all: refused, failing closed as ask before saving does
@@ -798,7 +850,7 @@ export const register: Register = on => {
         // The call stays waiting until his Skip them is recorded, so an answer in his own words, a
         // Run /design-rounds he changes his mind on, or a record that failed can be asked about again
         // (lessons review of #991).
-        if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now, and ask its closing question with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to it.`)
+        if (chosen === SKIP_NO) return say(r, `Dan answered ${SKIP_NO}: start /design-rounds now, and ask its closing question with metadata {"source": "${SETTLED_SOURCE}", "call": "${id}"}. Nothing that changes the look is edited on ${s} until he answers ${SETTLED_YES} to it. ${ROUND_FILES}`)
         if (chosen === NOT_LOOK) {
           // His word that this one call changes nothing on screen, kept with why (#1010): the same
           // call sent again goes through, and nothing is recorded for the issue.

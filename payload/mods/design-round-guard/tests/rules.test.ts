@@ -33,6 +33,15 @@ import {
   subjectsOf,
   textsOf,
   patternMayBeLook,
+  inScratchpad,
+  namesScratchpad,
+  joinedOnly,
+  shellVarPath,
+  tempRoots,
+  ROUND_FILES,
+  checked,
+  unsure,
+  unreadable,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -190,6 +199,96 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
   expect(subjectsOf({ ...at, branch: 'release-2026', isDefault: true, issues: [2026] })[0]?.key).toBe('record:/Users/dan/Apps/slate|branch:release-2026|session:s1')
   // An issue named on the settled question, whatever the branch.
   expect(subjectsOf({ main: at.main, repo: 'slate', session: 's1', issue: 12 })).toEqual([{ key: 'record:/Users/dan/Apps/slate|issue:12', label: 'issue #12 in slate' }])
+})
+
+// #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
+// session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
+test("the session's scratchpad is known by the session's id, under Claude Code's own temp folder", () => {
+  // CLAUDE_CODE_TMPDIR when it is set, else /tmp; macOS spells /tmp and /var under /private too.
+  expect(tempRoots(undefined)).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('')).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('/Users/dan/Temp Dir/')).toEqual(['/Users/dan/Temp Dir'])
+  expect(tempRoots('/var/folders/x/T')).toEqual(['/var/folders/x/T', '/private/var/folders/x/T'])
+  // A relative or climbing setting is not one Claude Code could have used as written: the default.
+  expect(tempRoots('tmp')).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('/tmp/../w/slate')).toEqual(['/tmp', '/private/tmp'])
+  const tmp = tempRoots(undefined)
+  const spaced = tempRoots('/Users/dan/Temp Dir')
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1/screen.css', 's1', tmp)).toBe(true)
+  expect(inScratchpad('/tmp/claude-501/-Users-dan-slate/s1/scratchpad', 's1', tmp)).toBe(true)
+  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css', 's1', spaced)).toBe(true)
+  // Lessons review: a folder shaped like it anywhere else, a checkout included, is not it.
+  expect(inScratchpad('/w/slate/app/claude-1/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/w/slate/tmp/claude-501/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/x/s1/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  // Another session's, a folder merely called scratchpad, a name that only starts like it, a climb out, and no id.
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/w/slate/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpads/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/../../../../../w/slate/a.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/screen.css', '', tmp)).toBe(false)
+  // An id is matched as written, never as a pattern.
+  expect(inScratchpad('/private/tmp/claude-501/x/s1x/scratchpad/screen.css', 's1.', tmp)).toBe(false)
+  // A command naming it, quoted or not, or with a space in the temp folder's name.
+  expect(namesScratchpad("d = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'", 's1', tmp)).toBe(true)
+  expect(namesScratchpad('cd /tmp/claude-501/x/s1/scratchpad && ls', 's1', tmp)).toBe(true)
+  expect(namesScratchpad('R="/Users/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"', 's1', spaced)).toBe(true)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s2/scratchpad'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad("d = '/w/slate/tmp/claude-501/x/s1/scratchpad'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad('cd scratchpad && ls', 's1', tmp)).toBe(false)
+})
+
+// #1191, lessons review: a name read as a round's file must be one the text joins onto a folder.
+test('a name is joined only where every place the text spells it joins it onto a folder', () => {
+  expect(joinedOnly("open(os.path.join(d, 'screen.css'), 'w')", 'screen.css')).toBe(true)
+  expect(joinedOnly('fs.writeFileSync(path.join(d, "screen.css"), x)', 'screen.css')).toBe(true)
+  expect(joinedOnly("(d / 'screen.css').write_text(x)", 'screen.css')).toBe(true)
+  // The shell's `$R/screen.css` is not joined: its folder is R's value (shellVarPath).
+  expect(joinedOnly('open("$R/screen.css", "w")', 'R/screen.css')).toBe(false)
+  expect(joinedOnly("p = os.path.join(d, 'a.css')\nq = d / 'a.css'", 'a.css')).toBe(true)
+  // Opened as written, in a list, after a call inside the join, or spelled nowhere: not joined.
+  expect(joinedOnly("open('index.html', 'w')", 'index.html')).toBe(false)
+  expect(joinedOnly("open(os.path.join(d, 'a.css'))\nopen('a.css', 'w')", 'a.css')).toBe(false)
+  expect(joinedOnly("for f in ['a.css']: open(f, 'w')", 'a.css')).toBe(false)
+  expect(joinedOnly("os.path.join(os.getcwd(), 'a.css')", 'a.css')).toBe(false)
+  expect(joinedOnly("x = 'b.css' // 'a.css'", 'a.css')).toBe(false)
+  expect(joinedOnly('open("x")', 'a.css')).toBe(false)
+  expect(joinedOnly('', '')).toBe(false)
+  // A longer name holding it is another name.
+  expect(joinedOnly("os.path.join(d, 'screen.css')\nopen('app/screen.css')", 'screen.css')).toBe(true)
+})
+
+// #1191: every refusal of a look changing edit says where a round's own files go, so a round the
+// guard held is never sent back to /design-rounds, which held it.
+test("every refusal of a look changing edit says a design round's files go in the session's scratchpad", () => {
+  const subjects = [{ key: 'k', label: 'issue #3718 in slate' }]
+  const files = ['src/app/globals.css']
+  expect(ROUND_FILES).toContain("this session's scratchpad")
+  for (const said of [refusal('t1', files, subjects), agentRefusal(files, subjects, 't2'), checked(files, subjects), unsure(files, 'a detached head names no branch'), unreadable(files, subjects, 'EIO')]) {
+    expect(said).toContain(ROUND_FILES)
+    expect(DASHES.test(said)).toBe(false)
+  }
+})
+
+// #1191, lessons review: `$APP/globals.css` was read as joined, and its disk check looked for a
+// project folder named APP. A name through a variable lands where the command's assignment puts it.
+test("a name the shell spells through a variable lands where the command's own assignment of it puts it", () => {
+  const text = 'open("$R/screen.css", "w")'
+  expect(shellVarPath("R='/tmp/claude-501/x/s1/scratchpad/3718/round1'; python3 - <<PY", text, 'R/screen.css')).toBe('/tmp/claude-501/x/s1/scratchpad/3718/round1/screen.css')
+  expect(shellVarPath('R="/Users/dan/Temp Dir/r1/"; x', text, 'R/screen.css')).toBe('/Users/dan/Temp Dir/r1/screen.css')
+  expect(shellVarPath('export R=/w/slate/src/app && x', text, 'R/screen.css')).toBe('/w/slate/src/app/screen.css')
+  expect(shellVarPath('R=src/app; x', text, 'R/screen.css')).toBe('src/app/screen.css')
+  expect(shellVarPath('R=/a; R=/a; x', text, 'R/screen.css')).toBe('/a/screen.css')
+  // Set nowhere, set twice to different values, built from another value, or the name also spelled
+  // without its $: not read.
+  expect(shellVarPath('python3 - <<PY', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a; R=/b; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R="$HOME/x"; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=$(pwd); x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('XR=/a; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a', `${text}\nopen('R/screen.css')`, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a', text, 'screen.css')).toBe(undefined)
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {
