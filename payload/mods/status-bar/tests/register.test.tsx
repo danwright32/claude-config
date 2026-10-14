@@ -77,7 +77,8 @@ const modKit: { name: string; register: Register } = {
 }
 const withKit = { plugins: [modKit] }
 
-const MIN = 60_000
+const SEC = 1_000
+const MIN = 60 * SEC
 const HOUR = 60 * MIN
 const T0 = 1_000 * HOUR
 const DIR = '/Users/x/.claude/state/status-bar'
@@ -749,6 +750,171 @@ test('a second session start in the same session, as a reload of the mod brings,
   loginAs(files, 'acct-2', 'Dan', 'Personal')
   await start($, clock)
   expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
+})
+
+// #1200: a /login in THIS session changes this session's account, so it is read again, unlike a
+// switch made by another session. Claude Code's /login is the core command; its output is the line
+// it prints once the login is done.
+type Cmd = { command: { run: (e: object) => Promise<{ text?: string }> } }
+const loginHere = (on: On, then: () => void) => {
+  on('command.run', ($, e) => {
+    if ((e as { command: string }).command !== 'login') return { text: '' } as never
+    then()
+    return { text: 'Login successful.' } as never
+  })
+}
+const runLogin = async ($: unknown, clock: { settle: () => Promise<void> }) => {
+  const out = await ($ as Cmd).command.run({ command: 'login', args: '', origin: { kind: 'human' }, presentation: {} })
+  await clock.settle()
+  return out
+}
+
+test("a /login in this session names the account it logged in to, and keeps /login's own output (#1200)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => loginAs(files, 'acct-2', 'Dan', 'Personal'))
+  await start($, clock)
+  const out = await runLogin($, clock)
+  expect(out.text).toBe('Login successful.')
+  expect(accountIn(files)).toEqual({ accountUuid: 'acct-2', organizationUuid: 'org-acct-2', displayName: 'Dan', emailAddress: 'acct-2@example.com', organizationName: 'Personal' })
+})
+
+const accountId = (files: Record<string, string>) => (accountIn(files) as { accountUuid: string }).accountUuid
+
+test('a /login already seen to land is not read again, since another session may switch the Mac next (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => loginAs(files, 'acct-2', 'Dan', 'Personal'))
+  await start($, clock)
+  await runLogin($, clock)
+  loginAs(files, 'acct-3', 'Dan', 'Elsewhere')
+  await clock.advance(MIN)
+  await step($, clock)
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('a /login that returns before the login file changes is read again within seconds, then no longer (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  expect(accountId(files)).toBe('acct-1')
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(accountId(files)).toBe('acct-2')
+  // Later, another session switches the Mac: this one keeps the account it logged in to.
+  loginAs(files, 'acct-3', 'Dan', 'Elsewhere')
+  await clock.advance(MIN)
+  await step($, clock)
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('a /login that changes nothing, as a cancelled one, stops waiting after half a minute (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await clock.advance(31 * SEC)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(MIN)
+  await step($, clock)
+  expect(accountId(files)).toBe('acct-1')
+})
+
+test('a login file that cannot be read after a /login is unknown, never the account from before it, until it can be (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => {
+    files[LOGIN_FILE] = 'not json'
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  expect(accountIn(files)).toBeNull()
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('a session that ends while a /login is awaited leaves no facts file behind (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'exit' } as never)
+  await clock.settle()
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(files[`${DIR}/s1.json`]).toBeUndefined()
+})
+
+test('a /clear while a /login is awaited goes on waiting, since the session carries on (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await clock.settle()
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('a session that ends while /login is still running leaves no facts file behind (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  on('command.run', async () => {
+    await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'exit' } as never)
+    loginAs(files, 'acct-2', 'Dan', 'Personal')
+    return { text: 'Login successful.' } as never
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  await clock.advance(2 * SEC)
+  expect(files[`${DIR}/s1.json`]).toBeUndefined()
+})
+
+test('a second /login while the first is awaited waits its own half minute (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await clock.advance(20 * SEC)
+  await runLogin($, clock)
+  // Past the first /login's half minute, inside the second's.
+  await clock.advance(15 * SEC)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('a /login that reports a failure still reads the login file, and its failure is still shown (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  on('command.run', () => {
+    loginAs(files, 'acct-2', 'Dan', 'Personal')
+    return { text: 'Login failed: the token could not be saved.' } as never
+  })
+  await start($, clock)
+  const out = await runLogin($, clock)
+  expect(out.text).toBe('Login failed: the token could not be saved.')
+  expect(accountId(files)).toBe('acct-2')
+})
+
+test('another slash command leaves the account the session started on (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await ($ as Cmd).command.run({ command: 'help', args: '', origin: { kind: 'human' }, presentation: {} })
+  await clock.advance(2 * SEC)
+  await step($, clock)
+  expect(accountId(files)).toBe('acct-1')
 })
 
 test('a Mac with no login file at all is no account, not an unknown one (#815)', withKit, async ($, on) => {
