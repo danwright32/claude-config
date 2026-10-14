@@ -19255,6 +19255,8 @@ CLAUDE_HOME="$OC_HA" SYNC_REPO="$OC_A" SYNC_NO_NOTIFY=1 bash "$SCRIPT" sync >/de
 out_oc1="$(oc_pull)"
 check "#359 a clone that is merely behind is still told how far behind" \
   "grep -qE 'commit\(s\) behind' <<< \"\$out_oc1\""
+check "#1198 and a clone on main is still told to pull, the remedy that reaches main" \
+  "grep -qF \"otherclone-B pull\" <<< \"\$out_oc1\""
 
 # 2b. A REGISTERED WORKTREE (claude-config#402). The reporter recognised a checkout by a `.git`
 #     DIRECTORY, and in a git worktree `.git` is a file, so a worktree that had registered itself
@@ -19270,6 +19272,63 @@ check "#402 a registered worktree is not reported as gone" \
   "out_lacks \"\$out_oc1w\" 'not there any more'"
 check "#402 and is told how far behind it is, as a clone would be" \
   "grep -qE 'otherclone-worktree is [0-9]+ commit\(s\) behind' <<< \"\$out_oc1w\""
+# A pull in a worktree on no branch fails outright, so it is never the remedy offered (#1198).
+check "#1198 a worktree on no branch is not told to pull" \
+  "out_lacks \"\$out_oc1w\" \"otherclone-worktree pull\""
+
+# 2c. A WORKTREE ON A FEATURE BRANCH (claude-config#1198). The warning told every checkout behind
+#     main to pull, and in a worktree on a feature branch a pull updates that branch from its own
+#     upstream and never reaches main, so the remedy changed nothing (L111). Measured 2026-10-14:
+#     an agent worktree whose PR had merged as #1114, reported 56 behind and told to pull.
+OC_FB="$WORK/otherclone-feature"
+git -C "$OC_B" worktree add -q -b fix/77-done "$OC_FB" >/dev/null 2>&1
+git -C "$OC_FB" -c user.email=t@t.t -c user.name=t commit -q --allow-empty -m "the feature" >/dev/null 2>&1
+# Pushed, as every branch with a PR is, so the shared repo has its commit and the case reached is
+# the one about the branch, not the one about work nobody pushed.
+git -C "$OC_FB" push -q origin fix/77-done >/dev/null 2>&1
+printf '%s\n' "$OC_FB" > "$OC_REG"
+OC_GH="$WORK/otherclone-gh"
+cat > "$OC_GH" <<'GHSTUB'
+#!/usr/bin/env bash
+[ -n "${OC_GH_FAIL:-}" ] && { echo "gh: simulated failure" >&2; exit 1; }
+cat "$OC_GH_MERGED"
+GHSTUB
+chmod +x "$OC_GH"
+export OC_GH_MERGED="$WORK/otherclone-merged.tsv"
+printf 'fix/77-done\t%s\t77\n' "$(git -C "$OC_FB" rev-parse HEAD)" > "$OC_GH_MERGED"
+
+out_fb1="$(SYNC_GH="$OC_GH" oc_pull)"
+# The fixture really is the case: after that pull the shared repo holds the branch's commit, and
+# the worktree is behind main.
+check "#1198 the feature worktree's commit reached the shared repo" \
+  "git -C '$OC_A' cat-file -e \"\$(git -C '$OC_FB' rev-parse HEAD)^{commit}\""
+check "#1198 and the worktree is behind main" \
+  "[ \"\$(git -C '$OC_A' rev-list --count \"\$(git -C '$OC_FB' rev-parse HEAD)..HEAD\")\" -gt 0 ]"
+check "#1198 a worktree whose PR merged is called finished, naming the PR" \
+  "grep -qE 'otherclone-feature is on fix/77-done, whose PR #77 has merged' <<< \"\$out_fb1\""
+check "#1198 and is given the command that removes it" \
+  "grep -qF \"worktree remove $OC_FB\" <<< \"\$out_fb1\""
+check "#1198 and is never told to pull" \
+  "out_lacks \"\$out_fb1\" \"otherclone-feature pull\""
+
+: > "$OC_GH_MERGED"
+out_fb2="$(SYNC_GH="$OC_GH" oc_pull)"
+check "#1198 a worktree whose PR has not merged is still told how far behind it is" \
+  "grep -qE 'otherclone-feature is [0-9]+ commit\(s\) behind' <<< \"\$out_fb2\""
+check "#1198 and that it is on its own branch, so a pull would not bring main in" \
+  "grep -qF 'on fix/77-done' <<< \"\$out_fb2\""
+check "#1198 and is given a rebase onto main rather than a pull" \
+  "grep -qE \"git -C $OC_FB rebase origin/\" <<< \"\$out_fb2\""
+check "#1198 and is never told to pull" \
+  "out_lacks \"\$out_fb2\" \"otherclone-feature pull\""
+
+out_fb3="$(OC_GH_FAIL=1 SYNC_GH="$OC_GH" oc_pull)"
+check "#1198 a PR state that cannot be read is said, never guessed" \
+  "grep -qF 'whether its PR has merged could not be read' <<< \"\$out_fb3\""
+check "#1198 and it is still never told to pull" \
+  "out_lacks \"\$out_fb3\" \"otherclone-feature pull\""
+git -C "$OC_B" worktree remove --force "$OC_FB" >/dev/null 2>&1
+printf '%s\n' "$OC_B" > "$OC_REG"
 printf '%s\n' "$OC_B" > "$OC_REG"
 
 # 3. HOLDING WORK NOBODY PUSHED. The case that was being reported as unanswerable.

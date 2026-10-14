@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# stale-worktree-nudge.sh: say, unprompted, when agent worktrees are sitting on work that has
-# already landed (claude-config#423).
+# stale-worktree-nudge.sh: remove, once a session, the agent worktrees whose work has already
+# landed, and say what it removed and what it kept (claude-config#423, #1199).
 #
 # check-stale-worktrees.sh answers the question correctly and nothing would ever ask it. The
 # failure it catches is silent by nature: the worktrees sit there, every repo wide search quietly
@@ -26,8 +26,9 @@
 # worktree nobody has tidied is something to mention, not a reason to refuse to work (L54). Every
 # path here exits 0.
 #
-# It never REMOVES anything, and neither does the check: see the header of check-stale-worktrees.sh
-# for why an automatic sweep is the wrong shape for a worktree.
+# It REMOVES, by Dan's decision of 2026-10-14 (#1199), through check-stale-worktrees.sh --remove,
+# whose header holds every rule a worktree must pass first and the time budget that keeps it inside
+# this hook's five seconds.
 #
 # Environment:
 #   STALE_WT_CHECK      run this instead of the check beside it, for a fixture
@@ -56,11 +57,11 @@ run_check(){
   # Judged by the exit CODE, never by a line of the output: a tool's last line is routinely a
   # different measurement than its verdict and usually the more reassuring one (L184).
   local answer verdict
-  answer="$(bash "$CHECK" 2>/dev/null)"; verdict=$?
-  # 0 is nothing to remove. 2 is could not tell, which is about gh or about this not being a
+  answer="$(bash "$CHECK" --remove 2>/dev/null)"; verdict=$?
+  # 0 is nothing landed. 2 is could not tell, which is about gh or about this not being a
   # repository, and neither is actionable by the person from here: the check says it on stderr for
   # anybody looking, and a notice nobody can act on is the alert that teaches people to skim
-  # (L36, L112). Only 1 has something to do.
+  # (L36, L112). Only 1 has something to say: what was removed, and what was kept and why.
   [ "$verdict" -eq 1 ] || return 0
   say "$answer"
 }
