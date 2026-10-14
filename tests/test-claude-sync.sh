@@ -19329,7 +19329,6 @@ check "#1198 and it is still never told to pull" \
   "out_lacks \"\$out_fb3\" \"otherclone-feature pull\""
 git -C "$OC_B" worktree remove --force "$OC_FB" >/dev/null 2>&1
 printf '%s\n' "$OC_B" > "$OC_REG"
-printf '%s\n' "$OC_B" > "$OC_REG"
 
 # 3. HOLDING WORK NOBODY PUSHED. The case that was being reported as unanswerable.
 git -C "$OC_B" config user.email t@t.t; git -C "$OC_B" config user.name t
