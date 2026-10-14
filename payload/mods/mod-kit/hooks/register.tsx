@@ -498,8 +498,7 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
 // session's environment; one that cannot be read is taken as unknown, which draws the text.
 // `isAppleTerminalTrusted` is this Mac's appleTerminalMouseReporting setting (band.ts
 // appleTerminalTrusted, #1012), read once from the options the module loaded with, so a redraw costs
-// nothing more. `isDrawingButton` is whether a button is drawn there at all: where one is drawn as
-// text that the setting would draw as a button, this Mac is told why, once (#1190).
+// nothing more.
 // `teller` is given only where a button is drawn there: where one is drawn as text that the setting
 // would draw as a button, this Mac is told why, once (#1190).
 const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>, isAppleTerminalTrusted: boolean, teller: Teller | undefined) => {
