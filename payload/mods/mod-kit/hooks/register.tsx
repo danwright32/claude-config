@@ -13,6 +13,7 @@ import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
+import { loginStarted, registerLogin } from './login.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
@@ -239,6 +240,8 @@ export const register: Register = (on, options) => {
   // Read from the options each time the module loads, never kept in a session (#1012).
   const isAppleTerminalTrusted = appleTerminalTrusted(options)
   registerBand(on, isAppleTerminalTrusted)
+  // A /login in this session, raised as modkit.login for every mod that follows the account (#1205).
+  registerLogin(on)
   // Every mod's message to another session, tried once more when refused (hooks/send.ts). Only a
   // mod's: Claude's own SendMessage, and anything else, is left as it is.
   on('session.send', async ($, e, next) => {
@@ -287,6 +290,8 @@ export const register: Register = (on, options) => {
       gh: async ({ words }) => ghArgs(words),
       pipeline: async ({ command }) => pipeline(command),
       pythonText: async ({ code }) => pythonText(code),
+      // The bottom of every login (#1205): each mod following it takes it in on its way down.
+      login: async () => undefined,
       workingTree: async ({ path }) => (await workingTree(path, dir => built.fs.exists(`${dir === '/' ? '' : dir}/.git`))) ?? null,
       repo: async ({ root, remote }) => ({ github: githubRepo(remote), name: repoName({ root, remote }) }),
       branch: async ({ path }) =>
@@ -600,6 +605,8 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
   // #939: where a click cannot land, a button is drawn as "type: /press <mod> <button>", and this is
   // that command. Only a button showing now is pressed, so an old line typed again presses nothing.
   on('session.start', async ($, e, next) => {
+    // A session started again in this process follows its /login afresh (#1205).
+    loginStarted()
     if (e.isInteractive) await $.command.register({ name: 'press', description: 'Press a button in the band or a pane: /press <mod> <button>, as the band shows it', argumentHint: '<mod> <button>' })
     // #960: at a reload, the mods that changed with mod-kit are asked to load again.
     await onePass(async () => {

@@ -67,6 +67,11 @@
 #             strings by hand (a triple quote, '"""', "'''"     before saving and mod-kit scanned them with
 #             or a quote's .repeat(3), or an f prefix class     the same code twice); what a span means is
 #             [fFtT])                                           each guard's own rule
+#   login-follower                                              on('modkit.login', ...): mod-kit follows
+#             following a /login by hooking the login command   the /login once, with its half minute wait,
+#             itself ({ command: 'login' })                     and raises the account it landed on (#1205:
+#                                                               the status bar and the account room each
+#                                                               kept a copy)
 #   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -146,6 +151,7 @@ PARTS=(
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
+  "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
 )
 
 n=0

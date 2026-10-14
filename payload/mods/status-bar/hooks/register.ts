@@ -19,10 +19,6 @@ const HOUR = 60 * MIN
 const CACHE_MS = HOUR
 // How often git, the PR and the jobs are read again, and the cache warning is checked.
 const TICK_MS = MIN
-// After a /login whose command returned before the login file named another account: how often the
-// file is read again, and for how long before the session stops waiting for it (#1200).
-const LOGIN_POLL_MS = 1_000
-const LOGIN_WAIT_MS = 30_000
 // How often GitHub is asked about the branch's PR when nothing on it is moving: no PR, or one whose
 // checks have finished (#1014). Each ask spends a point of the GraphQL allowance every session on
 // the Mac shares, 5,000 an hour, and asking every tick cost each open session 60 points an hour
@@ -70,9 +66,6 @@ let toldSave = false
 // Whether a main turn is running: from its first request to its end. Every request it makes keeps
 // the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
 let turnRunning = false
-// A /login in this session that returned before the login file named another account: the file is
-// read every LOGIN_POLL_MS until it does, for LOGIN_WAIT_MS at most (#1200).
-let loginWatch: { cancel: () => void } | undefined
 // The session has ended (not a /clear, after which it carries on): nothing writes its facts again.
 let ended = false
 let chain: Promise<unknown> = Promise.resolve()
@@ -125,9 +118,6 @@ const writeFacts = async ($: EngineInterface) => {
     cannotSave($, msg(err))
   }
 }
-
-// Which login an account record is, by its account and org ids; unknown and no login have none.
-const keyOf = (a: StatusBarAccount | null | undefined) => (a?.accountUuid && a.organizationUuid ? `${a.accountUuid}:${a.organizationUuid}` : '')
 
 // The account this session runs on, the one its limits belong to (#815): the Mac's login as it
 // stands at session start. Read then and not again, because the login file names whatever the Mac is
@@ -349,49 +339,6 @@ const read = async ($: EngineInterface) => {
   if ((await $.session.id()) !== writtenId) await writeFacts($)
 }
 
-// Reads the login file into this session's account and, when that changed what the status line
-// names, rewrites the facts file. True once it names a login other than `before`. A failure is
-// logged and false, never thrown, since it runs after /login's own result (L95).
-const adoptAccount = async ($: EngineInterface, h: string, before: string, isCurrent: () => boolean = () => true) => {
-  try {
-    const now = await readAccount($, h)
-    if (ended || !isCurrent()) return false
-    if (JSON.stringify(now) !== JSON.stringify((await $.state.get(accountRef)).value ?? null)) {
-      await $.state.set(accountRef, now)
-      await writeFacts($)
-    }
-    return now !== null && keyOf(now) !== before
-  } catch (err) {
-    $.ui.log(`status-bar: this session's account could not be read again after /login: ${msg(err)}`, { to: 'debug' })
-    return false
-  }
-}
-// Reads the login file every second for half a minute after a /login, until it names another
-// login. Each read checks the watch is still its own, so a read still in flight from an earlier
-// /login can neither stop a later one's watch nor adopt for it. Failing to start is logged, never
-// thrown over the command's own result.
-const watchLogin = async ($: EngineInterface, h: string, before: string) => {
-  try {
-    const until = (await $.clock.now()) + LOGIN_WAIT_MS
-    const mine = $.clock.every(LOGIN_POLL_MS, () => {
-      void (async () => {
-        if (loginWatch !== mine) return
-        // A session that ended while this watch was being started stops it at its first read.
-        if (ended) return stopLoginWatch()
-        const landed = await adoptAccount($, h, before, () => loginWatch === mine)
-        if (loginWatch === mine && (landed || (await $.clock.now()) >= until)) stopLoginWatch()
-      })().catch(err => $.ui.log(`status-bar: stopped reading the login file after /login: ${msg(err)}`, { to: 'debug' }))
-    })
-    loginWatch = mine
-  } catch (err) {
-    $.ui.log(`status-bar: could not keep reading the login file after /login: ${msg(err)}`, { to: 'debug' })
-  }
-}
-const stopLoginWatch = () => {
-  loginWatch?.cancel()
-  loginWatch = undefined
-}
-
 // The cache clock moved (a request started a new hour, or a compaction replaced the conversation):
 // the status line's file and the band follow, off the path of whatever moved it.
 const cacheMoved = async ($: EngineInterface) => {
@@ -477,26 +424,23 @@ export const register: Register = on => {
     return yield* next(e)
   })
 
-  // A /login in this session changes the account this session runs on, so the login file is read
-  // again once the command is done, failed or not, since whether the file changed is the file's to
-  // say (#1200). A read already naming another account shows the login landed. Otherwise the file
-  // is read every second for half a minute in case it changed after the command returned, and no
-  // longer: a /login that changed nothing (cancelled, or the same account again) must not leave this
-  // session adopting whatever another session switches the Mac to later.
-  on('command.run', { command: 'login' }, async ($, e, next) => {
-    if (!interactive || !home) return next(e)
-    const h = home
-    // Unknown before the login, any login read after it is another one.
-    const before = await $.state.get(accountRef).then(
-      r => keyOf(r.value),
-      () => '',
-    )
-    try {
-      return await next(e)
-    } finally {
-      stopLoginWatch()
-      if (!ended && !(await adoptAccount($, h, before))) await watchLogin($, h, before)
-    }
+  // A /login in this session changes the account this session runs on (#1200), and mod-kit raises
+  // it with the account the login file names, once the command is done and again if the file changes
+  // within the half minute after it (#1205). Taken in only while the session runs, so a login landing
+  // as it ends never writes an ended session's facts file back. A failure is logged, never thrown.
+  // Taken in once the raise has returned, never inside it: mod-kit's login is a call Claude Code
+  // cuts off at 10 seconds (#744), and writing the facts file runs a process.
+  on('modkit.login', async ($, e, next) => {
+    const now = e.account ? { ...e.account } : null
+    $.clock.after(0, () => {
+      void (async () => {
+        if (!interactive || !home || ended) return
+        if (JSON.stringify(now) === JSON.stringify((await $.state.get(accountRef)).value ?? null)) return
+        await $.state.set(accountRef, now)
+        await writeFacts($)
+      })().catch(err => $.ui.log(`status-bar: the account this session logged in to could not be recorded: ${msg(err)}`, { to: 'debug' }))
+    })
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -542,12 +486,9 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
-    // A /login still awaited would write the facts file of a session that has ended. A /clear ends
-    // only the conversation, and the session's account is still the one a /login is landing.
-    if (e.reason !== 'clear') {
-      ended = true
-      stopLoginWatch()
-    }
+    // A login landing after this would write the facts file of a session that has ended. A /clear
+    // ends only the conversation, and the session's account is still the one a /login is landing.
+    if (e.reason !== 'clear') ended = true
     if (home && SESSION_ID.test(e.sessionId)) {
       await $.process.run(['rm', '-f', `${dirOf(home)}/${e.sessionId}.json`]).catch(() => undefined)
       if (writtenId === e.sessionId) writtenId = undefined

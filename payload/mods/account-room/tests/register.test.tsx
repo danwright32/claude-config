@@ -50,6 +50,8 @@ const modKit: { name: string; register: Register } = {
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+        // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
+        login: async () => undefined,
       }
       return { ...built, modkit }
     })
@@ -117,6 +119,8 @@ const modKitToday: { name: string; register: Register } = {
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+        // #1205: the bottom of a login mod-kit raises; the room's own hook takes it in above this.
+        login: async () => undefined,
       }
       return { ...built, modkit }
     })
@@ -480,110 +484,85 @@ test("a reading is saved under the session's own account even after the login fi
 })
 
 // #1202: a /login in THIS session does change this session's account, so the record follows it,
-// unlike the switch made by another window above. Claude Code's /login is the core command; its
-// output is the line it prints once the login is done.
-type Cmd = { command: { run: (e: object) => Promise<{ text?: string }> } }
-const loginHere = (on: On, then: () => void) => {
-  on('command.run', ($, e) => {
-    if ((e as { command: string }).command !== 'login') return { text: '' } as never
-    then()
-    return { text: 'Login successful.' } as never
-  })
+// unlike the switch made by another window above. mod-kit follows the /login and raises the account
+// it landed on (#1205; its own tests cover when); here it is raised as mod-kit would, by a mod,
+// since only a loaded mod can call $.modkit.
+const raiser: { name: string; register: Register } = {
+  name: 'raiser',
+  register: on => {
+    on('tool.call', { tool: 'Bash' }, async ($, e) => {
+      await $.modkit.login({ account: JSON.parse(String((e as { command?: string }).command)) as never })
+      return { deny: 'raised' }
+    })
+  },
 }
-const runLogin = async ($: unknown, clock: { settle: () => Promise<void> }) => {
-  const out = await ($ as Cmd).command.run({ command: 'login', args: '', origin: { kind: 'human' }, presentation: {} })
+const withRaiser = { plugins: [modKit, raiser], options: REPO_OPTION }
+const raiseLogin = async ($: unknown, clock: { settle: () => Promise<void> }, account: Record<string, string> | null) => {
+  await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: 'Bash', command: JSON.stringify(account) } as never)
   await clock.settle()
-  return out
 }
+const acct = (id: string, email: string) => ({ accountUuid: id, organizationUuid: 'org-1', emailAddress: email, organizationName: 'Acme', displayName: 'Dan' })
 type Saved = { accounts: Record<string, { email: string; reading?: { five?: { used: number } } }> }
 const savedIn = (w: { files: Record<string, string> }) => JSON.parse(w.files[OWN] as string) as Saved
 
-test('after a /login in this session, readings are saved under the account it logged in to, and the old one keeps its own (#1202)', withKit, async ($, on) => {
+test('after a login raised in this session, readings are saved under the account it logged in to, and the old one keeps its own (#1202)', withRaiser, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }) } })
-  loginHere(on, () => {
-    w.files[LOGIN] = login('acct-work', 'work@example.com')
-  })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   await start($, clock)
   await measure($, clock, limits(40, 50))
-  const out = await runLogin($, clock)
-  expect(out.text).toBe('Login successful.')
+  await raiseLogin($, clock, acct('acct-work', 'work@example.com'))
   await measure($, clock, limits(10, 20))
   const saved = savedIn(w)
   expect(saved.accounts[await accountKey('acct-work', 'org-1')]?.reading?.five?.used).toBe(10)
   expect(saved.accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(40)
 })
 
-test('a /login that returns before the login file changes is followed within seconds, then no longer (#1202)', withKit, async ($, on) => {
-  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work', 'acct-third': 'Third' }) } })
-  loginHere(on, () => undefined)
+test('a login raised for the account the session is already on changes nothing (#1202)', withRaiser, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   await start($, clock)
-  await runLogin($, clock)
-  w.files[LOGIN] = login('acct-work', 'work@example.com')
-  await clock.advance(2_000)
-  // Later another window switches the Mac: this session stays on the account it logged in to.
-  w.files[LOGIN] = login('acct-third', 'third@example.com')
-  await clock.advance(MIN)
-  await measure($, clock, limits(10, 20))
-  const saved = savedIn(w)
-  expect(saved.accounts[await accountKey('acct-work', 'org-1')]?.reading?.five?.used).toBe(10)
-  expect(saved.accounts[await accountKey('acct-third', 'org-1')]).toBeUndefined()
+  await measure($, clock, limits(40, 50))
+  await raiseLogin($, clock, acct('acct-home', 'home@example.com'))
+  await measure($, clock, limits(45, 55))
+  expect(savedIn(w).accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(45)
 })
 
-test('a /login that changes nothing, as a cancelled one, stops following after half a minute (#1202)', withKit, async ($, on) => {
+test('a login raised with a login file that could not be read records nothing under the old account, until one names an account (#1202)', withRaiser, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }) } })
-  loginHere(on, () => undefined)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   await start($, clock)
-  await runLogin($, clock)
-  await clock.advance(31_000)
-  w.files[LOGIN] = login('acct-work', 'work@example.com')
-  await clock.advance(MIN)
+  await raiseLogin($, clock, null)
   await measure($, clock, limits(10, 20))
-  const saved = savedIn(w)
-  expect(saved.accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(10)
-  expect(saved.accounts[await accountKey('acct-work', 'org-1')]).toBeUndefined()
-})
-
-test('a login file that cannot be read after a /login records nothing under the old account, until it can be read (#1202)', withKit, async ($, on) => {
-  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }) } })
-  loginHere(on, () => {
-    w.files[LOGIN] = 'not json'
-  })
-  await start($, clock)
-  await runLogin($, clock)
-  await measure($, clock, limits(10, 20))
-  // The start recorded the account as seen; no reading may land under it once the file is unreadable.
+  // The start recorded the account as seen; no reading may land under it once the account is unknown.
   expect(savedIn(w).accounts[await accountKey('acct-home', 'org-1')]?.reading).toBeUndefined()
-  w.files[LOGIN] = login('acct-work', 'work@example.com')
-  await clock.advance(2_000)
+  await raiseLogin($, clock, acct('acct-work', 'work@example.com'))
   await measure($, clock, limits(15, 25))
   const saved = savedIn(w)
   expect(saved.accounts[await accountKey('acct-work', 'org-1')]?.reading?.five?.used).toBe(15)
   expect(saved.accounts[await accountKey('acct-home', 'org-1')]?.reading).toBeUndefined()
 })
 
-test('a login file unreadable for a moment after a /login, then naming the same account, resumes recording under it (#1202)', withKit, async ($, on) => {
+test('a login raised unreadable, then naming the account the session was on, resumes recording under it (#1202)', withRaiser, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
-  loginHere(on, () => {
-    w.files[LOGIN] = 'not json'
-  })
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
   await start($, clock)
-  await runLogin($, clock)
+  await raiseLogin($, clock, null)
   // The login was cancelled: the file reads again, naming the account the session was on.
-  w.files[LOGIN] = login('acct-home', 'home@example.com')
-  await clock.advance(2_000)
+  await raiseLogin($, clock, acct('acct-home', 'home@example.com'))
   await measure($, clock, limits(30, 40))
   expect(savedIn(w).accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(30)
 })
 
-test('another slash command leaves the account the session started on (#1202)', withKit, async ($, on) => {
+test('a login raised once the session has ended moves nothing (#1202)', withRaiser, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }) } })
-  loginHere(on, () => undefined)
+  on('tool.call', () => ({ result: 'ran', text: 'ran' }) as never)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   await start($, clock)
-  w.files[LOGIN] = login('acct-work', 'work@example.com')
-  await ($ as Cmd).command.run({ command: 'help', args: '', origin: { kind: 'human' }, presentation: {} })
-  await clock.advance(2_000)
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'exit' } as never)
+  await clock.settle()
+  await raiseLogin($, clock, acct('acct-work', 'work@example.com'))
   await measure($, clock, limits(10, 20))
-  expect(savedIn(w).accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(10)
+  expect(savedIn(w).accounts[await accountKey('acct-work', 'org-1')]).toBeUndefined()
 })
 
 test('at 95% on the 5 hour limit the boxed card names the account with room; below it there is no card', withKit, async ($, on) => {

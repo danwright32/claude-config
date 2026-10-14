@@ -122,6 +122,7 @@ const modKit: { name: string; register: Register } = {
         },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+        login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         press: never('press'),
         bandRow: never('bandRow'),
         clearBandRow: never('clearBandRow'),
