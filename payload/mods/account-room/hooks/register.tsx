@@ -1,6 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { AccountRoomAsking, AccountRoomPhase, AccountRoomSession, AccountRoomStop } from '../types/index.d.ts'
+import type { ModKitAccount } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { answerOf, contentsPath, entriesOf, fileOf, isRepoName, notRepoName, putBody, shaAfterPut, unseenWhy } from './github.ts'
 import type { Answer, RepoFile } from './github.ts'
 import { planOf, planText } from './plan.ts'
@@ -31,10 +32,6 @@ const PANE = 'account-room-nickname'
 const MIN = 60_000
 const LOCK_STALE_MS = 30_000
 const LOGIN_TIMEOUT_MS = 10 * MIN
-// After a /login whose command returned before the login file named another account: how often the
-// file is read again, and for how long before the session stops following it (#1202).
-const LOGIN_POLL_MS = 1_000
-const LOGIN_WAIT_MS = 30_000
 
 const sessionRef = { plugin: 'account-room', key: 'session' } as const
 const liveRef = { plugin: 'account-room', key: 'live' } as const
@@ -60,6 +57,8 @@ const serialWrites = queue()
 // The live reading is read, combined and written back in one turn, so two measurements arriving
 // together cannot each combine over the same old value and drop the other's window (L443).
 const serialLive = queue()
+// Each login mod-kit raises is followed in turn, so two cannot interleave over the record (#1205).
+const serialLogin = queue()
 // Things said once per session, so a fault that repeats on every reading is not a note per reading.
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
@@ -68,7 +67,6 @@ let switching = false
 let started_: { home: string; isInteractive: boolean } | undefined
 // The session has ended (not a /clear): nothing follows a /login for it any more.
 let ended = false
-let loginWatch: { cancel: () => void } | undefined
 let ticker: { cancel: () => void } | undefined
 let lastBest: Account | undefined
 // This Mac's readings file as this session last read or wrote it, with its sha: what the next
@@ -665,21 +663,29 @@ const finishAsk = async ($: EngineInterface, name: string | null, close: boolean
   await recompute($)
 }
 
-type LoginFile = { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown; organizationType?: unknown }
-
 /**
- * This session's account as the login file names it now: the record, 'none' for no Claude login
- * (an API key session), 'unreadable' for a file that could not be read. Each is logged as itself,
- * never one taken for another (L11).
+ * This session's account as the login file names it now, read through mod-kit's one reader of that
+ * file (#1205): the record, 'none' for no Claude login (an API key session), 'unreadable' for a file
+ * that could not be read or a mod-kit that could not answer. Each is logged as itself, never one
+ * taken for another (L11).
  */
 const readSession = async ($: EngineInterface, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none' | 'unreadable'> => {
-  let acct: LoginFile | undefined
+  let acct: ModKitAccount | null
   try {
-    acct = (JSON.parse((await readText($, `${home}/.claude.json`)) ?? '{}') as { oauthAccount?: LoginFile }).oauthAccount
+    acct = await $.modkit.account()
   } catch (err) {
-    $.ui.log(`account-room: ~/.claude.json could not be read, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
+    $.ui.log(`account-room: mod-kit could not read the login file, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
     return 'unreadable'
   }
+  if (acct === null) {
+    $.ui.log("account-room: ~/.claude.json could not be read, so this session's account is unknown", { to: 'debug' })
+    return 'unreadable'
+  }
+  return sessionFrom($, acct, home, isInteractive)
+}
+
+/** A session record from the login file's account, as read at start or raised by mod-kit after a /login. */
+const sessionFrom = async ($: EngineInterface, acct: ModKitAccount | undefined, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none'> => {
   if (!acct || typeof acct.accountUuid !== 'string' || typeof acct.organizationUuid !== 'string') {
     $.ui.log('account-room: no Claude account is logged in (an API key session?), so nothing is recorded', { to: 'debug' })
     return 'none'
@@ -701,62 +707,32 @@ const readSession = async ($: EngineInterface, home: string, isInteractive: bool
 }
 
 /**
- * The login file read after a /login, the record moved onto the account it names. True once it
- * names a login other than `before`. A file that cannot be read stops the record, so nothing is
- * saved under the account from before the login while it may no longer be this session's; the
- * old account's live reading never carries over to the new one. A failure is logged and false,
- * never thrown over the command's own result (L95).
+ * The account a /login in this session landed on, as mod-kit raises it (#1205), the record moved
+ * onto it. An account mod-kit could not read stops the record, so nothing is saved under the account
+ * from before the login while it may no longer be this session's; the old account's live reading
+ * never carries over to the new one. A failure is logged, never thrown over the login (L95).
  */
-const followLogin = async ($: EngineInterface, before: string, isCurrent: () => boolean = () => true): Promise<boolean> => {
-  if (!started_) return false
+const followLogin = async ($: EngineInterface, account: ModKitAccount | null) => {
+  if (!started_ || ended) return
   try {
-    const s = await readSession($, started_.home, started_.isInteractive)
-    if (ended || !isCurrent()) return false
-    const id = typeof s === 'string' ? '' : s.id
-    // Judged against the record as it stands, never against `before`: a file unreadable for a moment
-    // stops the record, and a read naming the account from before the login (a cancelled one) must
-    // put it back (lessons review of #1204).
+    const s = account === null ? 'unreadable' : await sessionFrom($, account, started_.home, started_.isInteractive)
+    if (ended) return
+    if (s === 'unreadable') $.ui.log("account-room: the login file could not be read after /login, so this session's account is unknown and nothing is recorded", { to: 'debug' })
     const had = (await $.state.get(sessionRef)).value
-    if ((had?.id ?? '') !== id) {
-      await $.state.set(sessionRef, typeof s === 'string' ? null : s)
-      await $.state.set(liveRef, null)
-      await $.state.set(dismissedRef, false)
-      if (typeof s !== 'string') {
-        $.clock.after(0, () => {
-          afterStart($, s).catch(err => once($, 'after-login', `Account room: the account this session logged in to could not be set up: ${message(err)}`))
-        })
-      }
-      await recompute($)
+    const id = typeof s === 'string' ? '' : s.id
+    if (s !== 'unreadable' && (had?.id ?? '') === id) return
+    await $.state.set(sessionRef, typeof s === 'string' ? null : s)
+    await $.state.set(liveRef, null)
+    await $.state.set(dismissedRef, false)
+    if (typeof s !== 'string') {
+      $.clock.after(0, () => {
+        afterStart($, s).catch(err => once($, 'after-login', `Account room: the account this session logged in to could not be set up: ${message(err)}`))
+      })
     }
-    return s !== 'unreadable' && id !== before
+    await recompute($)
   } catch (err) {
-    $.ui.log(`account-room: this session's account could not be read again after /login: ${message(err)}`, { to: 'debug' })
-    return false
+    $.ui.log(`account-room: this session's account could not be moved to the one /login landed on: ${message(err)}`, { to: 'debug' })
   }
-}
-
-// Reads the login file every LOGIN_POLL_MS for LOGIN_WAIT_MS after a /login, until it names another
-// login. Each read checks the watch is still its own, so a read in flight from an earlier /login can
-// neither stop a later one's watch nor follow for it.
-const watchLogin = async ($: EngineInterface, before: string) => {
-  try {
-    const until = (await $.clock.now()) + LOGIN_WAIT_MS
-    const mine = $.clock.every(LOGIN_POLL_MS, () => {
-      void (async () => {
-        if (loginWatch !== mine) return
-        if (ended) return stopLoginWatch()
-        const landed = await followLogin($, before, () => loginWatch === mine)
-        if (loginWatch === mine && (landed || (await $.clock.now()) >= until)) stopLoginWatch()
-      })().catch(err => $.ui.log(`account-room: stopped reading the login file after /login: ${message(err)}`, { to: 'debug' }))
-    })
-    loginWatch = mine
-  } catch (err) {
-    $.ui.log(`account-room: could not keep reading the login file after /login: ${message(err)}`, { to: 'debug' })
-  }
-}
-const stopLoginWatch = () => {
-  loginWatch?.cancel()
-  loginWatch = undefined
 }
 
 const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
@@ -861,22 +837,16 @@ export const register: Register = (on, options) => {
   // A /login in this session changes the account it runs on, and the readings it measures from then
   // on are that account's (#1202). Only this session's own /login does: a switch made in another
   // window changes the login file and not this session, which is why the account is otherwise read
-  // once, at start. So the record follows a /login once the command is done, failed or not, since
-  // whether the file changed is the file's to say. If the file does not yet name another login, it
-  // is read every second for half a minute and then no longer, so a /login that changed nothing
-  // never leaves this session adopting whatever another window switches the Mac to later.
-  on('command.run', { command: 'login' }, async ($, e, next) => {
-    if (!started_) return next(e)
-    const before = await $.state.get(sessionRef).then(
-      x => x.value?.id ?? '',
-      () => '',
-    )
-    try {
-      return await next(e)
-    } finally {
-      stopLoginWatch()
-      if (!ended && !(await followLogin($, before))) await watchLogin($, before)
-    }
+  // once, at start. mod-kit follows the /login and raises the account it landed on (#1205).
+  // Run once the raise has returned, never inside it: mod-kit's login is a call Claude Code cuts off
+  // at 10 seconds (#744), and moving the record can wait on GitHub for longer.
+  on('modkit.login', async ($, e, next) => {
+    const account = e.account
+    $.clock.after(0, () => {
+      // One at a time, in the order raised: the first read and a later one can land together.
+      void serialLogin(() => followLogin($, account))
+    })
+    return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
@@ -993,10 +963,7 @@ export const register: Register = (on, options) => {
 
   on('session.end', async ($, e, next) => {
     // A /clear ends only the conversation; the session, and the account a /login is landing, go on.
-    if (e.reason !== 'clear') {
-      ended = true
-      stopLoginWatch()
-    }
+    if (e.reason !== 'clear') ended = true
     stopTicker()
     await clearRow($)
     return next(e)

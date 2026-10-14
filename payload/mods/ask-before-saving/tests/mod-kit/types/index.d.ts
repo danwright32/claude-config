@@ -161,6 +161,23 @@ export type ModKit = {
    */
   pythonText: (input: { code: string }) => Promise<ModKitPythonText[]>
   /**
+   * A /login in this session (#1205), raised by mod-kit and taken in by any mod's hook on this event:
+   * `on('modkit.login', async ($, e, next) => (await follow(e.account), next(e)))`. `account` is the
+   * login file's account as it reads after the command: its fields, `{}` for no claude.ai login,
+   * null for a file that could not be read. Raised once the command is done, and again when the file
+   * changes within the half minute after it, then no longer, so a mod never follows a switch another
+   * session makes later. Only this session's /login is raised: another session's switch changes the
+   * login file and not this session's account.
+   */
+  login: (input: ModKitLogin) => Promise<void>
+  /**
+   * This session's account as the login file names it now, the one reader of that file every mod
+   * uses (#1205): its fields, `{}` for no claude.ai login, null for a file that could not be read.
+   * Read it at a session's start; after that only `modkit.login` says the session's account changed,
+   * since the file also changes when another session switches the Mac.
+   */
+  account: () => Promise<ModKitAccount | null>
+  /**
    * The git working tree an absolute path sits in: the nearest folder at or above it holding a
    * `.git` entry (a folder, or the file a linked worktree has), found on the disk, never by running
    * git, at most 64 folders up; null when there is none. Rejects a path that is not absolute, a
@@ -264,6 +281,10 @@ export type ModKitRepo = { github: string | null; name: string | null }
 export type ModKitBranch =
   | { root: string; main: string; branch: string; defaultBranch: string | null; isDefault: boolean; issues: number[] }
   | { root: string; main: string | null; unreadable: string }
+/** The login file's account fields a /login is followed by, each present only where the file has it as a string. */
+export type ModKitAccount = { accountUuid?: string; organizationUuid?: string; displayName?: string; emailAddress?: string; organizationName?: string; organizationType?: string }
+/** A /login in this session: the account the login file names after it, or null when it could not be read. */
+export type ModKitLogin = { account: ModKitAccount | null }
 /** A press on a button mod-kit drew: its `<mod>:<button>` key, the surface it came from, and how. */
 export type ModKitPress = { element: string; surface: string; how: 'click' | 'typed' }
 /** Where a Button is drawn, as a render hook's `e` carries it. */

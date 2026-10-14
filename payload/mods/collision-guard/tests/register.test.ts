@@ -74,6 +74,8 @@ const deps: { name: string; register: Register } = {
           isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+          login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+          account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
         },
         sessions: {
           list: async () => JSON.parse((await built.process.run(['__sessions'])).stdout),

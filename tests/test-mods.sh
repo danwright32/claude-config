@@ -1134,6 +1134,36 @@ for m in text-repeat text-triple text-prefix; do
     || check "and names $m, pointing it at modkit.pythonText" "$out"
 done
 case "$out" in *clean-asks-text*) check "a mod asking the kit where python holds text passes" "$out" ;; *) check "a mod asking the kit where python holds text passes" ok ;; esac
+# #1205: the status bar and the account room each followed a /login with their own copy of the
+# reading and its half minute wait. A mod hooking the login command itself fails the run, pointed at
+# modkit.login; a mod hooking the event mod-kit raises passes.
+M9L="$TMPROOT/m9l"
+mkmodsrc "$M9L" clean-follows-login "on('modkit.login', async (\$, e, next) => (await follow(e.account), next(e)))"
+mkmodsrc "$M9L" login-own "on('command.run', { command: 'login' }, async (\$, e, next) => next(e))"
+mkmodsrc "$M9L" login-own-dq 'on("command.run", { command: "login" }, async ($, e, next) => next(e))'
+out="$(bash "$SHARED" "$M9L" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod following /login itself fails the run" ok || check "a mod following /login itself fails the run" "exit=$code out=$out"
+for m in login-own login-own-dq; do
+  printf '%s\n' "$out" | grep "$m keeps its own login-follower" | grep -q 'modkit.login' && check "and names $m, pointing it at modkit.login" ok \
+    || check "and names $m, pointing it at modkit.login" "$out"
+done
+case "$out" in *clean-follows-login*) check "a mod hooking the login mod-kit raises passes" "$out" ;; *) check "a mod hooking the login mod-kit raises passes" ok ;; esac
+# Lessons review of #1205: the status bar and the account room also each read the login file at
+# their session's start. A mod naming the file as a path fails, pointed at modkit.account; one asking
+# the kit, or only naming the file in what it says, passes.
+M9LF="$TMPROOT/m9-login-file"
+mkmodsrc "$M9LF" clean-asks-account "const a = await \$.modkit.account(); log('~/.claude.json could not be read')"
+mkmodsrc "$M9LF" file-own "const text = await \$.fs.read(\`\${home}/.claude.json\`)"
+mkmodsrc "$M9LF" file-own-sq "const path = home + '/.claude.json'"
+mkmodsrc "$M9LF" file-own-join "const path = join(home, '.claude.json')"
+mkmodsrc "$M9LF" file-own-resolve 'const path = path.resolve(home, ".claude.json")'
+out="$(bash "$SHARED" "$M9LF" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod reading the login file itself fails the run" ok || check "a mod reading the login file itself fails the run" "exit=$code out=$out"
+for m in file-own file-own-sq file-own-join file-own-resolve; do
+  printf '%s\n' "$out" | grep "$m keeps its own login-file" | grep -q 'modkit.account' && check "and names $m, pointing it at modkit.account" ok \
+    || check "and names $m, pointing it at modkit.account" "$out"
+done
+case "$out" in *clean-asks-account*) check "a mod asking the kit for the account passes" "$out" ;; *) check "a mod asking the kit for the account passes" ok ;; esac
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.

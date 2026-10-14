@@ -32,6 +32,8 @@ const modKit: { name: string; register: Register } = {
         isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
         typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
         pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+        login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+        account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
