@@ -37,6 +37,7 @@ import {
   namesScratchpad,
   joinedOnly,
   addedOntoFolder,
+  shellBraced,
   shellVarPath,
   tempRoots,
   ROUND_FILES,
@@ -276,6 +277,16 @@ test('a name that looks absolute is added onto a folder only where every place t
   expect(addedOntoFolder("open('/w/slate/app/page.tsx', 'w')", '/w/slate/app/page.tsx')).toBe(false)
   expect(addedOntoFolder('open(W + "/app/page.tsx")', 'app/page.tsx')).toBe(false)
   expect(addedOntoFolder('x', '/app/page.tsx')).toBe(false)
+})
+
+// Lessons review of #1194: the shell's `${APP}/booker.css` is `$APP/booker.css`, for shellVarPath.
+test("a name after the shell's braced variable names that variable, where every place it is spelled agrees", () => {
+  expect(shellBraced('open("${APP}/booker.css", "w")', '/booker.css')).toBe('APP')
+  expect(shellBraced('cat "${APP}/booker.css" > "${APP}/booker.css"', '/booker.css')).toBe('APP')
+  expect(shellBraced('cp "${A}/booker.css" "${B}/booker.css"', '/booker.css')).toBeUndefined()
+  expect(shellBraced('open(f"{d}/booker.css")', '/booker.css')).toBeUndefined()
+  expect(shellBraced('open("${APP}/booker.css")\nopen("/booker.css")', '/booker.css')).toBeUndefined()
+  expect(shellBraced('open("${APP}/booker.css")', 'booker.css')).toBeUndefined()
 })
 
 // #1191: every refusal of a look changing edit says where a round's own files go, so a round the

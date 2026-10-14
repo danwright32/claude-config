@@ -2587,13 +2587,16 @@ with a space in it and a sentence read alike there, so the sentence read as two 
   `W+"/docs/design/clients.html"` that had been held only because a sentence it puts into PRD.md
   mentions `docs/design/clients.html`: mentionedLookFiles reads the name it opens as
   `/docs/design/clients.html`, a file at the disk's root, in no checkout, which was never held. A
-  name every place the text spells it after `+ "` or an f-string's brace (`f"{root}/app/page.tsx"`,
-  `${R}/screen.css`) is now read relative to that folder, as a joined name: in the project it is
+  name every place the text spells it after `+ "` or an f-string's brace (`f"{root}/app/page.tsx"`)
+  is now read relative to that folder, as a joined name: in the project it is
   held, and in the session's scratchpad, with the project lacking its first part, it passes as a
   round's file (#1191). This holds more than before: in this Mac's transcripts, 35 commands naming
   no scratchpad add a look file onto a worktree's folder (`W+"/Ovation/Roster/ShellView.swift"`)
   and read those names as files at the root, never held; they are now judged in the folder the
-  program runs in.
+  program runs in. The shell's `${APP}/booker.css`, which mentionedLookFiles also reads from the
+  root, is its `$APP/booker.css` (`rules.ts shellBraced`): judged where the command sets APP, as
+  #1191 judges `$APP`, never as a joined name. The lessons review found that the first version
+  read it as joined, so beside a scratchpad it passed a project stylesheet.
 - **What it cannot see.** A relative path holding a space, not from the root or the home folder,
   that reaches an open only through a function of the program's own, a list or a second name reads
   as a sentence. The folder a variable holds is still not followed, so a name added onto another

@@ -23,6 +23,7 @@ import {
   checked,
   dataOnlyChange,
   addedOntoFolder,
+  shellBraced,
   editedText,
   forged,
   inScratchpad,
@@ -153,7 +154,14 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // A name that looks absolute only because it is added onto a folder in a variable (`root +
 // "/app/page.tsx"`, `f"{root}/app/page.tsx"`) is that folder's, read as a joined name (rules.ts
 // addedOntoFolder, #1194): at the disk's root it was in no checkout, so it was never held.
-const guessAt = async ($: EngineInterface, said: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
+// The shell's `${APP}/booker.css` (read as `/booker.css`) is its `$APP/booker.css`, judged by where
+// the command sets APP (rules.ts shellBraced, lessons review of #1194), never as a joined name.
+const guessAt = async ($: EngineInterface, found: string, folder: string | undefined, at: Where, scratch: boolean, read: string, shell: string): Promise<Target | undefined> => {
+  const braced = shellBraced(read, found)
+  const unbrace = (s: string) => (braced === undefined ? s : s.replace(/\$\{([A-Za-z_]\w*)\}/g, '$$$1'))
+  const said = braced === undefined ? found : `${braced}${found}`
+  const text = unbrace(read)
+  const command = unbrace(shell)
   const added = addedOntoFolder(text, said)
   const m = added ? said.slice(1) : said
   if (!added && /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
