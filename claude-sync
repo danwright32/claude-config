@@ -10537,10 +10537,55 @@ report_other_clones_position(){
     # checkout now being honest about itself (L98, L11, L440).
     ck_note=""
     [ "$ck_refreshed" -eq 1 ] || ck_note=" Its own record of the remote could not be refreshed, so git asked inside that checkout will still report it level."
-    echo "claude-sync: the checkout at $d is $n commit(s) behind $up.$ck_note Config edited there is being written against a copy the shared repo has already moved past: run 'git -C $d pull' before working in it." >&2
+    # ONLY A CHECKOUT ON THE UPSTREAM'S BRANCH IS TOLD TO PULL (claude-config#1198). In a worktree
+    # on a feature branch a pull updates that branch from its own upstream and never reaches main,
+    # and on no branch it fails outright, so the remedy changed nothing (L111). Measured
+    # 2026-10-14: an agent worktree whose PR had merged as #1114 was reported 56 behind and told
+    # to pull. A feature branch whose PR has merged is finished, not behind.
+    br="$(git -C "$d" symbolic-ref -q --short HEAD 2>/dev/null || true)"
+    if [ "$br" = "${up#*/}" ]; then
+      echo "claude-sync: the checkout at $d is $n commit(s) behind $up.$ck_note Config edited there is being written against a copy the shared repo has already moved past: run 'git -C $d pull' before working in it." >&2
+    elif [ -z "$br" ]; then
+      echo "claude-sync: the checkout at $d is $n commit(s) behind $up, on no branch, where a pull fails. To work against the current ${up#*/}: git -C $d checkout --detach $up" >&2
+    else
+      other_clone_branch_notice "$d" "$br" "$head" "$n" "$up"
+    fi
     said=1
   done < "$CLONE_REGISTRY"
   return 0
+}
+
+# A registered checkout on a branch that is not the upstream's (claude-config#1198): finished if
+# its PR merged, otherwise behind on its own branch, and told the remedy for whichever it is. The
+# merged PRs are read once per run, through the same reading check-stale-worktrees.sh removes
+# finished worktrees by, so the two can never disagree about which are finished (L261).
+OC_MERGED=""; OC_MERGED_READ=0
+other_clone_branch_notice(){   # $1 dir  $2 branch  $3 head  $4 commits behind  $5 upstream
+  local d="$1" br="$2" head="$3" n="$4" up="$5" verdict num slug main
+  if [ "$OC_MERGED_READ" -eq 0 ]; then
+    OC_MERGED_READ=2
+    if [ -f "$SYNC_SELF_PAYLOAD/hooks/lib/merged-prs.sh" ] && . "$SYNC_SELF_PAYLOAD/hooks/lib/merged-prs.sh"; then
+      if slug="$(repo_slug)" && [ -n "$slug" ]; then
+        OC_MERGED="$(merged_prs "$(sync_gh)" 400 --repo "$slug")" && OC_MERGED_READ=1
+      else
+        OC_MERGED="$(cd "$SYNC_REPO" && merged_prs "$(sync_gh)" 400)" && OC_MERGED_READ=1
+      fi
+    fi
+  fi
+  verdict="unread"
+  [ "$OC_MERGED_READ" -eq 1 ] && IFS=$'\t' read -r verdict num <<<"$(pr_landing "$d" "$br" "$head" "$OC_MERGED")"
+  if [ "$verdict" = "landed" ]; then
+    if [ -f "$d/.git" ]; then
+      main="$(cd "$d" && cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd -P)"
+      echo "claude-sync: the checkout at $d is on $br, whose PR #$num has merged, so it is finished rather than behind: a pull there would only update $br. Remove it with: git -C ${main:-$d} worktree remove $d, then: claude-sync forget-clone $d" >&2
+    else
+      echo "claude-sync: the checkout at $d is on $br, whose PR #$num has merged, so it is finished rather than behind: a pull there would only update $br. Put it back on ${up#*/} with: git -C $d switch ${up#*/}, then: git -C $d pull" >&2
+    fi
+    return 0
+  fi
+  local why=""
+  [ "$verdict" = "unread" ] && why=" It may be finished: whether its PR has merged could not be read."
+  echo "claude-sync: the checkout at $d is $n commit(s) behind $up, on $br rather than ${up#*/}, so a pull there would update $br and never bring ${up#*/} in.$why To bring in the current ${up#*/}: git -C $d rebase $up" >&2
 }
 
 # Which automatic jobs this Mac runs, and which of their receives waits for CI (claude-config#280).
