@@ -73,9 +73,10 @@
 #                                                               the status bar and the account room each
 #                                                               kept a copy)
 #   login-file                                                  use $.modkit.account(), the one reader of
-#             reading the login file itself (a path ending      the file (lessons review of #1205: the status
-#             in /.claude.json, in any quotes)                  bar and the account room each read it their
-#                                                               own way at start)
+#             reading the login file itself (.claude.json as    the file (lessons review of #1205: the status
+#             a whole path part in any quotes: '/.claude.json', bar and the account room each read it their
+#             join(home, '.claude.json'); never a sentence      own way at start)
+#             that only names the file)
 #   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -155,7 +156,7 @@ PARTS=(
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
-  "login-file|/\\.claude\\.json[\"'\`]|\$.modkit.account()"
+  "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"
   "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
 )
 

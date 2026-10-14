@@ -1155,9 +1155,11 @@ M9LF="$TMPROOT/m9-login-file"
 mkmodsrc "$M9LF" clean-asks-account "const a = await \$.modkit.account(); log('~/.claude.json could not be read')"
 mkmodsrc "$M9LF" file-own "const text = await \$.fs.read(\`\${home}/.claude.json\`)"
 mkmodsrc "$M9LF" file-own-sq "const path = home + '/.claude.json'"
+mkmodsrc "$M9LF" file-own-join "const path = join(home, '.claude.json')"
+mkmodsrc "$M9LF" file-own-resolve 'const path = path.resolve(home, ".claude.json")'
 out="$(bash "$SHARED" "$M9LF" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod reading the login file itself fails the run" ok || check "a mod reading the login file itself fails the run" "exit=$code out=$out"
-for m in file-own file-own-sq; do
+for m in file-own file-own-sq file-own-join file-own-resolve; do
   printf '%s\n' "$out" | grep "$m keeps its own login-file" | grep -q 'modkit.account' && check "and names $m, pointing it at modkit.account" ok \
     || check "and names $m, pointing it at modkit.account" "$out"
 done
