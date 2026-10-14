@@ -713,19 +713,20 @@ const followLogin = async ($: EngineInterface, before: string, isCurrent: () => 
     const s = await readSession($, started_.home, started_.isInteractive)
     if (ended || !isCurrent()) return false
     const id = typeof s === 'string' ? '' : s.id
-    if (s === 'unreadable' || id !== before) {
-      const had = (await $.state.get(sessionRef)).value
-      if (had?.id !== id || s === 'unreadable') {
-        await $.state.set(sessionRef, typeof s === 'string' ? null : s)
-        await $.state.set(liveRef, null)
-        await $.state.set(dismissedRef, false)
-        if (typeof s !== 'string') {
-          $.clock.after(0, () => {
-            afterStart($, s).catch(err => once($, 'after-login', `Account room: the account this session logged in to could not be set up: ${message(err)}`))
-          })
-        }
-        await recompute($)
+    // Judged against the record as it stands, never against `before`: a file unreadable for a moment
+    // stops the record, and a read naming the account from before the login (a cancelled one) must
+    // put it back (lessons review of #1204).
+    const had = (await $.state.get(sessionRef)).value
+    if ((had?.id ?? '') !== id) {
+      await $.state.set(sessionRef, typeof s === 'string' ? null : s)
+      await $.state.set(liveRef, null)
+      await $.state.set(dismissedRef, false)
+      if (typeof s !== 'string') {
+        $.clock.after(0, () => {
+          afterStart($, s).catch(err => once($, 'after-login', `Account room: the account this session logged in to could not be set up: ${message(err)}`))
+        })
       }
+      await recompute($)
     }
     return s !== 'unreadable' && id !== before
   } catch (err) {

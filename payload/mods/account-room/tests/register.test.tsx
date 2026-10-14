@@ -561,6 +561,20 @@ test('a login file that cannot be read after a /login records nothing under the 
   expect(saved.accounts[await accountKey('acct-home', 'org-1')]?.reading).toBeUndefined()
 })
 
+test('a login file unreadable for a moment after a /login, then naming the same account, resumes recording under it (#1202)', withKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
+  loginHere(on, () => {
+    w.files[LOGIN] = 'not json'
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  // The login was cancelled: the file reads again, naming the account the session was on.
+  w.files[LOGIN] = login('acct-home', 'home@example.com')
+  await clock.advance(2_000)
+  await measure($, clock, limits(30, 40))
+  expect(savedIn(w).accounts[await accountKey('acct-home', 'org-1')]?.reading?.five?.used).toBe(30)
+})
+
 test('another slash command leaves the account the session started on (#1202)', withKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home', 'acct-work': 'Work' }) } })
   loginHere(on, () => undefined)
