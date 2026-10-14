@@ -35,6 +35,7 @@ import {
   patternMayBeLook,
   inScratchpad,
   namesScratchpad,
+  tempRoots,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -196,23 +197,40 @@ test('a branch naming an issue is keyed by the issue, one naming none by the bra
 
 // #1191: a design round's working files go in the session's scratchpad, which Claude Code hands every
 // session as <temp>/claude-<uid>/<project>/<session id>/scratchpad, its temp folder wherever that is.
-test("the session's scratchpad is known by the session's id, wherever its temp folder is", () => {
-  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1/screen.css', 's1')).toBe(true)
-  expect(inScratchpad('/tmp/claude-501/-Users-dan-slate/s1/scratchpad', 's1')).toBe(true)
-  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css', 's1')).toBe(true)
-  // Another session's, a folder merely called scratchpad, a name that only starts like it, and no id.
-  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/screen.css', 's1')).toBe(false)
-  expect(inScratchpad('/w/slate/scratchpad/screen.css', 's1')).toBe(false)
-  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpads/screen.css', 's1')).toBe(false)
-  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/screen.css', '')).toBe(false)
+test("the session's scratchpad is known by the session's id, under Claude Code's own temp folder", () => {
+  // CLAUDE_CODE_TMPDIR when it is set, else /tmp; macOS spells /tmp and /var under /private too.
+  expect(tempRoots(undefined)).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('')).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('/Users/dan/Temp Dir/')).toEqual(['/Users/dan/Temp Dir'])
+  expect(tempRoots('/var/folders/x/T')).toEqual(['/var/folders/x/T', '/private/var/folders/x/T'])
+  // A relative or climbing setting is not one Claude Code could have used as written: the default.
+  expect(tempRoots('tmp')).toEqual(['/tmp', '/private/tmp'])
+  expect(tempRoots('/tmp/../w/slate')).toEqual(['/tmp', '/private/tmp'])
+  const tmp = tempRoots(undefined)
+  const spaced = tempRoots('/Users/dan/Temp Dir')
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1/screen.css', 's1', tmp)).toBe(true)
+  expect(inScratchpad('/tmp/claude-501/-Users-dan-slate/s1/scratchpad', 's1', tmp)).toBe(true)
+  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/-Users-dan-slate/s1/scratchpad/a b/screen.css', 's1', spaced)).toBe(true)
+  // Lessons review: a folder shaped like it anywhere else, a checkout included, is not it.
+  expect(inScratchpad('/w/slate/app/claude-1/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/w/slate/tmp/claude-501/x/s1/scratchpad/page.tsx', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/Users/dan/Temp Dir/claude-501/x/s1/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  // Another session's, a folder merely called scratchpad, a name that only starts like it, a climb out, and no id.
+  expect(inScratchpad('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/w/slate/scratchpad/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpads/screen.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/../../../../../w/slate/a.css', 's1', tmp)).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1/scratchpad/screen.css', '', tmp)).toBe(false)
   // An id is matched as written, never as a pattern.
-  expect(inScratchpad('/private/tmp/claude-501/x/s1x/scratchpad/screen.css', 's1.')).toBe(false)
+  expect(inScratchpad('/private/tmp/claude-501/x/s1x/scratchpad/screen.css', 's1.', tmp)).toBe(false)
   // A command naming it, quoted or not, or with a space in the temp folder's name.
-  expect(namesScratchpad("d = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'", 's1')).toBe(true)
-  expect(namesScratchpad('R="/Users/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"', 's1')).toBe(true)
-  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s2/scratchpad'", 's1')).toBe(false)
-  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1')).toBe(false)
-  expect(namesScratchpad('cd scratchpad && ls', 's1')).toBe(false)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/-Users-dan-slate/s1/scratchpad/3718/round1'", 's1', tmp)).toBe(true)
+  expect(namesScratchpad('cd /tmp/claude-501/x/s1/scratchpad && ls', 's1', tmp)).toBe(true)
+  expect(namesScratchpad('R="/Users/dan/Temp Dir/claude-501/x/s1/scratchpad"; ls "$R"', 's1', spaced)).toBe(true)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s2/scratchpad'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad("d = '/private/tmp/claude-501/x/s1/scratchpads'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad("d = '/w/slate/tmp/claude-501/x/s1/scratchpad'", 's1', tmp)).toBe(false)
+  expect(namesScratchpad('cd scratchpad && ls', 's1', tmp)).toBe(false)
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {

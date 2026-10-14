@@ -2513,12 +2513,16 @@ the program ran in, the checkout (#1151's reading). Reproduced in the guard's te
 shapes: os.path.join, pathlib, a variable the shell fills in, and a program that also runs the
 switcher; a cd to the round's folder already passed.
 
-- **The session's scratchpad is never held.** Claude Code hands every session
-  `<temp>/claude-<uid>/<project>/<session id>/scratchpad`. The guard knows it by the session's id
-  from `$.session.id()`, the temp folder left open since TMPDIR or CLAUDE_CODE_TMPDIR can move it,
-  a space in its name included. A write there passes before any checkout or branch is read, so a
-  command touching only it needs no issue or branch; another session's scratchpad, and a project
-  folder merely called scratchpad, are judged as any folder.
+- **The session's scratchpad is known by Claude Code's own temp folder and the session's id.**
+  Claude Code hands every session `<temp>/claude-<uid>/<project>/<session id>/scratchpad`, where
+  `<temp>` is `CLAUDE_CODE_TMPDIR` when set and `/tmp` otherwise (also spelled under `/private` on
+  macOS). The guard reads that setting from the environment and the id from `$.session.id()`, a
+  space in the folder's name included. A named write there is in no checkout and passes with no
+  issue or branch read, as it did. The first version took the temp folder as anything, and the
+  lessons review found that let `<checkout>/app/claude-1/x/<session id>/scratchpad/page.tsx`
+  through, since the session's id is no secret from Claude; so a folder shaped like the scratchpad
+  anywhere else, another session's, and a project folder merely called scratchpad are judged as
+  any folder.
 - **A mentioned name is read in the scratchpad when the command names it and the project has no
   such name.** A guess from a program's text (or a command's, where the program is not read) is a
   relative name; where the command names this session's scratchpad and the name's first part is

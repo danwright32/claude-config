@@ -89,7 +89,8 @@ const STORE = `${HOME}/.claude/plugins/store/design-round-guard_inline-ab12cd34e
 type Dialog = { answer?: string; afk?: boolean }
 type Asked = { questions: { question: string; header: string; options: { label: string; description?: string }[]; multiSelect: boolean }[]; metadata?: Record<string, unknown> }
 // `blobs`: what git holds, by the checkout and the `<from>:<path>` that reads it (#1158).
-type Init = { cwd?: string; files?: Record<string, string>; agents?: string[]; blobs?: Record<string, string> }
+// `env`: the variables Claude Code runs with beside HOME (CLAUDE_CODE_TMPDIR, #1191).
+type Init = { cwd?: string; files?: Record<string, string>; agents?: string[]; blobs?: Record<string, string>; env?: Record<string, string> }
 const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
 
 // The Mac and Claude Code beneath the mod: each checkout's branch (a test may change it, or make it
@@ -111,7 +112,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const toasts: string[] = []
   const at ={ cwd: init.cwd ?? '/w/slate', session: 's1' }
   const clock = mock.clock(on, { now: T0 })
-  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : undefined }) as never)
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? HOME : init.env?.[e.name] }) as never)
   on('session.cwd', () => ({ value: at.cwd }) as never)
   on('session.id', () => ({ value: at.session }) as never)
   on('agent.list', () => ({ value: (init.agents ?? []).map(id => ({ id, description: 'a task', agentType: 'general-purpose' })) }) as never)
@@ -1476,23 +1477,35 @@ test("#1191: a design round's own files in the session's scratchpad pass on an i
   w.at.cwd = '/w/slate'
   w.gitRuns.length = 0
   for (const command of roundShapes(ROUND)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  // A scratchpad whose temp folder has a space in its name.
-  for (const command of roundShapes(ROUND_SPACED)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
-  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > "${ROUND_SPACED}/screen.css" <<'EOF'\na{}\nEOF` }))).toBe('')
-  expect(refusalOf(await call($, { tool: 'Write', file_path: `${ROUND_SPACED}/switcher.html`, content: '<!doctype html>' }))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${ROUND}/switcher.html`, content: '<!doctype html>' }))).toBe('')
   expect(w.gitRuns.filter(g => g.includes('branch --show-current'))).toEqual([])
-  expect(w.ran.length).toBe(14)
+  expect(w.ran.length).toBe(9)
   expect(Object.keys(w.store)).toEqual([])
 })
 
-test("#1191: the session's scratchpad passes wherever its temp folder is, even inside a checkout; another session's does not", withKit, async ($, on) => {
+// Claude Code keeps its temp folder in CLAUDE_CODE_TMPDIR when that is set, so the scratchpad is
+// found there, a space in its name included, and only there.
+test("#1191: the session's scratchpad is found under Claude Code's own temp folder, a space in its name included", withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate-wt', env: { CLAUDE_CODE_TMPDIR: '/Users/dan/Temp Dir/' } })
+  w.branches['/w/slate-wt'] = 'feat/3718-inline-booker'
+  for (const command of roundShapes(ROUND_SPACED)) expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cat > "${ROUND_SPACED}/screen.css" <<'EOF'\na{}\nEOF` }))).toBe('')
+  // /tmp is not this session's temp folder here, so a folder shaped like its scratchpad there is any folder.
+  expect(refusalOf(await call($, { tool: 'Bash', command: roundShapes(ROUND)[0] as string }))).toContain('issue #3718 in slate')
+  expect(w.ran.length).toBe(5)
+})
+
+// Lessons review of #1191: the session's id is no secret from Claude, so a folder shaped like the
+// scratchpad must not let a project's own screen through.
+test("#1191: a folder shaped like the session's scratchpad anywhere but Claude Code's temp folder is held, inside a checkout or naming another session", withKit, async ($, on) => {
   const w = world($, on, { cwd: '/w/slate' })
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/.tmp/claude-501/-w-slate/s1/scratchpad/3718/round1/screen.css', content: 'a{}' }))).toBe('')
-  expect(refusalOf(await call($, { tool: 'Bash', command: 'rm -f /w/slate/.tmp/claude-501/-w-slate/s1/scratchpad/3718/round1/*.html' }))).toBe('')
-  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/.tmp/claude-501/-w-slate/s2/scratchpad/3718/round1/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/app/claude-1/x/s1/scratchpad/page.tsx', content: 'x' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/tmp/claude-501/-w-slate/s1/scratchpad/3718/round1/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Bash', command: roundShapes('/w/slate/tmp/claude-501/-w-slate/s1/scratchpad/3718/round1')[0] as string }))).toContain('screen.css')
+  expect(refusalOf(await call($, { tool: 'Bash', command: roundShapes('/private/tmp/claude-501/-Users-dan-slate/s2/scratchpad/3718/round1')[0] as string }))).toContain('screen.css')
   // A folder merely called scratchpad is no session's scratchpad.
   expect(refusalOf(await call($, { tool: 'Write', file_path: '/w/slate/scratchpad/screen.css', content: 'a{}' }))).toContain(SKIP_QUESTION)
-  expect(w.ran.length).toBe(2)
+  expect(w.ran).toEqual([])
 })
 
 test("#1191: the product's own files stay held, alone or in one command with a round's files", withKit, async ($, on) => {

@@ -48,6 +48,7 @@ import {
   predates,
   READS_ONLY,
   ROUND_FILES,
+  tempRoots,
   textsOf,
   refusal,
   resolvePath,
@@ -102,10 +103,10 @@ import {
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
 //   judged whole, and the refusal says why. A refusal holds the change it refused, never the file.
 // - Since #1191: a design round's working files go in the session's scratchpad (rules.ts
-//   inScratchpad, known by the session's id), which is never held and needs no issue or branch, and a
-//   name a program only mentions is read there, not in the project, when the command names that
-//   scratchpad and the project has nothing of that name (guessAt). Every refusal says where a round's
-//   files go, so a held round is never sent back to /design-rounds, which held it.
+//   inScratchpad: Claude Code's temp folder, the session's id), in no checkout, so never held and
+//   needing no issue or branch; a name a program only mentions is read there, not in the project,
+//   when the command names that scratchpad and the project has nothing of that name (guessAt). Every
+//   refusal says where a round's files go, so a held round is never sent back to /design-rounds.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -122,9 +123,15 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
   return input
 }
 
-// `session`, the session's id, which names its scratchpad (#1191).
-type Where = { cwd: string; home: string; session: string }
-const whereOf = async ($: EngineInterface): Promise<Where> => ({ cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '', session: await $.session.id() })
+// `session`, the session's id, and `temps`, the temp folders Claude Code may keep it under, which
+// together name its scratchpad (#1191).
+type Where = { cwd: string; home: string; session: string; temps: string[] }
+const whereOf = async ($: EngineInterface): Promise<Where> => ({
+  cwd: await $.session.cwd(),
+  home: (await $.env.get('HOME')) ?? '',
+  session: await $.session.id(),
+  temps: tempRoots(await $.env.get('CLAUDE_CODE_TMPDIR')),
+})
 
 // A name a program or a command only mentions, as a guess at a file it writes, placed in `folder`
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
@@ -139,7 +146,7 @@ const guessAt = async ($: EngineInterface, m: string, folder: string | undefined
   if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
   if (folder === undefined) return { word: m }
   const path = resolvePath(m, folder, at.home)
-  if (!scratch || inScratchpad(path, at.session)) return { path, word: m }
+  if (!scratch || inScratchpad(path, at.session, at.temps)) return { path, word: m }
   const first = m.split('/').find(p => p !== '' && p !== '.') ?? m
   const there = await $.fs.exists(resolvePath(first, folder, at.home)).catch(() => true)
   return there ? { path, word: m } : undefined
@@ -166,7 +173,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   const w = await $.modkit.writes({ command, cwd: at.cwd, home: at.home })
   const targets: Target[] = []
   // Whether the command names the session's scratchpad, where a round's files go (#1191).
-  const scratch = namesScratchpad(command, at.session)
+  const scratch = namesScratchpad(command, at.session, at.temps)
   for (const f of w.files) targets.push({ word: f.word, ...(f.path ? { path: f.path } : {}), ...(f.folder ? { folder: f.folder } : {}) })
   // A removal or an emptying changes the look as surely as a write; a stamp, a folder or a mode does not.
   for (const c of w.changes) if (c.does === 'remove' || c.does === 'truncate') targets.push({ word: c.word, ...(c.path ? { path: c.path } : {}), ...(c.folder ? { folder: c.folder } : {}) })
@@ -202,7 +209,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     // Otherwise what the command, and any patch or script file it reads, mentions is the guess.
     const texts = [command]
     for (const f of u.inputs) if (await $.fs.exists(f)) texts.push(await $.fs.read(f))
-    const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session))
+    const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
     for (const t of texts)
       for (const m of mentionedLookFiles(t)) {
         const g = await guessAt($, m, at.cwd, at, named)
@@ -405,9 +412,6 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   const unsureFiles: string[] = []
   let why = ''
   for (const t of targets) {
-    // A design round's working file in the session's scratchpad is never held, wherever the temp
-    // folder is, a checkout included, and asks for no issue or branch (#1191).
-    if (t.path && inScratchpad(t.path, at.session)) continue
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
     // the checkout its folder is in, wherever mod-kit's write reader could place it (#1123): relative
     // or spelled from the top of the disk or home, a cd before it followed. A folder in no checkout is
@@ -415,7 +419,6 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // gives it a path.
     if (tool === 'Bash' && (t.path ? isGroupPattern(t.word.split('/').pop() ?? '') : isPattern(t.word))) {
       const folder = t.path ? t.path.slice(0, t.path.lastIndexOf('/')) || '/' : t.folder
-      if (folder !== undefined && inScratchpad(`${folder}/`, at.session)) continue
       let tree: string | null | undefined
       if (folder !== undefined) {
         try {

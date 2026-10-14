@@ -70,22 +70,33 @@ export const isTestPath = (path: string): boolean => {
   return false
 }
 
-// The session's scratchpad (#1191), as Claude Code hands every session one: a folder named
-// scratchpad under <temp>/claude-<uid>/<project>/<session id>/. Known by the session's own id, as
-// `$.session.id()` gives it, with the temp folder left open, since TMPDIR or CLAUDE_CODE_TMPDIR can
-// put it anywhere, a folder with a space in its name included. So another session's scratchpad, and
+// The session's scratchpad (#1191), as Claude Code hands every session one:
+// <temp>/claude-<uid>/<project>/<session id>/scratchpad, where <temp> is CLAUDE_CODE_TMPDIR when it is
+// set and /tmp otherwise (Claude Code's own default), each also in the /private spelling macOS gives
+// /tmp and /var. Known by the session's own id, as `$.session.id()` gives it, and only under that
+// temp folder: a folder shaped like it anywhere else, a checkout included, is any folder, since the
+// session's id is no secret from Claude (lessons review of #1191). Another session's scratchpad, and
 // a project folder merely called scratchpad, are not this one.
-const scratchpadAt = (session: string): string => `/claude-\\d+/[^/\\n]+/${session.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/scratchpad`
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** The temp folders the session's scratchpad may be under, from Claude Code's CLAUDE_CODE_TMPDIR (#1191). */
+export const tempRoots = (tmpdir: string | undefined): string[] => {
+  const t = tmpdir?.trim().replace(/\/+$/, '')
+  const root = t && t.startsWith('/') && !/(^|\/)\.\.?(\/|$)/.test(t) ? t : '/tmp'
+  return /^\/(tmp|var)(\/|$)/.test(root) ? [root, `/private${root}`] : [root]
+}
+const scratchpadAt = (session: string, roots: readonly string[]): string =>
+  `(?:${roots.map(esc).join('|')})/claude-\\d+/[^/\\n]+/${esc(session)}/scratchpad`
 
 /**
  * Whether an absolute path is in the session's scratchpad, where a design round's working files go
- * (#1191): a file for choosing a design with, never a screen of the product, so never held.
+ * (#1191): a file for choosing a design with, never a screen of the product.
  */
-export const inScratchpad = (path: string, session: string): boolean =>
-  session !== '' && !/(^|\/)\.\.(\/|$)/.test(path) && new RegExp(`^(?:/[^\\n]*)?${scratchpadAt(session)}(?:/|$)`).test(path)
+export const inScratchpad = (path: string, session: string, roots: readonly string[]): boolean =>
+  session !== '' && roots.length > 0 && !/(^|\/)\.\.(\/|$)/.test(path) && new RegExp(`^${scratchpadAt(session, roots)}(?:/|$)`).test(path)
 
 /** Whether a command's text names the session's scratchpad anywhere, quoted or not (#1191). */
-export const namesScratchpad = (text: string, session: string): boolean => session !== '' && new RegExp(`${scratchpadAt(session)}(?![\\w.-])`).test(text)
+export const namesScratchpad = (text: string, session: string, roots: readonly string[]): boolean =>
+  session !== '' && roots.length > 0 && new RegExp(`(?<![^\\s'"=(:])${scratchpadAt(session, roots)}(?![\\w.-])`).test(text)
 
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */
 export const relTo = (path: string, root: string): string => (path.startsWith(root + '/') ? path.slice(root.length + 1) : path)
