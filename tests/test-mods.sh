@@ -575,7 +575,10 @@ printf "on('classic.Stop', () => ({}))\n" > "$M7B/checks/hooks/register.test.ts"
 # review of #879): only a line that is a comment is taken out.
 mkmod "$M7B" urls
 printf "export const register = on => {\n  const u = 'https://example.com'; on('classic.Notification', async (\$, e, next) => next(e))\n}\n" > "$M7B/urls/hooks/register.ts"
-runbp(){ : > "$LOG"; out="$(STUB_LOG="$LOG" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7B" 2>&1)"; code=$?; }
+runbp(){   # $1 = claude command  $2 = the build it says it is (the stub's own default when empty)
+  : > "$LOG"
+  out="$(STUB_LOG="$LOG" FAKE_CC_VERSION="${2:-}" CLAUDE_BIN="${1:-$FAKE}" CHECK_MODS_BYPASS_KNOWN="$KNOWN7B" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7B" 2>&1)"; code=$?
+}
 runbp
 [ "$code" -eq 1 ] && check "a mod hooking a bypassed event fails the run" ok || check "a mod hooking a bypassed event fails the run" "exit=$code out=$out"
 printf '%s\n' "$out" | grep -q 'stops hooks classic.Stop, which' && check "naming the mod and the classic event" ok || check "naming the mod and the classic event" "$out"
@@ -611,22 +614,61 @@ runbp
 # The list against the build's own routes: a stub holding the same seven passes, one holding another
 # fails naming it, and one holding none is said as unmeasured rather than passed.
 printf 'stops\tclassic.Stop\t#1: x\nsections\tprompt.section\t#1: x\nurls\tclassic.Notification\t#1: x\n' > "$KNOWN7B"
-ROUTES7B=""
-for ev in attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt; do
-  ROUTES7B="$ROUTES7B# e(\"$ev\",(n,o,t)=>t.to(o,\"append\"))
-"
-done
-{ cat "$FAKE"; printf '%s' "$ROUTES7B"; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
-{ cat "$FAKE"; printf '%s' "$ROUTES7B"; printf '# e("prompt.attachment",(a,b,c)=>c.to(b,"append"))\n'; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
-runbp "$TMPROOT/claude-same"
+routes_of(){ local ev; for ev in "$@"; do printf '# e("%s",(n,o,t)=>t.to(o,"append"))\n' "$ev"; done; }
+SEVEN7B=(attribution.text 'classic.*' prompt.compose prompt.context prompt.section settings.read skill.prompt)
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}"; } > "$TMPROOT/claude-same"; chmod +x "$TMPROOT/claude-same"
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment; } > "$TMPROOT/claude-more"; chmod +x "$TMPROOT/claude-more"
+runbp "$TMPROOT/claude-same" 2.1.296
 [ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "a build routing the listed events passes" ok \
   || check "a build routing the listed events passes" "exit=$code out=$out"
-runbp "$TMPROOT/claude-more"
+runbp "$TMPROOT/claude-more" 2.1.296
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'not listed: prompt.attachment' && check "a build routing another event fails, naming it" ok \
   || check "a build routing another event fails, naming it" "exit=$code out=$out"
 runbp "$FAKE"
 printf '%s\n' "$out" | grep -q 'UNMEASURED: no security default route was found' && check "a build with no routes found is said as unmeasured" ok \
   || check "a build with no routes found is said as unmeasured" "$out"
+# 2.1.299 also routes prompt.attachment and session.compact past the user tier (#1185), and builds
+# before it do not, so the routes a build is held to depend on the build: each Mac and CI runs its
+# own, and neither goes red for the other's. 2.1.296 is the last build measured without them.
+{ cat "$FAKE"; routes_of "${SEVEN7B[@]}" prompt.attachment session.compact; } > "$TMPROOT/claude-nine"; chmod +x "$TMPROOT/claude-nine"
+runbp "$TMPROOT/claude-nine" 2.1.299
+[ "$code" -eq 0 ] && ! printf '%s\n' "$out" | grep -q 'routes past the user tier' && check "2.1.299 routing prompt.attachment and session.compact as well passes" ok \
+  || check "2.1.299 routing prompt.attachment and session.compact as well passes" "exit=$code out=$out"
+runbp "$TMPROOT/claude-same" 2.1.299
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: prompt.attachment session.compact' \
+  && check "a 2.1.299 that no longer routes them fails, naming both" ok || check "a 2.1.299 that no longer routes them fails, naming both" "exit=$code out=$out"
+runbp "$TMPROOT/claude-nine" 2.1.296
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'not listed: prompt.attachment session.compact' \
+  && printf '%s\n' "$out" | grep 'routes past the user tier' | grep -q '2\.1\.296' \
+  && check "a build older than the list says routing them fails, naming the build" ok \
+  || check "a build older than the list says routing them fails, naming the build" "exit=$code out=$out"
+# A later build is held to everything listed, so the next build that adds or drops a route fails on
+# whichever Mac installs it first.
+runbp "$TMPROOT/claude-nine" 2.1.400
+[ "$code" -eq 0 ] && check "a later build routing the same nine passes" ok || check "a later build routing the same nine passes" "exit=$code out=$out"
+# A build whose version cannot be read is held to every route listed, and that is said.
+runbp "$TMPROOT/claude-nine" unknown
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q 'could not read which Claude Code build' \
+  && check "a build whose version cannot be read is held to every listed route, and says so" ok \
+  || check "a build whose version cannot be read is held to every listed route, and says so" "exit=$code out=$out"
+runbp "$TMPROOT/claude-same" unknown
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'listed, no longer routed: prompt.attachment session.compact' \
+  && check "and fails when it routes fewer" ok || check "and fails when it routes fewer" "exit=$code out=$out"
+
+# 7c. Whatever build a Mac runs, and on CI with none, a hook on either route 2.1.299 added fails
+#     unless listed (#1185): the file check uses every listed route, so a hook that dies on the newer
+#     build is caught on a Mac still running the older one.
+M7C="$TMPROOT/m7c"; KNOWN7C="$TMPROOT/known7c.tsv"; : > "$KNOWN7C"
+mkmod "$M7C" compacts
+printf "export const register = on => {\n  on('session.compact', async (\$, e, next) => next(e))\n  on('prompt.attachment', async (\$, e, next) => next(e))\n}\n" > "$M7C/compacts/hooks/register.ts"
+out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" CHECK_MODS_BYPASS_KNOWN="$KNOWN7C" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'compacts hooks session.compact, which' \
+  && printf '%s\n' "$out" | grep -q 'compacts hooks prompt.attachment, which' \
+  && check "with no claude command, hooks on session.compact and prompt.attachment fail" ok \
+  || check "with no claude command, hooks on session.compact and prompt.attachment fail" "exit=$code out=$out"
+out="$(STUB_LOG="$LOG" FAKE_CC_VERSION=2.1.296 CLAUDE_BIN="$TMPROOT/claude-same" CHECK_MODS_BYPASS_KNOWN="$KNOWN7C" TSC_BIN="$TSC_PASS" bash "$CHECK" "$M7C" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q 'compacts hooks session.compact, which' \
+  && check "and on a Mac still running a build before 2.1.299" ok || check "and on a Mac still running a build before 2.1.299" "exit=$code out=$out"
 
 # 8. The real tree, with the real binary where this machine has one.
 REAL_BIN="$(command -v claude 2>/dev/null || true)"

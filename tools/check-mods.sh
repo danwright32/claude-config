@@ -69,14 +69,38 @@ done
 # there, but only while that file is in place: each is listed by mod and event in BYPASS_KNOWN with
 # the issue deciding it, so depending on the file is a decision, never an accident. Filesystem only, so it holds on CI's runner too; where a claude binary is found,
 # the list is compared with that build's own routes below.
-BYPASSED_ROUTES="attribution.text
-classic.*
-prompt.compose
-prompt.context
-prompt.section
-settings.read
-skill.prompt"
+#
+# Each line: the route, a tab, and the first build known to route it (0 for every build #875 met).
+# Builds differ (#1185): 2.1.299 added prompt.attachment and session.compact, which 2.1.296 did not
+# route (2.1.297 and 2.1.298 were never measured). The hook check just below uses EVERY route whatever
+# build is installed, so a hook that is dead on the newest build fails on every Mac and on CI; only
+# the comparison with an installed build further down holds that build to the routes listed for it.
+BYPASSED_ROUTES_SINCE="attribution.text	0
+classic.*	0
+prompt.attachment	2.1.299
+prompt.compose	0
+prompt.context	0
+prompt.section	0
+session.compact	2.1.299
+settings.read	0
+skill.prompt	0"
+BYPASSED_ROUTES="$(printf '%s\n' "$BYPASSED_ROUTES_SINCE" | cut -f1)"
 BYPASS_KNOWN="${CHECK_MODS_BYPASS_KNOWN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sec-default-bypassed-hooks.tsv}"
+# Whether build $1 is at least build $2, compared number by number (2.1.40 is before 2.1.299).
+build_at_least(){   # $1 = build  $2 = first build
+  [ "$2" = 0 ] && return 0
+  awk -v a="$1" -v b="$2" 'BEGIN { n = split(a, x, "."); m = split(b, y, "."); k = (n > m ? n : m)
+    for (i = 1; i <= k; i++) { if (x[i] + 0 > y[i] + 0) exit 0; if (x[i] + 0 < y[i] + 0) exit 1 }
+    exit 0 }'
+}
+# The routes build $1 is held to: those first routed at or before it, or every one when $1 is empty.
+routes_for_build(){   # $1 = build, or empty when it could not be read
+  local r since
+  while IFS=$'\t' read -r r since; do
+    [ -n "$r" ] || continue
+    if [ -z "$1" ] || build_at_least "$1" "$since"; then printf '%s\n' "$r"; fi
+  done <<< "$BYPASSED_ROUTES_SINCE"
+}
 is_bypassed(){   # $1 = event name
   local r
   # Read line by line, never word split, where classic.* would be expanded as a file pattern.
@@ -441,16 +465,21 @@ fi
 # command resolves to; a file holding no route at all (a stub, another build layout) is said, not
 # passed.
 bin_file="$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")"
+# Which build this is decides which routes it is held to (#1185); read once, and said again at the end.
+cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
 routes_now="$(grep -a -o -E '[A-Za-z_$]\("[A-Za-z.*]+",\([A-Za-z_$]+,[A-Za-z_$]+,[A-Za-z_$]+\)=>[A-Za-z_$]+\.to\([A-Za-z_$]+,"append"\)\)' "$bin_file" 2>/dev/null \
   | sed -E 's/^.\("([^"]+)".*/\1/' | LC_ALL=C sort -u || true)"
 if [ -z "$routes_now" ]; then
   echo "check-mods: UNMEASURED: no security default route was found in $bin_file, so the list of bypassed events was not compared with this build. The list in tools/check-mods.sh still applies." >&2
 else
-  routes_list="$(printf '%s\n' "$BYPASSED_ROUTES" | LC_ALL=C sort -u)"
+  if [ -z "$cc_now" ]; then
+    echo "check-mods: could not read which Claude Code build $bin is (from $bin --version), so its security default routes were compared with every route listed in tools/check-mods.sh, as the newest build's are." >&2
+  fi
+  routes_list="$(routes_for_build "$cc_now" | LC_ALL=C sort -u)"
   added="$(LC_ALL=C comm -13 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
   dropped="$(LC_ALL=C comm -23 <(printf '%s\n' "$routes_list") <(printf '%s\n' "$routes_now") | paste -sd' ' -)"
   if [ -n "$added$dropped" ]; then
-    echo "check-mods: this Claude Code build's security default routes past the user tier: $(printf '%s\n' "$routes_now" | paste -sd' ' -). The list in tools/check-mods.sh differs${added:+ (not listed: $added)}${dropped:+ (listed, no longer routed: $dropped)}. Update BYPASSED_ROUTES, then check every mod hook on the events that changed."
+    echo "check-mods: this Claude Code build (${cc_now:-version unread})'s security default routes past the user tier: $(printf '%s\n' "$routes_now" | paste -sd' ' -). The list in tools/check-mods.sh for this build differs${added:+ (not listed: $added)}${dropped:+ (listed, no longer routed: $dropped)}. Update BYPASSED_ROUTES_SINCE (each route with the first build that routes it), then check every mod hook on the events that changed."
     failed=1
   fi
 fi
@@ -506,8 +535,7 @@ for i in "${!mods[@]}"; do
 done
 echo "check-mods: $n mods checked in $dir"
 # A Mac running another build than the pinned one is told so, and nothing else changes: every verdict
-# above came from the pinned types, so it is the same on every build (#953).
-cc_now="$("$bin" --version 2>/dev/null | head -n 1 | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+' || true)"
+# above came from the pinned types, so it is the same on every build (#953). cc_now was read above.
 if [ -n "$cc_now" ] && [ -n "$pinned_build" ] && [ "$cc_now" != "$pinned_build" ]; then
   echo "check-mods: this Mac runs Claude Code $cc_now, and the types every mod was checked against are pinned at $pinned_build. To check against $cc_now's, run bash tools/refresh-claude-code-types.sh once a mod has loaded on it, then run tests/test-mods.sh and commit the result."
 fi
