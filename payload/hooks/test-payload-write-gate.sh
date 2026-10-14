@@ -252,6 +252,14 @@ runbash "git -C $FIX/dev checkout -- payload/LESSONS.md" "$FIX/elsewhere"
 refused "a git -C checkout of a payload path is refused"
 runbash "git -C $FIX/dev -c core.x=y restore payload/LESSONS.md" "$FIX/elsewhere"
 refused "and so is a restore past -C and -c"
+# The subcommand is read by the one reading of git (lib/shell-words.py, claude-config#1188), so env,
+# sudo and rtk in front of git are the same write.
+runbash "env GIT_PAGER=cat git -C $FIX/dev checkout -- payload/LESSONS.md" "$FIX/elsewhere"
+refused "#1188 a checkout behind env is refused"
+runbash "sudo git -C $FIX/dev restore payload/LESSONS.md" "$FIX/elsewhere"
+refused "#1188 a restore behind sudo is refused"
+runbash "env GIT_PAGER=cat git -C $FIX/dev checkout main" "$FIX/elsewhere"
+allowed "#1188 control: a branch checkout behind env names no path"
 # restore --staged rewrites only the index, never the file, and -s names a commit, not a path.
 runbash "git restore --staged LESSONS.md" "$FIX/dev/payload"
 allowed "a git restore --staged of a payload file writes no file, so it is allowed"

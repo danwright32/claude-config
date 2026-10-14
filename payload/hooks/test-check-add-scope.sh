@@ -204,6 +204,12 @@ silentabout "and does not accuse this session's own file" "mine.txt is not this 
 says "and hands back the scoped command to run instead" "git -C $REPO add"
 says "and that command names this session's own file" "mine.txt"
 says "and names the override for the case it has got wrong" "SKIP_ADD_SCOPE_CHECK=1"
+# The add is read by the one reading of git (claude-config#1188): env or sudo in front of git is the
+# same add, which before walked past this gate as a command named env.
+run "env GIT_TRACE=0 git add -A"
+refused "#1188 an unscoped add behind env is refused too"
+run "sudo git add ."
+refused "#1188 and so is one behind sudo"
 
 run "git add ."
 refused "a bare dot is refused the same way"

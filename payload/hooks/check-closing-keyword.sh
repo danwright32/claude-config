@@ -69,24 +69,34 @@ cmd="${parsed%%$'\x1f'*}"
 
 # Only the commands that can actually link an issue: a PR body/title, or a commit message.
 #
-# Matched on the LEADING TOKENS of each shell segment, never anywhere in the string. That is
-# the whole difference between a command and a command PAYLOAD, and getting it wrong was not
-# theoretical: the first draft of this hook blocked its own issue-closing comment, because
-# that comment QUOTED a PR-creation command as the example of what it catches. An issue
-# comment cannot close anything, and neither can a comment that merely talks about a PR.
+# Asked of each command the shell would RUN, never of the string. That is the whole difference
+# between a command and a command PAYLOAD, and getting it wrong was not theoretical: the first draft
+# of this hook blocked its own issue-closing comment, because that comment QUOTED a PR-creation
+# command as the example of what it catches. An issue comment cannot close anything, and neither can
+# a comment that merely talks about a PR.
+#
+# Read by lib/push-scope.sh, the one reading of a command every gate shares: ps_runs_gh finds the gh
+# subcommand as gh itself does, so `gh -R o/x pr create` and `gh pr -R o/x edit 3` are the creation
+# and the edit they are (claude-config#1188; this hook read the first three words before, and a flag
+# in front walked a negated keyword past it), and ps_is_git_commit, the push gates' own question,
+# sees `git -C <dir> commit`, which the first three words did not. With nothing able to read the
+# command (no lib/shell-words.py), the crude cut and ps_runs_gh's crude reading, which can only see
+# more creations than are there.
 is_target=0
-while IFS= read -r seg; do
-  # Drop leading env assignments (GH_TOKEN=... gh pr create ...) before reading the program.
-  head_tokens="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]*//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+)*//' | awk '{print $1, $2, $3}')"
-  if printf '%s' "$head_tokens" | grep -Eq '(^|/)gh[[:space:]]+pr[[:space:]]+(create|edit)([[:space:]]|$)'; then
-    is_target=1
-    break
-  fi
-  if printf '%s' "$head_tokens" | grep -Eq '(^|/)(rtk[[:space:]]+)?git[[:space:]]+commit([[:space:]]|$)'; then
-    is_target=1
-    break
-  fi
-done < <(printf '%s\n' "$cmd" | sed -E 's/(&&|\|\||;)/\n/g')
+# Read once, in this shell, so every question below is answered from the one reading.
+ps__read "$cmd" || :
+if ps_is_git_commit "$cmd"; then
+  is_target=1
+else
+  segs="$(ps__shell_segments "$cmd")"
+  [ "$?" -eq 1 ] && segs="$(ps__crude_cut "$cmd" | tr '\n' '\036')"
+  while IFS= read -r -d $'\x1e' seg; do
+    if ps_runs_gh "$seg" pr create || ps_runs_gh "$seg" pr edit; then
+      is_target=1
+      break
+    fi
+  done < <(printf '%s' "$segs")
+fi
 [ "$is_target" -eq 1 ] || exit 0
 
 if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_CLOSING_CHECK=1([[:space:]]|$)'; then

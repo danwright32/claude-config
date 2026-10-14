@@ -463,7 +463,9 @@ declare module 'claude-code' {
      * again, asked again at the next one. `stamped`: the time each manifest mod-kit touched was left
      * with, by mod, so its own touch is not read as a change. `swept`: where each provider other than
      * mod-kit was last looked at, at a turn's start (#966), `from` for one not looked at yet.
+     * `buttonsOff`: true once this session has taken the one saying of why buttons show as text on
+     * this Mac (#1190), so a redraw never says it twice whatever the store does.
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> } }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean }
   }
 }

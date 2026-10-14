@@ -417,3 +417,166 @@ test('a left rule over a wrapping line counts a button by the longer of its labe
   // With no instead, the /press line drawn in its place.
   expect(mostRows([[{ text: 'x', wrap: true }, { button: 'compact', label: 'Go' }]], 'status-bar')).toBeGreaterThanOrEqual(1 + 'type: /press status-bar compact'.length)
 })
+
+// #1190, 2026-10-14: the work MacBook drew "type: step 1 done" where the personal MacBook drew a
+// Done button, and nothing said why (Dan: "why does my work mac want me to type step 1 done instead
+// of clicking a done button"). The setting that turns buttons on lives in each Mac's own
+// settings.json, which the sync never carries. So the first time on a Mac that a button is drawn as
+// text where turning that setting on would draw it as a button (Apple Terminal, fullscreen, setting
+// off), mod-kit says so once in the transcript, with the command, and records that it did in its own
+// store, which is this Mac's alone.
+type Kept = { [key: string]: unknown }
+const world = (on: On, opts: { readFails?: boolean; writeFails?: boolean; kept?: Kept } = {}) => {
+  const kept: Kept = { ...(opts.kept ?? {}) }
+  const said: { text: string; to: string }[] = []
+  on('store.get', ($, e) => {
+    if (opts.readFails) throw new Error('the store could not be read')
+    return { value: kept[e.key] } as never
+  })
+  on('store.set', ($, e) => {
+    if (opts.writeFails) throw new Error('disk full')
+    kept[e.key] = e.value
+    return { value: undefined } as never
+  })
+  on('ui.log', ($, e) => {
+    said.push({ text: String(e.text), to: String(e.to) })
+    return { value: undefined } as never
+  })
+  return { kept, said }
+}
+const COMMAND = `echo '{"appleTerminalMouseReporting":"true"}' | claude plugin configure mod-kit@inline --values-stdin`
+const isNotice = (s: { text: string }) => s.text.includes(COMMAND)
+type Mounter = { ui: { mount: (t: never) => Promise<unknown> } }
+type Advancer = { advance: (ms: number) => Promise<void> }
+// Each target drawn twice, as a redraw would, the deferred work let run after each.
+const drawTwice = async ($: Mounter, clock: Advancer, targets: never[]) => {
+  for (const target of [...targets, ...targets]) {
+    const ui = (await $.ui.mount(target)) as unknown as Ui
+    await clock.advance(1)
+    await ui.unmount()
+  }
+}
+// A long dash, or a hyphen standing alone between words, spelled as escapes so this file holds none.
+const DASHED = new RegExp('[\\u2012\\u2013\\u2014\\u2015]|\\s\\u002d\\s')
+
+test('Apple Terminal fullscreen with the setting off says once, in the transcript, why buttons are text and the one command that turns them on', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 5_000 })
+  const { kept, said } = world(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await run($, `pane ${JSON.stringify({ ...row, slot: undefined })}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL), pane('terminal', FULL)])
+  const notices = said.filter(isNotice)
+  expect(notices).toHaveLength(1)
+  expect(notices[0]?.to).toBe('transcript')
+  const text = notices[0]?.text ?? ''
+  expect(text).toMatch(/Buttons are off on this Mac/)
+  expect(text).toMatch(/new session/)
+  expect(text).toMatch(/View > Allow Mouse Reporting/)
+  expect(text).toMatch(/Cmd R/)
+  expect(DASHED.test(text)).toBe(false)
+  // Recorded in mod-kit's own store, so no later session on this Mac says it again.
+  expect(Object.values(kept)).toEqual([5_000])
+  expect(said.filter(s => !isNotice(s))).toEqual([])
+})
+
+test('once the store records it, a later session on the same Mac draws the text and says nothing', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { said } = world(on, { kept: { buttonsOffSaid: 5_000 } })
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL)])
+  expect(said).toEqual([])
+})
+
+// Where turning the setting on would not draw a button, saying so would send Dan to a fix that does
+// nothing: the main screen, an unmeasured layout, a multiplexer, an unnamed terminal. Nor where
+// buttons are already drawn, nor in a band holding no button at all.
+test('nothing is said where the setting would not help, where buttons already work, or where no button is drawn', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { said } = world(on)
+  const env: Record<string, string> = {}
+  on('env.get', ($, e) => ({ value: env[e.name] }) as never)
+  await run($, `show ${JSON.stringify(row)}`)
+  const cases: [string | undefined, Viewport, 'terminal' | 'desktop'][] = [
+    ['Apple_Terminal', MAIN, 'terminal'],
+    ['Apple_Terminal', undefined, 'terminal'],
+    ['tmux', FULL, 'terminal'],
+    ['screen', FULL, 'terminal'],
+    [undefined, FULL, 'terminal'],
+    ['', FULL, 'terminal'],
+    ['iTerm.app', FULL, 'terminal'],
+    ['Apple_Terminal', MAIN, 'desktop'],
+  ]
+  for (const [name, viewport, surface] of cases) {
+    if (name === undefined) delete env.TERM_PROGRAM
+    else env.TERM_PROGRAM = name
+    await drawTwice($ as never, clock, [band(surface, viewport)])
+  }
+  expect(said).toEqual([])
+  // A band whose rows hold no button draws nothing as typed text.
+  env.TERM_PROGRAM = 'Apple_Terminal'
+  await run($, `show ${JSON.stringify({ ...row, lines: [[{ text: 'ctx 74%' }]] })}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL)])
+  expect(said).toEqual([])
+  // The control: the same band with a button in it, drawn the same way, does say it.
+  await run($, `show ${JSON.stringify(row)}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL)])
+  expect(said.filter(isNotice)).toHaveLength(1)
+})
+
+test('with the Apple Terminal setting on, Apple Terminal fullscreen draws buttons and says nothing', SETTING_ON, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { said } = world(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL)])
+  expect(said).toEqual([])
+})
+
+// The failure path: a store that will not take the record. Said once in this session all the same,
+// never on every redraw, with a line saying the next session will say it again, since a notice
+// repeated once a session costs less than one never seen.
+test('a store write that fails says the notice once this session, and says the record failed, never on every redraw', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { kept, said } = world(on, { writeFails: true })
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await run($, `pane ${JSON.stringify({ ...row, slot: undefined })}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL), pane('terminal', FULL), band('terminal', FULL)])
+  expect(said.filter(isNotice)).toHaveLength(1)
+  expect(said.filter(s => !isNotice(s))).toEqual([{ text: expect.stringMatching(/^mod-kit could not record that this Mac was told why buttons show as text \(.+\), so the next session will say it again\.$/), to: 'transcript' }])
+  expect(kept).toEqual({})
+})
+
+test('a store that cannot be read says the notice once this session, and says why it may come again', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { said } = world(on, { readFails: true })
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  await run($, `show ${JSON.stringify(row)}`)
+  await drawTwice($ as never, clock, [band('terminal', FULL), band('terminal', FULL)])
+  expect(said.filter(isNotice)).toHaveLength(1)
+  expect(said.filter(s => !isNotice(s))).toEqual([{ text: expect.stringMatching(/^mod-kit could not read whether this Mac was told why buttons show as text \(.+\), so it says it now/), to: 'transcript' }])
+})
+
+// A mod drawing its own Button (Simpler) asks $.modkit.clickable and draws text where it answers
+// false, so that is a button drawn as text too.
+test('$.modkit.clickable answering false in Apple Terminal fullscreen says the notice once as well', withPublisher, async ($, on) => {
+  engine(on)
+  const clock = mock.clock(on, { now: 0 })
+  const { said } = world(on)
+  mock.env(on, { TERM_PROGRAM: 'Apple_Terminal' })
+  expect(await run($, `clickable ${JSON.stringify({ surface: 'terminal', viewport: MAIN })}`)).toBe('clickable false')
+  await clock.advance(1)
+  expect(said).toEqual([])
+  expect(await run($, `clickable ${JSON.stringify({ surface: 'terminal', viewport: FULL })}`)).toBe('clickable false')
+  expect(await run($, `clickable ${JSON.stringify({ surface: 'terminal', viewport: FULL })}`)).toBe('clickable false')
+  await clock.advance(1)
+  expect(said.filter(isNotice)).toHaveLength(1)
+})

@@ -15,8 +15,31 @@ completeness gates, not safety gates, and a false block on a command we merely
 could not read would teach the override habit.
 """
 
+import importlib.util
+import os
 import re
 import shlex
+import sys
+
+# Which gh subcommand a command runs is read by lib/shell-words.py (gh_command), the one reading of gh
+# every gate asks (claude-config#1188): past assignments, rtk, env and sudo, and past gh's flags
+# written in front of the subcommand (`gh -R o/x issue create`, `gh issue -R o/x create`), which a
+# read of the first three words missed. Loaded by its path, beside this file, never by name.
+sys.dont_write_bytecode = True
+try:
+    _spec = importlib.util.spec_from_file_location(
+        "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "shell-words.py"))
+    _sw = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sw)
+    gh_command = _sw.gh_command
+except Exception:
+    # With no reader, any command naming gh, issue and create is a create, the words after create
+    # its own: the reading that sees more creates, never fewer, so a gate asks rather than misses.
+    def gh_command(words):
+        names = [w.split("/")[-1] for w in words]
+        if "gh" in names and "issue" in words and "create" in words:  # gh-reader: the crude reading, when there is no other
+            return ("issue", "create", [], words[words.index("create") + 1:])
+        return None
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -131,10 +154,6 @@ def _is_operator(tok):
     return tok in OPERATORS or set(tok) <= set("&|;()")
 
 
-def _is_gh(tok):
-    return tok == "gh" or tok.endswith("/gh")
-
-
 class Unreadable(Exception):
     """The command could not be tokenized, so no gate may judge it."""
 
@@ -192,12 +211,16 @@ def scan_creates(command):
             i += 1  # env assignment prefix: still at the head
             continue
 
-        if at_head and _is_gh(tok) and tokens[i + 1 : i + 3] == ["issue", "create"]:
-            j = i + 3
-            args = []
+        if at_head:
+            j = i
             while j < len(tokens) and not _is_operator(tokens[j]):
-                args.append(tokens[j])
                 j += 1
+            found = gh_command(tokens[i:j])
+            if not found or tuple(found[:2]) != ("issue", "create"):
+                i = j
+                at_head = False
+                continue
+            args = list(found[2]) + list(found[3])
             # A command that files nothing is not a create. A live false positive on
             # 2026-07-30: `gh issue create --help` was blocked for having no category,
             # which is absurd and teaches exactly the override habit this exists to

@@ -84,6 +84,15 @@ allows "flags before the title"       "gh issue create $ALL --title \"T\""
 
 # ============================ RULE: milestone ============================
 denies "no milestone"                 "gh issue create --title \"T\" $P $C"
+# gh takes the subcommand's flags in front of it, and rtk, env or sudo can stand in front of gh
+# (claude-config#1188): each is the same create, judged the same.
+denies "#1188 -R in front, no milestone"        "gh -R o/x issue create --title \"T\" $P $C"
+denies "#1188 -R between issue and create"      "gh issue -R o/x create --title \"T\" $P $C"
+denies "#1188 --repo=x in front, behind rtk"    "rtk gh --repo=o/x issue create --title \"T\" $M $P"
+denies "#1188 behind env with a setting"        "env GH_TOKEN=x gh issue create --title \"T\" $M $C"
+denies "#1188 behind sudo"                      "sudo gh issue create --title \"T\" $P $C"
+allows "#1188 -R in front, all three present"   "gh -R o/x issue create --title \"T\" $ALL"
+allows "#1188 its --help files nothing"         "gh -R o/x issue create --help"
 denies "empty milestone value"        "gh issue create --title \"T\" --milestone \"\" $P $C"
 denies "milestone flag with no value" "gh issue create --title \"T\" $P $C --milestone"
 denies "milestone followed by a flag" "gh issue create --title \"T\" --milestone $P $C"

@@ -135,22 +135,21 @@ _ls_default_remote(){
 # is printed as ? because it may be the default branch.
 _ls_push_dests(){   # $1 = command  $2 = repo | words
   local segs seg mode="${2:-repo}"
+  # Read in this shell, so each segment's question below is answered from the reading.
+  ps__read "$1" || :
   segs="$(ps__shell_segments "$1")" || segs="$(printf '%s' "$1" | sed -E 's/(&&|\|\||;|\|)/\n/g' | tr '\n' '\036')"
   while IFS= read -r -d $'\x1e' seg; do
+    # The push's own words, after its subcommand, from the one reading of git (ps_runs_git,
+    # claude-config#1188), so `env X=1 git -C <dir> push origin main` names origin and main too.
     ps__segment_is_push "$seg" || continue
-    local -a tok
-    read -r -a tok <<< "$seg"
+    local -a tok=(${PS_RUN_ARGS[@]+"${PS_RUN_ARGS[@]}"})
     # The refspecs are kept in an ARRAY and walked quoted: a glob refspec like refs/heads/*:refs/
     # heads/* expanded unquoted is matched against files in the working directory (claude-config#776
     # review). A tag only push (--tags with no refspec) updates no branch, so it names none.
     local -a specs=()
-    local i=0 n=${#tok[@]} seen=0 remote="" skip=0 tags=0 all=0 t d repo_opt="" want_repo=0
+    local i=0 n=${#tok[@]} remote="" skip=0 tags=0 all=0 t d repo_opt="" want_repo=0
     while [ "$i" -lt "$n" ]; do
       t="${tok[$i]}"; i=$((i + 1))
-      if [ "$seen" -eq 0 ]; then
-        case "$t" in push|push\)*|push\}*) seen=1 ;; esac
-        continue
-      fi
       t="${t%%)*}"; t="${t%%\}*}"; t="$(_ls_unquote "$t")"
       [ -n "$t" ] || continue
       if [ "$skip" -eq 1 ]; then skip=0; continue; fi

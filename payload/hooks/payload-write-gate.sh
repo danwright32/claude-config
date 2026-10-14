@@ -211,10 +211,28 @@ for v in seen:
     # Judged by the DESTINATION (claude-config#647): a relative path is resolved against where the
     # command actually runs, the session's directory or a `cd` earlier in the same command, so a
     # write made from inside payload/ counts whether or not its words say payload.
-    targets="$(printf '%s' "$cmd" | GATE_CWD="$cwd" python3 -c '
-import os, re, sys
+    targets="$(printf '%s' "$cmd" | GATE_CWD="$cwd" PS_SHELL_WORDS="$PS_SHELL_WORDS" python3 -B -c '
+import importlib.util, os, re, sys
 
 cmd = sys.stdin.read()
+GIT_WRITERS = ("checkout", "restore", "rm", "mv")
+# Which git subcommand a command runs is read by lib/shell-words.py (git_command), the one reading
+# of git every gate asks (claude-config#1188): past assignments, rtk, env and sudo, and the options
+# git takes itself. With that file missing, any command naming git and a subcommand that writes is
+# taken for it, the reading that sees more writes, never fewer (L42).
+try:
+    _spec = importlib.util.spec_from_file_location("shell_words", os.environ["PS_SHELL_WORDS"])
+    _sw = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_sw)
+    git_command, GIT_VALUED = _sw.git_command, _sw.GIT_VALUED
+except Exception:
+    GIT_VALUED = {"-C"}
+    def git_command(words):
+        names = [w.lstrip("({").split("/")[-1] for w in words]
+        for k, w in enumerate(words):
+            if "git" in names and w in GIT_WRITERS:  # gh-reader: the crude reading, when there is no other
+                return (w, [], words[k + 1:])
+        return None
 cwd = os.environ.get("GATE_CWD") or os.getcwd()
 targets = []
 
@@ -257,7 +275,6 @@ shell_text = "\n".join(shell)
 # segment is not blamed on a write in the next, and a `cd` moves where the rest resolve.
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "ditto", "unlink", "rmdir")
-GIT_WRITERS = ("checkout", "restore", "rm", "mv")
 base = cwd
 for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
@@ -273,43 +290,19 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
         continue
     head = words[k].lstrip("(").rsplit("/", 1)[-1]
     args = words[k + 1:]
-    if head in ("cd", "pushd"):
-        dest = next((w for w in args if not w.startswith("-")), "~")
-        nb = resolve(dest, base)
-        if nb and not nb.startswith("$"):
-            base = nb
-        continue
-    # A flag is never a path, so none is resolved against where the command runs.
-    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
-        for w in args:
-            if not w.startswith("-"):
-                add(w, base)
-    elif head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
-        for w in args:
-            if not w.startswith("-"):
-                add(w, base)
-    elif head == "dd":
-        for w in args:
-            if w.startswith("of="):
-                add(w[3:], base)
-    elif head == "git":
-        # Past the options git itself takes to the subcommand: -C names the directory the paths resolve
-        # against, and -c, --git-dir and --work-tree take a value that is not the subcommand.
-        gbase = base
+    found = git_command(words[k:])
+    if found:
+        # Past the options git itself takes to the subcommand: -C names the directory the paths
+        # resolve against, and the others that take a value are not the subcommand.
+        gbase, (sub, front, rest) = base, found
         i = 0
-        while i < len(args) and args[i].startswith("-"):
-            if args[i] == "-C" and i + 1 < len(args):
-                nb = resolve(args[i + 1], gbase)
+        while i < len(front):
+            if front[i] == "-C" and i + 1 < len(front):
+                nb = resolve(front[i + 1], gbase)
                 if nb and not nb.startswith("$"):
                     gbase = nb
-                i += 2
-            elif args[i] in ("-c", "--git-dir", "--work-tree", "--namespace") and i + 1 < len(args):
-                i += 2
-            else:
-                i += 1
-        sub = args[i] if i < len(args) else ""
+            i += 2 if front[i] in GIT_VALUED else 1
         if sub in GIT_WRITERS:
-            rest = args[i + 1:]
             # checkout and restore name a branch or commit before `--`, and only the paths after
             # it are rewritten; a bare `git checkout main` switches branches and names no path.
             if sub == "restore":
@@ -332,6 +325,26 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
             for w in rest:
                 if not w.startswith("-"):
                     add(w, gbase)
+        continue
+    if head in ("cd", "pushd"):
+        dest = next((w for w in args if not w.startswith("-")), "~")
+        nb = resolve(dest, base)
+        if nb and not nb.startswith("$"):
+            base = nb
+        continue
+    # A flag is never a path, so none is resolved against where the command runs.
+    if head == "sed" and any(w == "-i" or w.startswith("-i") for w in args):
+        for w in args:
+            if not w.startswith("-"):
+                add(w, base)
+    elif head in ("perl", "ruby") and any(re.match(r"^-[A-Za-z]*i", w) for w in args):
+        for w in args:
+            if not w.startswith("-"):
+                add(w, base)
+    elif head == "dd":
+        for w in args:
+            if w.startswith("of="):
+                add(w[3:], base)
     elif head in WRITERS:
         for w in args:
             if not w.startswith("-"):
