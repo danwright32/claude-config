@@ -376,6 +376,8 @@ const watchLogin = async ($: EngineInterface, h: string, before: string) => {
     const mine = $.clock.every(LOGIN_POLL_MS, () => {
       void (async () => {
         if (loginWatch !== mine) return
+        // A session that ended while this watch was being started stops it at its first read.
+        if (ended) return stopLoginWatch()
         const landed = await adoptAccount($, h, before, () => loginWatch === mine)
         if (loginWatch === mine && (landed || (await $.clock.now()) >= until)) stopLoginWatch()
       })().catch(err => $.ui.log(`status-bar: stopped reading the login file after /login: ${msg(err)}`, { to: 'debug' }))
