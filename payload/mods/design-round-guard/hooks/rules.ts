@@ -98,10 +98,34 @@ export const inScratchpad = (path: string, session: string, roots: readonly stri
 export const namesScratchpad = (text: string, session: string, roots: readonly string[]): boolean =>
   session !== '' && roots.length > 0 && new RegExp(`(?<![^\\s'"=(:])${scratchpadAt(session, roots)}(?![\\w.-])`).test(text)
 
+// Whether the text just before a name's `/` adds the name onto a folder held in a variable (#1194):
+// an f-string's or a template's brace (`f"{root}/app/page.tsx"`, `${R}/screen.css`) or a string added
+// onto one (`root + "/app/page.tsx"`).
+const addedOnto = (head: string): boolean => /\}$/.test(head) || /\+\s*[rRbBuUfF]{0,2}['"]$/.test(head)
+
+/**
+ * Whether every place a text spells a name that looks absolute (`/app/page.tsx`, as mentionedLookFiles
+ * reads `f"{root}/app/page.tsx"` and `root + "/app/page.tsx"`) adds it onto a folder held in a
+ * variable (#1194), so it is a name in that folder, never one at the disk's root, which is in no
+ * checkout and was never held. A name spelled anywhere as it is, from the root, is not.
+ */
+export const addedOntoFolder = (text: string, name: string): boolean => {
+  if (!name.startsWith('/')) return false
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
+    seen = true
+    if (!addedOnto(text.slice(Math.max(0, i - 8), i))) return false
+  }
+  return seen
+}
+
 /**
  * Whether every place a text spells a relative name joins it onto a folder held elsewhere, never
  * opening it as written (#1191, lessons review): `os.path.join(d, 'screen.css')` or `path.join(d,
- * 'screen.css')` (no call inside the join before it) or pathlib's `d / 'screen.css'`. A name opened
+ * 'screen.css')` (no call inside the join before it), pathlib's `d / 'screen.css'`, or (#1194) a
+ * string or an f-string adding it onto a folder in a variable (`d + "/screen.css"`,
+ * `f"{d}/screen.css"`). A name opened
  * as it is (`open('index.html')`), in a list, or anywhere else is not, and nor is a name the text
  * never spells. Nor is the shell's `$R/screen.css` (mentionedLookFiles reads it as `R/screen.css`),
  * whose folder is the variable's value, read by shellVarPath instead (lessons review of #1191: read
@@ -113,6 +137,10 @@ export const joinedOnly = (text: string, name: string): boolean => {
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     const before = text[i - 1] ?? ''
     const after = text[i + name.length] ?? ''
+    if (before === '/' && !/[\w.-]/.test(after) && addedOnto(text.slice(Math.max(0, i - 9), i - 1))) {
+      seen = true
+      continue
+    }
     // Only the name as a whole word: not a longer name holding it (`app/screen.css`, `screen.css.map`).
     if (/[\w./~@+*[\]()-]/.test(before) || /[\w.-]/.test(after)) continue
     seen = true

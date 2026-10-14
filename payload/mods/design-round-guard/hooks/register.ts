@@ -22,6 +22,7 @@ import {
   card,
   checked,
   dataOnlyChange,
+  addedOntoFolder,
   editedText,
   forged,
   inScratchpad,
@@ -149,8 +150,13 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // A name the shell spells through a variable (`$R/screen.css`) is where the command's own literal
 // assignment of it puts it (rules.ts shellVarPath), judged as any path, so `$APP/globals.css` with
 // APP the project's folder is held; one the command does not set is read as any name (lessons review).
-const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
-  if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
+// A name that looks absolute only because it is added onto a folder in a variable (`root +
+// "/app/page.tsx"`, `f"{root}/app/page.tsx"`) is that folder's, read as a joined name (rules.ts
+// addedOntoFolder, #1194): at the disk's root it was in no checkout, so it was never held.
+const guessAt = async ($: EngineInterface, said: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
+  const added = addedOntoFolder(text, said)
+  const m = added ? said.slice(1) : said
+  if (!added && /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
   const set = shellVarPath(command, text, m)
   if (set !== undefined && (set.startsWith('/') || /^~(\/|$)/.test(set) || folder !== undefined)) return { path: resolvePath(set, folder ?? '/', at.home), word: m }
   if (folder === undefined) return { word: m }

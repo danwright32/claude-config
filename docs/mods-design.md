@@ -2567,6 +2567,48 @@ switcher; a cd to the round's folder already passed.
   than meeting the same refusal again. The refusals of a write to the guard's own record and of a
   call the guard could not check say nothing of rounds, which they are not about.
 
+### What #1194 changed, 2026-10-14
+
+An agent on #1191, writing its README entry from a claude-config worktree, was held for
+"screen.css and src/app/globals.css" by a python heredoc that edits README.md: a one line string
+it puts into the README quotes both as text. #1165 kept every one line literal whole, since a path
+with a space in it and a sentence read alike there, so the sentence read as two names it opens.
+
+- **A one line literal is told from a sentence by its shape and its use** (mod-kit `code.ts`,
+  `pathShaped` and `pathUses`). It is kept when it is only a path: no space in it, or from the root,
+  the home folder or `./` (a Bidspoke checkout's spaces are a folder's). Otherwise it is kept when the
+  program uses it as a path: passed to open, pathlib's classes, any function of os, os.path, shutil,
+  glob, io and the like (under any name an import gives them), a Path's joinpath, rename and the
+  rest, a Path's replace (never a str's), or pathlib's `/`; or it is the whole value of a name used
+  so. Anything else (an argument of print, of a str's replace or join, of the program's own
+  function) is a sentence, and blanked as a block spanning lines is.
+- **A name added onto a folder in a variable is that folder's** (design round guard `rules.ts`
+  `addedOntoFolder`). Measuring the change found an Ovation program editing
+  `W+"/docs/design/clients.html"` that had been held only because a sentence it puts into PRD.md
+  mentions `docs/design/clients.html`: mentionedLookFiles reads the name it opens as
+  `/docs/design/clients.html`, a file at the disk's root, in no checkout, which was never held. A
+  name every place the text spells it after `+ "` or an f-string's brace (`f"{root}/app/page.tsx"`,
+  `${R}/screen.css`) is now read relative to that folder, as a joined name: in the project it is
+  held, and in the session's scratchpad, with the project lacking its first part, it passes as a
+  round's file (#1191). This holds more than before: in this Mac's transcripts, 35 commands naming
+  no scratchpad add a look file onto a worktree's folder (`W+"/Ovation/Roster/ShellView.swift"`)
+  and read those names as files at the root, never held; they are now judged in the folder the
+  program runs in.
+- **What it cannot see.** A relative path holding a space, not from the root or the home folder,
+  that reaches an open only through a function of the program's own, a list or a second name reads
+  as a sentence. The folder a variable holds is still not followed, so a name added onto another
+  checkout's folder is judged in the folder the program runs in.
+- **Ask before saving is unchanged.** Its #940 reading takes the spans from `pythonText` and keeps
+  its own rule (a memory file a quote closes counts); it never reads `code` (109 of 109 of its tests).
+- Measured over this Mac's transcripts (11,424 distinct Bash commands running python, 3,105 programs
+  judged by their own text, 2,592 given `code`): 36 commands lost 47 look file names, every one a
+  mention in text the program puts into another file (a README, PRD or PR body sentence, a test
+  script's shell lines, a Swift block in a string, a dictionary entry quoted as text), none a file the
+  program opens. No program lost its `code`, and 14 gained it, a sentence that mentioned split no
+  longer reading as a cut. The two Ovation design round programs that wrote `f"{out}/screen.css"`
+  into the scratchpad, held before only through a printed sentence, now pass as round files. The
+  Ovation program patching three design pages is still held for all three.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

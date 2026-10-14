@@ -36,6 +36,7 @@ import {
   inScratchpad,
   namesScratchpad,
   joinedOnly,
+  addedOntoFolder,
   shellVarPath,
   tempRoots,
   ROUND_FILES,
@@ -257,6 +258,24 @@ test('a name is joined only where every place the text spells it joins it onto a
   expect(joinedOnly('', '')).toBe(false)
   // A longer name holding it is another name.
   expect(joinedOnly("os.path.join(d, 'screen.css')\nopen('app/screen.css')", 'screen.css')).toBe(true)
+  // #1194: added onto a folder in a variable, by a string or an f-string's brace.
+  expect(joinedOnly('open(d + "/screen.css", "w")', 'screen.css')).toBe(true)
+  expect(joinedOnly('open(f"{d}/screen.css", "w")\nopen(d+\'/screen.css\')', 'screen.css')).toBe(true)
+  expect(joinedOnly('open(f"{d}/screen.css", "w")\nopen("screen.css", "w")', 'screen.css')).toBe(false)
+})
+
+// #1194: mentionedLookFiles reads `root + "/app/page.tsx"` and `f"{root}/app/page.tsx"` as a name at the
+// disk's root, in no checkout, so a program writing a page that way was never held by that name.
+test('a name that looks absolute is added onto a folder only where every place the text spells it is', () => {
+  expect(addedOntoFolder('p=W+"/docs/design/clients.html"; open(p)', '/docs/design/clients.html')).toBe(true)
+  expect(addedOntoFolder("open(W + '/app/page.tsx', 'w')", '/app/page.tsx')).toBe(true)
+  expect(addedOntoFolder('open(f"{W}/app/page.tsx", "w")', '/app/page.tsx')).toBe(true)
+  expect(addedOntoFolder('cat > "${R}/screen.css"', '/screen.css')).toBe(true)
+  // Spelled from the root anywhere, or not looking absolute at all: not added.
+  expect(addedOntoFolder('open(f"{W}/app/page.tsx")\nopen("/app/page.tsx", "w")', '/app/page.tsx')).toBe(false)
+  expect(addedOntoFolder("open('/w/slate/app/page.tsx', 'w')", '/w/slate/app/page.tsx')).toBe(false)
+  expect(addedOntoFolder('open(W + "/app/page.tsx")', 'app/page.tsx')).toBe(false)
+  expect(addedOntoFolder('x', '/app/page.tsx')).toBe(false)
 })
 
 // #1191: every refusal of a look changing edit says where a round's own files go, so a round the

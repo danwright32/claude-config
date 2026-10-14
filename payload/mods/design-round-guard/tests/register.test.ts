@@ -1602,3 +1602,48 @@ test('#1165: a program that writes a screen file is still held, and so is one wh
   expect(await held(`python3 - <<'EOF'\nfor f in """app/a.css\napp/b.css""".split():\n    open(f, 'w').write('')\nEOF`)).toContain('app/a.css')
   expect(w.ran).toEqual([])
 })
+
+// #1194: mod-kit kept a one line string literal whole (#1165), so a sentence in one read as a name the
+// program opens. An agent on #1191, 2026-10-14, writing the README entry from a claude-config
+// worktree, was held for "screen.css and src/app/globals.css" because a line its script puts into
+// README.md quotes both as text. Word for word.
+const HELD_1191 = "python3 - <<'EOF'\np='README.md'\ns=open(p).read()\ndef rep(old,new):\n    global s\n    assert s.count(old)==1, old\n    s=s.replace(old,new,1)\nrep(\"A design round's own files in the scratchpad pass however the command names them. Since #1165\",\n\"A design round's own files in the scratchpad pass however the command names them. Since #1191 the session's scratchpad (`<temp>/claude-<uid>/<project>/<session id>/scratchpad`, known by `$.session.id()`, the temp folder wherever it is, a folder with a space in its name included) is never held and asks for no issue or branch, even inside a checkout, while another session's is judged as any folder; and where a command names that scratchpad, a relative name a program only mentions (a round's `screen.css` joined onto the round's folder by `os.path.join` or pathlib, or through a variable the shell fills in) is read as the round's file, not the project's, unless the project has something of that name's first part on the disk (`src/app/globals.css`, a new file under `src/app/`), which is held as before, as is any name when the disk cannot answer. The gap, decided there: a new look changing file at the very top of a checkout, written by a program in the same command as a round's files, passes. Every refusal, and Dan's Run /design-rounds, says a round's files go in the scratchpad, so a held round is never sent back to /design-rounds, which held it. Since #1165\")\nrep(\"held only the change it refused, never the file, so an earlier edit can still be undone (#1158)\", \"held only the change it refused, never the file, so an earlier edit can still be undone (#1158)\") if False else None\nrep(\"Answers kept in the mod's store on this Mac. | #978, #1138, #1158 |\",\"Answers kept in the mod's store on this Mac. | #978, #1138, #1158, #1191 |\")\nopen(p,'w').write(s)\n\np='docs/mods-design.md'\ns=open(p).read()\nanchor=\"## Picker manners (#615), built 2026-10-04\"\nnew='''### What #1191 changed, 2026-10-14\n\nRunning /design-rounds for Slate's #3718, round one's files sat in the session's scratchpad\n(`<scratchpad>/3718/round1/`), and one Bash call embedding the fonts into `screen.css` and running\n`make-switcher.py` was refused twice: from the shared checkout on a detached head (\"could not tell\nwhich issue or branch it belongs to\"), and from a worktree on the issue's branch (\"issue #3718 in\nSlate has no design round Dan has settled\"). The only way through was the skip question's Not a\nlook change, a stretch of what it means, and Dan first read it as a choice to run design rounds,\nwhich looped straight back to the refusal. The program named the round's folder and joined each\nbare name onto it (`os.path.join(d, 'screen.css')`), and the guard placed those names in the folder\nthe program ran in, the checkout (#1151's reading). Reproduced as the guard's tests with four\nshapes: os.path.join, pathlib, a variable the shell fills in, and a program that also runs the\nswitcher; a cd to the round's folder already passed.\n\n- **The session's scratchpad is never held.** Claude Code hands every session\n  `<temp>/claude-<uid>/<project>/<session id>/scratchpad`. The guard knows it by the session's id\n  from `$.session.id()`, the temp folder left open since TMPDIR or CLAUDE_CODE_TMPDIR can move it,\n  a space in its name included. A write there passes before any checkout or branch is read, so a\n  command touching only it needs no issue or branch; another session's scratchpad, and a project\n  folder merely called scratchpad, are judged as any folder.\n- **A mentioned name is read in the scratchpad when the command names it and the project has no\n  such name.** A guess from a program's text (or a command's, where the program is not read) is a\n  relative name; where the command names this session's scratchpad and the name's first part is\n  not on the disk in the folder the guess would place it, it is the round's file. A first part\n  that is there (`src/app/globals.css`, a new `src/app/booker.css`, an existing top level file) is\n  read in the project and held as before, and so is any name the disk cannot answer for.\n- **The gap, chosen over holding every round.** A new look changing file at the very top of a\n  checkout, written by a program in the same command as a round's files, passes. Reading the\n  folder a program joins a name onto would mean following python's values, which mod-kit does not.\n- **Where a round's files go is now said.** The design rounds skill never named a place; it now\n  says the session's scratchpad under `<issue number>/round<N>/`. Every refusal says so too, as does\n  Dan's Run /design-rounds, so a session sent to run rounds is told where their files go rather\n  than meeting the same refusal again.\n\n'''\nassert s.count(anchor)==1\ns=s.replace(anchor,new+anchor,1)\nopen(p,'w').write(s)\nEOF\ngit diff --stat"
+
+test('#1194: a sentence on one line of a program that mentions a look file is no write to it', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  expect(refusalOf(await call($, { tool: 'Bash', command: HELD_1191 }))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('#1194: a one line path the program opens is still held, a space in it or not', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate' })
+  const held = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  expect(await held(OVATION_PAGES)).toContain(SKIP_QUESTION)
+  expect(await held("python3 - <<'EOF'\nopen('app/page.tsx', 'w').write('see app/page.tsx for the look')\nEOF")).toContain(SKIP_QUESTION)
+  expect(await held("python3 - <<'EOF'\nopen('/w/slate/app/my page.tsx', 'w').write('x')\nEOF")).toContain(SKIP_QUESTION)
+  expect(await held("python3 - <<'EOF'\nimport os\np = os.path.join('app', 'my page.tsx')\nopen(p, 'w').write('x')\nEOF")).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+})
+
+// #1194, measured: an Ovation session's program (2026-09-27, the checkout renamed) edits a design page
+// it names by adding it onto a folder held in a variable, `W+"/docs/design/clients.html"`, and was held
+// only because a sentence it puts into PRD.md mentions docs/design/clients.html. The name it opens
+// reads as one at the disk's root, in no checkout, so with the sentence blanked it passed. A name
+// added onto a folder by `+` or an f-string's brace is the folder's, read as any joined name.
+const JOINED_PAGE = 'W=/w/slate; python3 - $W <<\'EOF\'\nimport sys\nW=sys.argv[1]\np=W+"/docs/design/clients.html"; s=open(p).read()\nold=\'\'\'  box.append(el("div", null, sent))\'\'\'\nassert old in s; s=s.replace(old,\'\')\nopen(p,"w").write(s)\np=W+"/PRD.md"; s=open(p).read()\nold="The wording of the sentence is drafted in `docs/design/clients.html` and was not chosen in a round."\nnew="The wording of the sentence, drafted in `docs/design/clients.html`, was approved by Dan."\nassert old in s; s=s.replace(old,new); open(p,"w").write(s)\nEOF'
+
+test('#1194: a look file added onto a folder held in a variable is that folder\'s, held in a checkout and passed in the scratchpad', withKit, async ($, on) => {
+  const w = world($, on, { cwd: '/w/slate', files: { '/w/slate/docs/design/clients.html': '<p>' } })
+  const held = async (command: string) => refusalOf(await call($, { tool: 'Bash', command }))
+  expect(await held(JOINED_PAGE)).toContain('docs/design/clients.html')
+  expect(await held("python3 - <<'EOF'\nW = '/w/slate'\nopen(f\"{W}/app/page.tsx\", 'w').write('x')\nEOF")).toContain('app/page.tsx')
+  expect(await held("python3 - <<'EOF'\nW = '/w/slate'\nopen(W + '/app/page.tsx', 'w').write('x')\nEOF")).toContain('app/page.tsx')
+  expect(w.ran).toEqual([])
+  // A design round's program writing its files into the scratchpad the same ways (an Ovation round,
+  // 2026-09-14) passes, as a round's joined names do (#1191).
+  for (const command of [
+    `R=${ROUND} && mkdir -p "$R" && python3 - "$R" <<'PY'\nimport sys\nout = sys.argv[1]\nopen(f"{out}/builder.js", "w", encoding="utf-8").write("x")\nopen(f"{out}/screen.css", "w", encoding="utf-8").write("a{}")\nprint("builder.js", 1, "chars; screen.css", 3, "chars")\nPY`,
+    `python3 - <<'PY'\nout = '${ROUND}'\nopen(out + "/screen.css", "w").write("a{}")\nPY`,
+  ])
+    expect({ command, why: await held(command) }).toEqual({ command, why: '' })
+})

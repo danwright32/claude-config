@@ -640,9 +640,11 @@ export const codeTargets = (lang: Lang, inline: string): string[] | undefined =>
  * A python program's text with what it holds only as data blanked (#1165), for a guard reading the
  * names of the files a program can open: each comment, and each plain string literal spanning lines
  * (the text a script puts into a file, a block it replaces), all but its last word, which may be a
- * name (`"""notes\napp/page.tsx"""`, or one a .strip() leaves). A literal on one line is kept whole,
- * since a path (one with a space in it too, in a Bidspoke checkout) and a sentence read alike there,
- * and so is an f-string or a t-string, whose braces hold code. A blanked character becomes a space, a
+ * name (`"""notes\napp/page.tsx"""`, or one a .strip() leaves). A literal on one line is kept whole
+ * when it is only a path (pathShaped: one with a space in it too, from the root, as in a Bidspoke
+ * checkout) or is used as one (pathUses), and is otherwise a sentence, blanked (#1194: a README line
+ * a script puts in, quoting screen.css, read as a name it opens). An f-string or a t-string is kept,
+ * its braces holding code. A blanked character becomes a space, a
  * line break staying, so the text keeps its shape. Undefined where data cannot be told from code: any
  * language but python, a program that runs a process or builds code at run time (exec, eval,
  * compile), either of which can run what a string holds, and one whose code cuts text into parts
@@ -658,13 +660,17 @@ export const codeOnly = (lang: Lang, inline: string): string | undefined => {
   const canonical = s.canonical?.(inline) ?? inline
   if (first(s.process, canonical) || first(s.dynamic, canonical)) return undefined
   const blank = (t: string) => t.replace(/[^\n]/g, ' ')
+  const spans = pythonText(inline)
+  const asPath = pathUses(inline, spans)
   let out = ''
   let at = 0
-  for (const t of pythonText(inline)) {
+  for (const t of spans) {
     out += inline.slice(at, t.from)
     const body = inline.slice(t.from, t.to)
     if (t.kind === 'comment') out += blank(body)
-    else if (t.kind === 'formatted' || !body.includes('\n')) out += body
+    else if (t.kind === 'formatted') out += body
+    // One line: kept when it is only a path or is used as one, a sentence blanked (#1194).
+    else if (!body.includes('\n')) out += pathShaped(body) || asPath(t) ? body : blank(body)
     else {
       // The last word, kept with whatever space follows it (a .strip() makes it the whole).
       const last = /[^\s]*\s*$/.exec(body)?.[0] ?? ''
@@ -713,6 +719,113 @@ export const pythonText = (code: string): ModKitPythonText[] => {
   }
   return out
 }
+// A one line literal that is only a path (#1194): one with no space in it, or one from the root, the
+// home folder or the folder the program runs in (`/Users/dan/Documents - Dan Pro/...`, `~/...`,
+// `./...`), whose spaces are a folder's. A literal holding a space anywhere else reads as a sentence
+// unless the program uses it as a path (pathUses).
+const pathShaped = (body: string): boolean => {
+  const s = body.trim()
+  return !/\s/.test(s) || /^(?:\/|~|\.\.?\/)/.test(s)
+}
+
+// The modules whose functions take a path, and the names a path is opened, built or moved by: a
+// call (`open`, pathlib's classes) or a method (a Path's joinpath, rename, open), each read by name.
+// A str's replace is no path, so a Path's replace counts only when it is called on Path(...) or on a
+// name bound to one, as pythonTargets reads a move.
+const PATH_MODULES = new Set(['os', 'os.path', 'posixpath', 'shutil', 'pathlib', 'glob', 'fileinput', 'io', 'codecs', 'gzip', 'bz2', 'lzma', 'tarfile', 'zipfile', 'shelve', 'dbm', 'sqlite3', 'tempfile', 'filecmp'])
+const PATH_CALLS = new Set(['open', 'Path', 'PurePath', 'PosixPath', 'PurePosixPath', 'WindowsPath', 'PureWindowsPath'])
+const PATH_METHODS = new Set(['open', 'joinpath', 'rename', 'symlink_to', 'hardlink_to', 'copy', 'copy_into', 'move', 'move_into', 'relative_to', 'with_name', 'samefile'])
+
+/**
+ * Whether a one line literal is used as a path (#1194), read from the program's text: passed to a
+ * call that takes one (open, Path, os, os.path, shutil and the like, under any name an import gives
+ * them), joined by pathlib's `/`, or the whole value of a name that is. Anything else (an argument
+ * of print, of a str's replace or join, of a function of the program's own) is not. What it cannot
+ * see: a path with a space in it, not from the root or the home folder, that reaches an open only
+ * through a function of the program's own, a container or a second name, which reads as a sentence.
+ */
+const pathUses = (code: string, spans: ModKitPythonText[]): ((t: ModKitPythonText) => boolean) => {
+  // The code with every comment and literal emptied, so a bracket or a name inside one counts for nothing.
+  let skeleton = ''
+  let at = 0
+  for (const s of spans) {
+    skeleton += code.slice(at, s.from) + code.slice(s.from, s.to).replace(/[^\n]/g, ' ')
+    at = s.to
+  }
+  skeleton += code.slice(at)
+  // The bracket each place sits directly inside, -1 for none.
+  const inside = new Int32Array(skeleton.length + 1)
+  const open: number[] = []
+  for (let i = 0; i < skeleton.length; i++) {
+    inside[i] = open.length ? (open[open.length - 1] as number) : -1
+    const c = skeleton[i] as string
+    if ('([{'.includes(c)) open.push(i)
+    else if (')]}'.includes(c)) open.pop()
+  }
+  inside[skeleton.length] = open.length ? (open[open.length - 1] as number) : -1
+  // What each name an import binds stands for: `import shutil as sh`, `from os.path import join`.
+  const bound = new Map<string, string>()
+  for (const m of skeleton.matchAll(/(?:^|[;\n])[ \t]*import\s+([^;\n#]+)/g))
+    for (const part of (m[1] as string).split(',')) {
+      const p = /^\s*([\w.]+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+      if (p) bound.set(p[2] ?? (p[1] as string).split('.')[0] as string, p[2] ? (p[1] as string) : ((p[1] as string).split('.')[0] as string))
+    }
+  for (const m of skeleton.matchAll(/(?:^|[;\n])[ \t]*from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^;\n#]+)/g))
+    for (const part of (m[2] as string).replace(/[()]/g, '').split(',')) {
+      const p = /^\s*(\w+)(?:\s+as\s+(\w+))?\s*$/.exec(part)
+      if (p) bound.set((p[2] ?? p[1]) as string, `${m[1]}.${p[1]}`)
+    }
+  const resolve = (name: string): string => {
+    const [head, ...rest] = name.split('.')
+    const full = bound.get(head as string)
+    return full === undefined ? name : [full, ...rest].join('.')
+  }
+  // Whether the call whose bracket opens at `k` takes a path.
+  const pathCall = (k: number): boolean => {
+    if (skeleton[k] !== '(') return false
+    const before = skeleton.slice(0, k)
+    const m = /(\.\s*)?([A-Za-z_][\w.]*)\s*$/.exec(before)
+    if (!m) return false
+    // A method on an expression (`', '.join(`, `Path(p).rename(`) is read by its own name alone.
+    const method = m[1] !== undefined
+    const name = method ? (m[2] as string) : resolve(m[2] as string)
+    const parts = name.split('.')
+    const last = parts[parts.length - 1] as string
+    if (!method && (PATH_CALLS.has(name) || PATH_MODULES.has(parts.slice(0, -1).join('.')))) return true
+    if (PATH_METHODS.has(last) && (method || parts.length > 1)) return true
+    if (last === 'replace' && (method || parts.length > 1)) {
+      const dot = (m.index ?? 0) + (method ? 0 : (m[2] as string).lastIndexOf('.'))
+      const receiver = receiverBefore(skeleton, dot)
+      if (receiver === undefined) return false
+      return PY_PATH.test(receiver) || (/^\w+$/.test(receiver) && new RegExp(`(?:^|[;\\n])[ \\t]*${escaped(receiver)}\\s*=\\s*(?:pathlib\\s*\\.\\s*)?Path\\s*\\(`).test(skeleton))
+    }
+    return false
+  }
+  // Whether the text from `from` to `to` is used as a path where it stands: inside a call taking one,
+  // or beside pathlib's `/` (never `//`, python's floor division).
+  const usedAt = (from: number, to: number): boolean => {
+    if (pathCall(inside[from] as number)) return true
+    const left = /(?<!\/)\/\s*$/.test(skeleton.slice(Math.max(0, from - 40), from))
+    const right = /^\s*\/(?![/=])/.test(skeleton.slice(to, to + 40))
+    return left || right
+  }
+  return t => {
+    const q = /^(?:'''|""")$/.test(code.slice(t.from - 3, t.from)) ? 3 : 1
+    let start = t.from - q
+    while (start > 0 && /[rRbBuU]/.test(code[start - 1] as string)) start--
+    const end = Math.min(code.length, t.to + q)
+    if (usedAt(start, end)) return true
+    // The whole value of a name bound at the start of a statement, used as a path anywhere.
+    const name = /(?:^|[;\n])[ \t]*([A-Za-z_]\w*)[ \t]*=[ \t]*$/.exec(skeleton.slice(0, start))?.[1]
+    if (name === undefined || !/^[ \t]*(?:[;\n#]|$)/.test(skeleton.slice(end))) return false
+    for (const m of skeleton.matchAll(new RegExp(`(?<![\\w.])${escaped(name)}(?!\\w)`, 'g'))) {
+      const i = m.index ?? 0
+      if (usedAt(i, i + name.length)) return true
+    }
+    return false
+  }
+}
+
 // Python's ways of cutting text into parts: str's split and partition, a pattern's matches, and the
 // parsers of structured text (json, yaml, toml, csv, ast, shlex, configparser).
 const PARSES = /\.\s*(?:r?split|splitlines|r?partition|findall|finditer|search|match|fullmatch)\s*\(|\b(?:loads|load_all|safe_load|literal_eval)\s*\(|\b(?:csv|shlex|configparser|tomllib|toml|yaml)\s*\./
