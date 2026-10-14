@@ -327,8 +327,10 @@ function slateScenario(pulls, compare, runs, rollbacks) {
   function add(file, jobName, stepName, r) {
     runSeq++;
     const id = 5000 + runSeq, jobId = 9000 + runSeq;
-    const done = r.step !== 'running';
-    sc.runs[SLATE][file].push({ id: id, head_sha: r.sha || sha(1), created_at: r.at, status: done ? 'completed' : 'in_progress' });
+    const done = r.step !== 'running' && r.step !== 'queued';
+    sc.runs[SLATE][file].push({ id: id, head_sha: r.sha || sha(1), created_at: r.at, status: r.step === 'queued' ? 'queued' : done ? 'completed' : 'in_progress' });
+    // A queued run, or one cancelled while pending, has no jobs listed at all.
+    if (r.step === 'queued' || r.noJob) { sc.jobs[id] = []; return; }
     const steps = [{ name: 'Install', status: 'completed', conclusion: 'success' }];
     if (!r.noStep && r.step !== 'skipped') {
       steps.push({ name: stepName, status: done ? 'completed' : 'in_progress', conclusion: done ? r.step : null });
@@ -413,6 +415,13 @@ const LIVE_203 = { sha: sha(203), at: '2026-10-07T09:10:00Z', step: 'success' };
 {
   const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'running' }]);
   check(r.d[203] === 'unconfirmed', 'a rollback still running makes the live commit unconfirmed', JSON.stringify(r.d) + r.all);
+}
+{
+  // Lessons review of #1180: a rollback queued or just started has no jobs listed yet.
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'queued' }]);
+  check(r.d[203] === 'unconfirmed', 'a rollback queued with no job yet makes the live commit unconfirmed, never reads as changing nothing', JSON.stringify(r.d) + r.all);
+  const r2 = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'cancelled', noJob: true }]);
+  check(r2.d[203] === 'live', 'a rollback run cancelled before its job existed changed nothing', JSON.stringify(r2.d) + r2.all);
 }
 {
   // A time that does not parse compares false against everything (L50), which would skip the

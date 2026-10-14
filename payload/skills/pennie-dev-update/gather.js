@@ -235,7 +235,11 @@ function jobOutcome(slug, run, jobName, stepName, liveExits, unchangedExits) {
   const got = gh('repos/' + slug + '/actions/runs/' + run.id + '/jobs?per_page=100');
   if (!got || !Array.isArray(got.jobs)) throw new Unreachable('the jobs of ' + what + ' in ' + slug + ' were not a list.');
   const job = got.jobs.filter(function (j) { return j && j.name === jobName; })[0];
-  // A run on main superseded while pending is cancelled before its jobs exist: it touched nothing.
+  // A run not finished whose job is not listed yet is queued or just starting: it may be about
+  // to touch production, so it is running, never "touched nothing" (lessons review of #1180).
+  if (!job && run.status !== 'completed') return { outcome: 'running', what: what };
+  // A finished run with no such job was cancelled while pending, superseded by a newer merge,
+  // before its jobs existed: it touched nothing.
   if (!job) return { outcome: 'none', what: what };
   if (job.status !== 'completed') return { outcome: 'running', what: what };
   const at = job.completed_at;
