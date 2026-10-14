@@ -751,6 +751,95 @@ test('a second session start in the same session, as a reload of the mod brings,
   expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
 })
 
+// #1200: a /login in THIS session changes this session's account, so it is read again, unlike a
+// switch made by another session. Claude Code's /login is the core command; its output is the line
+// it prints once the login is done.
+type Cmd = { command: { run: (e: object) => Promise<{ text?: string }> } }
+const loginHere = (on: On, then: () => void) => {
+  on('command.run', ($, e) => {
+    if ((e as { command: string }).command !== 'login') return { text: '' } as never
+    then()
+    return { text: 'Login successful.' } as never
+  })
+}
+const runLogin = async ($: unknown, clock: { settle: () => Promise<void> }) => {
+  const out = await ($ as Cmd).command.run({ command: 'login', args: '', origin: { kind: 'human' }, presentation: {} })
+  await clock.settle()
+  return out
+}
+
+test("a /login in this session names the account it logged in to, and keeps /login's own output (#1200)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => loginAs(files, 'acct-2', 'Dan', 'Personal'))
+  await start($, clock)
+  const out = await runLogin($, clock)
+  expect(out.text).toBe('Login successful.')
+  expect(accountIn(files)).toEqual({ accountUuid: 'acct-2', organizationUuid: 'org-acct-2', displayName: 'Dan', emailAddress: 'acct-2@example.com', organizationName: 'Personal' })
+})
+
+test('a /login already seen to land is not read again at the next turn, which may follow another session switching (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => loginAs(files, 'acct-2', 'Dan', 'Personal'))
+  await start($, clock)
+  await runLogin($, clock)
+  loginAs(files, 'acct-3', 'Dan', 'Elsewhere')
+  await step($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-2')
+})
+
+test('a /login that returns before the login file changes is read again at the next turn, and only that once (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await step($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-2')
+  // Later, another session switches the Mac: this one keeps the account it logged in to.
+  loginAs(files, 'acct-3', 'Dan', 'Elsewhere')
+  await step($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-2')
+})
+
+test("a subagent's model request is not the turn a /login is read again at (#1200)", withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await step($, clock, 'agent-1')
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
+  await step($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-2')
+})
+
+test('a login file that cannot be read after a /login is unknown, never the account from before it (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => {
+    files[LOGIN_FILE] = 'not json'
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  expect(accountIn(files)).toBeNull()
+})
+
+test('another slash command leaves the account the session started on (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await ($ as Cmd).command.run({ command: 'help', args: '', origin: { kind: 'human' }, presentation: {} })
+  await clock.settle()
+  await step($, clock)
+  expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
+})
+
 test('a Mac with no login file at all is no account, not an unknown one (#815)', withKit, async ($, on) => {
   const { files, clock } = world(on)
   delete files[LOGIN_FILE]

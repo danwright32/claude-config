@@ -66,6 +66,9 @@ let toldSave = false
 // Whether a main turn is running: from its first request to its end. Every request it makes keeps
 // the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
 let turnRunning = false
+// A /login ran in this session, so its account is read again at the next main request, in case the
+// command returned before the login file changed (#1200).
+let loginPending = false
 let chain: Promise<unknown> = Promise.resolve()
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
@@ -118,9 +121,13 @@ const writeFacts = async ($: EngineInterface) => {
 }
 
 // The account this session runs on, the one its limits belong to (#815): the Mac's login as it
-// stands at session start. Read once, here, because the login file names whatever the Mac is logged
-// in to NOW, which another session's Switch changes under this one. No login at all (an API key) is
-// an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
+// stands at session start. Read then and not again, because the login file names whatever the Mac is
+// logged in to NOW, which another session's Switch changes under this one; the one exception is a
+// /login in this session, which does change this session's account (#1200). No login at all (an API
+// key) is an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
+// Which login an account record is, by its account and org ids; unknown and no login have none.
+const keyOf = (a: StatusBarAccount | null | undefined) => (a?.accountUuid && a.organizationUuid ? `${a.accountUuid}:${a.organizationUuid}` : '')
+
 const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAccount | null> => {
   try {
     // No login file at all is no claude.ai login, like an empty one; only a file that is there and
@@ -135,7 +142,7 @@ const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAcco
     }
     return out
   } catch (err) {
-    $.ui.log(`status-bar: ~/.claude.json could not be read at session start, so the status line shows this session's account as unknown: ${msg(err)}`, { to: 'debug' })
+    $.ui.log(`status-bar: ~/.claude.json could not be read, so the status line shows this session's account as unknown: ${msg(err)}`, { to: 'debug' })
     return null
   }
 }
@@ -411,6 +418,10 @@ export const register: Register = on => {
     if (interactive && e.agentId === undefined) {
       turnRunning = true
       try {
+        if (loginPending && home) {
+          loginPending = false
+          await $.state.set(accountRef, await readAccount($, home))
+        }
         await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
         $.clock.after(0, () => void cacheMoved($))
       } catch (err) {
@@ -418,6 +429,26 @@ export const register: Register = on => {
       }
     }
     return yield* next(e)
+  })
+
+  // A /login in this session changes the account this session runs on, so it is read again once the
+  // command is done, and once more at the next main request in case the login file changed after
+  // the command returned (#1200). It is read even when the command failed: whether the login file
+  // changed is the file's to say, not the command's. A read already naming another account shows the
+  // login landed, so the next request does not read again, since by then another session may have
+  // switched the Mac.
+  on('command.run', { command: 'login' }, async ($, e, next) => {
+    if (!interactive || !home) return next(e)
+    const before = keyOf((await $.state.get(accountRef)).value)
+    loginPending = true
+    try {
+      return await next(e)
+    } finally {
+      const now = await readAccount($, home)
+      if (now && keyOf(now) !== before) loginPending = false
+      await $.state.set(accountRef, now)
+      await writeFacts($)
+    }
   })
 
   on('turn.complete', async ($, e, next) => {
