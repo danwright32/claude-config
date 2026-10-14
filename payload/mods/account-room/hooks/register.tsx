@@ -31,6 +31,10 @@ const PANE = 'account-room-nickname'
 const MIN = 60_000
 const LOCK_STALE_MS = 30_000
 const LOGIN_TIMEOUT_MS = 10 * MIN
+// After a /login whose command returned before the login file named another account: how often the
+// file is read again, and for how long before the session stops following it (#1202).
+const LOGIN_POLL_MS = 1_000
+const LOGIN_WAIT_MS = 30_000
 
 const sessionRef = { plugin: 'account-room', key: 'session' } as const
 const liveRef = { plugin: 'account-room', key: 'live' } as const
@@ -60,6 +64,11 @@ const serialLive = queue()
 const noted = new Set<string>()
 // Whether this module instance is running a Switch: after a reload a "working" phase has no runner.
 let switching = false
+// Where and how this session started, kept so a /login can rebuild its record (#1202).
+let started_: { home: string; isInteractive: boolean } | undefined
+// The session has ended (not a /clear): nothing follows a /login for it any more.
+let ended = false
+let loginWatch: { cancel: () => void } | undefined
 let ticker: { cancel: () => void } | undefined
 let lastBest: Account | undefined
 // This Mac's readings file as this session last read or wrote it, with its sha: what the next
@@ -656,6 +665,99 @@ const finishAsk = async ($: EngineInterface, name: string | null, close: boolean
   await recompute($)
 }
 
+type LoginFile = { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown; organizationType?: unknown }
+
+/**
+ * This session's account as the login file names it now: the record, 'none' for no Claude login
+ * (an API key session), 'unreadable' for a file that could not be read. Each is logged as itself,
+ * never one taken for another (L11).
+ */
+const readSession = async ($: EngineInterface, home: string, isInteractive: boolean): Promise<AccountRoomSession | 'none' | 'unreadable'> => {
+  let acct: LoginFile | undefined
+  try {
+    acct = (JSON.parse((await readText($, `${home}/.claude.json`)) ?? '{}') as { oauthAccount?: LoginFile }).oauthAccount
+  } catch (err) {
+    $.ui.log(`account-room: ~/.claude.json could not be read, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
+    return 'unreadable'
+  }
+  if (!acct || typeof acct.accountUuid !== 'string' || typeof acct.organizationUuid !== 'string') {
+    $.ui.log('account-room: no Claude account is logged in (an API key session?), so nothing is recorded', { to: 'debug' })
+    return 'none'
+  }
+  const mac = await $.process.run(['scutil', '--get', 'LocalHostName']).then(
+    x => (x.exitCode === 0 && x.stdout.trim() ? x.stdout.trim() : null),
+    () => null,
+  )
+  const plan = planOf(acct.organizationType)
+  return {
+    id: await accountKey(acct.accountUuid, acct.organizationUuid),
+    email: typeof acct.emailAddress === 'string' ? acct.emailAddress : '',
+    org: typeof acct.organizationName === 'string' ? acct.organizationName : '',
+    ...(plan ? { plan } : {}),
+    isInteractive,
+    home,
+    mac,
+  }
+}
+
+/**
+ * The login file read after a /login, the record moved onto the account it names. True once it
+ * names a login other than `before`. A file that cannot be read stops the record, so nothing is
+ * saved under the account from before the login while it may no longer be this session's; the
+ * old account's live reading never carries over to the new one. A failure is logged and false,
+ * never thrown over the command's own result (L95).
+ */
+const followLogin = async ($: EngineInterface, before: string, isCurrent: () => boolean = () => true): Promise<boolean> => {
+  if (!started_) return false
+  try {
+    const s = await readSession($, started_.home, started_.isInteractive)
+    if (ended || !isCurrent()) return false
+    const id = typeof s === 'string' ? '' : s.id
+    if (s === 'unreadable' || id !== before) {
+      const had = (await $.state.get(sessionRef)).value
+      if (had?.id !== id || s === 'unreadable') {
+        await $.state.set(sessionRef, typeof s === 'string' ? null : s)
+        await $.state.set(liveRef, null)
+        await $.state.set(dismissedRef, false)
+        if (typeof s !== 'string') {
+          $.clock.after(0, () => {
+            afterStart($, s).catch(err => once($, 'after-login', `Account room: the account this session logged in to could not be set up: ${message(err)}`))
+          })
+        }
+        await recompute($)
+      }
+    }
+    return s !== 'unreadable' && id !== before
+  } catch (err) {
+    $.ui.log(`account-room: this session's account could not be read again after /login: ${message(err)}`, { to: 'debug' })
+    return false
+  }
+}
+
+// Reads the login file every LOGIN_POLL_MS for LOGIN_WAIT_MS after a /login, until it names another
+// login. Each read checks the watch is still its own, so a read in flight from an earlier /login can
+// neither stop a later one's watch nor follow for it.
+const watchLogin = async ($: EngineInterface, before: string) => {
+  try {
+    const until = (await $.clock.now()) + LOGIN_WAIT_MS
+    const mine = $.clock.every(LOGIN_POLL_MS, () => {
+      void (async () => {
+        if (loginWatch !== mine) return
+        if (ended) return stopLoginWatch()
+        const landed = await followLogin($, before, () => loginWatch === mine)
+        if (loginWatch === mine && (landed || (await $.clock.now()) >= until)) stopLoginWatch()
+      })().catch(err => $.ui.log(`account-room: stopped reading the login file after /login: ${message(err)}`, { to: 'debug' }))
+    })
+    loginWatch = mine
+  } catch (err) {
+    $.ui.log(`account-room: could not keep reading the login file after /login: ${message(err)}`, { to: 'debug' })
+  }
+}
+const stopLoginWatch = () => {
+  loginWatch?.cancel()
+  loginWatch = undefined
+}
+
 const afterStart = async ($: EngineInterface, s: AccountRoomSession) => {
   let reading: Reading | undefined
   try {
@@ -740,31 +842,10 @@ export const register: Register = (on, options) => {
       $.ui.log('account-room: no home folder, so no account is recorded', { to: 'debug' })
       return r
     }
-    let acct: { accountUuid?: unknown; organizationUuid?: unknown; emailAddress?: unknown; organizationName?: unknown; organizationType?: unknown } | undefined
-    try {
-      acct = (JSON.parse((await readText($, `${home}/.claude.json`)) ?? '{}') as { oauthAccount?: typeof acct }).oauthAccount
-    } catch (err) {
-      $.ui.log(`account-room: ~/.claude.json could not be read, so this session's account is unknown: ${message(err)}`, { to: 'debug' })
-      return r
-    }
-    if (!acct || typeof acct.accountUuid !== 'string' || typeof acct.organizationUuid !== 'string') {
-      $.ui.log('account-room: no Claude account is logged in (an API key session?), so nothing is recorded', { to: 'debug' })
-      return r
-    }
-    const mac = await $.process.run(['scutil', '--get', 'LocalHostName']).then(
-      x => (x.exitCode === 0 && x.stdout.trim() ? x.stdout.trim() : null),
-      () => null,
-    )
-    const plan = planOf(acct.organizationType)
-    const s: AccountRoomSession = {
-      id: await accountKey(acct.accountUuid, acct.organizationUuid),
-      email: typeof acct.emailAddress === 'string' ? acct.emailAddress : '',
-      org: typeof acct.organizationName === 'string' ? acct.organizationName : '',
-      ...(plan ? { plan } : {}),
-      isInteractive: e.isInteractive,
-      home,
-      mac,
-    }
+    started_ = { home, isInteractive: e.isInteractive }
+    ended = false
+    const s = await readSession($, home, e.isInteractive)
+    if (typeof s === 'string') return r
     await $.state.set(sessionRef, s)
     if (e.isInteractive) {
       await $.command.register({ name: 'accounts', description: 'Rename a Claude account: /accounts rename, or /accounts rename <nickname or email>' })
@@ -774,6 +855,27 @@ export const register: Register = (on, options) => {
       afterStart($, s).catch(err => once($, 'after-start', `Account room: this session's account could not be set up: ${message(err)}`))
     })
     return r
+  })
+
+  // A /login in this session changes the account it runs on, and the readings it measures from then
+  // on are that account's (#1202). Only this session's own /login does: a switch made in another
+  // window changes the login file and not this session, which is why the account is otherwise read
+  // once, at start. So the record follows a /login once the command is done, failed or not, since
+  // whether the file changed is the file's to say. If the file does not yet name another login, it
+  // is read every second for half a minute and then no longer, so a /login that changed nothing
+  // never leaves this session adopting whatever another window switches the Mac to later.
+  on('command.run', { command: 'login' }, async ($, e, next) => {
+    if (!started_) return next(e)
+    const before = await $.state.get(sessionRef).then(
+      x => x.value?.id ?? '',
+      () => '',
+    )
+    try {
+      return await next(e)
+    } finally {
+      stopLoginWatch()
+      if (!ended && !(await followLogin($, before))) await watchLogin($, before)
+    }
   })
 
   on('session.measure', async ($, e, next) => {
@@ -889,6 +991,11 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    // A /clear ends only the conversation; the session, and the account a /login is landing, go on.
+    if (e.reason !== 'clear') {
+      ended = true
+      stopLoginWatch()
+    }
     stopTicker()
     await clearRow($)
     return next(e)
