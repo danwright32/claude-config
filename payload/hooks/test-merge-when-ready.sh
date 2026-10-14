@@ -6,7 +6,7 @@
 # A fake gh holds the pull request's state in files (head, checks, distance behind, merged), and
 # moves it the way GitHub does: `pr update-branch` gives the pull request a NEW head with its checks
 # pending. The sleep is injected, and each fake sleep runs a step the test chose (checks go green,
-# main moves again), so nothing here waits on a clock (L524, L290). The two gates and the review
+# main moves again), so nothing here waits on a clock (L524, L290). The three gates and the review
 # checker are stubs that log what they were asked and answer from files, except in section 6, where
 # the REAL block-red-merge.sh judges, so the helper's reading of a real refusal is proved (L52).
 # Nothing reaches the network or a real pull request (L2).
@@ -62,8 +62,10 @@ case "$*" in
     if [ -e "$ST/merged" ]; then fail_read readback; else fail_read view; fi
     state=OPEN; [ -e "$ST/merged" ] && state=MERGED
     ms=CLEAN; [ "$(rd behind)" != 0 ] && ms=BEHIND
-    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7"}'
+    # labels holds the pull request's labels as JSON, for the changelog record gate (#1178).
+    lb="$(rd labels)"
+    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
     ;;
   "api repos/acme/widget/compare/"*)
     fail_read compare
@@ -138,8 +140,15 @@ case "$1" in
     exit "$rc" ;;
 esac
 EOS
+cat > "$STUBS/changelog-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/changelog-gate-payloads"; printf '\n' >> "$ST/changelog-gate-payloads"
+[ -s "$ST/changelog-gate-deny" ] && jq -nc --arg r "$(cat "$ST/changelog-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
+export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh"
 
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
@@ -465,6 +474,96 @@ printf '%s\n' 'gh: Resource not accessible by integration (HTTP 403)' > "$ST/run
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1087 a runs read GitHub refuses stops at once" "1" "$rc"
 check_eq "#1087 with no retry wait" "0" "$(count sleeps '^7$')"
+
+# =================================================================================================
+# 10. The changelog record gate is asked too (claude-config#1178). Nine Slate pull requests merged
+#     through this helper between 2026-10-07 and 2026-10-12 with no changelog/* label: the helper
+#     asked only the checks and review gates, and the typed command that started it is not a merge
+#     the changelog gate recognises, so require-changelog-tag.sh saw none of them.
+# =================================================================================================
+fresh "$OLD" 0 "$GREEN"
+printf 'PR #7 carries no usable changelog record. It has no changelog/* label.' > "$ST/changelog-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 a refusal from the changelog record gate stops it" "1" "$rc"
+check "#1178 carrying that gate's own reason" "no changelog/* label" "$out"
+check "#1178 and naming the gate that refused" "require-changelog-tag.sh refused" "$out"
+check_eq "#1178 and nothing is merged past it" "0" "$(count gh-calls 'pr merge')"
+
+# Asked FIRST, before any wait: the record does not depend on the head or its checks, so a missing
+# label is known at once, and finding it after a twelve minute CI run and a lessons review costs
+# both (L667).
+fresh "$OLD" 0 "$PENDING"
+printf 'PR #7 carries no usable changelog record.' > "$ST/changelog-gate-deny"
+out="$(MWR_MAX_POLLS=3 run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 a missing record stops it before it waits on checks" "1" "$rc"
+check_eq "#1178 with no wait at all" "0" "$(count sleeps '^30$')"
+check_eq "#1178 and no lessons review started for a merge that cannot happen" "0" "$(count review-calls '^start')"
+
+# A run resumed after the merge landed reports it merged, not refused: the record is asked only of an
+# open pull request.
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/merged"
+printf 'PR #7 carries no usable changelog record.' > "$ST/changelog-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 an already merged pull request is reported merged, whatever its record" "0" "$rc"
+check "#1178 in those words" "already merged" "$out"
+
+# And asked again at the merge, about the exact pinned command, because a label can be taken off
+# while the helper waits.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
+check_eq "#1178 with a record the merge goes through" "0" "$rc"
+check "#1178 the changelog gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --delete-branch --match-head-commit $OLD" "$(cat "$ST/changelog-gate-payloads" 2>/dev/null)"
+check "#1178 the merge line names every gate, not two" "every merge gate allows it" "$out"
+
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 'label removed' > \"\$ST/changelog-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 a record removed during the wait stops the merge" "1" "$rc"
+check "#1178 in the gate's words" "label removed" "$out"
+check_eq "#1178 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+# A gate that cannot be run is a refusal, never a pass (L98).
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_CHANGELOG_GATE="$WORKDIR/no-such-gate.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 a changelog gate that is not there stops it" "1" "$rc"
+check_eq "#1178 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+# The REAL gate decides, against a registry that gates acme/widget (L52).
+REG="$WORKDIR/repos.json"
+printf '%s\n' '{"repos":[{"name":"Widget","repo":"acme/widget","changelogFrom":"2026-01-01"}]}' > "$REG"
+fresh "$OLD" 0 "$GREEN"
+out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 the real require-changelog-tag.sh refuses an unlabelled pull request through the helper" "1" "$rc"
+check "#1178 its reason is shown" "carries no usable changelog record" "$out"
+check_eq "#1178 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+printf '%s' '[{"name":"changelog/technical"}]' > "$ST/labels"
+out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1178 control: the real gate lets a labelled pull request through the helper" "0" "$rc"
+
+# THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
+# here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
+# recognises a merge through the shared reader (mt_runs_merge or mt_is_pr_merge) must be asked, or
+# a merge through this helper skips it, which is exactly how the changelog gate was skipped.
+SETTINGS=""
+for _cand in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
+  [ -f "$_cand" ] && { SETTINGS="$_cand"; break; }
+done
+if [ -z "$SETTINGS" ]; then
+  bad "#1178 neither settings.hooks.json nor settings.json beside $DIR, so the merge gates cannot be listed"
+else
+  typed_gates="$(jq -r '.hooks.PreToolUse[]? | select((.matcher // "") | test("(^|[|])Bash($|[|])")) | .hooks[]?.command' "$SETTINGS" \
+    | sed 's#.*/##' | sort -u | while IFS= read -r h; do
+        [ -f "$DIR/$h" ] && grep -Eq 'mt_runs_merge|mt_is_pr_merge' "$DIR/$h" && printf '%s\n' "$h"
+      done)"
+  helper_gates="$(grep -oE '\$MWR_HOOKS/[A-Za-z0-9_.-]+\.sh' "$HELPER" | sed 's#.*/##' | sort -u)"
+  # The control: the listing must find the gate this suite already proves the helper asks, or an
+  # empty listing would agree with anything (L98).
+  check "#1178 control: the hooks block lists block-red-merge.sh as a merge gate" "block-red-merge.sh" "$typed_gates"
+  missing="$(comm -23 <(printf '%s\n' "$typed_gates") <(printf '%s\n' "$helper_gates"))"
+  check_eq "#1178 every merge gate a typed merge meets is asked by merge-when-ready.sh" "" "$missing"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

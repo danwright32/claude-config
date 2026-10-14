@@ -678,8 +678,13 @@ be updated, waited on and merged in one step, run in the background from a check
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
 (claude-config#851). It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile (three times at most), and
-then hands the exact pinned merge command to `block-red-merge.sh` and `pr-review-gate.sh` and merges
-only when both allow it, so it decides nothing either gate would refuse. It carries only the merge
+then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh` and
+`require-changelog-tag.sh` and merges only when every one allows it, so it decides nothing any gate
+would refuse. The changelog record gate is also asked at the first look, before any update, wait or
+review, because nothing those do can add a missing label. Asking only the first two let nine Slate
+pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
+gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
+to the hooks block but not to the helper fails it. It carries only the merge
 method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its hour runs out.
 A GitHub read that fails in transit or on GitHub's server (a timeout, a reset connection, an HTTP
