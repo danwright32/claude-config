@@ -103,6 +103,10 @@ crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh
 check_eq "a crashed reader still lets a pr create be seen" "yes" "$crashed"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr view 3" pr create; then echo yes; else echo no; fi' _ "$DIR" "$BROKEN")"
 check_eq "control: the crude reading does not take a pr view for a create" "no" "$crashed"
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_git "$3 push origin main" push; then echo "yes:${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$BROKEN" "$G")"
+check_eq "and the crude reading keeps a push's own words, its remote and branch" "yes:origin main" "$crashed"
+crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr -R o/x create --fill" pr create; then echo "yes:${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$BROKEN")"
+check_eq "and a creation's words after its action" "yes:--fill" "$crashed"
 
 # --- the scan ----------------------------------------------------------------------------------
 scan(){ out="$(python3 -B "$SCAN" "$1" 2>&1)"; rc=$?; }

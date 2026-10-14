@@ -383,19 +383,24 @@ ps__runs_tool() {   # $1 = one command, $2 = gh | git, $3 = the subcommand, $4 =
     && field="$(printf '%s' "$1" | python3 "$PS_SHELL_WORDS" tool 2>/dev/null)"; then
     ps__tool_field "$field" "$2" "$3" "${4:-}"; return
   fi
+  # The words after the last one asked about are taken for its own, split on whitespace, so a caller
+  # reading them (the push's remote and refspecs) still has them (the lessons review of #1188).
   local -a words
-  local w tool=0 sub=0 act=0
+  local w k=0 last=-1 tool=0 sub=0 act=0
   PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
   [ -n "${4:-}" ] || act=1
   read -r -a words <<< "$1"
   for w in ${words[@]+"${words[@]}"}; do
     w="${w#[(\{]}"; w="${w%%[)\}]*}"
     [ "${w##*/}" = "$2" ] && tool=1   # gh-reader: the crude reading, when there is no other
-    [ "$w" = "$3" ] && sub=1
-    [ "$w" = "${4:-}" ] && act=1
+    if [ "$w" = "$3" ] && [ "$sub" = 0 ]; then sub=1; [ -n "${4:-}" ] || last=$k; fi
+    if [ -n "${4:-}" ] && [ "$w" = "$4" ] && [ "$act" = 0 ]; then act=1; last=$k; fi
+    k=$((k + 1))
   done
   [ "$tool$sub$act" = 111 ] || return 1
   PS_RUN_SUB="$3"; PS_RUN_ACT="${4:-}"
+  [ "$last" -ge 0 ] && PS_RUN_ARGS=("${words[@]:$((last + 1))}")
+  return 0
 }
 
 # ps_runs_gh and ps_runs_git for the command at record $2 of a reading this shell holds (ps__read,
