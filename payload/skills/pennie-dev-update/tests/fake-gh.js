@@ -12,7 +12,12 @@
 //   { "pulls":   { "owner/name": [ <pull objects as the GitHub REST API returns them> ] },
 //     "compare": { "owner/name": { "<base>...<head>": "ahead" | "behind" | "identical" | "diverged" } },
 //     "searchDelta": { "owner/name": <number added to the honest count> },
-//     "fail":    { "owner/name": "<stderr text>" } }
+//     "fail":    { "owner/name": "<stderr text>" },
+//     "failRoute": { "<text a route contains>": "<stderr text>" },
+//     "runs":    { "owner/name": { "<workflow file>": [ <workflow runs, newest first> ] } },
+//     "jobs":    { "<run id>": [ <jobs of that run> ] },
+//     "annotations": { "<job id>": [ <check run annotations> ] },
+//     "checkRuns": { "owner/name": { "<sha>": [ <check runs on that commit> ] } } }
 
 const fs = require('fs');
 
@@ -37,6 +42,11 @@ catch (e) { die(8, 'fake gh: no readable scenario: ' + e.message); }
 const clean = route.replace(/^\//, '');
 const [routePath, query] = clean.split('?');
 const params = new URLSearchParams(query || '');
+
+// A failure scoped to one kind of read, so a test can fail the deploy record alone.
+Object.keys(scenario.failRoute || {}).forEach(function (part) {
+  if (clean.indexOf(part) !== -1) die(1, scenario.failRoute[part]);
+});
 
 function failFor(slug) {
   if (scenario.fail && scenario.fail[slug]) die(1, scenario.fail[slug]);
@@ -76,6 +86,42 @@ if (routePath === 'search/issues') {
     .filter(function (p) { return p.merged_at && Date.parse(p.merged_at) > t; }).length;
   const delta = (scenario.searchDelta && scenario.searchDelta[repo]) || 0;
   process.stdout.write(JSON.stringify({ total_count: count + delta, items: [] }));
+  process.exit(0);
+}
+
+m = routePath.match(/^repos\/([^/]+\/[^/]+)\/actions\/workflows\/([^/]+)\/runs$/);
+if (m) {
+  failFor(m[1]);
+  const runs = ((scenario.runs && scenario.runs[m[1]]) || {})[m[2]];
+  if (!runs) die(1, 'gh: Not Found (HTTP 404)');
+  const per = Number(params.get('per_page') || 30);
+  process.stdout.write(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice(0, per) }));
+  process.exit(0);
+}
+
+m = routePath.match(/^repos\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)\/jobs$/);
+if (m) {
+  failFor(m[1]);
+  const jobs = scenario.jobs && scenario.jobs[m[2]];
+  if (!jobs) die(1, 'gh: Not Found (HTTP 404)');
+  process.stdout.write(JSON.stringify({ total_count: jobs.length, jobs: jobs }));
+  process.exit(0);
+}
+
+m = routePath.match(/^repos\/([^/]+\/[^/]+)\/check-runs\/(\d+)\/annotations$/);
+if (m) {
+  failFor(m[1]);
+  process.stdout.write(JSON.stringify((scenario.annotations && scenario.annotations[m[2]]) || []));
+  process.exit(0);
+}
+
+m = routePath.match(/^repos\/([^/]+\/[^/]+)\/commits\/([0-9a-f]+)\/check-runs$/);
+if (m) {
+  failFor(m[1]);
+  const name = params.get('check_name');
+  const all = ((scenario.checkRuns && scenario.checkRuns[m[1]]) || {})[m[2]] || [];
+  const runs = all.filter(function (c) { return !name || c.name === name; });
+  process.stdout.write(JSON.stringify({ total_count: runs.length, check_runs: runs }));
   process.exit(0);
 }
 

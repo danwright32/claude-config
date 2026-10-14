@@ -301,6 +301,244 @@ function deployCase(liveArgs, compare, pulls, stateEntry) {
   check(p && p.status === 'refused' && /#999/.test(p.reason), 'a held back number GitHub does not show as merged refuses by name', p && JSON.stringify(p));
 }
 
+// ---------------------------------------------------------------- deploy records read from GitHub (claude-config#1177)
+//
+// Slate and Sonar leave their deploy record on GitHub, so gather.js reads it itself. The shapes
+// below are the ones GitHub's REST API returned for the real repos on 2026-10-13: Slate's CI run
+// on the merge commit, its `deploy` job and the step that touches production, with the exit code
+// the runner annotates a failed step with (read back from Slate run 37389636410, exit 11); and
+// Sonar's Cloudflare Pages check run on the merge commit.
+
+const SLATE = 'acme/slate';
+const SLATE_RECORD = {
+  kind: 'actions_deploy_job', workflow: 'ci.yml', branch: 'main', job: 'deploy', step: 'Deploy gradually',
+  liveExits: [0, 16, 17, 23], unchangedExits: [10, 11, 12, 13, 14, 15, 18, 19, 21, 25, 26],
+  rollback: { workflow: 'rollback.yml', job: 'rollback', step: 'Roll back and probe', unchangedExits: [30, 31] },
+};
+const PAGES_RECORD = { kind: 'deploy_check_run', checkName: 'Cloudflare Pages', app: 'cloudflare-workers-and-pages' };
+
+let runSeq = 0;
+// runs and rollbacks are newest first, as GitHub lists them. Each is { sha, at, step, exit,
+// noStep }: step is the step's conclusion, 'running' for one still going, 'skipped' for a job
+// skipped because ci failed.
+function slateScenario(pulls, compare, runs, rollbacks) {
+  const sc = { pulls: { [SLATE]: pulls }, compare: { [SLATE]: compare || {} },
+    runs: { [SLATE]: { 'ci.yml': [], 'rollback.yml': [] } }, jobs: {}, annotations: {} };
+  function add(file, jobName, stepName, r) {
+    runSeq++;
+    const id = 5000 + runSeq, jobId = 9000 + runSeq;
+    const done = r.step !== 'running' && r.step !== 'queued';
+    sc.runs[SLATE][file].push({ id: id, head_sha: r.sha || sha(1), created_at: r.at, status: r.step === 'queued' ? 'queued' : done ? 'completed' : 'in_progress' });
+    // A queued run, or one cancelled while pending, has no jobs listed at all.
+    if (r.step === 'queued' || r.noJob) { sc.jobs[id] = []; return; }
+    const steps = [{ name: 'Install', status: 'completed', conclusion: 'success' }];
+    if (!r.noStep && r.step !== 'skipped') {
+      steps.push({ name: stepName, status: done ? 'completed' : 'in_progress', conclusion: done ? r.step : null });
+    }
+    sc.jobs[id] = [{ id: jobId, name: jobName, status: done ? 'completed' : 'in_progress',
+      conclusion: done ? r.step : null, started_at: r.at, completed_at: done ? r.at : null, steps: steps }];
+    if (r.exit !== undefined) sc.annotations[jobId] = [{ message: 'Process completed with exit code ' + r.exit + '.' }];
+  }
+  runs.forEach(function (r) { add('ci.yml', 'deploy', 'Deploy gradually (10% canary, probe, then promote or restore)', r); });
+  (rollbacks || []).forEach(function (r) { add('rollback.yml', 'rollback', 'Roll back and probe', r); });
+  return sc;
+}
+function slateConfig() {
+  return { repos: [{ name: 'Slate', repo: SLATE, deployRecord: SLATE_RECORD, deployRecordFrom: '2026-10-04', changelogFrom: '2026-10-03' }] };
+}
+const SLATE_PULLS = [pr(201, '2026-10-05T12:00:00Z'), pr(202, '2026-10-06T12:00:00Z'), pr(203, '2026-10-07T09:00:00Z'), pr(204, '2026-10-07T12:00:00Z')];
+// What GitHub's compare says for each merge against each candidate live commit: main is linear.
+function linear(liveNumbers, prNumbers) {
+  const c = {};
+  liveNumbers.forEach(function (l) {
+    prNumbers.forEach(function (n) { c[sha(n) + '...' + sha(l)] = n < l ? 'ahead' : n === l ? 'identical' : 'behind'; });
+  });
+  return c;
+}
+const SLATE_COMPARE = linear([202, 203, 204], [201, 202, 203, 204]);
+function slateGather(runs, rollbacks, extraScenario, more, state) {
+  const sc = Object.assign(slateScenario(SLATE_PULLS, SLATE_COMPARE, runs, rollbacks), extraScenario || {});
+  const ws = workspace(sc, slateConfig(), state || { [SLATE]: { lastEnd: '2026-10-04T12:00:00Z' } });
+  const r = gather(ws, more);
+  r.ws = ws;
+  r.slate = repoOf(r, SLATE) || {};
+  r.d = {};
+  (r.slate ? r.slate.prs : []).forEach(function (x) { r.d[x.number] = x.deploy; });
+  return r;
+}
+const LIVE_203 = { sha: sha(203), at: '2026-10-07T09:10:00Z', step: 'success' };
+
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'running' }, LIVE_203,
+    { sha: sha(202), at: '2026-10-06T12:10:00Z', step: 'success' }]);
+  check(r.code === 0 && r.slate && r.slate.status === 'ok', 'Slate gathers from its deploy job without any --live', r.all);
+  check(r.d[201] === 'live' && r.d[202] === 'live' && r.d[203] === 'live' && r.d[204] === 'held',
+    'a change is live once a deploy that reached 100% contains it; one whose deploy is still running is held', JSON.stringify(r.d));
+  check(r.slate && (r.slate.deploy || {}).liveSha === sha(203) && /deploy/.test((r.slate.deploy || {}).source),
+    'the live commit is the newest deploy that reached 100%, and the output says which record it came from', r.slate && JSON.stringify(r.slate.deploy));
+  check(r.slate && JSON.stringify(r.slate.heldBack) === '[204]', 'the held change goes in heldBack to be checked next run', r.slate && JSON.stringify(r.slate.heldBack));
+}
+{
+  // Exit 13: the canary failed its probe at 10% and the old version was put back at 100%.
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 13 }, LIVE_203]);
+  check(r.d[203] === 'live' && r.d[204] === 'held',
+    'a deploy whose canary failed at 10% and was restored leaves its change held, not live', JSON.stringify(r.d) + r.all);
+}
+{
+  // Exit 16: promoted to 100%, then health reported a stale cron lane. The job failed, the release serves.
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 16 }, LIVE_203]);
+  check(r.d[204] === 'live' && (r.slate.deploy || {}).liveSha === sha(204),
+    'a failed job whose exit code says the release was promoted to 100% counts as live', JSON.stringify(r.d) + r.all);
+}
+{
+  // Exit 20: a restore failed three times, so production may still be split at 10%.
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 20 }, LIVE_203]);
+  check(r.code === 0 && r.slate.status === 'ok', 'an unconfirmed deploy state does not refuse the repo', r.all);
+  check(['201', '202', '203', '204'].every(function (n) { return r.d[n] === 'unconfirmed'; }),
+    'after a deploy that may have left production split, no change is claimed live or held: each is unconfirmed', JSON.stringify(r.d));
+  check(JSON.stringify(r.slate.heldBack) === '[201,202,203,204]', 'unconfirmed changes are held back, to be checked again next run', JSON.stringify(r.slate.heldBack));
+  check((r.slate.counts || {}).unconfirmed === 4 && (r.slate.notes || []).some(function (n) { return /could not be confirmed/.test(n) && /exit code 20/.test(n); }),
+    'the note says plainly the changes could not be confirmed, and why', JSON.stringify(r.slate.notes));
+  check(/unconfirmed/.test(r.err), 'the terminal line counts the unconfirmed changes', r.err);
+}
+{
+  // Rolled back after the newest deploy: GitHub does not record which commit the rollback restored.
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'success' }]);
+  check(Object.keys(r.d).length === 4 && Object.keys(r.d).every(function (n) { return r.d[n] === 'unconfirmed'; }),
+    'a rollback after the newest deploy makes every change unconfirmed, never live', JSON.stringify(r.d) + r.all);
+  check((r.slate.deploy || {}).unconfirmed && /roll/i.test((r.slate.deploy || {}).unconfirmed), 'the reason names the rollback', JSON.stringify(r.slate.deploy));
+}
+{
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'failure', exit: 31 }]);
+  check(r.d[203] === 'live' && r.d[204] === 'held', 'a rollback that refused and changed nothing leaves the deploy record standing', JSON.stringify(r.d) + r.all);
+}
+{
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'running' }]);
+  check(r.d[203] === 'unconfirmed', 'a rollback still running makes the live commit unconfirmed', JSON.stringify(r.d) + r.all);
+}
+{
+  // Lessons review of #1180: a rollback queued or just started has no jobs listed yet.
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'queued' }]);
+  check(r.d[203] === 'unconfirmed', 'a rollback queued with no job yet makes the live commit unconfirmed, never reads as changing nothing', JSON.stringify(r.d) + r.all);
+  const r2 = slateGather([LIVE_203], [{ at: '2026-10-07T15:00:00Z', step: 'cancelled', noJob: true }]);
+  check(r2.d[203] === 'live', 'a rollback run cancelled before its job existed changed nothing', JSON.stringify(r2.d) + r2.all);
+}
+{
+  // A time that does not parse compares false against everything (L50), which would skip the
+  // rollback and keep claiming the deploy live. It lands on the cautious side instead.
+  const r = slateGather([LIVE_203], [{ at: 'sometime', step: 'success' }]);
+  check(r.d[203] === 'unconfirmed' && /time/.test((r.slate.deploy || {}).unconfirmed || ''),
+    'a rollback run whose start time does not parse is treated as one that may have run after the deploy', JSON.stringify(r.slate.deploy) + r.all);
+}
+{
+  const r = slateGather([LIVE_203], [{ at: '2026-10-07T08:00:00Z', step: 'success' }]);
+  check(r.d[203] === 'live', 'a rollback older than the newest deploy is superseded by it', JSON.stringify(r.d) + r.all);
+}
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure' }, LIVE_203]);
+  check(r.d[203] === 'unconfirmed' && /exit code/.test((r.slate.deploy || {}).unconfirmed || ''),
+    'a failed deploy step with no exit code on record is unconfirmed, never read as restored', JSON.stringify(r.slate.deploy) + r.all);
+}
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'cancelled' }, LIVE_203]);
+  check(r.d[203] === 'unconfirmed', 'a deploy step cancelled mid run is unconfirmed', JSON.stringify(r.d) + r.all);
+}
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'skipped' }, LIVE_203]);
+  check(r.d[203] === 'live' && r.d[204] === 'held', 'a deploy job skipped because ci failed never touched production', JSON.stringify(r.d) + r.all);
+}
+{
+  const r = slateGather([LIVE_203], [], { failRoute: { '/jobs': 'HTTP 502: Bad Gateway' } });
+  check(r.code === 3 && r.slate.status === 'unreachable' && /502/.test(r.slate.reason) && /deploy/.test(r.slate.reason),
+    'a deploy record GitHub fails to answer makes the repo unreachable with GitHub\'s own error, never lists or drops its changes', JSON.stringify(r.slate));
+}
+{
+  const r = slateGather([LIVE_203], [], { failRoute: { 'rollback.yml': 'HTTP 404: Not Found' } });
+  check(r.slate.status === 'unreachable' && /404/.test(r.slate.reason), 'a rollback history that cannot be read makes the repo unreachable', JSON.stringify(r.slate));
+}
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 13 },
+    { sha: sha(203), at: '2026-10-07T09:10:00Z', step: 'failure', exit: 11 }]);
+  check(r.slate.status === 'refused' && /ci\.yml/.test(r.slate.reason) && /deploy/.test(r.slate.reason),
+    'no deploy in the runs read that reached production refuses the repo, naming the workflow and job, never holds everything quietly', JSON.stringify(r.slate));
+}
+{
+  const r = slateGather([{ sha: sha(203), at: '2026-10-07T09:10:00Z', step: 'success', noStep: true }]);
+  check(r.slate.status === 'refused' && /Deploy gradually/.test(r.slate.reason),
+    'a deploy job that succeeded with no step of the configured name refuses: the record has changed shape', JSON.stringify(r.slate));
+}
+{
+  const sc = slateScenario([], {}, [LIVE_203]);
+  const ws = workspace(sc, slateConfig(), { [SLATE]: { lastEnd: '2026-10-04T12:00:00Z' } });
+  const r = gather(ws);
+  const log = fs.existsSync(ws.ghLog) ? fs.readFileSync(ws.ghLog, 'utf8') : '';
+  check(r.code === 0 && !/actions/.test(log), 'a window with nothing merged never reads the deploy record', log);
+}
+{
+  const r = slateGather([LIVE_203], [], {}, ['--live', SLATE + '=' + sha(900) + '@2026-10-08T10:00:00Z']);
+  check(r.slate.status === 'refused' && /--live/.test(r.slate.reason),
+    'a --live given for a repo whose record is read from GitHub refuses rather than being ignored', JSON.stringify(r.slate));
+}
+{
+  // A first appearance while the live commit is unconfirmed has nothing it can introduce as live.
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 20 }, LIVE_203], [], {}, [], {});
+  check(r.slate.status === 'refused' && /exit code 20/.test(r.slate.reason),
+    'a first appearance while production is unconfirmed refuses, saying why', JSON.stringify(r.slate));
+}
+{
+  const r = slateGather([{ sha: sha(204), at: '2026-10-07T12:05:00Z', step: 'failure', exit: 22 }, LIVE_203]);
+  r.ws.draft = path.join(r.ws.dir, 'draft.txt');
+  fs.writeFileSync(r.ws.draft, 'Updates :thread:\n\nA line.\n');
+  const c = run(GATHER, ['commit-state', '--gathered', r.ws.out, '--state', r.ws.state, '--draft', r.ws.draft, '--repo', SLATE, '--listed', '203'], r.ws);
+  check(c.code !== 0 && /#203/.test(c.err) && /confirm/.test(c.err), 'an unconfirmed change cannot be listed as shipped', c.all);
+}
+{
+  const bad = slateConfig(); bad.repos[0].deployRecord = { kind: 'carrier_pigeon' };
+  const r = gather(workspace({ pulls: {} }, bad, {}));
+  check(r.code === 1 && /carrier_pigeon/.test(r.err), 'a deploy record of a kind gather.js cannot read refuses the run, naming it', r.all);
+  const bad2 = slateConfig(); bad2.repos[0].deployRecord = Object.assign({}, SLATE_RECORD, { step: '' });
+  const r2 = gather(workspace({ pulls: {} }, bad2, {}));
+  check(r2.code === 1 && /step/.test(r2.err), 'a deploy job record missing its step refuses the run, naming the field', r2.all);
+}
+
+// Sonar: a Cloudflare Pages check run on the merge commit. Pages deploys a whole version at once.
+function pagesRun(conclusion, app) {
+  return { name: 'Cloudflare Pages', app: { slug: app || 'cloudflare-workers-and-pages' },
+    status: conclusion ? 'completed' : 'in_progress', conclusion: conclusion || null, completed_at: conclusion ? '2026-10-05T12:01:00Z' : null };
+}
+function sonarGather(checkRuns, extra) {
+  const sc = Object.assign({ pulls: { [SONAR]: [pr(301, '2026-10-02T12:00:00Z'), pr(302, '2026-10-03T12:00:00Z'), pr(303, '2026-10-05T12:00:00Z')] },
+    compare: { [SONAR]: linear([301, 302, 303], [301, 302, 303]) }, checkRuns: { [SONAR]: checkRuns } }, extra || {});
+  const ws = workspace(sc, { repos: [{ name: 'Sonar', repo: SONAR, deployRecord: PAGES_RECORD, deployRecordFrom: '2026-09-25' }] },
+    { [SONAR]: { lastEnd: '2026-10-01T00:00:00Z' } });
+  const r = gather(ws);
+  r.sonar = repoOf(r, SONAR) || {};
+  r.d = {};
+  (r.sonar ? r.sonar.prs : []).forEach(function (x) { r.d[x.number] = x.deploy; });
+  return r;
+}
+{
+  const r = sonarGather({ [sha(303)]: [pagesRun(null)], [sha(302)]: [pagesRun('success')], [sha(301)]: [pagesRun('success')] });
+  check(r.code === 0 && r.d[301] === 'live' && r.d[302] === 'live' && r.d[303] === 'held',
+    'a Pages build still running holds its change; the newest successful production build is live', JSON.stringify(r.d) + r.all);
+}
+{
+  // #123 in the real Sonar: a merge commit with no check run at all. A failed build leaves the
+  // previous version serving. A check run of the same name from another app is not the record.
+  const r = sonarGather({ [sha(303)]: [pagesRun('success', 'someone-else')], [sha(302)]: [pagesRun('failure')], [sha(301)]: [pagesRun('success')] });
+  check(r.d[301] === 'live' && r.d[302] === 'held' && r.d[303] === 'held' && (r.sonar.deploy || {}).liveSha === sha(301),
+    'a failed Pages build, or a check run from another app, never counts as live', JSON.stringify(r.d) + JSON.stringify(r.sonar && r.sonar.deploy));
+}
+{
+  const r = sonarGather({}, { failRoute: { 'check-runs': 'HTTP 503: Service Unavailable' } });
+  check(r.sonar.status === 'unreachable' && /503/.test(r.sonar.reason), 'a Pages record GitHub fails to answer makes Sonar unreachable', JSON.stringify(r.sonar));
+}
+{
+  const r = sonarGather({ [sha(303)]: [pagesRun('failure')] });
+  check(r.sonar.status === 'refused' && /Cloudflare Pages/.test(r.sonar.reason),
+    'no successful Pages build among the merges read refuses Sonar, naming the check', JSON.stringify(r.sonar));
+}
+
 // ---------------------------------------------------------------- first appearance
 
 {
@@ -388,7 +626,8 @@ function deployCase(liveArgs, compare, pulls, stateEntry) {
   const shipped = JSON.parse(fs.readFileSync(path.join(SKILL, 'repos.json'), 'utf8'));
   const ws = workspace({ pulls: {} }, shipped, {});
   fs.copyFileSync(path.join(SKILL, 'repos.json'), ws.config);
-  const r = gather(ws, shipped.repos.filter(function (x) { return x.deployRecord; })
+  // --live is only for a record read by hand (PET's build_history); the others are read from GitHub.
+  const r = gather(ws, shipped.repos.filter(function (x) { return typeof x.deployRecord === 'string'; })
     .reduce(function (a, x) { return a.concat(['--live', x.repo + '=' + sha(900) + '@2026-10-08T10:00:00Z']); }, []));
   check(r.code === 0 && r.json && r.json.repos.length === shipped.repos.length,
     'the shipped repos.json is accepted, every repo in it gathered', r.all);
