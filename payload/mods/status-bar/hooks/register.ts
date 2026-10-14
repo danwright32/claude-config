@@ -19,6 +19,10 @@ const HOUR = 60 * MIN
 const CACHE_MS = HOUR
 // How often git, the PR and the jobs are read again, and the cache warning is checked.
 const TICK_MS = MIN
+// After a /login whose command returned before the login file named another account: how often the
+// file is read again, and for how long before the session stops waiting for it (#1200).
+const LOGIN_POLL_MS = 1_000
+const LOGIN_WAIT_MS = 30_000
 // How often GitHub is asked about the branch's PR when nothing on it is moving: no PR, or one whose
 // checks have finished (#1014). Each ask spends a point of the GraphQL allowance every session on
 // the Mac shares, 5,000 an hour, and asking every tick cost each open session 60 points an hour
@@ -66,9 +70,9 @@ let toldSave = false
 // Whether a main turn is running: from its first request to its end. Every request it makes keeps
 // the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
 let turnRunning = false
-// A /login ran in this session, so its account is read again at the next main request, in case the
-// command returned before the login file changed (#1200).
-let loginPending = false
+// A /login in this session that returned before the login file named another account: the file is
+// read every LOGIN_POLL_MS until it does, for LOGIN_WAIT_MS at most (#1200).
+let loginWatch: { cancel: () => void } | undefined
 let chain: Promise<unknown> = Promise.resolve()
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
@@ -120,14 +124,14 @@ const writeFacts = async ($: EngineInterface) => {
   }
 }
 
+// Which login an account record is, by its account and org ids; unknown and no login have none.
+const keyOf = (a: StatusBarAccount | null | undefined) => (a?.accountUuid && a.organizationUuid ? `${a.accountUuid}:${a.organizationUuid}` : '')
+
 // The account this session runs on, the one its limits belong to (#815): the Mac's login as it
 // stands at session start. Read then and not again, because the login file names whatever the Mac is
 // logged in to NOW, which another session's Switch changes under this one; the one exception is a
 // /login in this session, which does change this session's account (#1200). No login at all (an API
 // key) is an empty record; a file that cannot be read is null, said as unknown, never as no login (L11).
-// Which login an account record is, by its account and org ids; unknown and no login have none.
-const keyOf = (a: StatusBarAccount | null | undefined) => (a?.accountUuid && a.organizationUuid ? `${a.accountUuid}:${a.organizationUuid}` : '')
-
 const readAccount = async ($: EngineInterface, h: string): Promise<StatusBarAccount | null> => {
   try {
     // No login file at all is no claude.ai login, like an empty one; only a file that is there and
@@ -343,6 +347,27 @@ const read = async ($: EngineInterface) => {
   if ((await $.session.id()) !== writtenId) await writeFacts($)
 }
 
+// Reads the login file into this session's account and, when that changed what the status line
+// names, rewrites the facts file. True once it names a login other than `before`. A failure is
+// logged and false, never thrown, since it runs after /login's own result (L95).
+const adoptAccount = async ($: EngineInterface, h: string, before: string) => {
+  try {
+    const now = await readAccount($, h)
+    if (JSON.stringify(now) !== JSON.stringify((await $.state.get(accountRef)).value ?? null)) {
+      await $.state.set(accountRef, now)
+      await writeFacts($)
+    }
+    return now !== null && keyOf(now) !== before
+  } catch (err) {
+    $.ui.log(`status-bar: this session's account could not be read again after /login: ${msg(err)}`, { to: 'debug' })
+    return false
+  }
+}
+const stopLoginWatch = () => {
+  loginWatch?.cancel()
+  loginWatch = undefined
+}
+
 // The cache clock moved (a request started a new hour, or a compaction replaced the conversation):
 // the status line's file and the band follow, off the path of whatever moved it.
 const cacheMoved = async ($: EngineInterface) => {
@@ -418,10 +443,6 @@ export const register: Register = on => {
     if (interactive && e.agentId === undefined) {
       turnRunning = true
       try {
-        if (loginPending && home) {
-          loginPending = false
-          await $.state.set(accountRef, await readAccount($, home))
-        }
         await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
         $.clock.after(0, () => void cacheMoved($))
       } catch (err) {
@@ -431,23 +452,28 @@ export const register: Register = on => {
     return yield* next(e)
   })
 
-  // A /login in this session changes the account this session runs on, so it is read again once the
-  // command is done, and once more at the next main request in case the login file changed after
-  // the command returned (#1200). It is read even when the command failed: whether the login file
-  // changed is the file's to say, not the command's. A read already naming another account shows the
-  // login landed, so the next request does not read again, since by then another session may have
-  // switched the Mac.
+  // A /login in this session changes the account this session runs on, so the login file is read
+  // again once the command is done, failed or not, since whether the file changed is the file's to
+  // say (#1200). A read already naming another account shows the login landed. Otherwise the file
+  // is read every second for half a minute in case it changed after the command returned, and no
+  // longer: a /login that changed nothing (cancelled, or the same account again) must not leave this
+  // session adopting whatever another session switches the Mac to later.
   on('command.run', { command: 'login' }, async ($, e, next) => {
     if (!interactive || !home) return next(e)
+    const h = home
     const before = keyOf((await $.state.get(accountRef)).value)
-    loginPending = true
     try {
       return await next(e)
     } finally {
-      const now = await readAccount($, home)
-      if (now && keyOf(now) !== before) loginPending = false
-      await $.state.set(accountRef, now)
-      await writeFacts($)
+      stopLoginWatch()
+      if (!(await adoptAccount($, h, before))) {
+        const until = (await $.clock.now()) + LOGIN_WAIT_MS
+        loginWatch = $.clock.every(LOGIN_POLL_MS, () => {
+          void (async () => {
+            if ((await adoptAccount($, h, before)) || (await $.clock.now()) >= until) stopLoginWatch()
+          })()
+        })
+      }
     }
   })
 
