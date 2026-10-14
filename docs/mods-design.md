@@ -2541,12 +2541,20 @@ switcher; a cd to the round's folder already passed.
   name.** A guess from a program's text (or a command's, where the program is not read) is a
   relative name. Where the command names this session's scratchpad, every place the text spells
   the name joins it onto a folder (`os.path.join(d, 'screen.css')`, `path.join`, pathlib's
-  `d / 'screen.css'`, the shell's `$R/screen.css`), and its first part is not on the disk in the
-  folder the guess would place it, it is the round's file. A first part that is there
-  (`src/app/globals.css`, a new `src/app/booker.css`, an existing top level file) is read in the
-  project and held as before, and so is any name the disk cannot answer for. The join requirement
-  came from the lessons review: keyed only on the command naming the scratchpad, a comment naming
-  it let `open('index.html', 'w')` in the same program through.
+  `d / 'screen.css'`), and its first part is not on the disk in the folder the guess would place
+  it, it is the round's file. A first part that is there (`src/app/globals.css`, a new
+  `src/app/booker.css`, an existing top level file) is read in the project and held as before, and
+  so is any name the disk cannot answer for. The join requirement came from the lessons review:
+  keyed only on the command naming the scratchpad, a comment naming it let
+  `open('index.html', 'w')` in the same program through.
+- **A name through a shell variable lands where the command sets it.** The shell's
+  `$R/screen.css` (read by mentionedLookFiles as `R/screen.css`) was first counted as joined, and
+  the lessons review found its disk check then looked for a project folder named `R` or `APP`,
+  which is never there, so `$APP/globals.css` passed beside any mention of the scratchpad. Now
+  `rules.ts shellVarPath` reads the command's own assignment of the variable, when it is set once,
+  or always alike, to a literal, and the name is judged at that path: in the scratchpad it passes,
+  in the project it is held. A variable the command does not set is read as any name, in the
+  program's folder.
 - **The gap, chosen over holding every round.** The guard reads text, not the folder a join's
   variable holds, so a new look changing file at the very top of a checkout, joined onto the
   checkout by a program that also names the scratchpad, passes. Following the variable would mean

@@ -1532,6 +1532,11 @@ test("#1191: the product's own files stay held, alone or in one command with a r
   expect(await held(`python3 - <<'PY'\n# the round is in ${ROUND}\nfor f in ['index.html']:\n    open(f, 'w').write('x')\nPY`)).toContain('index.html')
   expect(await held(`python3 - <<'PY'\nimport os\nd = '${ROUND}'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nopen('booker.css', 'w').write('a{}')\nPY`)).toContain('booker.css')
   expect(await held(`python3 - <<'PY'\nimport os\nd = '${ROUND}'\nopen(os.path.join(d, 'screen.css'), 'w').write('a{}')\nopen('screen.css', 'w').write('a{}')\nPY`)).toContain('screen.css')
+  // Lessons review: a name through a shell variable lands where the command sets it, so the project's
+  // folder in one is the project's, however the scratchpad is named beside it; and one the command
+  // does not set is read in the program's folder, as before.
+  expect(await held(`APP=/w/slate-wt/src/app; R='${ROUND}'; python3 - <<PY\nopen("$R/screen.css", "w").write("a{}")\nopen("$APP/booker.css", "w").write("a{}")\nPY`)).toContain('src/app/booker.css')
+  expect(await held(`R='${ROUND}'; python3 - <<PY\nopen("$R/screen.css", "w").write("a{}")\nopen("$APP/booker.css", "w").write("a{}")\nPY`)).toContain('booker.css')
   // Where the disk cannot say whether a name is the project's, it is read as the project's, and held.
   w.ctl.existsFails = true
   expect(await held(roundShapes(ROUND)[0] as string)).toContain('screen.css')

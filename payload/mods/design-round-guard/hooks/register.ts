@@ -39,6 +39,7 @@ import {
   patternMayBeLook,
   relTo,
   shapeKind,
+  shellVarPath,
   mentionedLookFiles,
   mentionsStore,
   namesScratchpad,
@@ -139,14 +140,19 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // (#1151); only the word where that folder is unknown. Undefined for a design round's working file
 // (#1191): where the command names the session's scratchpad, a relative name that `text` (where it
 // was found) only ever joins onto a folder held elsewhere (rules.ts joinedOnly: `os.path.join(d,
-// 'screen.css')`, `d / 'screen.css'`, `$R/screen.css`) and whose first part is not on the disk in
+// 'screen.css')`, `d / 'screen.css'`) and whose first part is not on the disk in
 // `folder` is one joined onto the scratchpad folder the command names, never a file of the project.
 // A name opened as written (`open('index.html')`), or whose first part is there (src/app/globals.css,
 // src/app/new.css, an existing top level file), is still read in `folder`, and so is one the disk
 // cannot answer for. What it cannot see (lessons review): the folder a join's variable holds, so a
 // new top level look file joined onto the checkout by a program that also names the scratchpad passes.
-const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string): Promise<Target | undefined> => {
+// A name the shell spells through a variable (`$R/screen.css`) is where the command's own literal
+// assignment of it puts it (rules.ts shellVarPath), judged as any path, so `$APP/globals.css` with
+// APP the project's folder is held; one the command does not set is read as any name (lessons review).
+const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
   if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
+  const set = shellVarPath(command, text, m)
+  if (set !== undefined && (set.startsWith('/') || /^~(\/|$)/.test(set) || folder !== undefined)) return { path: resolvePath(set, folder ?? '/', at.home), word: m }
   if (folder === undefined) return { word: m }
   const path = resolvePath(m, folder, at.home)
   if (!scratch || inScratchpad(path, at.session, at.temps) || !joinedOnly(text, m)) return { path, word: m }
@@ -205,7 +211,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
       // words, read as its code instead.
       const read = [u.code ?? u.program, ...u.words.filter(x => x !== u.program)].join('\n')
       for (const m of mentionedLookFiles(read)) {
-        const t = await guessAt($, m, u.folder, at, scratch, read)
+        const t = await guessAt($, m, u.folder, at, scratch, read, command)
         if (t) targets.push(t)
       }
       continue
@@ -216,7 +222,7 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
     const named = scratch || texts.slice(1).some(t => namesScratchpad(t, at.session, at.temps))
     for (const t of texts)
       for (const m of mentionedLookFiles(t)) {
-        const g = await guessAt($, m, at.cwd, at, named, t)
+        const g = await guessAt($, m, at.cwd, at, named, t, command)
         if (g) targets.push(g)
       }
   }

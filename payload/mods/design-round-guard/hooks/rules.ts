@@ -101,9 +101,11 @@ export const namesScratchpad = (text: string, session: string, roots: readonly s
 /**
  * Whether every place a text spells a relative name joins it onto a folder held elsewhere, never
  * opening it as written (#1191, lessons review): `os.path.join(d, 'screen.css')` or `path.join(d,
- * 'screen.css')` (no call inside the join before it), pathlib's `d / 'screen.css'`, or the shell's
- * `$R/screen.css`, which mentionedLookFiles reads as `R/screen.css`. A name opened as it is
- * (`open('index.html')`), in a list, or anywhere else is not, and nor is a name the text never spells.
+ * 'screen.css')` (no call inside the join before it) or pathlib's `d / 'screen.css'`. A name opened
+ * as it is (`open('index.html')`), in a list, or anywhere else is not, and nor is a name the text
+ * never spells. Nor is the shell's `$R/screen.css` (mentionedLookFiles reads it as `R/screen.css`),
+ * whose folder is the variable's value, read by shellVarPath instead (lessons review of #1191: read
+ * as joined, its disk check looked for a project folder named after the variable).
  */
 export const joinedOnly = (text: string, name: string): boolean => {
   if (!name) return false
@@ -114,7 +116,6 @@ export const joinedOnly = (text: string, name: string): boolean => {
     // Only the name as a whole word: not a longer name holding it (`app/screen.css`, `screen.css.map`).
     if (/[\w./~@+*[\]()-]/.test(before) || /[\w.-]/.test(after)) continue
     seen = true
-    if (before === '$') continue
     const line = text.slice(text.lastIndexOf('\n', i - 1) + 1, i)
     if (!/['"]$/.test(line)) return false
     const head = line.slice(0, -1)
@@ -123,6 +124,35 @@ export const joinedOnly = (text: string, name: string): boolean => {
     return false
   }
   return seen
+}
+
+/**
+ * Where a name the shell spells through a variable (`$R/screen.css`, which mentionedLookFiles reads
+ * as `R/screen.css`) lands, from `command`'s own assignment of that variable (#1191, lessons review):
+ * its value joined with the rest of the name, when every place `text` spells the name follows a `$`
+ * and the command sets the variable once, or always to the same value, to a literal (bare, or in
+ * quotes with no `$` or backtick in it). Undefined otherwise, as for a variable set nowhere in the
+ * command, which the caller reads as it reads any name. The value may be relative, for the caller to
+ * place.
+ */
+export const shellVarPath = (command: string, text: string, name: string): string | undefined => {
+  const slash = name.indexOf('/')
+  const v = name.slice(0, slash)
+  if (slash <= 0 || !/^[A-Za-z_]\w*$/.test(v)) return undefined
+  let seen = false
+  for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
+    if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
+    if (text[i - 1] !== '$') return undefined
+    seen = true
+  }
+  if (!seen) return undefined
+  const values = new Set<string>()
+  for (const m of command.matchAll(new RegExp(`(?:^|[\\s;&|(])${v}=(?:'([^']*)'|"([^"$\`\\\\]*)"|([^\\s;&|()'"$\`\\\\]*))`, 'g'))) values.add(m[1] ?? m[2] ?? m[3] ?? '')
+  // A value built another way (`R="$X/y"`, `R=$(pwd)`) is set too, and cannot be read.
+  if (new RegExp(`(?:^|[\\s;&|(])${v}=["]?[$\`]`).test(command)) return undefined
+  const [value] = [...values]
+  if (values.size !== 1 || !value) return undefined
+  return `${value.replace(/\/+$/, '')}/${name.slice(slash + 1)}`
 }
 
 /** A path as it stands inside the checkout at `root`; the path itself when it is not under it. */

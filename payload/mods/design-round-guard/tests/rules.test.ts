@@ -36,6 +36,7 @@ import {
   inScratchpad,
   namesScratchpad,
   joinedOnly,
+  shellVarPath,
   tempRoots,
   ROUND_FILES,
   checked,
@@ -243,7 +244,8 @@ test('a name is joined only where every place the text spells it joins it onto a
   expect(joinedOnly("open(os.path.join(d, 'screen.css'), 'w')", 'screen.css')).toBe(true)
   expect(joinedOnly('fs.writeFileSync(path.join(d, "screen.css"), x)', 'screen.css')).toBe(true)
   expect(joinedOnly("(d / 'screen.css').write_text(x)", 'screen.css')).toBe(true)
-  expect(joinedOnly('open("$R/screen.css", "w")', 'R/screen.css')).toBe(true)
+  // The shell's `$R/screen.css` is not joined: its folder is R's value (shellVarPath).
+  expect(joinedOnly('open("$R/screen.css", "w")', 'R/screen.css')).toBe(false)
   expect(joinedOnly("p = os.path.join(d, 'a.css')\nq = d / 'a.css'", 'a.css')).toBe(true)
   // Opened as written, in a list, after a call inside the join, or spelled nowhere: not joined.
   expect(joinedOnly("open('index.html', 'w')", 'index.html')).toBe(false)
@@ -267,6 +269,26 @@ test("every refusal of a look changing edit says a design round's files go in th
     expect(said).toContain(ROUND_FILES)
     expect(DASHES.test(said)).toBe(false)
   }
+})
+
+// #1191, lessons review: `$APP/globals.css` was read as joined, and its disk check looked for a
+// project folder named APP. A name through a variable lands where the command's assignment puts it.
+test("a name the shell spells through a variable lands where the command's own assignment of it puts it", () => {
+  const text = 'open("$R/screen.css", "w")'
+  expect(shellVarPath("R='/tmp/claude-501/x/s1/scratchpad/3718/round1'; python3 - <<PY", text, 'R/screen.css')).toBe('/tmp/claude-501/x/s1/scratchpad/3718/round1/screen.css')
+  expect(shellVarPath('R="/Users/dan/Temp Dir/r1/"; x', text, 'R/screen.css')).toBe('/Users/dan/Temp Dir/r1/screen.css')
+  expect(shellVarPath('export R=/w/slate/src/app && x', text, 'R/screen.css')).toBe('/w/slate/src/app/screen.css')
+  expect(shellVarPath('R=src/app; x', text, 'R/screen.css')).toBe('src/app/screen.css')
+  expect(shellVarPath('R=/a; R=/a; x', text, 'R/screen.css')).toBe('/a/screen.css')
+  // Set nowhere, set twice to different values, built from another value, or the name also spelled
+  // without its $: not read.
+  expect(shellVarPath('python3 - <<PY', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a; R=/b; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R="$HOME/x"; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=$(pwd); x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('XR=/a; x', text, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a', `${text}\nopen('R/screen.css')`, 'R/screen.css')).toBe(undefined)
+  expect(shellVarPath('R=/a', text, 'screen.css')).toBe(undefined)
 })
 
 test('the refusal names the file and both ways on, in plain words, tied to the refused call', () => {
