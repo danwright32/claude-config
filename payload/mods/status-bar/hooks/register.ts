@@ -350,9 +350,10 @@ const read = async ($: EngineInterface) => {
 // Reads the login file into this session's account and, when that changed what the status line
 // names, rewrites the facts file. True once it names a login other than `before`. A failure is
 // logged and false, never thrown, since it runs after /login's own result (L95).
-const adoptAccount = async ($: EngineInterface, h: string, before: string) => {
+const adoptAccount = async ($: EngineInterface, h: string, before: string, isCurrent: () => boolean = () => true) => {
   try {
     const now = await readAccount($, h)
+    if (!isCurrent()) return false
     if (JSON.stringify(now) !== JSON.stringify((await $.state.get(accountRef)).value ?? null)) {
       await $.state.set(accountRef, now)
       await writeFacts($)
@@ -361,6 +362,25 @@ const adoptAccount = async ($: EngineInterface, h: string, before: string) => {
   } catch (err) {
     $.ui.log(`status-bar: this session's account could not be read again after /login: ${msg(err)}`, { to: 'debug' })
     return false
+  }
+}
+// Reads the login file every second for half a minute after a /login, until it names another
+// login. Each read checks the watch is still its own, so a read still in flight from an earlier
+// /login can neither stop a later one's watch nor adopt for it. Failing to start is logged, never
+// thrown over the command's own result.
+const watchLogin = async ($: EngineInterface, h: string, before: string) => {
+  try {
+    const until = (await $.clock.now()) + LOGIN_WAIT_MS
+    const mine = $.clock.every(LOGIN_POLL_MS, () => {
+      void (async () => {
+        if (loginWatch !== mine) return
+        const landed = await adoptAccount($, h, before, () => loginWatch === mine)
+        if (loginWatch === mine && (landed || (await $.clock.now()) >= until)) stopLoginWatch()
+      })().catch(err => $.ui.log(`status-bar: stopped reading the login file after /login: ${msg(err)}`, { to: 'debug' }))
+    })
+    loginWatch = mine
+  } catch (err) {
+    $.ui.log(`status-bar: could not keep reading the login file after /login: ${msg(err)}`, { to: 'debug' })
   }
 }
 const stopLoginWatch = () => {
@@ -466,14 +486,7 @@ export const register: Register = on => {
       return await next(e)
     } finally {
       stopLoginWatch()
-      if (!(await adoptAccount($, h, before))) {
-        const until = (await $.clock.now()) + LOGIN_WAIT_MS
-        loginWatch = $.clock.every(LOGIN_POLL_MS, () => {
-          void (async () => {
-            if ((await adoptAccount($, h, before)) || (await $.clock.now()) >= until) stopLoginWatch()
-          })()
-        })
-      }
+      if (!(await adoptAccount($, h, before))) await watchLogin($, h, before)
     }
   })
 
@@ -520,6 +533,8 @@ export const register: Register = on => {
   })
 
   on('session.end', async ($, e, next) => {
+    // A /login still awaited would write the facts file of a session that has ended.
+    stopLoginWatch()
     if (home && SESSION_ID.test(e.sessionId)) {
       await $.process.run(['rm', '-f', `${dirOf(home)}/${e.sessionId}.json`]).catch(() => undefined)
       if (writtenId === e.sessionId) writtenId = undefined

@@ -837,6 +837,34 @@ test('a login file that cannot be read after a /login is unknown, never the acco
   expect(accountId(files)).toBe('acct-2')
 })
 
+test('a session that ends while a /login is awaited leaves no facts file behind (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'exit' } as never)
+  await clock.settle()
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(files[`${DIR}/s1.json`]).toBeUndefined()
+})
+
+test('a second /login while the first is awaited waits its own half minute (#1200)', withKit, async ($, on) => {
+  const { files, clock } = world(on)
+  loginAs(files, 'acct-1', 'Dan', 'Pennie')
+  loginHere(on, () => undefined)
+  await start($, clock)
+  await runLogin($, clock)
+  await clock.advance(20 * SEC)
+  await runLogin($, clock)
+  // Past the first /login's half minute, inside the second's.
+  await clock.advance(15 * SEC)
+  loginAs(files, 'acct-2', 'Dan', 'Personal')
+  await clock.advance(2 * SEC)
+  expect(accountId(files)).toBe('acct-2')
+})
+
 test('a /login that reports a failure still reads the login file, and its failure is still shown (#1200)', withKit, async ($, on) => {
   const { files, clock } = world(on)
   loginAs(files, 'acct-1', 'Dan', 'Pennie')
