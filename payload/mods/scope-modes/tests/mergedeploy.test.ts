@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { actsOf, addAnswer, dirsOf, HOLD_MERGES, isListed, judgeNight, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Place, type Scripts, type Where } from '../hooks/mergedeploy.ts'
+import { API_MERGE_CASES } from './api-merge-cases.ts'
 import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { readCommands } from './read.ts'
 
@@ -224,6 +225,15 @@ describe('what a command does, by effect', () => {
     const unread = (command: string) => readCommands(command).map(({ gh: _gh, mergeHelper: _m, ...c }) => c)
     expect(unread('gh pr view 12').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'run a gh command whose flags cannot be read', repo: null }])
     expect(unread('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: null }])
+  })
+  // #1181: the daytime merge gates read this same table (payload/hooks/test-merge-target.sh), so a
+  // route one recogniser judges a merge and the other does not fails a suite (L450).
+  test('every route in the table the merge gates share is judged as the table says (#1181)', () => {
+    expect(API_MERGE_CASES.length).toBeGreaterThan(20)
+    const wrong = API_MERGE_CASES.filter(c => kinds(c.command).includes('merge') !== c.merge).map(c => c.command)
+    expect(wrong).toEqual([])
+    // A row where the two differ says why, or the difference is an accident nobody chose.
+    expect(API_MERGE_CASES.filter(c => c.gates !== undefined && !c.why).map(c => c.command)).toEqual([])
   })
   test('reads are not merges: viewing a PR, reading its merge state, a GraphQL query', () => {
     expect(kinds('gh pr view 12 --json mergeable')).toEqual([])

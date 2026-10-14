@@ -41,6 +41,10 @@ const RUNNERS = new Map<string, Runner>([
   ['stdbuf', { values: 'eio', long: ['--error', '--input', '--output'] }],
   ['xargs', { values: 'aEdIJLnPRSs', attached: 'eil', long: ['--arg-file', '--delimiter', '--max-args', '--max-chars', '--max-procs', '--process-slot-var'] }],
   ['caffeinate', { values: 'tw' }],
+  // rtk runs the command after it for a shorter output, and rtk-rewrite.sh writes it in front of
+  // every gh and git command, so `rtk gh pr merge 7` is a merge to every guard (claude-config#1181:
+  // the overnight judge read it as a command named rtk while the merge gates read the merge).
+  ['rtk', {}],
 ])
 
 // Where the command a runner at `at` runs begins, past its options and their values, its leading

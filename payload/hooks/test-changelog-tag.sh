@@ -77,6 +77,10 @@ case "$*" in
   *"auth status"*) printf 'Logged in to github.com account danwright32 (keyring)\n' ;;
   *"auth token -u "*) printf 'tok\n' ;;
   *"pr view"*) cat "$FAKE_PR_JSON" ;;
+  # Which pull request a GraphQL merge's node is (claude-config#1181).
+  *"api graphql"*)
+    if [ -n "${FAKE_NODE_FAIL:-}" ]; then printf '%s\n' "$FAKE_NODE_FAIL" >&2; exit 1; fi
+    printf '%s\n' "${FAKE_NODE_JSON:-}" ;;
 esac
 SH
   chmod +x "$dir/bin/gh"
@@ -682,6 +686,56 @@ fi
 run_hook_on "$dir" "$nopy" "./scripts/merge-when-green.sh 7"
 if says "$NOREAD_OUT" "more than one merge"; then
   fail "control: with no python3, one merge through a merge tool was refused as several: $NOREAD_OUT"; else pass; fi
+rm -rf "$dir"
+
+echo "changelog record: a merge through the GitHub API (claude-config#1181)"
+
+# Before #1181 these merged with no record read: the recogniser did not know the routes, and the
+# hook was registered behind an `if` of Bash(gh pr merge*), so Claude Code never ran it for them.
+NODE_WIDGET='{"data":{"node":{"__typename":"PullRequest","number":7,"repository":{"nameWithOwner":"acme/widget"}}}}'
+GQL_MERGE="gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_x\"}) { clientMutationId } }'"
+GQL_AUTO="gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"PR_x\"}) { clientMutationId } }'"
+
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+for c in "gh api -X PUT repos/acme/widget/pulls/7/merge -f merge_method=squash" \
+         "gh api --method PUT 'repos/{owner}/{repo}/pulls/7/merge'" \
+         "GH_TOKEN=x gh api -XPUT https://api.github.com/repos/acme/widget/pulls/7/merge"; do
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1181 an untagged PR merged through the REST endpoint [$c]: $out"; fi
+done
+for c in "$GQL_MERGE" "$GQL_AUTO"; do
+  out=$(FAKE_NODE_JSON="$NODE_WIDGET" run_hook "$dir" "$c")
+  if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1181 an untagged PR merged through a GraphQL mutation [$c]: $out"; fi
+done
+# Behind a word that only runs the command after it, each route is the same merge (#1181).
+for c in "env GH_TOKEN=x $MERGE 7 --squash" "sudo -u dan $MERGE 7 --squash" "sudo env GH_TOKEN=x rtk gh api -X PUT repos/acme/widget/pulls/7/merge"; do
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1181 an untagged PR merged behind a runner [$c]: $out"; fi
+done
+out=$(FAKE_NODE_JSON="$NODE_WIDGET" run_hook "$dir" "env GH_TOKEN=x $GQL_MERGE")
+if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1181 an untagged PR merged through GraphQL behind env: $out"; fi
+# The failure path: a node GitHub cannot resolve is refused by name, not read as the current branch's.
+out=$(FAKE_NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_x'" run_hook "$dir" "$GQL_MERGE")
+if denied "$out" && says "$out" "GitHub could not say which pull request that is" && says "$out" "ALLOW_UNTAGGED_MERGE=1"; then pass
+else fail "#1181 a GraphQL merge whose node cannot be resolved was not refused by name: $out"; fi
+# Calls that merge nothing pass untouched.
+for c in "gh api repos/acme/widget/pulls/7/merge" "gh api -X PUT repos/acme/widget/pulls/7 -f title=merge"; do
+  out=$(run_hook "$dir" "$c")
+  if [ -z "$out" ]; then pass; else fail "#1181 a gh api call that merges nothing was not let through untouched [$c]: $out"; fi
+done
+rm -rf "$dir"
+
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "gh api -X PUT repos/acme/widget/pulls/7/merge")
+if denied "$out"; then fail "#1181 a tagged PR merged through the REST endpoint was refused: $out"; else pass; fi
+out=$(FAKE_NODE_JSON="$NODE_WIDGET" run_hook "$dir" "$GQL_MERGE")
+if denied "$out"; then fail "#1181 a tagged PR merged through GraphQL was refused: $out"; else pass; fi
+rm -rf "$dir"
+
+# A REST merge into a repository the registry does not gate stands down, as gh pr merge does there.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_OTHER")
+out=$(run_hook "$dir" "gh api -X PUT repos/acme/widget/pulls/7/merge")
+if denied "$out"; then fail "#1181 a REST merge in an ungated repository was refused: $out"; else pass; fi
 rm -rf "$dir"
 
 echo "  $passed passed, $failed failed"

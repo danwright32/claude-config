@@ -8,10 +8,11 @@
 # read key as PR_REVIEW_READ=<key>, which only the messages carrying them hold. The review itself, and every outcome it can have, is
 # lib/pr-review.sh; this hook only decides whether a command merges and which head it merges.
 #
-# EVERY MERGE ROUTE this hook can see: `gh pr merge`, and a repo's own merge script in command
-# position (mt_runs_merge, the matcher block-red-merge.sh and the changelog gate share). It is
-# registered WITHOUT an `if` filter, because block-red-merge's `Bash(gh pr merge*)` never fires for
-# a script. A merge made INSIDE a script this hook cannot see (Overture's merge_pr is called by
+# EVERY MERGE ROUTE this hook can see: `gh pr merge`, the GitHub API's merge endpoint and GraphQL
+# merge mutations (claude-config#1181), and a repo's own merge script in command position
+# (mt_runs_merge, the matcher block-red-merge.sh and the changelog gate share). It is registered
+# WITHOUT an `if` filter, as every merge gate now is, because a filter such as `Bash(gh pr merge*)`
+# never fires for a script or an API call. A merge made INSIDE a script this hook cannot see (Overture's merge_pr is called by
 # verify-and-merge-branch.sh and verify-and-merge-batch.sh, which are not merge tools by name) is
 # covered by that script asking `pr-review.sh check` itself before it merges, so the rule lives in
 # one place and every route asks it.
@@ -27,8 +28,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 payload="$(cat)"
 
 # It runs before EVERY Bash command, so the commonest case leaves before anything is loaded: every
-# route mt_runs_merge recognises contains "merge", and a payload without it cannot be one.
-case "$payload" in *merge*) ;; *) exit 0 ;; esac
+# route mt_runs_merge recognises names a merge, as mt__might_merge in lib/merge-target.sh says in
+# which words, and a payload naming none cannot be one (a GraphQL merge says "Merge" or nothing at
+# all, claude-config#1181).
+case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
 
@@ -37,14 +40,14 @@ refuse() { printf '%s\n' "$1" >&2; exit 2; }
 if ! . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null; then
   case "$payload" in
     *SKIP_PR_REVIEW=1*) exit 0 ;;
-    *merge*) refuse "Refusing to merge: lib/merge-target.sh is missing, so pr-review-gate.sh cannot tell whether this command merges a pull request or read its head for the lessons review. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>." ;;
+    *) refuse "Refusing to merge: lib/merge-target.sh is missing, so pr-review-gate.sh cannot tell whether this command merges a pull request or read its head for the lessons review. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>." ;;
   esac
   exit 0
 fi
 if ps_reader_missing jq python3 || ! command -v jq >/dev/null 2>&1; then
   case "$payload" in
     *SKIP_PR_REVIEW=1*) exit 0 ;;
-    *merge*) refuse "Refusing to merge: jq is not on PATH, and the lessons review gate reads the pull request's head from GitHub with it. Install jq. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>." ;;
+    *) refuse "Refusing to merge: jq is not on PATH, and the lessons review gate reads the pull request's head from GitHub with it. Install jq. Override for one merge, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>." ;;
   esac
   exit 0
 fi
@@ -64,6 +67,13 @@ fi
 # reading. Refused, with how to run them so each is held.
 if span_why="$(mt_merge_span_why "$command" "$cwd")"; then
   refuse "Refusing to merge: $span_why"
+fi
+
+# A merge through the GitHub API whose pull request cannot be named (claude-config#1181): read as the
+# current branch's below, it would be held to another pull request's review. Asked in this shell, so
+# a GraphQL merge's node is resolved once and the reads below take that answer.
+if mt_api_merge_untold "$command"; then
+  refuse "Refusing to merge: $MT_API_WHY"
 fi
 
 repo_dir="$(mt_repo_dir "$command" "$cwd" 2>/dev/null)"

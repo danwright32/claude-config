@@ -110,6 +110,10 @@ cat > "$FAKEBIN/gh" <<'EOS'
 printf '%s\n' "$*" >> "$FAKE_LOG/gh-calls"
 case "$*" in
   "auth status"*) exit 0 ;;
+  # Which pull request a GraphQL merge's node is (claude-config#1181): FAKE_NODE_JSON, or the error
+  # FAKE_NODE_FAIL names.
+  "api graphql"*) [ -n "${FAKE_NODE_FAIL:-}" ] && { printf '%s\n' "$FAKE_NODE_FAIL" >&2; exit 1; }
+                  printf '%s\n' "${FAKE_NODE_JSON:-}"; exit 0 ;;
   # FAKE_GH_PR_ERR: the error a read of the pull request's description and comments fails with
   # (claude-config#1161); the merge gate's own read of the head is answered as before.
   "pr view"*) case "$*" in *body,comments*) [ -n "${FAKE_GH_PR_ERR:-}" ] && { printf '%s\n' "$FAKE_GH_PR_ERR" >&2; exit 1; } ;; esac
@@ -727,6 +731,36 @@ check_eq "a merge followed by another command is still seen" "2" "$rc"
 out="$(fire_gate "SKIP_PR_REVIEW=1 gh pr merge 7 --squash")"; rc=$?
 check_eq "the override lets the merge through" "0" "$rc"
 check "and says out loud that it did" "SKIP_PR_REVIEW=1" "$out"
+# A merge through the GitHub API is held for the review as gh pr merge is (claude-config#1181): before,
+# no merge gate recognised the REST merge endpoint or a GraphQL merge mutation at all.
+API_REST="gh api -X PUT 'repos/{owner}/{repo}/pulls/7/merge' -f merge_method=squash"
+API_GQL="gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"PR_x\"}) { clientMutationId } }'"
+API_ENQ="gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: \"PR_x\"}) { clientMutationId } }'"
+API_NODE='{"data":{"node":{"__typename":"PullRequest","number":7,"repository":{"nameWithOwner":"acme/widget"}}}}'
+wait_final "$HEAD_SHA"
+out="$(fire_gate "$API_REST")"; rc=$?
+check_eq "#1181 a REST merge is refused until its review's findings are read" "2" "$rc"
+check "#1181 carrying the findings of its pull request's head" "deleteEvent still swallows" "$out"
+ak="$(key_in "$out")"
+# Behind env or sudo it is the same merge, refused the same way (#1181: before, a command named env).
+out="$(fire_gate "env GH_TOKEN=x gh pr merge 7 --squash")"; rc=$?
+check_eq "#1181 a merge behind env is refused until the findings are read" "2" "$rc"
+out="$(fire_gate "sudo -u dan $API_REST")"; rc=$?
+check_eq "#1181 a REST merge behind sudo is refused until the findings are read" "2" "$rc"
+out="$(FAKE_NODE_JSON="$API_NODE" fire_gate "$API_ENQ")"; rc=$?
+check_eq "#1181 the merge queue's mutation, which names no merge, is refused before the findings are read" "2" "$rc"
+out="$(fire_gate "PR_REVIEW_READ=$ak $API_REST")"; rc=$?
+check_eq "#1181 and allowed with the read key, so it was judged as that pull request" "0" "$rc"
+out="$(FAKE_NODE_JSON="$API_NODE" fire_gate "PR_REVIEW_READ=$ak $API_GQL")"; rc=$?
+check_eq "#1181 a GraphQL merge of the same pull request, by its node, is allowed by the same key" "0" "$rc"
+grep -q 'api graphql' "$FAKE_LOG/gh-calls" && ok || bad "#1181 the gate never asked GitHub which pull request the node is"
+out="$(FAKE_NODE_FAIL="gh: Could not resolve to a node with the global id of 'PR_x'" fire_gate "PR_REVIEW_READ=$ak $API_GQL")"; rc=$?
+check_eq "#1181 a GraphQL merge whose node GitHub cannot resolve is refused, key or not" "2" "$rc"
+check "#1181 by name" "GitHub could not say which pull request that is" "$out"
+for c in "gh api 'repos/{owner}/{repo}/pulls/7/merge'" "gh api -X PUT 'repos/{owner}/{repo}/pulls/7' -f title=merge"; do
+  out="$(fire_gate "$c")"; rc=$?
+  check_eq "#1181 a gh api call that merges nothing passes untouched [$c]" "0|" "$rc|$out"
+done
 rm -f "$FAKE_LOG/pr-view.json"
 out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"
