@@ -208,6 +208,17 @@ fires S1 15 "#1188 a call behind env with --repo between issue and create"
 has "$out" "$FILE:16:" && bad "#1188 a quoted mention is not a call" "$out" || ok
 has "$out" "findings=7" && ok || bad "exactly the seven bare calls are flagged" "$out"
 
+# The calls are read by lib/shell-words.py (#1188). Without it the scan cannot tell a call from a
+# mention, so it says so as a finding of its own rather than passing the script, and the audit's
+# other checks still load (the lessons review of #1188).
+mkdir -p "$TMP/noreader"
+cp "$AUDIT" "$TMP/noreader/skill-audit.py"
+out="$(python3 "$TMP/noreader/skill-audit.py" exits "$TMP/skills" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && has "$out" "could not be checked" && has "$out" "shell-words.py" && ok \
+  || bad "#1188 a missing reader is a finding naming it, not a pass (rc=$rc)" "$out"
+out="$(python3 "$TMP/noreader/skill-audit.py" links "$TMP/none-such" 2>&1)"
+has "$out" "Traceback" && bad "#1188 and the audit's other checks still run without it" "$out" || ok
+
 # --- nothing to scan is not a pass -------------------------------------------------------------
 mkdir -p "$TMP/none"
 out="$(python3 "$AUDIT" exits "$TMP/none" 2>&1)"; rc=$?

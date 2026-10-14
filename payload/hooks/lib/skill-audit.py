@@ -427,15 +427,30 @@ def exits_python(path: str, rel: str):
 # command every gate asks (claude-config#1188): each command the shell would run, a substitution's
 # and an indented one inside a block included (the PR #936 lessons review), past reserved words,
 # assignments, rtk, env, sudo, exec and command, and past gh's flags written in front of the
-# subcommand. A comment or a quoted mention is no command. Loaded by its path, never by name.
-sys.dont_write_bytecode = True
-_spec = importlib.util.spec_from_file_location(
-    "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py"))
-SW = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(SW)
+# subcommand. A comment or a quoted mention is no command. Loaded by its path, never by name, and
+# only by the check that needs it, so a reader that cannot be loaded fails that check by name and
+# leaves this file's other checks running (the lessons review of #1188).
+SHELL_WORDS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shell-words.py")
+_SW = None
+
+
+def shell_words():
+    """The loaded reader, or raises ImportError naming the file when it cannot be loaded."""
+    global _SW
+    if _SW is None:
+        sys.dont_write_bytecode = True
+        try:
+            spec = importlib.util.spec_from_file_location("shell_words", SHELL_WORDS)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            raise ImportError(f"{SHELL_WORDS} could not be loaded ({type(exc).__name__}: {exc})") from exc
+        _SW = module
+    return _SW
 
 
 def runs_gh_issue_create(cmd: str) -> bool:
+    SW = shell_words()
     try:
         records = SW.commands(cmd)
     except SW.Unreadable:
@@ -472,8 +487,13 @@ def exits_shell(path: str, rel: str):
     except OSError as exc:
         return [f"{rel}: could not be read, so it could not be checked: {exc}"]
     for n, cmd in shell_commands(text):
-        if not runs_gh_issue_create(cmd):
-            continue
+        try:
+            if not runs_gh_issue_create(cmd):
+                continue
+        except ImportError as exc:
+            # A reader that cannot be loaded finds nothing, which is what a clean script looks like,
+            # so it is a finding of its own rather than a pass (L98, L11).
+            return [f"{rel}: its gh issue create calls could not be checked: {exc}"]
         missing = []
         if "--milestone" not in cmd and not re.search(r"(?:^|\s)-m\s", cmd):
             missing.append("a milestone")
