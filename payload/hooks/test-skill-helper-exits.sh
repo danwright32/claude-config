@@ -216,6 +216,10 @@ cp "$AUDIT" "$TMP/noreader/skill-audit.py"
 out="$(python3 "$TMP/noreader/skill-audit.py" exits "$TMP/skills" 2>&1)"; rc=$?
 [ "$rc" -eq 1 ] && has "$out" "could not be checked" && has "$out" "shell-words.py" && ok \
   || bad "#1188 a missing reader is a finding naming it, not a pass (rc=$rc)" "$out"
+mkdir -p "$TMP/quiet/skills/plain"
+printf '#!/usr/bin/env bash\necho hello\nls -la\n' > "$TMP/quiet/skills/plain/helper.sh"
+out="$(python3 "$TMP/noreader/skill-audit.py" exits "$TMP/quiet/skills" 2>&1)"; rc=$?
+[ "$rc" -eq 0 ] && ok || bad "#1188 a helper with no gh issue create is not reported for the missing reader (rc=$rc)" "$out"
 out="$(python3 "$TMP/noreader/skill-audit.py" links "$TMP/none-such" 2>&1)"
 has "$out" "Traceback" && bad "#1188 and the audit's other checks still run without it" "$out" || ok
 

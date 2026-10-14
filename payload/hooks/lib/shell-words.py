@@ -761,7 +761,13 @@ def tool_command(words):
     words = ([first] if first else []) + list(words[1:])
     if not words:
         return None
-    rest, _ = command_rest(shlex.join(words))
+    # Written back as the shell would read the same words. An assignment keeps its name outside the
+    # quotes, `NAME='a b'`, so command_rest still reads it as one: quoted whole, as shlex.join quotes
+    # it, `env GH_TOKEN="a b" gh issue create` read as a command named GH_TOKEN=a b (the lessons
+    # review of #1188).
+    text = " ".join(w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
+                    for w, m in ((w, ASSIGNMENT.match(w)) for w in words))
+    rest, _ = command_rest(text)
     return tool_read(command_words(rest))
 
 

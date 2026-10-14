@@ -487,6 +487,11 @@ def exits_shell(path: str, rel: str):
     except OSError as exc:
         return [f"{rel}: could not be read, so it could not be checked: {exc}"]
     for n, cmd in shell_commands(text):
+        # A line whose text names neither cannot run one, so it is never read: the reading is not
+        # started for every line of every helper, and a reader that cannot be loaded is reported
+        # only for a helper that has a call to check (the lessons review of #1188).
+        if "gh" not in cmd or "create" not in cmd:
+            continue
         try:
             if not runs_gh_issue_create(cmd):
                 continue

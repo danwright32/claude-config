@@ -79,7 +79,8 @@ PY
 # gh takes the subcommand's flags in front of it, and rtk, env or sudo can stand in front of gh
 # (claude-config#1188), read by lib/shell-words.py, the one reading every gate asks.
 for c in 'gh -R o/x issue create -t x' 'gh issue -R o/x create -t x' 'gh --repo=o/x issue create -t x' \
-         'rtk gh issue create -t x' 'env GH_TOKEN=x gh issue create -t x' 'sudo -u dan gh issue create -t x'; do
+         'rtk gh issue create -t x' 'env GH_TOKEN=x gh issue create -t x' 'sudo -u dan gh issue create -t x' \
+         'env GH_TOKEN="a b" gh issue create -t x' 'sudo env X="$(echo y z)" gh issue -R o/x create -t x'; do
   [ "$(ask count "$c")" = "1" ] && check "#1188 a create is found: $c" ok || check "#1188 a create is found: $c" "got $(ask count "$c")"
 done
 [ "$(ask titles 'gh -R o/x issue --milestone M create -t "the title"')" = "the title" ] \
