@@ -1792,7 +1792,19 @@ Apple Terminal tabs keep that switch on can say so once, with mod-kit's `appleTe
 setting (#1012, Dan 2026-10-09: "Buttons always, I keep it on"), and Apple Terminal in the fullscreen
 layout then draws real buttons. The setting vouches for Apple Terminal alone: tmux, screen, the main
 screen and an unnamed terminal keep the typed text. Its risk, accepted: the switch is per tab and
-Cmd+R flips it, so in a tab where it is off a button looks live and a click does nothing. A button without
+Cmd+R flips it, so in a tab where it is off a button looks live and a click does nothing. The
+setting is each Mac's own, which the sync never carries, so one Mac can draw buttons while the other
+draws text, and on 2026-10-14 nothing said why (#1190, Dan: "why does my work mac want me to type
+step 1 done instead of clicking a done button"). So the first time a Mac draws a button as text
+where the setting would draw it as a button (`settingWouldHelp` in hooks/band.ts: Apple Terminal in
+the fullscreen layout with the setting off, never the main screen, tmux, screen or an unnamed
+terminal), in the band, a pane or for a mod asking `$.modkit.clickable`, mod-kit says once in the
+transcript that buttons are off on this Mac, the command that turns them on, that it takes effect
+in a new session, and that the tab's View > Allow Mouse Reporting (Cmd R) must be ticked. A line in
+the transcript rather than a toast: it is said once per Mac, so it has to stay where the command can
+be selected. It is recorded in mod-kit's own store on that Mac (`buttonsOffSaid`), and each session
+first takes the one saying in its `$.state`, so a store that cannot be read or written still says it
+once a session, never at every redraw, and says the record failed. A button without
 `instead` is drawn there as "type: /press <mod> <button>": mod-kit's `/press` presses a button
 showing in the band or a pane the way a click does. A click (the Button's own press) and a typed
 /press both raise `modkit.press`, which every publisher answers, so no button anywhere is left dead.

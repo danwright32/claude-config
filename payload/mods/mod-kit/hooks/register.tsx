@@ -1,7 +1,7 @@
 import { read } from 'claude-code'
 import type { EngineInterface, On, Register, ResolveInput } from 'claude-code'
 import type { ModKit, ModKitBandButton, ModKitBandLine, ModKitBandPart, ModKitBandRow, ModKitBandText, ModKitCall, ModKitCard, ModKitClickSite, ModKitPane, ModKitPress, ModKitRun } from '../types/index.d.ts'
-import { appleTerminalTrusted, clicksReach, compose, drop, fallbackOf, isDivider, isSlot, mostRows, paneRefusal, put, refusal, wraps } from './band.ts'
+import { appleTerminalTrusted, BUTTONS_OFF_NOTICE, clicksReach, compose, drop, fallbackOf, holdsButton, isDivider, isSlot, mostRows, paneRefusal, put, refusal, settingWouldHelp, wraps } from './band.ts'
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
@@ -320,7 +320,18 @@ export const register: Register = (on, options) => {
       screen: async call => screenFailed(call, 'the check itself failed'),
       // The bottom of every press (#939): reached only when no publisher's modkit.press hook took it.
       press: async () => ({ isAnswered: false }),
-      clickable: async site => siteClickable(site, () => built.env.get('TERM_PROGRAM'), isAppleTerminalTrusted),
+      // Asked by a mod about to draw its own Button, so a false answer is a button drawn as text (#1190).
+      clickable: async site =>
+        siteClickable(site, () => built.env.get('TERM_PROGRAM'), isAppleTerminalTrusted, {
+          claim: async () => {
+            const held = await built.state.get(buttonsOffClaim)
+            return !held.value && (await built.state.set(buttonsOffClaim, true, { ifVersion: held.version })).isSet
+          },
+          told: () => built.store.get(BUTTONS_OFF_SAID),
+          record: async () => built.store.set(BUTTONS_OFF_SAID, await built.clock.now()),
+          say: text => built.ui.log(text),
+          later: fn => built.clock.after(0, fn),
+        }),
       isDans: async ({ origin }) => isDans(origin),
       // #1145: the one wording for a typed answer. The toast is shown here, $.ui being spelled only at
       // its call site. A toast the engine cannot show it drops and logs itself, never throwing here
@@ -487,12 +498,84 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
 // session's environment; one that cannot be read is taken as unknown, which draws the text.
 // `isAppleTerminalTrusted` is this Mac's appleTerminalMouseReporting setting (band.ts
 // appleTerminalTrusted, #1012), read once from the options the module loaded with, so a redraw costs
-// nothing more.
-const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>, isAppleTerminalTrusted: boolean) => {
+// nothing more. `isDrawingButton` is whether a button is drawn there at all: where one is drawn as
+// text that the setting would draw as a button, this Mac is told why, once (#1190).
+// `teller` is given only where a button is drawn there: where one is drawn as text that the setting
+// would draw as a button, this Mac is told why, once (#1190).
+const siteClickable = async (site: ModKitClickSite, terminalName: () => Promise<string | undefined>, isAppleTerminalTrusted: boolean, teller: Teller | undefined) => {
   const terminal = site.surface === 'terminal' ? await terminalName().catch(() => undefined) : undefined
-  return clicksReach({ surface: site.surface, isFullscreen: site.viewport?.isFullscreen, terminal, isAppleTerminalTrusted })
+  const at = { surface: site.surface, isFullscreen: site.viewport?.isFullscreen, terminal, isAppleTerminalTrusted }
+  if (teller && settingWouldHelp(at)) sayButtonsOffLater(teller)
+  return clicksReach(at)
 }
-const clickable = ($: EngineInterface, e: ModKitClickSite, isAppleTerminalTrusted: boolean) => siteClickable(e, () => $.env.get('TERM_PROGRAM'), isAppleTerminalTrusted)
+const clickable = ($: EngineInterface, e: ModKitClickSite, isAppleTerminalTrusted: boolean, isDrawingButton: boolean) =>
+  siteClickable(e, () => $.env.get('TERM_PROGRAM'), isAppleTerminalTrusted, isDrawingButton ? tellerOf($) : undefined)
+
+// #1190, 2026-10-14: the work MacBook drew "type: step 1 done" where the personal MacBook drew a Done
+// button, and nothing said why. The setting is each Mac's own (pluginConfigs in its settings.json,
+// which the sync never carries), so the first time a Mac draws a button as text that the setting
+// would draw as a button, mod-kit says so in the transcript, where the command can be copied and the
+// line stays, and records it in its own store (~/.claude/plugins/store, which the sync never carries
+// either), so the Mac is told once. Never said where the setting would not help (the main screen, an
+// unmeasured layout, tmux or screen, an unnamed terminal): band.ts settingWouldHelp.
+//
+// Each session takes the one saying in $.state first, by version, so redraws at once say it once and
+// a store that fails cannot make it repeat at every redraw. A store that cannot be read or written is
+// said, and the notice is shown all the same: a later session saying it again costs less than a Mac
+// never told. Done once the drawing has returned, so a store on the disk never holds a redraw back.
+//
+// What the saying needs from the engine, as closures: the engine refuses engine.create's own
+// interface passed as an argument, so $.modkit.clickable spells its own (`built`) in place, and the
+// drawings bind theirs through tellerOf. The logic is written once, below, over either.
+type Teller = {
+  /** Takes this session's one saying; false when it is already taken. */
+  claim: () => Promise<boolean>
+  told: () => Promise<unknown>
+  record: () => Promise<void>
+  say: (text: string) => void
+  later: (fn: () => void) => void
+}
+const buttonsOffClaim = { plugin: 'mod-kit', key: 'buttonsOff' } as const
+const BUTTONS_OFF_SAID = 'buttonsOffSaid'
+const tellerOf = ($: EngineInterface): Teller => ({
+  claim: async () => {
+    const held = await $.state.get(buttonsOffClaim)
+    return !held.value && (await $.state.set(buttonsOffClaim, true, { ifVersion: held.version })).isSet
+  },
+  told: () => $.store.get(BUTTONS_OFF_SAID),
+  record: async () => $.store.set(BUTTONS_OFF_SAID, await $.clock.now()),
+  say: text => $.ui.log(text),
+  later: fn => $.clock.after(0, fn),
+})
+const sayButtonsOff = async (t: Teller) => {
+  if (!(await t.claim())) return
+  try {
+    if ((await t.told()) !== undefined) return
+  } catch (err) {
+    t.say(`mod-kit could not read whether this Mac was told why buttons show as text (${reason(err)}), so it says it now, and a later session may say it again.`)
+  }
+  t.say(BUTTONS_OFF_NOTICE)
+  try {
+    await t.record()
+  } catch (err) {
+    t.say(`mod-kit could not record that this Mac was told why buttons show as text (${reason(err)}), so the next session will say it again.`)
+  }
+}
+// A failure before the claim (the session's state itself) is said once in this module's life, so it
+// cannot repeat at every redraw either.
+let saidButtonsOffFailure = false
+const sayButtonsOffLater = (t: Teller) => {
+  const failed = (err: unknown) => {
+    if (saidButtonsOffFailure) return
+    saidButtonsOffFailure = true
+    t.say(`mod-kit could not tell whether to say why buttons show as text on this Mac (${reason(err)}).`)
+  }
+  try {
+    t.later(() => void sayButtonsOff(t).catch(failed))
+  } catch (err) {
+    failed(err)
+  }
+}
 
 // A press on one of mod-kit's buttons, clicked or typed: raised as modkit.press for the publisher to
 // answer. Nothing answering, or the press failing, is said rather than left as a dead control.
@@ -561,13 +644,13 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rows = compose((await read($, band)) ?? [])
     if (e.props.hasSurvey || rows.length === 0) return next(e)
-    const isClickable = await clickable($, e, isAppleTerminalTrusted)
+    const isClickable = await clickable($, e, isAppleTerminalTrusted, rows.some(r => holdsButton(r.lines)))
     const { Box } = $.ui.resolve(e)
     return <Box flexDirection="column">{rows.map(row => drawCard($, e, e.props.bodyColumns, row, isClickable))}</Box>
   })
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     const pane = ((await read($, panes)) ?? []).find(p => p.id === e.requestId)
     if (!pane) return next(e)
-    return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e, isAppleTerminalTrusted))
+    return drawCard($, e, e.props.bodyColumns, pane, await clickable($, e, isAppleTerminalTrusted, holdsButton(pane.lines)))
   })
 }
