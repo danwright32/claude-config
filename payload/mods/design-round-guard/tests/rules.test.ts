@@ -36,6 +36,9 @@ import {
   inScratchpad,
   namesScratchpad,
   joinedOnly,
+  addedOntoFolder,
+  shellBraces,
+  afterVariable,
   shellVarPath,
   tempRoots,
   ROUND_FILES,
@@ -257,6 +260,47 @@ test('a name is joined only where every place the text spells it joins it onto a
   expect(joinedOnly('', '')).toBe(false)
   // A longer name holding it is another name.
   expect(joinedOnly("os.path.join(d, 'screen.css')\nopen('app/screen.css')", 'screen.css')).toBe(true)
+  // #1194: added onto a folder in a variable, by a string or an f-string's brace.
+  expect(joinedOnly('open(d + "/screen.css", "w")', 'screen.css')).toBe(true)
+  expect(joinedOnly('open(f"{d}/screen.css", "w")\nopen(d+\'/screen.css\')', 'screen.css')).toBe(true)
+  expect(joinedOnly('open(f"{d}/screen.css", "w")\nopen("screen.css", "w")', 'screen.css')).toBe(false)
+})
+
+// #1194: mentionedLookFiles reads `root + "/app/page.tsx"` and `f"{root}/app/page.tsx"` as a name at the
+// disk's root, in no checkout, so a program writing a page that way was never held by that name.
+test('a name that looks absolute is added onto a folder only where every place the text spells it is', () => {
+  expect(addedOntoFolder('p=W+"/docs/design/clients.html"; open(p)', '/docs/design/clients.html')).toBe(true)
+  expect(addedOntoFolder("open(W + '/app/page.tsx', 'w')", '/app/page.tsx')).toBe(true)
+  expect(addedOntoFolder('open(f"{W}/app/page.tsx", "w")', '/app/page.tsx')).toBe(true)
+  // The shell's braces hold a folder too, but its value is read by shellBraces, not as a join.
+  expect(addedOntoFolder('cat > "${R}/screen.css"', '/screen.css')).toBe(false)
+  // Spelled from the root anywhere, or not looking absolute at all: not added.
+  expect(addedOntoFolder('open(f"{W}/app/page.tsx")\nopen("/app/page.tsx", "w")', '/app/page.tsx')).toBe(false)
+  expect(addedOntoFolder("open('/w/slate/app/page.tsx', 'w')", '/w/slate/app/page.tsx')).toBe(false)
+  expect(addedOntoFolder('open(W + "/app/page.tsx")', 'app/page.tsx')).toBe(false)
+  expect(addedOntoFolder('x', '/app/page.tsx')).toBe(false)
+})
+
+// Lessons review of #1194: the shell's `${APP}/booker.css` is `$APP/booker.css`, for shellVarPath.
+test("a name after the shell's braced variable names that variable, and is never added onto a folder", () => {
+  expect(shellBraces('open("${APP}/booker.css", "w")', '/booker.css')).toEqual(['APP'])
+  expect(shellBraces('cat "${APP}/booker.css" > "${APP}/booker.css"', '/booker.css')).toEqual(['APP'])
+  expect(shellBraces('cp "${A}/booker.css" "${B}/booker.css"', '/booker.css')).toEqual(['A', 'B'])
+  expect(shellBraces('open("${A_LONG_ROUND_FOLDER_NAME}/booker.css")', '/booker.css')).toEqual(['A_LONG_ROUND_FOLDER_NAME'])
+  expect(shellBraces('open(f"{d}/booker.css")', '/booker.css')).toBeUndefined()
+  expect(shellBraces('open("${APP}/booker.css")\nopen("/booker.css")', '/booker.css')).toBeUndefined()
+  expect(shellBraces('open("${APP}/booker.css")', 'booker.css')).toBeUndefined()
+  // The shell's braces are no f-string's: neither reading takes them for a folder a name is added onto.
+  expect(addedOntoFolder('cp "${A}/x.css" "${B}/x.css"', '/x.css')).toBe(false)
+  expect(addedOntoFolder('open("${A_LONG_ROUND_FOLDER_NAME}/x.css")', '/x.css')).toBe(false)
+  expect(joinedOnly('cp "${A}/x.css" "${B}/x.css"', 'x.css')).toBe(false)
+  // Spelled after a shell variable and after a python one: after a variable, so not at the root,
+  // but not joined either.
+  const mixed = 'open("${APP}/x.css")\nopen(f"{d}/x.css", "w")'
+  expect(afterVariable(mixed, '/x.css')).toBe(true)
+  expect(joinedOnly(mixed, 'x.css')).toBe(false)
+  expect(afterVariable('open("${APP}/x.css")\nopen("/x.css")', '/x.css')).toBe(false)
+  expect(afterVariable('open("${APP}/x.css")', 'x.css')).toBe(false)
 })
 
 // #1191: every refusal of a look changing edit says where a round's own files go, so a round the

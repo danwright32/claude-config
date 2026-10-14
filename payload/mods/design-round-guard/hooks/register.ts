@@ -22,6 +22,9 @@ import {
   card,
   checked,
   dataOnlyChange,
+  addedOntoFolder,
+  shellBraces,
+  afterVariable,
   editedText,
   forged,
   inScratchpad,
@@ -149,8 +152,23 @@ const whereOf = async ($: EngineInterface): Promise<Where> => ({
 // A name the shell spells through a variable (`$R/screen.css`) is where the command's own literal
 // assignment of it puts it (rules.ts shellVarPath), judged as any path, so `$APP/globals.css` with
 // APP the project's folder is held; one the command does not set is read as any name (lessons review).
-const guessAt = async ($: EngineInterface, m: string, folder: string | undefined, at: Where, scratch: boolean, text: string, command: string): Promise<Target | undefined> => {
-  if (/^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
+// A name that looks absolute only because it is added onto a folder in a variable (`root +
+// "/app/page.tsx"`, `f"{root}/app/page.tsx"`) is that folder's, read as a joined name (rules.ts
+// addedOntoFolder, #1194): at the disk's root it was in no checkout, so it was never held.
+// The shell's `${APP}/booker.css` (read as `/booker.css`) is its `$APP/booker.css`, judged by where
+// the command sets APP (rules.ts shellBraces, lessons review of #1194), never as a joined name; one
+// spelled after two variables is read as a name in `folder`, as a variable the command does not set is.
+const guessAt = async ($: EngineInterface, found: string, folder: string | undefined, at: Where, scratch: boolean, read: string, shell: string): Promise<Target | undefined> => {
+  const braces = shellBraces(read, found)
+  const unbrace = (s: string) => (braces === undefined ? s : s.replace(/\$\{([A-Za-z_]\w*)\}/g, '$$$1'))
+  const said = braces === undefined ? found : braces.length === 1 ? `${braces[0]}${found}` : found.slice(1)
+  const text = unbrace(read)
+  const command = unbrace(shell)
+  const added = addedOntoFolder(text, said)
+  // After variables of more than one kind: in a folder the guard cannot read, never the root's.
+  const relative = added || (braces === undefined && afterVariable(text, said))
+  const m = relative ? said.slice(1) : said
+  if (!relative && /^(\/|~(\/|$)|\$HOME\/|\$\{HOME\}\/)/.test(m)) return { path: resolvePath(m, '/', at.home), word: m }
   const set = shellVarPath(command, text, m)
   if (set !== undefined && (set.startsWith('/') || /^~(\/|$)/.test(set) || folder !== undefined)) return { path: resolvePath(set, folder ?? '/', at.home), word: m }
   if (folder === undefined) return { word: m }

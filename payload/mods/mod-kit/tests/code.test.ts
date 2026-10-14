@@ -114,12 +114,56 @@ describe('codeOnly (#1165)', () => {
     const data = "  test('x', () => {\n    git('checkout -- app/page.tsx')\n  })\n"
     expect(codeOnly('python', `p='tests/x.test.ts'\nnew='''${data}'''\nopen(p,'w').write(new)`)).toBe(`p='tests/x.test.ts'\nnew='''${blank(data.slice(0, -3))}})\n'''\nopen(p,'w').write(new)`)
     expect(codeOnly('python', '# rewrites app/page.tsx\nx = 1')).toBe(`#${blank(' rewrites app/page.tsx')}\nx = 1`)
-    // One line: a path, a path with a space in it (a Bidspoke checkout), a sentence.
-    for (const code of ["open('app/page.tsx', 'w')", "open('/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')", "print('wrote app/page.tsx')"])
-      expect(codeOnly('python', code)).toBe(code)
+    // One line: a path, and a path with a space in it (a Bidspoke checkout).
+    for (const code of ["open('app/page.tsx', 'w')", "open('/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx', 'w')"]) expect(codeOnly('python', code)).toBe(code)
     // An f-string's braces hold code, so it is kept, across lines too.
     const f = "open(f'''{root}\n/app/page.tsx''', 'w')"
     expect(codeOnly('python', f)).toBe(f)
+  })
+  // #1194: a one line literal was kept whole, so a sentence in one (a README line a script puts in,
+  // quoting screen.css) read as a name the program opens. Told apart by shape and by use.
+  test('a one line literal that is only a path, or one used as a path, is kept (#1194)', () => {
+    for (const code of [
+      // Only a path: no space in it, or a space in a path from the root or the home folder.
+      "p = 'src/app/globals.css'",
+      "rep('screen.css', 'app/page.tsx')",
+      "p = '/Users/dan/Documents - Dan Pro/Bidspoke/app/page.tsx'",
+      "p = '~/Documents - Dan Pro/Bidspoke/app/page.tsx'",
+      "p = './my site/screen.css'",
+      // A space in a relative path, passed where a path goes.
+      "open('my site/screen.css', 'w')",
+      "io.open(file='my site/screen.css', mode='w')",
+      "Path('my site/screen.css').write_text(css)",
+      "pathlib.Path(root, 'my site/screen.css')",
+      "os.path.join(root, 'my site', 'screen.css')",
+      "shutil.copy(src, 'my site/screen.css')",
+      "root.joinpath('my site/screen.css')",
+      "d / 'my site/screen.css'",
+      "('my site' / name).write_text(css)",
+      "Path('a.css').rename('my site/screen.css')",
+      "Path('a.css').replace('my site/screen.css')",
+      // Imported under another name.
+      "from shutil import copy as cp\ncp(a, 'my site/screen.css')",
+      "from os.path import join\njoin(root, 'my site/screen.css')",
+      "import shutil as sh\nsh.move(a, 'my site/screen.css')",
+      // Bound to a name that is used as a path, or joined with /.
+      "p = 'my site/screen.css'\nopen(p, 'w')",
+      "p = 'my site/screen.css'\nwith open(file=p, mode='w') as f: f.write(css)",
+      "p = 'my site'\n(root / p / 'screen.css').write_text(css)",
+    ])
+      expect(codeOnly('python', code)).toBe(code)
+  })
+  test('a one line literal that is a sentence mentioning a name is data (#1194)', () => {
+    expect(codeOnly('python', "print('wrote app/page.tsx')")).toBe(`print('${blank('wrote app/page.tsx')}')`)
+    const line = 'keep screen.css and src/app/globals.css in step'
+    expect(codeOnly('python', `s = s.replace('the old line', '${line}')`)).toBe(`s = s.replace('${blank('the old line')}', '${blank(line)}')`)
+    expect(codeOnly('python', `rep("A round's files.", "Since #1191 a round's \`screen.css\` passes.")`)).toBe(`rep("${blank("A round's files.")}", "${blank("Since #1191 a round's `screen.css` passes.")}")`)
+    // A str's own replace, join and write are not paths, nor a name only printed or put in a file.
+    expect(codeOnly('python', "', '.join(['a b', 'screen.css x'])")).toBe(`', '.join(['${blank('a b')}', '${blank('screen.css x')}'])`)
+    // A str's join is its own, though os.path's join is imported under that name.
+    expect(codeOnly('python', "from os.path import join\nx = ', '.join('wrote screen.css today')")).toBe(`from os.path import join\nx = ', '.join('${blank('wrote screen.css today')}')`)
+    expect(codeOnly('python', "msg = 'wrote screen.css today'\nprint(msg)")).toBe(`msg = '${blank('wrote screen.css today')}'\nprint(msg)`)
+    expect(codeOnly('python', "open(p, 'w').write('see screen.css for the look')")).toBe(`open(p, 'w').write('${blank('see screen.css for the look')}')`)
   })
   test('a literal spanning lines keeps its last word, which may be a name, with any space after it', () => {
     expect(codeOnly('python', 'p = """notes\napp/page.tsx"""\nopen(p, "w")')).toBe('p = """     \napp/page.tsx"""\nopen(p, "w")')
