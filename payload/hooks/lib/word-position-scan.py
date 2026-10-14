@@ -58,7 +58,7 @@ SELF = "lib/word-position-scan.py"
 SKIP_DIRS = {"__pycache__", "node_modules", ".git"}
 
 
-def code_of(line, path):
+def code_of(line):
     """The line without a comment that starts it: a hook's comments name commands all the time."""
     stripped = line.lstrip()
     if stripped.startswith("#"):
@@ -88,7 +88,7 @@ def scan(folder):
             findings.append(f"{rel}: could not be read, so it could not be checked: {exc}")
             continue
         for n, line in enumerate(text.splitlines(), 1):
-            code = code_of(line, path)
+            code = code_of(line)
             if not code:
                 continue
             for rule, what in RULES:
