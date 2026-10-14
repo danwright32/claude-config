@@ -738,6 +738,25 @@ out=$(run_hook "$dir" "gh api -X PUT repos/acme/widget/pulls/7/merge")
 if denied "$out"; then fail "#1181 a REST merge in an ungated repository was refused: $out"; else pass; fi
 rm -rf "$dir"
 
+echo "changelog record: a repository flag in front of the subcommand (claude-config#1186)"
+
+# Before #1186 a merge with -R in front of pr merge merged with no record read.
+dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY")
+for c in "gh -R acme/widget pr merge 7 --squash" "gh --repo=acme/widget api -X PUT 'repos/{owner}/{repo}/pulls/7/merge'" \
+         "sudo env GH_TOKEN=x rtk gh -Racme/widget pr merge 7"; do
+  out=$(run_hook "$dir" "$c")
+  if denied "$out" && says "$out" "changelog/visible"; then pass; else fail "#1186 an untagged PR merged with the repository flag in front [$c]: $out"; fi
+done
+# The failure path: a repository flag gh cannot read is refused by name.
+out=$(run_hook "$dir" "gh -R nonsense pr merge 7")
+if denied "$out" && says "$out" 'as \"nonsense\"' && says "$out" "ALLOW_UNTAGGED_MERGE=1"; then pass
+else fail "#1186 a merge naming an unreadable repository was not refused by name: $out"; fi
+rm -rf "$dir"
+dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
+out=$(run_hook "$dir" "gh -R acme/widget pr merge 7 --squash")
+if denied "$out"; then fail "#1186 a tagged PR merged with the repository flag in front was refused: $out"; else pass; fi
+rm -rf "$dir"
+
 echo "  $passed passed, $failed failed"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

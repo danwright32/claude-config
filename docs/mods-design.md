@@ -1459,6 +1459,12 @@ is still asked once at bedtime and closed if unanswered.
   route, so no merge reaches GitHub unjudged.
   The refusal tells Claude to leave the green PR open and note it for the report. Phase 3's bans
   (#834) apply on top; `mayDeploy` lifts only this phase's deploy refusals.
+  The daytime merge gates are held to this judge's answer by `tests/api-merge-cases.ts`, which
+  since #1186 also names the repository each merge is about: a `-R` or `--repo` written in front of
+  the subcommand (`gh -R o/x pr merge 7`) is read by both, and a value gh cannot read is a
+  repository that cannot be told to both. A flag this judge does not know in front of a subcommand
+  (`gh pr -R o/x merge 7`, `gh -X PUT api ...`) it still refuses as unreadable, where the gates read
+  it as gh does; the table leaves the repository off those rows and says why.
 
 ### Sleep mode phase 2: nothing pages Dan while asleep (#841), built
 

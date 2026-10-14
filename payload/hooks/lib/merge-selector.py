@@ -9,11 +9,13 @@
 #             empty when it names none, so gh takes the directory's
 #   number  the pull request number it names, or empty
 #   route   pr (gh pr merge), rest (gh api on a pull request's merge endpoint), graphql (a GraphQL
-#             mutation that merges a pull request), untold (a merge through the GitHub API whose
-#             pull request cannot be read from the command), or empty when it runs none
+#             mutation that merges a pull request), untold (a merge whose pull request or repository
+#             cannot be read from the command), or empty when it runs none
 #   node    for graphql, the pull request's node id the mutation names; GitHub resolves it
 #   pin     the commit the merge is pinned to (--match-head-commit, sha=, expectedHeadOid), or empty
-#   why     for untold, which part could not be read: doc, spread, noid, many, endpoint
+#   why     for untold, which part could not be read: doc, spread, noid, many, endpoint, or for a
+#             repository flag gh cannot read, repo (a value that is not [HOST/]OWNER/REPO) and norepo
+#             (no value at all), claude-config#1186
 #   detail  for untold, the words concerned (the endpoint, the file), for the sentence a gate says
 #
 # One reader for both routes, because gh takes the repository and the number from the one command
@@ -25,7 +27,9 @@
 # suites read (payload/mods/scope-modes/tests/api-merge-cases.ts), because two recognisers in two
 # languages cannot share code and drift with nothing reporting it (L450).
 #
-# The gh pr merge reading is the one that lived inline in merge-target.sh until #1181, unchanged.
+# The gh pr merge reading is the one that lived inline in merge-target.sh until #1181. Since #1186 it
+# finds the subcommand as gh does (gh_path), past flags written in front of it, takes the LAST
+# repository flag as gh does, reads short flags clustered, and refuses a repository flag gh cannot read.
 # Only the merge's own arguments count: a `gh pr view --repo x` earlier in the same command is about
 # that view. A newline starts a new command the way a semicolon does, and the walk stops at the first
 # token it cannot read.
@@ -43,11 +47,89 @@ OPENERS = {";", "&&", "||", "|", "&", "(", "{", "|&", ";;"}
 ENDERS = OPENERS | {")", "}"}
 ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
+# ---- where gh finds its subcommand ------------------------------------------------------------
+# gh takes a subcommand's flags written IN FRONT of it: `gh -R o/x pr merge 7`, `gh pr -R o/x merge
+# 7`, `gh -X PUT api repos/o/x/pulls/7/merge` (claude-config#1186; measured on gh 2.89.0, 2026-10-14).
+# Its command library (cobra) finds the subcommand by passing over the flags first, then hands every
+# flag, wherever it stood, to that subcommand. So the reading here does the same: it finds the
+# subcommand and action as cobra finds them, and reads the flags in front as the subcommand's own.
+#
+# Cobra passes over a flag with no `=` in it as one that TAKES the next word, unless it is a flag it
+# knows takes none, and at the head of a gh command those are only gh's own --help (-h) and
+# --version (`gh help` lists no other flag of its own). A word of more than two characters after a
+# single dash (`-Rowner/x`, `-XPUT`) carries its value. So `gh --squash pr merge 7` is a command
+# named merge to gh, which it has none of, and it runs nothing (measured: `gh --web pr view 1`
+# answers `unknown command "view"`); the overnight judge refuses it anyway, and the shared table says
+# why the two differ there.
+GH_NO_VALUE = {"--help", "-h", "--version"}
+
+
+def gh_path(words):
+    """The words after `gh` as gh reads them: (sub, act, flags) where sub and act are the subcommand
+    and its action as cobra finds them (empty when absent; `api` takes no action), and flags are the
+    words written in front of the action, in order, for the subcommand to read as its own."""
+    path, front = [], []
+    j, n = 0, len(words)
+    while j < n:
+        w = words[j]
+        if w == "--":
+            break
+        if w.startswith("-") and len(w) > 1:
+            front.append(w)
+            takes = "=" not in w and w not in GH_NO_VALUE and (w.startswith("--") or len(w) == 2)
+            if takes and j + 1 < n:
+                front.append(words[j + 1])
+                j += 1
+            j += 1
+            continue
+        path.append(w)
+        j += 1
+        if len(path) == 2 or path[0] == "api":
+            break
+    sub = path[0] if path else ""
+    act = path[1] if len(path) > 1 else ""
+    return sub, act, front, words[j:]
+
+
+# ---- the repository flag -----------------------------------------------------------------------
+# gh reads -R and --repo as [HOST/]OWNER/REPO, or as an address when it has a scheme or starts with
+# git@ (gh's ghrepo.FromFullName), and refuses anything else outright: measured on gh 2.89.0,
+# `-R nonsense`, `-R a//b`, `-R a/b/c/d` and `-R o/r/` each answer `expected the "[HOST/]OWNER/REPO"
+# format`. An EMPTY value is no repository to gh, which then reads the folder's (`--repo= pr view`
+# answered for the checkout), so it is read here as none. A flag given no value at all (the last
+# word) gh refuses too. The two refusals are untold merges (claude-config#1186): read as naming no
+# repository, the gates would judge the checkout's pull request in its place (L75).
+ADDRESS = re.compile(r"^[^:]+://")
+# No repository flag given at all, which is not the same as one given an empty value or none.
+MISSING = object()
+
+
+def repo_flag_problem(value):
+    """Why gh cannot read this -R value: "norepo" when the flag has none, "repo" when it is not
+    [HOST/]OWNER/REPO; None when gh can read it."""
+    if value is None:
+        return "norepo"
+    if value == "" or ADDRESS.match(value) or value.startswith("git@"):
+        return None
+    parts = value.split("/", 3)
+    if len(parts) not in (2, 3) or "" in parts:
+        return "repo"
+    return None
+
+
+def untold_repo(problem, value):
+    return {"route": "untold", "why": problem, "detail": value or ""}
+
+
 # ---- gh pr merge -------------------------------------------------------------------------------
 # The flags gh pr merge takes a VALUE for. A value is neither a flag nor the pull request, so
 # without this list a commit sha or a message would be read as the thing being merged.
 VALUED = {"--repo", "-R", "--body", "-b", "--body-file", "-F", "--subject", "-t",
           "--match-head-commit", "--author-email", "-A"}
+# Its short flags that take a value, for a cluster such as `-sR owner/x` or `-sb 42`, which gh reads
+# as pflag does: each letter a flag until one that takes a value, which takes the rest of the word or
+# the next word (claude-config#1186; mod-kit's gh.ts reads `pr merge` with the same letters).
+PR_MERGE_SHORT_VALUES = set("RbFtA")
 LINK = re.compile(r"^(?:[a-z]+://)?([^/\s]+[.][^/\s]+)/([^/\s]+)/([^/\s]+)/pull/([0-9]+)(?:[/?#].*)?$")
 
 
@@ -60,7 +142,9 @@ def norm(v):
 
 
 def read_pr_merge(args):
-    repo, link_repo, number, pin = "", "", "", ""
+    # The repository flag's value as written, or MISSING when no -R or --repo is given. gh takes the
+    # LAST one (measured on gh 2.89.0: `-R a -R b` reads b), so each overwrites the one before.
+    raw, link_repo, number, pin = MISSING, "", "", ""
     j, n = 0, len(args)
     while j < n:
         a = args[j]
@@ -71,19 +155,28 @@ def read_pr_merge(args):
             pin = pin or args[j + 1]
         elif a.startswith("--match-head-commit="):
             pin = pin or a[len("--match-head-commit="):]
-        if a in ("--repo", "-R") and j + 1 < n:
-            repo = repo or norm(args[j + 1])
+        if a in ("--repo", "-R"):
+            raw = args[j + 1] if j + 1 < n else None
             j += 2
             continue
         if a.startswith("--repo="):
-            repo = repo or norm(a[len("--repo="):])
-        elif a.startswith("-R") and len(a) > 2:
-            repo = repo or norm(a[2:])
+            raw = a[len("--repo="):]
         elif a in VALUED:
             j += 2
             continue
-        elif a.startswith("-"):
+        elif a.startswith("--"):
             pass
+        elif a.startswith("-") and len(a) > 1:
+            # A cluster of short flags, read as gh reads it.
+            for k in range(1, len(a)):
+                if a[k] in PR_MERGE_SHORT_VALUES:
+                    value = a[k + 1:]
+                    if not value:
+                        value = args[j + 1] if j + 1 < n else None
+                        j += 1
+                    if a[k] == "R":
+                        raw = value
+                    break
         else:
             m = LINK.match(a)
             if m and not link_repo:
@@ -95,6 +188,12 @@ def read_pr_merge(args):
             elif a.isdigit() and not number:
                 number = a
         j += 1
+    repo = ""
+    if raw is not MISSING:
+        problem = repo_flag_problem(raw)
+        if problem:
+            return untold_repo(problem, raw)
+        repo = norm(raw)
     return {"repo": link_repo or repo, "number": number, "route": "pr", "pin": pin}
 
 
@@ -268,7 +367,38 @@ def arg_value(args, name, variables):
     return None
 
 
-def read_api(args):
+def read_api(front, after):
+    """The merge a gh api call makes, as read_api_route reads it from its flags written in front of
+    `api` and the words after it, held to a repository flag among those in front (claude-config#1186).
+    Only those: after `api` the overnight judge reads -R as a flag of gh api's taking no value, as gh
+    api's own flag table would, so its value is the endpoint there and the call no merge to either. gh api itself takes no -R and refuses a call carrying one, but
+    the overnight judge reads the flag as naming the repository of an endpoint written with gh's
+    placeholders, and the shared table holds the two to one answer: that repository when gh can
+    read it, a refusal when it cannot."""
+    named, rest = MISSING, []
+    j, n = 0, len(front)
+    while j < n:
+        a = front[j]
+        if a in ("-R", "--repo"):
+            named = front[j + 1] if j + 1 < n else None
+            j += 2
+            continue
+        if a.startswith("--repo="):
+            named = a[len("--repo="):]
+        elif a.startswith("-R") and len(a) > 2:
+            named = a[2:]
+        else:
+            rest.append(a)
+        j += 1
+    found = read_api_route(rest + list(after), named)
+    if found and named is not MISSING:
+        problem = repo_flag_problem(named)
+        if problem:
+            return untold_repo(problem, named)
+    return found
+
+
+def read_api_route(args, named):
     flags, plain = api_flags(args)
     endpoint = plain[0] if plain else ""
     fields = [(k, v) for k, v in flags if k in FIELD_FLAGS and isinstance(v, str)]
@@ -324,6 +454,9 @@ def read_api(args):
     if method == "GET" or not m:
         return None
     kind, repo = endpoint_repo(endpoint)
+    # gh's placeholders name the checkout's repository, and a repository flag in front names another.
+    if kind == "checkout" and isinstance(named, str) and named:
+        kind, repo = "repo", norm(named)
     if kind == "untold" or (kind == "checkout" and host and host != "github.com"):
         return {"route": "untold", "why": "endpoint", "detail": endpoint}
     if repo and host and host != "github.com":
@@ -349,16 +482,16 @@ while i < n:
     if at_start and ASSIGN.match(t):
         i += 1
         continue
-    if at_start and t.split("/")[-1] == "gh" and i + 1 < n and toks[i + 1] in ("pr", "api"):
-        is_pr = toks[i + 1:i + 3] == ["pr", "merge"]
-        j = i + (3 if is_pr else 2)
-        k = j
+    if at_start and t.split("/")[-1] == "gh":
+        k = i + 1
         while k < n and toks[k] not in ENDERS:
             k += 1
-        if is_pr:
-            found = read_pr_merge(toks[j:k])
-        elif toks[i + 1] == "api":
-            found = read_api(toks[j:k])
+        # The subcommand as gh finds it, past any of its flags written in front (claude-config#1186).
+        sub, act, front, after = gh_path(toks[i + 1:k])
+        if sub == "pr" and act == "merge":
+            found = read_pr_merge(front + after)
+        elif sub == "api":
+            found = read_api(front, after)
         if found:
             break
         i = k

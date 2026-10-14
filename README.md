@@ -622,6 +622,16 @@ merge is held to the overnight judge's answer by one table both suites read,
 request (`repos/<o>/<r>/merges`, `mergeBranch`) is refused overnight but not judged by the gates,
 which have no pull request to read, and the table says so.
 
+gh takes a subcommand's flags written in front of it, `gh -R owner/name pr merge 7` and `gh pr -R
+owner/name merge 7` (claude-config#1186; before, all three gates let these through unjudged). The
+gates find the subcommand as gh does, past those flags, and take the repository from the flag, the
+last one when there are several, as gh does, on `gh pr merge` and on the API routes. A repository flag
+gh cannot read (`-R nonsense`, `-R a//b`, or `-R` with no value) is refused in plain words, never
+judged as the current folder's pull request; gh refuses such a command itself, so nothing that could
+merge is stopped. An empty one (`--repo=`) is no repository to gh, which reads the folder's, and is
+judged that way. The table carries each spelling, behind each wrapper, with the repository both
+recognisers must read.
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).

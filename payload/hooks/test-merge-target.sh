@@ -587,7 +587,10 @@ for line in open(sys.argv[1]):
         continue
     row = json.loads(s.rstrip(","))
     want = row.get("gates", row["merge"])
-    print(("yes" if want else "no") + "\x1f" + row["command"])
+    # The repository the row says the merge is about (#1186): "-" for a row naming none, "!" for one
+    # that cannot be told, which every gate must refuse, else owner/name.
+    repo = "-" if "repo" not in row else ("!" if row["repo"] is None else row["repo"])
+    print(("yes" if want else "no") + "\x1f" + repo + "\x1f" + row["command"])
 PY
 )"
 n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
@@ -595,18 +598,74 @@ n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
 if [ "$n_rows" -ge 20 ]; then pass; else fail "#1181 the shared table read as $n_rows rows from $API_CASES: $api_rows"; fi
 while IFS= read -r row; do
   [ -n "$row" ] || continue
-  want="${row%%$'\x1f'*}"; c="${row#*$'\x1f'}"
+  want="${row%%$'\x1f'*}"; row="${row#*$'\x1f'}"; want_repo="${row%%$'\x1f'*}"; c="${row#*$'\x1f'}"
   # No gh reaches GitHub from here: a GraphQL row's node is never resolved by a question of merge or not.
   got=no; PATH="$NO_GH:$PATH" mt_runs_merge "$c" </dev/null && got=yes
   eq "$got" "$want" "#1181 the gates' recogniser on the shared table row: $c"
   # Every route in the table is a DIRECT merge, so the blocking gates' question answers the same.
   got=no; PATH="$NO_GH:$PATH" mt_is_pr_merge "$c" </dev/null && got=yes
   eq "$got" "$want" "#1181 the direct merge question on the shared table row: $c"
+  # The repository the merge is about, where the row names one (#1186): the one the gates read, or a
+  # refusal for one that cannot be told, never the checkout's pull request read in its place (L75).
+  case "$want_repo" in
+    -) ;;
+    !)
+      got=judged; PATH="$NO_GH:$PATH" mt_api_merge_untold "$c" </dev/null && got=refused
+      eq "$got" "refused" "#1186 a merge naming a repository that cannot be told is refused: $c" ;;
+    *)
+      got=refused; PATH="$NO_GH:$PATH" mt_api_merge_untold "$c" </dev/null || got=judged
+      eq "$got" "judged" "#1186 a merge naming its repository is judged, not refused: $c"
+      got="$(PATH="$NO_GH:$PATH" mt_repo_flag "$c" </dev/null | tr '[:upper:]' '[:lower:]')"
+      eq "$got" "$want_repo" "#1186 the repository the gates read on the shared table row: $c" ;;
+  esac
 done <<< "$api_rows"
 
 # rtk in front, which rtk-rewrite.sh writes in front of every gh command, is the same merge here (the
 # table leaves wrappers out; its header says why).
 if mt_is_pr_merge "rtk gh api -X PUT repos/acme/widget/pulls/7/merge"; then pass; else fail "#1181 rtk in front hid a REST merge"; fi
+
+# gh's flags written in front of the subcommand (#1186): gh hands them to the subcommand, so the
+# number, the repository and the pin are read from there as from anywhere else in the merge.
+eq "$(mt_pr_number "gh -R acme/widget pr merge 9 --squash")" "9" "#1186 the number of a merge with -R in front"
+eq "$(mt_pr_number "gh -R acme/widget pr -R acme/widget merge 9")" "9" "#1186 and with -R between pr and merge"
+eq "$(mt_repo_flag "gh --repo acme/widget pr merge https://github.com/acme/other/pull/4")" "acme/other" "#1186 a link still wins over a repository flag in front"
+eq "$(mt_pr_number "gh --repo acme/widget pr merge https://github.com/acme/other/pull/4")" "4" "#1186 and names the number"
+mt_api_merge_untold "gh -R acme/widget pr merge 9 --match-head-commit abc123" || :
+eq "$MT_API_PIN" "abc123" "#1186 the pin of a merge with -R in front"
+mt_api_merge_untold "gh --match-head-commit=abc123 pr merge 9" || :
+eq "$MT_API_PIN" "abc123" "#1186 a pin written in front of the subcommand pins the merge too"
+# gh takes the LAST repository flag it is given (measured on gh 2.89.0: `-R a -R b` reads b, and so
+# does `-R b` after the action with `-R a` in front), so the gates read the last one too.
+eq "$(mt_repo_flag "gh pr merge 7 -R acme/other -R acme/widget")" "acme/widget" "#1186 the last repository flag is the one gh reads"
+# Short flags clustered as gh reads them (pflag): the one taking a value takes the rest of the word or
+# the next word, so a body is never the number and a repository in a cluster is still read.
+eq "$(mt_pr_number "gh pr merge -sb 42")" "" "#1186 a body given in a cluster is not the pull request"
+eq "$(mt_repo_flag "gh pr merge 7 -dsR acme/widget")" "acme/widget" "#1186 a repository given in a cluster is read"
+# An empty repository flag is no repository to gh, which then reads the checkout's (measured on gh
+# 2.89.0: `gh --repo= pr view 1184` answered for the folder's repository), so it is judged as one with none.
+eq "$(mt_repo_flag "gh --repo= pr merge 7")" "" "#1186 an empty repository flag names none, as gh reads it"
+if mt_api_merge_untold "gh -R '' pr merge 7"; then fail "#1186 an empty repository flag, which gh reads as none, was refused: $MT_API_WHY"; else pass; fi
+
+# THE FAILURE PATH (#1186): a repository flag gh cannot read as [HOST/]OWNER/REPO, or one with no
+# value at all, is refused with a sentence naming it, never judged as the checkout's pull request.
+# gh itself refuses such a command (`expected the "[HOST/]OWNER/REPO" format, got "nonsense"`), so
+# the refusal stops nothing that could have merged.
+if mt_api_merge_untold "gh -R nonsense pr merge 7"; then
+  case "$MT_API_WHY" in
+    *'"nonsense"'*"owner/name"*) pass ;;
+    *) fail "#1186 the refusal of an unreadable repository flag does not name it and say what gh takes: $MT_API_WHY" ;;
+  esac
+else fail "#1186 a merge naming the repository nonsense was judged as some pull request"; fi
+eq "$(mt_repo_flag "gh -R nonsense pr merge 7")" "" "#1186 and names no repository a gate could ask about"
+eq "$MT_API_ROUTE" "untold" "#1186 its route is one that cannot be told"
+for c in "gh -R acme/widget/ pr merge 7" "gh -R a//b pr merge 7" "gh pr merge 7 --repo"; do
+  if mt_api_merge_untold "$c"; then pass; else fail "#1186 an unreadable repository flag was judged [$c]"; fi
+done
+if mt_api_merge_untold "gh pr merge 7 --squash -R"; then
+  case "$MT_API_WHY" in *"no value"*) pass ;; *) fail "#1186 a repository flag with no value was refused without saying so: $MT_API_WHY" ;; esac
+else fail "#1186 a repository flag with no value was judged"; fi
+# A spelling gh reads as an address is left to gh, as before: refusing it would stop a real merge.
+if mt_api_merge_untold "gh -R https://github.com/acme/widget pr merge 7"; then fail "#1186 an address gh reads was refused: $MT_API_WHY"; else pass; fi
 
 # The reading behind the table's wrapper rows (lib/shell-words.py past_runners): each runner's options
 # and settings are passed over, and env -S, whose command is a string split at run time, is left as
