@@ -1642,6 +1642,8 @@ test('#1194: a look file added onto a folder held in a variable is that folder\'
   // command sets APP, however the scratchpad is named beside it; never as a joined name.
   expect(await held(`APP=/w/slate/src/app; R='${ROUND}'; python3 - <<PY\nopen("$R/screen.css", "w").write("a{}")\nopen("\${APP}/booker.css", "w").write("a{}")\nPY`)).toContain('src/app/booker.css')
   expect(await held(`R='${ROUND}'; python3 - <<PY\nopen("$R/screen.css", "w").write("a{}")\nopen("\${APP}/booker.css", "w").write("a{}")\nPY`)).toContain('booker.css')
+  // Two variables before one name: neither is followed, so it is read in the program's folder.
+  expect(await held(`R='${ROUND}'; python3 - <<PY\nopen("$R/screen.css", "w").write(open("\${A}/booker.css").read())\nopen("\${B}/booker.css", "w").write("a{}")\nPY`)).toContain('booker.css')
   expect(w.ran).toEqual([])
   // A design round's program writing its files into the scratchpad the same ways (an Ovation round,
   // 2026-09-14) passes, as a round's joined names do (#1191).

@@ -100,8 +100,10 @@ export const namesScratchpad = (text: string, session: string, roots: readonly s
 
 // Whether the text just before a name's `/` adds the name onto a folder held in a variable (#1194):
 // an f-string's or a template's brace (`f"{root}/app/page.tsx"`) or a string added onto one
-// (`root + "/app/page.tsx"`). The shell's `${R}/screen.css` is read by shellBraced first.
-const addedOnto = (head: string): boolean => /\}$/.test(head) || /\+\s*[rRbBuUfF]{0,2}['"]$/.test(head)
+// (`root + "/app/page.tsx"`). The shell's `${R}/screen.css` is not: its folder is R's value, read by
+// shellBraces (lessons review).
+const addedOnto = (head: string): boolean => (/\}$/.test(head) && !SHELL_BRACE.test(head)) || /\+\s*[rRbBuUfF]{0,2}['"]$/.test(head)
+const SHELL_BRACE = /\$\{([A-Za-z_]\w*)\}$/
 
 /**
  * Whether every place a text spells a name that looks absolute (`/app/page.tsx`, as mentionedLookFiles
@@ -115,27 +117,27 @@ export const addedOntoFolder = (text: string, name: string): boolean => {
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
     seen = true
-    if (!addedOnto(text.slice(Math.max(0, i - 8), i))) return false
+    if (!addedOnto(text.slice(Math.max(0, i - 64), i))) return false
   }
   return seen
 }
 
 /**
- * The shell variable a name that looks absolute follows in braces (`${APP}/booker.css`, which
- * mentionedLookFiles reads as `/booker.css`), where every place the text spells the name follows the
- * same one (lessons review of #1194). That is the shell's `$APP/booker.css`, which lands where the
- * command sets the variable (shellVarPath), never a joined name. Undefined otherwise.
+ * The shell variables a name that looks absolute follows in braces (`${APP}/booker.css`, which
+ * mentionedLookFiles reads as `/booker.css`), where every place the text spells the name follows one
+ * (lessons review of #1194): each is the shell's `$APP/booker.css`, which lands where the command
+ * sets the variable (shellVarPath), never a joined name. Undefined where any place does not.
  */
-export const shellBraced = (text: string, name: string): string | undefined => {
+export const shellBraces = (text: string, name: string): string[] | undefined => {
   if (!name.startsWith('/')) return undefined
-  const vars = new Set<string>()
+  const vars: string[] = []
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     if (/[\w./~@+*[\]()-]/.test(text[i - 1] ?? '') || /[\w.-]/.test(text[i + name.length] ?? '')) continue
-    const v = /\$\{([A-Za-z_]\w*)\}$/.exec(text.slice(Math.max(0, i - 64), i))?.[1]
+    const v = SHELL_BRACE.exec(text.slice(Math.max(0, i - 64), i))?.[1]
     if (v === undefined) return undefined
-    vars.add(v)
+    if (!vars.includes(v)) vars.push(v)
   }
-  return vars.size === 1 ? [...vars][0] : undefined
+  return vars.length ? vars : undefined
 }
 
 /**
@@ -155,7 +157,7 @@ export const joinedOnly = (text: string, name: string): boolean => {
   for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1)) {
     const before = text[i - 1] ?? ''
     const after = text[i + name.length] ?? ''
-    if (before === '/' && !/[\w.-]/.test(after) && addedOnto(text.slice(Math.max(0, i - 9), i - 1))) {
+    if (before === '/' && !/[\w.-]/.test(after) && addedOnto(text.slice(Math.max(0, i - 65), i - 1))) {
       seen = true
       continue
     }

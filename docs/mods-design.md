@@ -2594,9 +2594,10 @@ with a space in it and a sentence read alike there, so the sentence read as two 
   no scratchpad add a look file onto a worktree's folder (`W+"/Ovation/Roster/ShellView.swift"`)
   and read those names as files at the root, never held; they are now judged in the folder the
   program runs in. The shell's `${APP}/booker.css`, which mentionedLookFiles also reads from the
-  root, is its `$APP/booker.css` (`rules.ts shellBraced`): judged where the command sets APP, as
-  #1191 judges `$APP`, never as a joined name. The lessons review found that the first version
-  read it as joined, so beside a scratchpad it passed a project stylesheet.
+  root, is its `$APP/booker.css` (`rules.ts shellBraces`): judged where the command sets APP, as
+  #1191 judges `$APP`, never as a joined name, and a name spelled after two such variables is read
+  in the program's folder. The lessons review found, twice, that a shell brace read as an f-string's
+  let a project stylesheet pass beside a scratchpad.
 - **What it cannot see.** A relative path holding a space, not from the root or the home folder,
   that reaches an open only through a function of the program's own, a list or a second name reads
   as a sentence. The folder a variable holds is still not followed, so a name added onto another
