@@ -19294,10 +19294,10 @@ cat > "$OC_GH" <<'GHSTUB'
 cat "$OC_GH_MERGED"
 GHSTUB
 chmod +x "$OC_GH"
-export OC_GH_MERGED="$WORK/otherclone-merged.tsv"
+OC_GH_MERGED="$WORK/otherclone-merged.tsv"
 printf 'fix/77-done\t%s\t77\n' "$(git -C "$OC_FB" rev-parse HEAD)" > "$OC_GH_MERGED"
 
-out_fb1="$(SYNC_GH="$OC_GH" oc_pull)"
+out_fb1="$(OC_GH_MERGED="$OC_GH_MERGED" SYNC_GH="$OC_GH" oc_pull)"
 # The fixture really is the case: after that pull the shared repo holds the branch's commit, and
 # the worktree is behind main.
 check "#1198 the feature worktree's commit reached the shared repo" \
@@ -19308,21 +19308,21 @@ check "#1198 a worktree whose PR merged is called finished, naming the PR" \
   "grep -qE 'otherclone-feature is on fix/77-done, whose PR #77 has merged' <<< \"\$out_fb1\""
 check "#1198 and is given the command that removes it" \
   "grep -qF \"worktree remove $OC_FB\" <<< \"\$out_fb1\""
-check "#1198 and is never told to pull" \
+check "#1198 and a finished worktree is never told to pull" \
   "out_lacks \"\$out_fb1\" \"otherclone-feature pull\""
 
 : > "$OC_GH_MERGED"
-out_fb2="$(SYNC_GH="$OC_GH" oc_pull)"
+out_fb2="$(OC_GH_MERGED="$OC_GH_MERGED" SYNC_GH="$OC_GH" oc_pull)"
 check "#1198 a worktree whose PR has not merged is still told how far behind it is" \
   "grep -qE 'otherclone-feature is [0-9]+ commit\(s\) behind' <<< \"\$out_fb2\""
 check "#1198 and that it is on its own branch, so a pull would not bring main in" \
   "grep -qF 'on fix/77-done' <<< \"\$out_fb2\""
 check "#1198 and is given a rebase onto main rather than a pull" \
   "grep -qE \"git -C $OC_FB rebase origin/\" <<< \"\$out_fb2\""
-check "#1198 and is never told to pull" \
+check "#1198 and an unfinished one is never told to pull either" \
   "out_lacks \"\$out_fb2\" \"otherclone-feature pull\""
 
-out_fb3="$(OC_GH_FAIL=1 SYNC_GH="$OC_GH" oc_pull)"
+out_fb3="$(OC_GH_FAIL=1 OC_GH_MERGED="$OC_GH_MERGED" SYNC_GH="$OC_GH" oc_pull)"
 check "#1198 a PR state that cannot be read is said, never guessed" \
   "grep -qF 'whether its PR has merged could not be read' <<< \"\$out_fb3\""
 check "#1198 and it is still never told to pull" \
