@@ -35,7 +35,7 @@ check_eq(){ if [[ "$3" == "$2" ]]; then ok; else bad "$1 (expected '$2', got '$3
 STUB="$TMP/check.sh"
 cat >"$STUB" <<'EOS'
 #!/usr/bin/env bash
-printf 'ran\n' >>"$STUB_CALLS"
+printf 'ran %s\n' "$*" >>"$STUB_CALLS"
 printf '%s\n' "${STUB_SAYS:-}"
 exit "${STUB_RC:-0}"
 EOS
@@ -52,7 +52,7 @@ fire(){ # fire <session id>
   RC=$?
 }
 
-export STUB_SAYS="  STALE agent-x [fix/1-x]: issue #1 is closed and nothing is uncommitted"
+export STUB_SAYS="  removed agent-x [fix/1-x]: PR #1 merged and nothing in it was newer (its branch is kept)"
 
 # --- nothing to say -------------------------------------------------------
 STUB_RC=0 fire s1
@@ -69,7 +69,9 @@ check_eq "and still never blocks the prompt" 0 "$RC"
 
 # --- something to say -----------------------------------------------------
 STUB_RC=1 fire s3
-check "a stale worktree is reported" "STALE agent-x" "$OUT"
+check "a removed worktree is reported" "removed agent-x" "$OUT"
+# Dan's decision on 2026-10-14 (#1199): finished worktrees are removed, not just named.
+check_eq "every run of the check is asked to remove, not only to report" "$(calls)" "$(grep -c -- '^ran --remove' "$STUB_CALLS")"
 check_eq "and even then it does not block the prompt" 0 "$RC"
 
 # --- once per session, not once per prompt --------------------------------
@@ -77,7 +79,7 @@ STUB_RC=1 fire s3
 check_eq "the same answer in the same session is not repeated" "" "$OUT"
 # A DIFFERENT session is told, because that session has been told nothing.
 STUB_RC=1 fire s4
-check "a different session is told the same thing" "STALE agent-x" "$OUT"
+check "a different session is told the same thing" "removed agent-x" "$OUT"
 
 # --- and the check itself is not run again either --------------------------
 # This is the cost bound, and it is the reason the record is read BEFORE the check rather than
@@ -98,10 +100,10 @@ check_eq "a newly stale worktree is left for the next session, not said in this 
 # speaks (L98). Driven twice, because speaking once proves nothing about which way it chose.
 OUT="$(printf '{}' | STALE_WT_CHECK="$STUB" STALE_WT_STATE_DIR="$STATE_DIR" \
   env STUB_RC=1 bash "$SCRIPT" 2>/dev/null)"
-check "with no session to key on it speaks" "STALE agent-x" "$OUT"
+check "with no session to key on it speaks" "removed agent-x" "$OUT"
 OUT="$(printf '{}' | STALE_WT_CHECK="$STUB" STALE_WT_STATE_DIR="$STATE_DIR" \
   env STUB_RC=1 bash "$SCRIPT" 2>/dev/null)"
-check "and goes on speaking rather than falling silent it cannot account for" "STALE agent-x" "$OUT"
+check "and goes on speaking rather than falling silent it cannot account for" "removed agent-x" "$OUT"
 # It says on stderr that it could not hold itself to once per session, because a hook paying a
 # network call on every prompt must not do it silently (L622).
 ERRS="$(printf '{}' | STALE_WT_CHECK="$STUB" STALE_WT_STATE_DIR="$STATE_DIR" \
