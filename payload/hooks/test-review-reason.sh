@@ -360,7 +360,7 @@ is_repeat "$r" && check "a Read whose offset and limit are null is a whole file 
   || check "a Read whose offset and limit are null is a whole file read" "[$r]"
 # FIRST is spelled as a placeholder and swapped for the command name when the line is built, so this
 # file holds no literal pipeline into it for the short circuit scan to count (it is a fixture string).
-for cmd in "cat PATH | FIRST -n 5" "cat PATH | grep -n rule" "cat > PATH <<EOF" "cat >> PATH" "head -n 40 PATH" "head PATH" "tail -n 20 PATH" "sed -n 1,5p PATH" "sed -n 1,400p PATH | cat" "sed 5q PATH" "awk 'NR<10' PATH" "bat -r 1:20 PATH"; do
+for cmd in "cat PATH | FIRST -n 5" "cat PATH | grep -n rule" "cat > PATH <<EOF" "cat >> PATH" "sed -i '' 's/a/b/' PATH" "sed -i.bak 's/a/b/' PATH" "sed --in-place 's/a/b/' PATH" "head -n 40 PATH" "head PATH" "tail -n 20 PATH" "sed -n 1,5p PATH" "sed -n 1,400p PATH | cat" "sed 5q PATH" "awk 'NR<10' PATH" "bat -r 1:20 PATH"; do
   { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2]).replace("FIRST", "he" + "ad")}))' "$cmd" "$INSTRUCTION")"; } > "$T"
   r="$(reason_with)"
   is_full "$r" && check "a partial print ($cmd) is not a read" ok \

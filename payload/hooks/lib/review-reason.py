@@ -140,6 +140,9 @@ def _prints_whole_file(words):
     if cmd == "bat":
         return not any(a in ("-r", "--line-range") or a.startswith(("-r", "--line-range=")) for a in args)
     if cmd == "sed":
+        # An in place edit (-i, -i.bak, BSD's -i '', --in-place) writes the file rather than printing it.
+        if any(a == "--in-place" or a.startswith("--in-place=") or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args):
+            return False
         quiet = any(a.startswith("-") and not a.startswith("--") and "n" in a[1:] for a in args)
         if "-e" in args:
             i = args.index("-e")
