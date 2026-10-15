@@ -112,8 +112,18 @@ LIST=""; HELD=""
 
 # A first look with nothing to baseline still records the session's list (see the header), which
 # costs a process only on that one prompt: every later one finds the list and goes on as before.
+#
+# That first look also sweeps other sessions' records past 14 days, as the full path does below: on
+# a computer where no review ever runs, it is the only pass that writes a record, so without the
+# sweep here one empty list per session would pile up for ever. One more process, on that one prompt.
+sweep_session_records() {   # another session's record by its age; this session's own never
+  find "$SHOWN_DIR" -maxdepth 1 \( -name '*.list' -o -name '*.held' \) ! -name "${session:-.}.list" ! -name "${session:-.}.held" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+}
 first_look_empty() {
-  [ -n "$LIST" ] && [ ! -e "$LIST" ] && { mkdir -p "$SHOWN_DIR" && : > "$LIST"; } 2>/dev/null
+  if [ -n "$LIST" ] && [ ! -e "$LIST" ]; then
+    { mkdir -p "$SHOWN_DIR" && : > "$LIST"; } 2>/dev/null
+    sweep_session_records
+  fi
   exit 0
 }
 [ -d "$AR_STATE_DIR" ] || first_look_empty
@@ -341,7 +351,7 @@ IFS=$' \t\n'
 # Housekeeping. Another session's record is swept by its age; this session's own never is, since it
 # was read above and is appended to below.
 find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.prread' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
-find "$SHOWN_DIR" -maxdepth 1 \( -name '*.list' -o -name '*.held' \) ! -name "${session:-.}.list" ! -name "${session:-.}.held" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+sweep_session_records
 
 # Last, so a run killed at any point before it has recorded nothing (see the header): what was
 # shown, then the fast path stamp, since this session has now seen everything written so far.
