@@ -290,6 +290,26 @@ const pressCopy = async ($: EngineInterface, field: keyof typeof COPIES, surface
   }
 }
 
+// Open (#1215): the open step's link to macOS's open, which hands it to the default browser. The link
+// is one argument with no shell between, and was refused at handover unless it is a whole http or
+// https address with no space or control character (card.ts), so open only ever gets a web address. Bounded well inside the
+// 10 s a press has, and said either way: opening is not doing the step, so the card stays as it was.
+const OPEN_TIMEOUT_MS = 5000
+const pressOpen = async ($: EngineInterface) => {
+  const card = (await $.state.get(cardRef)).value ?? null
+  const i = card ? nextStep(card) : undefined
+  const url = card && i !== undefined ? card.steps[i]?.url : undefined
+  if (i === undefined || !url) return
+  const failed = (why: string) => $.ui.toast(`Could not open the link for step ${i + 1} (${why}). Copy link still has it.`)
+  try {
+    const r = await $.process.run(['/usr/bin/open', url], { timeoutMs: OPEN_TIMEOUT_MS })
+    if (r.exitCode === 0) $.ui.toast(`Opened the link for step ${i + 1} in your browser.`)
+    else failed(r.stderr.trim().split('\n')[0] || `open exited ${r.exitCode}`)
+  } catch (err) {
+    failed(message(err))
+  }
+}
+
 /** The scope modes mod's noun (#621) as its contract has it; it may not be loaded at all. */
 type ScopeModes = { hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean }> }
 
@@ -542,13 +562,15 @@ export const register: Register = on => {
 
   // The card's buttons, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   // Copy link takes the whole address where the terminal draws no hyperlinks (#708). Where a click
-  // may not land, mod-kit draws no Copy link and the link wraps whole to be selected.
+  // may not land, mod-kit draws no Open or Copy link and the link wraps whole to be selected. Open
+  // hands the link to the default browser (#1215).
   on('modkit.press', async ($, e, next) => {
     const field = e.element === 'manual-steps:copy' ? 'value' : e.element === 'manual-steps:copy-link' ? 'url' : undefined
-    if (e.element !== 'manual-steps:done' && !field) return next(e)
-    // Done and Copy each finish well inside a noun's 10 s (#744): a state change, then a prompt sent
-    // or a copy, so the press is answered once its work is done.
-    await (field ? pressCopy($, field, e.surface) : pressDone($))
+    const isOpen = e.element === 'manual-steps:open-link'
+    if (e.element !== 'manual-steps:done' && !field && !isOpen) return next(e)
+    // Done, Copy and Open each finish well inside a noun's 10 s (#744): a state change, then a prompt
+    // sent, a copy or a bounded open, so the press is answered once its work is done.
+    await (isOpen ? pressOpen($) : field ? pressCopy($, field, e.surface) : pressDone($))
     return { value: { isAnswered: true } }
   })
 
