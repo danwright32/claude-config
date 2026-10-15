@@ -103,8 +103,6 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
   EXTRA_ENV=()
   REASON=""
   case "$name" in
-    tdd-nudge.sh|feature-discovery-nudge.sh)
-      REASON="prints a fixed policy line and reads nothing"; return 1 ;;
     turn-end-sound.sh)
       REASON="reads the one sleep record and plays one sound file; the record is a single small file that does not pile up"; return 1 ;;
     no-ai-tells-detect.py)
