@@ -236,7 +236,7 @@ describe('cardLines', () => {
 
   // #939: Dan, 2026-10-08, "I also can't click done here" and "copy link doesn't work here". Where a
   // click cannot reach a button mod-kit draws its instead text: Done says what to type, which is what
-  // Done would have sent, and Copy link and Copy draw nothing, since the link and the value beside them
+  // Done would have sent, and Open, Copy link and Copy draw nothing, since the link and the value beside them
   // are the text to select.
   test('every button carries what is drawn where a click cannot reach it: Done the words to type, Open, Copy link and Copy nothing', () => {
     const c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B', value: 'ip.src eq 1.2.3.4' })] })
@@ -254,8 +254,8 @@ describe('cardLines', () => {
   // #939, Dan 2026-10-08: a Google Sheets link showed as "https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV..."
   // with Copy link dead, so he could neither copy nor read it. The link is on a line of its own under
   // "Where:", nothing beside it, wrapping whole under its own first character, so a terminal can
-  // select all of it; Copy link sits beside the label instead.
-  test('a long link is on its own line under Where:, whole and wrapping, with Copy link beside the label', () => {
+  // select all of it; Open (#1215) and Copy link sit beside the label instead.
+  test('a long link is on its own line under Where:, whole and wrapping, with Open and Copy link beside the label', () => {
     const url = `https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV${'x'.repeat(120)}/edit?gid=0#gid=0`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Open the sheet' })] })) as (P & { href?: string; wrap?: true; label?: string })[][]
     expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
@@ -367,8 +367,8 @@ describe('cardLines', () => {
 
   // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
   // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows,
-  // and Copy link beside it, since Claude Code draws no hyperlinks on Apple Terminal.
-  test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
+  // and Open and Copy link beside it (#1215), since Claude Code draws no hyperlinks on Apple Terminal.
+  test('the open step\'s link is a link part carrying the whole address, with Open and Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
     expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])

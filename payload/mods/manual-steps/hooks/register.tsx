@@ -562,7 +562,8 @@ export const register: Register = on => {
 
   // The card's buttons, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   // Copy link takes the whole address where the terminal draws no hyperlinks (#708). Where a click
-  // may not land, mod-kit draws no Copy link and the link wraps whole to be selected.
+  // may not land, mod-kit draws no Open or Copy link and the link wraps whole to be selected. Open
+  // hands the link to the default browser (#1215).
   on('modkit.press', async ($, e, next) => {
     const field = e.element === 'manual-steps:copy' ? 'value' : e.element === 'manual-steps:copy-link' ? 'url' : undefined
     const isOpen = e.element === 'manual-steps:open-link'
