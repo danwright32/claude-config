@@ -39,11 +39,14 @@ compaction, or the file changed after that read; otherwise a short pointer at th
 copy already in context. Every way of failing to tell (no transcript, an
 unreadable line, a timestamp that will not parse) falls toward the full pointer,
 because a review run from a copy that is not in context is the worse failure.
-What counts as a read is a Read of exactly that file, or a Bash segment led by a
-command that prints it (cat, sed, head, tail, awk, less, more, bat); a listing,
-a count, an existence test, a diff or an edit only names it. Judged from the
-record rather than from a marker this helper would have to keep in step with
-compactions.
+What counts as a read is a WHOLE FILE read: a Read of exactly that file with no
+offset and no limit, or a Bash segment that prints all of it (cat, bat with no
+range, sed with no range, awk printing every line). A partial read (a Read with
+an offset or a limit, head, tail, a sed or awk range) is not one, since the short
+pointer says the text is already in context and most of it would not be (lessons
+review of #1228). A listing, a count, an existence test, a diff or an edit only
+names the file. Judged from the record rather than from a marker this helper
+would have to keep in step with compactions.
 
 Seam: CLAUDE_REVIEW_REASON_FORCE_FAIL makes this fail on purpose, so that caller
 fallback is tested rather than assumed.
@@ -52,6 +55,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime
 
@@ -119,27 +123,57 @@ def _stamp(value):
             return None
 
 
-# Commands that print a file's text. Naming the file is not reading it: ls, grep -c, test -f, a
-# diff or an Edit leave the text out of context, so only a segment led by one of these counts.
-PRINTERS = {"cat", "sed", "head", "tail", "awk", "less", "more", "bat"}
 SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;\n]")
+# A sed script or awk program that prints every line and nothing else.
+SED_WHOLE_WITH_N = {"p", "1,$p"}
+AWK_WHOLE = {"1", "{print}", "{ print }", "{print $0}", "{ print $0 }"}
+
+
+def _prints_whole_file(words):
+    """True only for a command that prints ALL of a file: cat, bat with no range, sed or awk with
+    no range. head, tail, a range or a quit is partial, and anything unrecognised is not a read,
+    which falls toward the full pointer."""
+    cmd, args = os.path.basename(words[0]), words[1:]
+    if cmd == "cat":
+        return True
+    if cmd == "bat":
+        return not any(a in ("-r", "--line-range") or a.startswith(("-r", "--line-range=")) for a in args)
+    if cmd == "sed":
+        quiet = any(a.startswith("-") and not a.startswith("--") and "n" in a[1:] for a in args)
+        if "-e" in args:
+            i = args.index("-e")
+            script = args[i + 1] if i + 1 < len(args) else None
+        else:
+            plain = [a for a in args if not a.startswith("-")]
+            script = plain[0] if len(plain) > 1 else None
+        if script is None:
+            return False
+        return script in SED_WHOLE_WITH_N if quiet else script == ""
+    if cmd == "awk":
+        plain = [a for a in args if not a.startswith("-")]
+        return len(plain) > 1 and plain[0].strip() in AWK_WHOLE
+    return False
 
 
 def _is_read(item, spellings, pattern):
-    """A Read of exactly the file, or a Bash segment that prints it."""
+    """A whole file Read of exactly the file, or a Bash segment that prints all of it."""
     name = item.get("name")
     inp = item.get("input") or {}
     if name == "Read":
-        return inp.get("file_path") in spellings
+        # An offset or a limit is a partial read; null is how a whole file Read can arrive too.
+        return inp.get("file_path") in spellings and inp.get("offset") is None and inp.get("limit") is None
     if name != "Bash":
         return False
     for segment in SEGMENT_SPLIT.split(str(inp.get("command") or "")):
         if not pattern.search(segment):
             continue
-        words = segment.split()
+        try:
+            words = shlex.split(segment)
+        except ValueError:
+            continue  # quoting this cannot follow: not evidence of a read
         while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
             words.pop(0)  # leading VAR=value assignments
-        if words and os.path.basename(words[0]) in PRINTERS:
+        if words and _prints_whole_file(words):
             return True
     return False
 

@@ -342,9 +342,34 @@ done
 { printf '%s\n' "$user_line"; tool_line "$FUTURE" Edit "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1], "old_string": "a", "new_string": "b"}))' "$INSTRUCTION")"; } > "$T"
 r="$(reason_with)"
 is_full "$r" && check "an Edit of the file is not a read of it" ok || check "an Edit of the file is not a read of it" "[$r]"
-{ printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": "sed -n 1,400p " + sys.argv[1] + " | cat"}))' "$INSTRUCTION")"; } > "$T"
+# A PARTIAL read is not a read of the instruction (lessons review of #1228): the short pointer says
+# "you read it earlier", and after a Read of a slice or a head of the file most of it never was.
+# Only a whole file Read (no offset, no limit) or a whole file print counts.
+read_with() { # read_with <extra Read input as JSON>: a Read of the instruction carrying those keys
+  tool_line "$FUTURE" Read "$(python3 -c 'import json,sys; d={"file_path": sys.argv[1]}; d.update(json.loads(sys.argv[2])); print(json.dumps(d))' "$INSTRUCTION" "$1")"
+}
+for extra in '{"offset": 40}' '{"limit": 20}' '{"offset": 1, "limit": 2000}'; do
+  { printf '%s\n' "$user_line"; read_with "$extra"; } > "$T"
+  r="$(reason_with)"
+  is_full "$r" && check "a Read with $extra is a partial read, not a read" ok \
+    || check "a Read with $extra is a partial read, not a read" "[$r]"
+done
+{ printf '%s\n' "$user_line"; read_with '{"offset": null, "limit": null}'; } > "$T"
 r="$(reason_with)"
-is_repeat "$r" && check "a sed print of the file counts as a read" ok || check "a sed print of the file counts as a read" "[$r]"
+is_repeat "$r" && check "a Read whose offset and limit are null is a whole file read" ok \
+  || check "a Read whose offset and limit are null is a whole file read" "[$r]"
+for cmd in "head -n 40 PATH" "head PATH" "tail -n 20 PATH" "sed -n 1,5p PATH" "sed -n 1,400p PATH | cat" "sed 5q PATH" "awk 'NR<10' PATH" "bat -r 1:20 PATH"; do
+  { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2])}))' "$cmd" "$INSTRUCTION")"; } > "$T"
+  r="$(reason_with)"
+  is_full "$r" && check "a partial print ($cmd) is not a read" ok \
+    || check "a partial print ($cmd) is not a read" "[$r]"
+done
+for cmd in "cat PATH" "cat -n PATH" "sed -n p PATH" "sed '' PATH" "awk 1 PATH" "awk '{print}' PATH" "bat PATH" "cat PATH; echo ======; cat /tmp/other.txt"; do
+  { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2])}))' "$cmd" "$INSTRUCTION")"; } > "$T"
+  r="$(reason_with)"
+  is_repeat "$r" && check "a whole file print ($cmd) counts as a read" ok \
+    || check "a whole file print ($cmd) counts as a read" "[$r]"
+done
 
 { printf '%s\n' "$user_line"; read_line "$PAST"; } > "$T"
 r="$(reason_with)"
