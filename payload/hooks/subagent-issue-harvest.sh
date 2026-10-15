@@ -440,8 +440,14 @@ else
   # Without the global config: the harvest reads one transcript digest and never a rule, and
   # loading the CLAUDE.md and all twelve lessons index files cost 64,868 input tokens a harvest
   # against 29,663 without them, measured 2026-09-23 (claude-config#538).
+  # And without anything else it never uses (hook trim, 2026-10-15): it answers in text from the
+  # digest on stdin, so it needs no tool (--tools ""), no skill (--disable-slash-commands), no MCP
+  # server (--strict-mcp-config, naming none) and no hook (disableAllHooks, which also keeps every
+  # per prompt nudge out of its prompt). The skills list and the deferred tool list were about half
+  # of each harvest's input. `--bare` would drop all of it too but refuses the subscription login.
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 with_deadline "$harvest_timeout" claude -p --model haiku)
+    | CLAUDE_DETACHED_RUN=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 with_deadline "$harvest_timeout" claude -p --model haiku \
+        --tools "" --disable-slash-commands --strict-mcp-config --settings '{"disableAllHooks":true}')
 fi
 status=$?
 
