@@ -39,7 +39,7 @@ every switch (the first included) with the option on the stage and its element. 
 option is built once at load, so a global set in buildScreen holds the LAST option
 built: a builder that redraws on a click redraws from what screenShown gave it, never
 from such a global (claude-config#1206). Each switch also keeps how far every scrolling
-region was scrolled, matched by order, so options are compared at the same place.
+region was scrolled, matched by where each sits in the screen, so options are compared at the same place.
 
 A "screen" puts one of the shared screens that ship beside this script, in screens/,
 on the page ahead of the round's own builder and stylesheet. "terminal" is the dark
