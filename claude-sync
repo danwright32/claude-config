@@ -5094,8 +5094,12 @@ write_mod_plugin_dirs(){   # $1 = keep-leftovers on a send, which never sweeps (
 # name, stay this Mac's own. A /effort pick on one Mac is put back to the shared value by the next
 # pull, the same as any shared setting: the repo is its only source.
 SHARED_SETTINGS_FILE="settings.shared.json"
-SHARED_SETTINGS_ALLOWED="ultracode modelSettings"
-SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel"
+#
+# The skill listing cap is shared (hook trim, 2026-10-15): every skill Claude can invoke is listed on
+# every request with its description cut at skillListingMaxDescChars characters, and a 300 cap cut
+# about 7.7K characters of listing per request against the 4096 one Mac carried.
+SHARED_SETTINGS_ALLOWED="ultracode modelSettings skillListingMaxDescChars"
+SHARED_SETTINGS_DESC="ultracode, modelSettings.<model>.effortLevel, skillListingMaxDescChars"
 # The one definition of how the shared settings land in settings.json, used by the write and by the
 # question of whether it is applied, so the two cannot disagree: applied is "applying changes nothing".
 SHARED_SETTINGS_APPLY_JQ='def apply_shared($s): reduce ($s | to_entries[]) as $e (.;
