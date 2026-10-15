@@ -291,6 +291,11 @@ print(json.dumps({"hook_event_name": sys.argv[1], "tool_name": "Bash", "cwd": sy
                   "tool_use_id": sys.argv[4], "tool_input": {"command": sys.argv[2]}}))
 ' "$1" "$2" "$3" "$4" | env SYNC_WATCH_PID_FILE="$pidf" SYNC_HOLD_FILE="$HOLD" PAYLOAD_WRITE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
 }
+# The installed config the report compares against, empty until a case fills it, so every case
+# above the next section is judged as it was before a file could match (claude-config#1211).
+INST="$FIX/installed"
+mkdir -p "$INST"
+export PAYLOAD_WRITE_INSTALLED_DIR="$INST"
 printf 'print(1)\n' > "$FIX/w.py"
 rm -f "$HOLD"
 prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t1
@@ -309,6 +314,8 @@ prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t2
 : > "$FIX/dev/payload/new.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t2
 says "a payload file it created is reported" "$FIX/dev/payload/new.md"
+# The installed config still holds it, so the removal is one the daemon would undo (claude-config#1211).
+: > "$INST/new.md"
 prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" t3
 rm -f "$FIX/dev/payload/new.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" t3
@@ -337,6 +344,44 @@ prepost PreToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 printf 'far\n' > "$FIX/elsewhere/notes.md"
 prepost PostToolUse "python3 $FIX/w.py" "$FIX/elsewhere" t8
 allowed "a call outside any checkout, writing outside one, is silent"
+echo "payload write gate: files that already match the installed config are left out of the report (claude-config#1211)"
+# On 2026-10-15 a fast forward pull of the checkout, right after the same commit was installed,
+# listed 27 files that all matched ~/.claude byte for byte: the daemon had nothing to revert. A
+# report wrong every time the checkout catches up with an install teaches skimming (L36).
+mkdir -p "$FIX/dev/payload/skills/s" "$INST/skills/s"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" m1
+printf 'same\n' > "$FIX/dev/payload/same.md"; printf 'same\n' > "$INST/same.md"
+printf 'mine\n' > "$FIX/dev/payload/differs.md"; printf 'theirs\n' > "$INST/differs.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" m1
+if [ "$RC" -eq 2 ]; then check "a file differing from the installed copy is still reported" ok
+else check "a file differing from the installed copy is still reported" "exit $RC, said: ${OUT:0:160}"; fi
+says "naming it" "$FIX/dev/payload/differs.md"
+case "$OUT" in *"payload/same.md"*) check "a file matching its installed copy is left out" "it was listed" ;; *) check "a file matching its installed copy is left out" ok ;; esac
+says "and the report says how many matched" "1 more already matched"
+says "and counts only the ones that differ" "1 file(s) changed"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" m2
+printf 'caught up\n' > "$FIX/dev/payload/same.md"; printf 'caught up\n' > "$INST/same.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" m2
+allowed "a call whose every change already matches the installed config is silent"
+# The payload holds a placeholder where the installed copy holds this Mac's own home, which is the
+# install working, never drift.
+# In pieces, or installing this suite would rewrite the fixture into this Mac's home path.
+TOKEN="__CLAUDE""_HOME__"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" m3
+printf 'run %s/x.sh\n' "$TOKEN" > "$FIX/dev/payload/skills/s/SKILL.md"; printf 'run %s/x.sh\n' "$INST" > "$INST/skills/s/SKILL.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" m3
+allowed "a file differing only where the payload holds the home placeholder counts as matching"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" m4
+printf 'run %s/y.sh\n' "$TOKEN" > "$FIX/dev/payload/skills/s/SKILL.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" m4
+says "a file carrying the placeholder that also really differs is reported" "$FIX/dev/payload/skills/s/SKILL.md"
+# A removal matches when the installed config lacks the file too, and is reported when it holds it.
+printf 'gone\n' > "$FIX/dev/payload/gone.md"; printf 'kept\n' > "$FIX/dev/payload/kept.md"; printf 'kept\n' > "$INST/kept.md"
+prepost PreToolUse "python3 $FIX/w.py" "$FIX/dev" m5
+rm -f "$FIX/dev/payload/gone.md" "$FIX/dev/payload/kept.md"
+prepost PostToolUse "python3 $FIX/w.py" "$FIX/dev" m5
+says "a removed file the installed config still holds is reported" "$FIX/dev/payload/kept.md"
+case "$OUT" in *"payload/gone.md"*) check "a removed file the installed config lacks too is left out" "it was listed" ;; *) check "a removed file the installed config lacks too is left out" ok ;; esac
 echo "payload write gate: an agent's own linked worktree on its own branch is not refused (claude-config#800)"
 
 # The daemon mirrors ~/.claude over payload/ in ITS clone and pushes to main; it never writes into a
