@@ -62,6 +62,16 @@
 # started against 300 files of another repository, 300 branch reviews of this one, and 300 push
 # reviews of this one against 30, and require each pair to be equal.
 #
+# SHOWN WHAT FINISHES DURING THE SESSION (claude-config#1216). A session with no record yet is at its
+# first look, and the reviews of its repository already finished then belong to earlier sessions:
+# on 2026-10-15 a new Slate session found about 650, mostly background agents' pushes from sessions
+# long gone, and printed 8,000 characters of them on every prompt for dozens of prompts. So the first
+# look records them as seen without printing them, and says in one line how many and where they
+# are. A review still pending then, or settled by this very pass, is not in that baseline, and is
+# shown when it finishes. A first prompt with nothing to baseline records an empty list all the same,
+# or the next review to finish would be taken for an earlier one. Subagents never prompt, so a
+# session's own pushes and its agents' all finish after its first look and are shown.
+#
 # MARKED SHOWN ONLY ONCE IT IS OUT. The platform throws a hook's output away when it kills it at the
 # timeout, so a review recorded as shown the moment it was printed was, when the hook was then
 # killed, never seen and never shown again. What was shown is appended to the session's list as the
@@ -85,7 +95,6 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/ai-review-common.sh
 . "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null || exit 0
 
-[ -d "$AR_STATE_DIR" ] || exit 0
 shopt -s nullglob
 
 # The session, read with a bash regex first because the fast path must start no process. A session
@@ -101,6 +110,14 @@ SHOWN_DIR="$AR_STATE_DIR/shown"
 LIST=""; HELD=""
 [ -n "$session" ] && { LIST="$SHOWN_DIR/$session.list"; HELD="$SHOWN_DIR/$session.held"; }
 
+# A first look with nothing to baseline still records the session's list (see the header), which
+# costs a process only on that one prompt: every later one finds the list and goes on as before.
+first_look_empty() {
+  [ -n "$LIST" ] && [ ! -e "$LIST" ] && { mkdir -p "$SHOWN_DIR" && : > "$LIST"; } 2>/dev/null
+  exit 0
+}
+[ -d "$AR_STATE_DIR" ] || first_look_empty
+
 # Fast path: nothing written since this session last looked, nothing pending, and nothing held back
 # by the last pass for want of room (the .held marker, at the end). "Since" is the session's record
 # being strictly NEWER than the last write: bash 3.2's -nt compares whole seconds, so a write in the
@@ -113,7 +130,7 @@ if [ -n "$LIST" ] && [ -f "$LIST" ] && [ "${#pending[@]}" -eq 0 ] && [ ! -e "$HE
 fi
 
 finished=( "$AR_STATE_DIR"/*.txt )
-[ "${#finished[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || exit 0
+[ "${#finished[@]}" -gt 0 ] || [ "${#pending[@]}" -gt 0 ] || first_look_empty
 
 # Full path. The repository this session is in, from the payload's cwd.
 fields="$(ar_payload_fields "$input")" || exit 0
@@ -160,6 +177,11 @@ NUDGE_BUDGET=8000
 NUDGE_HEADING=400   # the heading line above a review's text, with the repository, branch and sha
 printed=0
 held=0
+
+# The baseline, taken before anything pending is settled below, so a review that finishes in this
+# very pass is shown rather than counted as an earlier one.
+baseline=""
+[ -n "$LIST" ] && [ ! -e "$LIST" ] && baseline="$(unshown_reviews)"
 
 elapsed_text() {   # $1 = seconds -> "1m 42s" or "42s"
   local s="$1"
@@ -262,6 +284,13 @@ body_bound() {   # $1 = finished review file -> sets bound
 done
 
 todo="$(unshown_reviews)"
+if [ -n "$baseline" ]; then
+  # One awk over both lists, so the baseline costs no process per review (6f).
+  todo="$(printf '%s\n' "$todo" | awk 'FILENAME == ARGV[1] { b[$0] = 1; next } !($0 in b)' <(printf '%s\n' "$baseline") -)"
+  shown_names="$baseline"$'\n'
+  printf '%s review(s) of this repository finished before this session began, so they are not shown here; they are in %s.\n' \
+    "$(printf '%s\n' "$baseline" | grep -c .)" "$AR_STATE_DIR"
+fi
 IFS=$'\n'
 for base in $todo; do
   IFS=$' \t\n'

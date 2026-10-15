@@ -153,6 +153,16 @@ wait_for_final(){ # wait_for_final <sha> <seconds>  -> 0 when the finished file 
   return 1
 }
 
+# The sessions the nudge cases below speak as, begun HERE, before any push, as a real session's first
+# prompt comes before the reviews of its own pushes (claude-config#1216): a session is shown the
+# reviews that finish during it, and those finished before it began are recorded as a baseline and
+# not replayed. Begun with the state folder not yet there, which is the case of a first prompt with
+# nothing to baseline.
+for s in n1 n2 n3 p30 p300 killed; do
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$s" "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+done
+[ -f "$AI_REVIEW_STATE_DIR/shown/n1.list" ] && ok || bad "a session's first prompt with nothing to baseline still records an empty list"
+
 # ===========================================================================
 # 1. A successful push starts exactly one detached review and returns at once.
 # ===========================================================================
@@ -624,6 +634,75 @@ nudge n1
 [ -e "$AI_REVIEW_STATE_DIR/shown/gone.held" ] && bad "and so is its held marker" || ok
 [ -s "$AI_REVIEW_STATE_DIR/shown/recent.list" ] && ok || bad "a recent session record is kept"
 [ -s "$AI_REVIEW_STATE_DIR/shown/n1.list" ] && ok || bad "and this session's own record is kept, however old"
+rm -f "$AI_REVIEW_STATE_DIR/$own_key"-0000000000*.txt
+
+# 6f. A new session is shown the reviews that finish during it, never the last 14 days of them
+# (claude-config#1216). Seen live in a Slate session on 2026-10-15: about 650 earlier reviews, mostly
+# background agents' pushes from other sessions, printed 8,000 characters at a time on every prompt
+# for dozens of prompts. Its first look records them as a baseline and says so in one line.
+# How many finished push reviews of this repository the folder holds, counted here by listing it,
+# not through the hook's own filter, so the two can disagree (L721).
+own_finished(){ ls "$AI_REVIEW_STATE_DIR" | grep -c "^$own_key-[0-9a-f]*\.txt\$"; }
+i=900; while [ "$i" -lt 903 ]; do own_review push "$i"; i=$((i + 1)); done
+touch "$AI_REVIEW_STATE_DIR/.updated"
+earlier="$(own_finished)"
+[ "$earlier" -ge 3 ] && ok || bad "the folder holds the 3 reviews just written (it holds $earlier)"
+nudge fresh1
+check "a new session's first prompt says how many earlier reviews it left out" "$earlier review(s) of this repository finished before this session began" "$OUT"
+check "and where they are" "$AI_REVIEW_STATE_DIR" "$OUT"
+check_not "and shows none of them" "own review 90" "$OUT"
+check_eq "in one line" 1 "$(printf '%s\n' "$OUT" | grep -c .)"
+check_eq "and exits 0" 0 "$RC"
+nudge fresh1
+check_eq "the next prompt says nothing more about them" "" "$OUT"
+own_review push 903; touch "$AI_REVIEW_STATE_DIR/.updated"
+nudge fresh1
+check "a review finished after the first look is shown" "own review 903 finding 1" "$OUT"
+check_not "and the earlier ones still are not" "own review 900" "$OUT"
+# A review still running at the first look is not part of the baseline: shown once it finishes.
+run_sha="$(printf '%040d' 904)"
+printf 'repo=repo\nbranch=feat/b904\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' "$run_sha" "$(date +%s)" > "$AI_REVIEW_STATE_DIR/$own_key-$run_sha.txt.pending"
+nudge fresh2
+check_not "a review still running at a session's first look is not shown yet" "own review 904" "$OUT"
+rm -f "$AI_REVIEW_STATE_DIR/$own_key-$run_sha.txt.pending"; own_review push 904; touch "$AI_REVIEW_STATE_DIR/.updated"
+nudge fresh2
+check "and is shown when it finishes" "own review 904 finding 1" "$OUT"
+# One the hook itself settles at that first look (its runner died) finished during the session too.
+dead_sha="$(printf '%040d' 905)"
+printf 'repo=repo\nbranch=feat/dead905\nsha=%s\nstarted=%s\nmodel=sonnet\ndeadline=240\n' "$dead_sha" "$(( $(date +%s) - 1000 ))" > "$AI_REVIEW_STATE_DIR/$own_key-$dead_sha.txt.pending"
+nudge fresh3
+check "a dead review settled at a session's first look is reported to it" "feat/dead905" "$OUT"
+# Only this repository's reviews make the baseline: another repository's session still sees its own.
+other_new="$AI_REVIEW_STATE_DIR/$other_key-0000000000000000000000000000000000000906.txt"
+printf 'repo=other\nbranch=fix/other906\nsha=0000000000000000000000000000000000000906\nstarted=1\nfinished=2\nstatus=ok\n\nsrc/o.ts:1: the other repository finding. Should be: shown.\n' > "$other_new"
+touch "$AI_REVIEW_STATE_DIR/.updated"
+nudge fresh4
+check_not "a new session's baseline holds only its own repository's reviews" "other repository finding" "$OUT"
+nudge n3 "$OTHER"
+check "so a session in the other repository is still shown that repository's review" "the other repository finding" "$OUT"
+rm -f "$other_new"
+# A first look killed before it finished records no baseline, so the next prompt takes it again.
+PATH="$KILLBIN:$REAL_PATH" nudge fresh5
+[ "$RC" -ne 0 ] && ok || bad "the first look really was killed (exit $RC), or the case proves nothing"
+[ -e "$AI_REVIEW_STATE_DIR/shown/fresh5.list" ] && bad "a first look killed before it finished records no baseline" || ok
+nudge fresh5
+check "so the next prompt takes the baseline again" "review(s) of this repository finished before this session began" "$OUT"
+check_not "still showing none of them" "own review 90" "$OUT"
+# With nothing of its repository to baseline it says nothing, and still records its list.
+nudge fresh6 "$OTHER"
+check_eq "a first look with nothing of its repository to baseline says nothing" "" "$OUT"
+[ -f "$AI_REVIEW_STATE_DIR/shown/fresh6.list" ] && ok || bad "and records its list all the same"
+# The baseline pass starts no process per review: 300 earlier reviews cost what 30 do.
+rm -f "$AI_REVIEW_STATE_DIR/$own_key"-0000000000*.txt
+i=0; while [ "$i" -lt 30 ]; do own_review push "$i"; i=$((i + 1)); done
+earlier="$(own_finished)"
+count_launches fresh30; base30="$LAUNCHES"
+check "a first look over 30 earlier reviews says so" "$earlier review(s) of this repository" "$OUT"
+while [ "$i" -lt 300 ]; do own_review push "$i"; i=$((i + 1)); done
+earlier="$(own_finished)"
+count_launches fresh300
+check "and over 300" "$earlier review(s) of this repository" "$OUT"
+check_eq "300 earlier reviews start no more processes at a first look than 30 do ($base30)" "$base30" "$LAUNCHES"
 rm -f "$AI_REVIEW_STATE_DIR/$own_key"-0000000000*.txt
 
 # ===========================================================================
