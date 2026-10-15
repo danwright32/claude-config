@@ -10,6 +10,7 @@ Act as a senior developer doing a thorough code review of the git diff on standa
 8. Type safety: incorrect or overly loose types, unsafe casts.
 9. Error handling: missing error handling on the boundaries that need it, and a caught error that is swallowed so the failure reads as success.
 10. A repeat of a recorded lesson. Above these instructions, after a line reading "===== LESSONS", are the lessons learned from past mistakes in these projects, one line each, numbered like L41. Where the push repeats the mistake a lesson describes, report it like any other issue and cite the lesson by ending the what is wrong part with its number in brackets, for example (L41). Cite a lesson only where the diff actually repeats it.
+11. A description that no longer matches the code: a comment, a docstring, a test's name or comment, or a documentation line that still describes what the change replaced. Before reporting one, search the diff and the full files for every other place that describes the same behaviour, and report each of them on its own line in this same review, so they are all fixed at once rather than one per push.
 
 Ignore pure style and formatting nitpicks unless they cause a real bug.
 
