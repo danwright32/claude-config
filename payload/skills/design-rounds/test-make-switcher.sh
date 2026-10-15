@@ -422,6 +422,70 @@ MUTPY
 fi
 
 
+# --- 11b. switching keeps the scroll position, and tells the builder which option is shown ---
+# claude-config#1206, from Dan's Bidspoke partners rounds on 2026-10-14: "the page jumps to the top
+# after I scroll down if I go to another option. makes it really hard to compare." The stage swaps
+# built elements in and out, and a browser resets the scroll of an element taken out of the
+# document. Measured there: scrolled to 600, switched, read back 0.
+SCR="$TMP/scroll"; mkdir -p "$SCR"
+cat > "$SCR/builder.js" <<'BUILDER'
+var SHOWN_LOG = [];
+function buildScreen(variant) {
+  var outer = document.createElement("div");
+  outer.className = "screen";
+  var list = document.createElement("div");
+  list.className = "scroller";
+  list.style.cssText = "height:100px;overflow:auto";
+  var tall = document.createElement("div");
+  tall.style.cssText = "height:2000px";
+  tall.textContent = variant.name;
+  list.appendChild(tall);
+  outer.appendChild(list);
+  return outer;
+}
+function screenShown(variant, element) {
+  SHOWN_LOG.push(variant.name + ":" + (element && element.parentNode && element.parentNode.id));
+}
+BUILDER
+printf '.screen { color: #111; }\n' > "$SCR/screen.css"
+spec "$SCR/spec.json" "$TWO"
+run "$SCR/spec.json" "$SCR/out.html" >/dev/null
+scroll_probe() { # scroll_probe <page> -> the shown list's scroll after switching, then the hook's log
+  python3 - "$1" <<'SCROLLPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+function shownList() { return document.querySelector("#dr-stage .scroller"); }
+shownList().scrollTop = 600;
+document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+var afterOne = shownList().scrollTop;
+shownList().scrollTop = 250;
+document.dispatchEvent(new KeyboardEvent("keydown", {key: "1", bubbles: true}));
+var afterTwo = shownList().scrollTop;
+var out = document.createElement("pre"); out.id = "PROBE";
+out.textContent = afterOne + "," + afterTwo + "|" + (typeof SHOWN_LOG === "undefined" ? "NO-LOG" : SHOWN_LOG.join(","));
+document.body.append(out);
+</script>
+"""
+open(sys.argv[1] + ".scroll.html", "w", encoding="utf-8").write(page + harness)
+SCROLLPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    --dump-dom "file://$1.scroll.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
+}
+if [[ ! -x "$CHROME" ]]; then
+  echo "UNMEASURED: no browser at $CHROME, so keeping the scroll position across a switch was not tested. Set SWITCHER_TEST_CHROME."
+  unmeasured=$((unmeasured + 1))
+else
+  got="$(scroll_probe "$SCR/out.html")"
+  check_eq "a switch keeps how far a scrolling region inside the screen was scrolled, both ways" "600,250" "${got%%|*}"
+  # The hook is called after every swap, the first one included, with the option and the element on
+  # the stage, so a builder can redraw the screen that is showing rather than the last one built.
+  check_eq "the builder is told which option is on the stage after every switch" \
+    "Espresso:dr-stage,Ink:dr-stage,Espresso:dr-stage" "${got#*|}"
+fi
+
 # --- 12. the committed example is what the tool produces today ---
 #
 # example/switcher.html is generated and committed beside its own source, so it goes
