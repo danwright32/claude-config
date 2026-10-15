@@ -291,8 +291,8 @@ const pressCopy = async ($: EngineInterface, field: keyof typeof COPIES, surface
 }
 
 // Open (#1215): the open step's link to macOS's open, which hands it to the default browser. The link
-// is one argument with no shell between, and was refused at handover unless it is a whole https
-// address with no space or control character, so it is only ever an address. Bounded well inside the
+// is one argument with no shell between, and was refused at handover unless it is a whole http or
+// https address with no space or control character (card.ts), so open only ever gets a web address. Bounded well inside the
 // 10 s a press has, and said either way: opening is not doing the step, so the card stays as it was.
 const OPEN_TIMEOUT_MS = 5000
 const pressOpen = async ($: EngineInterface) => {
