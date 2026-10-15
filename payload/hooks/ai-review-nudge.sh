@@ -78,9 +78,12 @@
 # last write of the run, after everything else, so a run killed at any point before records nothing
 # and the next prompt shows it all again (section 6d).
 #
-# Housekeeping, only on the full path: finished files older than 14 days are removed, with their
+# Housekeeping, on the full path: finished files older than 14 days are removed, with their
 # delivery stamps, and so are other sessions' shown/ records not touched in 14 days (a record is
-# touched on every full pass, so one that old lists only reviews already swept). They are records of
+# touched on every full pass, so one that old lists only reviews already swept). The records sweep
+# also runs on a session's first look with nothing to baseline (sweep_session_records, called from
+# first_look_empty), since on a Mac where no review runs that is the only pass that writes a
+# record, and without it one empty list per session would pile up. They are records of
 # a push, not data anybody restores from. citations.tsv, the ledger of which lessons reviews cite,
 # is not a .txt and is never swept.
 #
