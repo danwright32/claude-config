@@ -274,6 +274,9 @@ check "the Swift file is in the diff (every file type)" "App/Sync.swift" "$stdin
 check "markdown is in the diff too" "+More." "$stdin"
 check "the first commit of the branch is in it, not only the last" "throws" "$stdin"
 check "the reviewer is told this is a whole branch" "WHOLE BRANCH" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
+# claude-config#1220: on #1217 four pushes each surfaced ONE more description a new button had left
+# stale. The reviewer is asked to report every description of the same behaviour in one review.
+check "the reviewer is asked to report every stale description of one behaviour at once" "every other place that describes the same behaviour" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
 check_not "the reviewer did not inherit CLAUDECODE" "CLAUDECODE=" "$(cat "$FAKE_LOG/env")"
 check "the cited lesson reached the durable ledger" "L215" "$(cat "$AI_REVIEW_STATE_DIR/citations.tsv" 2>/dev/null)"
 
