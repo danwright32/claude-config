@@ -1,5 +1,6 @@
 ---
 name: dan-wright-brand-voice
+disable-model-invocation: true
 description: Write content in Dan Wright Photography's voice for blog posts, social media, website copy, emails, alt text, and marketing. Use for any written content for Dan Wright Photography, a NYC-based documentary-style performing arts photographer. Covers brand voice, structural rules, factual-accuracy discipline, AI-tell avoidance, and per-format workflows.
 ---
 

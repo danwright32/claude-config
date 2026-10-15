@@ -82,7 +82,6 @@ payload/hooks/test-feature-discovery-nudge.sh: 1
 payload/hooks/test-lessons-advisory.sh: 2
 payload/hooks/test-measure-lessons-advisory.sh: 0
 payload/hooks/test-no-ai-tells-detect.sh: 0
-payload/hooks/test-post-compact.sh: 1
 payload/hooks/test-pr-merge-quiz.sh: 2
 payload/hooks/test-require-issue-fields.sh: 0
 payload/hooks/test-require-tests-before-push.sh: 1

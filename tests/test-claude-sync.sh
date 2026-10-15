@@ -20518,6 +20518,19 @@ check "#695 a pull sets ultracode from the shared settings file" "[ \"\$(jq -r '
 check "#772 #695 every other setting is exactly as it was" \
   "[ \"\$(jq -cS 'del(.statusLine, .ultracode)' '$SX1H/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
 check "#772 #695 and the pull names what it wrote" "line_has \"\$out_sx1\" 'settings.json' 'status line' && line_has \"\$out_sx1\" 'settings.json' 'ultracode'"
+
+# THE SKILL LISTING CAP IS SHARED TOO (hook trim, 2026-10-15). Every skill Claude can invoke is
+# listed with its description on every request, cut at skillListingMaxDescChars characters each; at
+# 4096 the longest descriptions went out in full, and a 300 cap removes about 7.7K characters of
+# listing per request. It is a setting Dan chose for both Macs, so it travels in the shared file.
+SXLR="$WORK/sxl-repo"; sx_repo "$SXLR" '{"skillListingMaxDescChars": 300}' ''
+SXLH="$WORK/sxl-home"; mkdir -p "$SXLH"; printf '%s\n' "$SX_ORIG" | jq -c '. + {"skillListingMaxDescChars": 4096}' > "$SXLH/settings.json"
+out_sxl="$(sx_pull "$SXLH" "$SXLR")"
+dbg "shared skill listing cap: $out_sxl"
+check "a pull sets skillListingMaxDescChars from the shared settings file" "[ \"\$(jq -r '.skillListingMaxDescChars' '$SXLH/settings.json')\" = 300 ]"
+check "and leaves every other setting as it was" \
+  "[ \"\$(jq -cS 'del(.skillListingMaxDescChars)' '$SXLH/settings.json')\" = \"\$(printf '%s' '$SX_ORIG' | jq -cS .)\" ]"
+check "and the shared file in this repository carries the 300 cap" "[ \"\$(jq -r '.skillListingMaxDescChars' '$(dirname "$SCRIPT")/payload/settings.shared.json')\" = 300 ]"
 # A second pull with nothing new leaves the file and its mtime alone: settings.json is a WatchPath,
 # and a needless rewrite would trigger the next sync. The mtime is SET into the past rather than
 # waited on, so a rewrite in the same second cannot hide (L290).
