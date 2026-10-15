@@ -1,5 +1,6 @@
 ---
 name: tracker
+disable-model-invocation: true
 description: Add a row to my personal Google Sheet project tracker from any project, or scan this Mac's git work to propose row updates and new rows (--scan). Use when the user wants to log a project update, record progress, "add to the tracker", or bring the tracker up to date from their repositories.
 trigger: /tracker
 ---

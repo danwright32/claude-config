@@ -16,8 +16,10 @@ back.
 - `payload/mods/`: Claude Code mods, each a plugin folder, loaded on **both** Macs (see Mods below)
 - `payload/settings.hooks.json`: **only** the `hooks` block of `settings.json`
 - `payload/settings.shared.json`: the few other `settings.json` settings both Macs share, today
-  `ultracode` (off since 2026-10-06) and the effort level per model, as
-  `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`). It is edited in the
+  `ultracode` (off since 2026-10-06), the effort level per model, as
+  `modelSettings.<full model name>.effortLevel` (`high` for `claude-opus-5-5`), and
+  `skillListingMaxDescChars` (300 since 2026-10-15, the characters of each skill description listed
+  to Claude on every request). It is edited in the
   repo, never published back from a Mac, and a pull writes each value into `settings.json`
   (refusing the whole file, by name, if it holds any key not on the allowlist in `claude-sync`, or a
   value Claude Code would not act on). Off is `false`, never a deletion. A `/effort` pick on one Mac
