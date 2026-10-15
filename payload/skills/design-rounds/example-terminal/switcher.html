@@ -399,6 +399,7 @@ function buildScreen(variant) {
   var stage = document.getElementById("dr-stage");
   var current = 0;
   var built = [];
+  var hookSaid = false;
 
   function show(index) {
     current = (index + VARIANTS.length) % VARIANTS.length;
@@ -432,12 +433,19 @@ function buildScreen(variant) {
     /* The builder is told which option is on the stage (claude-config#1206). Every option is built
        once at load, so a builder keeping one global redraw function ends up holding the LAST option
        built, and a click in the one showing redrew another off the stage. screenShown is read from
-       the top level, as buildScreen is, and a builder that throws in it costs only its own redraw. */
+       the top level, as buildScreen is. One that throws leaves the screen looking finished while
+       the redraw it asked for never happened, so the first throw is said on the page, as a
+       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). */
     if (typeof screenShown === "function") {
       try {
         screenShown(variant, incoming);
       } catch (err) {
-        if (window.console) console.error("screenShown threw for " + variant.name + ":", err);
+        if (!hookSaid) {
+          hookSaid = true;
+          warn("The builder's screenShown threw when " + variant.name + " was shown: "
+               + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
+               + "switch did not happen, so the screen showing may not be this option's.");
+        }
       }
     }
   }

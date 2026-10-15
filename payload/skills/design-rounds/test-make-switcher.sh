@@ -534,6 +534,25 @@ TWOPY
   check_eq "a region keeps its own scroll when an earlier region of the other option does not overflow" "300" "$got2"
 fi
 
+# Lessons review of #1206: a screenShown that throws leaves the screen on the stage looking finished
+# while the redraw it asked for never happened, so it is said on the page, as a throwing builder is.
+SC3="$TMP/scroll-throw"; mkdir -p "$SC3"
+cat > "$SC3/builder.js" <<'BUILDER'
+function buildScreen(variant) { var d = document.createElement("div"); d.className = "screen"; d.textContent = variant.name; return d; }
+function screenShown(variant) { throw new Error("no partner list for " + variant.name); }
+BUILDER
+printf '.screen { color: #111; }\n' > "$SC3/screen.css"
+spec "$SC3/spec.json" "$TWO"
+run "$SC3/spec.json" "$SC3/out.html" >/dev/null
+if [[ -x "$CHROME" ]]; then
+  strip3="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC3/out.html" 2>/dev/null \
+    | python3 -c 'import sys,re
+m = re.search(r"<p class=\"dr-sameness\">(.*?)</p>", sys.stdin.read(), re.S)
+print(re.sub(r"\s+", " ", m.group(1)).strip() if m else "NO-STRIP")')"
+  check "a screenShown that throws is said on the page" "screenShown threw" "$strip3"
+  check "and the strip quotes what it said" "no partner list for Espresso" "$strip3"
+fi
+
 # --- 12. the committed example is what the tool produces today ---
 #
 # example/switcher.html is generated and committed beside its own source, so it goes
