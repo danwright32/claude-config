@@ -137,12 +137,14 @@ if [ -n "$rref" ] && [ -f "$(expand "$rref")" ]; then ok "workflow RULES_PATH ->
 if grep -q "title: 'Lessons audit'" "$wf" 2>/dev/null; then ok "workflow declares the Lessons audit phase"; else bad "panel.workflow.js, no 'Lessons audit' phase declared"; fi
 # The audit is only a gate if its violations drive the fix loop; a phase that merely
 # reports would leave a known-bad plan intact and still look present in the phase list.
-if grep -q 'stillViolating()' "$wf" 2>/dev/null; then ok "lesson violations feed the fix loop"; else bad "panel.workflow.js: lessons audit is not wired into the fix-and-reverify loop"; fi
+# Both modes settle the plan through the one loop (claude-config#1208); its behaviour is tested by
+# test-panel-loop.sh, which runs it, and this only checks both paths still call it.
+if [ "$(grep -c 'await checkUntilSettled(' "$wf" 2>/dev/null)" -ge 2 ]; then ok "both paths settle the plan through the check loop"; else bad "panel.workflow.js: the main path or revise mode no longer settles its plan through checkUntilSettled"; fi
 # The script has TWO exits (main path and revise mode) and each must carry the audit.
 # Matching 'a return containing lessonsAudit' is not enough: the revise return satisfies
 # it on its own, so the main return could lose the audit and this would stay green.
-if grep -qE '^\s*return \{.*plan: finalPlan.*lessonsAudit' "$wf" 2>/dev/null; then ok "main path returns lessonsAudit"; else bad "panel.workflow.js: main return does not carry lessonsAudit"; fi
-if grep -qE "^\s*return \{ mode: 'revise'.*lessonsAudit" "$wf" 2>/dev/null; then ok "revise mode returns lessonsAudit"; else bad "panel.workflow.js: revise return does not carry lessonsAudit"; fi
+if grep -qE '^\s*return \{.*plan: finalPlan.*checks: settled\.checks.*lessonsAudit' "$wf" 2>/dev/null; then ok "main path returns its checks and lessonsAudit"; else bad "panel.workflow.js: main return does not carry checks and lessonsAudit"; fi
+if grep -qE "^\s*return \{ mode: 'revise'.*checks: settled\.checks.*lessonsAudit" "$wf" 2>/dev/null; then ok "revise mode returns its checks and lessonsAudit"; else bad "panel.workflow.js: revise return does not carry checks and lessonsAudit"; fi
 if grep -q 'lessonsAudit' "$D/skills/plan-council/SKILL.md" 2>/dev/null; then ok "plan-council reports lessonsAudit to the user"; else bad "plan-council SKILL.md, never reads lessonsAudit, so violations would be invisible"; fi
 if grep -q 'LESSONS-INDEX' "$D/skills/plan-lite/SKILL.md" 2>/dev/null; then ok "plan-lite runs a lessons audit against the index"; else bad "plan-lite SKILL.md, no lessons audit step against the LESSONS-INDEX files"; fi
 

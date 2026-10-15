@@ -105,13 +105,13 @@ const LESSONS_SCHEMA = {
     notes: { type: 'string' },
   },
 }
-const auditLessons = (planText, label) => agent(
+const auditLessons = (planText, label, schema = LESSONS_SCHEMA) => agent(
   `Audit this plan for "${feature}" against the RECORDED LESSONS: the distilled record of defects already paid for on past projects.\n\n` +
   `FIRST, list ${LESSONS_INDEX_GLOB} and read EVERY index file in full${expectedIndexFiles.length ? ` (there are ${expectedIndexFiles.length}: ${expectedIndexFiles.join(', ')})` : ''}, and the build-time reliability rules in ${RULES_PATH}. Do NOT read ~/.claude/LESSONS.md: it is too large to read whole. An index line is a SHORTENED rule, so before citing a lesson as violated, read its full entry with \`${LESSON_LOOKUP}\`. Do not work from memory: report every index file you read in indexFilesRead, report verdict="could-not-audit" if you could not read them all, and NEVER report "clean" on files you did not read.\n\n` +
   `${grounding}\n\nPLAN:\n${planText}\n\n` +
   `Go lesson by lesson. For each one that the plan VIOLATES, or that the plan silently ignores where it plainly applies (a background job with no failure alerting, a guard that fails open, a multi-step write that is not idempotent, a route with no tenant scoping, a destructive step with no backup or undo, an empty state rendered over an error, a count and its rows from two different predicates, a hand-maintained list mirroring a source of truth, a test that cannot fail), report it with the lesson id, the exact part of the plan at fault, why it is the same mistake, and the concrete fix.\n\n` +
   `Report ONLY real violations grounded in the plan's own text: do not pad the list with generic advice, and do not restate the reality-check's job (whether files and tables exist). Absence of a lesson from the plan is a violation only where that lesson plainly applies to what the plan is building.`,
-  { label, phase: 'Lessons audit', schema: LESSONS_SCHEMA, effort: 'high' }
+  { label, phase: 'Lessons audit', schema, effort: 'high' }
 )
 // An auditor that dies must never resolve to silence: parallel() yields null on failure,
 // and a missing audit reads exactly like a clean one unless it is converted to a loud one.
@@ -123,11 +123,211 @@ const normalizeAudit = (res) => res || {
 // passed no list, at least one): skipping a file is auditing against part of the record.
 const auditFailed = (au) => { const read = Array.isArray(au.indexFilesRead) ? au.indexFilesRead.map(f => String(f).split('/').pop()) : []; const want = Array.isArray(a.lessonIndexFiles) ? a.lessonIndexFiles.map(f => String(f).split('/').pop()) : []; return au.verdict === 'could-not-audit' || read.length === 0 || !(au.lessonsSeen > 0) || want.some(f => !read.includes(f)) }
 const auditCoverage = (au) => `read ${(au.indexFilesRead || []).length} of ${expectedIndexFiles.length || 'an unknown number of'} index files, lessons seen=${au.lessonsSeen}`
-// Same rule for the reality-check: a checker that died must not resolve to "holds".
-const normalizeRC = (res) => res || {
-  verdict: 'needs-fixes', confirmed: [], adjustments: [],
-  broken: ['The reality-check agent failed or was skipped, so NOTHING in this plan was verified against the real codebase. Treat every concrete claim as unverified.'],
+
+// --- The check loop (claude-config#1208) ---
+// Every run from 2026-09-21 ended with problems open: each round sampled the whole plan afresh,
+// nothing asked whether a given finding had been fixed, and the fix rewrote the plan, so every
+// round met mostly new text (measured on three local journals: 1 to 3 of 9 to 15 sections unchanged,
+// lesson findings overlapping 0 to 2 of 8 to 14 between rounds). So: findings are a record kept
+// here, each with an id, closed only on a verifier's verdict about that one finding; the fix returns
+// edits to the items findings name and this script splices them in, so text nobody edited is byte
+// identical; and a round re-checks only edited items and the items that name them.
+const MAX_ROUNDS = 3
+// Items: a heading line or a top level bullet or numbered line starts one, every other line joins
+// the item before it, and a fenced block is never split. Joined, the items are the plan byte for byte.
+const splitItems = (text) => {
+  const lines = String(text).split(/(?<=\n)/)
+  const out = []
+  let cur = ''
+  let fence = false
+  for (const l of lines) {
+    if (!fence && (/^#{1,6}\s/.test(l) || /^(?:[-*+]|\d+[.)])\s/.test(l)) && cur.trim()) { out.push(cur); cur = '' }
+    cur += l
+    if (/^\s*(?:```|~~~)/.test(l)) fence = !fence
+  }
+  if (cur) out.push(cur)
+  return out.map((t, i) => ({ id: `P${i + 1}`, text: t }))
 }
+// A replacement keeps the line endings the item had, so an edit never runs into the next item.
+const endLike = (text, was) => String(text).replace(/\n*$/, '') + ((String(was).match(/\n*$/) || [''])[0] || '\n')
+const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// The names other items refer to an item by: its "Phase 3", "Step 2", "A6" or "0.5", read off its
+// first line, so an edit to it re-checks every item that names it.
+const labelsOf = (text) => {
+  const first = String(text).split('\n')[0]
+  const out = new Set()
+  for (const m of first.matchAll(/\b(?:Phase|Step|Part|Stage)\s+\d+(?:\.\d+)*\b/gi)) out.add(m[0].toLowerCase())
+  for (const m of first.matchAll(/(?:^|[\s(#*-])([A-Z]{1,2}\d{1,3}|\d+\.\d+(?:\.\d+)*)(?=[\s).:,]|$)/g)) out.add(m[1].toLowerCase())
+  return [...out]
+}
+const scopeOf = (items, changed) => {
+  const labels = items.filter(it => changed.has(it.id)).flatMap(it => labelsOf(it.text))
+  return items.filter(it => changed.has(it.id) || labels.some(l => new RegExp(`\\b${escapeRe(l)}\\b`, 'i').test(it.text))).map(it => it.id)
+}
+const ITEM_NOTE = 'The plan is marked into items, each opened by a line like <<P3>>. Name the item each finding is about by that id, or whole-plan when it is about the plan as a whole.'
+const rcSchema = (ids) => ({
+  type: 'object', additionalProperties: false, required: ['verdict', 'confirmed', 'findings'],
+  properties: {
+    verdict: { type: 'string', enum: ['holds', 'needs-fixes'] },
+    confirmed: { type: 'array', items: { type: 'string' } },
+    findings: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['item', 'what', 'fix'], properties: { item: { type: 'string', enum: [...ids, 'whole-plan'] }, what: { type: 'string', description: 'the claim that does not hold, and what the code actually shows' }, fix: { type: 'string' } } } },
+  },
+})
+const lessonsSchema = (ids) => ({
+  ...LESSONS_SCHEMA,
+  properties: {
+    ...LESSONS_SCHEMA.properties,
+    violations: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['lessonId', 'item', 'severity', 'where', 'why', 'fix'], properties: {
+      lessonId: { type: 'string', description: 'e.g. L13, or the CLAUDE.md rule name' },
+      item: { type: 'string', enum: [...ids, 'whole-plan'] },
+      severity: { type: 'string', enum: ['blocking', 'advisory'], description: 'blocking when the plan as written would repeat the recorded defect; advisory for a strengthening it would merely benefit from' },
+      where: { type: 'string', description: 'the exact part of the plan that violates it' },
+      why: { type: 'string' },
+      fix: { type: 'string', description: 'the concrete change to the plan that would satisfy the lesson' },
+    } } },
+  },
+})
+const fixSchema = (ids, findingIds) => ({
+  type: 'object', additionalProperties: false, required: ['edits', 'added', 'declined'],
+  properties: {
+    edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['item', 'text'], properties: { item: { type: 'string', enum: ids }, text: { type: 'string', description: 'the full new text of that item, without its <<id>> marker' } } } },
+    added: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['after', 'text'], properties: { after: { type: 'string', enum: ids }, text: { type: 'string' } } } },
+    declined: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['finding', 'reason'], properties: { finding: { type: 'string', enum: findingIds.length ? findingIds : ['none'] }, reason: { type: 'string' } } } },
+  },
+})
+const verifySchema = (findingIds) => ({
+  type: 'object', additionalProperties: false, required: ['verdicts'],
+  properties: { verdicts: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['finding', 'status', 'evidence'], properties: { finding: { type: 'string', enum: findingIds }, status: { type: 'string', enum: ['fixed', 'open'] }, evidence: { type: 'string', description: 'the plan text that shows it fixed, or why it is still open' } } } } },
+})
+const describe = (f) => `${f.id} [${f.item}] (${f.source}${f.lessonId ? ` ${f.lessonId}` : ''}) ${f.what}. Fix: ${f.fix}`
+// Checks a plan until no blocking finding is open, for at most MAX_ROUNDS fix rounds. Returns the
+// checked text and a `checks` record: stoppedAt is clean, ceiling (blocking findings still open),
+// settled-with-dissent (the fix declined some, which are Dan's to decide) or unverified (a check
+// that did not run cleanly), and converged only when clean.
+const checkUntilSettled = async (planText, fixContext) => {
+  let items = splitItems(planText)
+  let counter = items.length
+  const ledger = []
+  const unverified = []
+  const sizes = []
+  const perRound = []
+  const ids = () => items.map(it => it.id)
+  const render = () => items.map(it => `<<${it.id}>>\n${it.text}`).join('')
+  const text = () => items.map(it => it.text).join('')
+  const open = (sev) => ledger.filter(f => f.status === 'open' && (!sev || f.severity === sev))
+  const decided = () => {
+    const d = ledger.filter(f => f.status === 'declined')
+    return d.length ? `\n\nALREADY DECIDED (declined by the plan's author and handed to the human; do NOT raise these again):\n${d.map(f => `${describe(f)} Declined because: ${f.reason}`).join('\n')}` : ''
+  }
+  const scoped = (scope) => scope ? `\n\nITEMS TO CHECK (report ONLY on these; the plan above is context):\n${items.filter(it => scope.includes(it.id)).map(it => `<<${it.id}>>\n${it.text}`).join('')}` : ''
+  const rcAsk = (scope, label, why) => agent(
+    `${why}\n${grounding}\n\n${ITEM_NOTE}\n\nPLAN:\n${render()}${scoped(scope)}${decided()}\n\nVerify every concrete claim${scope ? ' in the items to check' : ''} against the ACTUAL code and data: do the files, functions, APIs and tables exist and behave as stated, does anything break a stated constraint (${constraints}), does the design fit the code. Read the real code and schema; do not take the plan's word for it. Report each claim that does not hold as a finding on its item.`,
+    { label, phase: label === 'reality-check' ? 'Reality-check' : 'Fix & reverify', schema: rcSchema(ids()), effort: 'high' }
+  )
+  const auditAsk = (scope, label) => auditLessons(`${ITEM_NOTE} Give each violation its item and its severity.\n\n${render()}${scoped(scope)}${decided()}`, label, lessonsSchema(ids()))
+  const takeIn = (rc, au, round, what) => {
+    if (!rc) unverified.push(`the ${what} reality-check did not run, so ${what === 'first' ? 'nothing in the plan' : 'the items it was to check'} was verified against the code`)
+    for (const f of (rc && rc.findings) || []) ledger.push({ id: `F${ledger.length + 1}`, status: 'open', source: 'reality', severity: 'blocking', item: f.item, what: f.what, fix: f.fix, round })
+    const audit = normalizeAudit(au)
+    if (auditFailed(audit)) unverified.push(`the ${what} lessons audit did not run cleanly (${audit.verdict}, ${auditCoverage(audit)})`)
+    for (const v of audit.violations || []) ledger.push({ id: `F${ledger.length + 1}`, status: 'open', source: 'lessons', severity: v.severity === 'advisory' ? 'advisory' : 'blocking', item: v.item || 'whole-plan', lessonId: v.lessonId, what: `${v.why} (${v.where})`, fix: v.fix, round })
+    return audit
+  }
+  sizes.push(text().length)
+  phase('Reality-check')
+  const [rc0, au0] = await parallel([
+    () => rcAsk(null, 'reality-check', `Reality-check this plan for "${feature}" against the ACTUAL codebase and data.`),
+    () => auditAsk(null, 'lessons-audit'),
+  ])
+  const firstAudit = takeIn(rc0, au0, 0, 'first')
+  if (unverified.length) log(`CHECKS DID NOT ALL RUN: ${unverified.join('; ')}. The plan is UNVERIFIED there, not clean.`)
+  let rounds = 0
+  // Whether the whole plan has been checked since the last fix round. Every fix round clears it, so
+  // a fix made for a finding the whole plan pass raised is itself checked whole.
+  let checkedWhole = true
+  for (;;) {
+    if (!open('blocking').length) {
+      // One full pass after the last fix, for what splicing cannot see: an edit that left another
+      // item inconsistent with it.
+      if (checkedWhole) break
+      checkedWhole = true
+      const rcF = await rcAsk(null, `consistency:${rounds}`, `Check this CORRECTED plan for "${feature}" as a whole: is every item consistent with every other, and does every concrete claim still hold against the code?`)
+      takeIn(rcF, cleanAuditStandIn, rounds, 'final')
+      if (!open('blocking').length) break
+    }
+    if (rounds >= MAX_ROUNDS) break
+    rounds++
+    checkedWhole = false
+    phase('Fix & reverify')
+    const todo = open('blocking')
+    log(`Round ${rounds}: ${todo.length} blocking finding(s) open (${todo.map(f => f.id).join(', ')}): fixing them in place.`)
+    const fix = await agent(
+      `${fixContext}\n${grounding}\n\n${ITEM_NOTE}\n\nPLAN:\n${render()}\n\nFINDINGS TO FIX (each names its item):\n${todo.map(describe).join('\n')}${decided()}\n\nFix each finding with the SMALLEST edit to the item it names: return in \`edits\` the full new text of each item you change (without its <<id>> marker), in \`added\` any new item and the item it follows, and leave every other item alone. Change the DESIGN where a finding says it repeats a recorded mistake. Cite files and functions, never line numbers, which drift within days. If you judge a finding wrong, put it in \`declined\` with your reason: the human decides those. Never rewrite items no finding names.`,
+      { label: `fix:${rounds}`, phase: 'Fix & reverify', schema: fixSchema(ids(), todo.map(f => f.id)), effort: 'high' }
+    )
+    const changed = new Set()
+    if (!fix) log(`fix:${rounds} did not run, so nothing was fixed this round.`)
+    else {
+      const byId = new Map(items.map(it => [it.id, it]))
+      for (const e of fix.edits || []) {
+        const it = byId.get(e.item)
+        if (!it || typeof e.text !== 'string') { log(`fix:${rounds} named an item that is not in the plan (${e.item}); that edit was not made.`); continue }
+        it.text = endLike(e.text, it.text)
+        changed.add(it.id)
+      }
+      for (const ad of fix.added || []) {
+        const at = items.findIndex(it => it.id === ad.after)
+        if (at < 0 || typeof ad.text !== 'string') { log(`fix:${rounds} added after an item that is not in the plan (${ad.after}); it was not added.`); continue }
+        const it = { id: `P${++counter}`, text: endLike(ad.text, '\n\n') }
+        items.splice(at + 1, 0, it)
+        changed.add(it.id)
+      }
+      for (const d of fix.declined || []) {
+        const f = ledger.find(x => x.id === d.finding && x.status === 'open')
+        if (f) { f.status = 'declined'; f.reason = d.reason; f.closedRound = rounds }
+      }
+    }
+    const asked = open('blocking')
+    if (asked.length) {
+      const verdict = await agent(
+        `Did the latest correction of this plan for "${feature}" fix each of these findings? Judge each one on its own, from the plan as it now stands, and quote the text that shows it.\n${grounding}\n\n${ITEM_NOTE}\n\nPLAN:\n${render()}\n\nFINDINGS:\n${asked.map(describe).join('\n')}`,
+        { label: `verify:${rounds}`, phase: 'Fix & reverify', schema: verifySchema(asked.map(f => f.id)), effort: 'high' }
+      )
+      if (!verdict) log(`verify:${rounds} did not run, so every finding it was asked about stays open.`)
+      for (const f of asked) {
+        const v = verdict && (verdict.verdicts || []).find(x => x.finding === f.id)
+        if (!v) { if (verdict) log(`verify:${rounds} did not answer for ${f.id}, so it stays open.`); continue }
+        if (v.status === 'fixed') { f.status = 'fixed'; f.closedRound = rounds; f.evidence = v.evidence }
+      }
+    }
+    const scope = scopeOf(items, changed)
+    if (scope.length) {
+      const [rcN, auN] = await parallel([
+        () => rcAsk(scope, `recheck:${rounds}`, `Reality-check the items of this plan for "${feature}" that were just corrected, or that refer to a corrected item.`),
+        () => auditAsk(scope, `reaudit:${rounds}`),
+      ])
+      takeIn(rcN, auN, rounds, `round ${rounds}`)
+    }
+    sizes.push(text().length)
+    perRound.push({ round: rounds, edited: changed.size, rechecked: scope.length, open: open('blocking').length, fixed: ledger.filter(f => f.closedRound === rounds && f.status === 'fixed').length, declined: ledger.filter(f => f.closedRound === rounds && f.status === 'declined').length })
+  }
+  const blocking = open('blocking')
+  const declined = ledger.filter(f => f.status === 'declined').map(f => ({ id: f.id, item: f.item, source: f.source, lessonId: f.lessonId, what: f.what, reason: f.reason }))
+  const stoppedAt = blocking.length ? 'ceiling' : declined.length ? 'settled-with-dissent' : unverified.length ? 'unverified' : 'clean'
+  if (stoppedAt === 'ceiling') log(`STOPPED AT THE ${MAX_ROUNDS} ROUND CEILING with ${blocking.length} blocking finding(s) open: ${blocking.map(f => f.id).join(', ')}.`)
+  return {
+    text: text(),
+    firstAudit,
+    checks: {
+      stoppedAt, converged: stoppedAt === 'clean', rounds,
+      open: blocking.map(f => ({ id: f.id, item: f.item, source: f.source, lessonId: f.lessonId, what: f.what, fix: f.fix })),
+      advisory: open('advisory').map(f => ({ id: f.id, item: f.item, lessonId: f.lessonId, what: f.what, fix: f.fix })),
+      declined, fixed: ledger.filter(f => f.status === 'fixed').map(f => f.id), unverified, sizes, perRound,
+    },
+  }
+}
+// The final consistency pass is a reality-check alone; this stands in for the audit it does not run.
+const cleanAuditStandIn = { indexFilesRead: expectedIndexFiles.length ? expectedIndexFiles : ['(not re-audited)'], lessonsSeen: 1, verdict: 'clean', violations: [] }
 
 // --- Revise mode (re-run incorporating the human's GitHub Discussion comments) ---
 if (a.mode === 'revise') {
@@ -147,37 +347,9 @@ if (a.mode === 'revise') {
     `The human reviewed this plan for "${feature}" and left comments. Revise the plan to ADDRESS each comment specifically: change it where they are right, push back with reasons where they are not.\n${grounding}\n\nPRIOR PLAN:\n${prior}\n\nHUMAN COMMENTS:\n${comments}`,
     { label: 'revise', phase: 'Revise', schema: REVISE_SCHEMA, effort: 'high' }
   )
-  phase('Reality-check')
-  const REVISE_RC_SCHEMA = { type: 'object', additionalProperties: false, required: ['verdict', 'confirmed', 'broken'], properties: { verdict: { type: 'string', enum: ['holds', 'needs-fixes'] }, confirmed: { type: 'array', items: { type: 'string' } }, broken: { type: 'array', items: { type: 'string' } }, adjustments: { type: 'array', items: { type: 'string' } } } }
-  const reviseRcPrompt = (planText) =>
-    `Reality-check this REVISED plan against the actual codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete claim (files, APIs, tables, constraints) by reading the real code/schema. Report what holds, what is broken, and concrete adjustments.`
-  let reviseFinal = revised
-  let [reviseRC0, reviseAudit0] = await parallel([
-    () => agent(reviseRcPrompt(revised.plan), { label: 'reality-check', phase: 'Reality-check', effort: 'high', schema: REVISE_RC_SCHEMA }),
-    () => auditLessons(revised.plan, 'lessons-audit'),
-  ])
-  let reviseRC = normalizeRC(reviseRC0)
-  let reviseAudit = normalizeAudit(reviseAudit0)
-  if (auditFailed(reviseAudit)) log(`LESSONS AUDIT DID NOT RUN CLEANLY (${reviseAudit.verdict}, ${auditCoverage(reviseAudit)}): the revised plan is UNAUDITED against the lessons, not clean.`)
-
-  // One bounded correction round: revise mode stays light, but a known-bad proposal
-  // must be FIXED in the plan text, never merely reported beside it.
-  const reviseProblems = reviseRC.broken.length + reviseAudit.violations.length
-  if (reviseProblems > 0) {
-    phase('Fix & reverify')
-    log(`Revised plan has ${reviseRC.broken.length} broken claim(s) and ${reviseAudit.violations.length} lesson violation(s): correcting inline.`)
-    reviseFinal = await agent(
-      `Correct this revised plan IN PLACE. Fix each broken claim and each recorded-lesson violation directly in the plan text; do NOT append correction notes. Keep everything already correct, and keep the point-by-point responses to the human's comments.\n${grounding}\n\nBROKEN CLAIMS:\n${JSON.stringify(reviseRC.broken, null, 2)}\nLESSON VIOLATIONS (from ${LESSONS_SOURCE}: each names the lesson, the offending part, and the fix; apply the fix):\n${JSON.stringify(reviseAudit.violations, null, 2)}\n\nCURRENT PLAN:\n${reviseFinal.plan}\n\nReturn the fully corrected plan with the same structure.`,
-      { label: 'fix:1', phase: 'Fix & reverify', schema: REVISE_SCHEMA, effort: 'high' }
-    )
-    const [reviseRC1, reviseAudit1] = await parallel([
-      () => agent(reviseRcPrompt(reviseFinal.plan), { label: 'reverify:1', phase: 'Fix & reverify', effort: 'high', schema: REVISE_RC_SCHEMA }),
-      () => auditLessons(reviseFinal.plan, 'reaudit:1'),
-    ])
-    reviseRC = normalizeRC(reviseRC1)
-    reviseAudit = normalizeAudit(reviseAudit1)
-  }
-  return { mode: 'revise', feature, revised: reviseFinal, realityCheck: reviseRC, lessonsAudit: reviseAudit }
+  // The same loop as the main path (claude-config#1208), its responses to the comments carried here.
+  const settled = await checkUntilSettled(revised.plan, `Correct this REVISED plan for "${feature}" in place, keeping its point by point responses to the human's comments true.`)
+  return { mode: 'revise', feature, revised: { ...revised, plan: settled.text }, checks: settled.checks, lessonsAudit: settled.firstAudit, rcRounds: settled.checks.rounds }
 }
 
 // --- Preflight: confirm the grounding sources are actually reachable ---
@@ -315,63 +487,14 @@ const PLAN_SCHEMA = {
 
 phase('Synthesize')
 const draft = await agent(
-  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nBEFORE writing, read ${LESSONS_SOURCE} and the build-time rules in ${RULES_PATH}, and design against them: every failure path surfaces loudly, every multi-step write survives running twice, every route states who may call it and whose data it touches, every destructive step keeps the good state until its replacement is verified, and every guard is one that can be seen to fail. The plan is audited against that file after you write it, so build it in now rather than having it corrected out of you.\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap: what the best version would add and why it is deferred; (4) escalatedDecisions: EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
+  `Write the implementation plan for "${feature}" from the winning approach "${winner.name}" (${winner.summary}).\nGraft in these runner-up ideas where they strengthen it: ${(selection.runnerUpBestIdeas || []).join('; ') || '(none)'}\nJudge rationale: ${selection.rationale}\nFull champion/red-team context:\n${JSON.stringify(advocacy)}\n\nCite files, functions and symbols, never line numbers, which drift within days (L479). BEFORE writing, read ${LESSONS_SOURCE} and the build-time rules in ${RULES_PATH}, and design against them: every failure path surfaces loudly, every multi-step write survives running twice, every route states who may call it and whose data it touches, every destructive step keeps the good state until its replacement is verified, and every guard is one that can be seen to fail. The plan is audited against that file after you write it, so build it in now rather than having it corrected out of you.\n\nProduce: (1) a phased, concrete plan grounded in this codebase; (2) dissent you overruled and WHY; (3) the IDEAL-vs-DOABLE gap: what the best version would add and why it is deferred; (4) escalatedDecisions: EVERY product / scope / cost trade-off where reasonable people could choose differently MUST go here for the human to decide; do NOT 'lock' such a call yourself. This includes scope (build one thing vs two), thin-vs-full, and especially FREE-vs-PAID: if a non-free option is meaningfully better than the free one, put 'ship the free way' vs 'pay for the better way' here as an explicit decision with the cost named. Lock ONLY purely technical decisions that have one clearly-correct answer; (5) open risks and unknowns.`,
   { label: 'synthesize', phase: 'Synthesize', schema: PLAN_SCHEMA, effort: 'high' }
 )
 
-const RC_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: ['verdict', 'confirmed', 'broken'],
-  properties: {
-    verdict: { type: 'string', enum: ['holds', 'needs-fixes'] },
-    confirmed: { type: 'array', items: { type: 'string' } },
-    broken: { type: 'array', items: { type: 'string' } },
-    adjustments: { type: 'array', items: { type: 'string' } },
-  },
-}
-
-// Reality-check (does the plan match the code?) and lessons audit (does the plan repeat a
-// known mistake?) are independent questions, so they run side by side and BOTH feed the
-// same fix loop. Neither is allowed to be merely advisory.
-phase('Reality-check')
-let finalPlan = draft
-const rcPrompt = (planText, corrected) => corrected
-  ? `Reality-check this CORRECTED plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete claim (files, paths, line numbers, APIs, tables, constraints) by reading the real code/schema. Report what holds and anything still broken.`
-  : `Reality-check this plan against the ACTUAL codebase and data.\n${grounding}\n\nPlan:\n${planText}\n\nVerify every concrete assumption: do the referenced files, components, APIs, and tables actually exist? Are the file paths and line numbers correct? Does the data model support it? Does anything violate the stated constraints (${constraints})? Read the real code and schema to confirm: do not take the plan's word for it. Report what holds, what is broken, and concrete adjustments.`
-
-let [rc0, audit0] = await parallel([
-  () => agent(rcPrompt(finalPlan.plan, false), { label: 'reality-check', phase: 'Reality-check', schema: RC_SCHEMA, effort: 'high' }),
-  () => auditLessons(finalPlan.plan, 'lessons-audit'),
-])
-let realityCheck = normalizeRC(rc0)
-let lessonsAudit = normalizeAudit(audit0)
-if (auditFailed(lessonsAudit)) {
-  log(`LESSONS AUDIT DID NOT RUN CLEANLY (${lessonsAudit.verdict}, ${auditCoverage(lessonsAudit)}): this plan is UNAUDITED against the lessons, not clean. ${lessonsAudit.notes || ''}`)
-}
-
-// Fix-and-reverify: if either check found a problem, correct the plan IN PLACE (not as an
-// appended note) and re-run BOTH checks. Bounded to 2 rounds so it converges.
-let rcRounds = 0
-const stillBroken = () => (realityCheck.verdict === 'needs-fixes' || (realityCheck.broken && realityCheck.broken.length))
-const stillViolating = () => lessonsAudit.violations.length > 0
-while ((stillBroken() || stillViolating()) && rcRounds < 2) {
-  rcRounds++
-  log(`Round ${rcRounds}: ${(realityCheck.broken || []).length} broken item(s), ${lessonsAudit.violations.length} recorded-lesson violation(s): correcting the plan inline.`)
-  phase('Fix & reverify')
-  finalPlan = await agent(
-    `This plan failed its checks. Correct EACH item directly in the plan text: fix the wrong file paths, line numbers, and claims in place, and change the DESIGN where it repeats a recorded mistake; do NOT just append correction notes. Keep everything that was already correct.\n${grounding}\n\n` +
-    `BROKEN CLAIMS (reality-check):\n${JSON.stringify(realityCheck.broken || [], null, 2)}\n` +
-    `ADJUSTMENTS:\n${JSON.stringify(realityCheck.adjustments || [], null, 2)}\n` +
-    `RECORDED-LESSON VIOLATIONS (from ${LESSONS_SOURCE}: each names the lesson, the offending part of the plan, and the fix; APPLY the fix, and if you genuinely disagree with one, put it in overruledDissent with your reason rather than silently ignoring it):\n${JSON.stringify(lessonsAudit.violations, null, 2)}\n\n` +
-    `CURRENT PLAN:\n${finalPlan.plan}\n\nReturn the fully corrected plan with the same structure.`,
-    { label: `fix:${rcRounds}`, phase: 'Fix & reverify', schema: PLAN_SCHEMA, effort: 'high' }
-  )
-  const [rcN, auditN] = await parallel([
-    () => agent(rcPrompt(finalPlan.plan, true), { label: `reverify:${rcRounds}`, phase: 'Fix & reverify', schema: RC_SCHEMA, effort: 'high' }),
-    () => auditLessons(finalPlan.plan, `reaudit:${rcRounds}`),
-  ])
-  realityCheck = normalizeRC(rcN)
-  lessonsAudit = normalizeAudit(auditN)
-}
-
-return { feature, criteria, preflight: preflightResult(preflight, a), options, passes, advocacy, selection, winner, plan: finalPlan, realityCheck, lessonsAudit, rcRounds }
+// Reality-check (does the plan match the code?) and lessons audit (does the plan repeat a known
+// mistake?) feed one record of findings, which the loop settles (claude-config#1208). The plan keeps
+// everything the synthesizer wrote, overruledDissent included, which each fix round used to re-emit
+// and lose (8 to 0 measured).
+const settled = await checkUntilSettled(draft.plan, `This plan for "${feature}" failed its checks: correct it in place.`)
+const finalPlan = { ...draft, plan: settled.text }
+return { feature, criteria, preflight: preflightResult(preflight, a), options, passes, advocacy, selection, winner, plan: finalPlan, checks: settled.checks, lessonsAudit: settled.firstAudit, rcRounds: settled.checks.rounds }

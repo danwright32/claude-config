@@ -13,12 +13,18 @@
 // usage or any file it cannot read, after every file has been checked.
 const fs = require('fs')
 
+// The script as the engine runs it: the body of an async function of the names it is given. Exported
+// so the plan-council loop harness (claude-config#1208) runs a script exactly as this check reads it,
+// one reading rather than two.
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+const compile = (src, names = []) => new AsyncFunction(...names, src.replace(/^(\s*)export\s+(?=const\s+meta\b)/m, '$1'))
+module.exports = { compile }
+if (require.main === module) {
 const files = process.argv.slice(2)
 if (!files.length) {
   console.error('Usage: workflow-syntax.js <script.workflow.js> [...]')
   process.exit(2)
 }
-const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 let failed = 0
 let unreadable = 0
 // Every file is checked, an unreadable one included, so one bad path never hides the rest.
@@ -32,10 +38,11 @@ for (const f of files) {
     continue
   }
   try {
-    new AsyncFunction(src.replace(/^(\s*)export\s+(?=const\s+meta\b)/m, '$1'))
+    compile(src)
   } catch (e) {
     failed++
     console.error(`workflow-syntax: ${f} does not parse as a workflow script: ${e.message}`)
   }
 }
 process.exit(unreadable ? 2 : failed ? 1 : 0)
+}
