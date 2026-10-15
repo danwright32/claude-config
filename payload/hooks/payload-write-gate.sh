@@ -34,6 +34,7 @@
 # Env:
 #   SYNC_WATCH_PID_FILE  the watcher's pid file (default ~/.claude-sync-watch.pid)
 #   SYNC_HOLD_FILE       the hold marker (default ~/.claude-sync-hold)
+#   PAYLOAD_WRITE_INSTALLED_DIR  the installed config a changed file is compared with (default ~/.claude)
 # Override, per this repo's convention, explained to the person first and never silently:
 #   SKIP_PAYLOAD_WRITE_CHECK=1 as an inline prefix on a Bash command, for that one command.
 
@@ -44,6 +45,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null || exit 0
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# Missing, a file differing only by the home placeholder is reported rather than left out, which is
+# the safe side of that question.
+# shellcheck source=lib/home-token.sh
+. "$HOOK_DIR/lib/home-token.sh" 2>/dev/null || true
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -143,6 +148,7 @@ if [ "$event" = "PostToolUse" ]; then
   if [ -f "$list_f" ]; then
     changed="$changed$(printf '%s\n' "$now_list" | LC_ALL=C comm -3 - "$list_f" | sed 's/^[[:space:]]*//')"
   fi
+  roots_list="$(cat "$roots_f")"
   rm -f "$roots_f" "$list_f"
   changed="$(printf '%s\n' "$changed" | sed '/^$/d' | LC_ALL=C sort -u)"
   [ -n "$changed" ] || exit 0
@@ -150,10 +156,38 @@ if [ "$event" = "PostToolUse" ]; then
   wcmd="$(sc_watcher_cmd || true)"
   [ -n "$wcmd" ] || exit 0
   sc_hold_live && exit 0
+  # Left out: a file that already matches the installed config, which the daemon mirrors FROM, so
+  # it has nothing to revert there (claude-config#1211). On 2026-10-15 a fast forward pull of the
+  # checkout right after the same commit was installed listed 27 files, every one identical to its
+  # installed copy, and a report wrong whenever a checkout catches up teaches skimming (L36). A
+  # file matches when its bytes do, or when the only difference is the home placeholder the install
+  # expands, and a removed one when the installed config lacks it too. Anything else is reported,
+  # an installed copy merged with local settings included, since a match cannot be shown there.
+  installed="${PAYLOAD_WRITE_INSTALLED_DIR:-$HOME/.claude}"
+  differ=""; matched=0
+  while IFS= read -r f; do
+    rel=""
+    while IFS= read -r root; do
+      case "$f" in "$root/payload/"*) rel="${f#"$root/payload/"}"; break ;; esac
+    done < <(printf '%s\n' "$roots_list")
+    inst="$installed/$rel"
+    if [ -n "$rel" ] && {
+      { [ ! -e "$f" ] && [ ! -e "$inst" ]; } ||
+      { [ -f "$f" ] && [ -f "$inst" ] && { cmp -s "$f" "$inst" ||
+        { [ -n "${HOME_TOKEN:-}" ] && grep -Iq -F -- "$HOME_TOKEN" "$f" 2>/dev/null &&
+          home_detok "$installed" < "$f" | cmp -s - "$inst"; }; }; }
+    }; then matched=$((matched + 1)); else differ="$differ$f
+"; fi
+  done < <(printf '%s\n' "$changed")
+  changed="$(printf '%s' "$differ" | sed '/^$/d')"
+  [ -n "$changed" ] || exit 0
   n="$(printf '%s\n' "$changed" | grep -c .)"
   shown="$(printf '%s\n' "$changed" | awk 'NR <= 20 { print "  " $0 }')"
   [ "$n" -gt 20 ] && shown="$shown
   ... and $((n - 20)) more"
+  [ "$matched" -gt 0 ] && shown="$shown
+
+  $matched more already matched the installed config at $installed, so the daemon has nothing to revert there, and are left out."
   cat >&2 <<MSG
 claude-sync: $n file(s) changed under a development checkout's payload/ while that command ran, with a watch daemon live from another clone and no hold in force. What was measured is what changed while it ran, so another session or a parallel command writing there at the same moment would show here too:
 
