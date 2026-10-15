@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L771. A timeout raced against the work throws the timer's error and drops what the work attached, so attach context where the timer fires.
 - L1027. Local dev and test servers must not report to production's error tracker, and alerts act only on production.
 - L767. Checking several candidates to choose one, judge each one's failure on its own, so one broken candidate is skipped, not the whole choice failed.
 - L490. A gate parsing input through an external interpreter must refuse by name when it is missing: an empty parse reads as nothing to refuse.

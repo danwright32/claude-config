@@ -5,15 +5,15 @@ lessons review before any merge; read any one in full with
 `~/claude-config-sync/claude-sync lesson L174`, or a whole section in
 ~/.claude/LESSONS-INDEX-<section>.md.
 
-- Building with AI (building-with-ai): 13 lessons, 8 in the core
+- Building with AI (building-with-ai): 14 lessons, 8 in the core
 - Codebase hygiene (codebase-hygiene): 50 lessons, 30 in the core
 - Cross-system reliability (cross-system-reliability): 94 lessons, 35 in the core
-- Data safety (data-safety): 44 lessons, 26 in the core
+- Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 38 lessons, 17 in the core
-- Honest failure (honest-failure): 102 lessons, 33 in the core
+- Honest failure (honest-failure): 103 lessons, 33 in the core
 - Pipeline speed (pipeline-speed): 26 lessons, 24 in the core
 - Proof over green (proof-over-green): 195 lessons, 99 in the core
 - Security and privacy (security-and-privacy): 38 lessons, 13 in the core
-- State and identity (state-and-identity): 75 lessons, 20 in the core
+- State and identity (state-and-identity): 77 lessons, 20 in the core
 - Test speed (test-speed): 13 lessons, 9 in the core
 - UX completeness (ux-completeness): 100 lessons, 41 in the core

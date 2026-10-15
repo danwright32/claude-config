@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L770. A test or preview of unsaved work runs on a resource named apart from production's, or it ships the draft unseen.
 - L285. A store several consumers draw from must be drained by the key it is written by, or a coarser clear destroys work belonging to consumers it cannot see.
 - L206. A tool mode whose NAME reads like an inspection must not create or modify live data: it gets run to look around by somebody in a hurry.
 - L201. A seam or flag that keeps a test off live data on the way IN (a loadingSaved flag, an injected path the loader alone uses) does not cover the way OUT

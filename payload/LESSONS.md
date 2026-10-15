@@ -2699,6 +2699,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Data safety
 
+- **L770. A test or preview of unsaved work must run against a resource named apart from the one
+  production serves, because a test path that writes the live name quietly ships the draft to real
+  traffic and every check reading the saved version is blind to it.** (bidspoke#2161, 2026-10-15)
+  SHORT: A test or preview of unsaved work runs on a resource named apart from production's, or it ships the draft unseen.
+
 - **L285. A store that several independent consumers draw from must be drained by the same key
   it is written by, because a clear keyed more coarsely than the writes destroys work belonging
   to consumers the clearing one does not represent, and the loss is silent on both sides: the
@@ -3254,6 +3259,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge a stored artifact by the rules it was written under: a new requirement fails every older one, and a restore gated on it refuses good data.
 
 ## Honest failure
+
+- **L771. A timeout built by racing the work against a timer fails with the timer's own error, so
+  anything the work attached to its error (the request it sent, its logs, its cause) is lost on
+  exactly the slow path; attach that context where the timer fires, or record it before the call
+  starts.** (bidspoke#2163, 2026-10-15)
+  SHORT: A timeout raced against the work throws the timer's error and drops what the work attached, so attach context where the timer fires.
 
 - **L1027. A local env file that holds production's error reporting address makes every error on a
   developer's machine or test server page the live alert channel, so local dev and test servers must
@@ -5616,6 +5627,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A newest-wins merge must judge newness by when the value was true at its source, never when this copy read it, or a stale read wins.
 - **L1019. A memory address (Swift's ObjectIdentifier, Python's id(), a raw pointer) identifies an object only while it lives, and the allocator hands the same address to the next object, which then inherits whatever was recorded under it. Key a record on a stored identity, or hold the object weakly and check it is the same one, never on its address alone.** (overture#4609, 2026-10-08)
   SHORT: A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
+- **L769. A rule switched on in one place that needs an input supplied by another (a minimum, a filter, a threshold on a field some separate step must map) must be refused or warned about at the moment it is enabled when that input is not supplied, because the consumer then fails closed on every record and the change reads as merely stricter, so nobody looks.** (bidspoke#2149, 2026-10-15)
+  SHORT: Refuse enabling a rule whose input another step must supply but does not: the consumer fails closed on everything and it reads as merely stricter.
+- **L773. A per-consumer record of what has been seen that is created empty on first use treats all history as new, so seed it with a baseline when it is created.** (claude-config#1216, claude-config#1218, 2026-10-15: a new Slate session had no `shown/<session>.list` yet, so ai-review-nudge.sh took every finished push review of its repository from the last 14 days as unshown, about 650, mostly pushes by background agents of other, earlier sessions, and printed about 8,000 characters of them on every prompt for dozens of prompts, none about the work in hand. The fix writes what has already finished into the record as its baseline on the first pass, and says in one line how many it left out and where they are.)
+  SHORT: A seen record created empty on first use treats all history as new, so seed it with a baseline when it is created.
 
 ## Security and privacy
 
@@ -7832,6 +7847,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L768. An AI check that reads a large artifact once is a sample, not a sweep, so a fix and recheck loop around it finds a fresh batch every round and never converges; verify concrete references mechanically and split the rest so each reviewer's share is small enough to read whole.**
+  (claude-config#1208, 2026-10-15)
+  SHORT: An AI check reading a large artifact once is a sample, so recheck loops never converge: verify references by script and split the rest.
 
 - **L270. A rule stated in a prompt is contradicted by every example, reference document and
   line of surrounding prose that breaks it, and the demonstration outweighs the instruction, so

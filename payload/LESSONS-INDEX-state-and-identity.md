@@ -80,3 +80,5 @@ which is NOT loaded into the session.
 - L1005. A conflict check keyed only on the slot makes the subject clash with itself, so compare identity too, or a real clash and the same record read alike.
 - L751. A newest-wins merge must judge newness by when the value was true at its source, never when this copy read it, or a stale read wins.
 - L1019. A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
+- L769. Refuse enabling a rule whose input another step must supply but does not: the consumer fails closed on everything and it reads as merely stricter.
+- L773. A seen record created empty on first use treats all history as new, so seed it with a baseline when it is created.
