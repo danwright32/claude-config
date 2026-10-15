@@ -203,7 +203,7 @@ describe('cardLines', () => {
       'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done before this card',
       '2. Turn on the rule  [done]',
-      'Where: [copy-link]', 'https://dash.cloudflare.com/waf',
+      'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf',
       'What to do: Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy]',
       '3. Purge the cache',
@@ -238,11 +238,12 @@ describe('cardLines', () => {
   // click cannot reach a button mod-kit draws its instead text: Done says what to type, which is what
   // Done would have sent, and Copy link and Copy draw nothing, since the link and the value beside them
   // are the text to select.
-  test('every button carries what is drawn where a click cannot reach it: Done the words to type, Copy link and Copy nothing', () => {
+  test('every button carries what is drawn where a click cannot reach it: Done the words to type, Open, Copy link and Copy nothing', () => {
     const c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B', value: 'ip.src eq 1.2.3.4' })] })
     const buttons = (cardLines(c) as (P & { instead?: P[] })[][]).flat().filter(p => p.button)
     expect(buttons).toEqual([
       { button: 'done', label: 'Done', instead: [{ text: 'type: ', dim: true }, { text: 'step 2 done' }] },
+      { button: 'open-link', label: 'Open', instead: [] },
       { button: 'copy-link', label: 'Copy link', instead: [] },
       { button: 'copy', label: 'Copy', instead: [] },
     ])
@@ -257,7 +258,7 @@ describe('cardLines', () => {
   test('a long link is on its own line under Where:, whole and wrapping, with Copy link beside the label', () => {
     const url = `https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV${'x'.repeat(120)}/edit?gid=0#gid=0`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Open the sheet' })] })) as (P & { href?: string; wrap?: true; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
     expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
     // The whole address is the line's only text: never cut, nothing to select around it.
     expect(l[3]?.map(p => p.text).join('')).toBe(url)
@@ -370,7 +371,7 @@ describe('cardLines', () => {
   test('the open step\'s link is a link part carrying the whole address, with Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
     expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
     // The click path is not a link.
     expect(l[4]?.[1]?.href).toBeUndefined()
