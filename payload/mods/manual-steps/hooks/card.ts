@@ -266,7 +266,7 @@ export type CardText = { text: string; href?: string; color?: string; bold?: boo
  * not reach it (#939): Apple Terminal, whose tab reports clicks only while View > Allow Mouse
  * Reporting is ticked, and a terminal's main screen. Required here, so no button can ship without it.
  */
-export type CardPart = CardText | { button: 'done' | 'copy' | 'copy-link'; label: string; instead: CardText[] }
+export type CardPart = CardText | { button: 'done' | 'copy' | 'copy-link' | 'open-link'; label: string; instead: CardText[] }
 
 /** The prompt Done sends for step `i` (0 based), and the words the card says to type where it cannot be clicked. */
 export const donePrompt = (i: number): string => `step ${i + 1} done`
@@ -282,10 +282,11 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * after a bold "Where:", its clicks after a bold "What to do:" (several actions numbered one per
  * line under it), and any value with Copy (#872). A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
- * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Copy link
- * beside it. Where a click may not land (Apple Terminal, the main screen)
- * mod-kit draws each button's instead text: Done the words to type, Copy link and Copy nothing, the
- * link and the value wrapping whole beside them to be selected (#939).
+ * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Open (to the
+ * default browser, #1215) and Copy link beside its label. Where a click may not land (Apple
+ * Terminal, the main screen) mod-kit draws each button's instead text: Done the words to type,
+ * Open, Copy link and Copy nothing, the link and the value wrapping whole beside them to be
+ * selected (#939).
  */
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
   const open = nextStep(card)
@@ -312,8 +313,10 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
     const lead = (text: string): CardPart => ({ text, bold: true, whole: true, indent })
     // The link on a line of its own under the label, nothing beside it, wrapping whole under its own
     // first character, so a terminal can select every character of it where Copy link cannot be
-    // pressed (#939: a Google Sheets link was cut at the edge). Copy link sits beside the label.
-    if (s.url) lines.push([lead(WHERE), { button: 'copy-link', label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
+    // pressed (#939: a Google Sheets link was cut at the edge). Open and Copy link sit beside the
+    // label, Open first since opening is what the link is for (#1215); where a click cannot reach
+    // them both draw nothing, and the link under them is there to select.
+    if (s.url) lines.push([lead(WHERE), { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
     // A long location or click path wraps under its step rather than being cut at the edge (#734):
     // mod-kit's left rule reaches down every row it takes. It wraps beside its label, so the rows it
     // continues on sit under its own first word.

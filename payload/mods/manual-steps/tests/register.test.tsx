@@ -153,9 +153,11 @@ const ROOT = '/repo'
 // terminal, else 120, a laptop. `root` is where the session runs, `repoRoot` the repository's root
 // (the main checkout's for a worktree), null outside one.
 // `placesNoPanes` is a session whose attached surfaces place no panes at all, asked or not.
-type World = { wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean }
+// `opened` is how /usr/bin/open answers a press of Open: its exit code and what it printed, or an
+// Error the engine raises in its place.
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   const opens: { id: string; columns?: number }[] = []
@@ -164,6 +166,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   const prompts: string[] = []
   const toasts: string[] = []
   const copies: string[] = []
+  const runs: { argv: readonly string[]; timeoutMs?: number }[] = []
   const tools: string[] = []
   const commands: string[] = []
   // Read at each call, so a test can change one part way through.
@@ -218,6 +221,11 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     copies.push(e.text)
     return { value: w.copied ? { isCopied: true } : { isCopied: false, reason: 'no-clipboard' } } as never
   })
+  on('process.run', ($, e) => {
+    runs.push({ argv: e.argv, timeoutMs: e.init?.timeoutMs })
+    if (w.opened instanceof Error) throw w.opened
+    return { value: { exitCode: w.opened.exitCode, stdout: '', stderr: w.opened.stderr, isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
   on('ui.toast', ($, e) => {
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
@@ -230,7 +238,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, mem, opened, opens, closed, prompts, toasts, copies, tools, commands }
+  return { w, mem, opened, opens, closed, prompts, toasts, copies, runs, tools, commands }
 }
 
 type Mounted = Pick<KitMounted<'terminal'>, 'press' | 'find' | 'unmount'>
@@ -263,7 +271,7 @@ const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 // Dan pressing a button the card shows in the band, as he would: on mod-kit's drawing.
-const press = async ($: Engine, button: 'done' | 'copy' | 'copy-link') => {
+const press = async ($: Engine, button: 'done' | 'copy' | 'copy-link' | 'open-link') => {
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps } as never)
   await ui.press({ key: `manual-steps:${button}` })
   await ui.unmount()
@@ -332,7 +340,7 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [copy-link]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -369,7 +377,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [copy-link]', 'https://dash.cloudflare.com/waf'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -485,6 +493,48 @@ test('Copy link puts the open step\'s whole link on the clipboard, and says when
   w.w.copied = true
   await press($, 'copy')
   expect(w.copies[2]).toBe('ip.src eq 1.2.3.4')
+})
+
+// #1215, Dan 2026-10-15: "is there any reason it couldn't just have a button to open it in my default
+// web browser?" Open hands the open step's link to macOS's open, as one argument with no shell between,
+// so the link is only ever an address, and says what happened either way.
+test('Open opens the open step\'s link in the default browser, and says so', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf?x=1&y=$(id)`
+  await hand($, [step({ url }), step({ title: 'Purge the cache', url: 'https://dash.cloudflare.com/cache' })])
+  await press($, 'open-link')
+  expect(w.runs.map(r => r.argv)).toEqual([['/usr/bin/open', url]])
+  // Bounded well inside the 10 s a press has, so a hung open is said rather than waited on.
+  expect(w.runs[0]?.timeoutMs).toBeLessThanOrEqual(5000)
+  expect(w.toasts).toEqual(['Opened the link for step 1 in your browser.'])
+  // Opening is not doing the step: the card still waits on it.
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+})
+
+test('Open says why when the link could not be opened, never that it was', withKit, async ($, on) => {
+  const w = world(on, { opened: { exitCode: 1, stderr: 'LSOpenURLsWithRole() failed with error -10814\n' } })
+  await start($)
+  await hand($, [step()])
+  await press($, 'open-link')
+  expect(w.toasts).toEqual(['Could not open the link for step 1 (LSOpenURLsWithRole() failed with error -10814). Copy link still has it.'])
+  w.w.opened = { exitCode: 1, stderr: '' }
+  await press($, 'open-link')
+  expect(w.toasts[1]).toBe('Could not open the link for step 1 (open exited 1). Copy link still has it.')
+  // An open the engine could not run at all (a timeout, a refusal): the engine words the reason, and
+  // the toast still says it failed rather than that it opened.
+  w.w.opened = new Error('the process timed out after 5000 ms')
+  await press($, 'open-link')
+  expect(w.toasts[2]).toMatch(/^Could not open the link for step 1 \(.+\)\. Copy link still has it\.$/)
+  expect(w.toasts.some(t => t.startsWith('Opened'))).toBe(false)
+})
+
+test('a step with no link shows no Open, and nothing is run', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step({ url: undefined, location: 'Salesforce desktop app, Setup' })])
+  expect((await bandText($)).some(l => l.includes('[open-link]'))).toBe(false)
+  expect(w.runs).toEqual([])
 })
 
 test('when mod-kit refuses the row, the handover says the card could not be shown', withKit, async ($, on) => {
@@ -986,7 +1036,7 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
   expect(await bandText($)).toEqual([
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done]',
-    'Where: [copy-link]', 'https://dash.cloudflare.com/waf',
+    'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf',
     expect.stringMatching(/^2\. Watch the next merge  taken off on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
