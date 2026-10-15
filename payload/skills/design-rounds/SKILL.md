@@ -108,6 +108,18 @@ are held like any screen edit until Dan answers Settled (claude-config#1191: a r
 | A page needing nothing from the network | It still renders in a year, on a plane, from a git checkout |
 | A refusal instead of a page, on any fault | A switcher with a dead frame or an unwired key looks finished |
 | `<out>.picker.json`, the closing picker's options | The tab and the picker entry are the same two facts, so they are emitted once rather than retyped |
+| The same scroll position on every option | A round about anything below the fold is compared in place, without scrolling back down after each switch |
+| `screenShown(variant, element)`, called after each switch when the builder defines it | The builder always knows which option is on the stage |
+
+**A builder that changes its screen after load (a click that opens an editor, switches a
+partner, redraws a list) keeps no single global redraw function and reads no global set in
+`buildScreen` when a click lands.** Every option is built once, at load, so whatever global
+`buildScreen` last set belongs to the LAST option built: a click in option 1 then redraws
+option 4, off the stage, and the screen showing does not move (claude-config#1206, from
+Dan's Bidspoke partners rounds). Define `screenShown(variant, element)` instead, which the
+page calls with the option on the stage and its element after every switch, the first one
+included, and redraw from those. The page also keeps how far each scrolling region was
+scrolled across a switch, matched by where each sits in the screen, so no builder needs its own scroll listener.
 
 `bash test-make-switcher.sh` runs its checks, and `run-all-tests.sh` finds that suite on its own. The refusals above each have a test that produces them, including the unwired key.
 

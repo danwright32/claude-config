@@ -34,6 +34,13 @@ the entire screen, chrome included. Every option goes through that one function
 with one field changed between them, which is what makes "everything else held
 byte identical" structural rather than a promise.
 
+A builder may also define screenShown(variant, element), which the page calls after
+every switch (the first included) with the option on the stage and its element. Every
+option is built once at load, so a global set in buildScreen holds the LAST option
+built: a builder that redraws on a click redraws from what screenShown gave it, never
+from such a global (claude-config#1206). Each switch also keeps how far every scrolling
+region was scrolled, matched by where each sits in the screen, so options are compared at the same place.
+
 A "screen" puts one of the shared screens that ship beside this script, in screens/,
 on the page ahead of the round's own builder and stylesheet. "terminal" is the dark
 Claude Code terminal (title bar, transcript, the band above the prompt, the prompt
@@ -215,6 +222,7 @@ __BUILDER__
   var stage = document.getElementById("dr-stage");
   var current = 0;
   var built = [];
+  var hookSaid = false;
 
   function show(index) {
     current = (index + VARIANTS.length) % VARIANTS.length;
@@ -229,7 +237,66 @@ __BUILDER__
        for each option exactly once, and the same element is moved onto the stage every
        time that option is chosen. The fallback covers the one case where drawAll could not
        finish, so a page whose builder threw is still usable rather than blank. */
-    stage.replaceChildren(built[current] || buildScreen(variant));
+    var outgoing = stage.firstElementChild;
+    var kept = outgoing ? scrolled(outgoing) : [];
+    var incoming = built[current] || buildScreen(variant);
+    stage.replaceChildren(incoming);
+    /* A browser resets the scroll of an element taken out of the document, so every scrolling
+       region came back at the top on a switch, and a round about anything below the fold could not
+       be compared in place (claude-config#1206). The positions the outgoing screen was scrolled to
+       are put on the incoming one's regions, matched by where each sits in the screen, so options
+       are compared at the same place by default and no builder has to ask for it. */
+    kept.forEach(function (at) {
+      var region = nodeAt(incoming, at.path);
+      if (region) {
+        region.scrollTop = at.top;
+        region.scrollLeft = at.left;
+      }
+    });
+    /* The builder is told which option is on the stage (claude-config#1206). Every option is built
+       once at load, so a builder keeping one global redraw function ends up holding the LAST option
+       built, and a click in the one showing redrew another off the stage. screenShown is read from
+       the top level, as buildScreen is. One that throws leaves the screen looking finished while
+       the redraw it asked for never happened, so the first throw is said on the page, as a
+       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). */
+    if (typeof screenShown === "function") {
+      try {
+        screenShown(variant, incoming);
+      } catch (err) {
+        if (!hookSaid) {
+          hookSaid = true;
+          warn("The builder's screenShown threw when " + variant.name + " was shown: "
+               + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
+               + "switch did not happen, so the screen showing may not be this option's.");
+        }
+      }
+    }
+  }
+
+  /* Every element in a screen that is scrolled away from its start, each named by its path from
+     the screen (the child index at every level). The path, not its order among the regions that
+     overflow, is what matches one option's region to another's: every option is drawn by the one
+     builder, while an option whose list is short has one fewer overflowing region, which would
+     shift every later one onto the wrong partner (lessons review of #1206). */
+  function scrolled(root) {
+    var all = [root].concat(Array.prototype.slice.call(root.querySelectorAll("*")));
+    return all.filter(function (node) {
+      return node.scrollTop || node.scrollLeft;
+    }).map(function (node) {
+      return { path: pathOf(root, node), top: node.scrollTop, left: node.scrollLeft };
+    });
+  }
+  function pathOf(root, node) {
+    var path = [];
+    for (var at = node; at !== root; at = at.parentElement) {
+      path.unshift(Array.prototype.indexOf.call(at.parentElement.children, at));
+    }
+    return path;
+  }
+  function nodeAt(root, path) {
+    var at = root;
+    for (var i = 0; at && i < path.length; i++) at = at.children[path[i]];
+    return at || null;
   }
 
   /* Draw every option once, keep the pictures, and say whether any two are the same.
