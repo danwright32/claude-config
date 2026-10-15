@@ -123,7 +123,8 @@ def _stamp(value):
             return None
 
 
-SEGMENT_SPLIT = re.compile(r"\|\||&&|[|;\n]")
+# A command line is split into pipelines (on ;, &&, || and newlines), and each pipeline into stages.
+PIPELINE_SPLIT = re.compile(r"\|\||&&|[;\n]")
 # A sed script or awk program that prints every line and nothing else.
 SED_WHOLE_WITH_N = {"p", "1,$p"}
 AWK_WHOLE = {"1", "{print}", "{ print }", "{print $0}", "{ print $0 }"}
@@ -164,17 +165,24 @@ def _is_read(item, spellings, pattern):
         return inp.get("file_path") in spellings and inp.get("offset") is None and inp.get("limit") is None
     if name != "Bash":
         return False
-    for segment in SEGMENT_SPLIT.split(str(inp.get("command") or "")):
-        if not pattern.search(segment):
-            continue
-        try:
-            words = shlex.split(segment)
-        except ValueError:
-            continue  # quoting this cannot follow: not evidence of a read
-        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
-            words.pop(0)  # leading VAR=value assignments
-        if words and _prints_whole_file(words):
-            return True
+    for pipeline in PIPELINE_SPLIT.split(str(inp.get("command") or "")):
+        stages = pipeline.split("|")
+        for i, stage in enumerate(stages):
+            if not pattern.search(stage):
+                continue
+            try:
+                words = shlex.split(stage)
+            except ValueError:
+                break  # quoting this cannot follow: not evidence of a read
+            while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+                words.pop(0)  # leading VAR=value assignments
+            # Output sent to a file, or a heredoc fed in, is a write, not a print.
+            if any(w in (">", ">>") or w.startswith((">", "1>", "<<")) for w in words[1:]):
+                break
+            # Piped onward, only a plain `cat` leaves every line on screen; head or grep keeps some.
+            if all(s.split() == ["cat"] for s in stages[i + 1:]) and words and _prints_whole_file(words):
+                return True
+            break
     return False
 
 
