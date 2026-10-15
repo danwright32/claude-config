@@ -692,6 +692,17 @@ check_not "still showing none of them" "own review 90" "$OUT"
 nudge fresh6 "$OTHER"
 check_eq "a first look with nothing of its repository to baseline says nothing" "" "$OUT"
 [ -f "$AI_REVIEW_STATE_DIR/shown/fresh6.list" ] && ok || bad "and records its list all the same"
+# On a computer where no review ever runs, a first look with nothing to baseline is the only pass
+# that writes a session record, so it also sweeps other sessions' records past 14 days, as the full
+# path does, or one empty list per session would pile up for ever.
+EMPTY_STATE="$WORKDIR/empty-state"; mkdir -p "$EMPTY_STATE/shown"
+: > "$EMPTY_STATE/shown/old.list"; touch -t 202001010000 "$EMPTY_STATE/shown/old.list"
+: > "$EMPTY_STATE/shown/recent.list"
+OUT="$(printf '{"session_id":"e1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | AI_REVIEW_STATE_DIR="$EMPTY_STATE" bash "$NUDGE" 2>/dev/null)"
+check_eq "a first look in a state folder holding no review prints nothing" "" "$OUT"
+[ -f "$EMPTY_STATE/shown/e1.list" ] && ok || bad "and records its list"
+[ -e "$EMPTY_STATE/shown/old.list" ] && bad "and sweeps another session's record older than 14 days" || ok
+[ -e "$EMPTY_STATE/shown/recent.list" ] && ok || bad "while a recent one is kept"
 # The baseline pass starts no process per review: 300 earlier reviews cost what 30 do.
 rm -f "$AI_REVIEW_STATE_DIR/$own_key"-0000000000*.txt
 i=0; while [ "$i" -lt 30 ]; do own_review push "$i"; i=$((i + 1)); done
