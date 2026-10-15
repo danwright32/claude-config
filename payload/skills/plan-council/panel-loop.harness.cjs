@@ -60,6 +60,14 @@ const scenarios = {
     'fix:1': p => ({ edits: [{ item: idOf(p, '## Phase 1 storage'), text: '## Phase 1 storage\nAdd the real table.\n' }], added: [], declined: [] }),
     'verify:1': p => ({ verdicts: findingIds(p).map(f => ({ finding: f, status: 'fixed', evidence: 'ok' })) }),
   },
+  // The whole plan pass after round 1 finds an inconsistency; the fix for it must be followed by
+  // another whole plan pass, never trusted on its scoped recheck alone.
+  'consistency-reopens': {
+    'reality-check': p => ({ verdict: 'needs-fixes', confirmed: [], findings: [{ item: idOf(p, '## Phase 2 api'), what: 'route path is wrong', fix: 'name the real route' }] }),
+    'consistency:1': p => ({ verdict: 'needs-fixes', confirmed: [], findings: [{ item: idOf(p, '## Phase 3 ui'), what: 'the count no longer matches the route', fix: 'count from the real route' }] }),
+    fix: p => ({ edits: [{ item: idOf(p, '## Phase 2 api'), text: '## Phase 2 api\nThe real route reads the Phase 1 table.\n' }], added: [], declined: [] }),
+    verify: p => ({ verdicts: findingIds(p).map(f => ({ finding: f, status: 'fixed', evidence: 'ok' })) }),
+  },
   // The fixer declines the finding: it is Dan's, and the run is never clean.
   declined: {
     'lessons-audit': p => cleanAudit({ verdict: 'violations', violations: [{ lessonId: 'L5', item: idOf(p, '## Phase 1 storage'), severity: 'blocking', where: 'drop', why: 'no backup', fix: 'back up first' }] }),

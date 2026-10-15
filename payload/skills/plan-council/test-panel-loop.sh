@@ -66,6 +66,10 @@ expect references "the item naming the edited one is re-checked" "'## Phase 2 ap
 expect references "an item naming nothing edited is not" "'## Phase 3 ui' not in prompt('recheck:1').split('ITEMS TO CHECK')[-1]"
 expect references "unedited items are byte identical in the returned plan" "r['plan']['plan'].endswith('## Phase 2 api\nThe route reads the Phase 1 table.\n\n## Phase 3 ui\nShow the count.\n')"
 
+# A finding the whole plan pass raises reopens the loop, and its fix gets a whole plan pass too.
+expect consistency-reopens "a finding from the whole plan pass runs another fix round" "'fix:2' in labels"
+expect consistency-reopens "and that fix is followed by another whole plan pass" "'consistency:2' in labels and r['checks']['stoppedAt'] == 'clean'"
+
 # A declined finding is Dan's: the run is settled with dissent, never clean, and it is not re-raised.
 expect declined "a declined finding ends the run settled with dissent" "r['checks']['stoppedAt'] == 'settled-with-dissent' and r['checks']['converged'] is False"
 expect declined "with the decline and its reason returned" "[(d['id'], d['reason']) for d in r['checks']['declined']] == [('F1', 'the table is empty by construction')]"

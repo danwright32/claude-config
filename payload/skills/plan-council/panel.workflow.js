@@ -242,19 +242,22 @@ const checkUntilSettled = async (planText, fixContext) => {
   const firstAudit = takeIn(rc0, au0, 0, 'first')
   if (unverified.length) log(`CHECKS DID NOT ALL RUN: ${unverified.join('; ')}. The plan is UNVERIFIED there, not clean.`)
   let rounds = 0
-  let finalPass = false
+  // Whether the whole plan has been checked since the last fix round. Every fix round clears it, so
+  // a fix made for a finding the whole plan pass raised is itself checked whole.
+  let checkedWhole = true
   for (;;) {
     if (!open('blocking').length) {
       // One full pass after the last fix, for what splicing cannot see: an edit that left another
       // item inconsistent with it.
-      if (rounds === 0 || finalPass) break
-      finalPass = true
+      if (checkedWhole) break
+      checkedWhole = true
       const rcF = await rcAsk(null, `consistency:${rounds}`, `Check this CORRECTED plan for "${feature}" as a whole: is every item consistent with every other, and does every concrete claim still hold against the code?`)
       takeIn(rcF, cleanAuditStandIn, rounds, 'final')
       if (!open('blocking').length) break
     }
     if (rounds >= MAX_ROUNDS) break
     rounds++
+    checkedWhole = false
     phase('Fix & reverify')
     const todo = open('blocking')
     log(`Round ${rounds}: ${todo.length} blocking finding(s) open (${todo.map(f => f.id).join(', ')}): fixing them in place.`)
