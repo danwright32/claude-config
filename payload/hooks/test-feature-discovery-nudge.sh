@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Tests for feature-discovery-nudge.sh (claude-config#124).
 #
-# It injects one standing instruction into every prompt, and its whole design is that it does NOT
-# try to detect a feature request: the instruction is conditional and the model self filters. So
-# there is little behaviour to check and exactly one way it fails, which is by printing nothing, or
-# printing something that is no longer an instruction, on every prompt for as long as nobody looks.
+# It adds one standing instruction to each session (SessionStart, since 2026-10-15), and its whole
+# design is that it does NOT try to detect a feature request: the instruction is conditional and the
+# model self filters. So there is little behaviour to check and exactly one way it fails, which is by
+# printing nothing, or printing something that is no longer an instruction, in every session for as
+# long as nobody looks.
 # Nothing would report that.
 set -uo pipefail
 
@@ -67,6 +68,28 @@ else
   check "its sibling nudge still works the same way and says something different" "tdd-nudge.sh is gone"
 fi
 
+
+# ONCE PER SESSION, not on every prompt (hook trim, 2026-10-15). On UserPromptSubmit this line was
+# copied into the transcript once per prompt, so a session of P prompts carried P copies, each
+# re-read by every later request: 558K characters in Slate sessions, Oct 1 to 15 2026. On
+# SessionStart it arrives once at the start, once after /clear and once after each compaction,
+# which is when the earlier copy is gone. Read from the settings this repository installs.
+SETTINGS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/settings.hooks.json"
+events="$(python3 -c '
+import json, re, sys
+d = json.load(open(sys.argv[1]))["hooks"]
+pat = re.compile(r"/hooks/" + re.escape(sys.argv[2]) + r"(?![A-Za-z0-9_.-])")
+print(" ".join(sorted({ev for ev, ms in d.items() for m in ms for h in m.get("hooks", []) if pat.search(h.get("command", ""))})))
+' "$SETTINGS_FILE" "feature-discovery-nudge.sh" 2>/dev/null)"
+[ "$events" = "SessionStart" ] \
+  && check "it is registered under SessionStart only" ok \
+  || check "it is registered under SessionStart only" "registered under: ${events:-nothing}"
+# A headless run started by an app has nobody to nudge, and its prompt is a job, not a request
+# to write code.
+out_detached="$(printf '{}' | CLAUDE_DETACHED_RUN=1 "$H" 2>/dev/null)"
+[ -z "$out_detached" ] \
+  && check "it says nothing in a detached headless run" ok \
+  || check "it says nothing in a detached headless run" "out=$out_detached"
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

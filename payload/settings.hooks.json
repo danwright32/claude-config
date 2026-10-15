@@ -246,16 +246,6 @@
           },
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/tdd-nudge.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/feature-discovery-nudge.sh",
-            "timeout": 5
-          },
-          {
-            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/rule-files-changed.sh",
             "timeout": 5
           },
@@ -304,11 +294,16 @@
     ],
     "SessionStart": [
       {
-        "matcher": "compact",
         "hooks": [
           {
             "type": "command",
-            "command": "__CLAUDE_HOME__/hooks/post-compact.sh"
+            "command": "__CLAUDE_HOME__/hooks/tdd-nudge.sh",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/feature-discovery-nudge.sh",
+            "timeout": 5
           }
         ]
       }

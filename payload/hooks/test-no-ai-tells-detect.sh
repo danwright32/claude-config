@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Tests for no-ai-tells-detect.py, which decides whether a prompt is asking for PROSE and, if so,
-# loads the writing skill into the turn (claude-config#124).
+# points the turn at the writing skill with a one line pointer (claude-config#124; a pointer rather
+# than the whole skill since 2026-10-15).
 #
 # It is a classifier over the prompt text, and both ways of being wrong are quiet. Missing a real
 # writing request means the copy goes out with every AI tell the skill exists to remove. Firing on
-# a coding request means a whole skill is pasted into a turn that has no use for it. It had no
+# a coding request means a pointer to a skill lands in a turn that has no use for it. It had no
 # test, and a classifier with no test is a list of keywords nobody has read against the sentences
 # it will actually meet (L104: a shape matcher must be checked against what it has to PRESERVE, not
 # only against what it has to catch).
@@ -88,16 +89,26 @@ done
   || check "and on a prompt that asks for nothing to be written" "it fired"
 
 # ---------------------------------------------------------------------------
-# What it injects has to be the skill itself, not merely something.
+# What it injects has to be a pointer at the writing skill, not merely something.
 # ---------------------------------------------------------------------------
 out="$(python3 -c 'import json; print(json.dumps({"prompt":"write a blog post"}))' | HOME="$FAKEHOME" python3 "$H" 2>/dev/null)"
 ctx="$(printf '%s' "$out" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("hookSpecificOutput") or {}).get("additionalContext",""))' 2>/dev/null)"
 grep -qi 'no-ai-tells' <<< "$ctx" \
-  && check "what it injects is the writing skill" ok \
-  || check "what it injects is the writing skill" "ctx=${ctx:0:120}"
-[ "${#ctx}" -gt 400 ] \
-  && check "and the whole of it, not a stub" ok \
-  || check "and the whole of it, not a stub" "only ${#ctx} characters came through"
+  && check "what it injects names the writing skill" ok \
+  || check "what it injects names the writing skill" "ctx=${ctx:0:120}"
+grep -qi 'Skill tool' <<< "$ctx" \
+  && check "and tells Claude to load it with the Skill tool" ok \
+  || check "and tells Claude to load it with the Skill tool" "ctx=${ctx:0:160}"
+# A POINTER, not the body (hook trim, 2026-10-15). Pasting the whole 4,136 character skill into
+# every prose prompt was 942K characters in Slate sessions, Oct 1 to 15 2026, re-read by every later
+# request, while the skill loaded through the Skill tool arrives once and only when used.
+[ "${#ctx}" -le 200 ] \
+  && check "and is a one line pointer, not the skill body (<= 200 characters)" ok \
+  || check "and is a one line pointer, not the skill body (<= 200 characters)" "${#ctx} characters came through"
+body_line="$(awk '/^---/ { fm++; next } fm >= 2 && /^[A-Za-z]/ && length($0) > 60 { print; exit }' "$REPO_SKILL")"
+[ -n "$body_line" ] && [[ "$ctx" != *"$body_line"* ]] \
+  && check "and carries no sentence of the skill body" ok \
+  || check "and carries no sentence of the skill body" "body line [${body_line:0:60}] found or none to compare"
 
 # ---------------------------------------------------------------------------
 # Payloads it must survive.

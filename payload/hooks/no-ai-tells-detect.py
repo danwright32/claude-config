@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """
-UserPromptSubmit hook: detects prose writing intent and injects the no-ai-tells skill.
+UserPromptSubmit hook: detects prose writing intent and points Claude at the no-ai-tells skill.
 Fires on writing requests (articles, blogs, copy, tooltips, sentences, etc.)
 but NOT on code writing requests.
+
+It injects a ONE LINE POINTER, never the skill body (hook trim, 2026-10-15). Pasting the whole
+4,136 character skill into every prose prompt cost 942K characters in Slate sessions, Oct 1 to 15
+2026, each copy re-read by every later request; through the Skill tool the body arrives once, and
+only in a turn that really writes prose. The skill file is still checked for, because a pointer at a
+skill this Mac does not have would read exactly like guidance.
 """
 import json
 import os
 import sys
+
+POINTER = (
+    "[no-ai-tells] This prompt asks for prose. Before showing any draft, load the no-ai-tells "
+    "skill with the Skill tool and apply its edits."
+)
 
 try:
     data = json.load(sys.stdin)
@@ -59,7 +70,7 @@ try:
         skill_path = os.path.expanduser("~/.claude/skills/no-ai-tells/SKILL.md")
         try:
             with open(skill_path, "r") as f:
-                skill_content = f.read()
+                f.read(1)
         except Exception as exc:
             # Said out loud, because this is the worst of the three outcomes and it used to be the
             # quietest. Having DECIDED the prompt is asking for prose, injecting nothing looks
@@ -77,7 +88,7 @@ try:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": skill_content,
+                    "additionalContext": POINTER,
                 }
             }))
 

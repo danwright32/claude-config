@@ -15,6 +15,13 @@ assertion in its own suite passed throughout, because a hook's suite reads the w
 and nothing compared the output against what the platform takes (L3). The same object is copied
 from hook to hook, so the guard is the tree wide question, not the one line (L30, L613).
 
+post-compact.sh itself is gone (#1223, 2026-10-15). A controlled run on Claude Code 2.1.300, one
+process with hooks off and no tools, showed the platform re-reads the project's CLAUDE.md AND its
+@imports from disk after a compaction: an import rewritten after the /compact came back with its new
+word while the compaction summary still held the old one, and the same run with
+CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 answered NONE. The hook only ever re-sent the file without its
+imports, so it was a second, partial copy of something already restored.
+
 THE TABLE BELOW IS A MEASUREMENT, not a memory. It is the discriminated union behind
 `hookSpecificOutput` in the installed Claude Code, read out of the binary with
 `strings -a ~/.local/share/claude/versions/<version>` and searching for `hookSpecificOutput:$e([`,
