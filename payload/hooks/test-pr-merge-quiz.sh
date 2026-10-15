@@ -494,6 +494,12 @@ needs "prefers a concrete scenario"       'scenario'
 needs "corrects without looking back"     'without describing the old behavior'
 needs "offers to change the behavior"     'change it to what he picked'
 needs "captures a change as an issue"     'open a GitHub issue'
+# Three guards the 2026-10-15 trim first dropped and the lessons review caught: the issue goes to the
+# repo the merge ran in (a session's repo can differ: a cd, a --repo, several merges), no coding
+# starts mid quiz, and a merge named without a number is resolved before its diff is read.
+needs "files the issue where the merge ran"  'in the repo you just merged in'
+needs "does not start coding mid quiz"       'do NOT start coding in the middle of the quiz'
+needs "resolves a merge with no number"      'resolve the PR for the merged branch first'
 
 # The old framing that let past-tense questions in must be gone.
 if holds "$REASON" 'Test BEHAVIOR AND IMPACT'; then
@@ -525,9 +531,26 @@ needs "counts what they see"               'what they see'
 needs "counts what they interact with"     'what they interact with'
 needs "counts what they receive and when"  'what they receive and when'
 
-# Two categories Dan explicitly kept IN (2026-08-03), despite being invisible while things work.
+# Failure behavior Dan kept IN (2026-08-03), despite being invisible while things work.
 needs "counts failure behavior"            'what happens when something goes wrong'
-needs "counts a rare edge case fix"        'a fix to a rare edge case'
+
+# BUG FIXES ARE NOT QUIZZED, a rare edge case fix included (Dan's standing rule, 2026-09-07, on
+# #2048: "skip quiz. this is a bug fix, not a change"; approved into the hook 2026-10-15). A fix
+# makes the product do what it was always meant to do, so there is nothing new to learn, and he is
+# usually the one who reported it. The quiz is for deliberate changes. This reverses the 2026-08-03
+# rule that counted a rare edge case fix IN, so its old wording must be gone.
+needs "quizzes only deliberate changes"    'deliberate change'
+needs "skips bug fixes"                    'bug fixes, including a fix to a rare edge case'
+absent "no longer counts an edge case fix in" 'something goes wrong, or a fix to a rare edge case'
+absent "no longer counts an edge case fix in, old wording" 'since that situation now behaves differently'
+
+# SHORT (hook trim, 2026-10-15). The instruction was 5,213 characters on every quizzed merge, 878K
+# characters in Slate sessions Oct 1 to 15 2026, each re-read by every later request. Every rule
+# above still has to fit; this keeps a regrowth from going unnoticed.
+quiz_len="$(printf '%s' "$REASON" | jq -r '.reason // ""' 2>/dev/null | python3 -c 'import sys; print(len(sys.stdin.read()))')"
+if [ "${quiz_len:-0}" -gt 0 ] && [ "$quiz_len" -le 2600 ]; then pass=$((pass+1)); else
+  fail=$((fail+1)); echo "FAIL: the quiz instruction stays at or under 2,600 characters (it is ${quiz_len:-unreadable})"
+fi
 
 # For his own tooling, Dan is the user, so a change to how a hook or skill behaves still quizzes.
 needs "makes Dan the user of his tooling"  'Dan IS the user'
