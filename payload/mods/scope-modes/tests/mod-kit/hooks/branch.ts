@@ -48,6 +48,26 @@ export const branchAt = async (path: string, walk: (path: string) => Promise<str
 }
 
 /**
+ * The branch a rebase in progress is rebasing, or '' when none is (#1210). A rebase leaves the head
+ * detached, and a reader keyed on the branch then refused work in a worktree whose branch named its
+ * issue. git records the branch in its rebase notes under the checkout's git folder: rebase-merge
+ * for an interactive or merge rebase, rebase-apply for the rest. Asked only when the head is
+ * detached, so a checkout on a branch costs nothing more. Notes that cannot be read, or that name
+ * no branch, are no rebase, and the head stays unreadable rather than guessed.
+ */
+const rebasing = async (root: string, run: Run): Promise<string> => {
+  const where = await tryRun(run, ['git', '-C', root, 'rev-parse', '--git-path', 'rebase-merge/head-name', '--git-path', 'rebase-apply/head-name'])
+  if (where.exitCode !== 0) return ''
+  for (const p of where.stdout.split('\n').map(l => l.trim()).filter(Boolean)) {
+    const file = p.startsWith('/') ? p : `${root.replace(/\/$/, '')}/${p}`
+    const read = await tryRun(run, ['cat', file])
+    const name = read.exitCode === 0 ? read.stdout.trim() : ''
+    if (name.startsWith('refs/heads/')) return name.slice('refs/heads/'.length)
+  }
+  return ''
+}
+
+/**
  * Where the checkout at `root` stands, asked of git (three reads at once, so the whole answer is
  * bounded by the slowest one). A branch git cannot read, a detached head, or a main working tree
  * git does not name is `unreadable`, saying which, never a guess: a reader deciding what an edit
@@ -63,7 +83,7 @@ export const readBranch = async (root: string, run: Run): Promise<ModKitBranch> 
   const main = w.exitCode === 0 ? mainOf(w.stdout) : null
   if (main === null) return { root, main: null, unreadable: w.exitCode === 0 ? 'git named no main working tree' : `git could not list its worktrees: ${said(w)}` }
   if (b.exitCode !== 0) return { root, main, unreadable: `git could not read the branch: ${said(b)}` }
-  const branch = b.stdout.trim()
+  const branch = b.stdout.trim() || (await rebasing(root, run))
   if (!branch) return { root, main, unreadable: 'a detached head names no branch' }
   const defaultBranch = h.exitCode === 0 && h.stdout.trim() ? h.stdout.trim().replace(/^origin\//, '') : null
   return { root, main, branch, defaultBranch, isDefault: isDefaultBranch(branch, defaultBranch), issues: issuesOfBranch(branch) }

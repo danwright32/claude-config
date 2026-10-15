@@ -8,14 +8,23 @@ const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
 const failed = (stderr: string) => ({ exitCode: 128, stdout: '', stderr })
 
 // A git that answers each of the three reads as the test says; every other command is a failure of the test.
-const gitSays = (says: { branch?: ReturnType<typeof ok>; worktrees?: ReturnType<typeof ok>; head?: ReturnType<typeof ok> | 'throws' }): { run: Run; asked: string[] } => {
+// `rebasing` is the branch a rebase in progress names in its notes, as git keeps them under the
+// checkout's git folder (rebase-merge for an interactive or merge rebase, rebase-apply for the rest).
+const gitSays = (says: { branch?: ReturnType<typeof ok>; worktrees?: ReturnType<typeof ok>; head?: ReturnType<typeof ok> | 'throws'; rebasing?: { kind: 'rebase-merge' | 'rebase-apply'; headName: string; inWorktree?: boolean } }): { run: Run; asked: string[] } => {
   const asked: string[] = []
   const run: Run = async argv => {
     asked.push(argv.join(' '))
+    if (argv[0] === 'cat') {
+      // A worktree's notes sit under the main checkout's git folder, named by an absolute path.
+      const want = says.rebasing ? (says.rebasing.inWorktree ? `/main/.git/worktrees/r/${says.rebasing.kind}/head-name` : `/r/.git/${says.rebasing.kind}/head-name`) : ''
+      return argv[1] === want ? ok(`${(says.rebasing as { headName: string }).headName}\n`) : { exitCode: 1, stdout: '', stderr: `cat: ${argv[1]}: No such file or directory` }
+    }
     const sub = argv.slice(3).join(' ')
     if (argv[0] !== 'git' || argv[1] !== '-C') throw new Error(`not a git read in the checkout: ${argv.join(' ')}`)
     if (sub === 'branch --show-current') return says.branch ?? ok('978-design-round-guard\n')
     if (sub === 'worktree list --porcelain') return says.worktrees ?? ok('worktree /Users/x/Apps/slate\nHEAD abc\nbranch refs/heads/main\n\nworktree /Users/x/Apps/slate/.claude/worktrees/a1\nHEAD def\nbranch refs/heads/978-design-round-guard\n')
+    if (sub === 'rev-parse --git-path rebase-merge/head-name --git-path rebase-apply/head-name')
+      return says.rebasing?.inWorktree ? ok('/main/.git/worktrees/r/rebase-merge/head-name\n/main/.git/worktrees/r/rebase-apply/head-name\n') : ok('.git/rebase-merge/head-name\n.git/rebase-apply/head-name\n')
     if (sub === 'symbolic-ref --short refs/remotes/origin/HEAD') {
       if (says.head === 'throws') throw new Error('git could not be started')
       return says.head ?? ok('origin/main\n')
@@ -90,4 +99,28 @@ test('a branch git cannot read, a detached head, or no main working tree is unre
     throw new Error('spawn git ENOENT')
   }
   expect(await readBranch('/r', dead)).toEqual({ root: '/r', main: null, unreadable: 'git could not list its worktrees: spawn git ENOENT' })
+})
+
+// #1210: a rebase in progress leaves the head detached, and the design round guard then refused an
+// edit for "a detached head names no branch" though the worktree's branch named its issue. git
+// records the branch being rebased, so that is the branch, for either kind of rebase.
+test('a rebase in progress reads as the branch being rebased, for either kind of rebase', async () => {
+  for (const kind of ['rebase-merge', 'rebase-apply'] as const) {
+    const g = gitSays({ branch: ok('\n'), rebasing: { kind, headName: 'refs/heads/fix/1205-shared-login-follower' } })
+    expect(await readBranch('/r', g.run)).toMatchObject({ root: '/r', branch: 'fix/1205-shared-login-follower', isDefault: false, issues: [1205] })
+  }
+})
+
+// In a worktree git names the notes by an absolute path under the main checkout (measured on a real
+// conflicted rebase), which is the case #1210 was found in.
+test('a rebase in progress in a worktree reads as its branch, from notes named by an absolute path', async () => {
+  for (const kind of ['rebase-merge', 'rebase-apply'] as const) {
+    const g = gitSays({ branch: ok('\n'), rebasing: { kind, headName: 'refs/heads/fix/1205-shared-login-follower', inWorktree: true } })
+    expect(await readBranch('/r', g.run)).toMatchObject({ branch: 'fix/1205-shared-login-follower', issues: [1205] })
+  }
+})
+
+test('a detached head with no rebase in progress, or notes naming no branch, is still unreadable', async () => {
+  expect(await readBranch('/r', gitSays({ branch: ok('\n') }).run)).toMatchObject({ unreadable: 'a detached head names no branch' })
+  expect(await readBranch('/r', gitSays({ branch: ok('\n'), rebasing: { kind: 'rebase-merge', headName: 'detached HEAD' } }).run)).toMatchObject({ unreadable: 'a detached head names no branch' })
 })
