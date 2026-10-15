@@ -45,6 +45,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/sync-clone.sh" 2>/dev/null || exit 0
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# Missing, a file differing only by the home placeholder is reported rather than left out, which is
+# the safe side of that question.
+# shellcheck source=lib/home-token.sh
+. "$HOOK_DIR/lib/home-token.sh" 2>/dev/null || true
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -160,8 +164,6 @@ if [ "$event" = "PostToolUse" ]; then
   # expands, and a removed one when the installed config lacks it too. Anything else is reported,
   # an installed copy merged with local settings included, since a match cannot be shown there.
   installed="${PAYLOAD_WRITE_INSTALLED_DIR:-$HOME/.claude}"
-  # In pieces, because the install rewrites the whole placeholder wherever it appears, this line too.
-  home_token="__CLAUDE""_HOME__"
   differ=""; matched=0
   while IFS= read -r f; do
     rel=""
@@ -172,8 +174,8 @@ if [ "$event" = "PostToolUse" ]; then
     if [ -n "$rel" ] && {
       { [ ! -e "$f" ] && [ ! -e "$inst" ]; } ||
       { [ -f "$f" ] && [ -f "$inst" ] && { cmp -s "$f" "$inst" ||
-        { grep -Iq -F -- "$home_token" "$f" 2>/dev/null &&
-          LC_ALL=C sed "s|$home_token|$installed|g" "$f" | cmp -s - "$inst"; }; }; }
+        { [ -n "${HOME_TOKEN:-}" ] && grep -Iq -F -- "$HOME_TOKEN" "$f" 2>/dev/null &&
+          home_detok "$installed" < "$f" | cmp -s - "$inst"; }; }; }
     }; then matched=$((matched + 1)); else differ="$differ$f
 "; fi
   done < <(printf '%s\n' "$changed")

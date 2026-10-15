@@ -1596,11 +1596,17 @@ clear_retired_skill_leftovers(){
   return 0
 }
 
-# LC_ALL=C so the substitution is bytewise. A UTF-8 locale makes sed refuse a file holding a byte
-# sequence it cannot decode ("illegal byte sequence"), which would empty the stream rather than
-# fail loudly, and the caller compares what comes out.
-tok(){ LC_ALL=C sed "s|$CLAUDE_HOME|$TOKEN|g"; }   # real home -> placeholder
-detok(){ LC_ALL=C sed "s|$TOKEN|$CLAUDE_HOME|g"; } # placeholder -> this Mac's home
+# Bytewise and literal: a byte sequence no locale decodes passes through rather than emptying the
+# stream, and a home path is data, never a pattern (with sed, a | & or \ in it corrupted the
+# substitution and its dots matched any character). payload/hooks/lib/home-token.sh carries the same
+# swap for the write gate, which asks whether a checkout's file already matches what this installs.
+# This script stays whole on its own, so it keeps its own copy, and test-home-token.sh fails when the
+# two differ by a byte, as the mod test copies are held to mod-kit's (claude-config#1211, L370).
+home_literal_swap(){ # home_literal_swap <from> <to>
+  HT_FROM="$1" HT_TO="$2" perl -pe 'BEGIN { binmode STDIN; binmode STDOUT } s/\Q$ENV{HT_FROM}\E/$ENV{HT_TO}/g'
+}
+tok(){ home_literal_swap "$CLAUDE_HOME" "$TOKEN"; }   # real home -> placeholder
+detok(){ home_literal_swap "$TOKEN" "$CLAUDE_HOME"; } # placeholder -> this Mac's home
 
 # ---- the home path substitution covers every mirrored file, not one (#87) ----
 # tok/detok existed and were wired to settings.hooks.json ALONE, so every other payload file was
