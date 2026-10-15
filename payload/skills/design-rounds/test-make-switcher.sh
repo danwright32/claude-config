@@ -486,6 +486,54 @@ else
     "Espresso:dr-stage,Ink:dr-stage,Espresso:dr-stage" "${got#*|}"
 fi
 
+# Lessons review of #1206: regions are matched by where they sit in the screen, not by their order
+# among the ones that overflow, since an option whose first list is short has one fewer overflowing
+# region and every later one would shift onto the wrong partner.
+SC2="$TMP/scroll-two"; mkdir -p "$SC2"
+cat > "$SC2/builder.js" <<'BUILDER'
+function region(cls, px) {
+  var r = document.createElement("div");
+  r.className = cls;
+  r.style.cssText = "height:100px;overflow:auto";
+  var inner = document.createElement("div");
+  inner.style.cssText = "height:" + px + "px";
+  // Text inside, since headless Chrome scrolls no region whose only content is an empty block.
+  inner.textContent = cls;
+  r.appendChild(inner);
+  return r;
+}
+function buildScreen(variant) {
+  var outer = document.createElement("div");
+  outer.className = "screen";
+  outer.appendChild(region("first", variant.key === "1" ? 2000 : 50));
+  outer.appendChild(region("second", 2000));
+  return outer;
+}
+BUILDER
+printf '.screen { color: #111; }\n' > "$SC2/screen.css"
+spec "$SC2/spec.json" "$TWO"
+run "$SC2/spec.json" "$SC2/out.html" >/dev/null
+if [[ -x "$CHROME" ]]; then
+  python3 - "$SC2/out.html" <<'TWOPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+function q(c) { return document.querySelector("#dr-stage ." + c); }
+q("first").scrollTop = 400;
+q("second").scrollTop = 300;
+document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+var out = document.createElement("pre"); out.id = "PROBE"; out.textContent = String(q("second").scrollTop);
+document.body.append(out);
+</script>
+"""
+open(sys.argv[1] + ".two.html", "w", encoding="utf-8").write(page + harness)
+TWOPY
+  got2="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC2/out.html.two.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")')"
+  check_eq "a region keeps its own scroll when an earlier region of the other option does not overflow" "300" "$got2"
+fi
+
 # --- 12. the committed example is what the tool produces today ---
 #
 # example/switcher.html is generated and committed beside its own source, so it goes

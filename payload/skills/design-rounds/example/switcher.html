@@ -157,11 +157,10 @@ function buildScreen(variant) {
     /* A browser resets the scroll of an element taken out of the document, so every scrolling
        region came back at the top on a switch, and a round about anything below the fold could not
        be compared in place (claude-config#1206). The positions the outgoing screen was scrolled to
-       are put on the incoming one's regions, matched by their order, so options are compared at
-       the same place by default and no builder has to ask for it. */
-    var regions = scrollers(incoming);
+       are put on the incoming one's regions, matched by where each sits in the screen, so options
+       are compared at the same place by default and no builder has to ask for it. */
     kept.forEach(function (at) {
-      var region = regions[at.index];
+      var region = nodeAt(incoming, at.path);
       if (region) {
         region.scrollTop = at.top;
         region.scrollLeft = at.left;
@@ -180,19 +179,30 @@ function buildScreen(variant) {
     }
   }
 
-  /* Every element in a screen that can scroll, the screen itself first, in document order: the
-     order is what matches one option's region to another's, since each option is drawn by the one
-     builder. Read while the screen is on the stage, where its sizes are real. */
-  function scrollers(root) {
+  /* Every element in a screen that is scrolled away from its start, each named by its path from
+     the screen (the child index at every level). The path, not its order among the regions that
+     overflow, is what matches one option's region to another's: every option is drawn by the one
+     builder, while an option whose list is short has one fewer overflowing region, which would
+     shift every later one onto the wrong partner (lessons review of #1206). */
+  function scrolled(root) {
     var all = [root].concat(Array.prototype.slice.call(root.querySelectorAll("*")));
     return all.filter(function (node) {
-      return node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth;
+      return node.scrollTop || node.scrollLeft;
+    }).map(function (node) {
+      return { path: pathOf(root, node), top: node.scrollTop, left: node.scrollLeft };
     });
   }
-  function scrolled(root) {
-    return scrollers(root).map(function (node, index) {
-      return { index: index, top: node.scrollTop, left: node.scrollLeft };
-    });
+  function pathOf(root, node) {
+    var path = [];
+    for (var at = node; at !== root; at = at.parentElement) {
+      path.unshift(Array.prototype.indexOf.call(at.parentElement.children, at));
+    }
+    return path;
+  }
+  function nodeAt(root, path) {
+    var at = root;
+    for (var i = 0; at && i < path.length; i++) at = at.children[path[i]];
+    return at || null;
   }
 
   /* Draw every option once, keep the pictures, and say whether any two are the same.
