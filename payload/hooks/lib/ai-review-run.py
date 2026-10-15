@@ -10,8 +10,8 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --started EPOCH
 
 It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
-<model> --settings {"disableAllHooks":true} --strict-mcp-config --disallowedTools ReportFindings` with
-the diff on stdin (the last three are explained where the command is built).
+<model> --settings {"disableAllHooks":true} --strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with
+the diff on stdin (the last four are explained where the command is built).
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
@@ -279,8 +279,11 @@ def main(argv):
         # without, five runs each) and one stored answer ended with the reviewer's aside that they
         # needed authorizing, text that is neither a finding nor "No issues found.". So never name
         # an --mcp-config here: one would bring its servers straight back.
+        # Skills OFF (hook trim, 2026-10-15). The reviewer invokes no skill, and without the flag the
+        # whole skills list, every skill's name and description, rides on each request of the run.
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
+               "--disable-slash-commands",
                "--disallowedTools", "ReportFindings"]
         with open(a.diff_file, "rb") as diff:
             # Its own process group, so the deadline can kill everything claude started and not
