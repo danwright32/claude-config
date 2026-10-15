@@ -282,10 +282,11 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * after a bold "Where:", its clicks after a bold "What to do:" (several actions numbered one per
  * line under it), and any value with Copy (#872). A later step is its title alone; a finished one is dimmed and
  * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
- * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Copy link
- * beside it. Where a click may not land (Apple Terminal, the main screen)
- * mod-kit draws each button's instead text: Done the words to type, Copy link and Copy nothing, the
- * link and the value wrapping whole beside them to be selected (#939).
+ * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Open (to the
+ * default browser, #1215) and Copy link beside its label. Where a click may not land (Apple
+ * Terminal, the main screen) mod-kit draws each button's instead text: Done the words to type,
+ * Open, Copy link and Copy nothing, the link and the value wrapping whole beside them to be
+ * selected (#939).
  */
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
   const open = nextStep(card)
