@@ -271,6 +271,141 @@ else
   check "the reason carries no em or en dash" "it does"
 fi
 
+# ---------------------------------------------------------------------------
+# 10. READ ONCE PER SESSION. Each fire used to send Claude back to cat the whole
+#     instruction, and that text was then re-read by every later request: the reads
+#     of the two instruction files were 0.93% of every token read in Slate
+#     sessions, Oct 1 to 15 2026. Given --transcript, the helper sends the full
+#     "read it now" pointer only when this session has not read the file since its
+#     last compaction (or the file changed after that read), and otherwise a short
+#     pointer at the copy already in context. Every way of failing to tell falls
+#     toward the full pointer, because a review run from a copy that is not there is
+#     the worse failure.
+# ---------------------------------------------------------------------------
+T="$WORK/transcript.jsonl"
+tool_line() { # tool_line <timestamp> <tool name> <input json>
+  python3 -c '
+import json, sys
+print(json.dumps({"type": "assistant", "timestamp": sys.argv[1],
+  "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": sys.argv[2], "input": json.loads(sys.argv[3])}]}},
+  ensure_ascii=False))  # as Claude Code writes its transcript: characters, not escapes
+' "$1" "$2" "$3"
+}
+read_line() { tool_line "$1" Read "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1]}))' "$INSTRUCTION")"; }
+cat_line() { tool_line "$1" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": "cat " + sys.argv[1] + "; echo done"}))' "$INSTRUCTION")"; }
+boundary_line='{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","timestamp":"2099-01-02T00:00:00.000Z"}'
+user_line='{"type":"user","message":{"role":"user","content":"do the thing"}}'
+FUTURE="2099-01-01T00:00:00.000Z"   # after the fixture's mtime, so the read is of the current file
+PAST="2000-01-01T00:00:00.000Z"     # before it, so the file has changed since that read
+
+reason_with() { reason_of "$("$HELPER" --instruction "$INSTRUCTION" --label "SESSION REFLECTION" --transcript "$T" 2>/dev/null)"; }
+is_full() { [[ "$1" == *"Read $INSTRUCTION now"* ]]; }
+is_repeat() { [[ "$1" == *"Follow $INSTRUCTION again"* && "$1" != *"Read $INSTRUCTION now"* ]]; }
+
+printf '%s\n' "$user_line" > "$T"
+r="$(reason_with)"
+is_full "$r" && check "no read in the transcript: the full pointer" ok \
+  || check "no read in the transcript: the full pointer" "[$r]"
+
+{ printf '%s\n' "$user_line"; read_line "$FUTURE"; } > "$T"
+r="$(reason_with)"
+is_repeat "$r" && check "a Read of the file this session: the short repeat pointer" ok \
+  || check "a Read of the file this session: the short repeat pointer" "[$r]"
+[[ "$r" == *"$INSTRUCTION"* ]] && check "the repeat pointer still names the file" ok \
+  || check "the repeat pointer still names the file" "[$r]"
+[ "$(( ${#r} - ${#INSTRUCTION} ))" -le 130 ] && check "the repeat pointer is short (<= 130 characters besides the path)" ok \
+  || check "the repeat pointer is short (<= 130 characters besides the path)" "it is ${#r} with a ${#INSTRUCTION} character path"
+
+{ printf '%s\n' "$user_line"; cat_line "$FUTURE"; } > "$T"
+r="$(reason_with)"
+is_repeat "$r" && check "a cat of the file in a Bash call counts as a read" ok \
+  || check "a cat of the file in a Bash call counts as a read" "[$r]"
+
+{ printf '%s\n' "$user_line"; read_line "$FUTURE"; printf '%s\n' "$boundary_line"; } > "$T"
+r="$(reason_with)"
+is_full "$r" && check "a read before a compaction does not count: the full pointer again" ok \
+  || check "a read before a compaction does not count: the full pointer again" "[$r]"
+
+{ printf '%s\n' "$user_line"; read_line "$FUTURE"; printf '%s\n' "$boundary_line"; cat_line "$FUTURE"; } > "$T"
+r="$(reason_with)"
+is_repeat "$r" && check "a read after the compaction counts again" ok \
+  || check "a read after the compaction counts again" "[$r]"
+
+# Naming the file is not reading it: a listing, a count, an existence test or an edit leaves the
+# text out of context, so each of those still gets the full pointer.
+for cmd in "ls -l PATH" "grep -c rule PATH" "test -f PATH && echo yes" "git diff -- PATH"; do
+  { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2])}))' "$cmd" "$INSTRUCTION")"; } > "$T"
+  r="$(reason_with)"
+  is_full "$r" && check "a Bash call that only names the file ($cmd) is not a read" ok \
+    || check "a Bash call that only names the file ($cmd) is not a read" "[$r]"
+done
+{ printf '%s\n' "$user_line"; tool_line "$FUTURE" Edit "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1], "old_string": "a", "new_string": "b"}))' "$INSTRUCTION")"; } > "$T"
+r="$(reason_with)"
+is_full "$r" && check "an Edit of the file is not a read of it" ok || check "an Edit of the file is not a read of it" "[$r]"
+# A PARTIAL read is not a read of the instruction (lessons review of #1228): the short pointer says
+# "you read it earlier", and after a Read of a slice or a head of the file most of it never was.
+# Only a whole file Read (no offset, no limit) or a whole file print counts.
+read_with() { # read_with <extra Read input as JSON>: a Read of the instruction carrying those keys
+  tool_line "$FUTURE" Read "$(python3 -c 'import json,sys; d={"file_path": sys.argv[1]}; d.update(json.loads(sys.argv[2])); print(json.dumps(d))' "$INSTRUCTION" "$1")"
+}
+for extra in '{"offset": 40}' '{"limit": 20}' '{"offset": 1, "limit": 2000}'; do
+  { printf '%s\n' "$user_line"; read_with "$extra"; } > "$T"
+  r="$(reason_with)"
+  is_full "$r" && check "a Read with $extra is a partial read, not a read" ok \
+    || check "a Read with $extra is a partial read, not a read" "[$r]"
+done
+{ printf '%s\n' "$user_line"; read_with '{"offset": null, "limit": null}'; } > "$T"
+r="$(reason_with)"
+is_repeat "$r" && check "a Read whose offset and limit are null is a whole file read" ok \
+  || check "a Read whose offset and limit are null is a whole file read" "[$r]"
+# FIRST is spelled as a placeholder and swapped for the command name when the line is built, so this
+# file holds no literal pipeline into it for the short circuit scan to count (it is a fixture string).
+for cmd in "cat PATH | FIRST -n 5" "cat PATH | grep -n rule" "cat > PATH <<EOF" "cat >> PATH" "sed -i '' 's/a/b/' PATH" "sed -i.bak 's/a/b/' PATH" "sed --in-place 's/a/b/' PATH" "head -n 40 PATH" "head PATH" "tail -n 20 PATH" "sed -n 1,5p PATH" "sed -n 1,400p PATH | cat" "sed 5q PATH" "awk 'NR<10' PATH" "bat -r 1:20 PATH"; do
+  { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2]).replace("FIRST", "he" + "ad")}))' "$cmd" "$INSTRUCTION")"; } > "$T"
+  r="$(reason_with)"
+  is_full "$r" && check "a partial print ($cmd) is not a read" ok \
+    || check "a partial print ($cmd) is not a read" "[$r]"
+done
+for cmd in "cat PATH" "cat -n PATH" "sed -n p PATH" "sed '' PATH" "awk 1 PATH" "awk '{print}' PATH" "bat PATH" "cat PATH; echo ======; cat /tmp/other.txt" "cat PATH | cat" "cat PATH 2>&1"; do
+  { printf '%s\n' "$user_line"; tool_line "$FUTURE" Bash "$(python3 -c 'import json,sys; print(json.dumps({"command": sys.argv[1].replace("PATH", sys.argv[2])}))' "$cmd" "$INSTRUCTION")"; } > "$T"
+  r="$(reason_with)"
+  is_repeat "$r" && check "a whole file print ($cmd) counts as a read" ok \
+    || check "a whole file print ($cmd) counts as a read" "[$r]"
+done
+
+{ printf '%s\n' "$user_line"; read_line "$PAST"; } > "$T"
+r="$(reason_with)"
+is_full "$r" && check "a file changed since it was read: the full pointer" ok \
+  || check "a file changed since it was read: the full pointer" "[$r]"
+
+{ printf '%s\n' "$user_line"; tool_line "$FUTURE" Read "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1] + ".bak"}))' "$INSTRUCTION")"; } > "$T"
+r="$(reason_with)"
+is_full "$r" && check "a read of a different file whose name starts the same does not count" ok \
+  || check "a read of a different file whose name starts the same does not count" "[$r]"
+
+{ printf '%s\n' "$user_line"; tool_line "not a time" Read "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1]}))' "$INSTRUCTION")"; } > "$T"
+r="$(reason_with)"
+is_full "$r" && check "a read with an unreadable timestamp falls toward the full pointer" ok \
+  || check "a read with an unreadable timestamp falls toward the full pointer" "[$r]"
+
+# A path holding a character outside ASCII, like the curly apostrophe in Dan’s project folders, is
+# written into the transcript as the character itself and must still be recognised as a read.
+ODD_DIR="$WORK/Dan’s config"; mkdir -p "$ODD_DIR"; ODD="$ODD_DIR/issue-review.md"; cp "$INSTRUCTION" "$ODD"
+{ printf '%s\n' "$user_line"; tool_line "$FUTURE" Read "$(python3 -c 'import json,sys; print(json.dumps({"file_path": sys.argv[1]}, ensure_ascii=False))' "$ODD")"; } > "$T"
+r="$(reason_of "$("$HELPER" --instruction "$ODD" --label "SESSION REFLECTION" --transcript "$T" 2>/dev/null)")"
+[[ "$r" == *"Follow $ODD again"* ]] && check "a read of a path with a non ASCII character counts" ok \
+  || check "a read of a path with a non ASCII character counts" "[$r]"
+
+r="$(reason_of "$("$HELPER" --instruction "$INSTRUCTION" --label "SESSION REFLECTION" --transcript "$WORK/no-such-transcript.jsonl" 2>/dev/null)")"
+is_full "$r" && check "an unreadable transcript falls toward the full pointer" ok \
+  || check "an unreadable transcript falls toward the full pointer" "[$r]"
+
+r="$(reason_of "$("$HELPER" --instruction "$INSTRUCTION" --label "SESSION REFLECTION" 2>/dev/null)")"
+is_full "$r" && check "no transcript given: the full pointer" ok \
+  || check "no transcript given: the full pointer" "[$r]"
+[ "$(( ${#r} - ${#INSTRUCTION} ))" -le 110 ] && check "the full pointer itself is short (<= 110 characters besides the path)" ok \
+  || check "the full pointer itself is short (<= 110 characters besides the path)" "it is ${#r} with a ${#INSTRUCTION} character path"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

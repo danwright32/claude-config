@@ -3,7 +3,7 @@
 
 Usage:
   review-reason.py --instruction <path> --label <text>
-                   [--findings <path>] [--extra <line>]...
+                   [--findings <path>] [--extra <line>]... [--transcript <path>]
 
 Why this exists. A Stop hook hands its instruction to Claude through the payload's
 `reason`, and `reason` is printed to Dan verbatim. Both Stop hooks used to carry
@@ -30,13 +30,34 @@ Exits non-zero ONLY when it cannot produce a payload at all. Callers fall back t
 a static payload of their own, because losing the whole review is worse than
 losing the pointer's detail.
 
+READ ONCE PER SESSION. Every fire used to send Claude back to read the whole
+instruction, and each read stayed in the transcript where every later request
+re-read it (the two instruction files' reads were 0.93% of every token read in
+Slate sessions, Oct 1 to 15 2026). Given --transcript, the full "read it now"
+pointer goes out only when the session has not read the file since its last
+compaction, or the file changed after that read; otherwise a short pointer at the
+copy already in context. Every way of failing to tell (no transcript, an
+unreadable line, a timestamp that will not parse) falls toward the full pointer,
+because a review run from a copy that is not in context is the worse failure.
+What counts as a read is a WHOLE FILE read: a Read of exactly that file with no
+offset and no limit, or a Bash segment that prints all of it (cat, bat with no
+range, sed with no range, awk printing every line). A partial read (a Read with
+an offset or a limit, head, tail, a sed or awk range) is not one, since the short
+pointer says the text is already in context and most of it would not be (lessons
+review of #1228). A listing, a count, an existence test, a diff or an edit only
+names the file. Judged from the record rather than from a marker this helper
+would have to keep in step with compactions.
+
 Seam: CLAUDE_REVIEW_REASON_FORCE_FAIL makes this fail on purpose, so that caller
 fallback is tested rather than assumed.
 """
 import argparse
 import json
 import os
+import re
+import shlex
 import sys
+from datetime import datetime
 
 
 def count_pending(text):
@@ -89,7 +110,133 @@ def phrase(findings, failures, other):
     return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def build_reason(instruction, label, findings_path, extras):
+def _stamp(value):
+    """An ISO transcript timestamp as epoch seconds, or None when it will not parse."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
+    except ValueError:
+        try:
+            return datetime.strptime(value.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        except ValueError:
+            return None
+
+
+# A command line is split into pipelines (on ;, &&, || and newlines), and each pipeline into stages.
+PIPELINE_SPLIT = re.compile(r"\|\||&&|[;\n]")
+# A sed script or awk program that prints every line and nothing else.
+SED_WHOLE_WITH_N = {"p", "1,$p"}
+AWK_WHOLE = {"1", "{print}", "{ print }", "{print $0}", "{ print $0 }"}
+
+
+def _prints_whole_file(words):
+    """True only for a command that prints ALL of a file: cat, bat with no range, sed or awk with
+    no range. head, tail, a range or a quit is partial, and anything unrecognised is not a read,
+    which falls toward the full pointer."""
+    cmd, args = os.path.basename(words[0]), words[1:]
+    if cmd == "cat":
+        return True
+    if cmd == "bat":
+        return not any(a in ("-r", "--line-range") or a.startswith(("-r", "--line-range=")) for a in args)
+    if cmd == "sed":
+        # An in place edit (-i, -i.bak, BSD's -i '', --in-place) writes the file rather than printing it.
+        if any(a == "--in-place" or a.startswith("--in-place=") or (a.startswith("-") and not a.startswith("--") and "i" in a[1:]) for a in args):
+            return False
+        quiet = any(a.startswith("-") and not a.startswith("--") and "n" in a[1:] for a in args)
+        if "-e" in args:
+            i = args.index("-e")
+            script = args[i + 1] if i + 1 < len(args) else None
+        else:
+            plain = [a for a in args if not a.startswith("-")]
+            script = plain[0] if len(plain) > 1 else None
+        if script is None:
+            return False
+        return script in SED_WHOLE_WITH_N if quiet else script == ""
+    if cmd == "awk":
+        plain = [a for a in args if not a.startswith("-")]
+        return len(plain) > 1 and plain[0].strip() in AWK_WHOLE
+    return False
+
+
+def _is_read(item, spellings, pattern):
+    """A whole file Read of exactly the file, or a Bash segment that prints all of it."""
+    name = item.get("name")
+    inp = item.get("input") or {}
+    if name == "Read":
+        # An offset or a limit is a partial read; null is how a whole file Read can arrive too.
+        return inp.get("file_path") in spellings and inp.get("offset") is None and inp.get("limit") is None
+    if name != "Bash":
+        return False
+    for pipeline in PIPELINE_SPLIT.split(str(inp.get("command") or "")):
+        stages = pipeline.split("|")
+        for i, stage in enumerate(stages):
+            if not pattern.search(stage):
+                continue
+            try:
+                words = shlex.split(stage)
+            except ValueError:
+                break  # quoting this cannot follow: not evidence of a read
+            while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+                words.pop(0)  # leading VAR=value assignments
+            # Output sent to a file, or a heredoc fed in, is a write, not a print.
+            if any(w in (">", ">>") or w.startswith((">", "1>", "<<")) for w in words[1:]):
+                break
+            # Piped onward, only a plain `cat` leaves every line on screen; head or grep keeps some.
+            if all(s.split() == ["cat"] for s in stages[i + 1:]) and words and _prints_whole_file(words):
+                return True
+            break
+    return False
+
+
+def read_this_session(transcript, instruction):
+    """True only when the transcript shows a read of the CURRENT instruction since the last compaction."""
+    if not transcript:
+        return False
+    home = os.path.expanduser("~")
+    spellings = {instruction}
+    if home and instruction.startswith(home + "/"):
+        spellings.add("~" + instruction[len(home):])
+    # The path must end where the name ends, so foo.md.bak or foo.md-notes is not a read of foo.md.
+    pattern = re.compile("(?:%s)(?![A-Za-z0-9_.-])" % "|".join(re.escape(s) for s in sorted(spellings)))
+    last = None
+    try:
+        with open(transcript, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "compact_boundary" in line:
+                    try:
+                        if json.loads(line).get("subtype") == "compact_boundary":
+                            last = None
+                            continue
+                    except Exception:
+                        pass
+                if not any(s in line for s in spellings):
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if entry.get("type") != "assistant":
+                    continue
+                content = (entry.get("message") or {}).get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "tool_use" \
+                            and _is_read(item, spellings, pattern):
+                        # A read whose time cannot be told is no evidence of having the current file.
+                        last = _stamp(entry.get("timestamp"))
+    except OSError:
+        return False
+    if last is None:
+        return False
+    try:
+        return os.path.getmtime(instruction) <= last
+    except OSError:
+        return False
+
+
+def build_reason(instruction, label, findings_path, extras, transcript=""):
     if not os.path.isfile(instruction):
         # Loud, and its own message. A half applied sync on the other Mac leaves
         # the hook present and its instruction absent, and staying silent there
@@ -101,11 +248,13 @@ def build_reason(instruction, label, findings_path, extras):
             % (label, instruction)
         )
 
-    reason = (
-        "%s. The whole instruction is in %s. Read that file now and follow it exactly. "
-        "This line is a pointer, not a summary, so do not answer from it."
-        % (label, instruction)
-    )
+    if read_this_session(transcript, instruction):
+        reason = (
+            "%s. Follow %s again; you read it earlier this session. "
+            "Re-read it only if it is no longer in your context." % (label, instruction)
+        )
+    else:
+        reason = "%s. Read %s now and follow it exactly. This line only points at it." % (label, instruction)
 
     if findings_path:
         try:
@@ -140,6 +289,7 @@ def main():
     ap.add_argument("--label", required=True)
     ap.add_argument("--findings", default="")
     ap.add_argument("--extra", action="append", default=[])
+    ap.add_argument("--transcript", default="")
     args = ap.parse_args()
 
     if os.environ.get("CLAUDE_REVIEW_REASON_FORCE_FAIL"):
@@ -148,7 +298,7 @@ def main():
 
     payload = {
         "decision": "block",
-        "reason": build_reason(args.instruction, args.label, args.findings, args.extra),
+        "reason": build_reason(args.instruction, args.label, args.findings, args.extra, args.transcript),
     }
     print(json.dumps(payload))
     return 0

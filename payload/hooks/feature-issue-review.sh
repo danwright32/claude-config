@@ -271,6 +271,9 @@ if [ -n "$pending" ]; then
 fi
 
 reason_args=(--instruction "$INSTRUCTION" --label "END OF TURN ISSUE REVIEW")
+# The transcript lets the helper send a short pointer once this session has already read the
+# instruction since its last compaction, rather than another full read (lib/review-reason.py).
+reason_args+=(--transcript "$transcript")
 if [ -n "$findings_file" ]; then reason_args+=(--findings "$findings_file"); fi
 if [ -n "$muted_line" ]; then reason_args+=(--extra "$muted_line"); fi
 # A seen ledger that could not be kept beside the spool rides in the REASON, not the findings file:
