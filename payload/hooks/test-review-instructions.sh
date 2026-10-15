@@ -152,6 +152,15 @@ print(m.group(1) if m else "")
     [ "$isize" -gt "$BUDGET" ] \
       && check "$hook's instruction is genuinely bigger than the budget" ok \
       || check "$hook's instruction is genuinely bigger than the budget" "it is only $isize characters, so the budget proves nothing"
+    # And it stays short itself. Every first fire of a session reads it into the transcript, where
+    # every later request re-reads it: the 18,669 character issue review and the reflection beside
+    # it were 0.93% of every token read in Slate sessions, Oct 1 to 15 2026. Characters, not bytes,
+    # because the banner's box drawing characters are three bytes each. The reasons behind each rule
+    # live in the notes file next to it, which nothing reads at run time.
+    ichars="$(python3 -c 'import sys; print(len(open(sys.argv[1], encoding="utf-8").read()))' "$named")"
+    [ "$ichars" -le 3000 ] \
+      && check "$hook's instruction stays at or under 3,000 characters" ok \
+      || check "$hook's instruction stays at or under 3,000 characters" "it is $ichars; move the reasons into its notes file"
   fi
 done
 
@@ -215,6 +224,35 @@ for hook in feature-issue-review session-reflection; do
   [[ "$reason" == *"review/"* ]] \
     && check "$hook's fallback still says where the instruction lives" ok \
     || check "$hook's fallback still says where the instruction lives" "[$reason]"
+done
+
+# ---------------------------------------------------------------------------
+# READ ONCE PER SESSION, wired. lib/review-reason.py decides from the transcript
+# whether this session already read the instruction (test-review-reason.sh drives
+# that decision); this proves each hook actually hands it the transcript, so a
+# session that has read the file gets the short repeat pointer and not another read.
+# ---------------------------------------------------------------------------
+for hook in feature-issue-review session-reflection; do
+  file="$DIR/review/session-reflection.md"
+  [ "$hook" = feature-issue-review ] && file="$DIR/review/issue-review.md"
+  READ_T="$WORK/read-$hook.jsonl"
+  {
+    cat "$TRANSCRIPT"
+    python3 -c '
+import json, sys
+print(json.dumps({"type": "assistant", "timestamp": "2099-01-01T00:00:00.000Z",
+  "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "r", "name": "Read", "input": {"file_path": sys.argv[1]}}]}}))
+' "$file"
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":"and again"}}'
+    printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Edit","id":"t2","input":{}}]}}'
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}'
+  } > "$READ_T"
+  out="$(printf '{"transcript_path":"%s","stop_hook_active":false}' "$READ_T" | \
+    CLAUDE_PROJECT_DIR="$(mktemp -d "$WORK/proj.XXXXXX")" bash "$DIR/$hook.sh")"
+  reason="$(reason_of "$out")"
+  [[ "$reason" == *"Follow $file again"* ]] \
+    && check "$hook sends the short repeat pointer once the session has read its instruction" ok \
+    || check "$hook sends the short repeat pointer once the session has read its instruction" "[$reason]"
 done
 
 echo
