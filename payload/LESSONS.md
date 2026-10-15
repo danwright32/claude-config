@@ -8699,6 +8699,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L774. When several unrelated dependencies slow down or time out in the same minutes, split the latency by the location that ran each call before blaming any one of them, because one degraded hosting location looks exactly like every dependency failing at once and each per-dependency alert names a wrong cause.**
+  (Try-Pennie/bidspoke#2209, 2026-10-15)
+  SHORT: When unrelated dependencies all slow at once, split latency by the hosting location before blaming one; a bad location looks like all of them failing.
+
 - **L1025. Every build of an app that declares a URL scheme, a test host or Debug product included,
   registers with the operating system and competes for that scheme's links, so a development build
   must not declare the production scheme, or a link opened while the app is closed can launch a test
