@@ -4,5 +4,6 @@
     "claude-opus-5-5": {
       "effortLevel": "high"
     }
-  }
+  },
+  "skillListingMaxDescChars": 300
 }

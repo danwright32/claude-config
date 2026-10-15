@@ -1,5 +1,6 @@
 ---
 name: reel-plan
+disable-model-invocation: true
 description: Use when planning a video highlight reel for a live performance or event before the shoot. Interviews the shooter about venue, program, and audio, then produces a story spine, a shot list separating safety shots from ambitious ones, a paper edit, and a field card readable on a phone at the venue.
 ---
 

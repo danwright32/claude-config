@@ -1,5 +1,6 @@
 ---
 name: coffee-profile
+disable-model-invocation: true
 description: Use when Dan asks to redo, refresh or update his coffee taste profile, wants new coffee or roaster recommendations, or has added coffees to the Coffee Tracker sheet. Trigger /coffee-profile.
 trigger: /coffee-profile
 ---
