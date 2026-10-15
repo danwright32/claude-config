@@ -74,9 +74,11 @@ worked=$(python3 "$(dirname "${BASH_SOURCE[0]}")/turn-worked.py" "$transcript" 2
 # the tree and requiring the reason to name the copy.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# The transcript lets the helper send a short pointer once this session has already read the
+# instruction since its last compaction, rather than another full read (lib/review-reason.py).
 payload="$(python3 "$SELF_DIR/lib/review-reason.py" \
   --instruction "$SELF_DIR/review/session-reflection.md" \
-  --label "SESSION REFLECTION" 2>/dev/null)" || payload=""
+  --label "SESSION REFLECTION" --transcript "$transcript" 2>/dev/null)" || payload=""
 
 if [ -n "$payload" ]; then
   printf '%s' "$payload"
