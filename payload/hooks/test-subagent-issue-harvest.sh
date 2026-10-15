@@ -463,13 +463,40 @@ contains "is not a finding" "$lt_prompt_lc" \
 reset_spool
 CLAUDE_STUB_DIR="$TMPROOT/claude-stub"; mkdir -p "$CLAUDE_STUB_DIR"
 CLAUDE_ENV_SEEN="$TMPROOT/claude-env-seen"; rm -f "$CLAUDE_ENV_SEEN"
-printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_DISABLE_CLAUDE_MDS:-unset}" > "%s"\necho NONE\n' "$CLAUDE_ENV_SEEN" > "$CLAUDE_STUB_DIR/claude"
+CLAUDE_ARGS_SEEN="$TMPROOT/claude-args-seen"; rm -f "$CLAUDE_ARGS_SEEN"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_DISABLE_CLAUDE_MDS:-unset}" > "%s"\nprintf "%%s\\036" "$@" > "%s"\necho NONE\n' "$CLAUDE_ENV_SEEN" "$CLAUDE_ARGS_SEEN" > "$CLAUDE_STUB_DIR/claude"
 chmod +x "$CLAUDE_STUB_DIR/claude"
 ( unset CLAUDE_ISSUE_HARVEST_CMD; payload "$REPO" | PATH="$CLAUDE_STUB_DIR:$PATH" bash "$HARVEST" >/dev/null 2>&1 )
 seen="$(cat "$CLAUDE_ENV_SEEN" 2>/dev/null || echo 'claude never ran')"
 [ "$seen" = "1" ] \
   && check "the default harvest launch switches the global config off" ok \
   || check "the default harvest launch switches the global config off" "CLAUDE_CODE_DISABLE_CLAUDE_MDS=$seen"
+
+# And it loads nothing else it never uses (hook trim, 2026-10-15). The harvest reads one digest on
+# stdin and answers in text: it needs no tool, no skill, no MCP server and no hook, yet the skills
+# list and the deferred tool list were about half of each harvest's input. Read from the arguments
+# the stand in actually received, each flag exactly as the launch must carry it.
+harvest_args_ok="$(python3 - "$CLAUDE_ARGS_SEEN" <<'PY_ARGS'
+import json, sys
+try:
+    args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+except OSError:
+    print("claude never ran"); sys.exit(0)
+missing = [f for f in ("--disable-slash-commands", "--strict-mcp-config") if f not in args]
+if "--tools" not in args or args[args.index("--tools") + 1] != "":
+    missing.append('--tools ""')
+try:
+    settings = json.loads(args[args.index("--settings") + 1])
+    if settings.get("disableAllHooks") is not True:
+        missing.append("--settings disableAllHooks")
+except (ValueError, IndexError):
+    missing.append("--settings disableAllHooks")
+if any(a == "--mcp-config" or a.startswith("--mcp-config=") for a in args):
+    missing.append("no --mcp-config")
+print("ok" if not missing else "missing: " + ", ".join(missing))
+PY_ARGS
+)"
+check "the default harvest launch loads no tools, skills, MCP servers or hooks" "$harvest_args_ok"
 
 # Recursion guard: the harvest runs a headless Claude, whose own subagents must
 # not harvest in turn.

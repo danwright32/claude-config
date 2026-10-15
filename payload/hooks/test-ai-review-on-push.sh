@@ -225,6 +225,13 @@ if strict != 1 or named:
     print(f"  --strict-mcp-config appeared {strict} times; --mcp-config arguments: {named}")
     sys.exit(1)
 EOF
+# No skills either (hook trim, 2026-10-15): the reviewer invokes none, and the skills list is sent on
+# every request of the run otherwise.
+python3 - "$FAKE_LOG/args" <<'EOF' && ok || bad "the reviewer starts with no skills: --disable-slash-commands exactly once"
+import sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+sys.exit(0 if args.count("--disable-slash-commands") == 1 else 1)
+EOF
 check "the prompt asks about a sibling not changed the same way" "sibling of a changed function that was not changed the same way" "$args_blob"
 check "and about a class fix that missed a site" "class fix that missed one of its sites" "$args_blob"
 check "and keeps the no issues line" "No issues found." "$args_blob"
