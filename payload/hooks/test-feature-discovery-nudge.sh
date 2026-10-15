@@ -88,15 +88,19 @@ done
 [ -n "$SETTINGS_FILE" ] \
   && check "a settings file holding the hooks block is beside the hooks" ok \
   || check "a settings file holding the hooks block is beside the hooks" "neither settings.hooks.json nor settings.json in $_settings_dir"
-events="$(python3 -c '
+# With no settings file the registration was not checked, and the line above already says why,
+# so it is not reported a second time as "registered under nothing".
+if [ -n "$SETTINGS_FILE" ]; then
+  events="$(python3 -c '
 import json, re, sys
 d = json.load(open(sys.argv[1]))["hooks"]
 pat = re.compile(r"/hooks/" + re.escape(sys.argv[2]) + r"(?![A-Za-z0-9_.-])")
 print(" ".join(sorted({ev for ev, ms in d.items() for m in ms for h in m.get("hooks", []) if pat.search(h.get("command", ""))})))
 ' "$SETTINGS_FILE" "feature-discovery-nudge.sh" 2>/dev/null)"
-[ "$events" = "SessionStart" ] \
-  && check "it is registered under SessionStart only" ok \
-  || check "it is registered under SessionStart only" "registered under: ${events:-nothing}"
+  [ "$events" = "SessionStart" ] \
+    && check "it is registered under SessionStart only" ok \
+    || check "it is registered under SessionStart only" "registered under: ${events:-nothing}"
+fi
 # A headless run started by an app has nobody to nudge, and its prompt is a job, not a request
 # to write code.
 out_detached="$(printf '{}' | CLAUDE_DETACHED_RUN=1 "$H" 2>/dev/null)"
