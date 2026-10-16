@@ -4,6 +4,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
+import { GOAL_MARK, goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { SLEEP_START } from '../hooks/driver.ts'
 import { ghArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -190,7 +192,9 @@ const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
-type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown> }
+type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown>; transcriptPath?: string | null }
+// The goal every session has set with /goal unless a test says otherwise (#1242).
+const DEFAULT_GOAL = 'Close #7'
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
 // unless headRefName says otherwise) and by `gh pr view` only by its own number.
 type GhPr = { number: number; state: string; url?: string; headRefName?: string; headRefOid?: string; closingIssuesReferences: { number: number }[] }
@@ -334,6 +338,10 @@ type Opts = {
   vanishOnSpawn?: string
   /** A tool call naming this text is refused by a guard beneath the mod (#1108). */
   refusedBeneath?: string
+  /** Each session's /goal as its transcript records it (#1242), by session id: null for none, or a read that fails; DEFAULT_GOAL unless said. */
+  goals?: Record<string, string | null | { fails: string }>
+  /** A hook beneath blocks every Stop, as Claude Code's /goal hook does while its condition does not hold (#1242). */
+  goalHookBlocks?: boolean
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -378,6 +386,10 @@ const world = (on: On, o: Opts = {}) => {
     killed: [] as string[],
     /** Every opening of a file in BBEdit that succeeded, as run (#837). */
     opened: [] as string[][],
+    /** Every transcript whose goal was read (#1242). */
+    goalReads: [] as string[],
+    /** How many Stops reached the hooks beneath the mod (#1242). */
+    beneathStops: 0,
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -543,6 +555,16 @@ const world = (on: On, o: Opts = {}) => {
         return ok(`released\t${a[3]}\t${a[5]}\n`)
       }
     }
+    // A session's goal records, as the shell finds them in its transcript by their mark (#1242): the
+    // goal a test gives it, none (grep finds nothing and exits 1), or a read that fails.
+    if (cmd === 'bash' && a[0] === '-c' && a[3] === GOAL_MARK) {
+      w.goalReads.push(a[4] as string)
+      const id = String(a[4]).split('/').pop()?.replace(/\.jsonl$/, '') ?? ''
+      const g = o.goals && id in o.goals ? o.goals[id] : DEFAULT_GOAL
+      if (g === null || g === undefined) return fail(1)
+      if (typeof g === 'object') return fail(2, g.fails)
+      return ok(`${JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, sentinel: true, condition: g } })}\n`)
+    }
     if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
     if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
       if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
@@ -560,7 +582,9 @@ const world = (on: On, o: Opts = {}) => {
       // A registry answer missing its lists, so enrolment throws reading it (#843).
       if (o.registryGarbled) return ok('{}')
       if (o.registryAnswer !== undefined) return ok(o.registryAnswer)
-      return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])], closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
+      // Each session's transcript where the registry finds it (#1242), unless a test says where.
+      const withTranscript = (s: Session) => ({ transcriptPath: `/Users/x/.claude/projects/-repo/${s.sessionId}.jsonl`, ...s })
+      return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])].map(withTranscript), closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
       const v = o.verdict ?? null
@@ -674,7 +698,12 @@ const world = (on: On, o: Opts = {}) => {
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
   on('session.receive', ($, e) => ({ text: e.text }) as never)
-  on('classic.Stop', () => ({}) as never)
+  // A hook beneath the mod that blocks every Stop, as Claude Code's own /goal hook does while its
+  // condition does not hold (measured on 2.1.301, #1242); each time it is reached is counted.
+  on('classic.Stop', () => {
+    w.beneathStops++
+    return (o.goalHookBlocks ? { block: '[Close #7]: not yet' } : {}) as never
+  })
   on('classic.PermissionRequest', () => (o.beneathDecision ? { decision: o.beneathDecision } : {}) as never)
   on('classic.PermissionDenied', () => (o.beneathRetries ? { retry: true } : {}) as never)
   on('classic.StopFailure', () => ({}) as never)
@@ -2041,6 +2070,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     report: '/Users/x/Downloads/Sleep report 1969-12-31.md',
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
+    // Each worker's goal, read from its transcript, where Claude Code's /goal records it (#1242).
+    goals: { s1: 'Close #7', s2: 'Close #7' },
     placeBefore: 'home',
     repos: { mayDeploy: [], mergeOnly: [{ repo: 'o/r', mergeDeploys: false }], closed: [] },
   })
@@ -2052,7 +2083,10 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`].sort())
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe("Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.")
+  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.`)
+  // A goal already set is asked about by nobody: no question, and every worker's transcript read.
+  expect(w.asked).toEqual([])
+  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl', '/Users/x/.claude/projects/-repo/s2.jsonl'])
   // The report is started at once from the record just placed, so it exists from the first minute (#835).
   expect(w.reports).toEqual([{ op: 'start', record: CURRENT }])
   expect(w.runs.some(r => r[0] === 'python3')).toBe(false)
@@ -2086,6 +2120,143 @@ test("/sleep whose own checkout mod-kit's walk cannot read does not start, and s
   const r = await command($ as never, 'sleep')
   expect(r.text).toBe("Sleep mode did not start: this session's checkout could not be read (the disk cannot read /repo).")
   expect(w.files[CURRENT]).toBeUndefined()
+})
+
+// ---- Each worker's goal (#1242) ----
+// Dan, 2026-10-16: "it should just work with the built in /goal ... If there's no goal set, prompt me
+// to set one and then only work the goal." A worker whose transcript shows no /goal is asked for one
+// among the before bed questions; what Dan types is its goal, and without one it does no work.
+const otherWorker = (o: Record<string, unknown> = {}): Session => ({ ...interactive('s2'), repoRoot: '/other', extra: { 'scope-modes': { isInteractive: true }, progress: { request: 'Fix the parser' } }, ...o })
+const S2_GOAL_Q = goalQuestion('the session in o/other ("Fix the parser")')
+const withOther = (o: Opts = {}): Opts => ({
+  open: [otherWorker()],
+  origins: { '/other': 'git@github.com:o/other.git' },
+  files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/other', mergeDeploys: false }]) },
+  githubRepos: { default: ['o/r', 'o/other'] },
+  ...o,
+})
+
+test('/sleep asks for a goal for a worker that has none, and keeps the one Dan types (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ goals: { s2: null }, issueAnswers: { [S2_GOAL_Q]: 'Close #12 and #14' } }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([S2_GOAL_Q])
+  expect(S2_GOAL_Q).toMatch(/^The session in o\/other \("Fix the parser"\) has no \/goal set, so it does no work tonight unless you give it one\./)
+  expect(w.askedOptions[0]).toEqual([NO_GOAL, 'Go to sleep now'])
+  expect(recordOf(w).goals).toEqual({ s1: 'Close #7', s2: 'Close #12 and #14' })
+  expect(r.text).toMatch(asRegExp(` Tonight's goals: this session, "Close #7"; the session in o/other ("Fix the parser"), "Close #12 and #14".`))
+})
+
+test('a worker left without a goal is kept with none, said, and its repository is not asked about (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ goals: { s2: null }, files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }]) }, issueAnswers: { [S2_GOAL_Q]: NO_GOAL } }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  // o/other is on neither list, but nothing works there tonight, so no question about it is asked.
+  expect(w.asked).toEqual([S2_GOAL_Q])
+  expect(recordOf(w).goals).toEqual({ s1: 'Close #7' })
+  expect(recordOf(w).workers).toEqual(['s1', 's2'])
+  expect((recordOf(w).repos as { closed: unknown[] }).closed).toEqual([])
+  expect(r.text).toMatch(asRegExp(` Tonight's goals: this session, "Close #7". No goal, so no work tonight: the session in o/other ("Fix the parser") (you chose no work for it).`))
+})
+
+test('Go to sleep now on a goal question asks nothing more, and every worker it left has no goal (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ goals: { s1: null, s2: null }, issueAnswers: { [goalQuestion('this session')]: 'Go to sleep now' } }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toMatch(asRegExp(' No goal, so no work tonight: this session (you chose to go to sleep first); the session in o/other ("Fix the parser") (not asked: you chose to go to sleep first).'))
+})
+
+test('a goal question left unanswered for the ten minutes leaves its worker with no goal, said (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ goals: { s2: null }, issueAnswers: { [S2_GOAL_Q]: null } }))
+  await start($ as never, clock)
+  let done = false
+  const pending = command($ as never, 'sleep').then(r => {
+    done = true
+    return r
+  })
+  await clock.advance(10 * MIN)
+  expect(done).toBe(true)
+  const r = await pending
+  expect(recordOf(w).goals).toEqual({ s1: 'Close #7' })
+  expect(r.text).toMatch(asRegExp(' No goal, so no work tonight: the session in o/other ("Fix the parser") (not answered in 10 minutes).'))
+})
+
+test("a transcript whose goal cannot be read, or that cannot be found, is asked about, never read as a goal (#1242)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ open: [otherWorker({ transcriptPath: null })], goals: { s1: { fails: 'grep: Permission denied' } }, issueAnswers: { [goalQuestion('this session')]: NO_GOAL, [S2_GOAL_Q]: NO_GOAL } }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([goalQuestion('this session'), S2_GOAL_Q])
+  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+  expect(recordOf(w).goals).toEqual({})
+  // Why each was asked is said, so a goal Dan did set and the mod could not read is not a mystery.
+  expect(r.text).toMatch(/this session's \/goal could not be read \(grep: Permission denied\)/)
+  expect(r.text).toMatch(/the session in o\/other \("Fix the parser"\)'s transcript was not found/)
+})
+
+test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {
+  // A session that is not interactive enrols no worker of its own and can ask nothing.
+  const { w, clock } = world(on, withOther({ goals: { s2: null } }))
+  await ($ as unknown as $T).session.start({ cwd: '/repo', surface: 'terminal', isInteractive: false } as never)
+  await clock.settle()
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toMatch(asRegExp(' No goal, so no work tonight: the session in o/other ("Fix the parser") (nobody was at this session to ask).'))
+})
+
+// A worker idle at its prompt has no turn to end, so the overnight driver, which acts at a Stop,
+// never reached it: only a session mid turn, or the one /sleep ran in, worked overnight (#1242). So
+// /sleep tells every other worker with a goal to start, and that session's own scope modes starts
+// its turn with the overnight rules, as the driver starts one again after a wait.
+test('/sleep tells every other worker with a goal to start now, and none without one (#1242)', withDeps, async ($, on) => {
+  const third: Session = { ...interactive('s3'), repoRoot: '/third', extra: { 'scope-modes': { isInteractive: true }, progress: { request: 'Read only' } } }
+  const S3_GOAL_Q = goalQuestion('the session in o/third ("Read only")')
+  const { w, clock } = world(on, withOther({
+    open: [otherWorker(), third],
+    origins: { '/other': 'git@github.com:o/other.git', '/third': 'git@github.com:o/third.git' },
+    goals: { s3: null },
+    issueAnswers: { [S3_GOAL_Q]: NO_GOAL },
+  }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.sent).toEqual([{ to: 's2', text: SLEEP_START }])
+  expect(r.text).toMatch(asRegExp(' Told to start now: the session in o/other ("Fix the parser").'))
+})
+
+test('a worker that cannot be told to start is said, and noted for the morning (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({ sends: [{ refused: 'no such session' }, { refused: 'no such session' }] }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(asRegExp(' Could not be told to start, so it may do no work tonight: the session in o/other ("Fix the parser") (no such session).'))
+  expect(w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'finding').map(n => n.text)).toEqual([
+    'the session in o/other ("Fix the parser") could not be told to start at bedtime (no such session), so it may have done no work tonight',
+  ])
+})
+
+test("a worker told to start begins its night's work with the overnight rules, in a turn of its own (#1242)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  const r = (await ($ as unknown as { session: { receive: (e: never) => Promise<unknown> } }).session.receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: SLEEP_START } as never)) as { consumed?: string }
+  expect(r.consumed).toMatch(/started the night's work/)
+  await clock.settle()
+  expect(w.prompts.length).toBe(1)
+  expect(w.prompts[0]).toMatch(/^Sleep mode is on and Dan is asleep: start the night's work now\. Overnight rules \(sleep mode\)/)
+  expect(w.prompts[0]).toContain(`Tonight's goal, as Dan set it: "Close #7 and #9".`)
+})
+
+test('a start for a session with no goal, or not a worker, or from the model starts nothing (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'], goals: {} }) } })
+  await start($ as never, clock)
+  const receive = (e: unknown) => ($ as unknown as { session: { receive: (e: never) => Promise<unknown> } }).session.receive(e as never) as Promise<{ consumed?: string; text?: string }>
+  expect((await receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: SLEEP_START })).consumed).toMatch(/no goal/)
+  // Written by a model rather than this mod, it is a message like any other, passed on.
+  expect((await receive({ origin: { kind: 'peer' }, text: SLEEP_START })).text).toBe(SLEEP_START)
+  w.files[CURRENT] = asleepRecord()
+  expect((await receive({ origin: { kind: 'peer', plugin: 'scope-modes' }, text: SLEEP_START })).consumed).toMatch(/not a worker/)
+  await clock.settle()
+  expect(w.prompts).toEqual([])
 })
 
 test('/sleep says when the report could not be started, and sleep still holds (#835)', withDeps, async ($, on) => {
@@ -3224,7 +3395,8 @@ test('"I\'m up" carries what waking found only as data: an issue title written o
 
 const DRIVER = `${SLEEP}/driver/g0/s1.json`
 const NOTES = `${SLEEP}/notes/g0.jsonl`
-const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], ...extra })
+// A worker with the goal /sleep recorded for it (#1242): with none it does no work.
+const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], goals: { s1: 'Close #7 and #9' }, ...extra })
 const kinds = (w: { appended: { line: string }[] }) => w.appended.map(a => (JSON.parse(a.line) as { kind: string }).kind)
 const stopFailure = async ($: $T, error: string, message = 'API Error: 429 rate limited') =>
   (await ($ as unknown as { classic: { StopFailure: (e: never) => Promise<unknown> } }).classic.StopFailure({ error, last_assistant_message: message } as never))
@@ -3233,11 +3405,66 @@ test('an enrolled session is blocked at Stop with the overnight rules, its count
   const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
   await start($ as never, clock)
   const r = await stop($ as never)
-  expect(r.block).toMatch(/^You hold no issue: claim the next one\. Overnight rules \(sleep mode\)/)
-  expect(r.block).toContain('bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1')
+  expect(r.block).toMatch(/^You hold no issue: work toward the goal, claiming the next of its issues if it names any\. Overnight rules \(sleep mode\)/)
+  // The goal the record keeps for this session, and the claim command naming its issues only (#1242).
+  expect(r.block).toContain(`Tonight's goal, as Dan set it: "Close #7 and #9".`)
+  expect(r.block).toContain("bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1 <the goal's issue numbers>")
   expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ v: 1, generation: 'g0', session: 's1', blocks: 1 })
   expect(kinds(w)).toEqual(['heartbeat'])
   expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'heartbeat', repo: 'o/r', by: 's1', usage: { rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
+})
+
+// Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker the
+// record keeps no goal for (left without one before bed, or a record from before goals were kept)
+// is let stop at its first Stop, said in its note, and never told to claim anything.
+for (const [label, goals] of [['none kept for it', {}], ["only another worker's", { s2: 'Close #3' }], ['a blank one', { s1: '   ' }], ['a record from before goals were kept', undefined]] as const) {
+  test(`a worker with no goal (${label}) is let stop at its first Stop, noted, and never told to claim (#1242)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'], ...(goals === undefined ? {} : { goals }) }) } })
+    await start($ as never, clock)
+    expect((await stop($ as never)).block).toBeUndefined()
+    expect(w.appended.map(a => JSON.parse(a.line))).toEqual([expect.objectContaining({ kind: 'stopped', repo: 'o/r', by: 's1', text: 'no goal was set for this session before bed, so it does no work tonight' })])
+    expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ stopped: 'no goal was set for this session before bed, so it does no work tonight', blocks: 0 })
+    // Stopped for the night: never blocked again, and the queue was never asked to claim.
+    expect((await stop($ as never)).block).toBeUndefined()
+    expect(w.released).toEqual([])
+  })
+}
+
+// Claude Code's own /goal installs a Stop hook that blocks every Stop until its condition holds. It
+// sits beneath this mod in the Stop chain, so when the driver let a worker stop by passing the Stop
+// on, that hook blocked it again: measured on 2.1.301 (#1242), a worker the circuit breaker had let
+// go went on for 9 more blocks a turn, every turn, until Claude Code's own cap ended each turn. So a
+// stop the driver decides ends the chain: the breaker, the night's cap, the weekly limit and no goal
+// hold whatever a hook beneath would say.
+test("a stop the driver decides ends the Stop chain, so a /goal hook beneath cannot keep the worker going (#1242)", withDeps, async ($, on) => {
+  // The breaker let this worker go earlier tonight: its counter says so.
+  const stopped = JSON.stringify({ v: 1, generation: 'g0', session: 's1', since: T0, blocks: 3, idleBlocks: 3, progressAt: T0, fingerprint: null, waitStep: 0, resumeAt: null, waits: [], weeklyAt: T0, finishing: false, claimFails: 0, parked: null, stopped: 'circuit breaker: 3 blocks in a row with no new commit, claim or note' })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [DRIVER]: stopped }, goalHookBlocks: true })
+  await start($ as never, clock)
+  for (let n = 0; n < 3; n++) expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.beneathStops).toBe(0)
+})
+
+test('the weekly limit stops a worker past a hook beneath that would block it (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, goalHookBlocks: true, usage: { rateLimits: [{ kind: 'seven_day', percentUsed: 96 }] } })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.beneathStops).toBe(0)
+  expect(kinds(w)).toContain('stopped')
+})
+
+test('a worker with no goal is let stop past a hook beneath that would block it (#1242)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'], goals: {} }) }, goalHookBlocks: true })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(w.beneathStops).toBe(0)
+})
+
+test('a session the driver does not drive still reaches the hooks beneath at its Stop (#1242 control)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() }, goalHookBlocks: true })
+  await start($ as never, clock)
+  expect((await stop($ as never)).block).toBe('[Close #7]: not yet')
+  expect(w.beneathStops).toBe(1)
 })
 
 test('a session the record does not name is never driven: its Stop passes, and nothing is noted (#844)', withDeps, async ($, on) => {

@@ -577,14 +577,42 @@ has "an overnight check hit is under Needs a look" "Done overnight, check it: Is
 has "a read it could not make is under Needs a look too" "Not checked overnight: deploy runs in o/r were not checked" "$look"
 lacks "neither is left for Other notes" "## Other notes" "$r"
 
+# ---- each worker's goal (#1242) ----
+# Sleep mode works only a goal Dan set, kept per worker in the record's goals. A worker left without
+# one does no work, so the report says so once, in its header, and never calls its silence a session
+# that ended unexpectedly. A goal that names no issue is worked as a task whose steps the session
+# notes as progress, listed in a section of their own.
+record g14 '["aaaa1111","bbbb2222","cccc3333"]' "$SLEEPDIR/ended/g14.json"
+python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["goals"] = {"aaaa1111": "Close #12", "bbbb2222": "Tidy the parser"}; json.dump(d, open(p, "w"))' "$SLEEPDIR/ended/g14.json"
+{
+  echo '{"v":1,"kind":"start","at":'"$SINCE"',"by":"aaaa1111","power":"on AC power","generation":"g14"}'
+  echo '{"v":1,"kind":"heartbeat","at":1791455100000,"by":"aaaa1111","generation":"g14"}'
+  echo '{"v":1,"kind":"progress","at":1791455200000,"by":"bbbb2222","text":"Split the parser into two files","generation":"g14"}'
+  echo '{"v":1,"kind":"stopped","at":1791455300000,"by":"bbbb2222","text":"the parser is tidy","generation":"g14"}'
+  echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"eeee5555","generation":"g14"}'
+} > "$SLEEPDIR/notes/g14.jsonl"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g14.json" --final >/dev/null 2>&1
+r="$(report_of g14)"
+has "a worker with no goal is said, once, in the header" "No goal was set for 1 session (cccc3333), so it did no work tonight." "$r"
+check_eq "and only once" 1 "$(printf '%s\n' "$r" | grep -c 'cccc3333), so it did no work')"
+lacks "and its silence is never read as ending unexpectedly" "Session cccc3333 ended unexpectedly" "$r"
+has "a worker with a goal is still judged by its silence" "Session aaaa1111 ended unexpectedly" "$r"
+has "each worker's goal is in its row" 'aaaa1111: goal "Close #12", last heard' "$r"
+has "the goal of the other too" 'bbbb2222: goal "Tidy the parser", last heard' "$r"
+has "a step toward a goal is listed under its own heading" "## Progress toward goals" "$r"
+has "with the session that noted it" "bbbb2222: Split the parser into two files" "$r"
+lacks "never under Other notes" "progress from bbbb2222" "$r"
+# A record from before goals were kept says nothing about goals at all.
+lacks "an older record without goals names no worker as without one" "No goal was set" "$(report_of g6)"
+
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
-check_eq "every report this suite wrote carries its stamp" 11 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
+check_eq "every report this suite wrote carries its stamp" 12 "$(grep -l -F -- "$STAMP" "$DL"/* 2>/dev/null | wc -l | tr -d ' ')"
 leaked="$(find "$REAL_DOWNLOADS" -maxdepth 1 -type f -newer "$WORK/began" -size -1024k -exec grep -l -F -- "$STAMP" {} + 2>/dev/null)"
 check_eq "the real Downloads gained nothing this suite wrote" "" "$leaked"
 # Named "Sleep report <night>.md" (Dan, decision 4), a space in the name, so listed one a line.
-check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
+check_eq "every report landed in the suite's own Downloads" "Sleep report g1.md|Sleep report g11.md|Sleep report g12.md|Sleep report g13.md|Sleep report g14.md|Sleep report g2.md|Sleep report g3.md|Sleep report g5.md|Sleep report g6.md|Sleep report g7.md|Sleep report g8.md|Sleep report g9.md" "$(ls "$DL" | tr '\n' '|' | sed 's/|$//')"
 
 echo
 echo "passed: $pass, failed: $fail"
