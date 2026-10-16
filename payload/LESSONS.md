@@ -7385,6 +7385,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   root; only a result opened from a shared link had its own address.)
 
 ## External systems
+- **L775. After changing something through another service's management API, check the change by
+  reading again on a short timer until a deadline, never with one immediate read, because those
+  lists lag the change and one read reports a change that landed as a failure.** (slate#3787, 2026-10-15)
+  SHORT: Check a change made through another service's API by re-reading on a timer to a deadline; one immediate read calls a landed change a failure.
 - **L1023. A reader that sorts free text from outside the system into a closed set of values by how
   it BEGINS reads any new option sharing that beginning as the old one, with full confidence, so
   match each known wording whole and refuse the rest rather than falling through to the closest
