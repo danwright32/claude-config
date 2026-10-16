@@ -1611,8 +1611,18 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   have sent, and Copy link and Copy are not drawn, the link and the value beside them being the
   text to select. A fullscreen terminal that reports clicks (iTerm2, Ghostty and the rest) and the
   remote surfaces keep the buttons.
-- **Done.** The open step's Done sends "step N done" as Dan's own words and shows "sent" in place of
-  the button until Claude answers (open: the words for that waiting state). Claude records its
+- **Every step open** (#1239). On 2026-10-15 Dan pressed Done on step 1 of three and the session
+  took five minutes to read it; steps 2 and 3 showed only their titles with no Done, so he could
+  not get ahead on them ("we should have all steps open so I can complete them while I'm waiting
+  if needed and each should have it's own done button"). So every unfinished step is drawn open,
+  bold, with its Where, What to do, link and value, and its own Done; each button is keyed by its
+  step's number (`done-3`, `copy-link-2`), and a bare key drawn before is read as the open step. A
+  step that uses what an earlier one makes says so first under its title, after a bold "Needs:"
+  ("the password made in step 1"), from the steps tool's `needs`. The heading reads "waiting on
+  you" while any unfinished step has not been sent.
+- **Done.** A step's Done sends "step N done" as Dan's own words and shows "sent" in place of
+  the button until Claude answers (open: the words for that waiting state). Several steps can be
+  sent at once, each with its own state. Claude records its
   verdict through `steps_done`: `checked`, `per-you`, or `not-done`, which opens the step again
   with its Done. A Done that cannot reach Claude opens the step again with a toast saying why.
 - **Only the open step** (#886). On 2026-10-07 "step 2 done" with step 1 open was recorded as
@@ -1620,6 +1630,13 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   `checked`, `per-you` or `not-done` only on the open step; one naming any other is refused,
   telling Claude to ask Dan which step he means rather than guess, and never to record the steps
   before it to reach it. `withdrawn` claims nothing was done, so it still takes any unfinished step.
+- **Recorded in order** (#1239, Dan's decision, 2026-10-15). Done can be pressed on any step, but
+  steps are recorded in order. A verdict on a later step whose Done Dan pressed, with an earlier
+  step unfinished, is refused with the instruction to ask Dan whether every earlier step is done:
+  on a yes Claude records each in order, the open step first; on a no it records nothing. When that
+  turn ends with the later step unrecorded, its Done comes back with "Step N is not recorded until
+  every step before it is done. Press its Done again once they are." A later step he did not press
+  keeps the ask above, which step he means.
 - **When each step finished** (#886). Dan read steps recorded a minute earlier as "done days ago",
   because they were grey. So grey now means old and only old: a step found already done when the
   card was pinned ("already done before this card") and one finished in an earlier session ("in an

@@ -83,6 +83,26 @@ describe('finish', () => {
     }
     expect('refusal' in finish(c, 1, 'per-you')).toBe(false)
   })
+  // #1239 point 3 (Dan, 2026-10-15): Done can be pressed on any step, but steps are recorded in order.
+  // Done on step 3 with step 2 unfinished records nothing: Claude asks whether every earlier step is
+  // done, records them in order on a yes, and nothing on a no.
+  test('a verdict on a later step whose Done Dan pressed, with an earlier one unfinished, asks whether every earlier step is done and records nothing (#1239)', () => {
+    const c = finish(made({ heading: 'x', steps: [step({ title: 'Pull' }), step({ title: 'Install the checker' }), step({ title: 'Run the check' })] }), 1, 'per-you')
+    if ('refusal' in c) throw new Error(c.refusal)
+    const pressed = sent(c.card, 2, true)
+    for (const v of ['checked', 'per-you', 'not-done'] as const) {
+      const r = finish(pressed, 3, v)
+      expect('refusal' in r && r.refusal).toMatch(
+        /^Dan pressed Done on step 3 \(Run the check\) while step 2 \(Install the checker\) is not finished\. Record nothing yet: ask Dan whether every step before step 3 is done\. If he says yes, record them in order, step 2 first, then each after it up to step 3\. If he says no, record nothing;/,
+      )
+    }
+    // Yes: the earlier step first, then the pressed one, which keeps that Dan pressed it.
+    const two = finish(pressed, 2, 'per-you', 1)
+    if ('refusal' in two) throw new Error(two.refusal)
+    const three = finish(two.card, 3, 'per-you', 2)
+    if ('refusal' in three) throw new Error(three.refusal)
+    expect(three.card.steps.map(s => [s.finished, s.isPressed === true])).toEqual([['per-you', false], ['per-you', false], ['per-you', true]])
+  })
   test('a verdict records when the step finished, and whether Dan pressed its Done', () => {
     const c = made({ heading: 'x', steps: [step(), step({ title: 'Second' })] })
     const a = finish(sent(c, 0, true), 1, 'per-you', 1234)
@@ -186,34 +206,66 @@ describe('cardLines', () => {
   const WHERE = { text: 'Where: ', bold: true, whole: true, indent: 3 }
   const WHAT = { text: 'What to do: ', bold: true, whole: true, indent: 3 }
 
-  test('an amber heading, only the next step open, later steps by title alone', () => {
+  // #1239: Dan finished step 1 and pressed Done, and for five minutes, while the session was busy,
+  // steps 2 and 3 showed only their titles with no Done, so he could not get ahead on them. Every
+  // unfinished step is open, each with its own Done, its buttons keyed by its number.
+  test('an amber heading, and every unfinished step open with its own Done, before any is pressed (#1239)', () => {
     const c = made({
       heading: 'Cloudflare WAF',
       steps: [
         step({ checked: 'already-done', title: 'Create the API token' }),
         step({ title: 'Turn on the rule', clicks: 'Security, WAF, Custom rules, Deploy', value: 'ip.src eq 1.2.3.4' }),
-        step({ title: 'Purge the cache' }),
+        step({ title: 'Purge the cache', url: 'https://dash.cloudflare.com/cache' }),
+        step({ title: 'Check the site', url: undefined, location: 'Safari, a new window', clicks: ['Open the site', 'Reload twice'] }),
       ],
     })
     const l = lines(c)
-    // While the open step is Dan's to do, the heading says so (#863), on the card's own line rather
-    // than a second row beside it.
+    // While a step is Dan's to do, the heading says so (#863), on the card's own line rather than a
+    // second row beside it.
     expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }, { text: '  waiting on you', dim: true }])
     expect(l.map(textOf)).toEqual([
       'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done before this card',
-      '2. Turn on the rule  [done]',
-      'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf',
+      '2. Turn on the rule  [done-2]',
+      'Where: [open-link-2]  [copy-link-2]', 'https://dash.cloudflare.com/waf',
       'What to do: Security, WAF, Custom rules, Deploy',
-      'ip.src eq 1.2.3.4  [copy]',
-      '3. Purge the cache',
+      'ip.src eq 1.2.3.4  [copy-2]',
+      '3. Purge the cache  [done-3]',
+      'Where: [open-link-3]  [copy-link-3]', 'https://dash.cloudflare.com/cache',
+      '4. Check the site  [done-4]',
+      'Where: Safari, a new window',
+      'What to do: ', '1. Open the site', '2. Reload twice',
     ])
-    // The step to do is bold in the terminal's own text colour; its details sit under its title.
-    expect(l[2]?.[0]).toMatchObject({ bold: true })
-    expect(l[2]?.[0]?.color).toBeUndefined()
+    // Every step to do is bold in the terminal's own text colour; its details sit under its title.
+    for (const at of [2, 7, 10]) {
+      expect(l[at]?.[0]).toMatchObject({ bold: true })
+      expect(l[at]?.[0]?.color).toBeUndefined()
+    }
     expect(l.slice(3, 7).every(x => x[0]?.indent === 3)).toBe(true)
-    // A later step is plain: not bold, not dim.
-    expect(l[7]).toEqual([{ text: '3. Purge the cache' }])
+  })
+
+  // #1239 point 4: steps 2 and 3 pasted the password made in step 1, which a card showing every step
+  // at once must say rather than hide, so Dan sees what he needs before he starts.
+  test('a step that needs an earlier one says so first under its title, labelled and wrapping (#1239)', () => {
+    const c = made({ heading: 'x', steps: [step({ title: 'Make the password' }), step({ title: 'Create the user', needs: '  Needs: the password made in step 1 ', clicks: 'Paste it' })] })
+    expect(c.steps[1]?.needs).toBe('the password made in step 1')
+    const l = lines(c) as (P & { wrap?: true; whole?: true })[][]
+    const at = l.findIndex(x => x[0]?.text === '2. Create the user')
+    expect(l[at + 1]).toEqual([{ text: 'Needs: ', bold: true, whole: true, indent: 3 }, { text: 'the password made in step 1', wrap: true }])
+    expect(l[at + 2]?.[0]).toEqual(WHERE)
+    // A step needing nothing draws no such line.
+    expect(l.flat().filter(p => p.text === 'Needs: ')).toHaveLength(1)
+  })
+
+  // #1239 point 5: each step keeps its own state, so several can be in flight at once.
+  test('several steps sent at once each read sent, and the heading waits on Dan while any is not (#1239)', () => {
+    const three = made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' }), step({ title: 'C' })] })
+    const two = sent(sent(three, 0, true), 2, true)
+    const l = lines(two)
+    expect(l[0]).toEqual([{ text: 'x', color: 'warning' }, { text: '  waiting on you', dim: true }])
+    expect(l.map(textOf).filter(t => /^\d\. /.test(t))).toEqual(['1. A  sent', '2. B  [done-2]', '3. C  sent'])
+    // Every step sent: the card waits on Claude, not on Dan.
+    expect(lines(sent(two, 1, true))[0]).toEqual([{ text: 'x', color: 'warning' }])
   })
 
   // #734: a long click path or exact location wraps under its step rather than being cut at the edge
@@ -242,10 +294,10 @@ describe('cardLines', () => {
     const c = made({ heading: 'x', steps: [step({ checked: 'already-done', title: 'A' }), step({ title: 'B', value: 'ip.src eq 1.2.3.4' })] })
     const buttons = (cardLines(c) as (P & { instead?: P[] })[][]).flat().filter(p => p.button)
     expect(buttons).toEqual([
-      { button: 'done', label: 'Done', instead: [{ text: 'type: ', dim: true }, { text: 'step 2 done' }] },
-      { button: 'open-link', label: 'Open', instead: [] },
-      { button: 'copy-link', label: 'Copy link', instead: [] },
-      { button: 'copy', label: 'Copy', instead: [] },
+      { button: 'done-2', label: 'Done', instead: [{ text: 'type: ', dim: true }, { text: 'step 2 done' }] },
+      { button: 'open-link-2', label: 'Open', instead: [] },
+      { button: 'copy-link-2', label: 'Copy link', instead: [] },
+      { button: 'copy-2', label: 'Copy', instead: [] },
     ])
     // The words to type are the very prompt a press of Done sends, so Claude reads both the same way.
     expect(buttons[0]?.instead?.map(r => r.text).join('')).toBe('type: step 2 done')
@@ -258,7 +310,7 @@ describe('cardLines', () => {
   test('a long link is on its own line under Where:, whole and wrapping, with Open and Copy link beside the label', () => {
     const url = `https://docs.google.com/spreadsheets/d/1aFt8ks89lkzLV${'x'.repeat(120)}/edit?gid=0#gid=0`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Open the sheet' })] })) as (P & { href?: string; wrap?: true; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[2]).toEqual([WHERE, { button: 'open-link-1', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link-1', label: 'Copy link', instead: [] }])
     expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
     // The whole address is the line's only text: never cut, nothing to select around it.
     expect(l[3]?.map(p => p.text).join('')).toBe(url)
@@ -368,10 +420,10 @@ describe('cardLines', () => {
   // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
   // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows,
   // and Open and Copy link beside it (#1215), since Claude Code draws no hyperlinks on Apple Terminal.
-  test('the open step\'s link is a link part carrying the whole address, with Open and Copy link; an exact location stays text', () => {
+  test('a step\'s link is a link part carrying the whole address, with Open and Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
-    expect(l[2]).toEqual([WHERE, { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }])
+    expect(l[2]).toEqual([WHERE, { button: 'open-link-1', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link-1', label: 'Copy link', instead: [] }])
     expect(l[3]).toEqual([{ text: url, href: url, wrap: true, indent: 3 }])
     // The click path is not a link.
     expect(l[4]?.[1]?.href).toBeUndefined()
@@ -381,21 +433,21 @@ describe('cardLines', () => {
   })
 
   // #872: a bare location line read to Dan as an unexplained fragment, so the card labels each part
-  // of the open step itself: "Where:" before the link or location, "What to do:" before the clicks,
+  // of every open step itself: "Where:" before the link or location, "What to do:" before the clicks,
   // each bold and drawn whole, once. The value stays on its own line with Copy.
-  test('the open step labels its link or location and its clicks, each label once and bold; the value has none', () => {
+  test('each open step labels its link or location and its clicks, each label once and bold; the value has none', () => {
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login', clicks: 'File, New Password Item', value: 'hunter2' })] }))
     expect(at.slice(2)).toEqual([
       [WHERE, { text: 'Keychain Access, login', wrap: true }],
       [WHAT, { text: 'File, New Password Item', wrap: true }],
-      [{ text: 'hunter2', indent: 3, wrap: true }, { text: '  ' }, { button: 'copy', label: 'Copy', instead: [] }],
+      [{ text: 'hunter2', indent: 3, wrap: true }, { text: '  ' }, { button: 'copy-1', label: 'Copy', instead: [] }],
     ])
     const all = at.flat().map(p => p.text ?? '').join('\n')
     expect(all.match(/Where:/g)).toHaveLength(1)
     expect(all.match(/What to do:/g)).toHaveLength(1)
-    // A later step is its title alone, so it carries no labels either.
+    // Every unfinished step is open (#1239), each labelled once.
     const two = lines(made({ heading: 'x', steps: [step({ clicks: 'A, B' }), step({ title: 'Later', clicks: 'C, D' })] }))
-    expect(two.flat().filter(p => p.text === 'Where: ' || p.text === 'What to do: ')).toHaveLength(2)
+    expect(two.flat().filter(p => p.text === 'Where: ' || p.text === 'What to do: ')).toHaveLength(4)
   })
 
   // #872, Dan after a step whose What to do held four actions in one sentence: "step 4 would've been a
@@ -414,7 +466,7 @@ describe('cardLines', () => {
       '2. Paste the command and press Return',
       '3. Type /clear',
       '4. Type /exit',
-      'claude --resume  [copy]',
+      'claude --resume  [copy-1]',
     ])
   })
 
@@ -445,7 +497,7 @@ describe('cardLines', () => {
   test('a value of several lines shows on one line, and the indent follows the number width', () => {
     const steps = Array.from({ length: 10 }, (_, i) => step({ checked: i < 9 ? 'already-done' : 'not-done', title: `S${i + 1}`, value: i === 9 ? 'a\nb' : undefined }))
     const l = lines(made({ heading: 'x', steps }))
-    const value = l.find(x => x.some(p => p.button === 'copy'))
+    const value = l.find(x => x.some(p => p.button === 'copy-10'))
     expect(value?.[0]).toMatchObject({ text: 'a b', indent: 4 })
   })
 })
