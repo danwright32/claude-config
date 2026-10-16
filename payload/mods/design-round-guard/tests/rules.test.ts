@@ -558,7 +558,8 @@ test('a mod hook edit is logic only when it touches no JSX line and names no dra
 // #1248: on 2026-10-16 a subagent's Edit for #1245 to manual steps' hook file was refused as a look
 // change (call toolu_013hHV3QP5RaaVGuwwQJvTXj). It only added a type and a helper that sends Dan a
 // notification when a card is pinned, which nothing in the file called yet; the helper reads the
-// steps card's heading, and `card` is a word a mod draws with. The file as it stood, cut to its
+// steps card's heading, and `card` is a word a mod draws with; the untouched line below it, naming the
+// card too, was read with it. The file as it stood, cut to its
 // imports and the lines around the insertion (payload/mods/manual-steps/hooks/register.tsx at
 // 5681b31a^), with one drawing line added at its end, and the refused call's new_string, word for word.
 const STEPS_BEFORE = [
@@ -621,61 +622,13 @@ const STEPS_NEW = [
   '',
   STEPS_OLD,
 ].join('\n')
-const addedAbove = (code: string) => modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `${code}${STEPS_OLD}`))
-
-test('#1248: adding code nothing in a mod hook file runs yet passes, whatever drawing nouns it names', () => {
+test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
   if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
-  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(true)
-  // A plain type, and helpers reading the card that nothing calls.
-  expect(addedAbove('type Pair = { card: StepsCard; n: number }\n\n')).toBe(true)
-  expect(addedAbove('const headingOf = (card: StepsCard) => card.heading\n\n')).toBe(true)
-  expect(addedAbove('function stepsOf(card: StepsCard) {\n  return card.steps\n}\n\n')).toBe(true)
-})
-
-test('#1248: added code that can change what is drawn, or that runs where it stands, is still asked about', () => {
-  const asked: string[] = [
-    // A colour, a style or a size, by word or by literal, which a later line naming none could draw.
-    "const pick = () => 'amber'\n\n",
-    'const tone = (c: StepsCard) => (c.heading ? AMBER : GREY)\n\n',
-    'const pad = (n: number) => n + paddingX\n\n',
-    "const pick = () => '#ff0000'\n\n",
-    "const pick = () => '\\x1b[31m'\n\n",
-    // An element.
-    'const Note = () => <Text>x</Text>\n\n',
-    // Each of the rest names the card, so only the reading of added code could pass it. Code that runs
-    // where it stands: a call, a function run at once, a second name after a comma, a statement after a
-    // semicolon or on a line of its own, a body on the next line.
-    'const x = setUp(card)\n\n',
-    'const x = ((card: StepsCard) => card)()\n\n',
-    'const x = function () {\n  return card\n}()\n\n',
-    'const x = function (card: StepsCard) { return card }.call(null, card)\n\n',
-    'const f = (card: StepsCard) => card, g = setUp()\n\n',
-    'const f = (card: StepsCard) => card; setUp()\n\n',
-    'const f = (card: StepsCard) => card\nsetUp()\n\n',
-    'const f = (card: StepsCard) =>\n  card\n\n',
-    // Reached from outside the file, or a name the file already uses, which redeclares or shadows it.
-    'export const f = (card: StepsCard) => card.heading\n\n',
-    'const left = (card: StepsCard) => card.heading\n\n',
-    'const holdWhileAway = (card: StepsCard) => card.heading\n\n',
-    // Text that cannot be read alone.
-    'const f = (card: StepsCard) => {\n\n',
-    'const f = (card: StepsCard) => `\n\n',
-  ]
-  for (const code of asked) expect(`${code}: ${addedAbove(code)}`).toBe(`${code}: false`)
-  // Added inside a function rather than between declarations.
-  const inside = STEPS_BEFORE.replace("  const n = nextStep(card)\n  return n === undefined ? 'every", "  const n = nextStep(card)\n  const f = () => card.heading\n  return n === undefined ? 'every")
-  expect(modHookLogicOnly(STEPS_BEFORE, inside)).toBe(false)
-  // Added inside a block, even at the start of a line and above a comment.
-  const block = STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW)
-  const comment = '    // The noun missing'
-  expect(modHookLogicOnly(block, block.replace(comment, `const g = (card: StepsCard) => card\n${comment}`))).toBe(false)
-  // Added above a line it could run on into.
-  const before = STEPS_BEFORE.replace(STEPS_OLD, `;[1].forEach(x => x)\n${STEPS_OLD}`)
-  expect(modHookLogicOnly(before, before.replace(';[1]', 'const f = (card: StepsCard) => card\n;[1]'))).toBe(false)
-  // The later edit that calls the new helper is judged by its own lines, as any edit is: it names the
-  // card, so it is still asked about (the gap #1248 leaves).
-  const wired = STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW)
-  expect(modHookLogicOnly(wired, wired.replace('    return false\n', '    void tellDan($, card)\n    return false\n'))).toBe(false)
+  // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  // Added directly above the line naming the card, a helper naming no drawing word passes: the
+  // untouched line below it is no longer read.
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
 })
 
 // #1248: lines added directly above an unchanged line were judged with that line, so a logic line

@@ -2650,16 +2650,11 @@ region ran to the end of the line after the change.
 - **The lines a change touches end where it ends.** A change that only adds lines, or only takes
   them, is moved to the start of a line where it reads the same (`changedSpan`), and its region stops
   at the last changed line, so a logic line added directly above a line that draws is judged alone.
-- **Code nothing runs yet is no look change.** An insertion of whole top level declarations that run
-  nothing where they stand (a type, an interface, a function, a const given an arrow function, never a function expression, which `}()` runs at once), between
-  declarations, never exported, under names the file does not use, passes (`unusedCode`), provided it
-  holds no element, no colour literal, and no drawing word but those naming what is drawn (card, row,
-  pane, band, panel, button) or the act (draw, render). Colour, style and size words still hold it,
-  since a helper holding one could hand it to a later line naming none.
-- **The gap, left open.** The edit that later calls the helper is judged by its own lines. #1245's
-  wiring line names `card`, so it is still asked; a helper whose body names only what is drawn,
-  called from a line naming none of it, would pass both edits. Each check was seen to fail its test
-  with the check removed.
+  Changing the drawing line itself is still asked about.
+- **No word is exempted (Dan, 2026-10-16: the line fix only).** A rule letting new code nothing runs
+  yet name what is drawn was built and offered, and declined. So the #1245 helper is still asked
+  about, for the card it reads, and so is the edit that calls it with the card; #1248's aim of
+  letting logic only edits through is met only as far as the line fix reaches.
 
 ## Picker manners (#615), built 2026-10-04
 

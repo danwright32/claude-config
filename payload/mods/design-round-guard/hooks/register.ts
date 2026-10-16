@@ -103,8 +103,8 @@ import {
 //   asked (rules.ts onScreenProblem). A typed answer is said, to Dan in a toast and to Claude, as not
 //   recorded, with the question to ask again. A mod's own hook file is judged by what it draws
 //   (rules.ts modHookLogicOnly): an edit touching none of it passes unasked. Since #1248 the lines
-//   it touches end where it ends, and adding code nothing in the file runs yet passes even when it
-//   names what is drawn, such as a card (rules.ts unusedCode).
+//   it touches end where it ends (rules.ts changedSpan), so the untouched line below a change is not
+//   read with it.
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
