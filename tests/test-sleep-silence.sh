@@ -61,6 +61,7 @@ mod:scope-modes/hooks/register.ts:notify:notifier	The sleep mode notification it
 mod:scope-modes/hooks/register.ts:classic.Stop	Blocks only to keep Claude finishing winding down; a question that leads to is refused while asleep by this mod's AskUserQuestion refusal.
 mod:manual-steps/hooks/register.tsx:classic.Stop	Sends Claude back to pin a steps card, and a card pinned while asleep is held by scope modes' hold, which reads the sleep record.
 mod:is-it-live/hooks/register.ts:classic.Stop	Sends Claude back to make the is it live card for a merge (#1244), which is kept, toasted and drawn as a result row, never a notification, sound or question; it refuses once per merge in a chain of turn ends, so it never holds a sleeping worker, and the card is there for /live in the morning.
+mod:manual-steps/hooks/register.tsx:tellDan:noun	Reaches Dan only through the goal tracker's notify, which consults the predicate (its own route below); a card pinned while asleep is held by scope modes' hold before this is reached.
 mod:goal-tracker/hooks/register.tsx:classic.PermissionRequest	Reaches Dan only through notify, which consults the predicate (its own route below).
 mod:goal-tracker/hooks/register.tsx:classic.Notification	Reaches Dan only through notify, which consults the predicate (its own route below).
 mod:scope-modes/hooks/register.ts:askOne:ask	The before bed questions, about a repository on neither merge and deploy list (#843) and the open questions on the queue's issues (#836): asked only inside /sleep, while Dan is at the prompt that typed it and before the sleep record exists, so the Mac is not asleep yet.
@@ -96,6 +97,8 @@ SENDS = [
     ("notifier", re.compile(r"""['"](?:terminal-notifier)['"]""")),
     ("sound", re.compile(r"""['"](?:afplay|say)['"]""")),
     ("ask", re.compile(r"\bui\.ask\(")),
+    # Another mod's noun that pages Dan for it (#1245): the goal tracker's notifier, asked by name.
+    ("noun", re.compile(r"\bgoalTracker\.waitingOnYou\(")),
 ]
 CLASSIC = re.compile(r"""\bon\(\s*['"](classic\.(?:Stop|SubagentStop|StopFailure|Notification|PermissionRequest|PermissionDenied|TeammateIdle))['"]""")
 CONSULTS = re.compile(r"\bisAsleep\b|\bsleepNow\(|\.scopeModes\.hold\(")
@@ -144,6 +147,9 @@ done
 grep -q $'^mod:goal-tracker/hooks/register.tsx:notify:notifier\t' "$ROUTES" \
   && check "the goal tracker's notify is found as a route" ok \
   || check "the goal tracker's notify is found as a route" "not found; routes: $(cut -f1 "$ROUTES" | tr '\n' ' ')"
+grep -q $'^mod:manual-steps/hooks/register.tsx:tellDan:noun\t' "$ROUTES" \
+  && check "manual steps asking the goal tracker to notify is found as a route (#1245)" ok \
+  || check "manual steps asking the goal tracker to notify is found as a route (#1245)" "not found; routes: $(cut -f1 "$ROUTES" | tr '\n' ' ')"
 
 while IFS=$'\t' read -r route consults where; do
   [ -n "$route" ] || continue

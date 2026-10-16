@@ -1371,3 +1371,53 @@ test('without scope modes loaded the notification is sent and no failed sleep ch
   expect(w.notified).toEqual([['-title', 'Claude Code', '-message', "What's next?"]])
   expect(w.debug.filter(d => /could not tell whether the Mac is asleep/.test(d))).toEqual([])
 })
+
+// ---- The noun (#1245): another mod notifies Dan that this session waits on him ----
+// The manual steps mod pins a card Dan can work on now and asks this noun to tell him, so a card put
+// up while he is not looking at the terminal is not missed. A stand in caller asks it from its own
+// hook, where every mod's noun is reachable, and answers with what it said or what it threw.
+const nounCaller: { name: string; register: Register } = {
+  name: 'manual-steps',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'TellDan') return next(e)
+      try {
+        const r = await $.goalTracker.waitingOnYou((e as unknown as { input: { message: string } }).input)
+        return { result: r, text: JSON.stringify(r) } as never
+      } catch (err) {
+        return { deny: `threw: ${String((err as Error)?.message ?? err)}` }
+      }
+    })
+  },
+}
+const tellDan = async ($: Engine, message: string) => {
+  const r = (await $.tool.call({ tool: 'TellDan', tool_use_id: 'n1', input: { message } } as never)) as { deny?: string; text?: string }
+  if (r.deny !== undefined) throw new Error(r.deny)
+  return JSON.parse(r.text ?? 'null') as unknown
+}
+const PINNED = 'Steps card pinned: Cloudflare WAF. Next, step 1 of 2: Turn on the WAF rule.'
+const withCaller = { plugins: [deps, sleeper, nounCaller] }
+
+test('the noun sends one notification, titled as a question is, and says it was sent (#1245)', withCaller, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: false })
+  await start($)
+  expect(await tellDan($, PINNED)).toEqual({ isSent: true })
+  expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', PINNED]])
+})
+
+test('while asleep the noun sends nothing and says why (#1245, #841)', withCaller, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: true })
+  await start($)
+  expect(await tellDan($, PINNED)).toEqual({ isSent: false, reason: 'the Mac is asleep (sleep mode)' })
+  expect(w.notified).toEqual([])
+})
+
+test("a notification that cannot be sent is said to the caller with the notifier's reason (#1245)", withCaller, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: false, notifyFails: true })
+  await start($)
+  expect(await tellDan($, PINNED)).toEqual({ isSent: false, reason: 'terminal-notifier: no permission to notify' })
+  expect(w.notified.length).toBe(1)
+})

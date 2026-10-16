@@ -1,4 +1,5 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Hook, Register } from 'claude-code'
+import type { GoalTracker } from '../types/index.d.ts'
 import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
 import { empty, FAIL_STREAK, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
 
@@ -78,11 +79,13 @@ const isAsleep = async ($: EngineInterface): Promise<boolean> => {
     return false
   }
 }
-const notify = async ($: EngineInterface, title: string, message: string, sound?: string) => {
+const ASLEEP = 'the Mac is asleep (sleep mode)'
+// Why the notification was not sent, or undefined once terminal-notifier took it.
+const notify = async ($: EngineInterface, title: string, message: string, sound?: string): Promise<string | undefined> => {
   // Dan is asleep: nothing pages him (#841). The pane still shows what the session waits on.
   if (await isAsleep($)) {
-    $.ui.log(`goal-tracker: the notification "${title}" was not sent: the Mac is asleep (sleep mode)`, { to: 'debug' })
-    return
+    $.ui.log(`goal-tracker: the notification "${title}" was not sent: ${ASLEEP}`, { to: 'debug' })
+    return ASLEEP
   }
   let why: string | undefined
   try {
@@ -93,12 +96,13 @@ const notify = async ($: EngineInterface, title: string, message: string, sound?
   } catch (err) {
     why = err instanceof Error ? err.message : String(err)
   }
-  if (why === undefined) return
+  if (why === undefined) return undefined
   $.ui.log(`goal-tracker: could not send the notification "${title}": ${why}`, { to: 'debug' })
   if (!toldNoNotify) {
     toldNoNotify = true
     $.ui.log(`The goal tracker could not send a notification: ${why}.`)
   }
+  return why
 }
 // Sent beside the call it announces, never awaited by it: a notifier that hangs never holds up a question.
 const notifySoon = ($: EngineInterface, title: () => Promise<string>, message: string, sound?: string) => {
@@ -392,7 +396,28 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   }
 }
 
+// The noun (#1245): another mod whose session waits on Dan (manual steps, on pinning a card he can
+// do now) has him told through this mod's one notifier, titled as a question is and silent while
+// the Mac is asleep. The noun's own method answers only when the hook below failed, and says so; the
+// hook has the whole engine, so it reaches scope modes' sleep check wherever the folders sort.
+const NOUN_UNANSWERED = "the goal tracker's own hook did not answer"
+const waitingNoun: Hook<'goalTracker.waitingOnYou'> = async ($, e) => {
+  const why = await notify($, `${await projectName($)} is waiting on you`, e.message)
+  return { value: why === undefined ? { isSent: true } : { isSent: false, reason: why } }
+}
+
 export const register: Register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const goalTracker: GoalTracker = {
+      waitingOnYou: async () => {
+        throw new Error(NOUN_UNANSWERED)
+      },
+    }
+    return { ...built, goalTracker }
+  })
+  on('goalTracker.waitingOnYou', waitingNoun)
+
   // Everything the module keeps belongs to one session: a later start in the same process begins
   // again rather than reading the last one's (lessons review of #634).
   on('session.start', async ($, e, next) => {
