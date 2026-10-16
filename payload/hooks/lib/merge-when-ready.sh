@@ -40,6 +40,21 @@
 # THE MERGE IS PINNED to the head the gates judged (--match-head-commit), so a push landing between
 # the judgement and the merge is refused by GitHub, and this goes round again for the new head.
 #
+# WHEN THE BASE KEEPS MOVING it waits for it to be still, and keeps going (claude-config#1271). This
+# used to update at most three times and then stop with nothing merged. On 2026-10-16, with several
+# pull requests merging at once and each head's checks taking 15 to 30 minutes, main moved faster
+# than that: #1267 stopped twice and #1257 once, and each time a person waited for main to go quiet
+# and started it again by hand. Now a pull request behind its base is updated at once the first
+# time, and after that only once the base's tip (read from the same compare that measures how far
+# behind it is, so it costs no call) has been unchanged for MWR_SETTLE_SECONDS, so a burst of merges
+# costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
+# hours by default, and the poll count bound the run, and is-it-live's window for a background merge
+# (WAIT_MS) is held at twice that deadline by test-merge-when-ready.sh (L227). Waiting changes only
+# WHEN an update is made; what merges is still exactly the head every gate judged, as above. A queue
+# across sessions, so only one helper per repository updates at a time, was the other remedy the
+# issue named and is not built: it would serialise only this Mac's helpers, not the other MacBook's
+# or a typed merge, and would need a holder that dies to be noticed (L409).
+#
 # WHAT IT REFUSES TO CARRY. Only the merge method and --delete-branch are passed to gh. Anything
 # else is refused before any call: --admin and --auto would bypass or defer the very checks this
 # waits for, a pin of your own could disagree with the head judged, and free text (a subject or a
@@ -51,9 +66,9 @@
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
-#      closed, a read GitHub refused or still did not answer after being asked again, or main
-#      moved more times than MWR_MAX_UPDATES allows
-#   3  still waiting when the deadline or the poll count ran out; running it again resumes
+#      closed, or a read GitHub refused or still did not answer after being asked again
+#   3  still waiting (on checks, the review, or a base still moving) when the deadline or the poll
+#      count ran out; running it again resumes
 #   64 refused its arguments, or was run outside a checkout
 #
 # Findings to read: the review's own refusal carries a read key. Read them, fix what is real, then
@@ -66,9 +81,11 @@
 # waiter was a third of this Mac's GraphQL spend at that moment). A check run takes minutes, so a
 # merge lands at most a minute after it could have.
 #
-# Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_DEADLINE_SECONDS (3600),
+# Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_DEADLINE_SECONDS (10800),
 # MWR_MAX_POLLS (derived from the two, bounding the loop by count as well as by clock, L704),
-# MWR_MAX_UPDATES (3), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
+# MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
+# past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
+# epoch seconds, the clock's seam), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
 # MWR_HEARTBEAT_SECONDS (300), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
@@ -88,9 +105,10 @@ REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 POLL="$(num_or "${MWR_POLL_SECONDS:-}" 60)"; [ "$POLL" -ge 1 ] || POLL=1
-DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 3600)"
+DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 10800)"
 MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $((DEADLINE / POLL + 10)))"
-MAX_UPDATES="$(num_or "${MWR_MAX_UPDATES:-}" 3)"
+SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
+NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 300)"
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
@@ -134,8 +152,14 @@ done
 slug="${repo:-$(mt_remote_slug)}"
 [ -n "$slug" ] || usage "this checkout has no GitHub origin; name the repository with --repo owner/name."
 
-t0="$(date +%s)"
-now(){ date +%s; }
+# The clock is a seam like the sleep (L524): MWR_NOW names a command printing epoch seconds. One that
+# prints anything else is not believed, and the real clock is read instead.
+now(){
+  local t=""
+  [ -n "$NOW_CMD" ] && t="$("$NOW_CMD" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$t" ;; esac
+}
+t0="$(now)"
 elapsed(){
   local s=$(( $(now) - t0 ))
   if [ "$s" -ge 60 ]; then printf '%dm %02ds' "$((s / 60))" "$((s % 60))"; else printf '%ds' "$s"; fi
@@ -206,9 +230,12 @@ read_runs(){
   runs_pending="$MT_RUNS_PENDING"; read_err="$MT_RUNS_ERR"
   return "$rc"
 }
-read_compare(){   # sets compare, crc, behind
+read_compare(){   # sets compare, crc, behind, base_tip
   compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
   behind="$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)"
+  # base_commit is the base branch's tip (measured against git ls-remote, 2026-10-16), read here so
+  # knowing whether main has moved costs no call of its own.
+  base_tip="$(printf '%s' "$compare" | jq -r '.base_commit.sha // ""' 2>/dev/null)"
   case "$behind" in ''|*[!0-9]*) ;; *) return 0 ;; esac
   read_err="${compare:0:300}, exit $crc"
   [ "$crc" -ne 0 ] && mt_gh_transient "$compare" && return 2
@@ -225,6 +252,20 @@ read_back(){   # sets after
 }
 
 record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
+tip_seen=""; tip_moved_at=""
+# Out of time while waiting on something: the same stop wherever the wait is.
+out_of_time(){   # $1 = what it was still waiting for
+  if [ "$polls" -ge "$MAX_POLLS" ] || [ $(( $(now) - t0 )) -ge "$DEADLINE" ]; then
+    stop 3 "Out of time: #$pr at ${head:0:7} $1 after $polls look(s). Nothing was merged; run the same command again to resume."
+  fi
+}
+wait_a_look(){   # $1 = the status line; said when it changes, and every HEARTBEAT seconds while it does not
+  if [ "$1" != "$last_status" ] || [ $(( $(now) - last_said )) -ge "$HEARTBEAT" ]; then
+    say "$1"; last_status="$1"; last_said="$(now)"
+  fi
+  "$SLEEP" "$POLL"
+}
+mins(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $1 / 60 ))"; else printf '%ds' "$1"; fi; }
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
@@ -258,14 +299,28 @@ while :; do
   # Behind its base: update, and go round for the new head.
   with_retries "whether #$pr contains the tip of $base" read_compare; rrc=$?
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read whether #$pr contains the tip of $base ($read_err$(tried "$rrc")). Nothing was merged."
+  # When the base's tip was last SEEN to change (claude-config#1271). The first look has nothing to
+  # compare with, so a pull request already behind is updated at once; the time is the look that
+  # saw the change, never GitHub's commit date, so a clock between them cannot shorten the wait. A
+  # compare that names no tip leaves this unset, and the helper then updates at once each time, as
+  # it did before: more check runs spent, never a merge any gate would refuse.
+  if [ -n "$base_tip" ]; then
+    [ -n "$tip_seen" ] && [ "$base_tip" != "$tip_seen" ] && tip_moved_at="$(now)"
+    tip_seen="$base_tip"
+  fi
   if [ "$behind" -gt 0 ] || [ "$(printf '%s' "$view" | jq -r '.mergeStateStatus // ""')" = "BEHIND" ]; then
-    if [ "$updates" -ge "$MAX_UPDATES" ]; then
-      stop 1 "Stopped: $base moved again; this run has updated it $updates time(s), its limit (MWR_MAX_UPDATES). Nothing was merged. Run it again when merges into $base have quietened."
+    # MAIN STILL MOVING: wait for it to be still before updating. Each update starts a fresh check
+    # run of 15 to 30 minutes, and a base still taking merges would leave the new head behind again
+    # before it finished, so a burst of merges is answered with one update after it, not one each.
+    if [ -n "$tip_moved_at" ] && [ $(( $(now) - tip_moved_at )) -lt "$SETTLE" ]; then
+      out_of_time "is behind $base, with $base still moving"
+      wait_a_look "Head ${head:0:7}: behind $base, with $base still moving; updating once it has been still for $(mins "$SETTLE")."
+      continue
     fi
     upd="$(gh_as pr update-branch "$pr" --repo "$slug" 2>&1)" || stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. Nothing was merged; resolve it by hand."
     updates=$((updates + 1))
     noun="commits"; [ "$behind" -eq 1 ] && noun="commit"
-    say "Head ${head:0:7} was $behind $noun behind $base, so it was updated (update $updates of at most $MAX_UPDATES). Waiting for the new head's checks and lessons review."
+    say "Head ${head:0:7} was $behind $noun behind $base, so it was updated (update $updates). Waiting for the new head's checks and lessons review."
     "$SLEEP" "$POLL"; continue
   fi
 
@@ -311,14 +366,9 @@ while :; do
   esac
 
   if [ -n "$waiting" ]; then
-    if [ "$polls" -ge "$MAX_POLLS" ] || [ $(( $(now) - t0 )) -ge "$DEADLINE" ]; then
-      stop 3 "Out of time: #$pr at ${head:0:7} still has $waiting after $polls look(s). Nothing was merged; run the same command again to resume."
-    fi
-    status="Head ${head:0:7}: waiting, $waiting."
-    if [ "$status" != "$last_status" ] || [ $(( $(now) - last_said )) -ge "$HEARTBEAT" ]; then
-      say "$status"; last_status="$status"; last_said="$(now)"
-    fi
-    "$SLEEP" "$POLL"; continue
+    out_of_time "still has $waiting"
+    wait_a_look "Head ${head:0:7}: waiting, $waiting."
+    continue
   fi
 
   # Ready by every reading here. The gates decide.

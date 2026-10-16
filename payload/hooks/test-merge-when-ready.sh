@@ -70,7 +70,10 @@ case "$*" in
   "api repos/acme/widget/compare/"*)
     fail_read compare
     b="$(rd behind)"; st=ahead; [ "$b" != 0 ] && st=diverged
-    printf '{"status":"%s","ahead_by":1,"behind_by":%s}\n' "$st" "$b"
+    # base_commit is the base branch's tip, as GitHub's compare reports it (claude-config#1271);
+    # main-tip moves when a test makes main move.
+    mt="$(rd main-tip)"
+    printf '{"status":"%s","ahead_by":1,"behind_by":%s,"base_commit":{"sha":"%s"}}\n' "$st" "$b" "${mt:-aaaaaaa}"
     ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
@@ -80,6 +83,7 @@ case "$*" in
     ;;
   "pr update-branch"*)
     [ -e "$ST/update-fails" ] && { echo "GraphQL: merge conflict between base and head (updatePullRequestBranch)" >&2; exit 1; }
+    printf '%s\n' "$(rd clock)" >> "$ST/update-times"
     nh="$(head -1 "$ST/next-heads")"; tail -n +2 "$ST/next-heads" > "$ST/next-heads.tmp"; mv "$ST/next-heads.tmp" "$ST/next-heads"
     printf '%s' "$nh" > "$ST/head"; printf '0' > "$ST/behind"; cat "$ST/rollup-after-update" > "$ST/rollup"
     ;;
@@ -95,9 +99,12 @@ chmod +x "$BIN/gh"
 export PATH="$BIN:$PATH"
 
 # --- the injected sleep: runs the next step the test queued, then returns at once -----------------
+# It also moves the injected clock on by the seconds asked (claude-config#1271), so a wait for main to
+# be still for minutes, and a deadline hours long, are crossed in no real time at all.
 cat > "$BIN/fake-sleep" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\n' "$1" >> "$ST/sleeps"
+printf '%s' "$(( $(cat "$ST/clock") + $1 ))" > "$ST/clock"
 if [ -s "$ST/on-sleep" ]; then
   step="$(head -1 "$ST/on-sleep")"; tail -n +2 "$ST/on-sleep" > "$ST/on-sleep.tmp"; mv "$ST/on-sleep.tmp" "$ST/on-sleep"
   eval "$step"
@@ -105,6 +112,8 @@ fi
 EOS
 chmod +x "$BIN/fake-sleep"
 export MWR_SLEEP="$BIN/fake-sleep"
+printf '#!/usr/bin/env bash\ncat "$ST/clock"\n' > "$BIN/fake-now"; chmod +x "$BIN/fake-now"
+export MWR_NOW="$BIN/fake-now"
 export MWR_POLL_SECONDS=30
 export MWR_READ_RETRY_SECONDS=7
 export MWR_NO_CHECKS_GRACE_SECONDS=0
@@ -160,6 +169,7 @@ fresh(){ # fresh <head> <behind> <rollup>
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"
+  printf '1000000' > "$ST/clock"; printf 'm0' > "$ST/main-tip"
 }
 run(){ (cd "$REPO" && bash "$HELPER" "$@" 2>&1); }
 count(){ if [ -f "$ST/$1" ]; then grep -c -- "$2" "$ST/$1"; else echo 0; fi; }
@@ -225,13 +235,6 @@ check_eq "#851 main moving again means a second update, then the merge" "0" "$rc
 check_eq "#851 two updates" "2" "$(count gh-calls 'pr update-branch 7')"
 check "#851 merging the newest head" "--match-head-commit $NEWER" "$(grep 'pr merge' "$ST/gh-calls")"
 
-fresh "$OLD" 2 "$GREEN"
-printf '%s\n%s\n' "$NEW" "$NEWER" > "$ST/next-heads"
-printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 3 > \"\$ST/behind\"" > "$ST/on-sleep"
-out="$(MWR_MAX_UPDATES=1 run 7 --squash)"; rc=$?
-check_eq "#851 past its update limit it stops rather than chasing main for ever" "1" "$rc"
-check "#851 saying how many times it updated" "updated it 1 time" "$out"
-check_eq "#851 and nothing was merged" "0" "$(count gh-calls 'pr merge')"
 
 # =================================================================================================
 # 5. Every way it stops without merging, each in its own words.
@@ -561,6 +564,97 @@ else
   check "#1178 control: the hooks block lists block-red-merge.sh as a merge gate" "block-red-merge.sh" "$typed_gates"
   missing="$(comm -23 <(printf '%s\n' "$typed_gates") <(printf '%s\n' "$helper_gates"))"
   check_eq "#1178 every merge gate a typed merge meets is asked by merge-when-ready.sh" "" "$missing"
+fi
+
+# =================================================================================================
+# 11. Main keeps moving: the helper waits for it to be still, then updates, and never gives up on a
+#     count (claude-config#1271). On 2026-10-16, with several pull requests merging at once and each
+#     head's checks taking 15 to 30 minutes, #1267 stopped twice and #1257 once at the old limit of
+#     three updates, and each time a person waited for main to go quiet and started it again. The
+#     clock here is injected and moved only by the fake sleep, so minutes of quiet and hours of
+#     deadline pass in no real time (L524, L290).
+# =================================================================================================
+H4="4444444444444444444444444444444444444444"
+H5="5555555555555555555555555555555555555555"
+H6="6666666666666666666666666666666666666666"
+
+# Main moves three times in a row after the first update: one more update, made only once main has
+# been still for the settle window, not one per move.
+fresh "$OLD" 2 "$GREEN"
+printf '%s' "$GREEN" > "$ST/rollup-after-update"
+printf '%s\n%s\n' "$NEW" "$NEWER" > "$ST/next-heads"
+printf '%s\n%s\n%s\n' \
+  "printf 3 > \"\$ST/behind\"; printf m1 > \"\$ST/main-tip\"" \
+  "printf 4 > \"\$ST/behind\"; printf m2 > \"\$ST/main-tip\"" \
+  "printf 5 > \"\$ST/behind\"; printf m3 > \"\$ST/main-tip\"" > "$ST/on-sleep"
+out="$(MWR_SETTLE_SECONDS=90 run 7 --squash)"; rc=$?
+check_eq "#1271 main moving three times while it waits still ends in a merge" "0" "$rc"
+check_eq "#1271 with one update for the whole burst, not one per move" "2" "$(count gh-calls 'pr update-branch 7')"
+check_eq "#1271 the first update at once, the second 90s after main last moved" "1000000 1000180" "$(tr '\n' ' ' < "$ST/update-times" | sed 's/ $//')"
+check "#1271 it says it is waiting for main to be still" "main still moving" "$out"
+check "#1271 the merge is pinned to the head made after main settled" "--match-head-commit $NEWER" "$(grep 'pr merge' "$ST/gh-calls")"
+check_eq "#1271 the checks gate was asked once, about that pinned head" "1" "$(grep -c "match-head-commit $NEWER" "$ST/red-gate-payloads" 2>/dev/null || echo 0)"
+check_eq "#1271 and never about a head main had moved past" "0" "$(grep -c "match-head-commit $NEW\"" "$ST/red-gate-payloads" 2>/dev/null || true)"
+check "#1271 so was the lessons review gate" "--match-head-commit $NEWER" "$(cat "$ST/review-gate-payloads" 2>/dev/null)"
+check "#1271 and the changelog record gate" "--match-head-commit $NEWER" "$(tail -2 "$ST/changelog-gate-payloads" 2>/dev/null)"
+check "#1271 the review checked was the pinned head's" "check --dir $REPO --sha $NEWER" "$(cat "$ST/review-calls")"
+
+# Its default settle window, with no MWR_SETTLE_SECONDS: five minutes of quiet (a setting, not a
+# measurement).
+fresh "$OLD" 1 "$GREEN"
+printf '%s' "$GREEN" > "$ST/rollup-after-update"
+printf '%s\n%s\n' "$NEW" "$NEWER" > "$ST/next-heads"
+printf '%s\n' "printf 2 > \"\$ST/behind\"; printf m1 > \"\$ST/main-tip\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1271 with the default window it merges" "0" "$rc"
+check_eq "#1271 updating 300s after main last moved" "1000000 1000330" "$(tr '\n' ' ' < "$ST/update-times" | sed 's/ $//')"
+
+# Main moves after every update, four times, each a 20 minute check run apart: five updates, more
+# than the old limit of three, and well past the old one hour deadline, then the merge.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n%s\n%s\n%s\n%s\n' "$NEW" "$NEWER" "$H4" "$H5" "$H6" > "$ST/next-heads"
+for k in 1 2 3 4; do
+  printf '%s\n' "printf '%s' \$(( \$(cat \"\$ST/clock\") + 1200 )) > \"\$ST/clock\"; printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 2 > \"\$ST/behind\"; printf m$k > \"\$ST/main-tip\"" >> "$ST/on-sleep"
+done
+printf '%s\n%s\n' "printf '%s' \$(( \$(cat \"\$ST/clock\") + 1200 )) > \"\$ST/clock\"" "printf '%s' '$GREEN' > \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(MWR_SETTLE_SECONDS=0 run 7 --squash)"; rc=$?
+check_eq "#1271 main moving after each of four updates no longer stops it" "0" "$rc"
+check_eq "#1271 five updates" "5" "$(count gh-calls 'pr update-branch 7')"
+check "#1271 and the newest head is the one merged" "--match-head-commit $H6" "$(grep 'pr merge' "$ST/gh-calls")"
+check_eq "#1271 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+check "#1271 each update is counted as it is made" "update 5" "$out"
+check_not "#1271 with no limit named" "at most" "$out"
+
+# Main never goes still: the deadline still bounds it, and nothing merges.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"
+MOVE='n=$(( $(cat "$ST/n" 2>/dev/null || echo 0) + 1 )); printf %s "$n" > "$ST/n"; printf m%s "$n" > "$ST/main-tip"; printf 1 > "$ST/behind"'
+for _ in $(seq 1 30); do printf '%s\n' "$MOVE" >> "$ST/on-sleep"; done
+out="$(MWR_SETTLE_SECONDS=90 MWR_DEADLINE_SECONDS=300 run 7 --squash)"; rc=$?
+check_eq "#1271 a main that never goes still ends at the deadline, resumable" "3" "$rc"
+check "#1271 saying it is out of time" "Out of time" "$out"
+check "#1271 and that main was still moving" "main still moving" "$out"
+check_eq "#1271 it did not chase main with an update per move" "1" "$(count gh-calls 'pr update-branch 7')"
+check_eq "#1271 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Its default deadline, measured by running it out (L107): three hours, so a busy afternoon of
+# 15 to 30 minute check runs is waited through rather than handed back to a person.
+fresh "$OLD" 0 "$PENDING"
+out="$(MWR_POLL_SECONDS=600 run 7 --squash)"; rc=$?
+default_deadline=$(( $(cat "$ST/clock") - 1000000 ))
+check_eq "#1271 with no deadline set it runs out only after three hours" "3 10800" "$rc $default_deadline"
+
+# THE RATIO (L227): is-it-live asks GitHub about a merge this helper makes in the background for
+# WAIT_MS after the command, so that window must stay well past the helper's deadline, or a merge
+# landing late in the run is never owed its card. Read from the mod's own source, here, so raising
+# either number without the other fails.
+wait_line="$(grep -E '^export const WAIT_MS = ' "$DIR/../mods/is-it-live/hooks/merges.ts" 2>/dev/null)"
+wait_expr="$(printf '%s' "${wait_line#*= }" | tr -d '_ ')"
+if [[ "$wait_expr" =~ ^[0-9*]+$ ]]; then
+  wait_s=$(( wait_expr / 1000 ))
+  [ "$wait_s" -ge $(( 2 * default_deadline )) ] && ok || bad "#1271 is-it-live's WAIT_MS (${wait_s}s) is not at least twice the helper's deadline (${default_deadline}s)"
+else
+  bad "#1271 could not read WAIT_MS from is-it-live's merges.ts (read: '$wait_line')"
 fi
 
 echo
