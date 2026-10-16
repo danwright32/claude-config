@@ -19,7 +19,8 @@ takes an flock on a lock file kept beside its records. An flock is released by t
 holder dies, so a crashed run never leaves a lock somebody has to clear by hand (L409). The lock is
 passed to the check itself too, so it is held for as long as either of them lives. A run that
 finds the lock taken does nothing, and says so only when the holder has been at it longer than
-STALE_WT_STUCK_MINUTES, because a run that never ends blocks every later one in silence.
+STALE_WT_STUCK_MINUTES, because a run that never ends blocks every later one in silence. That is
+said once per stuck run, not once per session that meets it.
 
 WHAT IT WRITES, all beside the lock, in the nudge's state directory, as
 claude-stale-worktrees-repo-<key>.*:
@@ -37,6 +38,7 @@ Environment: STALE_WT_STUCK_MINUTES (default 30), STALE_WT_NOW (the clock, for a
 
 import argparse
 import fcntl
+import glob
 import json
 import os
 import signal
@@ -110,12 +112,25 @@ def run(args):
         started = held.get("started")
         limit = int(os.environ.get("STALE_WT_STUCK_MINUTES", "30") or 30)
         if isinstance(started, int) and "finished" not in held and now() - started >= limit * 60:
+            # One hang is one notice, however many sessions start while it lasts: the first to
+            # notice it creates this run's marker, exclusively, and only that one writes. The
+            # next run to take the lock clears the markers, the hang being over by then.
+            try:
+                os.close(os.open("%s.stuck.%d.%s" % (base, started, held.get("pid", "unknown")),
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            except FileExistsError:
+                return 0
             tell(base, args.repo, now(), [
                 "  a cleanup run started at %s (process %s) is still running %d minutes later, so no "
                 "later run can start until it ends. Its record is %s." % (
                     eastern(started), held.get("pid", "unknown"), (now() - started) // 60, last_path)])
         return 0
 
+    for told in glob.glob(glob.escape(base) + ".stuck.*"):
+        try:
+            os.remove(told)
+        except OSError:
+            pass
     notes = []
     previous = read_record(last_path)
     if previous and isinstance(previous.get("started"), int) and "finished" not in previous:

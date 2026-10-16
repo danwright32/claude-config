@@ -47,9 +47,11 @@
 #
 # Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [repo-dir]
 #
-# Exit 0 = no worktree here holds work that has landed, including when there are none at all.
-# Exit 1 = at least one does: each is named, with what was done about it (removed, or the command
-#          and the reason it was kept), so the caller has something to say.
+# Exit 0 = no worktree here holds work that has landed, including when there are none at all, and
+#          no removal was left part way.
+# Exit 1 = at least one does, or a removal an earlier run started was left part way: each is named,
+#          with what was done about it (removed, finished, or the command and the reason it was
+#          kept), so the caller has something to say.
 # Exit 2 = it could not tell, so nothing is claimed and nothing removed: not a git repo, no gh, or
 #          the merged PR list could not be read. Refusing rather than reporting a clean tree,
 #          because reading nothing and finding nothing wrong are otherwise one answer (L98).

@@ -191,9 +191,16 @@ STUB_GATE="$TMP/gate-stuck" STUB_RC=0 fire s8
 reached "$TMP/gate-stuck" || bad "the stuck run reached its gate"
 STUB_RC=0 fire s9; settle s9; STUB_RC=0 fire s9
 check_eq "a run that has held the lock a moment is not called stuck" "" "$OUT"
-STUB_RC=0 fire s10 STALE_WT_NOW="$(( $(date +%s) + 31 * 60 ))"; settle s10; STUB_RC=0 fire s10
-check "a run that has held the lock past its limit is said to be still running" "still running" "$OUT"
-check "naming the process, so it can be looked at" "process " "$OUT"
+LATE="$(( $(date +%s) + 31 * 60 ))"
+STUB_RC=0 fire s10 STALE_WT_NOW="$LATE"; settle s10
+# A second session meeting the same stuck run says nothing more: one hang is one notice, however
+# many sessions start while it lasts.
+# Counted across every prompt, since the second session's own first prompt says what is waiting.
+STUB_RC=0 fire s10b STALE_WT_NOW="$LATE"; SAID="$OUT"; settle s10b
+STUB_RC=0 fire s10; SAID="$SAID"$'\n'"$OUT"
+check "a run that has held the lock past its limit is said to be still running" "still running" "$SAID"
+check "naming the process, so it can be looked at" "process " "$SAID"
+check_eq "and said once, not once per session that met it" 1 "$(printf '%s\n' "$SAID" | grep -c 'still running' || true)"
 : >"$TMP/gate-stuck"; settle s8
 
 # --- a run that died part way is said -------------------------------------
