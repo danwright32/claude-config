@@ -310,7 +310,7 @@ while :; do
   fi
   if [ "$behind" -gt 0 ] || [ "$(printf '%s' "$view" | jq -r '.mergeStateStatus // ""')" = "BEHIND" ]; then
     # MAIN STILL MOVING: wait for it to be still before updating. Each update starts a fresh check
-    # run of 15 to 30 minutes, and a base still taking merges would leave the new head behind again
+    # run of 15 to 30 minutes (as they ran on 2026-10-16), and a base still taking merges would leave the new head behind again
     # before it finished, so a burst of merges is answered with one update after it, not one each.
     if [ -n "$tip_moved_at" ] && [ $(( $(now) - tip_moved_at )) -lt "$SETTLE" ]; then
       out_of_time "is behind $base, with $base still moving"

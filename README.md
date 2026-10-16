@@ -741,7 +741,7 @@ to the hooks block but not to the helper fails it. It carries only the merge
 method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
 out. A base that keeps moving no longer stops it (claude-config#1271): it used to give up after
-three updates, which on a busy day (several merges at once, 15 to 30 minute check runs) handed the
+three updates, which on a busy day (2026-10-16: several merges at once, 15 to 30 minute check runs) handed the
 restart to a person. The first update is made at once; after that it waits until the base's tip
 has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges costs one fresh check
 run rather than one each, and only the deadline bounds how many updates it makes. is-it-live's

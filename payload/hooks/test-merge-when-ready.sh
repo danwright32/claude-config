@@ -609,7 +609,8 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#1271 with the default window it merges" "0" "$rc"
 check_eq "#1271 updating 300s after main last moved" "1000000 1000330" "$(tr '\n' ' ' < "$ST/update-times" | sed 's/ $//')"
 
-# Main moves after every update, four times, each a 20 minute check run apart: five updates, more
+# Main moves after every update, four times, each a 20 minute check run apart (a fixture, not a
+# measurement): five updates, more
 # than the old limit of three, and well past the old one hour deadline, then the merge.
 fresh "$OLD" 1 "$GREEN"
 printf '%s\n%s\n%s\n%s\n%s\n' "$NEW" "$NEWER" "$H4" "$H5" "$H6" > "$ST/next-heads"
@@ -638,7 +639,7 @@ check_eq "#1271 it did not chase main with an update per move" "1" "$(count gh-c
 check_eq "#1271 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # Its default deadline, measured by running it out (L107): three hours, so a busy afternoon of
-# 15 to 30 minute check runs is waited through rather than handed back to a person.
+# 15 to 30 minute check runs (as on 2026-10-16) is waited through rather than handed back to a person.
 fresh "$OLD" 0 "$PENDING"
 out="$(MWR_POLL_SECONDS=600 run 7 --squash)"; rc=$?
 default_deadline=$(( $(cat "$ST/clock") - 1000000 ))
