@@ -1,6 +1,6 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
-import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'
+import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
 
@@ -221,7 +221,15 @@ const unsend = ($: EngineInterface, n: number, forgetPress = false) =>
 const giveDoneBack = async ($: EngineInterface, n: number) => {
   if (!(await unsend($, n))) return
   await refresh($)
-  $.ui.toast(`Claude did not say whether step ${n + 1} took. Press Done to ask again.`)
+  // #1239: a later step pressed while an earlier one is unfinished is recorded only once the steps
+  // before it are, so its Done comes back saying that rather than that Claude went quiet.
+  const card = (await $.state.get(cardRef)).value ?? null
+  const open = card ? nextStep(card) : undefined
+  $.ui.toast(
+    open !== undefined && open < n
+      ? `Step ${n + 1} is not recorded until every step before it is done. Press its Done again once they are.`
+      : `Claude did not say whether step ${n + 1} took. Press Done to ask again.`,
+  )
 }
 
 // #734: a "step N done" prompt queued behind a running turn and then dropped (Esc drops the queue),
@@ -247,17 +255,19 @@ const armFallback = ($: EngineInterface) => {
 const giveBackDropped = async ($: EngineInterface, mine: number) => {
   if (mine !== armed || runningTurn !== null) return
   const card = (await $.state.get(cardRef)).value ?? null
-  const i = card ? card.steps.findIndex(s => s.isSent) : -1
-  if (i < 0) return
-  // Its turn started: the end of that turn decides, below.
-  if ((await $.state.get(waitingRef)).value?.step === i + 1) return
-  await giveDoneBack($, i)
+  // Several steps can be sent at once (#1239): each whose turn never started comes back.
+  const waiting = (await $.state.get(waitingRef)).value?.step
+  for (const [i, s] of (card?.steps ?? []).entries()) {
+    // Its turn started: the end of that turn decides, below.
+    if (s.isSent && waiting !== i + 1) await giveDoneBack($, i)
+  }
 }
 
-const pressDone = async ($: EngineInterface) => {
+// Done on step `i` (0 based), any unfinished step not already sent (#1239).
+const pressDone = async ($: EngineInterface, i: number) => {
   const n = await change($, card => {
-    const i = card ? nextStep(card) : undefined
-    if (!card || i === undefined || card.steps[i]?.isSent) return { card, out: undefined }
+    const s = card?.steps[i]
+    if (!card || !s || s.finished || s.isSent) return { card, out: undefined }
     return { card: sent(card, i, true), out: i }
   })
   if (n === undefined) return
@@ -273,14 +283,18 @@ const pressDone = async ($: EngineInterface) => {
   armFallback($)
 }
 
-// What each Copy on the open step copies, and what its toast calls it.
+// What each Copy on a step copies, and what its toast calls it.
 const COPIES = { value: 'value', url: 'link' } as const
 
-const pressCopy = async ($: EngineInterface, field: keyof typeof COPIES, surface: string | undefined) => {
-  const card = (await $.state.get(cardRef)).value ?? null
-  const i = card ? nextStep(card) : undefined
-  const text = card && i !== undefined ? card.steps[i]?.[field] : undefined
-  if (i === undefined || !text) return
+// The text of `field` on unfinished step `i` (0 based), the step whose button was pressed (#1239).
+const fieldOf = async ($: EngineInterface, i: number, field: keyof typeof COPIES) => {
+  const s = ((await $.state.get(cardRef)).value ?? null)?.steps[i]
+  return s && !s.finished ? s[field] : undefined
+}
+
+const pressCopy = async ($: EngineInterface, i: number, field: keyof typeof COPIES, surface: string | undefined) => {
+  const text = await fieldOf($, i, field)
+  if (!text) return
   const what = COPIES[field]
   try {
     const r = await $.ui.copy({ text, surface: surface as never })
@@ -290,16 +304,14 @@ const pressCopy = async ($: EngineInterface, field: keyof typeof COPIES, surface
   }
 }
 
-// Open (#1215): the open step's link to macOS's open, which hands it to the default browser. The link
+// Open (#1215): the pressed step's link to macOS's open, which hands it to the default browser. The link
 // is one argument with no shell between, and was refused at handover unless it is a whole http or
 // https address with no space or control character (card.ts), so open only ever gets a web address. Bounded well inside the
 // 10 s a press has, and said either way: opening is not doing the step, so the card stays as it was.
 const OPEN_TIMEOUT_MS = 5000
-const pressOpen = async ($: EngineInterface) => {
-  const card = (await $.state.get(cardRef)).value ?? null
-  const i = card ? nextStep(card) : undefined
-  const url = card && i !== undefined ? card.steps[i]?.url : undefined
-  if (i === undefined || !url) return
+const pressOpen = async ($: EngineInterface, i: number) => {
+  const url = await fieldOf($, i, 'url')
+  if (!url) return
   const failed = (why: string) => $.ui.toast(`Could not open the link for step ${i + 1} (${why}). Copy link still has it.`)
   try {
     const r = await $.process.run(['/usr/bin/open', url], { timeoutMs: OPEN_TIMEOUT_MS })
@@ -377,6 +389,12 @@ const STEP_SCHEMA = {
         'What Dan does there, as a list with one action per item, in order (["Open Terminal", "Paste the command and press Return", "Type /exit"]); the card numbers them under "What to do:". Never join several actions into one sentence. Do not write the label or the numbers.',
     },
     value: { type: 'string', description: 'A value to paste, given a Copy button.' },
+    // #1239: every step is open at once, so one that uses an earlier step's result says so.
+    needs: {
+      type: 'string',
+      description:
+        'Only when this step uses something an earlier step makes: what, in a few words, naming that step (for example "the password made in step 1"). The card draws the "Needs:" label itself, so do not write it.',
+    },
     checked: {
       type: 'string',
       enum: ['already-done', 'not-done', 'cannot-check'],
@@ -388,9 +406,9 @@ const STEP_SCHEMA = {
 
 // The two tools' words, exported so a test can hold them to what Dan asked of them (#872).
 export const STEPS_DESCRIPTION =
-  'Pin manual steps for Dan as a card he works through, instead of listing them in your reply. Put on the card only a step Dan can do now; a step waiting on something else (a merge, a deploy, a later session) stays in the issue, not on the card. Check every step against the current state first (the hand-off rule). Each step needs its direct link, or where there is no page a location Dan can find (the app and the window), plus its actions as a list, one action per item, and any value to paste. The card labels them "Where:" and "What to do:" and numbers the actions, so write no labels or numbers. Pinning replaces the card. When Dan presses Done you receive "step N done": check it took where you can and call steps_done.'
+  'Pin manual steps for Dan as a card he works through, instead of listing them in your reply. Put on the card only a step Dan can do now; a step waiting on something else (a merge, a deploy, a later session) stays in the issue, not on the card. Check every step against the current state first (the hand-off rule). Each step needs its direct link, or where there is no page a location Dan can find (the app and the window), plus its actions as a list, one action per item, and any value to paste. Every step is shown open at once, each with its own Done, so Dan can work ahead: where a step uses something an earlier step makes, say so in its needs. The card labels them "Where:", "What to do:" and "Needs:" and numbers the actions, so write no labels or numbers. Pinning replaces the card. When Dan presses Done you receive "step N done": check it took where you can and call steps_done.'
 export const VERDICT_DESCRIPTION =
-  'Record whether the open manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again). Only the open step (the first one not finished) takes checked, per-you or not-done. When Dan says a step other than the open one is done, do not guess which he means and do not record the steps before it to reach it: a call naming any other step is refused, so ask Dan which step he means, then record only the open one. The card shows when each step finished, and tells a step Dan pressed Done on from one you recorded per you. withdrawn takes any unfinished step off the card undone, at any time, when it cannot be done now; the card shows it as taken off, not done.'
+  'Record whether the open manual step took, after Dan pressed Done ("step N done") or said he did it: checked when you verified it, per-you when it cannot be checked, not-done when you checked and it did not take (the step opens again). Only the open step (the first one not finished) takes checked, per-you or not-done. When Dan says a step other than the open one is done, do not guess which he means and do not record the steps before it to reach it: a call naming any other step is refused, so ask Dan which step he means, then record only the open one. Steps are recorded in order. When Dan pressed Done on a later step while an earlier one is unfinished, that call is refused too: ask Dan whether every earlier step is done; on a yes record each in order, the open step first, and on a no record nothing. The card shows when each step finished, and tells a step Dan pressed Done on from one you recorded per you. withdrawn takes any unfinished step off the card undone, at any time, when it cannot be done now; the card shows it as taken off, not done.'
 export const VERDICT_INPUT = {
   type: 'object',
   properties: { step: { type: 'integer', minimum: 1 }, checked: { type: 'string', enum: [...VERDICTS] } },
@@ -532,6 +550,8 @@ export const register: Register = on => {
     }
     await $.state.set(waitingRef, null)
     await giveDoneBack($, waiting.step - 1)
+    // Another step sent beside it (#1239) may be queued behind this turn, or dropped with it.
+    if ((await $.state.get(cardRef)).value?.steps.some(s => s.isSent)) armFallback($)
     return r
   })
 
@@ -590,12 +610,19 @@ export const register: Register = on => {
   // may not land, mod-kit draws no Open or Copy link and the link wraps whole to be selected. Open
   // hands the link to the default browser (#1215).
   on('modkit.press', async ($, e, next) => {
-    const field = e.element === 'manual-steps:copy' ? 'value' : e.element === 'manual-steps:copy-link' ? 'url' : undefined
-    const isOpen = e.element === 'manual-steps:open-link'
-    if (e.element !== 'manual-steps:done' && !field && !isOpen) return next(e)
+    // Each button names its step (#1239); a bare one, drawn before, names the open step.
+    const card = (await $.state.get(cardRef)).value ?? null
+    const p = pressed(e.element, card ? nextStep(card) : undefined)
+    if (!p) return next(e)
     // Done, Copy and Open each finish well inside a noun's 10 s (#744): a state change, then a prompt
     // sent, a copy or a bounded open, so the press is answered once its work is done.
-    await (isOpen ? pressOpen($) : field ? pressCopy($, field, e.surface) : pressDone($))
+    const i = p.step
+    if (i !== undefined) {
+      if (p.action === 'open-link') await pressOpen($, i)
+      else if (p.action === 'copy') await pressCopy($, i, 'value', e.surface)
+      else if (p.action === 'copy-link') await pressCopy($, i, 'url', e.surface)
+      else await pressDone($, i)
+    }
     return { value: { isAnswered: true } }
   })
 
