@@ -15,9 +15,10 @@ import { clientRefusal, sqlRefusal } from './sql.ts'
 
 /**
  * One simple command, as `$.modkit.pipeline` gives it, with `$.modkit.git`'s reading when it is git
- * and `$.modkit.gh`'s readings (#961): `gh`, the words it runs gh with (ghWords), and `mergeHelper`,
- * the merge helper's arguments as `gh pr merge` reads them (helperWords). Each is read once per
- * command, beside the pipeline, and absent where the command runs neither.
+ * and its gh readings (#961): `gh`, `$.modkit.gh`'s reading of the words it runs gh with (ghWords),
+ * and `mergeHelper`, `$.modkit.mergeHelper`'s reading of the `gh pr merge` the merge helper runs,
+ * which mod-kit alone finds (#1251). Each is read once per command, beside the pipeline, and absent
+ * where the command runs neither.
  */
 export type Cmd = ModKitCommand & { git?: { sub?: string; args: string[]; dir?: string }; gh?: ModKitGh; mergeHelper?: ModKitGh }
 
@@ -26,15 +27,6 @@ export const ghWords = (words: readonly string[]): string[] | undefined => {
   let w = [...words]
   while (['npx', 'bunx'].includes(name(w[0]))) w = w.slice(1).filter((x, i) => i > 0 || !x.startsWith('-'))
   return name(w[0]) === 'gh' ? w : undefined
-}
-
-const HELPER = /(?:^|\/)merge-when-ready\.sh$/
-/** Whether a command runs the merge helper, which merges by gh inside a script no reader sees. */
-export const runsHelper = (words: readonly string[]): boolean => words.some(w => HELPER.test(w))
-/** The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them: those words, or undefined when it is not run. */
-export const helperWords = (words: readonly string[]): string[] | undefined => {
-  const at = words.findIndex(w => HELPER.test(w))
-  return at < 0 ? undefined : ['gh', 'pr', 'merge', ...words.slice(at + 1)]
 }
 
 /** The value of a flag gh read, by any of its names (the last one given wins, as in gh); undefined when absent. */
