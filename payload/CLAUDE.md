@@ -112,6 +112,7 @@ Dan does not write code or live in the terminal. When a step genuinely requires 
 - Use 2 space indentation where no config exists.
 - TypeScript everywhere. Avoid `any`.
 - **Consolidate from the start.** Before building something, check whether it duplicates logic that already exists (or that you are about to write twice) and reuse/share one implementation instead. Do not create a second copy of the same behavior and leave consolidation as a later cleanup. Dan has flagged repeated "two things doing the same job" more than once.
+- **Interlocking screen state goes in a tested reducer.** When a screen holds many pieces of state that change together (roughly ten or more, or a multi step flow with loading, failed and retry states), keep the rules for how it changes in one pure function the UI only sends events to, and test that function directly. A simple form or a few independent values stays as plain state. (Dan, 2026-10-16. Evaluation issues in the personal app repos may refine this.)
 
 ## Bug Fixes & Learning
 
