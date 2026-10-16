@@ -187,6 +187,10 @@ test('a write through a variable the command first sets to one literal temporary
   expect(await throughS(`S="${SP}"; cp payload/LESSONS.md "$S/LESSONS.md"`)).toEqual([])
   expect(await throughS(`S='${SP}' && cp payload/LESSONS.md \${S}/LESSONS.md`, '${S}/LESSONS.md')).toEqual([])
   expect(await throughS(`D=/private/tmp/x S=${SP}\ncp payload/LESSONS.md $S/LESSONS.md`)).toEqual([])
+  // A folder under home by ~/, which an assignment expands, is judged where it lands too: a notes file
+  // there beside a command naming LESSONS.md is no save, and CLAUDE.md there is one.
+  expect(await throughS('S=~/notes; cp payload/LESSONS.md $S/notes.txt', '$S/notes.txt', '/Users/dan/notes/notes.txt')).toEqual([])
+  expect(await throughS('S=~/.claude; cp payload/LESSONS.md $S/CLAUDE.md', '$S/CLAUDE.md', '/Users/dan/.claude/CLAUDE.md')).toEqual(['~/.claude/CLAUDE.md'])
   // The same folder inside a checkout there is a session's lasting memory, and is asked about.
   expect(await throughS(`S=/tmp/repo; cp payload/LESSONS.md $S/LESSONS.md`, '$S/LESSONS.md', '/tmp/repo/LESSONS.md')).toEqual(['/tmp/repo/LESSONS.md'])
 })
