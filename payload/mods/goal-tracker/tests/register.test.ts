@@ -105,7 +105,7 @@ type WorldOpts = {
   asleep?: boolean | 'throws' | 'typeerror'
 }
 const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
-  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
+  const w = { progress: [] as Rec[], attempts: 0, notified: [] as string[][], notifyTimeouts: [] as (number | undefined)[], logs: [] as string[], debug: [] as string[], duringPermission: undefined as Rec | undefined, answer: undefined as (() => void) | undefined, lint: undefined as (() => void) | undefined }
   let writes = 0
   on('process.run', ($, e) => {
     // mod-kit's reader, as the stand-in above asks it: mod-kit's own copy (#1135).
@@ -115,6 +115,7 @@ const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
     }
     if (e.argv[0] === 'terminal-notifier') {
       w.notified.push(e.argv.slice(1))
+      w.notifyTimeouts.push(e.init?.timeoutMs)
       if (opts.notifyFails) return { value: { exitCode: 1, stdout: '', stderr: 'terminal-notifier: no permission to notify', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] === '__asleep') {
@@ -1404,6 +1405,17 @@ test('the noun sends one notification, titled as a question is, and says it was 
   await start($)
   expect(await tellDan($, PINNED)).toEqual({ isSent: true })
   expect(w.notified).toEqual([['-title', 'Ovation is waiting on you', '-message', PINNED]])
+})
+
+// Claude Code cuts a noun call off at 10 s (#744) and the clock runs through every $ call, so the
+// notifier the noun waits on is bounded well under it, leaving the sleep check and the project room.
+test('the notifier the noun waits on is bounded under half of a noun call\'s 10 s (#1245, #744)', withCaller, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { asleep: false })
+  await start($)
+  await tellDan($, PINNED)
+  expect(w.notifyTimeouts.length).toBe(1)
+  expect(w.notifyTimeouts[0]).toBeLessThanOrEqual(5_000)
 })
 
 test('while asleep the noun sends nothing and says why (#1245, #841)', withCaller, async ($, on) => {
