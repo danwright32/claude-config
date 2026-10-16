@@ -1942,6 +1942,50 @@ _cpu_field(){   # 0m12.34s -> whole seconds, or nothing
 # figure is got out (L196: a component that constructs its own context is beyond what the caller
 # can see).
 SUITE_CPU_SECONDS=""
+# HOW BUSY THE MACHINE WAS, which decides whether the processor time above can be trusted at all
+# (claude-config#1259). Processor time does not move with ordinary load, but under heavy contention
+# it inflates too: on 2026-10-16 a run cost 2536s of section time against a 2520s budget with 1379s
+# of processor time, at a load average of 59.86 on 12 cores while other sessions ran their suites,
+# and passed on a rerun with nothing changed. Red there cannot be told from a suite that grew, so
+# both guards below report such a run as UNMEASURED, with the figure they saw, rather than failing
+# it (L411). Busy is the shared reader's one predicate (payload/hooks/lib/load-average.sh, L370),
+# judged on the load BEYOND this suite's own shards: its own work competing with itself is part of
+# what it costs, and on CI's two cores the shards alone already pass the core count, where a
+# predicate counting them would switch both guards off on the one machine they were calibrated on
+# (L551). Only consulted where a guard is about to fail, so a quiet day reads nothing. Found beside
+# $SCRIPT, as suite-deadline.sh is, and a copy without it judges as before and says the figure is
+# missing (L90).
+if [ -f "$(dirname "$SCRIPT")/payload/hooks/lib/load-average.sh" ]; then
+  . "$(dirname "$SCRIPT")/payload/hooks/lib/load-average.sh"
+else
+  load_average_one_minute(){ return 0; }
+  load_average_cores(){ return 0; }
+  load_average_busy(){ return 1; }
+fi
+SUITE_LOAD_FIGURE=""
+SUITE_LOAD_CORES=""
+# Exits 0 when the machine was busier than its cores beyond this suite's own shards, and leaves the
+# figures it read in SUITE_LOAD_FIGURE and SUITE_LOAD_CORES (empty where they could not be read).
+suite_load_busy(){
+  SUITE_LOAD_FIGURE="$(load_average_one_minute)"
+  SUITE_LOAD_CORES="$(load_average_cores)"
+  load_average_busy "$SUITE_LOAD_FIGURE" "$SUITE_LOAD_CORES" "${SUITE_JOBS:-1}"
+}
+# The load a refusal carries beside its figures, so a red on a loaded machine says so (L356).
+suite_load_said(){
+  if [ -z "$SUITE_LOAD_FIGURE" ]; then printf 'load average that could not be read, so whether the machine was busy is unknown'
+  elif [ -z "$SUITE_LOAD_CORES" ]; then printf 'load average of %s (the core count could not be read)' "$SUITE_LOAD_FIGURE"
+  else printf 'load average of %s on %s cores (%s of it this suite'"'"'s own shards)' "$SUITE_LOAD_FIGURE" "$SUITE_LOAD_CORES" "${SUITE_JOBS:-1}"
+  fi
+}
+# Says a guard's red was not judged, on stderr and as a SUITE-NOTE, since run-all-tests.sh carries
+# that line to CI and drops plain stderr (claude-config#505).
+suite_load_unmeasured(){   # $1 = what was not judged, in words
+  local _lu_msg
+  _lu_msg="UNMEASURED: $1, but it ran at a $(suite_load_said), more than the machine has cores beyond those shards, and processor time inflates too on a machine that busy, so whether the suite has grown is NOT known (claude-config#1259). Not treated as a failure; run it again on a quieter machine to judge it."
+  echo "test suite: $_lu_msg" >&2
+  printf 'SUITE-NOTE %s\n' "$_lu_msg"
+}
 # What the end of a full run says about the deadline's headroom, and whether that fails the run.
 #
 # A FUNCTION rather than a block at the end of the fan-out (claude-config#167). It has three things
@@ -1974,13 +2018,18 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
   esac
   [ "$ceiling" -lt $(( elapsed * 2 )) ] || return 0
   if [ $(( cpu * 2 )) -ge "$elapsed" ]; then
+    # On a machine busier than its cores the processor time is no witness either (#1259).
+    if suite_load_busy; then
+      suite_load_unmeasured "this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, with ${cpu}s of processor time"
+      return 0
+    fi
     # PREFIXED "FAIL:", because that prefix is a marker read by code rather than decoration
     # (L199). run-all-tests.sh prints only the lines of a suite's output matching `^ *(FAIL|not
     # ok)`, so this refusal, which is the whole reason the run exits non-zero, reached nobody: the
     # job log showed the suite reporting "2043 passed, 0 failed" and exiting 1 with no cause
     # anywhere in it. That cost three CI cycles on 2026-09-19 before the reason was found by
     # calling this function by hand (claude-config#473).
-    echo "FAIL: test suite: this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, and ${cpu}s of that was the suite's own work. It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
+    echo "FAIL: test suite: this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, which is less than twice it, and ${cpu}s of that was the suite's own work, at a $(suite_load_said). It has grown into its own deadline rather than waited on a busy machine. Raise SUITE_TIMEOUT, or find what got slower." >&2
     return 1
   fi
   echo "test suite: note, this run took ${elapsed}s of wall clock against a ${ceiling}s deadline, but only ${cpu}s of processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
@@ -2133,10 +2182,16 @@ suite_work_report(){   # $1 = section seconds  $2 = the ceiling  $3 = processor 
     echo "test suite: note, this run's sections cost ${work}s between them, past their ${budget}s budget, but only ${cpu}s of that was the suite's own processor time, so the machine was busy with something else rather than the suite having grown. Not treated as a failure." >&2
     return 0
   fi
+  # And on a machine busier than its cores the processor time is no witness either: the 2026-10-16
+  # red, 2536s past 2520s with 1379s of processor time at load 59.86 on 12 cores (#1259).
+  if suite_load_busy; then
+    suite_load_unmeasured "this run's sections cost ${work}s between them, past their ${budget}s budget, with ${cpu}s of processor time"
+    return 0
+  fi
   # PREFIXED "FAIL:" because that prefix is read by code, not decoration (L199): run-all-tests.sh
   # prints only the lines matching FAIL or not ok, so a refusal without it exits non-zero with its
   # cause nowhere in the log. That cost three CI cycles for the guard above on 2026-09-19.
-  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time, so it has grown rather than waited on a busy machine. Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
+  echo "FAIL: test suite: this run's sections cost ${work}s of section time between them, against a budget of ${budget}s (${SUITE_WORK_BUDGET_PCT}% of the ${ceiling}s ceiling), and ${cpu}s of that was the suite's own processor time at a $(suite_load_said), so it has grown rather than waited on a busy machine. Sharding divides the wall clock and hides this, so it is measured undivided. Find what was added and make it cheaper, share a fixture with the section beside it, or raise SUITE_WORK_BUDGET_PCT deliberately and say why." >&2
   return 1
 }
 
@@ -16292,7 +16347,9 @@ section "== how much WORK this run is, against a budget that scales with its cei
 #
 # Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
 # neighbour's variable passes until the day the deal changes.
-_wb(){ suite_work_report "$1" "$2" "${3-2000}" 2>&1; }
+# A quiet machine, set rather than measured, so a check below cannot turn on how busy this Mac is
+# (L290, L411): the budget now asks the load average whether its reading can be trusted (#1259).
+_wb(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "${3-2000}" 2>&1; }
 
 # Under budget says NOTHING. A report printed on every run is one nobody reads (L36), and this one
 # has to stay quiet on the ordinary day or it stops being a signal.
@@ -16365,6 +16422,42 @@ _wb_nocpu="$(_wb 3000 3600 '')"; _wb_nocpu_rc=$?
 check "#492 an unreadable processor time is said, not assumed" "[ -n \"\$_wb_nocpu\" ]"
 check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_nocpu_rc' -eq 0 ]"
 
+# A MACHINE BUSIER THAN ITS CORES MAKES THE PROCESSOR TIME UNTRUSTWORTHY TOO (claude-config#1259).
+# The check above trusts processor time to say whose the section time was, and under heavy
+# contention it inflates as well: on 2026-10-16 a run cost 2536s against a 2520s budget with 1379s
+# of processor time, at a load average of 59.86 on 12 cores while other sessions ran suites, and
+# passed on a rerun with nothing changed. Red there cannot be told from a suite that grew, so it is
+# reported as UNMEASURED with the load it saw, and only the load beyond this suite's own shards
+# counts, since its own work competing with itself is what the budget exists to see (L411). The
+# load is SET here through the shared reader's seam, never measured (L290).
+_wbl(){ LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" 2>&1; }
+_wbl_busy="$(_wbl 2536 3600 1379 59.86)"; _wbl_busy_rc=$?
+check "#1259 the 2026-10-16 run, past budget at load 59.86 on 12 cores, does not fail" "[ '$_wbl_busy_rc' -eq 0 ]"
+check "#1259 and it is not dressed as a failure" "! printf '%s\n' \"\$_wbl_busy\" | grep -q '^FAIL:'"
+check "#1259 and it says the budget was UNMEASURED" "case \"\$_wbl_busy\" in *UNMEASURED*) true ;; *) false ;; esac"
+check "#1259 and records the load it saw, the cores, and the figures it could not judge" \
+  "line_has \"\$_wbl_busy\" '59.86' '12 cores' '2536' '2520' '1379'"
+# It reaches CI: run-all-tests.sh carries a SUITE-NOTE line and drops plain stderr.
+check "#1259 and it is carried to CI as a marked note" \
+  "printf '%s\n' \"\$_wbl_busy\" | grep -q '^SUITE-NOTE .*UNMEASURED.*59.86'"
+# The positive control in the same shape (L159): the same figures on a quiet machine still fail.
+_wbl_quiet="$(_wbl 2536 3600 1379 10.00)"; _wbl_quiet_rc=$?
+check "#1259 the same figures on a quiet machine still fail" "[ '$_wbl_quiet_rc' -eq 1 ]"
+check "#1259 and say so where the runner prints it" "case \"\$_wbl_quiet\" in FAIL:*) true ;; *) false ;; esac"
+# The suite's own shards are no excuse: 15 on 12 cores with its 4 shards is 11 beyond them.
+_wbl_own="$(_wbl 2536 3600 1379 15.00)"; _wbl_own_rc=$?
+check "#1259 load that is only the suite's own shards still fails" "[ '$_wbl_own_rc' -eq 1 ]"
+_wbl_edge="$(_wbl 2536 3600 1379 17.00)"; _wbl_edge_rc=$?
+check "#1259 and load beyond them that passes the cores does not" "[ '$_wbl_edge_rc' -eq 0 ]"
+# An unreadable load must not be what excuses a red: it fails as before, and says so.
+_wbl_none="$(_wbl 2536 3600 1379 high)"; _wbl_none_rc=$?
+check "#1259 an unreadable load average does not excuse the run" "[ '$_wbl_none_rc' -eq 1 ]"
+check "#1259 and the refusal says the load could not be read" \
+  "case \"\$_wbl_none\" in *'load average that could not be read'*) true ;; *) false ;; esac"
+# Under budget, a busy machine changes nothing: still silent.
+_wbl_under="$(_wbl 500 3600 400 59.86)"
+check "#1259 a run inside its budget says nothing however busy the machine" "[ -z \"\$_wbl_under\" ]"
+
 # THE NUMBER HAS TO BE VISIBLE, or nobody can tell a guard that measured and passed from one that
 # measured nothing and passed (L98, L557). Measured on CI on 2026-09-19: the sharded run's own
 # SUITE-WORK lines never reach the job log, because run-all-tests.sh prints only the lines matching
@@ -16420,8 +16513,9 @@ section "== the end-of-run headroom report, watched saying each thing it can say
 # machine. The numbers are the ones actually measured on 2026-08-22 rather than convenient ones:
 # 348 seconds of wall clock idle, and 1943 under load 160 to 188 with only 262 of those seconds the
 # suite's own work (L48).
-_hd_say(){ suite_headroom_report "$1" "$2" "$3" 2>&1; }
-_hd_rc(){ suite_headroom_report "$1" "$2" "$3" >/dev/null 2>&1; }
+# A quiet machine, set rather than measured, for the same reason as the budget's checks (#1259).
+_hd_say(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report "$1" "$2" "$3" 2>&1; }
+_hd_rc(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report "$1" "$2" "$3" >/dev/null 2>&1; }
 
 # Idle, against the shipped ceiling. Nothing to say, and saying nothing has to be an outcome this
 # can actually reach, or every check below is about a function that always speaks.
@@ -16461,6 +16555,15 @@ _hd_rc 1943 971 3600; _hd_edge_lo=$?
 _hd_rc 1943 972 3600; _hd_edge_hi=$?
 check "#167 just under half the wall clock is the machine's fault, not the suite's" "[ '$_hd_edge_lo' -eq 0 ]"
 check "#167 and just over it is the suite's"                                        "[ '$_hd_edge_hi' -ne 0 ]"
+
+# The wall clock guard trusts the same processor time, so a machine busier than its cores beyond
+# the suite's own shards makes its red UNMEASURED too (claude-config#1259), and only then.
+_hd_busy="$(LOAD_AVERAGE_CMD="echo 59.86" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 2>&1)"; _hd_busy_rc=$?
+check "#1259 a run that filled its deadline on a machine past its cores does not fail" "[ '$_hd_busy_rc' -eq 0 ]"
+check "#1259 and says UNMEASURED with the load it saw" "line_has \"\$_hd_busy\" 'UNMEASURED' '59.86' '12 cores'"
+check "#1259 and is carried to CI as a marked note" "printf '%s\n' \"\$_hd_busy\" | grep -q '^SUITE-NOTE .*UNMEASURED'"
+_hd_quiet_rc=0; LOAD_AVERAGE_CMD="echo 10.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 >/dev/null 2>&1 || _hd_quiet_rc=$?
+check "#1259 and the same run on a quiet machine still fails" "[ '$_hd_quiet_rc' -ne 0 ]"
 
 # A reader that came back with nothing has measured nothing, and nothing must never read as a
 # figure of zero: zero clears every headroom test there is, so a broken reader would be
