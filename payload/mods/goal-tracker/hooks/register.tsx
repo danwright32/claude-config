@@ -79,6 +79,10 @@ const isAsleep = async ($: EngineInterface): Promise<boolean> => {
     return false
   }
 }
+// How long terminal-notifier may take, which answers in well under a second. Under half of the 10 s
+// Claude Code gives a noun call (#744, #1245), since the noun below sends through here and its clock
+// runs through every $ call it makes, the sleep check and the project's name included.
+const NOTIFY_MS = 5_000
 const ASLEEP = 'the Mac is asleep (sleep mode)'
 // Why the notification was not sent, or undefined once terminal-notifier took it.
 const notify = async ($: EngineInterface, title: string, message: string, sound?: string): Promise<string | undefined> => {
@@ -91,7 +95,7 @@ const notify = async ($: EngineInterface, title: string, message: string, sound?
   try {
     // A value starting with a dash would be read as an option, so it is led by a space (lessons review).
     const text = (v: string) => (v.startsWith('-') ? ` ${v}` : v)
-    const r = await $.process.run(['terminal-notifier', '-title', text(title), '-message', text(message), ...(sound ? ['-sound', sound] : [])], { timeoutMs: 10_000 })
+    const r = await $.process.run(['terminal-notifier', '-title', text(title), '-message', text(message), ...(sound ? ['-sound', sound] : [])], { timeoutMs: NOTIFY_MS })
     if (r.exitCode !== 0) why = r.stderr.trim() || `terminal-notifier exited ${r.exitCode}`
   } catch (err) {
     why = err instanceof Error ? err.message : String(err)
