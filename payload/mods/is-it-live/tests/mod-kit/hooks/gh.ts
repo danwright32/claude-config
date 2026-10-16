@@ -1,3 +1,5 @@
+import { pipeline, type Command } from './commands.ts'
+import { SHELLS } from './program.ts'
 import { ghRepo, linkRepo } from './repo.ts'
 
 // The one reading of a gh command's arguments (#834, moved here from scope-modes in #961): every
@@ -159,6 +161,70 @@ export const flagOf = (a: GhArgs, ...names: string[]): string | true | undefined
 
 /** Whether any of these flags was given. */
 export const hasFlag = (a: GhArgs, ...names: string[]): boolean => a.flags.some(f => names.includes(f.name))
+
+// The merge helper (payload/hooks/lib/merge-when-ready.sh) merges by `gh pr merge` inside a script
+// no reader sees, handing it every word after its own name. It is found here alone (#1251: scope
+// modes and is it live each found it by its file's name themselves), in one command as the pipeline
+// reader gives it, its wrappers (rtk, env, sudo, nohup, timeout, xargs, find -exec) already taken off
+// and a shell's -c read as the commands it runs. Only a command that RUNS it counts (Dan,
+// 2026-10-16, narrowing the overnight merge ban): its file as the program, or as the script a shell,
+// `source` or `.` runs. One that reads or names the file (cat, grep, an editor, an argument to
+// another script) runs nothing. One that may run it but cannot be read for certain (a program or a
+// shell's script that is a variable, a substitution, a pattern or xargs' input, a shell fed what it
+// cannot read, eval of a variable, inline code that runs a process and names the helper) counts as
+// running it, its reading `unreadable` with a repository that cannot be told (null).
+const MERGE_HELPER = /(?:^|\/)merge-when-ready\.sh$/
+const MERGE_HELPER_NAMED = /merge-when-ready/
+// A word whose value the shell decides: a substitution anywhere, or a variable in its last part
+// (`$VENV/bin/python` is a python whatever $VENV is); for a file a shell runs, a pattern or xargs'
+// placeholder too (a program named `[` is the test command, never a pattern).
+const substituted = (w: string): boolean => /`|\$\(/.test(w)
+const unknownProgram = (w: string): boolean => substituted(w) || (w.split('/').pop() ?? '').includes('$')
+const unknownFile = (w: string): boolean => substituted(w) || /[$*?[{]/.test(w.split('/').pop() ?? '')
+const RUNNERS = new Set([...SHELLS, 'fish'])
+const SOURCES = new Set(['source', '.'])
+type HelperCommand = Pick<Command, 'words' | 'script' | 'program' | 'xargs' | 'verdict'>
+
+/** The `gh pr merge` a command runs through the merge helper, read as gh reads it; undefined when it runs no helper. */
+export const mergeHelperArgs = (c: HelperCommand): GhArgs | undefined => {
+  const words = c.words
+  const program = words[0]
+  if (program === undefined) return undefined
+  const ran = (at: number) => ghArgs(['gh', 'pr', 'merge', ...words.slice(at + 1)]) as GhArgs
+  const unsure = (): GhArgs => ({ ...(ghArgs(['gh', 'pr', 'merge']) as GhArgs), named: null, unreadable: true })
+  // xargs adds words from its input after those written, which may name another repository.
+  const ranAt = (at: number) => (c.xargs ? unsure() : ran(at))
+  if (MERGE_HELPER.test(program)) return ranAt(0)
+  if (unknownProgram(program)) return unsure()
+  const name = program.split('/').pop() as string
+  if (name === 'eval') {
+    // What eval runs, read as a line of its own.
+    for (const inner of pipeline(words.slice(1).join(' '))) {
+      const h = mergeHelperArgs(inner)
+      if (h) return h
+    }
+    return undefined
+  }
+  if (RUNNERS.has(name) || SOURCES.has(name)) {
+    // The file it runs: the reader's script, else (for source, ., and a shell it does not know) its
+    // first operand.
+    const operand = words.slice(1).find(w => !w.startsWith('-'))
+    const files = c.script?.files ?? (operand !== undefined ? [operand] : [])
+    const helper = files.find(f => MERGE_HELPER.test(f))
+    if (helper !== undefined) {
+      // Fed on standard input, the words after it are not what it is handed.
+      const at = c.script?.stdin ? -1 : words.indexOf(helper)
+      return at < 0 ? unsure() : ranAt(at)
+    }
+    if (files.some(unknownFile)) return unsure()
+    if (c.program && 'unreadable' in c.program) return unsure()
+    if (c.xargs && !files.length) return unsure()
+    return undefined
+  }
+  // Inline code that runs a process (or cannot be read) and names the helper.
+  if (c.verdict && c.verdict.does !== 'write files' && c.program && 'text' in c.program && MERGE_HELPER_NAMED.test(c.program.text)) return unsure()
+  return undefined
+}
 
 const FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field']
 const API = 'https://api.github.com/'

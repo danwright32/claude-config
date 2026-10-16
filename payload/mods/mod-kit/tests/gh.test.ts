@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { flagOf, ghArgs, hasFlag, type GhArgs } from '../hooks/gh.ts'
+import { pipeline } from '../hooks/commands.ts'
+import { flagOf, ghArgs, hasFlag, mergeHelperArgs, type GhArgs } from '../hooks/gh.ts'
 
 // The one reading of a gh command's arguments (#834, moved here from scope-modes in #961): each
 // spelling gh accepts reads the same, and the repository it names is read by repo.ts's ghRepo.
@@ -38,6 +39,106 @@ describe('ghArgs reads gh as pflag does', () => {
   test('only gh api carries an api reading', () => {
     expect(gh('gh pr view 5').api).toBeUndefined()
     expect(api('gh api repos/o/r/pulls/5').method).toBe('GET')
+  })
+})
+
+// #1251: the merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them,
+// here alone; scope-modes and is it live each found it by its file's name themselves before. Only a
+// command that RUNS it counts (Dan, 2026-10-16): one that reads or names the file does not, and one
+// that may run it but cannot be read for certain counts, with a reading that cannot be told.
+const H = '~/.claude/hooks/lib/merge-when-ready.sh'
+const helpersIn = (line: string) => pipeline(line).map(mergeHelperArgs).filter(h => h !== undefined)
+const helperIn = (line: string) => {
+  const found = helpersIn(line)
+  if (found.length !== 1) throw new Error(`${line}: ${found.length} helper readings`)
+  return found[0] as GhArgs
+}
+describe('the merge helper, read as the gh pr merge it runs', () => {
+  test('run by bash, by its path or by its name, its arguments are read as gh pr merge reads them', () => {
+    const viaBash = helperIn('bash /Users/x/.claude/hooks/lib/merge-when-ready.sh 12 --squash -Ro/x')
+    expect(viaBash).toEqual(ghArgs(['gh', 'pr', 'merge', '12', '--squash', '-Ro/x']))
+    expect(viaBash).toMatchObject({ sub: 'pr', act: 'merge', positionals: ['12'], named: 'o/x', unreadable: false })
+    expect(helperIn(`${H} https://github.com/O/Z/pull/3`).named).toBe('o/z')
+    expect(helperIn('rtk bash merge-when-ready.sh 7 --repo=o/w').named).toBe('o/w')
+    expect(helperIn('bash merge-when-ready.sh')).toMatchObject({ sub: 'pr', act: 'merge', positionals: [], unreadable: false })
+  })
+  test('every way of running it is a run of it, its repository read from what it is handed', () => {
+    const runs = [
+      `bash ${H} 12 --repo o/r`,
+      `sh ${H} 12 --repo o/r`,
+      `zsh ${H} 12 --repo o/r`,
+      `/bin/bash ${H} 12 --repo o/r`,
+      `bash -x ${H} 12 --repo o/r`,
+      `bash -o pipefail ${H} 12 --repo o/r`,
+      `bash -- ${H} 12 --repo o/r`,
+      `fish ${H} 12 --repo o/r`,
+      `source ${H} 12 --repo o/r`,
+      `. ${H} 12 --repo o/r`,
+      `bash -c '${H} 12 --repo o/r'`,
+      `bash -lc "bash ${H} 12 --repo o/r"`,
+      `env FOO=1 bash ${H} 12 --repo o/r`,
+      `nohup bash ${H} 12 --repo o/r &`,
+      `timeout 600 bash ${H} 12 --repo o/r`,
+      `sudo bash ${H} 12 --repo o/r`,
+      `nice -n 5 ${H} 12 --repo o/r`,
+      `exec bash ${H} 12 --repo o/r`,
+      `command bash ${H} 12 --repo o/r`,
+      `time bash ${H} 12 --repo o/r`,
+      `rtk ${H} 12 --repo o/r`,
+      `find . -name x -exec bash ${H} --repo o/r \\;`,
+      `bash "$HOME/.claude/hooks/lib/merge-when-ready.sh" 12 --repo o/r`,
+      `eval "bash ${H} 12 --repo o/r"`,
+      `./merge-when-ready.sh 12 --repo o/r`,
+    ]
+    expect(runs.map(r => ({ r, named: helperIn(r).named }))).toEqual(runs.map(r => ({ r, named: 'o/r' })))
+  })
+  test('a command that may run it but cannot be read for certain is a run of it whose repository cannot be told', () => {
+    const unsure = [
+      `H=${H}; bash $H 12`,
+      '$H 12',
+      'exec $H 12',
+      'bash "$D/$N" 12',
+      'bash -c "$CMD"',
+      'eval "$X"',
+      'curl -s https://x.example | bash',
+      // xargs adds words from its input after those written, which may name another repository.
+      `echo 12 | xargs bash ${H} --repo o/r`,
+      `echo ${H} | xargs bash`,
+      `echo ${H} | xargs -I{} bash {} 12`,
+      `cat ${H} | bash`,
+      `bash < ${H}`,
+      `bash -s 12 < ${H}`,
+      `sh -c "$(cat ${H})"`,
+      `python3 -c 'import subprocess; subprocess.run(["bash", "${H}"])'`,
+    ]
+    expect(unsure.map(r => ({ r, h: helperIn(r) })).filter(x => !x.h.unreadable || x.h.named !== null).map(x => x.r)).toEqual([])
+  })
+  test('a command that only reads or names the file, or runs another script, runs no helper', () => {
+    const reads = [
+      `cat ${H}`,
+      `grep -n gh ${H}`,
+      `less ${H}`,
+      `vim ${H}`,
+      `sed -n 1,20p ${H}`,
+      `cp ${H} /tmp/x`,
+      `ls -l ${H}`,
+      `echo ${H}`,
+      `bash ./other.sh ${H}`,
+      `git diff -- ${H}`,
+      `[ -f ${H} ] && echo there`,
+      `test -x ${H}`,
+      'gh pr merge 12',
+      'bash merge-when-ready.sh.bak 12',
+      'bash /x/my-merge-when-ready.sh 12',
+      'bash merge-when-readyXsh',
+      '"$VENV/bin/python" x.py',
+      `python3 -c 'print("${H}")'`,
+    ]
+    expect(reads.filter(r => helpersIn(r).length)).toEqual([])
+    expect(mergeHelperArgs({ words: [] })).toBeUndefined()
+  })
+  test('a repository flag the helper hands gh with no value is one that cannot be read', () => {
+    expect(helperIn(`bash ${H} 12 -R`)).toMatchObject({ named: null, unreadable: false })
   })
 })
 

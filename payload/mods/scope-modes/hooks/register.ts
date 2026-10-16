@@ -12,7 +12,7 @@ import type {
   ScopeModesTarget,
 } from '../types/index.d.ts'
 import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
-import { EDITORS, ghWords, helperWords, noBuildRefusal, type Cmd } from './nobuild.ts'
+import { EDITORS, ghWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
   closedSentence,
@@ -1656,8 +1656,11 @@ const hold = async ($: EngineInterface, label: string, prompt: string) => {
 // feeds it (#724), the program it runs and what that program can do, a shell's script read as the
 // commands it runs (its -c, a heredoc, a here-string, or what echo, printf or cat pipes in), and
 // what a find -exec runs read as a command of its own, so this mod keeps no reader of its own
-// (L613). Each is given its git reading, and its gh readings (#961): the words it runs gh with and
-// the merge helper's arguments, each read once here by mod-kit's one reader of gh's arguments.
+// (L613). Each is given its git reading, and its gh readings (#961): the words it runs gh with, read
+// by mod-kit's one reader of gh's arguments, and the merge helper, which mod-kit alone finds and
+// reads as the gh pr merge it runs (#1251). Every command is asked, since only mod-kit can say which
+// runs the helper; a reading mod-kit cannot give throws, and every check judging a call refuses it
+// (or leaves its permission prompt for Dan) on a throw, so no merge is judged unread (L42, #961).
 const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => {
   const out: Cmd[] = []
   for (const c of await $.modkit.pipeline({ command: raw })) {
@@ -1666,8 +1669,7 @@ const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => 
     const ghAt = ghWords(c.words)
     const gh = ghAt ? await $.modkit.gh({ words: ghAt }) : undefined
     if (gh) cmd.gh = gh
-    const helperAt = helperWords(c.words)
-    const helper = helperAt ? await $.modkit.gh({ words: helperAt }) : undefined
+    const helper = await $.modkit.mergeHelper(c)
     if (helper) cmd.mergeHelper = helper
     out.push(cmd)
   }

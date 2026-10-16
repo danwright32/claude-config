@@ -59,6 +59,7 @@ const modKit: { name: string; register: Register } = {
         workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
         repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+        mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
         ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
         branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },

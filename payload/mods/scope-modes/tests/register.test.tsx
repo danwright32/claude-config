@@ -1,12 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { GOAL_MARK, goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
 import { SLEEP_START } from '../hooks/driver.ts'
-import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
@@ -61,6 +61,7 @@ const deps: { name: string; register: Register } = {
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
           gh: async (input: { words: string[] }) => kit('gh', input),
+          mergeHelper: async (command: Command) => kit('mergeHelper', command),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
           linkRepo: async (input: { link: string }) => kit('linkRepo', input),
@@ -300,6 +301,8 @@ type Opts = {
   /** mod-kit's readers of a repository gh spells and of a github.com link fail (#961). */
   ghRepoReaderFails?: boolean
   linkReaderFails?: boolean
+  /** mod-kit's reader of the merge helper fails (#1251). */
+  mergeHelperReaderFails?: boolean
   /** mod-kit's link reader fails only for a link holding this text (#961). */
   linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -533,7 +536,8 @@ const world = (on: On, o: Opts = {}) => {
       if (a[0] === 'linkRepo' && (o.linkReaderFails || (o.linkReaderFailsOn !== undefined && (input.link ?? '').includes(o.linkReaderFailsOn)))) return fail(1, 'mod-kit is not loaded')
       if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
       if (a[0] === 'isDans') return ok(JSON.stringify(isDans((input as { origin?: never }).origin)))
-      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : git(input.words ?? [])
+      if (a[0] === 'mergeHelper' && o.mergeHelperReaderFails) return fail(1, 'mod-kit is not loaded')
+      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : a[0] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(a[1] as string) as Command) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
@@ -2990,6 +2994,24 @@ test('merge only: a repository whose merge deploys keeps its green PR open; one 
   // In a checkout of o/quiet (phase 3 lets a session write only to the repository its checkout is).
   expect(await call($ as never, bash('cd /quiet && gh pr merge 5'))).toBe('ran')
   expect(await call($ as never, bash('cd /quiet && gh workflow run deploy.yml'))).toMatch(asRegExp('o/quiet may merge overnight but never deploy'))
+})
+
+// #961 decided that a command the mod has no reading for is never judged as merging nothing. Since
+// #1251 only mod-kit can say a command runs the merge helper, so that decision is kept here: a
+// reading mod-kit cannot give refuses the call, the helper never let through unjudged.
+test('asleep, a merge helper reading mod-kit cannot give refuses the call, where the same merge runs once it can (#1251, #961)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/quiet', mergeDeploys: false }], closed: [] }), origins: { '/quiet': 'git@github.com:o/quiet.git' } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toBe('ran')
+  // Only running it is a merge (Dan, 2026-10-16): reading its file runs in a repository whose merges
+  // wait, and a run that cannot be read for certain is refused there and here.
+  expect(await call($ as never, bash('cat ~/.claude/hooks/lib/merge-when-ready.sh'))).toBe('ran')
+  expect(await call($ as never, bash('bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight/)
+  expect(await call($ as never, bash('cd /quiet && bash -c "$MERGE"'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
+  // xargs may add a repository from its input after the one written, so it is refused too.
+  expect(await call($ as never, bash('cd /quiet && echo 5 | xargs bash ~/.claude/hooks/lib/merge-when-ready.sh --repo o/quiet'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
+  w.o.mergeHelperReaderFails = true
+  expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(mod-kit is not loaded\)/)
 })
 
 test('a package script whose body deploys is refused where deploying is not allowed; a push to main is refused everywhere', withDeps, async ($, on) => {

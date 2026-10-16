@@ -37,6 +37,7 @@ const modKit: { name: string; register: Register } = {
         writes: never('writes'),
         git: never('git'),
         gh: never('gh'),
+        mergeHelper: never('mergeHelper'),
         ghRepo: never('ghRepo'),
         linkRepo: never('linkRepo'),
         pipeline: never('pipeline'),
