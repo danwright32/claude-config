@@ -379,7 +379,7 @@ fi
 # passed that stop on, and the same worker was blocked 9 more times a turn, every turn, until Claude
 # Code's own cap of 9 ended each one (measured 2026-10-16 on 2.1.301, the night's cap and the weekly
 # limit the same way).
-transcript_of() { find "$HOME/.claude/projects" -name "$1.jsonl" 2>/dev/null | head -n 1; }
+transcript_of() { find "$HOME/.claude/projects" -name "$1.jsonl" -print -quit 2>/dev/null; }
 # How many times the goal's hook blocked a session, or none when its transcript is not there: its
 # feedback as the transcript writes it, the line break escaped. grep -c prints 0 and exits 1 when
 # nothing matches, so its count is taken whatever its exit.
