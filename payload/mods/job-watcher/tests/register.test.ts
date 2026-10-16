@@ -152,6 +152,8 @@ type World = {
   asleep?: boolean | 'throws'
   /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, or thrown. */
   submit?: 'drop' | 'throws' | 'hangs'
+  /** The engine's handling of a turn's end beneath the watcher throws (lessons review of #1234). */
+  turnEndThrows?: boolean
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -316,7 +318,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     return { text: e.text } as never
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
-  on('turn.complete', ($, e) => ({ text: e.answer }) as never)
+  on('turn.complete', ($, e) => {
+    if (o.turnEndThrows) throw new Error('the transcript could not be written')
+    return { text: e.answer } as never
+  })
   // The rows the conversation keeps, as the plugins above handed them down. Nothing in the test
   // kit stores a row (2.1.289), so the call itself then fails; `appendRow` below catches that.
   on('session.append', ($, e, next) => {
@@ -2122,6 +2127,18 @@ test('a wake that throws is said once and carried on the next tool call instead 
   expect(quietSaid(w).length).toBe(1)
   await turnStarts($)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+test('a turn whose end fails beneath the watcher still leaves the conversation idle, so it is woken (lessons review of #1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], turnEndThrows: true })
+  await start($)
+  await turnStarts($)
+  await turnEnds($).catch(() => undefined)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
 })
 
 test('a wake whose submit never answers holds up no look: a job still stalls and is said (lessons review of #1234)', withDeps, async ($, on) => {

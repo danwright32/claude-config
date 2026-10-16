@@ -1016,14 +1016,19 @@ export const register: Register = on => {
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
-    const r = await next(e)
-    if (e.agentId !== undefined) return r
-    mainTurn = 'idle'
-    // Off the turn's end path, so the turn has ended before the wake is submitted.
-    $.clock.after(0, () => {
-      wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session at a turn's end: ${message(err)}`, { to: 'debug' }))
-    })
-    return r
+    try {
+      return await next(e)
+    } finally {
+      // The turn has ended whatever a hook beneath did with its end (lessons review of #1234): a
+      // throw there must not leave this conversation read as busy, and never woken, for good.
+      if (e.agentId === undefined) {
+        mainTurn = 'idle'
+        // Off the turn's end path, so the turn has ended before the wake is submitted.
+        $.clock.after(0, () => {
+          wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session at a turn's end: ${message(err)}`, { to: 'debug' }))
+        })
+      }
+    }
   })
 
   // Claude Code's notice that a job ended names it (#706): it is dropped then, on the watcher's own
