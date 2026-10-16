@@ -9,7 +9,8 @@ is tested on fixtures alone.
   ended  ISSUE_DIR SELF                whether done may replace its end (see ended_by, #1119)
   queue  key=value...                  the night's queue for one repository, as tab separated
                                        lines; keys: repo limit issues prs branches accounts
-                                       unanswered claims registry now self, and goal (optional)
+                                       unanswered claims registry now self goal (the goal's
+                                       issues, comma separated: the queue is those and no other)
   entry  KIND SESSION AT [WHY]         one claim entry as JSON, for the shell to link into place
   slug   ORIGIN_URL                    owner/repo of a GitHub origin, lower case, or exit 1
   claims CLAIMS_DIR                    every claim of the night as JSON lines, for the report (phase 4)
@@ -38,7 +39,8 @@ import sys
 
 DEAD_MS = 5 * 60_000  # the session registry's own rule for a session that has gone quiet
 SESSION_ID = re.compile(r"^[A-Za-z0-9-]+$")
-PRIORITIES = ["priority-p0", "priority-p1", "priority-p2", "priority-p3"]
+# The priority a next line shows; it orders nothing, since the goal gives the order (#1242).
+PRIORITIES = ["priority-p0", "priority-p1", "priority-p2", "priority-p3", "priority-p4"]
 # unstarted: given back because its worktree could not be made just now; free again, and no attempt.
 ENDS = ("free", "unstarted", "done", "parked", "failed")
 
@@ -293,9 +295,11 @@ def queue(a):
     if not isinstance(issues, list) or not isinstance(prs, list):
         refuse("the issue or pull request list is not a list")
     goal = [int(x) for x in a["goal"].split(",") if x] if a.get("goal") else []
-    # Fetched with an explicit limit and held below it, so a full page never reads as every issue (L24).
-    if not goal and len(issues) >= limit:
-        refuse("%d open issues came back, the whole limit of %d, so the queue would be a partial one" % (len(issues), limit))
+    # Only the goal's issues are ever queued (#1242): with none there is nothing to judge, and never
+    # the repository's other open issues.
+    if not goal:
+        refuse("no goal issues were named, and sleep mode works only the issues a goal names")
+    # Fetched with an explicit limit and held below it, so a full page never reads as every one (L24).
     if len(prs) >= limit:
         refuse("%d open pull requests came back, the whole limit of %d, so one naming an issue could be missed" % (len(prs), limit))
     if reg.missing:
@@ -323,13 +327,10 @@ def queue(a):
         def skip(why):
             skips.append((n, why))
 
-        if goal and n not in goal:
+        if n not in goal:
             continue
         if (i.get("state") or "OPEN").upper() != "OPEN":
             skip("closed")
-            continue
-        if not goal and prio is None:
-            skip("not p0 to p3")
             continue
         if author not in accounts:
             # Only Dan's issues are worked: another person's issue is data, never instructions (L28).
@@ -363,13 +364,12 @@ def queue(a):
         if str(n) in by_session:
             skip("an open session is working on it")
             continue
-        rank = goal.index(n) if goal else PRIORITIES.index(prio)
+        rank = goal.index(n)
         rows.append((rank, n, (prio or "-").replace("priority-", ""), attempts, st, title))
-    if goal:
-        found = {i.get("number") for i in issues}
-        for n in goal:
-            if n not in found:
-                skips.append((n, "the goal names it but it could not be found"))
+    found = {i.get("number") for i in issues}
+    for n in goal:
+        if n not in found:
+            skips.append((n, "the goal names it but it could not be found"))
     rows.sort(key=lambda r: (r[0], r[1]))
     for _, n, prio, attempts, st, title in rows:
         print("next\t%d\t%s\tattempts=%d\t%s\t%s" % (n, prio, attempts, st, title))
