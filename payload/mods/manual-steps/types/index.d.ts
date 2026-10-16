@@ -65,7 +65,7 @@ export type StepsCard = {
 }
 
 /** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
-export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string }
+export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string; needs?: string }
 
 /**
  * This mod's noun, for other mods (#1107). Each method is answered by this mod's own hook on its

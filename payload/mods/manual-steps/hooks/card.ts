@@ -186,8 +186,11 @@ export const sent = (card: StepsCard, i: number, isSent: boolean, forgetPress = 
  * The card after Claude's verdict on step `n` (1 based), finished at `at` (epoch milliseconds), or
  * why it cannot be applied. Only the open step takes checked, per-you or not-done (#886): "step 2
  * done" with step 1 open was recorded as both, and the card claimed an install Dan never did, so a
- * verdict on any other step is refused and Claude is told to ask which he means. withdrawn takes any
- * unfinished step off, since it claims nothing was done.
+ * verdict on any other step is refused and Claude is told to ask which he means. Steps are recorded
+ * in order (#1239): a later step whose Done Dan pressed, with an earlier one unfinished, is refused
+ * too, telling Claude to ask whether every earlier step is done and on a yes to record each in
+ * order, the open step first. withdrawn takes any unfinished step off, since it claims nothing was
+ * done.
  */
 export const finish = (card: StepsCard, n: number, verdict: StepsVerdict, at?: number): Made | Refused => {
   if (!(VERDICTS as readonly string[]).includes(verdict)) return { refusal: `"${String(verdict)}" is not one of ${VERDICTS.join(', ')}.` }

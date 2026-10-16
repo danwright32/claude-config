@@ -483,7 +483,7 @@ test('Copy puts the value on the clipboard, and says when it could not', withKit
 
 // #708: Claude Code draws no hyperlinks on Apple Terminal, where a long link is plain text cut at
 // the edge, so Copy link is what takes the whole address on every terminal.
-test('Copy link puts the open step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
+test('Copy link puts its step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf`
@@ -501,9 +501,9 @@ test('Copy link puts the open step\'s whole link on the clipboard, and says when
 })
 
 // #1215, Dan 2026-10-15: "is there any reason it couldn't just have a button to open it in my default
-// web browser?" Open hands the open step's link to macOS's open, as one argument with no shell between,
+// web browser?" Open hands its step's link to macOS's open, as one argument with no shell between,
 // so the link is only ever an address, and says what happened either way.
-test('Open opens the open step\'s link in the default browser, and says so', withKit, async ($, on) => {
+test('Open opens its step\'s link in the default browser, and says so', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf?x=1&y=$(id)`
@@ -538,7 +538,7 @@ test('a step with no link shows no Open, and nothing is run', withKit, async ($,
   const w = world(on)
   await start($)
   await hand($, [step({ url: undefined, location: 'Salesforce desktop app, Setup' })])
-  expect((await bandText($)).some(l => l.includes('[open-link]'))).toBe(false)
+  expect((await bandText($)).some(l => l.includes('[open-link'))).toBe(false)
   expect(w.runs).toEqual([])
 })
 
@@ -922,7 +922,7 @@ test('a card pinned while /steps has the pane open replaces the card in that pan
   expect((await paneShown($))?.lines[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
 })
 
-test('the pane asks for a dock as wide as the open step\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
+test('the pane asks for a dock as wide as the card\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
   const w = world(on, { wide: true })
   await start($)
   const clicks = 'Websites, example.com, Security, WAF, Custom rules, Create rule'
@@ -1150,6 +1150,16 @@ test('a step added to a card already pinned goes at its end, under its heading, 
   expect(await addStep($)).toEqual({ isShown: true })
   expect(stored(w.mem)?.heading).toBe('Cloudflare WAF')
   expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
+})
+
+// #1239 lessons review: every step shows at once, so a step another mod adds can say what it needs too.
+test('a step another mod adds can say what it needs from an earlier one, drawn as the steps tool draws it (#1239)', withCaller, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [step()])
+  expect(await addStep($, { ...MORNING, needs: 'the review the night left' })).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[text.findIndex(t => t.startsWith(`2. ${MORNING.title}`)) + 1]).toBe('Needs: the review the night left')
 })
 
 test('finish takes the step off by its title, whichever step is open, said as checked; one not there finishes nothing (#1107)', withCaller, async ($, on) => {

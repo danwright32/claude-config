@@ -420,7 +420,7 @@ describe('cardLines', () => {
   // A long dashboard link cut at the edge still opens and copies whole (#708): it is a link part,
   // which mod-kit draws as Claude Code's Link, so the address travels with it however much shows,
   // and Open and Copy link beside it (#1215), since Claude Code draws no hyperlinks on Apple Terminal.
-  test('the open step\'s link is a link part carrying the whole address, with Open and Copy link; an exact location stays text', () => {
+  test('a step\'s link is a link part carrying the whole address, with Open and Copy link; an exact location stays text', () => {
     const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf/custom-rules?zone=example.com`
     const l = lines(made({ heading: 'x', steps: [step({ url, clicks: 'Security, WAF' })] })) as (P & { href?: string; label?: string })[][]
     expect(l[2]).toEqual([WHERE, { button: 'open-link-1', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link-1', label: 'Copy link', instead: [] }])
@@ -433,9 +433,9 @@ describe('cardLines', () => {
   })
 
   // #872: a bare location line read to Dan as an unexplained fragment, so the card labels each part
-  // of the open step itself: "Where:" before the link or location, "What to do:" before the clicks,
+  // of every open step itself: "Where:" before the link or location, "What to do:" before the clicks,
   // each bold and drawn whole, once. The value stays on its own line with Copy.
-  test('the open step labels its link or location and its clicks, each label once and bold; the value has none', () => {
+  test('each open step labels its link or location and its clicks, each label once and bold; the value has none', () => {
     const at = lines(made({ heading: 'x', steps: [step({ url: undefined, location: 'Keychain Access, login', clicks: 'File, New Password Item', value: 'hunter2' })] }))
     expect(at.slice(2)).toEqual([
       [WHERE, { text: 'Keychain Access, login', wrap: true }],
