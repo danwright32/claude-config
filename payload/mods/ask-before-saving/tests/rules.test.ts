@@ -182,7 +182,7 @@ const throughS = (command: string, word = '$S/LESSONS.md', path = `${SP}/LESSONS
   return lastingFiles({ files: [{ word, path }], unnamed: [] }, HOME, inCheckout, command)
 }
 
-test('a write through a variable the command first sets to one literal temporary folder is judged by that folder', async () => {
+test('a write through a variable the command first sets to one plain folder, absolute or under home, is judged where it lands', async () => {
   expect(await throughS(`S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`)).toEqual([])
   expect(await throughS(`S="${SP}"; cp payload/LESSONS.md "$S/LESSONS.md"`)).toEqual([])
   expect(await throughS(`S='${SP}' && cp payload/LESSONS.md \${S}/LESSONS.md`, '${S}/LESSONS.md')).toEqual([])
