@@ -150,7 +150,8 @@ test('a /clear while a /login is awaited goes on following it, and a real end st
 // #1235: a login made in another session, or by the account room's Switch, moves the account the
 // session runs on too: Claude Code takes in the new credential and re-reads the session's context
 // with the new account's email. So the login file is read again at each prompt and at each re-read
-// of the context, and a login other than the one last raised is raised.
+// of the context, and a login other than the one the session is known to be on (the one it started
+// on, then the last one raised) is raised.
 type P = { turn: { start: (e: object) => Promise<unknown> }; prompt: { context: (e: object) => Promise<{ blocks: unknown[] }> } }
 let turns = 0
 const prompt = async ($: unknown, clock: { settle: () => Promise<void> }) => {
