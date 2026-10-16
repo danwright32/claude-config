@@ -141,6 +141,67 @@ export const answerKey = (repo: string, issue: number, text: string) => {
   return fnv(k, 0x811c9dc5) + fnv(k, 0x050c5d1f)
 }
 
+// ---- Each worker's goal (#1242) ----
+// Dan's decision of 2026-10-16: sleep mode works only toward the goal a session has set with Claude
+// Code's own /goal, which may name a milestone, issues, or a task with no issue at all. A worker
+// with none is asked for one before bed; left without one, it does no work that night.
+//
+// Claude Code keeps no goal a mod can ask for, but writes it into the session's transcript as a
+// goal_status attachment: `sentinel: true, met: false` with the condition when /goal sets it (and
+// again after each compaction), `sentinel: true, met: true` when the goal ends, and, each time it
+// judges the condition, a record without the sentinel whose `met: true` is the goal cleared as met.
+// Measured on every transcript on this Mac on 2026-10-16 (Claude Code 2.1.272 to 2.1.300): 95 set
+// and 45 ended sentinels, every /goal with a condition preceded by a set one. 12 of the ended ones
+// came with /goal clear and 33 without it (a goal Dan paused in his own words), and after every one
+// of the 45 the condition was never judged again until a goal was set anew: the goal had stopped.
+// So the newest such record says whether a goal is set now, and its condition what it is. The
+// command's own "Goal set:" line is not that record: it stays the last word on a goal that ended
+// without /goal clear (31 of 70 transcripts measured).
+
+/** What the shell finds a transcript's goal records by: every one carries it, written this way. */
+export const GOAL_MARK = '"type":"goal_status"'
+
+export type GoalReading = { state: 'set'; condition: string } | { state: 'none' }
+
+/**
+ * The goal set now, from the transcript lines GOAL_MARK found, oldest first. Only a whole record of
+ * Claude Code's own counts: the mark inside text a tool printed, or a line cut short, is not one.
+ */
+export const goalIn = (lines: string): GoalReading => {
+  let last: { met: boolean; condition: string } | null = null
+  for (const raw of lines.split('\n')) {
+    if (!raw.trim()) continue
+    let o: unknown
+    try {
+      o = JSON.parse(raw)
+    } catch {
+      continue
+    }
+    const r = o as { type?: unknown; attachment?: { type?: unknown; met?: unknown; condition?: unknown } } | null
+    const a = r && typeof r === 'object' && r.type === 'attachment' ? r.attachment : undefined
+    if (!a || a.type !== 'goal_status') continue
+    // A record this reader cannot read says no goal rather than one nobody can see the words of.
+    last = typeof a.met === 'boolean' && typeof a.condition === 'string' ? { met: a.met, condition: a.condition.trim() } : { met: true, condition: '' }
+  }
+  return last && !last.met && last.condition ? { state: 'set', condition: last.condition } : { state: 'none' }
+}
+
+export const NO_GOAL = 'No work for it tonight'
+
+/** The before bed question for a worker with no goal set: who it is, and what having none means. */
+export const goalQuestion = (who: string) =>
+  `${who.charAt(0).toUpperCase()}${who.slice(1)} has no /goal set, so it does no work tonight unless you give it one. What should it work toward: a milestone, issues, or a task, in your words?`
+
+/** No work for it, or go to sleep; anything Dan types is the goal. */
+export const goalOptions = () => [NO_GOAL, GO_TO_SLEEP]
+
+/** What an answer to the goal question gives the worker. */
+export const goalAnswer = (a: string): { goal: string | null; slept?: true } => {
+  if (a === GO_TO_SLEEP) return { goal: null, slept: true }
+  const t = a.trim()
+  return { goal: t && t !== NO_GOAL ? t : null }
+}
+
 /** The night's unanswered list as sleep-queue.sh reads it: one owner/repo#N a line, each once. */
 export const unansweredText = (left: { repo: string; issue: number }[]) => {
   const lines = [...new Set(left.map(l => `${l.repo.toLowerCase()}#${l.issue}`))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))

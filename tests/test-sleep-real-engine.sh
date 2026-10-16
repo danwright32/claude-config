@@ -12,9 +12,13 @@
 #      it: a settings PermissionRequest hook that denies one command still wins (#834). A session
 #      that is not a worker gets neither, the control. That worker then makes no progress, so the
 #      driver's circuit breaker lets it go.
-#   4. A worker is kept going by the driver: its Stop is blocked with the overnight rules, and it
-#      claims the queued issue with sleep-queue.sh, works it in the claim's worktree, ends the claim
-#      and stops when nothing is left (#842, #844).
+#   3a. Claude Code's own /goal hook blocks a session that is not a worker again and again (the
+#      control), and never reaches a worker the driver has let stop, so a /goal cannot carry a
+#      worker past the circuit breaker, the night's cap or the weekly limit (#1242).
+#   4a. A worker with no goal is let stop at its first Stop and asks the queue nothing (#1242).
+#   4. A worker with a goal is kept going by the driver: its Stop is blocked with the overnight rules
+#      carrying its goal, and it claims the goal's issue with sleep-queue.sh, works it in the
+#      claim's worktree, ends the claim and stops when nothing is left (#842, #844).
 #   5. Notes reach the report: the claim, its end, the driver's heartbeats and a proposed issue are
 #      in the night's notes and in the report rendered from them (#835, #905).
 #   6. /wake ends it: the record moved aside, the Mac let go, the report finished and held rather
@@ -40,9 +44,11 @@
 #
 # What a headless run cannot show, said rather than passed:
 #   - /sleep enrols interactive sessions only, and a `claude -p` run is never one (by design,
-#     #840). So steps 3 and 4 enrol their sessions by adding their ids to the record /sleep wrote;
+#     #840). So steps 3, 3a, 4a and 4 enrol their sessions by adding their ids to the record /sleep wrote;
 #     a real interactive session's enrolment is UNMEASURED here.
 #   - The before bed questions need a person at a prompt, so none is asked here.
+#   - /sleep telling an idle worker to start (#1242) needs a second live interactive session to
+#     send to, so the send and the turn it starts are measured only by the mod's own suite.
 #   - A full hour of work, a real usage limit and a real model's night: the first real night.
 #
 # It costs nothing (the key it is given is not a real one, so nothing it sends could be billed) and
@@ -122,7 +128,7 @@ finish() {
   echo "time: $(( $(date +%s) - STARTED )) seconds; cost: none, the model is the scripted stand-in"
   local u
   for u in ${unmeasured_parts[@]+"${unmeasured_parts[@]}"}; do echo "UNMEASURED: $u"; done
-  echo "UNMEASURED: a real interactive session's enrolment by /sleep (a headless run is never one), the before bed questions, a real model following the overnight rules, a full hour of work and a real usage limit; the first real night measures them"
+  echo "UNMEASURED: a real interactive session's enrolment by /sleep (a headless run is never one), an idle worker told to start by /sleep, the before bed questions, a real model following the overnight rules, a full hour of work and a real usage limit; the first real night measures them"
   printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
   exit $?
@@ -259,11 +265,14 @@ for line in open(sys.argv[1]):
 print('\n'.join(out))
 PY
 }
+# enrol SESSION [GOAL]: a worker, with the goal /sleep would have kept for it, or none (#1242).
 enrol() { python3 - "$REC" "$@" <<'PY'
 import json, os, sys
 rec = sys.argv[1]
 d = json.load(open(rec))
-d['workers'] = list(dict.fromkeys((d.get('workers') or []) + sys.argv[2:]))
+d['workers'] = list(dict.fromkeys((d.get('workers') or []) + [sys.argv[2]]))
+if len(sys.argv) > 3:
+    d.setdefault('goals', {})[sys.argv[2]] = sys.argv[3]
 tmp = rec + '.enrol.tmp'
 open(tmp, 'w').write(json.dumps(d))
 os.replace(tmp, rec)
@@ -289,6 +298,9 @@ grep -q '^scope-modes: Sleep mode is on until' <<<"$SLEEP_SAID" && check "/sleep
 [ "$(jget "$REC" workers)" = "[]" ] \
   && check "a headless run is never enrolled as a worker (#840)" ok \
   || check "a headless run is never enrolled as a worker (#840)" "workers=$(jget "$REC" workers)"
+[ "$(jget "$REC" goals)" = "{}" ] \
+  && check "the record keeps each worker's goal, none with no worker (#1242)" ok \
+  || check "the record keeps each worker's goal, none with no worker (#1242)" "goals=$(jget "$REC" goals)"
 [ "$(jget "$REC" placeBefore)" = away ] \
   && check "the record keeps where Dan was before sleep (away here)" ok \
   || check "the record keeps where Dan was before sleep (away here)" "placeBefore=$(jget "$REC" placeBefore)"
@@ -343,7 +355,7 @@ else
     && check "control: a session that is not a worker gets no prompt approved while asleep" ok \
     || check "control: a session that is not a worker gets no prompt approved while asleep" "$(ls "$REPO"); $(clip "$(calls "$WORK/p0.jsonl")" 300)"
   P1="$(uuid)"
-  enrol "$P1"
+  enrol "$P1" "Close #1"
   echo "-- permission prompts, a worker (session $P1, enrolled)"
   session "$WORK/p1.jsonl" 180 1 "$P1" --settings "$HOOKS_JSON" -- "PERMISSION-STEP: run the two commands."
   [ ! -e "$REPO/denied-by-settings.txt" ] \
@@ -358,17 +370,78 @@ else
     || check "a worker that makes no progress is let go by the circuit breaker after 3 blocks (#844)" "$(head -c 400 "$STATE/driver/$GEN/$P1.json" 2>&1)"
 fi
 
-# ---- 4. a worker kept going by the driver, claiming and ending one issue ----
+# ---- 3a. a /goal cannot keep a worker going past the driver's stop (#1242) ----
+# Claude Code's own /goal adds a Stop hook that blocks every Stop until its condition holds, and the
+# stand-in model answers its judge that the condition never does. First the control: a session that
+# is not a worker, its goal set, is blocked again and again by that hook. Then a worker whose driver
+# has already let it go (its counter says the circuit breaker stopped it): the driver's answer ends
+# the Stop chain, so the goal's hook is never reached and the session stops. Before #1242 the driver
+# passed that stop on, and the same worker was blocked 9 more times a turn, every turn, until Claude
+# Code's own cap of 9 ended each one (measured 2026-10-16 on 2.1.301, the night's cap and the weekly
+# limit the same way).
+transcript_of() { find "$HOME/.claude/projects" -name "$1.jsonl" -print -quit 2>/dev/null; }
+# How many times the goal's hook blocked a session, or none when its transcript is not there. Its
+# feedback is matched however the transcript stores the line break after the hook's words (the JSON
+# escape it writes today, a doubled escape, a space or nothing), so the worker's 0 below can never
+# come from a spelling the control never saw (lessons review of #1242); the control reading 0 still
+# fails loudly beside it. grep -c prints 0 and exits 1 when nothing matches, so its count is taken
+# whatever its exit.
+goal_blocks() { local t n; t="$(transcript_of "$1")"; [ -n "$t" ] || { echo none; return; }; n="$(grep -c -E 'Stop hook feedback:[^[]{0,4}\[Close #1\]' "$t")"; echo "${n:-0}"; }
+C1="$(uuid)"
+echo "-- a /goal in a session that is not a worker (session $C1), the control"
+session "$WORK/c1.jsonl" 180 2 "$C1" -- "/goal Close #1" "PLAIN-STEP: say hello"
+CB="$(goal_blocks "$C1")"
+case "$CB" in none|0) check "control: the goal's own hook blocks a session the driver does not drive" "goal blocks: $CB" ;; *) check "control: the goal's own hook blocks a session the driver does not drive" ok ;; esac
+G1="$(uuid)"
+enrol "$G1" "Close #1"
+mkdir -p "$STATE/driver/$GEN"
+printf '{"v":1,"generation":"%s","session":"%s","since":%s000,"blocks":3,"idleBlocks":3,"progressAt":%s000,"fingerprint":null,"waitStep":0,"resumeAt":null,"waits":[],"weeklyAt":%s000,"finishing":false,"claimFails":0,"parked":null,"stopped":"circuit breaker: 3 blocks in a row with no new commit, claim or note"}' \
+  "$GEN" "$G1" "$(date +%s)" "$(date +%s)" "$(date +%s)" > "$STATE/driver/$GEN/$G1.json"
+echo "-- a worker the breaker let go, its /goal set (session $G1, enrolled)"
+session "$WORK/g1.jsonl" 180 2 "$G1" -- "/goal Close #1" "PLAIN-STEP: say hello"
+GT="$(transcript_of "$G1")"
+grep -q '"type":"goal_status","met":false,"sentinel":true,"condition":"Close #1"' "$GT" 2>/dev/null \
+  && check "the worker's /goal was set, as its transcript records it" ok \
+  || check "the worker's /goal was set, as its transcript records it" "transcript: ${GT:-not found}"
+[ "$(goal_blocks "$G1")" = 0 ] \
+  && check "a worker the driver let stop is never blocked by its /goal's hook (#1242)" ok \
+  || check "a worker the driver let stop is never blocked by its /goal's hook (#1242)" "goal blocks: $(goal_blocks "$G1")"
+[ "$(jget "$STATE/driver/$GEN/$G1.json" blocks)" = 3 ] \
+  && check "and the driver blocked it no more either" ok \
+  || check "and the driver blocked it no more either" "$(head -c 300 "$STATE/driver/$GEN/$G1.json")"
+
+# ---- 4a. a worker with no goal does no work (#1242) ----
+# Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker the
+# record keeps no goal for is let stop at its first Stop, and the queue is never asked anything.
+N1="$(uuid)"
+enrol "$N1"
+: > "$WORK/source.log"
+echo "-- a worker with no goal (session $N1, enrolled)"
+session "$WORK/n1.jsonl" 180 1 "$N1" --allowedTools Bash Read -- "WORKER-STEP: sleep mode is on and this session is enrolled to work overnight."
+[ "$(jget "$STATE/driver/$GEN/$N1.json" stopped)" = 'no goal was set for this session before bed, so it does no work tonight' ] \
+  && check "a worker with no goal is let stop at its first Stop, saying why (#1242)" ok \
+  || check "a worker with no goal is let stop at its first Stop, saying why (#1242)" "$(head -c 400 "$STATE/driver/$GEN/$N1.json" 2>&1)"
+[ "$(jget "$STATE/driver/$GEN/$N1.json" blocks)" = 0 ] \
+  && check "and it was never blocked to work" ok \
+  || check "and it was never blocked to work" "blocks=$(jget "$STATE/driver/$GEN/$N1.json" blocks)"
+[ ! -s "$WORK/source.log" ] \
+  && check "and the queue was asked nothing for it" ok \
+  || check "and the queue was asked nothing for it" "$(clip "$(cat "$WORK/source.log")" 300)"
+
+# ---- 4. a worker kept going by the driver, claiming and ending one issue of its goal ----
 W1="$(uuid)"
-enrol "$W1"
+enrol "$W1" "Close #1"
 echo "-- the worker (session $W1, enrolled)"
 session "$WORK/w1.jsonl" 600 1 "$W1" --allowedTools Bash Read -- "WORKER-STEP: sleep mode is on and this session is enrolled to work overnight."
 DRIVER="$STATE/driver/$GEN/$W1.json"
 BLOCKS="$(jget "$DRIVER" blocks)"
 case "$BLOCKS" in ''|null|0) check "the driver blocked the worker's Stop and kept it going (#844)" "driver record: $(head -c 400 "$DRIVER" 2>&1)" ;; *) check "the driver blocked the worker's Stop and kept it going (#844)" ok ;; esac
+grep -q '^issue danwright32/sleepdemo 1$' "$WORK/source.log" 2>/dev/null \
+  && check "the worker ran sleep-queue.sh next with its goal's issue, which read that issue" ok \
+  || check "the worker ran sleep-queue.sh next with its goal's issue, which read that issue" "the stand-in source was not asked for #1: $(clip "$(calls "$WORK/w1.jsonl")" 400)"
 grep -q '^issues' "$WORK/source.log" 2>/dev/null \
-  && check "the worker ran sleep-queue.sh next, which read the queue" ok \
-  || check "the worker ran sleep-queue.sh next, which read the queue" "the stand-in source was never asked: $(clip "$(calls "$WORK/w1.jsonl")" 400)"
+  && check "the repository's open issues were never listed: only the goal's are worked (#1242)" "$(clip "$(cat "$WORK/source.log")" 300)" \
+  || check "the repository's open issues were never listed: only the goal's are worked (#1242)" ok
 KINDS="$(python3 - "$NOTES" "$W1" <<'PY'
 import json, sys
 for line in open(sys.argv[1]):
@@ -419,6 +492,9 @@ grep -q '^scope-modes: Sleep mode is off' <<<"$WAKE_SAID" && check "/wake says s
 grep -q 'not opened on the Mac' <<<"$WAKE_SAID" && check "away before sleep, the report waits in the held card, never opened on the screen (#837)" ok || check "away before sleep, the report waits in the held card, never opened on the screen (#837)" "said: $WAKE_SAID"
 case "$(ps -o comm= -p "${CAF:-0}" 2>/dev/null)" in *caffeinate) check "/wake lets the caffeinate hold go" "pid $CAF still running" ;; *) check "/wake lets the caffeinate hold go" ok ;; esac
 grep -q '"kind": *"woke"' "$NOTES" && check "the end of the night is noted (woke)" ok || check "the end of the night is noted (woke)" "no woke note in $NOTES"
+grep -qF "No goal was set for 1 session (${N1:0:8}), so it did no work tonight." "$REPORT" \
+  && check "the finished report says the worker with no goal did no work (#1242)" ok \
+  || check "the finished report says the worker with no goal did no work (#1242)" "$(head -c 600 "$REPORT")"
 grep -q 'Add goodbye.txt' "$REPORT" && grep -qi 'sleep/1\|claim' "$REPORT" \
   && check "the finished report still holds the night's claim and proposal" ok \
   || check "the finished report still holds the night's claim and proposal" "$(head -c 400 "$REPORT")"
