@@ -32,6 +32,12 @@ export type SleepRecord = {
   startedBy: { sessionId: string; cwd: string }
   /** The sessions that work overnight; every other session is only kept quiet. */
   workers: string[]
+  /**
+   * What each worker works toward tonight (#1242), by session id: the condition its /goal set, or
+   * the goal Dan gave it before bed. A worker with no entry has no goal and does no work; absent on a
+   * record written before goals were kept, where no worker has one.
+   */
+  goals?: Record<string, string>
   /** Where Dan was before sleep (home or away), put back on every session at wake. */
   placeBefore: ScopeModesPlace
   /** The night's merge and deploy lists as settled at bedtime (#843, mergedeploy.ts); absent on an older record, which closes every repository. */
@@ -98,6 +104,12 @@ export const readSleep = (text: string | null, now: number, boot: Boot): SleepRe
   if (!same) return { state: 'other-boot', record }
   if (now >= r.until) return { state: 'expired', record }
   return { state: 'asleep', record }
+}
+
+/** A worker's goal as the record keeps it: its text, or null for none, a field that cannot be read included (#1242). */
+export const goalOf = (record: SleepRecord, session: string): string | null => {
+  const g = record.goals && typeof record.goals === 'object' && !Array.isArray(record.goals) ? (record.goals as Record<string, unknown>)[session] : undefined
+  return typeof g === 'string' && g.trim() ? g.trim() : null
 }
 
 /** This boot's start in seconds, from `sysctl -n kern.boottime`'s text, or null. */

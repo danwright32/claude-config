@@ -62,7 +62,7 @@ import {
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
-import { bootOf, bootSessionOf, etDate, etWhen, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
@@ -1705,9 +1705,11 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const claim = await claimNow($, en)
     const u = await usageNow($)
     const fingerprint = progressOf(notesText, en.self, await refsNow($, where.root, claim, en.home))
+    // What this session works toward tonight, as /sleep recorded it (#1242); with none it stops.
+    const goal = goalOf(en.record, en.self)
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
-      weekly: u.weekly, claim, rules: overnightRules(en.self, where.root),
+      weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal),
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
     if (d.record) {

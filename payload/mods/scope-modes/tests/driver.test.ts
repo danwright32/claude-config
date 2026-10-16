@@ -9,7 +9,8 @@ import {
 
 const MIN = 60_000
 const T0 = 1_000_000_000
-const RULES = overnightRules('s1', '/repo')
+const GOAL = 'Close #7 and #9'
+const RULES = overnightRules('s1', '/repo', GOAL)
 // Where a refused release's command is run: the repository and session the rules name.
 const AT = { root: '/repo', self: 's1' }
 const ok = (record: DriverRecord): DriverReading => ({ state: 'ok', record })
@@ -17,7 +18,7 @@ const none: ClaimReading = { state: 'none' }
 const held = (attempts = 1, since = T0): ClaimReading => ({ state: 'held', claim: { repo: 'o/r', issue: 7, attempts, since } })
 const input = (o: Partial<StopInput> = {}): StopInput => ({
   now: T0, self: 's1', generation: 'g1', repo: 'o/r', driver: { state: 'none' }, fingerprint: 'notes=0;refs=', notesText: '',
-  weekly: 10, claim: none, rules: RULES, ...o,
+  weekly: 10, claim: none, goal: GOAL, rules: RULES, ...o,
 })
 // A record from earlier tonight whose last progress reading was nothing at all.
 const after = (o: Partial<DriverRecord> = {}): DriverRecord => ({ ...freshDriver('g1', 's1', T0), fingerprint: 'notes=0;refs=', weeklyAt: T0, ...o })
@@ -60,7 +61,7 @@ describe('the block', () => {
   test('carries the overnight rules whole, so they survive compaction', () => {
     const r = decideStop(input())
     expect(r.kind === 'block' && r.reason).toContain(RULES)
-    expect(RULES).toContain('sleep-queue.sh next /repo s1')
+    expect(RULES).toContain('sleep-queue.sh next /repo s1 <')
     expect(RULES).toContain('sleep-queue.sh release /repo <issue> s1 done|parked|failed')
     expect(RULES).toMatch(/never from what you say/)
   })
@@ -79,7 +80,7 @@ describe('the block', () => {
     expect(r.notes).toEqual([{ kind: 'heartbeat', repo: 'o/r', issue: 7 }])
   })
   test('a repository path with spaces or an apostrophe is quoted, so the commands run as written', () => {
-    const rules = overnightRules('s1', "/Users/x/Documents - Dan’s Mac/it's here")
+    const rules = overnightRules('s1', "/Users/x/Documents - Dan’s Mac/it's here", GOAL)
     expect(rules).toContain("sleep-queue.sh next '/Users/x/Documents - Dan’s Mac/it'\\''s here' s1")
     expect(rules).toContain("sleep-queue.sh release '/Users/x/Documents - Dan’s Mac/it'\\''s here' <issue> s1 ")
   })
@@ -93,6 +94,51 @@ describe('the block', () => {
   test('the rules carry no long dash', () => {
     const dashes = [0x2014, 0x2013].map(c => String.fromCharCode(c))
     expect(dashes.some(c => RULES.includes(c))).toBe(false)
+  })
+})
+
+// Sleep mode works only a goal Dan set (#1242, Dan, 2026-10-16: "Don't pick up random issues. If
+// there's no goal set, prompt me to set one and then only work the goal").
+describe('the goal (#1242)', () => {
+  test("the rules carry the session's goal in Dan's words, and say to work toward it alone", () => {
+    expect(RULES).toContain(`Tonight's goal, as Dan set it: "${GOAL}".`)
+    expect(RULES).toMatch(/Work only toward it: never any other issue or task/)
+  })
+  test('the rules never tell a session to claim from the queue without the goal\'s issues', () => {
+    // The only claim command they give names the goal's issue numbers; a bare `next ROOT SELF`, the
+    // old claim of the most urgent open issue, appears nowhere.
+    expect(RULES).toContain("`bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1 <the goal's issue numbers>`")
+    expect(RULES).not.toMatch(/sleep-queue\.sh next \/repo s1`/)
+    expect(RULES).toMatch(/a milestone, its open issues/)
+  })
+  test('a goal that names no issue is worked as a task, in a worktree of its own, its steps noted as progress', () => {
+    expect(RULES).toMatch(/If the goal names no issue, work the task itself in a worktree of its own/)
+    expect(RULES).toContain('kind progress')
+  })
+  test('the session stops with a note once the goal is met or nothing more toward it can be done', () => {
+    expect(RULES).toContain(`sleep_note '{"kind":"stopped","by":"s1","text":"<why>"}'`)
+    expect(RULES).toMatch(/When the goal is met, `next` prints none, or nothing more toward it can be done tonight/)
+  })
+  test('a goal is quoted as one sentence whatever it holds', () => {
+    const rules = overnightRules('s1', '/repo', 'Ship "the parser"\nthen stop')
+    expect(rules).toContain(`Tonight's goal, as Dan set it: "Ship 'the parser' then stop".`)
+  })
+  test('a worker with no goal is let stop at its first Stop, said in a note, and never blocked', () => {
+    const r = decideStop(input({ goal: null }))
+    expect(r.kind).toBe('stop')
+    expect(r.kind === 'stop' && r.why).toBe('no goal was set for this session before bed, so it does no work tonight')
+    expect(r.notes).toEqual([{ kind: 'stopped', repo: 'o/r', text: 'no goal was set for this session before bed, so it does no work tonight' }])
+    expect(r.record?.stopped).toBe('no goal was set for this session before bed, so it does no work tonight')
+    // Even with progress showing: no goal is no work, whatever the session did.
+    expect(decideStop(input({ goal: null, fingerprint: 'notes=4;refs=' })).kind).toBe('stop')
+  })
+  test('a worker with no goal that somehow holds a claim gives it up, parked, never left held', () => {
+    const r = decideStop(input({ goal: null, claim: held() }))
+    expect(r.kind === 'stop' && r.release).toEqual({ issue: 7, state: 'parked', why: 'no goal was set for this session before bed, so it does no work tonight' })
+  })
+  test('with no claim in hand a worker is told to work toward the goal, never to claim the next one', () => {
+    const r = decideStop(input())
+    expect(r.kind === 'block' && r.reason).toMatch(/^You hold no issue: work toward the goal, claiming the next of its issues if it names any\. Overnight rules/)
   })
 })
 

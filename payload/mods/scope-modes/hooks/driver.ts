@@ -209,6 +209,8 @@ export type StopInput = {
   notesText: string | null
   weekly: number | null
   claim: ClaimReading
+  /** The goal this session works toward tonight, as the sleep record keeps it (#1242); null for none. */
+  goal: string | null
   /** The rules every block carries, so they survive compaction. */
   rules: string
 }
@@ -227,10 +229,13 @@ export const thenNext = (s: string) => (s.endsWith('\n') ? s : `${s} `)
 const pct = (n: number) => `${Math.round(n * 10) / 10}%`
 const mins = (ms: number) => `${Math.round(ms / MIN)} minutes`
 
+/** Why a worker with no goal stops at once (#1242): no goal is no work, never anything open. */
+export const NO_GOAL_WHY = 'no goal was set for this session before bed, so it does no work tonight'
+
 /**
  * One Stop of an enrolled session while the Mac sleeps. Blocks to keep it working, or lets it stop
- * with a note saying why. The order is the order of what matters most: an unreadable counter, the
- * weekly limit, the night's cap, the breaker, the stuck claim, the unmeasured usage.
+ * with a note saying why. The order is the order of what matters most: an unreadable counter, no
+ * goal, the weekly limit, the night's cap, the breaker, the stuck claim, the unmeasured usage.
  */
 export const decideStop = (i: StopInput): StopDecision => {
   const { now, self } = i
@@ -259,6 +264,10 @@ export const decideStop = (i: StopInput): StopDecision => {
     // A stop with no claim to end still leaves a failed note when it is a fault, so it shows in the report.
     return { kind: 'stop', record: d, why, ...(release ? { release } : {}), notes: [...extra, { kind: 'stopped', ...where, text: why }] }
   }
+
+  // Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker
+  // left without one at bedtime does nothing, and a claim it somehow holds is given up.
+  if (i.goal === null) return stop(NO_GOAL_WHY, claim ? { issue: claim.issue, state: 'parked', why: NO_GOAL_WHY } : undefined)
 
   if (saidStopped(i.notesText, self, d.since)) {
     return stop('the session said it stopped (its stopped note)', claim ? { issue: claim.issue, state: 'parked', why: 'the session said it stopped while still holding this issue' } : undefined)
@@ -326,7 +335,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   d.blocks++
   if (!progressed) d.idleBlocks++
   // A release says the next step itself, ended or not, so no status is given beside it.
-  const status = unread ? unread : release ? '' : claim ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: claim the next one. '
+  const status = unread ? unread : release ? '' : claim ? `You hold #${claim.issue} in ${claim.repo} (attempt ${claim.attempts}): carry on with it. ` : 'You hold no issue: work toward the goal, claiming the next of its issues if it names any. '
   return { kind: 'block', record: d, ...(release ? { release } : {}), notes: [{ kind: 'heartbeat', ...where }], reason: `${told}${status}${i.rules}` }
 }
 
@@ -400,23 +409,31 @@ export const RESUME = 'Sleep mode: the wait after the API error is over. Carry o
 
 /**
  * The overnight rules, carried in every block so they survive compaction (#844). `self` and `root`
- * fill in the commands; nothing here names a phase that is not built.
+ * fill in the commands, and `goal` is what this session works toward tonight and nothing else
+ * (#1242): the queue is only ever asked for the goal's issues, since a bare `next` once claimed the
+ * most urgent open issue in the repository. Nothing here names a phase that is not built.
  */
 // A word for a shell command line: left as it is when plain, else single quoted, so a repository
 // path with a space or an apostrophe (Dan's work MacBook has both) runs as written.
 const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`)
 
-export const overnightRules = (self: string, rootPath: string) => {
+// The goal as one quoted sentence: its own double quotes made single and its lines joined, so it can
+// neither end the quotation early nor break the rules into pieces.
+const quoted = (goal: string) => `"${goal.replace(/"/g, "'").split(/\s+/).filter(Boolean).join(' ')}"`
+
+export const overnightRules = (self: string, rootPath: string, goal: string) => {
   const root = shellWord(rootPath)
   const me = shellWord(self)
   return [
     'Overnight rules (sleep mode): Dan is asleep and asks nothing tonight.',
-    `Claim work with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${me}\`; it prints the issue and a worktree of its own: work only there, never switch branches in the primary checkout.`,
-    `If it prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
+    `Tonight's goal, as Dan set it: ${quoted(goal)}. Work only toward it: never any other issue or task, however urgent.`,
+    `If the goal names issues, or a milestone, its open issues (read them with gh issue list --milestone), claim them with \`bash ~/.claude/hooks/lib/sleep-queue.sh next ${root} ${me} <the goal's issue numbers>\`, naming every one of them each time; it claims the first one free, prints the issue and a worktree of its own, and claims nothing without them. Work only in that worktree, never switch branches in the primary checkout.`,
+    'If the goal names no issue, work the task itself in a worktree of its own (git worktree add under .claude/worktrees), never in the primary checkout, committing as you go and noting each step done with sleep_note (kind progress, with text), since only a claim\'s commits are read as progress.',
+    `If \`next\` prints attempts=${LIMITS.attempts + 1} or more, release that issue as parked at once and claim the next.`,
     'Work it test first, open a pull request, and follow the repository\'s own merge rules.',
-    `When it is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next.`,
+    `When an issue is finished, or cannot be, end the claim with \`bash ~/.claude/hooks/lib/sleep-queue.sh release ${root} <issue> ${me} done|parked|failed "<why>"\` (it writes the note for the report), then claim the next of the goal's issues.`,
     'Write anything for Dan with sleep_note from ~/.claude/hooks/lib/sleep.sh: a question about an issue (kind question, with repo as owner/name, issue as its number, and text), which is asked before bed next time; a proposed issue (kind issue, with repo as owner/name, title, priority as p0 to p4, labels as a list, milestone, and text); a lesson (kind lesson, with the rule word for word as its text); or anything noticed (kind finding). Proposed issues and lessons are offered to Dan in the morning; never file issues, add lessons or ask him.',
-    `When \`next\` prints none, write \`sleep_note '{"kind":"stopped","by":"${self}","text":"nothing left to claim"}'\` and stop.`,
+    `When the goal is met, \`next\` prints none, or nothing more toward it can be done tonight, write \`sleep_note '{"kind":"stopped","by":"${self}","text":"<why>"}'\` and stop.`,
     'What is done is judged from commits and notes, never from what you say, so commit and note as you go.',
   ].join(' ')
 }

@@ -3224,7 +3224,8 @@ test('"I\'m up" carries what waking found only as data: an issue title written o
 
 const DRIVER = `${SLEEP}/driver/g0/s1.json`
 const NOTES = `${SLEEP}/notes/g0.jsonl`
-const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], ...extra })
+// A worker with the goal /sleep recorded for it (#1242): with none it does no work.
+const asleepWorker = (extra: Record<string, unknown> = {}) => asleepRecord({ workers: ['s1'], goals: { s1: 'Close #7 and #9' }, ...extra })
 const kinds = (w: { appended: { line: string }[] }) => w.appended.map(a => (JSON.parse(a.line) as { kind: string }).kind)
 const stopFailure = async ($: $T, error: string, message = 'API Error: 429 rate limited') =>
   (await ($ as unknown as { classic: { StopFailure: (e: never) => Promise<unknown> } }).classic.StopFailure({ error, last_assistant_message: message } as never))
@@ -3233,12 +3234,30 @@ test('an enrolled session is blocked at Stop with the overnight rules, its count
   const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
   await start($ as never, clock)
   const r = await stop($ as never)
-  expect(r.block).toMatch(/^You hold no issue: claim the next one\. Overnight rules \(sleep mode\)/)
-  expect(r.block).toContain('bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1')
+  expect(r.block).toMatch(/^You hold no issue: work toward the goal, claiming the next of its issues if it names any\. Overnight rules \(sleep mode\)/)
+  // The goal the record keeps for this session, and the claim command naming its issues only (#1242).
+  expect(r.block).toContain(`Tonight's goal, as Dan set it: "Close #7 and #9".`)
+  expect(r.block).toContain("bash ~/.claude/hooks/lib/sleep-queue.sh next /repo s1 <the goal's issue numbers>")
   expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ v: 1, generation: 'g0', session: 's1', blocks: 1 })
   expect(kinds(w)).toEqual(['heartbeat'])
   expect(JSON.parse(w.appended[0]?.line as string)).toMatchObject({ kind: 'heartbeat', repo: 'o/r', by: 's1', usage: { rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } })
 })
+
+// Dan, 2026-10-16: "If there's no goal set ... only work the goal. No random issues." A worker the
+// record keeps no goal for (left without one before bed, or a record from before goals were kept)
+// is let stop at its first Stop, said in its note, and never told to claim anything.
+for (const [label, goals] of [['none kept for it', {}], ["only another worker's", { s2: 'Close #3' }], ['a blank one', { s1: '   ' }], ['a record from before goals were kept', undefined]] as const) {
+  test(`a worker with no goal (${label}) is let stop at its first Stop, noted, and never told to claim (#1242)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'], ...(goals === undefined ? {} : { goals }) }) } })
+    await start($ as never, clock)
+    expect((await stop($ as never)).block).toBeUndefined()
+    expect(w.appended.map(a => JSON.parse(a.line))).toEqual([expect.objectContaining({ kind: 'stopped', repo: 'o/r', by: 's1', text: 'no goal was set for this session before bed, so it does no work tonight' })])
+    expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ stopped: 'no goal was set for this session before bed, so it does no work tonight', blocks: 0 })
+    // Stopped for the night: never blocked again, and the queue was never asked to claim.
+    expect((await stop($ as never)).block).toBeUndefined()
+    expect(w.released).toEqual([])
+  })
+}
 
 test('a session the record does not name is never driven: its Stop passes, and nothing is noted (#844)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
