@@ -199,6 +199,70 @@ out_odd="$(python3 "$D" "$ODD" 2>&1)"; code_odd=$?
   && check "#898 oddly shaped lines are skipped and the rest of the transcript is still digested" ok \
   || check "#898 oddly shaped lines are skipped and the rest of the transcript is still digested" "exit=$code_odd out=${out_odd:0:300}"
 
+# A REPORT HANDED BACK THROUGH THE SubagentHandback TOOL IS WHAT THE AGENT SAID (claude-config#1232).
+# An agent that ends by calling that tool writes its report as the tool's INPUT, not as assistant
+# text, so a digest reading only text blocks recorded such an agent as having said nothing: status
+# none, no model call, and every side finding in its report lost. The shape below is measured, not
+# imagined: 286 SubagentHandback blocks across 229 real subagent transcripts on 2026-10-16, every
+# one a tool_use block with exactly the keys caller, id, input, name and type, caller {"type":
+# "direct"}, and an input holding one key, message, always a string. 8 of those 229 transcripts
+# held no assistant text at all, so the handback was the only thing the agent ever said. The text
+# here is invented; only the shape is copied.
+handback() { # handback <report>  -> one assistant line handing the report back, in the measured shape
+  python3 -c 'import json,sys; print(json.dumps({"type":"assistant","message":{"role":"assistant","type":"message","content":[{"type":"tool_use","id":"toolu_01FixtureHandback0000000001","name":"SubagentHandback","caller":{"type":"direct"},"input":{"message":sys.argv[1]}}]}}))' "$1"
+}
+handback_ack() { # the tool_result the harness answers a delivered handback with, as measured
+  python3 -c 'import json; print(json.dumps({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01FixtureHandback0000000001","content":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]}}))'
+}
+
+ONLYHANDBACK="$TMPROOT/onlyhandback.jsonl"
+{ asked "Fix the invoice rounding"; used Edit "/repo/invoice.ts"
+  handback "HANDBACK-ONLY-MARKER: fixed the rounding; the tax helper still truncates negative totals and I left it alone."
+  handback_ack; } > "$ONLYHANDBACK"
+out_hb="$(python3 "$D" "$ONLYHANDBACK" 2>&1)"; code_hb=$?
+[ "$code_hb" -eq 0 ] \
+  && check "#1232 an agent whose only words are a handback report exits 0, not 1 (said nothing)" ok \
+  || check "#1232 an agent whose only words are a handback report exits 0, not 1 (said nothing)" "exit=$code_hb out=${out_hb:0:300}"
+grep -q 'HANDBACK-ONLY-MARKER' <<< "$out_hb" \
+  && check "#1232 and the handed back report is printed as what the agent said" ok \
+  || check "#1232 and the handed back report is printed as what the agent said" "out=${out_hb:0:300}"
+grep -q 'Report delivered to your caller' <<< "$out_hb" \
+  && check "#1232 while the harness acknowledgement, a tool result, stays out" "the acknowledgement came through" \
+  || check "#1232 while the harness acknowledgement, a tool result, stays out" ok
+
+# An agent that narrates AND hands back: the report is the end of what it said, which is the part
+# trimming keeps, so it has to come through after the narration rather than not at all.
+NARRATED="$TMPROOT/narrated.jsonl"
+{ asked "Audit the export job"; say "NARRATION-MARKER: reading the export job now."
+  handback "REPORT-MARKER: the export job retries forever on a 403."; handback_ack; } > "$NARRATED"
+out_nar="$(python3 "$D" "$NARRATED" 2>&1)"
+python3 -c 'import sys; t=sys.stdin.read(); a=t.find("NARRATION-MARKER"); b=t.find("REPORT-MARKER"); sys.exit(0 if 0 <= a < b else 1)' <<< "$out_nar" \
+  && check "#1232 a report handed back after narration comes through, after it" ok \
+  || check "#1232 a report handed back after narration comes through, after it" "out=${out_nar:0:300}"
+
+# Only the hand back tool is read this way. Another tool's input carrying a message field (a commit,
+# a message to a sibling) is an action, not the agent's report, and must stay out of the digest.
+OTHERMSG="$TMPROOT/othermsg.jsonl"
+{ asked "Commit the work"
+  python3 -c 'import json; print(json.dumps({"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01FixtureOther00000000000001","name":"SendMessage","input":{"to":"sibling","message":"OTHER-TOOL-MESSAGE-MARKER"}}]}}))'
+  say "Committed."; } > "$OTHERMSG"
+out_om="$(python3 "$D" "$OTHERMSG" 2>&1)"
+grep -q 'OTHER-TOOL-MESSAGE-MARKER' <<< "$out_om" \
+  && check "#1232 a message field on another tool's input is not read as the report" "it came through" \
+  || check "#1232 a message field on another tool's input is not read as the report" ok
+
+# A handback whose message is not a string, or is blank, is skipped like any odd shape (#898), so an
+# agent whose only handback is malformed is still one that said nothing (exit 1), never a crash.
+ODDHANDBACK="$TMPROOT/oddhandback.jsonl"
+{ asked "Look around"
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"SubagentHandback","input":{"message":7}}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"SubagentHandback","input":{"message":"   "}}]}}' \
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"SubagentHandback","input":"not an object"}]}}'; } > "$ODDHANDBACK"
+python3 "$D" "$ODDHANDBACK" >/dev/null 2>&1; code_ohb=$?
+[ "$code_ohb" -eq 1 ] \
+  && check "#1232 a malformed or blank handback is skipped, and the agent reads as having said nothing" ok \
+  || check "#1232 a malformed or blank handback is skipped, and the agent reads as having said nothing" "exit=$code_ohb"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
