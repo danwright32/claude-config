@@ -499,10 +499,11 @@ const named = async (names: Record<string, string | null>) => {
   return JSON.stringify({ v: 1, names: out })
 }
 
-test("a reading is saved under the session's own account even after the login file names another", withKit, async ($, on) => {
+test("a reading is saved under the session's own account even after the login file names another, until the next prompt", withKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
-  // Another window logs in to Work: the file changes, this session's account does not (L175).
+  // Another window logs in to Work: the file changes, and a measurement never reads it; the next
+  // prompt or re-read of the context does (#1235, below).
   w.files[LOGIN] = login('acct-work', 'work@example.com')
   await measure($, clock, limits(40, 50))
   const saved = JSON.parse(w.files[OWN] as string) as { mac: string; accounts: Record<string, { email: string; reading?: { five?: { used: number } } }> }
@@ -515,8 +516,9 @@ test("a reading is saved under the session's own account even after the login fi
   expect(w.files[OWN]).not.toContain('acct-home')
 })
 
-// #1202: a /login in THIS session does change this session's account, so the record follows it,
-// unlike the switch made by another window above. mod-kit follows the /login and raises the account
+// #1202: a /login in THIS session changes this session's account at once, and since #1235 so does a
+// login made in another window, which mod-kit raises at this session's next prompt or re-read of the
+// context; either way the record follows the raised login. mod-kit follows the /login and raises the account
 // it landed on (#1205; its own tests cover when); here it is raised as mod-kit would, by a mod,
 // since only a loaded mod can call $.modkit.
 const raiser: { name: string; register: Register } = {

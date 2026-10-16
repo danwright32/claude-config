@@ -165,16 +165,18 @@ export type ModKit = {
    * `on('modkit.login', async ($, e, next) => (await follow(e.account), next(e)))`. `account` is the
    * login file's account as it reads after the command: its fields, `{}` for no claude.ai login,
    * null for a file that could not be read. Raised once the command is done, and again when the file
-   * changes within the half minute after it, then no longer, so a mod never follows a switch another
-   * session makes later. Only this session's /login is raised: another session's switch changes the
-   * login file and not this session's account.
+   * changes within the half minute after it. Raised too when a login made elsewhere (another
+   * session's /login, the account room's Switch) moves this session (#1235): Claude Code keeps one
+   * credential per Mac, so the login file is read again at each prompt and each re-read of the
+   * context, and a login other than the one last raised is raised; a file that cannot be read then
+   * raises nothing.
    */
   login: (input: ModKitLogin) => Promise<void>
   /**
    * This session's account as the login file names it now, the one reader of that file every mod
    * uses (#1205): its fields, `{}` for no claude.ai login, null for a file that could not be read.
-   * Read it at a session's start; after that only `modkit.login` says the session's account changed,
-   * since the file also changes when another session switches the Mac.
+   * Read it at a session's start; after that `modkit.login` says when the session's account changed,
+   * so a mod never reads the file again for itself.
    */
   account: () => Promise<ModKitAccount | null>
   /**
@@ -485,8 +487,10 @@ declare module 'claude-code' {
      * with, by mod, so its own touch is not read as a change. `swept`: where each provider other than
      * mod-kit was last looked at, at a turn's start (#966), `from` for one not looked at yet.
      * `buttonsOff`: true once this session has taken the one saying of why buttons show as text on
-     * this Mac (#1190), so a redraw never says it twice whatever the store does.
+     * this Mac (#1190), so a redraw never says it twice whatever the store does. `login`: the login
+     * this session is known to be on (account and org ids, '' for none, null for a file that could
+     * not be read), noted at its start and moved by every modkit.login raised (#1235).
      */
-    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean }
+    'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null }
   }
 }

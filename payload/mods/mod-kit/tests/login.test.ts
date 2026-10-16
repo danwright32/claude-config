@@ -50,6 +50,8 @@ const world = (on: On, then: (files: Record<string, string>) => void = () => und
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('prompt.context', ($, e) => ({ blocks: e.blocks }))
   on('ui.toast', ($, e) => {
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
@@ -92,7 +94,8 @@ test('a /login that returns before the login file changes is raised again once i
   files[LOGIN] = as('acct-2')
   await clock.advance(2 * SEC)
   expect(logins(toasts)).toEqual([account('acct-1'), account('acct-2')])
-  // Later, another session switches the Mac: nothing more is raised for it.
+  // Later, another session switches the Mac: the wait raises nothing more for it; the next prompt
+  // does (#1235, below).
   files[LOGIN] = as('acct-3')
   await clock.advance(MIN)
   expect(logins(toasts)).toEqual([account('acct-1'), account('acct-2')])
@@ -142,6 +145,107 @@ test('a /clear while a /login is awaited goes on following it, and a real end st
   files[LOGIN] = as('acct-3')
   await clock.advance(2 * SEC)
   expect(logins(toasts)).toEqual([account('acct-1'), account('acct-2'), account('acct-2')])
+})
+
+// #1235: a login made in another session, or by the account room's Switch, moves the account the
+// session runs on too: Claude Code takes in the new credential and re-reads the session's context
+// with the new account's email. So the login file is read again at each prompt and at each re-read
+// of the context, and a login other than the one last raised is raised.
+type P = { turn: { start: (e: object) => Promise<unknown> }; prompt: { context: (e: object) => Promise<{ blocks: unknown[] }> } }
+let turns = 0
+const prompt = async ($: unknown, clock: { settle: () => Promise<void> }) => {
+  turns += 1
+  await ($ as P).turn.start({ text: 'go on', turnId: `t${turns}` })
+  await clock.settle()
+}
+const reread = async ($: unknown, clock: { settle: () => Promise<void> }) => {
+  const out = await ($ as P).prompt.context({ blocks: [{ name: 'userEmail', text: 'x' }] })
+  await clock.settle()
+  return out
+}
+
+test("another session's login is raised at this session's next prompt, once", withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on)
+  await start($, clock)
+  files[LOGIN] = as('acct-2', 'Personal')
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2', 'Personal')])
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2', 'Personal')])
+  // And back again, as a second switch would.
+  files[LOGIN] = as('acct-1')
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2', 'Personal'), account('acct-1')])
+})
+
+test('a prompt on the account the session started on raises nothing', withFollower, async ($, on) => {
+  const { toasts, clock } = world(on)
+  await start($, clock)
+  await prompt($, clock)
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([])
+})
+
+test('a re-read of the context raises the account the login file names now, and passes the context on unchanged', withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on)
+  await start($, clock)
+  files[LOGIN] = as('acct-2')
+  const out = await reread($, clock)
+  expect(out.blocks).toEqual([{ name: 'userEmail', text: 'x' }])
+  expect(logins(toasts)).toEqual([account('acct-2')])
+  // The prompt that follows finds nothing new.
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2')])
+})
+
+test('a login file that cannot be read at a prompt raises nothing, and the account is raised once it can be read', withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on)
+  await start($, clock)
+  files[LOGIN] = 'not json'
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([])
+  files[LOGIN] = as('acct-2')
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2')])
+})
+
+test('a login another session leaves with no claude.ai login is raised as no account', withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on)
+  await start($, clock)
+  delete files[LOGIN]
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([{}])
+})
+
+test('a /login already raised is not raised again at the next prompt', withFollower, async ($, on) => {
+  const { toasts, clock } = world(on, f => {
+    f[LOGIN] = as('acct-2')
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([account('acct-2')])
+})
+
+test('a /login raised as unknown is followed by the account at the next prompt that can read it', withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on, f => {
+    f[LOGIN] = 'not json'
+  })
+  await start($, clock)
+  await runLogin($, clock)
+  await clock.advance(31 * SEC)
+  files[LOGIN] = as('acct-1')
+  await prompt($, clock)
+  expect(logins(toasts)).toEqual([null, account('acct-1')])
+})
+
+test('a prompt after the session has ended raises nothing', withFollower, async ($, on) => {
+  const { files, toasts, clock } = world(on)
+  await start($, clock)
+  await end($, clock, 'exit')
+  files[LOGIN] = as('acct-2')
+  await reread($, clock)
+  expect(logins(toasts)).toEqual([])
 })
 
 test('another slash command raises nothing', withFollower, async ($, on) => {
