@@ -15,8 +15,8 @@
 #   3a. Claude Code's own /goal hook blocks a session that is not a worker again and again (the
 #      control), and never reaches a worker the driver has let stop, so a /goal cannot carry a
 #      worker past the circuit breaker, the night's cap or the weekly limit (#1242).
-#   4. A worker with no goal is let stop at its first Stop and asks the queue nothing (#1242). A
-#      worker with one is kept going by the driver: its Stop is blocked with the overnight rules
+#   4a. A worker with no goal is let stop at its first Stop and asks the queue nothing (#1242).
+#   4. A worker with a goal is kept going by the driver: its Stop is blocked with the overnight rules
 #      carrying its goal, and it claims the goal's issue with sleep-queue.sh, works it in the
 #      claim's worktree, ends the claim and stops when nothing is left (#842, #844).
 #   5. Notes reach the report: the claim, its end, the driver's heartbeats and a proposed issue are
