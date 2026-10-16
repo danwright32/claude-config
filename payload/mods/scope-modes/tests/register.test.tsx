@@ -3008,6 +3008,8 @@ test('asleep, a merge helper reading mod-kit cannot give refuses the call, where
   expect(await call($ as never, bash('cat ~/.claude/hooks/lib/merge-when-ready.sh'))).toBe('ran')
   expect(await call($ as never, bash('bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight/)
   expect(await call($ as never, bash('cd /quiet && bash -c "$MERGE"'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
+  // xargs may add a repository from its input after the one written, so it is refused too.
+  expect(await call($ as never, bash('cd /quiet && echo 5 | xargs bash ~/.claude/hooks/lib/merge-when-ready.sh --repo o/quiet'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
   w.o.mergeHelperReaderFails = true
   expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(mod-kit is not loaded\)/)
 })

