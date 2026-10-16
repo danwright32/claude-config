@@ -225,7 +225,8 @@ check "#851 every wait line carries the elapsed time" "merge-when-ready: [" "$ou
 [ "$(count sleeps 30)" -ge 2 ] && ok || bad "#851 it slept through the injected sleep while waiting ($(count sleeps 30))"
 
 # =================================================================================================
-# 4. Main moves again while the new head is being checked: updated again, and bounded.
+# 4. Main moves again while the new head is being checked: updated again. There is no count of
+#    updates since #1271; the deadline bounds the run, and section 11 proves both.
 # =================================================================================================
 fresh "$OLD" 2 "$GREEN"
 printf '%s\n%s\n' "$NEW" "$NEWER" > "$ST/next-heads"
