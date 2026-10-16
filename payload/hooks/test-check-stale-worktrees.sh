@@ -213,6 +213,40 @@ check_eq "with the change in it" "somebody wrote this since" "$(cat "$WT/agent-c
 check_eq "a marker for a worktree git no longer lists is cleared" no "$([ -e "$MARKS/agent-long-gone" ] && echo yes || echo no)"
 G -C "$REPO" worktree remove --force "$WT/agent-cut-changed" >/dev/null 2>&1; rm -f "$MARKS/agent-cut-changed"
 
+# --- a removal git refuses, and one that fails part way --------------------
+# A refusal before anything is deleted (here, a locked worktree) leaves nothing to finish, so its
+# marker goes. A failure PART WAY is different, measured 2026-10-16 with one unwritable folder: git
+# deleted the worktree's own files and its registration, stopped at that folder, and left a plain
+# folder git no longer lists. Clearing the marker there would leave it unexplained for ever, so the
+# marker stays and every later run names it as a folder to delete by hand.
+add fix/510-locked agent-locked; merged fix/510-locked "$WT/agent-locked" HEAD 510; age agent-locked
+G -C "$REPO" worktree lock "$WT/agent-locked"
+add fix/511-unwritable agent-unwritable
+mkdir -p "$WT/agent-unwritable/z"; printf 'z\n' >"$WT/agent-unwritable/z/z.txt"
+G -C "$WT/agent-unwritable" add z; G -C "$WT/agent-unwritable" commit -qm z
+merged fix/511-unwritable "$WT/agent-unwritable" HEAD 511; age agent-unwritable
+chmod 555 "$WT/agent-unwritable/z"
+trap 'chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+CAN_DENY=1
+: >"$WT/agent-unwritable/z/probe" 2>/dev/null && { CAN_DENY=0; rm -f "$WT/agent-unwritable/z/probe"; }
+run --remove "$REPO"
+check "a removal git refuses is said" "keeping agent-locked [fix/510-locked]: git would not remove it" "$OUT"
+check_eq "and, nothing having been deleted, leaves no marker" no "$([ -e "$MARKS/agent-locked" ] && echo yes || echo no)"
+if [ "$CAN_DENY" -eq 1 ]; then
+  check "a removal that fails part way is said" "keeping agent-unwritable [fix/511-unwritable]: git would not remove it" "$OUT"
+  check_eq "and its marker stays, since part of it is gone" yes "$([ -e "$MARKS/agent-unwritable" ] && echo yes || echo no)"
+  run --remove "$REPO"
+  check "the next run names what git left as a plain folder to delete by hand" \
+    "keeping agent-unwritable: an earlier removal of it stopped part way after git had already let go of it" "$OUT"
+  check "with the command that deletes it" "rm -rf $REPO_REAL/.claude/worktrees/agent-unwritable" "$OUT"
+  check_eq "and deletes nothing itself" yes "$([ -d "$WT/agent-unwritable" ] && echo yes || echo no)"
+else
+  echo "UNMEASURED: a folder made unwritable here can still be written (running as root?), so a removal failing part way cannot be staged"
+fi
+chmod -R u+w "$WT/agent-unwritable" 2>/dev/null; rm -rf "$WT/agent-unwritable"; rm -f "$MARKS/agent-unwritable"
+G -C "$REPO" worktree unlock "$WT/agent-locked"; G -C "$REPO" worktree remove --force "$WT/agent-locked" >/dev/null 2>&1
+G -C "$REPO" worktree prune
+
 # --- a number that is a PREFIX of a merged branch is not merged -------------
 add fix/41 agent-prefix; age agent-prefix
 run "$REPO"

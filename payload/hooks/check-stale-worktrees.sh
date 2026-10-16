@@ -29,7 +29,9 @@
 # So each removal writes a progress marker into the repository's git directory first and clears it
 # after. A marker found by a later --remove run is a removal an earlier run decided on and never
 # finished: it is finished when nothing but deletions is in the folder and nothing is running in
-# it, and otherwise kept and said loudly, because a change since the cut is somebody's work.
+# it, and otherwise kept and said loudly, because a change since the cut is somebody's work. A
+# removal git itself fails part way can leave a folder git no longer lists; that one is named on
+# every run with the command that deletes it, and never deleted here.
 #
 # It is not run inside a prompt. The nudge starts it in the background, under no timeout and in a
 # session of its own (lib/stale-worktree-run.py, #1247), because with 46 worktrees inspecting them
@@ -143,8 +145,18 @@ for m in "$MARKS"/*; do
   [ -f "$m" ] || continue
   p="$(head -n 1 "$m" 2>/dev/null)"; name="$(basename "$p")"; b=""; listed=0
   for i in "${!paths[@]}"; do [ "${paths[$i]}" = "$p" ] && { listed=1; b="${branches[$i]}"; }; done
-  # Git no longer lists it, so that removal finished after all and only the marker was left.
-  if [ "$listed" -eq 0 ]; then rm -f "$m"; continue; fi
+  # Git no longer lists it and the folder is gone, so that removal finished after all and only the
+  # marker was left.
+  if [ "$listed" -eq 0 ] && [ ! -e "$p" ]; then rm -f "$m"; continue; fi
+  # Git no longer lists it but the folder is still there: a removal that failed part way after git
+  # had dropped its registration. It is a plain folder now, which this script does not delete (a
+  # different operation, with nothing left to check it against), so it is named every run until a
+  # person deletes it, and the marker is cleared on the run that finds it gone.
+  if [ "$listed" -eq 0 ]; then
+    cut=$((cut + 1))
+    echo "  keeping $name: an earlier removal of it stopped part way after git had already let go of it, so what is left is a plain folder no worktree owns. Delete it by hand once nothing in it is wanted: rm -rf $p"
+    continue
+  fi
   cut=$((cut + 1)); settled="$settled$p "
   if [ "$REMOVE" -eq 0 ]; then
     echo "  CUT OFF $name [${b:-no branch}]: an earlier removal of it stopped part way"
@@ -227,11 +239,22 @@ for i in "${!paths[@]}"; do
   if err="$(git -C "$top" worktree remove "$p" 2>&1)"; then
     removed=$((removed + 1))
     echo "  removed $name [$b]: PR #$num merged and nothing in it was newer (its branch is kept)"
+    rm -f "$MARKS/$name"
   else
     echo "  keeping $name [$b]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
+    # A refusal before anything is deleted (a lock, a change made since the check above) leaves the
+    # worktree listed, whole and as it was, so there is nothing to finish. A failure PART WAY does
+    # not: measured 2026-10-16 with one unwritable folder, git deleted the worktree's own files and
+    # its registration and then stopped. The marker stays for anything but the first, so a later
+    # run can say what is left.
+    still="$(git -C "$top" worktree list --porcelain 2>/dev/null)"
+    case $'\n'"$still"$'\n' in
+      *$'\n'"worktree $p"$'\n'*)
+        if [ -d "$p" ] && [ -z "$(git -C "$p" status --porcelain 2>/dev/null | grep '^ D ')" ]; then
+          rm -f "$MARKS/$name"
+        fi ;;
+    esac
   fi
-  # Cleared either way: git refuses before it deletes anything, so a refusal leaves nothing to finish.
-  rm -f "$MARKS/$name"
 done
 
 [ "$landed" -eq 0 ] && [ "$cut" -eq 0 ] && exit 0
