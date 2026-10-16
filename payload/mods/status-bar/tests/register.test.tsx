@@ -732,28 +732,30 @@ test('a folder that is no repository, or a repository with no commits yet, has n
   await ui.unmount()
 })
 
-// #815: the status line names the session's own account, the one its limits belong to, so the
-// account is read from the Mac's login file once, at session start, and carried in the facts file.
-// Another session logging the Mac in to another account (a Switch does) must not change this one's.
+// #815: the status line names the session's own account, the one its limits belong to, read from the
+// Mac's login file at session start and carried in the facts file. #1235: a login made in another
+// session (or by a Switch) moves this session too, since Claude Code keeps one credential per Mac,
+// so mod-kit reads the file again at each prompt and each re-read of the context and raises the
+// change as modkit.login (its own tests cover when; the raised login is taken in below); a request
+// in between never reads it.
 const LOGIN_FILE = '/Users/x/.claude.json'
 const loginAs = (files: Record<string, string>, id: string, name: string, org: string) => {
   files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: id, organizationUuid: `org-${id}`, displayName: name, emailAddress: `${id}@example.com`, organizationName: org }, other: 'kept out' })
 }
 const accountIn = (files: Record<string, string>) => (JSON.parse(files[`${DIR}/s1.json`] as string) as { account: unknown }).account
 
-test("the facts file names the session's own account, read at its start, and keeps it when the Mac logs in elsewhere (#815)", withKit, async ($, on) => {
+test("the facts file names the session's own account, read at its start, and keeps it through a request when the Mac logs in elsewhere (#815)", withKit, async ($, on) => {
   const { files, clock } = world(on)
   loginAs(files, 'acct-1', 'Dan', 'Pennie')
   await start($, clock)
   const mine = { accountUuid: 'acct-1', organizationUuid: 'org-acct-1', displayName: 'Dan', emailAddress: 'acct-1@example.com', organizationName: 'Pennie' }
   expect(accountIn(files)).toEqual(mine)
-  // Another session switches the Mac's login; this session's next facts write keeps its own account.
+  // Another session switches the Mac's login; a request reads no login file, so it keeps the account.
   loginAs(files, 'acct-2', 'Dan', 'Personal')
   await step($, clock)
   expect(cacheIn(files)).toBe(T0 + HOUR)
   expect(accountIn(files)).toEqual(mine)
 })
-
 test("the facts file carries the login's organizationType, so the status line can name the plan (#1156)", withKit, async ($, on) => {
   const { files, clock } = world(on)
   files[LOGIN_FILE] = JSON.stringify({ oauthAccount: { accountUuid: 'acct-1', organizationUuid: 'org-1', displayName: 'Dan', organizationName: 'Pennie', organizationType: 'claude_team', billingType: 'kept out' } })
@@ -770,9 +772,9 @@ test('a second session start in the same session, as a reload of the mod brings,
   expect((accountIn(files) as { accountUuid: string }).accountUuid).toBe('acct-1')
 })
 
-// #1200: a /login in THIS session changes this session's account, unlike a switch made by another
-// session. mod-kit follows the /login and raises modkit.login with the account the login file names
-// (#1205; its own tests cover when it raises); here it is raised as mod-kit would.
+// #1200: a /login in THIS session changes this session's account at once. mod-kit follows the
+// /login and raises modkit.login with the account the login file names (#1205; its own tests cover
+// when it raises); here it is raised as mod-kit would.
 // A mod raising the login as mod-kit would, since only a loaded mod can call $.modkit: the account
 // arrives as a Bash command's text.
 const raiser: { name: string; register: Register } = {
@@ -799,7 +801,8 @@ test('a login raised in this session names the account it logged in to (#1200, #
   await start($, clock)
   await raiseLogin($, clock, acct2)
   expect(accountIn(files)).toEqual(acct2)
-  // Later another session switches the Mac, which raises nothing here: the account stays.
+  // Later another session switches the Mac: a request raises nothing, so the account stays until the
+  // next prompt (#1235, above).
   loginAs(files, 'acct-3', 'Dan', 'Elsewhere')
   await step($, clock)
   expect(accountId(files)).toBe('acct-2')
