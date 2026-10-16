@@ -4,8 +4,8 @@
 #
 # Sourced for its functions, or run as a command by an overnight session:
 #
-#   bash ~/.claude/hooks/lib/sleep-queue.sh next    REPO_ROOT SESSION_ID [GOAL_ISSUE...]
-#   bash ~/.claude/hooks/lib/sleep-queue.sh queue   REPO_ROOT SESSION_ID [GOAL_ISSUE...]
+#   bash ~/.claude/hooks/lib/sleep-queue.sh next    REPO_ROOT SESSION_ID GOAL_ISSUE...
+#   bash ~/.claude/hooks/lib/sleep-queue.sh queue   REPO_ROOT SESSION_ID GOAL_ISSUE...
 #   bash ~/.claude/hooks/lib/sleep-queue.sh claim   REPO_ROOT ISSUE SESSION_ID
 #   bash ~/.claude/hooks/lib/sleep-queue.sh release REPO_ROOT ISSUE SESSION_ID free|done|parked|failed [WHY]
 #   bash ~/.claude/hooks/lib/sleep-queue.sh claims
@@ -21,11 +21,18 @@
 #
 #   claimed  ISSUE  attempts=N  worktree=PATH  TITLE        exit 0
 #   none     -      nothing left to claim tonight            exit 1
+#   none     -      no goal issues were named: ...           exit 1
 #   refused  -      WHY                                      exit 3
 #
-# The queue (L24): the goal's issues when given, else every open p0 to p3 issue, fetched with an
-# explicit limit (SLEEP_QUEUE_LIMIT, 500) and refused when a page comes back that full, sorted here
-# by priority then number. Left out, each with its reason on a skip line: needs-dan; a before bed
+# The queue is the goal's issues and nothing else (#1242, Dan, 2026-10-16: "Don't pick up random
+# issues"): the issues the session's goal names, or its milestone's open issues, each passed as a
+# GOAL_ISSUE and read on its own, in the order given, whatever their priority. With none named,
+# `queue` and `next` print the second none line and read nothing from GitHub: there is no fallback
+# to the repository's other open issues, so a session with no goal does no work. Goal issues named
+# but none of them readable is refused (exit 3), after a skip line for each with its reason, never
+# read as no goal named. The open pull
+# requests are fetched with an explicit limit (SLEEP_QUEUE_LIMIT, 500) and refused when a page
+# comes back that full (L24). Left out, each with its reason on a skip line: needs-dan; a before bed
 # question about it that went unanswered (phase 6, #836, writes those to
 # ~/.claude/state/sleep/unanswered/GENERATION, one owner/repo#N a line); an open pull request or a
 # branch naming it, unless tonight's own claims have touched it, when the claim decides; an issue an
@@ -189,7 +196,6 @@ import json, sys
 for a in json.load(sys.stdin).get("hosts", {}).get("github.com", []):
     if a.get("state") == "success" and a.get("login"):
         print(a["login"])' ;;
-    issues) _sq_gh issue list -R "$2" --state open --limit "$3" --json number,title,labels,author ;;
     issue) _sq_gh issue view "$3" -R "$2" --json number,title,labels,author,state ;;
     prs) _sq_gh pr list -R "$2" --state open --limit "$3" --json number,title,body,headRefName ;;
     branches) _sq_gh api --paginate "repos/$2/branches?per_page=100" --jq '.[].name' ;;
@@ -217,18 +223,23 @@ _sq_fetch() {
 
 # ---- the queue ----
 
-# sleep_queue REPO_ROOT SESSION_ID [GOAL_ISSUE...]: next and skip lines, as the header says.
+# The answer to a call naming no goal issue: nothing is offered, and nothing read (#1242).
+_sq_no_goal() { printf 'none\t-\tno goal issues were named: sleep mode works only the issues a goal names, never the other open issues\n'; return 1; }
+
+# sleep_queue REPO_ROOT SESSION_ID GOAL_ISSUE...: next and skip lines, as the header says.
 sleep_queue() {
   local root="${1:-}" self="${2:-}" gen slug tmp limit="${SLEEP_QUEUE_LIMIT:-500}" n rc goal="" goalskips="" why
   [ $# -ge 2 ] || { _sq_refuse "sleep_queue needs a repository root and a session id"; return 3; }
   shift 2
+  # Awake is said first, as by every other call; asleep with no goal reads nothing from GitHub.
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  [ $# -gt 0 ] || { _sq_no_goal; return 1; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
   _sq_account "$slug" || { rm -rf "$tmp"; _sq_refuse "$_SQ_WHY"; return 3; }
   rc=0
   _sq_fetch "$tmp/accounts" "list of Dan's GitHub accounts" accounts || rc=3
-  if [ "$rc" = 0 ] && [ $# -gt 0 ]; then
+  if [ "$rc" = 0 ]; then
     : > "$tmp/goal.jsonl"
     for n in "$@"; do
       case "$n" in ''|*[!0-9]*) rm -rf "$tmp"; _sq_refuse "goal issue $n is not an issue number"; return 3 ;; esac
@@ -241,11 +252,16 @@ sleep_queue() {
       cat "$tmp/one" >> "$tmp/goal.jsonl"; echo >> "$tmp/goal.jsonl"
       goal="$goal${goal:+,}$n"
     done
+    # Every goal issue unreadable is a goal that could not be read, never one that named nothing
+    # (lessons review of #1242, L11): each issue's own reason is kept, and the queue refuses.
+    if [ -z "$goal" ]; then
+      printf '%s' "$goalskips"
+      _sq_refuse "every goal issue named ($(printf '#%s, ' "$@" | sed 's/, $//')) could not be read from GitHub, so nothing can be claimed from this goal"
+      rm -rf "$tmp"; return 3
+    fi
     [ "$rc" = 0 ] && { python3 -c '
 import json, sys
 print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$tmp/goal.jsonl" > "$tmp/issues.json" 2>"$tmp/goal.err" || { _sq_refuse "a goal issue came back as something other than JSON"; rc=3; }; }
-  elif [ "$rc" = 0 ]; then
-    _sq_fetch "$tmp/issues.json" "open issues of $slug" issues "$slug" "$limit" || rc=3
   fi
   [ "$rc" = 0 ] && { _sq_fetch "$tmp/prs.json" "open pull requests of $slug" prs "$slug" "$limit" || rc=3; }
   [ "$rc" = 0 ] && { _sq_fetch "$tmp/branches" "branches of $slug" branches "$slug" || rc=3; }
@@ -544,13 +560,15 @@ sleep_worktree() {
 
 # ---- next ----
 
-# sleep_next REPO_ROOT SESSION_ID [GOAL_ISSUE...]: see the header. Exactly one result line comes
+# sleep_next REPO_ROOT SESSION_ID GOAL_ISSUE...: see the header. Exactly one result line comes
 # first; issues it claimed but could not start follow as skip lines, with the queue's own. A claim
 # refused outright (the night ended, the claim folder cannot be written) stops it with that refusal,
-# never read as an issue someone else holds.
+# never read as an issue someone else holds. With no goal issue it claims nothing (#1242).
 sleep_next() {
   local root="${1:-}" self="${2:-}" q rc lines n title got attempts wt err failed="" crc
   q="$(sleep_queue "$@")"; rc=$?
+  # No goal issues: the queue's own none line, said as next's one result, and nothing claimed.
+  if [ "$rc" = 1 ] && [ $# -eq 2 ]; then printf '%s\n' "$q"; return 1; fi
   if [ "$rc" != 0 ]; then printf '%s\n' "$q"; return 3; fi
   lines="$(printf '%s\n' "$q" | awk -F'\t' '$1 == "next" { print $2 "\t" $6 }')"
   while IFS=$'\t' read -r n title; do
