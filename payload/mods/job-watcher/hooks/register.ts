@@ -79,6 +79,8 @@ const say = (to: string | undefined, text: string, wake?: true) => notices.push(
 // turn.complete of the main loop. Unknown until a session start says idle, and read as not idle, so
 // a session the watcher has not seen start is told on its next tool call as before, never woken.
 let mainTurn: 'idle' | 'busy' | 'unknown' = 'unknown'
+// Counts session starts, so work that spans one (a wake in flight) can tell its session has ended.
+let sessionNo = 0
 let toldUnpublished = false
 let toldClockFailed = false
 // The agents whose loops have not ended, as the last look at the agent list found them, plus any seen
@@ -337,6 +339,7 @@ const wakeIfIdle = async ($: EngineInterface) => {
   if (mainTurn !== 'idle') return
   const due = notices.filter(n => n.wake && n.to === undefined)
   if (!due.length) return
+  const mine = sessionNo
   // Taken before the first wait, so a second call meanwhile finds nothing of these to send.
   for (const n of due) notices.splice(notices.indexOf(n), 1)
   let asleep = false
@@ -358,6 +361,12 @@ const wakeIfIdle = async ($: EngineInterface) => {
     const r = await $.prompt.submit({ text: due.map(n => n.text).join('\n\n') })
     if (r.drop !== undefined) throw new Error(r.drop)
   } catch (err) {
+    // A new session started while the wake was in flight (lessons review of #1234): its notice was
+    // about the old session's agents, so it is dropped, never handed to the new one as its own.
+    if (sessionNo !== mine) {
+      $.ui.log(`The background job watcher could not wake a session about a quiet background agent (${message(err)}), and the session it was for has ended, so the notice is dropped.`, { to: 'debug' })
+      return
+    }
     for (const n of due) notices.push({ to: undefined, text: n.text })
     $.ui.log(`The background job watcher could not wake this session about a quiet background agent (${message(err)}). Claude is told on its next tool call instead.`)
   }
@@ -899,6 +908,7 @@ export const register: Register = on => {
     lateStops.clear()
     reminded.clear()
     notices.length = 0
+    sessionNo += 1
     // A session starting has no turn running yet (#1234).
     mainTurn = 'idle'
     toldUnpublished = false

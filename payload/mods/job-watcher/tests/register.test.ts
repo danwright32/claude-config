@@ -152,6 +152,8 @@ type World = {
   asleep?: boolean | 'throws'
   /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, thrown, or never answered (hangs). */
   submit?: 'drop' | 'throws' | 'hangs'
+  /** A submit that throws only once this settles, so a test can act while the wake is in flight. */
+  submitFailsAfter?: Promise<unknown>
   /** The engine's handling of a turn's end beneath the watcher throws (lessons review of #1234). */
   turnEndThrows?: boolean
 }
@@ -315,6 +317,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (o.submit === 'drop') return { drop: 'held while Dan is away' } as never
     // A submit that never answers: the turn it asks for never starts.
     if (o.submit === 'hangs') return new Promise<never>(() => undefined)
+    if (o.submitFailsAfter) return o.submitFailsAfter.then(() => { throw new Error('the prompt queue is closed') }) as never
     return { text: e.text } as never
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
@@ -2153,6 +2156,26 @@ test('a turn whose end fails beneath the watcher still leaves the conversation i
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
   expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
+})
+
+// Lessons review of #1234: a wake still in flight when a new session starts must not, failing,
+// hand the old session's notice to the new one, which would read it as about its own agents.
+test("a wake that fails after a new session has started never carries the old session's notice into it (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let fail = () => {}
+  const failed = new Promise<void>(r => { fail = r })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submitFailsAfter: failed })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  await start($)
+  fail()
+  await clock.advance(1)
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
+  // Nothing about it reaches the new session's transcript either: the drop goes to the debug log.
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([])
 })
 
 test('a wake whose submit never answers holds up no look: a job still stalls and is said (lessons review of #1234)', withDeps, async ($, on) => {
