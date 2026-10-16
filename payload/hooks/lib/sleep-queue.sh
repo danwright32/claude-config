@@ -28,7 +28,9 @@
 # issues"): the issues the session's goal names, or its milestone's open issues, each passed as a
 # GOAL_ISSUE and read on its own, in the order given, whatever their priority. With none named,
 # `queue` and `next` print the second none line and read nothing from GitHub: there is no fallback
-# to the repository's other open issues, so a session with no goal does no work. The open pull
+# to the repository's other open issues, so a session with no goal does no work. Goal issues named
+# but none of them readable is refused (exit 3), after a skip line for each with its reason, never
+# read as no goal named. The open pull
 # requests are fetched with an explicit limit (SLEEP_QUEUE_LIMIT, 500) and refused when a page
 # comes back that full (L24). Left out, each with its reason on a skip line: needs-dan; a before bed
 # question about it that went unanswered (phase 6, #836, writes those to
@@ -250,6 +252,13 @@ sleep_queue() {
       cat "$tmp/one" >> "$tmp/goal.jsonl"; echo >> "$tmp/goal.jsonl"
       goal="$goal${goal:+,}$n"
     done
+    # Every goal issue unreadable is a goal that could not be read, never one that named nothing
+    # (lessons review of #1242, L11): each issue's own reason is kept, and the queue refuses.
+    if [ -z "$goal" ]; then
+      printf '%s' "$goalskips"
+      _sq_refuse "every goal issue named ($(printf '#%s, ' "$@" | sed 's/, $//')) could not be read from GitHub, so nothing can be claimed from this goal"
+      rm -rf "$tmp"; return 3
+    fi
     [ "$rc" = 0 ] && { python3 -c '
 import json, sys
 print(json.dumps([json.loads(l) for l in open(sys.argv[1]) if l.strip()]))' "$tmp/goal.jsonl" > "$tmp/issues.json" 2>"$tmp/goal.err" || { _sq_refuse "a goal issue came back as something other than JSON"; rc=3; }; }

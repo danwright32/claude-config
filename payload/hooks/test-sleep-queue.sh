@@ -296,6 +296,14 @@ out="$(sleep_queue "$ROOT" s1 8 77 5)"; rc=$?
 check_eq "a goal issue that cannot be read does not refuse the queue" 0 "$rc"
 check_eq "the readable goal issues are still queued" "8 5" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
 check_has "and the unreadable one is a skip line saying why" "$(printf 'skip\t77\tthe goal issue #77 could not be read from GitHub')" "$out"
+# Every goal issue unreadable is a goal that could not be read, never one that named nothing
+# (lessons review of #1242, L11): refused, with each issue's own reason kept.
+out="$(sleep_queue "$ROOT" s1 77 78)"; rc=$?
+check_eq "a goal whose issues all cannot be read refuses, as a read that failed" 3 "$rc"
+check_has "saying every goal issue named could not be read" "every goal issue named (#77, #78) could not be read from GitHub" "$out"
+check_not "never that no goal issues were named" "no goal issues were named" "$out"
+check_has "keeping the first issue's own reason" "$(printf 'skip\t77\tthe goal issue #77 could not be read from GitHub')" "$out"
+check_has "and the second's" "$(printf 'skip\t78\tthe goal issue #78 could not be read from GitHub')" "$out"
 # An issue with no priority label is queued when a goal names it: a goal is Dan's word on what to work.
 fixtures
 check_eq "a goal issue of p4, or of no priority, is queued too" "10 8" "$(sleep_queue "$ROOT" s1 10 8 | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"

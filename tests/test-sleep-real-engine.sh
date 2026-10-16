@@ -44,7 +44,7 @@
 #
 # What a headless run cannot show, said rather than passed:
 #   - /sleep enrols interactive sessions only, and a `claude -p` run is never one (by design,
-#     #840). So steps 3 and 4 enrol their sessions by adding their ids to the record /sleep wrote;
+#     #840). So steps 3, 3a, 4a and 4 enrol their sessions by adding their ids to the record /sleep wrote;
 #     a real interactive session's enrolment is UNMEASURED here.
 #   - The before bed questions need a person at a prompt, so none is asked here.
 #   - /sleep telling an idle worker to start (#1242) needs a second live interactive session to
