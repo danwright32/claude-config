@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { IsItLive, IsItLiveCard } from '../types/index.d.ts'
+import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
+import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, helperWords, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -12,7 +13,6 @@ import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, 
 // only mod-kit draws a result row (tools/check-mod-shared-parts.sh, L613). The same lines go to the
 // model as the tool's text result, which is also what the row shows after a reload.
 
-const TOOL = `mcp__${MOD}__card`
 const KEEP = 50
 const CARDS = 'cards:'
 
@@ -30,9 +30,9 @@ const storeKey = (repo: string) => `${CARDS}${fold(repo)}`
 const verdictsRef = { plugin: 'is-it-live', key: 'verdicts' } as const
 const verdictKey = (repo: string, pr: number) => `${fold(repo)}#${pr}`
 
-const run = async ($: EngineInterface, argv: string[]) => {
+const run = async ($: EngineInterface, argv: string[], cwd?: string) => {
   try {
-    const r = await $.process.run(argv, { timeoutMs: 20_000 })
+    const r = await $.process.run(argv, { timeoutMs: 20_000, ...(cwd ? { cwd } : {}) })
     return r.exitCode === 0 ? { out: r.stdout } : { error: (r.stderr || r.stdout || `exit ${r.exitCode}`).trim() }
   } catch (err) {
     return { error: String((err as Error)?.message ?? err) }
@@ -102,6 +102,121 @@ const pin = async ($: EngineInterface, c: IsItLiveCard): Promise<string | undefi
   }
 }
 
+// ---- #1244: the card after every merge (merges.ts says why) ----
+
+// Per session, in $.state: a new session owes nothing for another's merges. A card is kept in the
+// store, which every session shares, so a card another session made for the PR settles it too.
+const owedRef = { plugin: 'is-it-live', key: 'owed' } as const
+const interactiveRef = { plugin: 'is-it-live', key: 'interactive' } as const
+const refusedRef = { plugin: 'is-it-live', key: 'refused' } as const
+const msg = (err: unknown) => String((err as Error)?.message ?? err)
+
+const owedOf = async ($: EngineInterface): Promise<IsItLiveOwed[]> => (await $.state.get(owedRef)).value ?? []
+
+// What GitHub says about the PR a merge named, asked in the folder the session's shell is in, since
+// a merge naming no repository is the checkout's there. Never the exit code: `| tail` makes a failed
+// merge exit 0, and `--delete-branch` in a worktree fails after merging (L161).
+const ask = async ($: EngineInterface, m: { selector?: string; named?: string }, cwd: string, since: number): Promise<Proof> => {
+  const r = await run($, ['gh', 'pr', 'view', ...(m.selector !== undefined ? [m.selector] : []), ...(m.named ? ['--repo', m.named] : []), '--json', VIEW_FIELDS], cwd)
+  return r.error !== undefined ? { kind: 'unproven', why: `GitHub could not be asked: ${r.error}` } : proofOf(r.out as string, since)
+}
+
+// The repository GitHub's own link for the PR names, read by mod-kit's one reader, as a card is kept.
+const repoOfLink = async ($: EngineInterface, url: string, named: string | undefined): Promise<string | undefined> => {
+  try {
+    return (await $.modkit.linkRepo({ link: url })) ?? named
+  } catch {
+    return named
+  }
+}
+
+// Each merge a Bash call made at once, read by mod-kit's command and gh readers: gh pr merge in any
+// spelling mod-kit reads (behind rtk, sudo, an assignment), and the merge helper's arguments read as
+// the gh pr merge it runs.
+const mergesIn = async ($: EngineInterface, command: string): Promise<MergeCall[]> => {
+  const out: MergeCall[] = []
+  for (const c of await $.modkit.pipeline({ command })) {
+    const direct = mergeCallOf(await $.modkit.gh({ words: c.words }))
+    if (direct) {
+      out.push(direct)
+      continue
+    }
+    const hw = helperWords(c.words)
+    const viaHelper = hw ? mergeCallOf(await $.modkit.gh({ words: hw })) : undefined
+    if (viaHelper) out.push(viaHelper)
+  }
+  return out
+}
+
+// What each merge in a finished Bash call owes, kept, and the line its result carries.
+const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, how: { failed: boolean; background: boolean; agent: boolean }): Promise<string[]> => {
+  const cwd = await $.session.cwd()
+  const lines: string[] = []
+  const added: IsItLiveOwed[] = []
+  for (const m of calls) {
+    const named = m.named ?? undefined
+    const p: Proof = m.named === null ? { kind: 'unproven', why: 'the repository it names could not be read' } : await ask($, { ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named } : {}) }, cwd, at)
+    let o: IsItLiveOwed | undefined
+    if (p.kind === 'merged') {
+      const repo = await repoOfLink($, p.url, named)
+      o = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${at}`, how: 'merged', pr: p.pr, at, cwd, ...(repo ? { repo } : {}) }
+    } else if (m.pr === undefined || p.kind === 'closed' || (p.kind === 'open' && !how.background)) {
+      // Merged nothing (refused, still open, closed), or names no number to hold it by.
+      o = undefined
+    } else if (how.background) {
+      o = { key: `wait:${named ?? cwd}#${m.pr}@${at}`, how: 'waiting', pr: m.pr, at, cwd, ...(m.selector !== undefined ? { selector: m.selector } : {}), ...(named ? { named, repo: named } : {}) }
+    } else if (p.kind === 'unproven' && !how.failed) {
+      o = { key: named ? `${named}#${m.pr}` : `#${m.pr}@${at}`, how: 'unproven', pr: m.pr, at, cwd, why: p.why, ...(named ? { repo: named } : {}) }
+    }
+    if (!o) continue
+    added.push(o)
+    lines.push(nudgeOf(o, how.agent))
+  }
+  if (added.length) {
+    const keys = new Set(added.map(o => o.key))
+    await $.state.set(owedRef, [...(await owedOf($)).filter(o => !keys.has(o.key)), ...added])
+  }
+  return lines
+}
+
+// Whether a card made at or after the merge is kept for it, by this session or any other.
+const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => {
+  const since = (c: IsItLiveCard) => c.pr === o.pr && c.at >= o.at
+  if (o.repo) return (await cardsOf($, o.repo)).some(since)
+  for (const k of await $.store.keys()) {
+    if (!k.startsWith(CARDS)) continue
+    const v = await $.store.get(k)
+    if (Array.isArray(v) && (v as IsItLiveCard[]).some(since)) return true
+  }
+  return false
+}
+
+// The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
+// owed, one closed or past its wait is let go, and a merge with a card is settled.
+const owedNow = async ($: EngineInterface): Promise<IsItLiveOwed[]> => {
+  const now = await $.clock.now()
+  const kept: IsItLiveOwed[] = []
+  for (const o of await owedOf($)) {
+    let x: IsItLiveOwed | undefined = o
+    if (o.how === 'waiting') {
+      if (now - o.at > WAIT_MS) {
+        $.ui.log(`is-it-live: stopped asking GitHub about #${o.pr}, merged in the background, after ${WAIT_MS / 3_600_000} hours`, { to: 'debug' })
+        continue
+      }
+      const p = await ask($, o, o.cwd, o.at)
+      if (p.kind === 'closed') continue
+      if (p.kind === 'merged') {
+        const repo = await repoOfLink($, p.url, o.named)
+        x = { key: repo ? `${fold(repo)}#${p.pr}` : `#${p.pr}@${o.at}`, how: 'merged', pr: p.pr, at: o.at, cwd: o.cwd, ...(repo ? { repo } : {}) }
+      }
+    }
+    if (x.how !== 'waiting' && (await carded($, x))) continue
+    kept.push(x)
+  }
+  await $.state.set(owedRef, kept)
+  return kept.filter(o => o.how !== 'waiting')
+}
+
 // #771: the card's facts showed up to four times after a merge, the last being Claude's own reply
 // restating it. Said in the tool's description and again in every answer.
 const SEEN = 'Dan has already seen this card in the chat, drawn in full: do not restate any of it in your reply, and add no sentence that repeats it.'
@@ -150,6 +265,8 @@ export const register: Register = on => {
   })
 
   on('session.start', async ($, e, next) => {
+    // A turn end is refused for a missing card only where somebody is at the prompt to see it (#1244).
+    await $.state.set(interactiveRef, e.isInteractive === true)
     await $.tool.register({ name: 'card', description: DESCRIPTION, inputSchema: SCHEMA })
     await $.command.register({ name: 'live', description: "This project's recent change cards, and the messages not yet sent." })
     return next(e)
@@ -174,7 +291,15 @@ export const register: Register = on => {
     } catch {
       return { deny: `No card: GitHub's answer about #${input.pr} could not be read.` }
     }
-    if (facts.state !== 'MERGED') return { deny: `No card: #${input.pr} is ${String(facts.state ?? 'unknown').toLowerCase()}, not merged.` }
+    if (facts.state !== 'MERGED') {
+      // GitHub says it never merged, so a merge this session could not confirm for it is settled
+      // (#1244): one whose repository was not read, or was read as this one.
+      if (facts.state === 'OPEN' || facts.state === 'CLOSED') {
+        const left = (await owedOf($)).filter(o => !(o.pr === input.pr && o.how === 'unproven' && (!o.repo || fold(o.repo) === fold(input.repo))))
+        await $.state.set(owedRef, left)
+      }
+      return { deny: `No card: #${input.pr} is ${String(facts.state ?? 'unknown').toLowerCase()}, not merged.` }
+    }
 
     // An issue Dan or Claude filed is filed from Dan's own account, and gets no message (the spec).
     const notes: string[] = []
@@ -250,6 +375,61 @@ export const register: Register = on => {
       result: cardText(shown),
       context: [...notes, SEEN],
     }
+  })
+
+  // #1244: a Bash call that merges carries a line saying to show the card, once GitHub says what
+  // the merge did. Passed down first and changed only by that line, so every guard beneath still
+  // judges the call; a call refused before it ran merged nothing.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const input = e as unknown as Record<string, unknown>
+    const command = String(input.command ?? '')
+    // No merge spelling mod-kit reads lacks the word, so most calls are passed without reading.
+    if (!/merge/i.test(command)) return next(e)
+    const at = await $.clock.now()
+    const done = await next(e)
+    if (done.deny !== undefined) return done
+    try {
+      const calls = await mergesIn($, command)
+      if (!calls.length) return done
+      const background = input.run_in_background === true || typeof (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId === 'string'
+      const lines = await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined })
+      return lines.length ? { ...done, context: [...(done.context ?? []), ...lines] } : done
+    } catch (err) {
+      // Said where Claude reads it: a merge this missed would otherwise go unseen (fail loud).
+      $.ui.log(`is-it-live: could not read whether a Bash call merged a PR: ${msg(err)}`, { to: 'debug' })
+      return { ...done, context: [...(done.context ?? []), `is it live could not tell whether this command merged a pull request (${msg(err)}). If it did, show Dan its is it live card: load the card tool with ToolSearch with the query "select:${TOOL}".`] }
+    }
+  })
+
+  // #1244: the turn does not end while a PR merged in this session has no card. Asked after the
+  // hooks beneath (wind down, the overnight driver), whose block is kept beside this one. Refused
+  // once per merge in a chain of turn ends, so a card that cannot be made (GitHub not answering)
+  // never traps the turn, a sleeping worker's included: the next end in the chain goes ahead, said.
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e)
+    if ((await $.state.get(interactiveRef)).value !== true) return r
+    let owed: IsItLiveOwed[]
+    try {
+      owed = await owedNow($)
+    } catch (err) {
+      $.ui.toast(`Is it live could not check this turn's merges for a card: ${msg(err)}`)
+      return r
+    }
+    if (!owed.length) return r
+    const held = (await $.state.get(refusedRef)).value
+    const before = e.stop_hook_active && held ? held : { keys: [], told: [] }
+    const fresh = owed.filter(o => !before.keys.includes(o.key))
+    if (!fresh.length) {
+      const untold = owed.filter(o => !before.told.includes(o.key))
+      if (untold.length) {
+        $.ui.toast(letGoOf(untold))
+        await $.state.set(refusedRef, { keys: before.keys, told: [...before.told, ...untold.map(o => o.key)] })
+      }
+      return r
+    }
+    await $.state.set(refusedRef, { keys: [...before.keys, ...fresh.map(o => o.key)], told: before.told })
+    const ours = refusalOf(owed)
+    return { ...r, block: r.block ? `${r.block}\n\n${ours}` : ours }
   })
 
   // #771: the call's own row is Claude Code's echo of the tool's input, which carried every fact the

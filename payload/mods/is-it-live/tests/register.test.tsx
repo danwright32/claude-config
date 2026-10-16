@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { pipeline } from './mod-kit/hooks/commands.ts'
+import { ghArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
@@ -60,13 +62,23 @@ const modKit: { name: string; register: Register } = {
           return JSON.parse(r.stdout)
         },
         // The kit's other members, which these tests never reach: each refuses by name if one ever is.
-        gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+        // #1244: a merge is read by byte for byte copies of mod-kit's own command and gh readers,
+        // asked of the world the same way.
+        gh: async (input: { words: string[] }) => {
+          const r = await built.process.run(['__modkit', 'gh', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return r.stdout === '' ? undefined : JSON.parse(r.stdout)
+        },
+        pipeline: async (input: { command: string }) => {
+          const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return JSON.parse(r.stdout)
+        },
         ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         blocked: async () => { throw new Error("mod-kit's blocked is not stood in by these tests") },
         commands: async () => { throw new Error("mod-kit's commands is not stood in by these tests") },
         writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
         git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
-        pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
         workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
         branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
@@ -126,7 +138,22 @@ const withKit = { plugins: [modKit] }
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
 type Gh = { exitCode: number; stdout: string; stderr?: string }
-type World = { pr: Gh; issue: Gh; me: Gh; accounts: Gh; repoName: Gh; remote: string | null; copied: boolean; stored?: Record<string, unknown>; kitFails?: boolean }
+// #1244: `prView`, when given, answers each `gh pr view` first (by its arguments), and `bash` is
+// what Claude Code's own Bash tool gives back beneath the mod.
+type BashOut = { text: string; isError?: true; backgroundTaskId?: string }
+type World = {
+  pr: Gh
+  issue: Gh
+  me: Gh
+  accounts: Gh
+  repoName: Gh
+  remote: string | null
+  copied: boolean
+  stored?: Record<string, unknown>
+  kitFails?: boolean
+  prView?: (argv: string[]) => Gh | undefined
+  bash: BashOut
+}
 
 // GitHub, the clipboard, the store, toasts and Claude Code's own band beneath the mod.
 const world = (on: On, init: Partial<World> = {}) => {
@@ -140,6 +167,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     remote: `git@github.com:${REPO}.git`,
     repoName: { exitCode: 0, stdout: `${REPO}\n` },
     copied: true,
+    bash: { text: '' },
     ...init,
   }
   const toasts: string[] = []
@@ -151,6 +179,11 @@ const world = (on: On, init: Partial<World> = {}) => {
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
     if (e.argv[0] === '__modkit') {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      if (e.argv[1] === 'gh' || e.argv[1] === 'pipeline') {
+        const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string }
+        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : pipeline(input.command)
+        return { value: { exitCode: 0, stdout: read === undefined ? '' : JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+      }
       if (e.argv[1] === 'linkRepo') {
         const { link } = JSON.parse(e.argv[2] as string) as { link: string }
         return { value: { exitCode: 0, stdout: JSON.stringify(linkRepo(link)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
@@ -160,7 +193,10 @@ const world = (on: On, init: Partial<World> = {}) => {
     }
     runs.push([...e.argv])
     const a = e.argv.join(' ')
-    const g = a.startsWith('gh pr view')
+    const viewed = a.startsWith('gh pr view') && w.prView ? w.prView([...e.argv]) : undefined
+    const g = viewed
+      ? viewed
+      : a.startsWith('gh pr view')
       ? w.pr
       : a.startsWith('gh issue view')
         ? w.issue
@@ -175,6 +211,15 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('session.repo', () => ({ value: { root: '/Users/dan/Apps/slate', remote: w.remote, isOwn: false } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
+  on('session.cwd', () => ({ value: '/Users/dan/Apps/slate' }) as never)
+  // Claude Code's own Bash tool and turn end, beneath the mod.
+  on('tool.call', { tool: 'Bash' }, () => {
+    const b = w.bash
+    const result = { stdout: b.text, stderr: '', interrupted: false, ...(b.backgroundTaskId ? { backgroundTaskId: b.backgroundTaskId } : {}) }
+    return (b.isError ? { isError: true, result: b.text, text: b.text } : { result, text: b.text }) as never
+  })
+  on('classic.Stop', () => ({}) as never)
+  on('ui.log', () => ({ value: undefined }) as never)
   on('tool.register', () => ({ value: undefined }) as never)
   on('command.register', () => ({ value: undefined }) as never)
   on('ui.copy', ($, e) => {
@@ -689,4 +734,179 @@ test("a link mod-kit cannot read keeps the card under the repository Claude gave
   expect(r.deny).toBeUndefined()
   expect((r.context ?? []).join(' ')).toContain(`GitHub's link for #9 could not be read (mod-kit is not loaded), so the card is kept under ${REPO} as given.`)
   expect(JSON.parse(await verdict($, `${REPO} 9`)).state).toBe('live')
+})
+
+// ---- #1244: the card after every merge ----
+// The card appeared only when Claude chose to call a deferred tool whose description it never saw.
+// A merge GitHub confirms now carries a line saying to show the card, and how to load the tool, and
+// the turn cannot end while a PR merged in the session has no card.
+
+type Pr = { state: 'MERGED' | 'OPEN' | 'CLOSED'; mergedAt?: number }
+// GitHub, answering `gh pr view <n> [--repo r]` for the PRs it holds; a PR named by no --repo is the
+// session folder's repository's.
+const github = (prs: Record<string, Pr>) => (argv: string[]): Gh => {
+  const n = argv[3] !== undefined && !argv[3].startsWith('-') ? argv[3] : undefined
+  const at = argv.indexOf('--repo')
+  const repo = at >= 0 ? (argv[at + 1] as string) : REPO
+  const p = n === undefined ? undefined : prs[`${repo}#${n}`]
+  if (!p) return { exitCode: 1, stdout: '', stderr: 'no pull requests found' }
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({ number: Number(n), state: p.state, mergedAt: p.mergedAt === undefined ? null : new Date(p.mergedAt).toISOString(), title: 'Filter bookings by venue', url: `https://github.com/${repo}/pull/${n}` }),
+  }
+}
+const JUST = T0 + 30_000
+const OTHER = 'danwright32/other'
+const bash = async ($: unknown, command: string, more: Record<string, unknown> = {}) =>
+  (await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: 'Bash', tool_use_id: 'b1', command, ...more } as never)) as Out
+const turnEnd = async ($: unknown, isActive = false) =>
+  (await ($ as { classic: { Stop: (e: object) => Promise<unknown> } }).classic.Stop({
+    hook_event_name: 'Stop',
+    session_id: 's1',
+    transcript_path: '/t',
+    cwd: '/Users/dan/Apps/slate',
+    stop_hook_active: isActive,
+    last_assistant_message: 'Merged and done.',
+  })) as { block?: string }
+const said = (o: Out) => (o.context ?? []).join(' ')
+const views = (runs: string[][]) => runs.filter(r => r.slice(0, 3).join(' ') === 'gh pr view' && r.includes('number,state,mergedAt,url'))
+
+test('a merge GitHub confirms carries a line to show the card now, with how to load the deferred tool (#1244)', withKit, async ($, on) => {
+  const { runs } = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  const r = await bash($, 'gh pr merge 412 --squash --delete-branch')
+  expect(said(r)).toContain(`You merged ${REPO}#412.`)
+  expect(said(r)).toContain('ToolSearch with the query "select:mcp__is-it-live__card"')
+  // Asked of GitHub in the session's folder, never taken from the exit code (L161).
+  expect(views(runs)).toEqual([['gh', 'pr', 'view', '412', '--json', 'number,state,mergedAt,url']])
+})
+
+test('the turn end is refused while a PR merged this session has no card, naming each one (#1244)', withKit, async ($, on) => {
+  world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  await bash($, `gh pr merge 7 --squash -R ${OTHER}`)
+  const r = await turnEnd($)
+  expect(r.block).toContain(`${REPO}#412`)
+  expect(r.block).toContain(`${OTHER}#7`)
+  expect(r.block).toContain('select:mcp__is-it-live__card')
+})
+
+test('a card in any state, unreachable included, lets the turn end, so the check can always be met honestly (#1244)', withKit, async ($, on) => {
+  world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  await bash($, `gh pr merge 7 --squash -R ${OTHER}`)
+  expect((await card($, { ...CARD, deploy: 'unreachable', checked: 'The deploy dashboard did not answer.' })).deny).toBeUndefined()
+  const r = await turnEnd($)
+  expect(r.block).not.toContain(`${REPO}#412`)
+  expect(r.block).toContain(`${OTHER}#7`)
+  expect((await card($, { ...CARD, repo: OTHER, pr: 7, deploy: 'none' })).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a failed merge and an auto merge leave nothing pending (#1244)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'OPEN' } }) })
+  await start($)
+  w.w.bash = { text: 'X Pull request is not mergeable: the head branch is not up to date.', isError: true }
+  expect(said(await bash($, 'gh pr merge 412 --squash'))).not.toContain('is it live')
+  w.w.bash = { text: '' }
+  w.runs.length = 0
+  // Merges later, once its checks pass: nothing merged now, and GitHub is not even asked.
+  expect(said(await bash($, 'gh pr merge 412 --auto --squash'))).not.toContain('is it live')
+  expect(views(w.runs)).toEqual([])
+  // A merge piped through tail exits 0 whatever happened: GitHub, not the exit code, says it did not merge.
+  expect(said(await bash($, 'gh pr merge 412 --squash 2>&1 | tail -3'))).not.toContain('is it live')
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test('a merge that exits non zero after merging (a worktree holding main) is still a merge (#1244)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  w.w.bash = { text: "failed to run git: fatal: 'main' is already used by worktree", isError: true }
+  expect(said(await bash($, 'gh pr merge 412 --squash --delete-branch'))).toContain(`You merged ${REPO}#412.`)
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+test('a merge is recognised as plain gh, through rtk, and through the merge helper (#1244)', withKit, async ($, on) => {
+  const { runs } = world(on, {
+    prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }),
+  })
+  await start($)
+  expect(said(await bash($, 'cd /Users/dan/Apps/slate && gh pr merge 412 --squash'))).toContain(`You merged ${REPO}#412.`)
+  expect(said(await bash($, 'rtk gh pr merge 413 --squash --delete-branch'))).toContain(`You merged ${REPO}#413.`)
+  expect(said(await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo ${OTHER} --squash --delete-branch`))).toContain(`You merged ${OTHER}#7.`)
+  expect(views(runs).map(r => r.slice(3).join(' '))).toEqual(['412 --json number,state,mergedAt,url', '413 --json number,state,mergedAt,url', `7 --repo ${OTHER} --json number,state,mergedAt,url`])
+  // Reads of a PR, and a command that only mentions merging, are no merges.
+  runs.length = 0
+  await bash($, 'gh pr view 412 --json mergeable')
+  await bash($, 'echo "gh pr merge 412"')
+  expect(views(runs)).toEqual([])
+})
+
+test('the turn end is refused once per PR in a chain of turn ends, so a card that cannot be made never traps it (#1244)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+  // Claude could not make the card (GitHub stopped answering): the next turn end in the chain ends, said.
+  expect((await turnEnd($, true)).block).toBeUndefined()
+  expect(w.toasts.join(' ')).toContain(`No is it live card for ${REPO}#412`)
+  // A new chain asks again, since the card is still owed.
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+test('a card another session made after the merge clears it; one made before does not (#1244)', withKit, async ($, on) => {
+  const kept = (pr: number, at: number) => ({ repo: REPO, pr, title: 't', url: `https://github.com/${REPO}/pull/${pr}`, state: 'live', at })
+  world(on, {
+    prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${REPO}#413`]: { state: 'MERGED', mergedAt: JUST } }),
+    stored: { 'cards:danwright32/slate': [kept(412, T0 + 5), kept(413, T0 - 1)] },
+  })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  await bash($, 'gh pr merge 413 --squash')
+  const r = await turnEnd($)
+  expect(r.block).not.toContain(`${REPO}#412`)
+  expect(r.block).toContain(`${REPO}#413`)
+})
+
+test('a merge the helper makes in the background is asked of GitHub at the turn end (#1244)', withKit, async ($, on) => {
+  const prs: Record<string, Pr> = { [`${REPO}#412`]: { state: 'OPEN' } }
+  const w = world(on, { prView: github(prs) })
+  await start($)
+  w.w.bash = { text: 'Command running in background with ID: b7.', backgroundTaskId: 'b7' }
+  const r = await bash($, 'bash ~/.claude/hooks/lib/merge-when-ready.sh 412 --squash', { run_in_background: true })
+  expect(said(r)).toContain('When it reports #412 merged')
+  expect(said(r)).toContain('select:mcp__is-it-live__card')
+  // Still waiting on checks: nothing merged yet, so nothing is owed.
+  expect((await turnEnd($)).block).toBeUndefined()
+  prs[`${REPO}#412`] = { state: 'MERGED', mergedAt: JUST }
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+test('GitHub naming an older merge under that number is not taken for this one, and a card that finds it unmerged clears it (#1244)', withKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: T0 - 86_400_000 } }) })
+  await start($)
+  const r = await bash($, 'gh pr merge 412 --squash')
+  expect(said(r)).toContain('GitHub did not confirm that #412 merged just now')
+  expect((await turnEnd($)).block).toContain('#412')
+  // Claude names the repository; GitHub says the PR there is open, so it never merged.
+  w.w.prView = github({ [`${OTHER}#412`]: { state: 'OPEN' } })
+  expect((await card($, { ...CARD, repo: OTHER })).deny).toContain('not merged')
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
+test("a subagent's merge is named for its report, and the session that dispatched it owes the card (#1244)", withKit, async ($, on) => {
+  world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  const r = await bash($, 'gh pr merge 412 --squash', { agentId: 'a1' })
+  expect(said(r)).toContain('Name it in your report')
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
+})
+
+test('a session with nobody at its prompt is never refused a turn end (#1244)', withKit, async ($, on) => {
+  world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await ($ as { session: { start: (x: never) => Promise<unknown> } }).session.start({ cwd: '/Users/dan/Apps/slate', surface: null, isInteractive: false } as never)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toBeUndefined()
 })
