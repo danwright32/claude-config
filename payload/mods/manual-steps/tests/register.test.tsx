@@ -341,7 +341,11 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done-1]', 'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
+  expect(await bandText($)).toEqual([
+    'Cloudflare WAF  waiting on you',
+    '1. Turn on the WAF rule  [done-1]', 'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf',
+    '2. Purge the cache  [done-2]', 'Where: [open-link-2]  [copy-link-2]', 'https://dash.cloudflare.com/waf',
+  ])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -1003,19 +1007,22 @@ test('a block another Stop hook gives is kept beside this one (#863)', withKit, 
   expect(r.block).toMatch(/steps tool/)
 })
 
-test('the band says the open step is waiting on Dan while it is, and clears once it is done (#863)', withKit, async ($, on) => {
+test('the band says the card is waiting on Dan while any step is his to do, and clears once none is (#863, #1239)', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
   expect((await bandText($)).slice(0, 2)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done-1]'])
-  // Sent, it waits on Claude, not on Dan.
+  // Step 1 sent, step 2 is still Dan's to do, so the card still waits on him (#1239).
   await press($, 'done-1')
   expect(w.prompts).toEqual(['step 1 done'])
-  expect((await bandText($))[0]).toBe('Cloudflare WAF')
-  // The next step is Dan's again.
-  await call($, VERDICT, { step: 1, checked: 'checked' })
   expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done-2]')
+  // Both sent: the card waits on Claude, not on Dan.
+  await press($, 'done-2')
+  expect((await bandText($))[0]).toBe('Cloudflare WAF')
+  // A step not done is Dan's again.
+  await call($, VERDICT, { step: 1, checked: 'not-done' })
+  expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
+  await call($, VERDICT, { step: 1, checked: 'withdrawn' })
   await call($, VERDICT, { step: 2, checked: 'checked' })
   expect(await band($)).toBeUndefined()
 })
@@ -1338,9 +1345,8 @@ test('two steps sent at once each wait on Claude, and each Done comes back on it
   await press($, 'done-1')
   await press($, 'done-2')
   expect(w.prompts).toEqual(['step 1 done', 'step 2 done'])
-  // A second press on a sent step sends nothing more.
-  await press($, 'done-2')
-  expect(w.prompts).toHaveLength(2)
+  // A sent step draws no Done, so it cannot be sent twice.
+  expect((await stepLines($))[1]).toBe('2. Create the user  sent')
   // Step 3 is still Dan's to do, so the card still waits on him.
   expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
   await turnStart($, 'step 1 done', 'T1')
