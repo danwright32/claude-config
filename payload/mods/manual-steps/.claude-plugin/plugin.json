@@ -1,7 +1,7 @@
 {
   "name": "manual-steps",
   "version": "0.1.0",
-  "description": "Pins the manual steps Claude hands Dan as a card: a side pane when the terminal is wide, the band above the prompt when it is not. Only the next step is open, with its link, clicks, a value with Copy, and Done.",
+  "description": "Pins the manual steps Claude hands Dan as a card: a side pane when the terminal is wide, the band above the prompt when it is not. Every unfinished step is open at once, each with its link, clicks, a value with Copy, and its own Done.",
   "author": { "name": "Dan Wright" },
   "types": "./types/index.d.ts",
   "dependencies": ["mod-kit"]
