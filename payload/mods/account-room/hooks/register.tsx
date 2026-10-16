@@ -14,8 +14,10 @@ import type { MacFile, Nicknames } from './store.ts'
 // sentence settled in design rounds the same day (docs/mods-design.md "Account room (#659)").
 //
 // - Every rate limit reading this session receives is recorded under the account and org the
-//   session started on (L175), in this Mac's readings file in the private readings repository on
-//   GitHub (#750), rewritten only when a figure moved or its newest reading is over 10 minutes old.
+//   session is on: read at its start, and moved when mod-kit raises a login (a /login here, or one
+//   made elsewhere and seen at the next prompt, #1235, L175), in this Mac's readings file in the
+//   private readings repository on GitHub (#750), rewritten only when a figure moved or its newest
+//   reading is over 10 minutes old.
 // - When this account reaches 95% on the 5 hour limit or 90% weekly, a boxed card in the band names
 //   the account with the most room, from every Mac's readings, with Switch and Dismiss.
 // - Switch signs claude.ai out in the browser (signOut below, route still to be proven), then
@@ -835,9 +837,9 @@ export const register: Register = (on, options) => {
   })
 
   // A /login in this session changes the account it runs on, and the readings it measures from then
-  // on are that account's (#1202). Only this session's own /login does: a switch made in another
-  // window changes the login file and not this session, which is why the account is otherwise read
-  // once, at start. mod-kit follows the /login and raises the account it landed on (#1205).
+  // on are that account's (#1202). So does a login made in another window or by Switch, since Claude
+  // Code keeps one credential per Mac (#1235). mod-kit follows both and raises the account landed on:
+  // a /login at once (#1205), one made elsewhere at the next prompt or re-read of the context.
   // Run once the raise has returned, never inside it: mod-kit's login is a call Claude Code cuts off
   // at 10 seconds (#744), and moving the record can wait on GitHub for longer.
   on('modkit.login', async ($, e, next) => {

@@ -19,8 +19,9 @@
 #   cache time left         the mod's facts file for this session, the one thing only the mod knows
 #   account and org         the session's own account, the one its limits belong to (#815, Dan
 #                           2026-10-05): the mod reads ~/.claude.json at session start into the
-#                           facts file, since the login file names whatever the Mac is logged in
-#                           to NOW and another session's Switch changes it. Only a facts file
+#                           facts file, and again when mod-kit raises a login: this session's
+#                           /login, or one made elsewhere, seen at the next prompt or re-read of
+#                           the context (#1235). Only a facts file
 #                           written before #815, or none yet, falls back to ~/.claude.json as it
 #                           stands. The account room's nickname for it, from
 #                           ~/.claude/mods/account-room-nicknames.json, in their place when one is
