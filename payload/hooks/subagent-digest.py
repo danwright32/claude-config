@@ -6,7 +6,8 @@ Usage: subagent-digest.py <transcript_path> [max_chars]
 Prints the agent's own words plus the files it touched. Tool RESULTS are left
 out on purpose: they are most of the bytes and none of the judgment, and what
 this is looking for is what the agent NOTICED, which only ever appears in what
-it said.
+it said. What it said includes a final report handed back through the
+SubagentHandback tool, which arrives as that tool's input, not as text.
 
 Exit codes, because the caller has to tell these apart and stdout cannot:
   0  a digest was printed
@@ -36,6 +37,12 @@ TASK_MAX = 6000
 # harvest prompt carries its own copy, and test-subagent-issue-harvest.sh reads the marker out of a
 # real digest and checks the prompt names it, so the two cannot drift apart silently.
 TASK_TRIM_MARKER = "[task trimmed by the digest"
+
+# The tool an agent can end by calling to deliver its final report, whose input is
+# {"message": <the report>}. Measured 2026-10-16 over 286 such calls in 229 real subagent
+# transcripts: every one a tool_use block named exactly this with that one string field, and 8 of
+# those transcripts held no assistant text at all, so the report was all the agent ever said.
+HANDBACK_TOOL = "SubagentHandback"
 
 
 def trim_task(text):
@@ -99,6 +106,14 @@ def main():
             elif it.get("type") == "tool_use":
                 inp = it.get("input")
                 inp = inp if isinstance(inp, dict) else {}
+                # A report handed back through the hand back tool is the agent's words, written as
+                # that tool's input rather than as text (claude-config#1232). Read as anything else,
+                # an agent whose report went that way was harvested as having said nothing.
+                if it.get("name") == HANDBACK_TOOL:
+                    report = inp.get("message")
+                    if isinstance(report, str) and report.strip():
+                        said.append(report.strip())
+                    continue
                 path = inp.get("file_path") or inp.get("path")
                 if isinstance(path, str) and path and path not in touched:
                     touched.append(path)
