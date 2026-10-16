@@ -140,6 +140,19 @@ check_eq "the merged PRs are read once for the whole run, not once per worktree"
   1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
 check_eq "it removes nothing without --remove, including the ones it called stale" 9 "$(ls "$WT" | wc -l | tr -d ' ')"
 
+# What a worktree costs to inspect is paid only by one that could be removed (#1247). Asking git
+# for its status walks the whole tree, so a worktree whose PR has not landed is settled by that
+# alone and never asked. Counted through a git on PATH that logs each call, never timed (L224):
+# the five whose PR landed are asked, and the four that did not (newer, open, gone, detached) are not.
+REAL_GIT="$(command -v git)"
+mkdir -p "$TMP/shim"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$GIT_LOG"\nexec "%s" "$@"\n' "$REAL_GIT" >"$TMP/shim/git"
+chmod +x "$TMP/shim/git"
+export GIT_LOG="$TMP/git.log"; : >"$GIT_LOG"
+OUT="$(PATH="$TMP/shim:$PATH" STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" "$REPO" 2>&1)"
+check "the shimmed run still judges every worktree" "2 of 9 agent worktree(s)" "$OUT"
+check_eq "only the worktrees whose PR landed are asked for their status" 5 "$(grep -c 'status --porcelain' "$GIT_LOG" || true)"
+
 # REMOVE, with no time left: nothing is removed, and it says the rest wait for the next run.
 : >"$GH_CALLS"
 OUT="$(STALE_WT_GH="$TMP/bin/gh" STALE_WT_BUDGET_SECS=0 bash "$SCRIPT" --remove "$REPO" 2>&1)"; RC=$?
@@ -159,6 +172,46 @@ for d in newer open dirty recent busy gone detached; do [ -d "$WT/agent-$d" ] &&
 check_eq "every worktree it kept is still there" 7 "$remaining"
 check_eq "and the dirty one still holds its work" "work in progress" "$(cat "$WT/agent-dirty/wip.txt")"
 check "the summary says how many were removed" "removed 2 of 9 agent worktree(s)" "$OUT"
+MARKS="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claude-worktree-removing"
+check_eq "a removal that finished leaves no progress marker behind" "" "$(ls "$MARKS" 2>/dev/null)"
+
+# --- a removal cut off part way (L617) --------------------------------------
+# A `git worktree remove` killed part way leaves a part deleted folder that git still lists, and
+# what is left reads as uncommitted DELETIONS, so without a marker every later run keeps it for ever
+# as a worktree somebody is working in. Measured 2026-10-16: killed 80ms in, 2412 of 3000 files were
+# left and git status showed 588 " D" lines and nothing else. The marker is the check's own, written
+# before each removal and cleared after it, so this fixture writes it the way the check does.
+cut_off(){ # cut_off <name> <branch> <PR>: a landed worktree whose removal stopped part way
+  add "$2" "$1"
+  printf 'a\n' >"$WT/$1/a.txt"; printf 'b\n' >"$WT/$1/b.txt"
+  G -C "$WT/$1" add a.txt b.txt; G -C "$WT/$1" commit -qm files
+  merged "$2" "$WT/$1" HEAD "$3"
+  mkdir -p "$MARKS"; printf '%s\n' "$REPO_REAL/.claude/worktrees/$1" >"$MARKS/$1"
+  rm -f "$WT/$1/a.txt"
+  age "$1"
+}
+cut_off agent-cut fix/500-cut 500
+cut_off agent-cut-changed fix/501-cut 501
+printf 'somebody wrote this since\n' >"$WT/agent-cut-changed/b.txt"
+age agent-cut-changed
+# A marker for a worktree git no longer lists is a removal that finished after all.
+printf '%s\n' "$REPO_REAL/.claude/worktrees/agent-long-gone" >"$MARKS/agent-long-gone"
+
+run "$REPO"
+check "report mode names a removal that was cut off, with the command that finishes it" \
+  "CUT OFF agent-cut [fix/500-cut]" "$OUT"
+check_eq "and finishes nothing" yes "$([ -d "$WT/agent-cut" ] && echo yes || echo no)"
+run --remove "$REPO"
+check "a removal cut off with nothing but deletions in it is finished" "finished removing agent-cut [fix/500-cut]" "$OUT"
+check_eq "its folder is gone" no "$([ -d "$WT/agent-cut" ] && echo yes || echo no)"
+check_eq "and so is its marker" no "$([ -e "$MARKS/agent-cut" ] && echo yes || echo no)"
+check_not "it is not also kept as holding uncommitted changes" "keeping agent-cut [" "$OUT"
+check "one changed since the cut is not finished, and says so loudly" \
+  "keeping agent-cut-changed [fix/501-cut]: an earlier removal of it was cut off part way, and something in it has changed since" "$OUT"
+check_eq "its folder stays" yes "$([ -d "$WT/agent-cut-changed" ] && echo yes || echo no)"
+check_eq "with the change in it" "somebody wrote this since" "$(cat "$WT/agent-cut-changed/b.txt")"
+check_eq "a marker for a worktree git no longer lists is cleared" no "$([ -e "$MARKS/agent-long-gone" ] && echo yes || echo no)"
+G -C "$REPO" worktree remove --force "$WT/agent-cut-changed" >/dev/null 2>&1; rm -f "$MARKS/agent-cut-changed"
 
 # --- a number that is a PREFIX of a merged branch is not merged -------------
 add fix/41 agent-prefix; age agent-prefix

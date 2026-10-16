@@ -22,10 +22,23 @@
 # Its BRANCH is never deleted, so every commit can be had back with `git worktree add`. What goes
 # with the folder is only what git ignores (installed packages, a local settings file).
 #
-# A TIME BUDGET, because the nudge that runs this has five seconds and a removal killed part way
-# leaves a half deleted folder (L617). No removal is STARTED past STALE_WT_BUDGET_SECS from the
-# script's start; the rest are named as left for the next run. One removal measured at 0.13 to
-# 0.18 seconds on 2026-10-14, so one in flight at the budget ends well inside the timeout.
+# A REMOVAL CUT OFF PART WAY IS FINISHED, NOT LEFT (L617). A `git worktree remove` killed part way
+# leaves a part deleted folder that git still lists, and what is left reads as uncommitted
+# DELETIONS, so every later run would keep it for ever as a worktree somebody is working in
+# (measured 2026-10-16: killed 80ms in, 2412 of 3000 files left, 588 " D" lines and nothing else).
+# So each removal writes a progress marker into the repository's git directory first and clears it
+# after. A marker found by a later --remove run is a removal an earlier run decided on and never
+# finished: it is finished when nothing but deletions is in the folder and nothing is running in
+# it, and otherwise kept and said loudly, because a change since the cut is somebody's work.
+#
+# It is not run inside a prompt. The nudge starts it in the background, under no timeout and in a
+# session of its own (lib/stale-worktree-run.py, #1247), because with 46 worktrees inspecting them
+# took most of the nudge's five seconds and the whole run was killed, every session.
+#
+# A TIME BUDGET still bounds one run: no removal is STARTED past STALE_WT_BUDGET_SECS from the
+# script's start, and the rest are named as left for the next run. It no longer guards a timeout;
+# it bounds how long one run holds the lock that keeps the next one waiting. One removal measured
+# at 0.13 to 0.18 seconds on 2026-10-14, so the default leaves room for hundreds.
 #
 # ONE network call, not one per worktree: the merged PRs come back in a single list. A repo with
 # no worktree directory costs nothing at all, which is every project but this one.
@@ -43,7 +56,7 @@
 #   STALE_WT_GH              the gh to run, for a fixture that must not reach the network (L2)
 #   STALE_WT_LIMIT           how many of the newest merged PRs to ask for (default 400); a worktree
 #                            whose PR is older than these is kept, the harmless direction
-#   STALE_WT_BUDGET_SECS     no removal starts later than this from the start (default 3)
+#   STALE_WT_BUDGET_SECS     no removal starts later than this from the start (default 300)
 #   STALE_WT_RECENT_MINUTES  a change this recent keeps a worktree (default 360)
 
 set -uo pipefail
@@ -53,7 +66,7 @@ if [ "${1:-}" = "--remove" ]; then REMOVE=1; shift; fi
 REPO="${1:-$PWD}"
 GH="${STALE_WT_GH:-gh}"
 LIMIT="${STALE_WT_LIMIT:-400}"
-BUDGET="${STALE_WT_BUDGET_SECS:-3}"
+BUDGET="${STALE_WT_BUDGET_SECS:-300}"
 RECENT="${STALE_WT_RECENT_MINUTES:-360}"
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/merged-prs.sh" || {
@@ -119,16 +132,49 @@ in_use(){   # $1 = a worktree's resolved path
   printf '%s\n' "$cwds" | awk -v p="$1" '$0 == p || index($0, p "/") == 1 { found = 1 } END { exit !found }'
 }
 
-landed=0; removed=0; left=0
-for i in "${!paths[@]}"; do
-  p="${paths[$i]}"; b="${branches[$i]}"; h="${heads[$i]}"; name="$(basename "$p")"
-  # Uncommitted work settles it on its own: somebody may be part way through a change, and nothing
-  # below is worth risking that (L5).
-  dirty="$(git -C "$p" status --porcelain 2>/dev/null | grep -c . || true)"
-  if [ "${dirty:-0}" -gt 0 ]; then
-    echo "  keeping $name [${b:-no branch}]: it holds $dirty uncommitted change(s), so a session may be working in it"
+# The progress markers, one file per removal in flight, named for the worktree and holding its
+# path. In the git directory, so they are never part of anybody's working tree.
+common="$(cd "$top" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"
+MARKS="${common:-$top/.git}/claude-worktree-removing"
+
+landed=0; removed=0; left=0; cut=0
+settled=" "   # the worktrees a cut off removal already accounts for, so the loop below skips them
+for m in "$MARKS"/*; do
+  [ -f "$m" ] || continue
+  p="$(head -n 1 "$m" 2>/dev/null)"; name="$(basename "$p")"; b=""; listed=0
+  for i in "${!paths[@]}"; do [ "${paths[$i]}" = "$p" ] && { listed=1; b="${branches[$i]}"; }; done
+  # Git no longer lists it, so that removal finished after all and only the marker was left.
+  if [ "$listed" -eq 0 ]; then rm -f "$m"; continue; fi
+  cut=$((cut + 1)); settled="$settled$p "
+  if [ "$REMOVE" -eq 0 ]; then
+    echo "  CUT OFF $name [${b:-no branch}]: an earlier removal of it stopped part way"
+    echo "    git -C $top worktree remove --force $p"
     continue
   fi
+  # Anything in it but a deletion of a committed file is a change since the cut, which is somebody's.
+  others="$(git -C "$p" status --porcelain 2>/dev/null | grep -v '^ D ' | grep -c . || true)"
+  real="$(cd "$p" 2>/dev/null && pwd -P)" || real="$p"
+  if [ "${others:-0}" -gt 0 ] || { [ -d "$p" ] && in_use "$real"; }; then
+    echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and something in it has changed since or is running in it, so it is left for a person. Its marker is $m"
+    continue
+  fi
+  # Only deletions, so everything still to go is in a commit on its branch. A folder already gone
+  # takes the plain command, since --force refuses one that is not there.
+  force="--force"; [ -d "$p" ] || force=""
+  if err="$(git -C "$top" worktree remove $force "$p" 2>&1)"; then
+    rm -f "$m"; removed=$((removed + 1))
+    echo "  finished removing $name [${b:-no branch}]: an earlier run started removing it and was cut off part way (its branch is kept)"
+  else
+    echo "  keeping $name [${b:-no branch}]: an earlier removal of it was cut off part way, and git would not finish it: $(printf '%s' "$err" | tr '\n' ' ')"
+  fi
+done
+
+for i in "${!paths[@]}"; do
+  p="${paths[$i]}"; b="${branches[$i]}"; h="${heads[$i]}"; name="$(basename "$p")"
+  case "$settled" in *" $p "*) continue ;; esac
+  # Whether its work landed is asked FIRST, because it costs nothing beyond the one list already
+  # read, and a worktree whose PR has not landed is kept whatever else is true of it. Every check
+  # after this walks the folder, so only a worktree that could be removed pays for one (#1247).
   if [ -z "$b" ]; then
     echo "  keeping $name [no branch]: it is not on a branch, so no PR can say whether its work landed"
     continue
@@ -140,6 +186,13 @@ for i in "${!paths[@]}"; do
     unconfirmed) echo "  keeping $name [$b]: PR #$num merged at a commit this repository does not have, so whether it holds this worktree's commits cannot be read here"; continue ;;
     *) echo "  keeping $name [$b]: no merged PR has this branch"; continue ;;
   esac
+  # Uncommitted work settles it on its own: somebody may be part way through a change, and nothing
+  # below is worth risking that (L5).
+  dirty="$(git -C "$p" status --porcelain 2>/dev/null | grep -c . || true)"
+  if [ "${dirty:-0}" -gt 0 ]; then
+    echo "  keeping $name [$b]: it holds $dirty uncommitted change(s), so a session may be working in it"
+    continue
+  fi
   real="$(cd "$p" 2>/dev/null && pwd -P)" || real="$p"
   if [ -n "$(find "$p" -mmin "-$RECENT" -not -name .git -print -quit 2>/dev/null)" ]; then
     echo "  keeping $name [$b]: something in it changed in the last $RECENT minutes, so a session may still be using it"
@@ -163,6 +216,12 @@ for i in "${!paths[@]}"; do
     left=$((left + 1))
     continue
   fi
+  # The marker goes down BEFORE git starts deleting. A removal that cannot leave one is not started,
+  # since one cut off without it would read as somebody's work for ever.
+  if ! { mkdir -p "$MARKS" && printf '%s\n' "$p" >"$MARKS/$name"; } 2>/dev/null; then
+    echo "  keeping $name [$b]: its progress marker could not be written in $MARKS, so a removal cut off part way could not be finished later"
+    continue
+  fi
   # No --force: git refuses a worktree with anything untracked or modified, so a change made since
   # the check above is a refusal, never a loss.
   if err="$(git -C "$top" worktree remove "$p" 2>&1)"; then
@@ -171,11 +230,14 @@ for i in "${!paths[@]}"; do
   else
     echo "  keeping $name [$b]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
   fi
+  # Cleared either way: git refuses before it deletes anything, so a refusal leaves nothing to finish.
+  rm -f "$MARKS/$name"
 done
 
-[ "$landed" -eq 0 ] && exit 0
+[ "$landed" -eq 0 ] && [ "$cut" -eq 0 ] && exit 0
 if [ "$REMOVE" -eq 0 ]; then
-  echo "$landed of ${#paths[@]} agent worktree(s) hold work that has landed. Each is a full copy of the tree, so every repo wide search returns its hits once more per copy. The command to remove one is printed under it."
+  [ "$cut" -gt 0 ] && echo "$cut agent worktree(s) were left part deleted by a removal that stopped part way. The command that finishes one is printed under it."
+  [ "$landed" -gt 0 ] && echo "$landed of ${#paths[@]} agent worktree(s) hold work that has landed. Each is a full copy of the tree, so every repo wide search returns its hits once more per copy. The command to remove one is printed under it."
 else
   echo "removed $removed of ${#paths[@]} agent worktree(s), each one whose PR had merged with nothing newer in it; every one kept is named above with why."
   [ "$left" -gt 0 ] && echo "$left landed worktree(s) left for the next run, which stops starting removals ${BUDGET}s in."
