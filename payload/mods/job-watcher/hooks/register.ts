@@ -70,9 +70,15 @@ const watch = new Map<string, Watch>()
 // What Claude should be told, each addressed to the loop it concerns (#784): a background agent's
 // id, or undefined for this session's own conversation. One addressed to an agent that has ended
 // goes to this session instead, so nothing is said to a loop that will never read it.
-type Notice = { to: string | undefined; text: string }
+// wake: one this session must not wait for its next tool call to read (#1234), a background agent
+// gone quiet: it starts a turn of its own when this conversation is idle.
+type Notice = { to: string | undefined; text: string; wake?: true }
 const notices: Notice[] = []
-const say = (to: string | undefined, text: string) => notices.push({ to, text })
+const say = (to: string | undefined, text: string, wake?: true) => notices.push({ to, text, ...(wake ? { wake } : {}) })
+// #1234: whether this conversation's own loop has a turn running, from the engine's turn.start and
+// turn.complete of the main loop. Unknown until a session start says idle, and read as not idle, so
+// a session the watcher has not seen start is told on its next tool call as before, never woken.
+let mainTurn: 'idle' | 'busy' | 'unknown' = 'unknown'
 let toldUnpublished = false
 let toldClockFailed = false
 // The agents whose loops have not ended, as the last look at the agent list found them, plus any seen
@@ -315,9 +321,47 @@ const lookAtAgents = async ($: EngineInterface, now: number, live: Live) => {
       : s.inFlight > 0
         ? `the last one it started, ${s.lastTool}, started ${mins(now - (s.startedAt ?? s.at))} minutes ago and has not finished`
         : `the last one it started, ${s.lastTool}, finished ${mins(quietMs)} minutes ago`
-    say(undefined, `Background agent "${nameOf(a)}" (${a.id}) has been quiet for ${mins(quietMs)} minutes: no tool call of its has started or finished in that time, and ${last}. It is listed as running but may be hung: read its transcript, or stop it with TaskStop if it is.`)
+    say(undefined, `Background agent "${nameOf(a)}" (${a.id}) has been quiet for ${mins(quietMs)} minutes: no tool call of its has started or finished in that time, and ${last}. It is listed as running but may be hung: read its transcript, or stop it with TaskStop if it is.`, true)
   }
 }
+
+// #1234: the quiet agents said to this conversation while it is idle start a turn of their own,
+// through $.prompt.submit (a plugin's prompt runs as a turn once the session is idle, the route
+// sleep mode's morning turn takes, measured by tests/test-sleep-real-engine.sh). Taken off the
+// queue as they are submitted, so each is said once: woken here, or read on a tool call, never both.
+// A submit refused or thrown puts them back without the wake mark, for the next tool call to carry,
+// and is said once; it is not tried again each minute. Sleep mode (#841) keeps the overnight
+// sessions working, so asleep the conversation is still woken (a wake reaches Claude, never Dan:
+// questions are refused and sounds stand down while asleep), and each is noted for the morning report.
+const wakeIfIdle = async ($: EngineInterface) => {
+  if (mainTurn !== 'idle') return
+  const due = notices.filter(n => n.wake && n.to === undefined)
+  if (!due.length) return
+  for (const n of due) notices.splice(notices.indexOf(n), 1)
+  let asleep = false
+  try {
+    asleep = (await ($ as unknown as { scopeModes: SleepModes }).scopeModes.isAsleep()) === true
+  } catch {
+    // A sleep record that cannot be read is awake (scope modes' own rule): woken, nothing noted.
+  }
+  if (asleep) {
+    for (const n of due) {
+      try {
+        await ($ as unknown as { scopeModes: SleepModes }).scopeModes.sleepNote({ kind: 'finding', text: n.text })
+      } catch (err) {
+        $.ui.log(`job-watcher: could not note a quiet background agent for the morning report: ${message(err)}`, { to: 'debug' })
+      }
+    }
+  }
+  try {
+    const r = await $.prompt.submit({ text: due.map(n => n.text).join('\n\n') })
+    if (r.drop !== undefined) throw new Error(r.drop)
+  } catch (err) {
+    for (const n of due) notices.push({ to: undefined, text: n.text })
+    $.ui.log(`The background job watcher could not wake this session about a quiet background agent (${message(err)}). Claude is told on its next tool call instead.`)
+  }
+}
+type SleepModes = { isAsleep: () => Promise<boolean>; sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }> }
 
 // Each tool call of a background agent's loop is a sign it is alive (#759): stamped as it starts and
 // again as it finishes. A clock that cannot be read stamps nothing, so the agent only looks older.
@@ -370,6 +414,7 @@ const lookAll = async ($: EngineInterface, live: Live) => {
   // The agents first, in a failure boundary of their own (L73): which loops are live decides where
   // each job's notices go.
   await lookAtAgents($, now, live)
+  if (live()) await wakeIfIdle($)
   for (const job of [...jobs.values()]) {
     if (!live()) return
     // One forgotten while an earlier job was looked at (stopped by Claude, or ended) is not looked at.
@@ -850,6 +895,8 @@ export const register: Register = on => {
     lateStops.clear()
     reminded.clear()
     notices.length = 0
+    // A session starting has no turn running yet (#1234).
+    mainTurn = 'idle'
     toldUnpublished = false
     toldClockFailed = false
     toldLookGivenUp = false
@@ -956,6 +1003,23 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
+  })
+
+  // This conversation's own turns (#1234): a background agent gone quiet while one runs is read on
+  // its next tool call; one left unread when the turn ends, or gone quiet while none runs, wakes it.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) mainTurn = 'busy'
+    return next(e)
+  })
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined) return r
+    mainTurn = 'idle'
+    // Off the turn's end path, so the turn has ended before the wake is submitted.
+    $.clock.after(0, () => {
+      wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session at a turn's end: ${message(err)}`, { to: 'debug' }))
+    })
+    return r
   })
 
   // Claude Code's notice that a job ended names it (#706): it is dropped then, on the watcher's own
