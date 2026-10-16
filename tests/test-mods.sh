@@ -1093,7 +1093,7 @@ case "$out" in *clean-asks-link*) check "a mod asking the kit, or taking api.git
 # (merges.ts) each did with the same pattern. Each shape fails the run, pointed at
 # $.modkit.mergeHelper; a mod asking the kit, or naming the helper only in what it says, passes.
 M9H="$TMPROOT/m9-merge-helper"
-mkmodsrc "$M9H" clean-asks-helper "const h = await \$.modkit.mergeHelper({ words: c.words }); const what = 'merge a PR with merge-when-ready.sh'; say(\`merge-when-ready.sh is merging #\${n}\`)"
+mkmodsrc "$M9H" clean-asks-helper "const h = await \$.modkit.mergeHelper(c); const what = 'merge a PR with merge-when-ready.sh'; say(\`merge-when-ready.sh is merging #\${n}\`)"
 mkmodsrc "$M9H" helper-regex 'const HELPER = /(?:^|\/)merge-when-ready\.sh$/'
 mkmodsrc "$M9H" helper-unescaped 'const runs = words.some(w => /merge-when-ready.sh/.test(w))'
 mkmodsrc "$M9H" helper-ends "const at = words.findIndex(w => w.endsWith('/merge-when-ready.sh'))"

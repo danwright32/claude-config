@@ -58,10 +58,11 @@
 #             from its origin by hand (naming the composer      counting a handoff's opening prompt). Whether
 #             kind as a string)                                 it came from his phone (bridge alone) is
 #                                                               another question.
-#   merge-helper                                                use $.modkit.mergeHelper({ words }), the gh
-#             finding the merge helper by its file's name      pr merge it runs read as gh reads it (#1251:
-#             (merge-when-ready\.sh in a pattern, or the        scope-modes and is it live each matched the
-#             name ending a string); never a sentence that      name themselves)
+#   merge-helper                                                use $.modkit.mergeHelper(command), the gh pr
+#             finding the merge helper by its file's name      merge a command runs through it, read as gh
+#             (merge-when-ready\.sh in a pattern, or the        reads it (#1251: scope-modes and is it live
+#             name ending a string); never a sentence that      each matched the name themselves, and took
+#             only names it                                     reading the file for running it)
 #             only names it
 #   typed-answer                                               use $.modkit.typedAnswer({ guard, typed, still,
 #             telling Dan or Claude that an answer he typed     again }) (#1145: the design round guard and
@@ -159,7 +160,7 @@ PARTS=(
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
-  "merge-helper|merge-when-ready\\\\\\.sh|[\"'\`/]merge-when-ready\\.sh[\"'\`/)]|\$.modkit.mergeHelper({ words })"
+  "merge-helper|merge-when-ready\\\\\\.sh|[\"'\`/]merge-when-ready\\.sh[\"'\`/)]|\$.modkit.mergeHelper(command)"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
   "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"

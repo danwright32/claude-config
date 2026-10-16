@@ -101,12 +101,16 @@ export type ModKit = {
    */
   gh: (input: { words: string[] }) => Promise<ModKitGh | undefined>
   /**
-   * The `gh pr merge` one command runs through the merge helper (merge-when-ready.sh, found by any
-   * word that is its file, by path or by name), the words after it read as `gh` reads them;
-   * undefined when the command runs no helper (#1251: found here alone, never by a mod's own match
-   * on the name). Ask it once per command, as `gh` is.
+   * The `gh pr merge` one command `pipeline` gave runs through the merge helper
+   * (merge-when-ready.sh), the words after it read as `gh` reads them; undefined when the command
+   * runs no helper (#1251: found here alone, never by a mod's own match on the name). Only a
+   * command that RUNS it counts: its file as the program, or as the script a shell, `source` or `.`
+   * runs (Dan, 2026-10-16); one that reads or names the file (cat, grep, an editor) does not. One
+   * that may run it but cannot be read for certain (a program or script that is a variable or a
+   * substitution, a shell fed what cannot be read, xargs, eval of a variable, inline code running a
+   * process that names it) is `unreadable`, its repository null. Ask it once per command, as `gh` is.
    */
-  mergeHelper: (input: { words: string[] }) => Promise<ModKitGh | undefined>
+  mergeHelper: (command: ModKitCommand) => Promise<ModKitGh | undefined>
   /**
    * A repository as gh reads one (-R, GH_REPO, a `gh repo` positional), as owner/name in lower
    * case; null when it is none (another host, more or less than owner and name). Here owner/name

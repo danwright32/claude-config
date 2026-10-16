@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { git, pipeline } from './mod-kit/hooks/commands.ts'
+import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { GOAL_MARK, goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
@@ -61,7 +61,7 @@ const deps: { name: string; register: Register } = {
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
           git: async (input: { words: string[] }) => kit('git', input),
           gh: async (input: { words: string[] }) => kit('gh', input),
-          mergeHelper: async (input: { words: string[] }) => kit('mergeHelper', input),
+          mergeHelper: async (command: Command) => kit('mergeHelper', command),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
           linkRepo: async (input: { link: string }) => kit('linkRepo', input),
@@ -537,7 +537,7 @@ const world = (on: On, o: Opts = {}) => {
       if (a[0] === 'linkRepo') return ok(JSON.stringify(linkRepo(input.link)))
       if (a[0] === 'isDans') return ok(JSON.stringify(isDans((input as { origin?: never }).origin)))
       if (a[0] === 'mergeHelper' && o.mergeHelperReaderFails) return fail(1, 'mod-kit is not loaded')
-      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : a[0] === 'mergeHelper' ? mergeHelperArgs(input.words ?? []) : git(input.words ?? [])
+      const out = a[0] === 'pipeline' ? pipeline(input.command ?? '') : a[0] === 'writes' ? commandWrites(input.command ?? '', input.cwd ?? '', input.home ?? '') : a[0] === 'gh' ? ghArgs(input.words ?? []) : a[0] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(a[1] as string) as Command) : git(input.words ?? [])
       return ok(out === undefined ? '' : JSON.stringify(out))
     }
     // The overnight driver's reads and writes (#844): the queue, the sleep/ branches, power and caffeinate.
@@ -3003,6 +3003,11 @@ test('asleep, a merge helper reading mod-kit cannot give refuses the call, where
   const { w, clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/quiet', mergeDeploys: false }], closed: [] }), origins: { '/quiet': 'git@github.com:o/quiet.git' } })
   await start($ as never, clock)
   expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toBe('ran')
+  // Only running it is a merge (Dan, 2026-10-16): reading its file runs in a repository whose merges
+  // wait, and a run that cannot be read for certain is refused there and here.
+  expect(await call($ as never, bash('cat ~/.claude/hooks/lib/merge-when-ready.sh'))).toBe('ran')
+  expect(await call($ as never, bash('bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight/)
+  expect(await call($ as never, bash('cd /quiet && bash -c "$MERGE"'))).toMatch(/^Blocked overnight: this would run a command that may run merge-when-ready\.sh, which cannot be read/)
   w.o.mergeHelperReaderFails = true
   expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(mod-kit is not loaded\)/)
 })

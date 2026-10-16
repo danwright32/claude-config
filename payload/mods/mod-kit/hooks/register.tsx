@@ -289,7 +289,7 @@ export const register: Register = (on, options) => {
       writes: async ({ command, cwd, home }) => commandWrites(command, cwd, home),
       git: async ({ words }) => git(words),
       gh: async ({ words }) => ghArgs(words),
-      mergeHelper: async ({ words }) => mergeHelperArgs(words),
+      mergeHelper: async command => mergeHelperArgs(command),
       pipeline: async ({ command }) => pipeline(command),
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.

@@ -234,8 +234,12 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
   const words = c.words
   const cmd = name(words[0])
   // The merge helper merges by gh inside a script the reader never sees, so it is a merge whenever
-  // mod-kit finds it run, whatever its arguments (#1251).
-  if (c.mergeHelper) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: helperRepo(c.mergeHelper) })
+  // mod-kit finds it run, whatever its arguments, and one that may run it but cannot be read for
+  // certain is a merge into a repository that cannot be told (#1251). Reading its file is neither.
+  if (c.mergeHelper) {
+    const what = c.mergeHelper.unreadable ? 'run a command that may run merge-when-ready.sh, which cannot be read' : 'merge a PR with merge-when-ready.sh'
+    out.push({ kind: 'merge', what, repo: helperRepo(c.mergeHelper) })
+  }
   if (c.git?.sub === 'push') {
     const p = pushToDefault(c.git.args, where)
     if (p) out.push({ kind: 'push-default', what: p })

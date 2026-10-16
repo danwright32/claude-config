@@ -141,7 +141,7 @@ const mergesIn = async ($: EngineInterface, command: string): Promise<MergeCall[
       out.push(direct)
       continue
     }
-    const viaHelper = mergeCallOf(await $.modkit.mergeHelper({ words: c.words }))
+    const viaHelper = mergeCallOf(await $.modkit.mergeHelper(c))
     if (viaHelper) out.push(viaHelper)
   }
   return out

@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
-import { pipeline } from './mod-kit/hooks/commands.ts'
+import { pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -70,8 +70,8 @@ const modKit: { name: string; register: Register } = {
           return r.stdout === '' ? undefined : JSON.parse(r.stdout)
         },
         // #1251: the merge helper is found by mod-kit's reader alone, asked of the world the same way.
-        mergeHelper: async (input: { words: string[] }) => {
-          const r = await built.process.run(['__modkit', 'mergeHelper', JSON.stringify(input)])
+        mergeHelper: async (command: Command) => {
+          const r = await built.process.run(['__modkit', 'mergeHelper', JSON.stringify(command)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return r.stdout === '' ? undefined : JSON.parse(r.stdout)
         },
@@ -187,7 +187,7 @@ const world = (on: On, init: Partial<World> = {}) => {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
       if (e.argv[1] === 'gh' || e.argv[1] === 'mergeHelper' || e.argv[1] === 'pipeline') {
         const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string }
-        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : e.argv[1] === 'mergeHelper' ? mergeHelperArgs(input.words) : pipeline(input.command)
+        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : e.argv[1] === 'mergeHelper' ? mergeHelperArgs(JSON.parse(e.argv[2] as string) as Command) : pipeline(input.command)
         return { value: { exitCode: 0, stdout: read === undefined ? '' : JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
       }
       if (e.argv[1] === 'linkRepo') {
@@ -847,6 +847,11 @@ test('a merge is recognised as plain gh, through rtk, and through the merge help
   runs.length = 0
   await bash($, 'gh pr view 412 --json mergeable')
   await bash($, 'echo "gh pr merge 412"')
+  // Reading the merge helper's file runs no merge (#1251, Dan, 2026-10-16), so GitHub is not asked;
+  // a run whose repository cannot be told is not asked either, and says nothing.
+  expect(said(await bash($, 'cat ~/.claude/hooks/lib/merge-when-ready.sh'))).not.toContain('merg')
+  expect(said(await bash($, 'grep -n gh ~/.claude/hooks/lib/merge-when-ready.sh'))).not.toContain('merg')
+  expect(said(await bash($, 'bash -c "$MERGE"'))).not.toContain('merg')
   expect(views(runs)).toEqual([])
 })
 

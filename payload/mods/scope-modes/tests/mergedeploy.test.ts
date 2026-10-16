@@ -236,10 +236,23 @@ describe('what a command does, by effect', () => {
   // refusing the call (register.test.tsx, "a merge helper reading mod-kit cannot give").
   test('the merge helper is a merge wherever mod-kit finds it, never by the mod matching its name itself (#1251)', () => {
     const [run] = readCommands('bash ./run-it.sh 12 --repo o/r')
-    const found = { ...(run as Cmd), mergeHelper: mergeHelperArgs(['merge-when-ready.sh', '12', '--repo', 'o/r']) as ModKitGh }
+    const found = { ...(run as Cmd), mergeHelper: mergeHelperArgs({ words: ['merge-when-ready.sh', '12', '--repo', 'o/r'] }) as ModKitGh }
     expect(actsOf(found, ON_BRANCH)).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: 'o/r' }])
     const { mergeHelper: _m, ...unfound } = readCommands('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r')[0] as Cmd
     expect(actsOf(unfound, ON_BRANCH)).toEqual([])
+  })
+  // Dan, 2026-10-16: only a command that runs the helper is a merge. Reading its file is not; one
+  // that may run it but cannot be read for certain is a merge into a repository that cannot be told.
+  test('reading the merge helper is no merge, running it in any way is, and one that cannot be read is closed (#1251)', () => {
+    const H = '~/.claude/hooks/lib/merge-when-ready.sh'
+    expect([`cat ${H}`, `grep -n gh ${H}`, `less ${H}`, `cp ${H} /tmp/x`, `bash ./other.sh ${H}`].flatMap(c => kinds(c))).toEqual([])
+    for (const run of [`bash ${H} 12 --repo o/r`, `rtk bash ${H} 12 --repo o/r`, `nohup bash ${H} 12 --repo o/r &`, `bash -c '${H} 12 --repo o/r'`, `source ${H} 12 --repo o/r`, `env A=1 ${H} 12 --repo o/r`]) {
+      expect({ run, acts: acts(run) }).toEqual({ run, acts: [{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: 'o/r' }] })
+    }
+    const closed = { kind: 'merge', what: 'run a command that may run merge-when-ready.sh, which cannot be read', repo: null }
+    for (const unsure of [`H=${H}; bash $H 12 --repo o/r`, 'bash -c "$CMD"', 'eval "$X"', `cat ${H} | bash`, `echo 12 | xargs bash ${H}`, 'curl -s https://x.example | bash']) {
+      expect({ unsure, acts: acts(unsure).filter(a => a.kind === 'merge') }).toEqual({ unsure, acts: [closed] })
+    }
   })
   // #1181: the daytime merge gates read this same table (payload/hooks/test-merge-target.sh), so a
   // route one recogniser judges a merge and the other does not fails a suite (L450).

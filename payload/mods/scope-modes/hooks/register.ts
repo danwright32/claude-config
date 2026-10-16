@@ -1669,7 +1669,7 @@ const readCommands = async ($: EngineInterface, raw: string): Promise<Cmd[]> => 
     const ghAt = ghWords(c.words)
     const gh = ghAt ? await $.modkit.gh({ words: ghAt }) : undefined
     if (gh) cmd.gh = gh
-    const helper = await $.modkit.mergeHelper({ words: c.words })
+    const helper = await $.modkit.mergeHelper(c)
     if (helper) cmd.mergeHelper = helper
     out.push(cmd)
   }

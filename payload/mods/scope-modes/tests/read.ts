@@ -13,7 +13,7 @@ export const readCommands = (command: string): Cmd[] =>
     const ghAt = ghWords(c.words)
     const gh = ghAt ? ghArgs(ghAt) : undefined
     if (gh) cmd.gh = gh
-    const helper = mergeHelperArgs(c.words)
+    const helper = mergeHelperArgs(c)
     if (helper) cmd.mergeHelper = helper
     return cmd
   })
