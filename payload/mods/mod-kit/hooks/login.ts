@@ -1,18 +1,26 @@
 import type { EngineInterface, On } from 'claude-code'
 import type { ModKitAccount } from '../types/index.d.ts'
 
-// A /login in this session changes the account it runs on (#1205). A session's account is otherwise
-// read once, at its start, because the login file names whatever the Mac is logged in to NOW, which
-// another session's switch changes under this one; a /login in THIS session is the one change that
-// is this session's own. Two mods followed it, each with its own copy of this reading and its wait
-// (#1201, #1204), and they are now the first two to hook modkit.login instead.
+// A /login in this session changes the account it runs on (#1205). Two mods followed it, each with
+// its own copy of this reading and its wait (#1201, #1204), and they are now the first two to hook
+// modkit.login instead.
 //
 // Raised once the command is done, failed or not, since whether the login file changed is the
 // file's to say. If the file does not yet name another login it is read every second for half a
-// minute, raised again once it does, and no longer: a /login that changed nothing (cancelled, or
-// the same account again) must not leave a session adopting whatever another session switches the
-// Mac to later. The wait survives a /clear, which ends only the conversation, and stops when the
-// session really ends.
+// minute, raised again once it does, and no longer: the wait is for this /login alone, and the
+// login file is otherwise read again at the moments below. The wait survives a /clear, which ends
+// only the conversation, and stops when the session really ends.
+//
+// A login made anywhere else moves this session too (#1235): another session's /login, or the
+// account room's Switch, which runs `claude auth login`. Claude Code keeps one credential per Mac
+// and drops the one it holds when the store's version changes (read in 2.1.301's own code), and the
+// email it hands the session comes from this same login file, read again whenever the context is
+// (its session_context record names why: account_change after a /login, as seen on 2026-10-16).
+// So the login file is read again at each prompt (turn.start) and at each re-read of the context
+// (prompt.context), and a login other than the one this session is known to be on is raised. Never
+// at a measurement: that is many reads a turn, of a file that holds every project. A file that
+// cannot be read then raises nothing, since a read that failed says nothing about which login it
+// holds; only a /login, which may have broken it, raises it as unknown.
 
 const POLL_MS = 1_000
 const WAIT_MS = 30_000
@@ -22,11 +30,13 @@ const reason = (err: unknown) => String((err as Error)?.message ?? err)
 
 /** What reading the login file needs, as functions, since mod-kit's noun code cannot pass its $ along. */
 export type LoginFileIo = { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string>; log: (text: string) => void }
-export const ioOf = ($: EngineInterface): LoginFileIo => ({
-  exists: path => $.fs.exists(path),
-  read: path => $.fs.read(path),
-  log: text => void $.ui.log(text, { to: 'debug' }),
-})
+export function ioOf($: EngineInterface): LoginFileIo {
+  return {
+    exists: path => $.fs.exists(path),
+    read: path => $.fs.read(path),
+    log: text => void $.ui.log(text, { to: 'debug' }),
+  }
+}
 
 /** The login file's account: its fields, `{}` for no claude.ai login, null for a file that cannot be read (L11). */
 export const readAccount = async (io: LoginFileIo, home: string): Promise<ModKitAccount | null> => {
@@ -57,9 +67,60 @@ const stop = () => {
   watch?.cancel()
   watch = undefined
 }
-/** Called from mod-kit's own session.start, since a module holds one hook per event: a session started again in this process is followed afresh. */
-export const loginStarted = () => {
+
+// The login this session is known to be on, by loginKey ('' for none), or null when the last raise
+// was of a file that could not be read: read at its start and moved by every raise. Kept in $.state,
+// so a reload of mod-kit keeps what it last told the mods rather than taking the file as it is then.
+const knownRef = { plugin: 'mod-kit', key: 'login' } as const
+
+/**
+ * Raised for every mod following the account, then noted as the login this session is on: noted
+ * only once the raise has returned, so a raise that failed or was cut off is raised again at the
+ * next look rather than taken as told (lessons review of #1235). A mod taking it twice compares it
+ * with its own record and changes nothing.
+ */
+async function raise($: EngineInterface, account: ModKitAccount | null) {
+  await $.modkit.login({ account })
+  await $.state.set(knownRef, account === null ? null : loginKey(account))
+}
+
+/**
+ * Called from mod-kit's own session.start, since a module holds one hook per event: a session started
+ * again in this process is followed afresh, and the login it starts on is noted unless a start before
+ * it in this session (a reload) already did. A file that cannot be read is noted as unknown.
+ */
+export async function loginStarted($: EngineInterface) {
   ended = false
+  if ((await $.state.get(knownRef)).version !== 0) return
+  const h = await $.env.get('HOME').catch(() => undefined)
+  if (!h) return
+  const a = await readAccount(ioOf($), h)
+  await $.state.set(knownRef, a === null ? null : loginKey(a), { ifVersion: 0 })
+}
+
+// One look at a time, so a prompt and a re-read landing together raise one change once.
+let looks: Promise<void> = Promise.resolve()
+
+async function lookAgain($: EngineInterface) {
+  if (ended) return
+  const h = await $.env.get('HOME').catch(() => undefined)
+  if (!h) return
+  const now = await readAccount(ioOf($), h)
+  if (now === null || ended) return
+  if (loginKey(now) === (await $.state.get(knownRef)).value) return
+  await raise($, now)
+}
+
+/**
+ * Called at each prompt (from mod-kit's own turn.start) and at each re-read of the context: the
+ * login file read again, and raised when it names a login other than the one this session is known
+ * to be on (#1235). Called once the hook has returned, so a slow disk never holds up the turn.
+ */
+export function followAccount($: EngineInterface) {
+  looks = looks
+    .then(() => lookAgain($))
+    .catch(err => $.ui.log(`mod-kit: could not read the login file again for the account this session is on: ${reason(err)}`, { to: 'debug' }))
+  return looks
 }
 
 const landed = (a: ModKitAccount | null, before: string) => a !== null && loginKey(a) !== before
@@ -76,7 +137,7 @@ export const registerLogin = (on: On) => {
       stop()
       try {
         let last = await readAccount(ioOf($), h)
-        if (!ended) await $.modkit.login({ account: last })
+        if (!ended) await raise($, last)
         if (!ended && !landed(last, before)) {
           const until = (await $.clock.now()) + WAIT_MS
           const mine = $.clock.every(POLL_MS, () => {
@@ -89,7 +150,7 @@ export const registerLogin = (on: On) => {
               if (JSON.stringify(now) !== JSON.stringify(last)) {
                 last = now
                 if (watch !== mine || ended) return
-                await $.modkit.login({ account: now })
+                await raise($, now)
                 if (landed(now, before)) return stop()
               }
               if (watch === mine && (await $.clock.now()) >= until) stop()
@@ -102,6 +163,18 @@ export const registerLogin = (on: On) => {
         $.ui.log(`mod-kit: could not follow /login: ${reason(err)}`, { to: 'debug' })
       }
     }
+  })
+
+  // The context is read again after a compaction, a /clear, a plugin's ask, or the account changing:
+  // its email is the login file's, so the file is read again with it (#1235). Passed on as it came.
+  on('prompt.context', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      $.clock.after(0, () => void followAccount($))
+    } catch (err) {
+      $.ui.log(`mod-kit: could not read the login file again after the context was: ${reason(err)}`, { to: 'debug' })
+    }
+    return r
   })
 
   on('session.end', async ($, e, next) => {
