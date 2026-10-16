@@ -536,6 +536,19 @@ test('a save through a path the command holds in a variable is refused, naming t
   expect(w.ran).toEqual([])
 })
 
+// #1241: a copy into the scratchpad through a variable the command set was refused twice, as a write
+// that may reach lasting memory. Read by mod-kit's own reader, as in a session.
+test('a copy into a temporary folder through a variable the command first sets to it goes through; one set only conditionally is still refused', withKit, async ($, on) => {
+  const w = world($, on)
+  const S = '/private/tmp/claude-501/p/s/scratchpad/sf'
+  const copy = `S=${S}; cp payload/LESSONS.md $S/LESSONS.md`
+  await call($, { tool: 'Bash', command: copy })
+  expect(w.ran.map(r => r.input.command)).toEqual([copy])
+  for (const command of [`[ -d x ] && S=${S}; cp payload/LESSONS.md $S/LESSONS.md`, `S=${S}; eval "$X"; cp payload/LESSONS.md $S/LESSONS.md`])
+    expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toContain(ASKS)
+  expect(w.ran.map(r => r.input.command)).toEqual([copy])
+})
+
 test('a save to a target the words cannot name is refused when the command mentions lasting memory, and goes through when it mentions none', withKit, async ($, on) => {
   const w = world($, on)
   const asked = refusalOf(await call($, { tool: 'Bash', command: `printf 'x\\n' >> "$(ls ~/.claude/projects/p/memory/MEMORY.md)"` }))
