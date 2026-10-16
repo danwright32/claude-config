@@ -647,6 +647,8 @@ test('#1248: added code that can change what is drawn, or that runs where it sta
     // semicolon or on a line of its own, a body on the next line.
     'const x = setUp(card)\n\n',
     'const x = ((card: StepsCard) => card)()\n\n',
+    'const x = function () {\n  return card\n}()\n\n',
+    'const x = function (card: StepsCard) { return card }.call(null, card)\n\n',
     'const f = (card: StepsCard) => card, g = setUp()\n\n',
     'const f = (card: StepsCard) => card; setUp()\n\n',
     'const f = (card: StepsCard) => card\nsetUp()\n\n',

@@ -2651,7 +2651,7 @@ region ran to the end of the line after the change.
   them, is moved to the start of a line where it reads the same (`changedSpan`), and its region stops
   at the last changed line, so a logic line added directly above a line that draws is judged alone.
 - **Code nothing runs yet is no look change.** An insertion of whole top level declarations that run
-  nothing where they stand (a type, an interface, a function, a const given a function), between
+  nothing where they stand (a type, an interface, a function, a const given an arrow function, never a function expression, which `}()` runs at once), between
   declarations, never exported, under names the file does not use, passes (`unusedCode`), provided it
   holds no element, no colour literal, and no drawing word but those naming what is drawn (card, row,
   pane, band, panel, button) or the act (draw, render). Colour, style and size words still hold it,

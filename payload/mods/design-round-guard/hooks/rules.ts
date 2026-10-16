@@ -866,9 +866,10 @@ export const changedSpan = (before: string, after: string): { at: number; before
 const MOD_SURFACE_WORDS = new Set(['card', 'row', 'rows', 'pane', 'band', 'panel', 'button', 'draw', 'render'])
 
 // A declaration that runs nothing where it stands: a type, an interface, a function, or a const given
-// a function (an arrow, whose parameter list is followed by => or a return type, or a function
-// expression). Never exported, since what is exported is reached from outside the file.
-const DECLARES = /^(?:type\s+([A-Za-z_$][\w$]*)\b|interface\s+([A-Za-z_$][\w$]*)\b|(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*[(<]|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(function\b|\())/
+// an arrow function, whose parameter list is followed by => or a return type. Never a function
+// expression, which `}()` can run where it stands, and never exported, since what is exported is
+// reached from outside the file.
+const DECLARES = /^(?:type\s+([A-Za-z_$][\w$]*)\b|interface\s+([A-Za-z_$][\w$]*)\b|(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*[(<]|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(\())/
 
 // What may follow an insertion in the file: the start of a declaration, an import or export, a
 // comment, or the end of the text. A line opening with a bracket, an operator or a backtick could be
@@ -888,8 +889,9 @@ const codeOnly = (text: string, spans: { comments: readonly Span[]; texts: reado
  * run (#1248: a subagent's edit adding a notification helper to manual steps was held, because the
  * helper reads the steps card's heading, and `card` is a word a mod draws with). True when the change
  * is one insertion (changedSpan) of whole lines at the file's top
- * level (outside every bracket, string, comment and element) and before a line that starts a
- * declaration, an import, an export or a comment, or at the end; when the inserted text, read alone,
+ * level (outside every bracket, string, comment and element) and before a line that starts with
+ * const, let, var, type, interface, function, async, class, enum, declare, import or export, or a
+ * comment, or at the end (FOLLOWS); when the inserted text, read alone,
  * holds no JSX element and spells no colour (MOD_LOOK_LITERAL), names no drawing word but those that
  * only say what is drawn (MOD_SURFACE_WORDS), comments aside, and is made only of declarations that
  * run nothing (DECLARES), each opening a line, each closing every bracket it opens before its line or
