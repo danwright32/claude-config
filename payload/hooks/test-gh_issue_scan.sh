@@ -40,6 +40,10 @@ import sys
 import gh_issue_scan as g
 
 mode, cmd = sys.argv[1], sys.argv[2]
+if mode == "writes":
+    # Every file the command writes, as path:a for an append or w for a write, then :shown or :hidden.
+    print(" ".join("%s:%s:%s" % (p, "a" if a else "w", "shown" if s else "hidden") for p, a, s in g.file_writes(cmd)))
+    raise SystemExit
 try:
     creates = g.scan_creates(cmd)
 except g.Unreadable as e:
@@ -155,6 +159,31 @@ two_seg="$(printf 'SKIP_MILESTONE_CHECK=1 gh issue create -t a\ngh issue create 
 [ "$(ask env 'FOO=1 BAR=2 gh issue create -t a')" = "FOO=1,BAR=2" ] \
   && check "several env assignments in front of one create are all kept" ok \
   || check "several env assignments in front of one create are all kept" "got $(ask env 'FOO=1 BAR=2 gh issue create -t a')"
+
+# ---------------------------------------------------------------------------
+# What the command writes itself (claude-config#1246), so a gate judging a body file the same
+# command writes reads it from the command, and stands down on what the command does not show.
+# ---------------------------------------------------------------------------
+writes_is() { # writes_is <description> <expected> <command>
+  local got; got="$(ask writes "$3")"
+  [ "$got" = "$2" ] && check "$1" ok || check "$1" "got [$got], wanted [$2]"
+}
+writes_is "a quoted heredoc is shown" "b.md:w:shown" "$(printf "cat > b.md <<'EOF'\nhi \$x\nEOF")"
+writes_is "a backslash quoted heredoc is shown" "b.md:w:shown" "$(printf 'cat > b.md <<\\EOF\nhi $x\nEOF')"
+writes_is "an unquoted heredoc that expands is hidden" "b.md:w:hidden" "$(printf 'cat > b.md <<EOF\nhi $x\nEOF')"
+writes_is "an unquoted heredoc that expands nothing is shown" "b.md:w:shown" "$(printf 'cat > b.md <<EOF\nhi\nEOF')"
+writes_is "a tab stripped heredoc closes on its indented delimiter" "b.md:w:shown c.md:w:hidden" "$(printf "cat > b.md <<-'EOF'\n\thi\n\tEOF\nbash x > c.md")"
+writes_is "an append is told apart" "b.md:a:shown" "echo hi >> b.md"
+writes_is "a here-string is shown" "b.md:w:shown" "cat > b.md <<< hi"
+writes_is "cat of a file is hidden" "b.md:w:hidden" "cat a.md > b.md"
+writes_is "tee writes its operands, appending with -a" "b.md:a:shown" "printf hi | tee -a b.md"
+writes_is "a pipe carried onto the next line still feeds tee" "b.md:w:shown" "$(printf 'printf hi |\ntee b.md')"
+writes_is "a heredoc opened on the last line has no body anyone showed" "b.md:w:hidden" "cat > b.md <<'EOF'"
+writes_is "an fd duplication is not a file" "" "echo hi 2>&1"
+writes_is "a heredoc inside a quoted body is not read as one" "" "gh issue create --body \"\$(cat <<'EOF'
+hi > b.md
+EOF
+)\""
 
 # ---------------------------------------------------------------------------
 # Unreadable is its own answer, not zero creates. Zero means "nothing to gate" and lets the command
