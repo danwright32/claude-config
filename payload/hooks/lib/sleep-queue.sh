@@ -229,8 +229,9 @@ sleep_queue() {
   local root="${1:-}" self="${2:-}" gen slug tmp limit="${SLEEP_QUEUE_LIMIT:-500}" n rc goal="" goalskips="" why
   [ $# -ge 2 ] || { _sq_refuse "sleep_queue needs a repository root and a session id"; return 3; }
   shift 2
-  [ $# -gt 0 ] || { _sq_no_goal; return 1; }
+  # Awake is said first, as by every other call; asleep with no goal reads nothing from GitHub.
   gen="$(_sq_generation)" || { _sq_refuse "$gen"; return 3; }
+  [ $# -gt 0 ] || { _sq_no_goal; return 1; }
   slug="$(_sq_slug "$root")" || { _sq_refuse "$root has no GitHub origin, so its issues cannot be named"; return 3; }
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/sleep-queue.XXXXXX")" || { _sq_refuse "no temporary folder could be made"; return 3; }
   _sq_account "$slug" || { rm -rf "$tmp"; _sq_refuse "$_SQ_WHY"; return 3; }
@@ -556,8 +557,9 @@ sleep_worktree() {
 # never read as an issue someone else holds. With no goal issue it claims nothing (#1242).
 sleep_next() {
   local root="${1:-}" self="${2:-}" q rc lines n title got attempts wt err failed="" crc
-  [ $# -eq 2 ] && { _sq_no_goal; return 1; }
   q="$(sleep_queue "$@")"; rc=$?
+  # No goal issues: the queue's own none line, said as next's one result, and nothing claimed.
+  if [ "$rc" = 1 ] && [ $# -eq 2 ]; then printf '%s\n' "$q"; return 1; fi
   if [ "$rc" != 0 ]; then printf '%s\n' "$q"; return 3; fi
   lines="$(printf '%s\n' "$q" | awk -F'\t' '$1 == "next" { print $2 "\t" $6 }')"
   while IFS=$'\t' read -r n title; do

@@ -1115,7 +1115,7 @@ overwrite control always eight. The seam acts only on a folder holding a `partie
 writes, and has a deadline, so a night never waits on it. What the build decided, each open to Dan
 changing it:
 
-- `next REPO_ROOT SESSION_ID [GOAL_ISSUE...]` is the one call an overnight session makes: queue,
+- `next REPO_ROOT SESSION_ID GOAL_ISSUE...` is the one call an overnight session makes: queue,
   claim the first issue nobody holds, and give it a worktree, `PRIMARY/.claude/worktrees/sleep-N` on
   branch `sleep/N`, never a checkout in the primary checkout. A folder already at that path that is
   not this repository's worktree is never adopted (L421); the claim ends `failed` and `next` goes on.

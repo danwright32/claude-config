@@ -153,6 +153,14 @@ out="$(bash "$LIB" next "$ROOT" s1)"; rc=$?
 check_eq "run as a command with no goal issues, next claims nothing" 1 "$rc"
 check_eq "the same line" "$NO_GOAL" "$out"
 check_eq "and GitHub was asked nothing" "" "$(cat "$WORK/source.log" 2>/dev/null)"
+# Awake, there is no night at all, which outranks having no goal: every awake call refuses alike.
+awake
+for fn in sleep_queue sleep_next; do
+  out="$($fn "$ROOT" s1)"; rc=$?
+  check_eq "awake with no goal issues, $fn refuses as every awake call does" 3 "$rc"
+  check_has "saying the Mac is not asleep, not that there is no goal" "not asleep" "$out"
+done
+asleep
 
 # ---- the queue ----
 out="$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
