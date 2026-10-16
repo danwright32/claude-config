@@ -271,7 +271,8 @@ const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 // Dan pressing a button the card shows in the band, as he would: on mod-kit's drawing.
-const press = async ($: Engine, button: 'done' | 'copy' | 'copy-link' | 'open-link') => {
+// A button is keyed by what it does and its step's number (#1239): 'done-2' is step 2's Done.
+const press = async ($: Engine, button: `${'done' | 'copy' | 'copy-link' | 'open-link'}-${number}`) => {
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: bandProps } as never)
   await ui.press({ key: `manual-steps:${button}` })
   await ui.unmount()
@@ -340,7 +341,11 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(w.opened).toHaveLength(1)
   expect(w.closed).toEqual(w.opened)
   expect(await band($)).toMatchObject({ slot: 'steps', frame: { kind: 'left-rule', color: 'warning' } })
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf', '2. Purge the cache'])
+  expect(await bandText($)).toEqual([
+    'Cloudflare WAF  waiting on you',
+    '1. Turn on the WAF rule  [done-1]', 'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf',
+    '2. Purge the cache  [done-2]', 'Where: [open-link-2]  [copy-link-2]', 'https://dash.cloudflare.com/waf',
+  ])
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -355,10 +360,10 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: w.opened[0], props: { bodyColumns: 50 } } as never)
   expect(await ui.find({ type: 'Text', text: 'Cloudflare WAF' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: '1. Turn on the WAF rule' }))?.props).toMatchObject({ bold: true })
-  expect((await ui.find({ type: 'Button', key: 'manual-steps:done' }))?.props.label).toBe('Done')
+  expect((await ui.find({ type: 'Button', key: 'manual-steps:done-1' }))?.props.label).toBe('Done')
   expect((await paneShown($))?.lines.length).toBe(4)
   // Done pressed in the pane does what Done in the band does.
-  await ui.press({ key: 'manual-steps:done' })
+  await ui.press({ key: 'manual-steps:done-1' })
   expect(w.prompts).toEqual(['step 1 done'])
   await ui.unmount()
   // The pane shows the change: the step waits on Claude, its Done gone.
@@ -377,7 +382,7 @@ test('when mod-kit refuses the pane, the card is the steps row of the band and n
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.opened).toEqual([])
   expect(await paneShown($)).toBeUndefined()
-  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]', 'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf'])
+  expect(await bandText($)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done-1]', 'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf'])
 })
 
 test('steps found already done are marked so, and a card that is all done is not pinned', withKit, async ($, on) => {
@@ -388,7 +393,7 @@ test('steps found already done are marked so, and a card that is all done is not
   expect(await band($)).toBeUndefined()
   expect(w.opened).toEqual([])
   await hand($, [step({ checked: 'already-done', title: 'Made the token' }), step({ title: 'Second' })])
-  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done before this card', '2. Second  [done]'])
+  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done before this card', '2. Second  [done-2]'])
 })
 
 test('a step that does not say it was checked first is refused', withKit, async ($, on) => {
@@ -401,12 +406,12 @@ test('Done on a step Claude can check: "step 1 done" is sent, then Claude marks 
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
-  await press($, 'done')
+  await press($, 'done-1')
   expect(w.prompts).toEqual(['step 1 done'])
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
   expect((await band($))?.lines[1]?.[1]).toMatchObject({ text: expect.stringMatching(/^  checked on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/), color: 'success' })
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
+  expect((await bandText($))[2]).toBe('2. Purge the cache  [done-2]')
 })
 
 // #939 review: where Done cannot be clicked the card says what to type, which must be the very prompt
@@ -415,9 +420,9 @@ test('the words Done says to type are the prompt a Done press sends', withKit, a
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
-  const done = (await band($))?.lines[1]?.find(p => p.button === 'done') as { instead?: { text: string }[] } | undefined
+  const done = (await band($))?.lines[1]?.find(p => p.button === 'done-1') as { instead?: { text: string }[] } | undefined
   const typed = (done?.instead ?? []).map(r => r.text).join('')
-  await press($, 'done')
+  await press($, 'done-1')
   expect(typed).toBe(`type: ${w.prompts[0]}`)
 })
 
@@ -425,7 +430,7 @@ test('Done on a step Claude cannot check reads "done, you pressed Done" with its
   const w = world(on)
   await start($)
   await hand($, [step({ checked: 'cannot-check' }), step({ title: 'Purge the cache' })])
-  await press($, 'done')
+  await press($, 'done-1')
   expect(w.prompts).toEqual(['step 1 done'])
   await call($, VERDICT, { step: 1, checked: 'per-you' })
   expect((await band($))?.lines[1]?.[1]).toEqual({ text: expect.stringMatching(/^  done, you pressed Done on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/) })
@@ -439,17 +444,17 @@ test('a step Claude found did not take opens again, with Done', withKit, async (
   world(on)
   await start($)
   await hand($, [step()])
-  await press($, 'done')
+  await press($, 'done-1')
   await call($, VERDICT, { step: 1, checked: 'not-done' })
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('a Done that cannot reach Claude opens the step again and says so', withKit, async ($, on) => {
   const w = world(on, { submitFails: true })
   await start($)
   await hand($, [step()])
-  await press($, 'done')
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  await press($, 'done-1')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   // A hook beneath that fails is skipped, so Claude Code answers that nothing took the prompt.
   expect(w.toasts).toHaveLength(1)
   expect(w.toasts[0]).toMatch(/^Could not tell Claude step 1 is done: .+\. Press Done again\.$/)
@@ -468,63 +473,63 @@ test('Copy puts the value on the clipboard, and says when it could not', withKit
   const w = world(on)
   await start($)
   await hand($, [step({ value: 'ip.src eq 1.2.3.4' })])
-  await press($, 'copy')
+  await press($, 'copy-1')
   expect(w.copies).toEqual(['ip.src eq 1.2.3.4'])
   expect(w.toasts).toEqual(['Copied the value for step 1.'])
   w.w.copied = false
-  await press($, 'copy')
+  await press($, 'copy-1')
   expect(w.toasts[1]).toBe('Could not copy the value for step 1 (no-clipboard).')
 })
 
 // #708: Claude Code draws no hyperlinks on Apple Terminal, where a long link is plain text cut at
 // the edge, so Copy link is what takes the whole address on every terminal.
-test('Copy link puts the open step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
+test('Copy link puts its step\'s whole link on the clipboard, and says when it could not', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf`
   await hand($, [step({ url, value: 'ip.src eq 1.2.3.4' })])
-  await press($, 'copy-link')
+  await press($, 'copy-link-1')
   expect(w.copies).toEqual([url])
   expect(w.toasts).toEqual(['Copied the link for step 1.'])
   w.w.copied = false
-  await press($, 'copy-link')
+  await press($, 'copy-link-1')
   expect(w.toasts[1]).toBe('Could not copy the link for step 1 (no-clipboard).')
   // Copy beside the value still copies the value.
   w.w.copied = true
-  await press($, 'copy')
+  await press($, 'copy-1')
   expect(w.copies[2]).toBe('ip.src eq 1.2.3.4')
 })
 
 // #1215, Dan 2026-10-15: "is there any reason it couldn't just have a button to open it in my default
-// web browser?" Open hands the open step's link to macOS's open, as one argument with no shell between,
+// web browser?" Open hands its step's link to macOS's open, as one argument with no shell between,
 // so the link is only ever an address, and says what happened either way.
-test('Open opens the open step\'s link in the default browser, and says so', withKit, async ($, on) => {
+test('Open opens its step\'s link in the default browser, and says so', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   const url = `https://dash.cloudflare.com/${'a'.repeat(200)}/security/waf?x=1&y=$(id)`
   await hand($, [step({ url }), step({ title: 'Purge the cache', url: 'https://dash.cloudflare.com/cache' })])
-  await press($, 'open-link')
+  await press($, 'open-link-1')
   expect(w.runs.map(r => r.argv)).toEqual([['/usr/bin/open', url]])
   // Bounded well inside the 10 s a press has, so a hung open is said rather than waited on.
   expect(w.runs[0]?.timeoutMs).toBeLessThanOrEqual(5000)
   expect(w.toasts).toEqual(['Opened the link for step 1 in your browser.'])
   // Opening is not doing the step: the card still waits on it.
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('Open says why when the link could not be opened, never that it was', withKit, async ($, on) => {
   const w = world(on, { opened: { exitCode: 1, stderr: 'LSOpenURLsWithRole() failed with error -10814\n' } })
   await start($)
   await hand($, [step()])
-  await press($, 'open-link')
+  await press($, 'open-link-1')
   expect(w.toasts).toEqual(['Could not open the link for step 1 (LSOpenURLsWithRole() failed with error -10814). Copy link still has it.'])
   w.w.opened = { exitCode: 1, stderr: '' }
-  await press($, 'open-link')
+  await press($, 'open-link-1')
   expect(w.toasts[1]).toBe('Could not open the link for step 1 (open exited 1). Copy link still has it.')
   // An open the engine could not run at all (a timeout, a refusal): the engine words the reason, and
   // the toast still says it failed rather than that it opened.
   w.w.opened = new Error('the process timed out after 5000 ms')
-  await press($, 'open-link')
+  await press($, 'open-link-1')
   expect(w.toasts[2]).toMatch(/^Could not open the link for step 1 \(.+\)\. Copy link still has it\.$/)
   expect(w.toasts.some(t => t.startsWith('Opened'))).toBe(false)
 })
@@ -533,7 +538,7 @@ test('a step with no link shows no Open, and nothing is run', withKit, async ($,
   const w = world(on)
   await start($)
   await hand($, [step({ url: undefined, location: 'Salesforce desktop app, Setup' })])
-  expect((await bandText($)).some(l => l.includes('[open-link]'))).toBe(false)
+  expect((await bandText($)).some(l => l.includes('[open-link'))).toBe(false)
   expect(w.runs).toEqual([])
 })
 
@@ -549,7 +554,7 @@ test('a store that cannot be written is said, and the card still shows', withKit
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.toasts).toHaveLength(1)
   expect(w.toasts[0]).toMatch(/^The manual steps could not be saved for the next session: .+\.$/)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('unfinished steps carry over: the next session in the project holds them until Claude re-checks them', withKit, async ($, on) => {
@@ -574,7 +579,7 @@ test('unfinished steps carry over: the next session in the project holds them un
   expect(await call($, VERDICT, { step: 2, checked: 'checked' })).toMatch(/refused: No steps are pinned/)
   // Re-pinned by Claude after checking: shown, the note no longer sent, the store holding the new card.
   await hand($, [step({ title: 'Purge the cache', url: 'https://b.example' })])
-  expect((await bandText($))[1]).toBe('1. Purge the cache  [done]')
+  expect((await bandText($))[1]).toBe('1. Purge the cache  [done-1]')
   expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Purge the cache'])
   const after = (await ($ as unknown as { prompt: { context: (e: object) => Promise<{ blocks: { name: string }[] }> } }).prompt.context({ blocks: [] })).blocks
   expect(after.find(b => b.name === 'manualSteps')).toBeUndefined()
@@ -623,14 +628,14 @@ test('at home, with the scope modes mod loaded, the card shows as usual', withAw
   await start($)
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
   expect(w.toasts).toEqual([])
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('when the scope modes mod cannot answer, the card is shown rather than lost', withAway, async ($, on) => {
   world(on, { wide: false }, {}, { AWAY: 'broken' })
   await start($)
   expect(await hand($, [step()])).toMatch(/step 1 of 1 is next/)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('/steps with nothing pinned says so', withKit, async ($, on) => {
@@ -682,7 +687,7 @@ test('a repository that cannot be read keeps nothing under the folder, and says 
   // The kit skips a hook beneath that throws and answers that nothing implements the call, so the
   // reason is the engine's, not this world's.
   expect(w.toasts[0]).toMatch(/^The manual steps could not be saved for the next session: .+\.$/)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
 })
 
 test('outside a repository the steps are kept under the folder', withKit, async ($, on) => {
@@ -727,12 +732,12 @@ test('a reload mid session keeps the live card live: verdicts land, and no carri
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
-  await press($, 'done')
+  await press($, 'done-1')
   // The mod reloaded: Claude Code runs session.start again and keeps $.state.
   await start($)
   expect((await context($)).find(b => b.name === 'manualSteps')).toBeUndefined()
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
+  expect((await bandText($))[2]).toBe('2. Purge the cache  [done-2]')
   expect(w.toasts).toEqual([])
 })
 
@@ -740,13 +745,13 @@ test('a Done Claude never answers comes back when the turn it started ends, and 
   const w = world(on)
   await start($)
   await hand($, [step()])
-  await press($, 'done')
+  await press($, 'done-1')
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   // "sent" is never kept for another session: that turn will not answer there.
   expect(stored(w.mem)?.steps[0]?.isSent).toBeUndefined()
   await turnStart($, 'step 1 done', 'T2')
   await turnEnd($, 'T2')
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toEqual(['Claude did not say whether step 1 took. Press Done to ask again.'])
   // A verdict Claude gives later still lands.
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
@@ -756,10 +761,10 @@ test('an interrupted turn brings Done back too', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await hand($, [step()])
-  await press($, 'done')
+  await press($, 'done-1')
   await turnStart($, 'step 1 done', 'T2')
   await turnEnd($, 'T2', 'aborted')
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toHaveLength(1)
 })
 
@@ -769,7 +774,7 @@ test('only the end of the turn "step N done" started counts: one already running
   await hand($, [step()])
   // Done pressed while Claude was busy: the prompt waits behind the running turn.
   await turnStart($, 'fix the tests', 'T1')
-  await press($, 'done')
+  await press($, 'done-1')
   await turnEnd($, 'T1')
   await turnEnd($, 'T9', 'answer', 'agent-1')
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
@@ -792,7 +797,7 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
   await start($)
   await hand($, [step()])
   await turnStart($, 'fix the tests', 'T1')
-  await press($, 'done')
+  await press($, 'done-1')
   // Claude works on past the bound: a prompt waiting behind a running turn is never taken for dropped.
   await clock.advance(DROPPED_AFTER_MS * 3)
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
@@ -802,7 +807,7 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(w.toasts).toEqual([])
   await clock.advance(1)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toEqual([RELEASED])
   // A verdict Claude gives later still lands.
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
@@ -814,9 +819,9 @@ test('a Done pressed with nothing running whose prompt starts no turn comes back
   await start($)
   await hand($, [step()])
   // The prompt went in, but a prompt hook refused it, so no turn began.
-  await press($, 'done')
+  await press($, 'done-1')
   await clock.advance(DROPPED_AFTER_MS)
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.toasts).toEqual([RELEASED])
 })
 
@@ -829,7 +834,7 @@ test('a queued Done whose turn starts after the turn ahead of it ends is never r
   await start($)
   await hand($, [step()])
   await turnStart($, 'fix the tests', 'T1')
-  await press($, 'done')
+  await press($, 'done-1')
   await clock.advance(DROPPED_AFTER_MS - 1_000)
   await turnEnd($, 'T1')
   // Past the press's own bound, a few seconds after the turn ahead ended: still waiting.
@@ -854,7 +859,7 @@ test('/steps does not lower the width a card opened unasked needs: the next one 
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
   // A later card, unasked, at 120 columns: the band, as at any laptop width.
   await hand($, [step({ title: 'Purge the cache' })])
-  expect((await bandText($))[1]).toBe('1. Purge the cache  [done]')
+  expect((await bandText($))[1]).toBe('1. Purge the cache  [done-1]')
   expect(await paneShown($)).toBeUndefined()
 })
 
@@ -870,7 +875,7 @@ test('/steps with the card in the pane opened unasked moves it to its own pane a
   expect(await paneShown($)).toMatchObject({ id: askedId })
   // Done from the pane /steps opened, and the last verdict closes that pane.
   const ui = await $.ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'Pane', requestId: askedId, props: { bodyColumns: 50 } } as never)
-  await ui.press({ key: 'manual-steps:done' })
+  await ui.press({ key: 'manual-steps:done-1' })
   await ui.unmount()
   expect(w.prompts).toEqual(['step 1 done'])
   await call($, VERDICT, { step: 1, checked: 'checked' })
@@ -887,7 +892,7 @@ test('/steps where its pane cannot be placed moves the card to the band and clos
   expect(await paneShown($)).toBeDefined()
   w.w.placesNoPanes = true
   expect(await slashSteps($, w.w)).toBe('The steps card is in the band above the prompt.')
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(w.closed).toContain(unasked)
   expect(await paneShown($)).toBeUndefined()
 })
@@ -900,7 +905,7 @@ test('a new card mod-kit will not draw in the open pane goes to the band, and th
   expect(await paneShown($)).toBeDefined()
   env.KIT_REFUSE_PANE = 'the pane is held by another mod'
   expect(await hand($, [step({ title: 'Purge the cache' })])).toMatch(/step 1 of 1 is next/)
-  expect((await bandText($))[1]).toBe('1. Purge the cache  [done]')
+  expect((await bandText($))[1]).toBe('1. Purge the cache  [done-1]')
   expect(w.closed).toContain(w.opened[0])
   expect(await paneShown($)).toBeUndefined()
 })
@@ -917,7 +922,7 @@ test('a card pinned while /steps has the pane open replaces the card in that pan
   expect((await paneShown($))?.lines[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
 })
 
-test('the pane asks for a dock as wide as the open step\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
+test('the pane asks for a dock as wide as the card\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
   const w = world(on, { wide: true })
   await start($)
   const clicks = 'Websites, example.com, Security, WAF, Custom rules, Create rule'
@@ -1002,19 +1007,22 @@ test('a block another Stop hook gives is kept beside this one (#863)', withKit, 
   expect(r.block).toMatch(/steps tool/)
 })
 
-test('the band says the open step is waiting on Dan while it is, and clears once it is done (#863)', withKit, async ($, on) => {
+test('the band says the card is waiting on Dan while any step is his to do, and clears once none is (#863, #1239)', withKit, async ($, on) => {
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
-  expect((await bandText($)).slice(0, 2)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done]'])
-  // Sent, it waits on Claude, not on Dan.
-  await press($, 'done')
+  expect((await bandText($)).slice(0, 2)).toEqual(['Cloudflare WAF  waiting on you', '1. Turn on the WAF rule  [done-1]'])
+  // Step 1 sent, step 2 is still Dan's to do, so the card still waits on him (#1239).
+  await press($, 'done-1')
   expect(w.prompts).toEqual(['step 1 done'])
-  expect((await bandText($))[0]).toBe('Cloudflare WAF')
-  // The next step is Dan's again.
-  await call($, VERDICT, { step: 1, checked: 'checked' })
   expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done]')
+  // Both sent: the card waits on Claude, not on Dan.
+  await press($, 'done-2')
+  expect((await bandText($))[0]).toBe('Cloudflare WAF')
+  // A step not done is Dan's again.
+  await call($, VERDICT, { step: 1, checked: 'not-done' })
+  expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
+  await call($, VERDICT, { step: 1, checked: 'withdrawn' })
   await call($, VERDICT, { step: 2, checked: 'checked' })
   expect(await band($)).toBeUndefined()
 })
@@ -1035,8 +1043,8 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
   expect(await call($, VERDICT, { step: 2, checked: 'withdrawn' })).toMatch(/^Step 2 recorded/)
   expect(await bandText($)).toEqual([
     'Cloudflare WAF  waiting on you',
-    '1. Turn on the WAF rule  [done]',
-    'Where: [open-link]  [copy-link]', 'https://dash.cloudflare.com/waf',
+    '1. Turn on the WAF rule  [done-1]',
+    'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf',
     expect.stringMatching(/^2\. Watch the next merge  taken off on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
@@ -1052,7 +1060,7 @@ test('"step 2 done" with step 1 open is refused with the ask, and nothing is rec
   for (const checked of ['per-you', 'checked'])
     expect(await call($, VERDICT, { step: 2, checked })).toMatch(/^refused: Step 2 \(Install the checker\) is not the open step; step 1 \(Pull\) is\. .*Ask Dan which step he means/)
   expect(stored(w.mem)?.steps.map(s => s.finished ?? null)).toEqual([null, null, null])
-  expect((await bandText($))[1]).toBe('1. Pull  [done]')
+  expect((await bandText($))[1]).toBe('1. Pull  [done-1]')
   // The open one takes it.
   expect(await call($, VERDICT, { step: 1, checked: 'per-you' })).toMatch(/^Step 1 recorded; step 2 of 3 is next/)
 })
@@ -1130,7 +1138,7 @@ test('another mod adds a step: a card of its own when none is pinned, shown as a
   expect(await addStep($)).toEqual({ isShown: true })
   const text = await bandText($)
   expect(text[0]).toMatch(/^The morning after sleep mode/)
-  expect(text[1]).toBe(`1. ${MORNING.title}  [done]`)
+  expect(text[1]).toBe(`1. ${MORNING.title}  [done-1]`)
   expect(stored(w.mem)?.steps).toEqual([{ title: MORNING.title, location: MORNING.location, clicks: MORNING.clicks, isAdded: true }])
 })
 
@@ -1144,6 +1152,16 @@ test('a step added to a card already pinned goes at its end, under its heading, 
   expect(stored(w.mem)?.steps.map(s => s.title)).toEqual(['Turn on the WAF rule', MORNING.title])
 })
 
+// #1239 lessons review: every step shows at once, so a step another mod adds can say what it needs too.
+test('a step another mod adds can say what it needs from an earlier one, drawn as the steps tool draws it (#1239)', withCaller, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, [step()])
+  expect(await addStep($, { ...MORNING, needs: 'the review the night left' })).toEqual({ isShown: true })
+  const text = await bandText($)
+  expect(text[text.findIndex(t => t.startsWith(`2. ${MORNING.title}`)) + 1]).toBe('Needs: the review the night left')
+})
+
 test('finish takes the step off by its title, whichever step is open, said as checked; one not there finishes nothing (#1107)', withCaller, async ($, on) => {
   const w = world(on)
   await start($)
@@ -1152,7 +1170,7 @@ test('finish takes the step off by its title, whichever step is open, said as ch
   expect(await finishStep($)).toEqual({ isFinished: true })
   expect(stored(w.mem)?.steps[1]).toMatchObject({ title: MORNING.title, finished: 'checked' })
   // The open step is still the first, with its Done.
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   expect(await finishStep($)).toEqual({ isFinished: false })
   expect(await finishStep($, 'No such step')).toEqual({ isFinished: false })
   // The last unfinished step taken off takes the card with it.
@@ -1269,7 +1287,7 @@ test('a notification that was not sent leaves the card pinned and tells Claude w
   world(on, {}, {}, env)
   await start($)
   expect(await hand($, [step()])).toBe('Pinned "Cloudflare WAF": step 1 of 1 is next. Dan was not notified: the Mac is asleep (sleep mode).')
-  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
   env.GOAL_NOTIFY = 'throws'
   expect(await hand($, [step()])).toMatch(/^Pinned "Cloudflare WAF": step 1 of 1 is next\. Dan was not notified: .*the notifier could not be reached/)
 })
@@ -1278,4 +1296,104 @@ test('without the goal tracker loaded the card is pinned and Claude is told Dan 
   world(on)
   await start($)
   expect(await hand($, [step()])).toBe('Pinned "Cloudflare WAF": step 1 of 1 is next. Dan was not notified: the goal tracker mod, which sends the notifications, is not loaded.')
+})
+
+// ---- Every step open at once, each with its own Done (#1239) ----
+// On 2026-10-15 Dan pressed Done on step 1 of three and the session took five minutes to read it;
+// steps 2 and 3 showed only their titles, with no Done, so he could not get ahead on them. His words:
+// "we should have all steps open so I can complete them while I'm waiting if needed and each should
+// have it's own done button".
+const three = () => [
+  step({ title: 'Make the password', url: undefined, location: '1Password, the Private vault' }),
+  step({ title: 'Create the user', url: 'https://supabase.com/dashboard/project/x/auth/users', needs: 'the password made in step 1' }),
+  step({ title: 'Give the Worker the password', url: 'https://dash.cloudflare.com/workers/x/settings', needs: 'the password made in step 1' }),
+]
+const stepLines = async ($: Engine) => (await bandText($)).filter(t => /^\d\. /.test(t))
+
+test('a card with three steps shows all three open, each with Done, before any is pressed (#1239)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  await hand($, three(), 'Partners page monitor')
+  expect(await bandText($)).toEqual([
+    'Partners page monitor  waiting on you',
+    '1. Make the password  [done-1]',
+    'Where: 1Password, the Private vault',
+    '2. Create the user  [done-2]',
+    'Needs: the password made in step 1',
+    'Where: [open-link-2]  [copy-link-2]',
+    'https://supabase.com/dashboard/project/x/auth/users',
+    '3. Give the Worker the password  [done-3]',
+    'Needs: the password made in step 1',
+    'Where: [open-link-3]  [copy-link-3]',
+    'https://dash.cloudflare.com/workers/x/settings',
+  ])
+})
+
+test('Done on step 3 while step 2 is unfinished marks step 3 sent, and Claude is told to ask whether every earlier step is done before recording any (#1239)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, three())
+  await press($, 'done-1')
+  await press($, 'done-3')
+  expect(w.prompts).toEqual(['step 1 done', 'step 3 done'])
+  expect(await stepLines($)).toEqual(['1. Make the password  sent', '2. Create the user  [done-2]', '3. Give the Worker the password  sent'])
+  expect(await call($, VERDICT, { step: 1, checked: 'per-you' })).toMatch(/^Step 1 recorded; step 2 of 3 is next/)
+  // Step 3's verdict, with step 2 not finished: refused, with the ask, and nothing recorded.
+  expect(await call($, VERDICT, { step: 3, checked: 'per-you' })).toMatch(
+    /^refused: Dan pressed Done on step 3 \(Give the Worker the password\) while step 2 \(Create the user\) is not finished\. Record nothing yet: ask Dan whether every step before step 3 is done/,
+  )
+  expect(stored(w.mem)?.steps.map(s => s.finished ?? null)).toEqual(['per-you', null, null])
+  // Dan says yes: recorded in order, the pressed one still reading as his press.
+  expect(await call($, VERDICT, { step: 2, checked: 'per-you' })).toMatch(/^Step 2 recorded; step 3 of 3 is next/)
+  expect(await call($, VERDICT, { step: 3, checked: 'per-you' })).toMatch(/every step is finished/i)
+})
+
+test('two steps sent at once each wait on Claude, and each Done comes back on its own when its turn ends unanswered (#1239)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, three())
+  await press($, 'done-1')
+  await press($, 'done-2')
+  expect(w.prompts).toEqual(['step 1 done', 'step 2 done'])
+  // A sent step draws no Done, so it cannot be sent twice.
+  expect((await stepLines($))[1]).toBe('2. Create the user  sent')
+  // Step 3 is still Dan's to do, so the card still waits on him.
+  expect((await bandText($))[0]).toBe('Cloudflare WAF  waiting on you')
+  await turnStart($, 'step 1 done', 'T1')
+  expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 3 is next/)
+  await turnEnd($, 'T1')
+  // Step 2's turn ends with no verdict: its Done comes back, said once.
+  await turnStart($, 'step 2 done', 'T2')
+  await turnEnd($, 'T2')
+  expect((await stepLines($))[1]).toBe('2. Create the user  [done-2]')
+  expect(w.toasts).toEqual(['Claude did not say whether step 2 took. Press Done to ask again.'])
+})
+
+test('Done on a later step whose turn ends unrecorded, with an earlier step unfinished, comes back saying it waits for that step (#1239)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, three())
+  await press($, 'done-3')
+  await turnStart($, 'step 3 done', 'T3')
+  expect(await call($, VERDICT, { step: 3, checked: 'per-you' })).toMatch(/^refused: Dan pressed Done on step 3/)
+  await turnEnd($, 'T3')
+  expect((await stepLines($))[2]).toBe('3. Give the Worker the password  [done-3]')
+  expect(w.toasts).toEqual(['Step 3 is not recorded until every step before it is done. Press its Done again once they are.'])
+})
+
+test('Copy, Copy link and Open on a later step act on that step, not the first (#1239)', withKit, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await hand($, [step(), step({ title: 'Purge the cache', url: 'https://dash.cloudflare.com/cache', value: 'everything' })])
+  await press($, 'copy-link-2')
+  await press($, 'copy-2')
+  await press($, 'open-link-2')
+  expect(w.copies).toEqual(['https://dash.cloudflare.com/cache', 'everything'])
+  expect(w.runs.map(r => r.argv)).toEqual([['/usr/bin/open', 'https://dash.cloudflare.com/cache']])
+  expect(w.toasts).toEqual(['Copied the link for step 2.', 'Copied the value for step 2.', 'Opened the link for step 2 in your browser.'])
+})
+
+test('the tools say every step is open with its own Done, ask what a step needs from an earlier one, and record in order (#1239)', () => {
+  expect(STEPS_DESCRIPTION).toMatch(/needs/)
+  expect(VERDICT_DESCRIPTION).toMatch(/ask Dan whether every earlier step is done/i)
 })
