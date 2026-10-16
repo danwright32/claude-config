@@ -832,8 +832,28 @@ const MOD_LOOK_WORDS = new Set(
 const MOD_LOOK_LITERAL = /#[0-9a-f]{3,8}\b|\\x1b|\\u001b|\\u\{1b\}|\\033|\\e\[|\b(rgb|hsl)a?\(/i
 
 /**
+ * Where two texts differ: `at`, the offset both share up to, and the end of the changed part in each,
+ * exclusive. Where one only adds to the other or takes from it, the change is moved as early as it
+ * reads the same, to the start of a line where it can be (#1248), so whole lines added above a line
+ * are never read as reaching into it, as `const a = 1` added above `const b` would otherwise be.
+ */
+export const changedSpan = (before: string, after: string): { at: number; before: number; after: number } => {
+  const max = Math.min(before.length, after.length)
+  let p = 0
+  while (p < max && before[p] === after[p]) p++
+  let s = 0
+  while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++
+  if (p + s < max) return { at: p, before: before.length - s, after: after.length - s }
+  const long = after.length > before.length ? after : before
+  const d = long.length - max
+  while (p > 0 && long[p - 1] !== '\n' && long[p - 1] === long[p + d - 1]) p--
+  return { at: p, before: before.length > max ? p + d : p, after: after.length > max ? p + d : p }
+}
+
+/**
  * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
- * the file draws (#1138): every line the change touches, in both texts, lies outside every JSX element
+ * the file draws (#1138): every line the change touches (changedSpan, ending where the change ends,
+ * never on the unchanged line after it, #1248), in both texts, lies outside every JSX element
  * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS) and spells no
  * colour or terminal style (MOD_LOOK_LITERAL). A text the reader cannot follow (sourceSpans) is never
  * judged so. A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
@@ -841,16 +861,18 @@ const MOD_LOOK_LITERAL = /#[0-9a-f]{3,8}\b|\\x1b|\\u001b|\\u\{1b\}|\\033|\\e\[|\
  */
 export const modHookLogicOnly = (before: string, after: string): boolean => {
   if (before === after) return false
-  const max = Math.min(before.length, after.length)
-  let p = 0
-  while (p < max && before[p] === after[p]) p++
-  let s = 0
-  while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++
-  for (const text of [before, after]) {
+  const span = changedSpan(before, after)
+  for (const [text, end] of [
+    [before, span.before],
+    [after, span.after],
+  ] as const) {
     const spans = sourceSpans(text)
     if (!spans) return false
-    const from = text.lastIndexOf('\n', p - 1) + 1
-    const nl = text.indexOf('\n', text.length - s)
+    // The lines the change touches in this text, ending where it ends, never on the unchanged line
+    // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
+    // whether an element spans the place the lines go.
+    const from = text.lastIndexOf('\n', span.at - 1) + 1
+    const nl = end === span.at ? from : text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
     const to = nl < 0 ? text.length : nl
     if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
     let shown = ''
