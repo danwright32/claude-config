@@ -44,6 +44,35 @@ declare module 'claude-code' {
        * link for the PR names it, in lowercase; the newest card's winning.
        */
       verdicts: Record<string, IsItLiveVerdict>
+      /** The merges this session still owes a card (#1244), oldest first. */
+      owed: IsItLiveOwed[]
+      /** Whether the session has somebody at its prompt, from session.start (#1244). */
+      interactive: boolean
+      /**
+       * The owed merges a turn end has already been refused for in the current chain of turn ends,
+       * and those whose letting go has been said (#1244): each is refused once per chain.
+       */
+      refused: { keys: string[]; told: string[] }
     }
   }
+}
+
+/**
+ * A merge this session made that still owes its card (#1244). `merged` GitHub confirmed just after
+ * the command; `unproven` the command did not fail but GitHub could not confirm it (`why`); `waiting`
+ * a merge the helper makes in the background, asked of GitHub again at each turn end and owed only
+ * once GitHub says it merged. `repo` is owner/name as GitHub's link names it, absent where it could
+ * not be read; `selector`, `named` and `cwd` are what GitHub is asked again with; `at` is when the
+ * command ran, ms since the epoch, and a card made at or after it settles the merge.
+ */
+export type IsItLiveOwed = {
+  key: string
+  how: 'merged' | 'unproven' | 'waiting'
+  pr: number
+  at: number
+  cwd: string
+  repo?: string
+  selector?: string
+  named?: string
+  why?: string
 }

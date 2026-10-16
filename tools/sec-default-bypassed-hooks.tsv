@@ -6,6 +6,7 @@
 # "Setting up a new Mac"). On a Mac without that file none of them runs, and claude-sync status says so.
 scope-modes	classic.Stop	#876: runs only while the managed settings file is in place; no event a user tier mod receives can refuse a turn end
 manual-steps	classic.Stop	#876: runs only while the managed settings file is in place; no event a user tier mod receives can refuse a turn end
+is-it-live	classic.Stop	#1244: runs only while the managed settings file is in place; no event a user tier mod receives can refuse a turn end, so without it a merge still carries its nudge but a turn end with no card goes ahead
 manual-steps	prompt.context	#876: runs only while the managed settings file is in place; prompt content is what the security default keeps from a person's plugins
 ask-before-saving	prompt.section	#876: runs only while the managed settings file is in place; prompt content is what the security default keeps from a person's plugins
 picker-manners	prompt.section	#876: runs only while the managed settings file is in place; prompt content is what the security default keeps from a person's plugins
