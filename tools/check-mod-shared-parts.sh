@@ -63,8 +63,7 @@
 #             (merge-when-ready\.sh in a pattern, or the        reads it (#1251: scope-modes and is it live
 #             name ending a string); never a sentence that      each matched the name themselves, and took
 #             only names it                                     reading the file for running it)
-#             only names it
-#   typed-answer                                               use $.modkit.typedAnswer({ guard, typed, still,
+#   typed-answer                                                use $.modkit.typedAnswer({ guard, typed, still,
 #             telling Dan or Claude that an answer he typed     again }) (#1145: the design round guard and
 #             was not recorded (the phrase "typed answer was    ask before saving said it two ways, and only
 #             not recorded")                                    one told Dan at all)
