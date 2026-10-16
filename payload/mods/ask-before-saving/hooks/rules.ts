@@ -170,7 +170,7 @@ const throughSettable = async (word: string, text: string, isSet: IsSet): Promis
   return named === undefined || (await settable(named, text, isSet))
 }
 
-// A folder a variable can be fixed to for certain: absolute or under home by ~/ (which an assignment
+// A folder a variable can be fixed to for certain: absolute or under home by an unquoted ~/ (which an assignment
 // expands), spelled only with characters the shell
 // neither splits, globs nor expands, and never climbing out through `..`, which the disk reads
 // through links and resolvePath does not.
@@ -200,7 +200,7 @@ const ASSIGNS = new RegExp(String.raw`^[ \t]*(?<all>(?:${ASSIGNMENT}[ \t]+)*${AS
  * Where a write through a variable lands, when the command itself fixes that variable for certain
  * (#1241: `S=<scratchpad>/sf; cp payload/LESSONS.md $S/LESSONS.md` was refused as a write that may
  * reach lasting memory). Certain means the command opens with statements made only of assignments,
- * one of which gives the variable a plain absolute folder, or one under home by ~/ (plainFolder), so nothing before it can
+ * one of which gives the variable a plain absolute folder, or one under home by an unquoted ~/ (plainFolder), so nothing before it can
  * make it conditional; the variable is named nowhere else in the command, so nothing reassigns,
  * appends to, reads into, loops over, references or unsets it, and is read only whole (`$S`,
  * `${S}`, never `${S::=x}`); no text is run as shell code (eval, source, `.`); and it is no variable
@@ -218,10 +218,15 @@ export const certainPath = (word: string, command: string, home: string): string
   let value: string | undefined
   let rest = command
   for (let s = ASSIGNS.exec(rest); s; s = ASSIGNS.exec(rest)) {
-    for (const a of (s.groups?.all ?? '').matchAll(new RegExp(ASSIGNMENT, 'g'))) if (a[1] === name) value = (a[2] as string).replace(/^(["'])([\s\S]*)\1$/, '$2')
+    for (const a of (s.groups?.all ?? '').matchAll(new RegExp(ASSIGNMENT, 'g'))) if (a[1] === name) value = a[2] as string
     rest = rest.slice(s[0].length)
   }
-  if (value === undefined || !plainFolder(value) || !(value.startsWith('/') || value.startsWith('~/'))) return undefined
+  if (value === undefined) return undefined
+  // The shell expands a `~` only unquoted: a quoted one is a folder named ~ wherever the command
+  // runs, which is no certain place.
+  const quoted = /^["']/.test(value)
+  if (quoted) value = value.slice(1, -1)
+  if (!plainFolder(value) || !(value.startsWith('/') || (!quoted && value.startsWith('~/')))) return undefined
   const bare = command.match(new RegExp(`(^|[^$\\w{])${name}(?!\\w)`, 'gm')) ?? []
   if (bare.length !== 1 || command.split(`\${${name}`).length !== command.split(`\${${name}}`).length) return undefined
   return resolvePath(value + under, '/', home)

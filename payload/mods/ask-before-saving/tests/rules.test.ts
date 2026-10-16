@@ -236,6 +236,11 @@ test('a write through a variable whose value the command cannot fix for certain 
     ['S=tmp/sf; cp payload/LESSONS.md $S/LESSONS.md', '/tmp/sf/LESSONS.md'],
   ]
   for (const [command, path] of unplain) expect(`${command}: ${(await throughS(command, '$S/LESSONS.md', path)).length}`).not.toBe(`${command}: 0`)
+  // A quoted ~, which the shell leaves as a folder named ~ wherever the command runs.
+  for (const q of ['"', "'"]) {
+    const command = `S=${q}~/notes${q}; cp payload/LESSONS.md $S/notes.txt`
+    expect(`${command}: ${(await throughS(command, '$S/notes.txt', '/Users/dan/notes/notes.txt')).length}`).not.toBe(`${command}: 0`)
+  }
   // A variable the shell sets for itself changes under the command: `$_` after every command, REPLY on a read.
   expect((await throughS(`_=${SP}; cp payload/LESSONS.md $_/LESSONS.md`, '$_/LESSONS.md')).length).not.toBe(0)
   expect((await throughS(`REPLY=${SP}; read < f; cp payload/LESSONS.md $REPLY/LESSONS.md`, '$REPLY/LESSONS.md')).length).not.toBe(0)
