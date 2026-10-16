@@ -896,6 +896,17 @@ test('GitHub naming an older merge under that number is not taken for this one, 
   expect((await turnEnd($)).block).toBeUndefined()
 })
 
+test("a merge whose repository was not read is settled by this session's card for it, never by another session's card for that number (#1244)", withKit, async ($, on) => {
+  const elsewhere = { repo: OTHER, pr: 412, title: 't', url: `https://github.com/${OTHER}/pull/412`, state: 'live', at: T0 + 5 }
+  world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: T0 - 86_400_000 } }), stored: { 'cards:danwright32/other': [elsewhere] } })
+  await start($)
+  await bash($, 'gh pr merge 412 --squash')
+  expect((await turnEnd($)).block).toContain('#412 (its repository was not read from the command)')
+  // Claude makes the card for it in this session: GitHub confirms that PR merged.
+  expect((await card($, CARD)).deny).toBeUndefined()
+  expect((await turnEnd($)).block).toBeUndefined()
+})
+
 test("a subagent's merge is named for its report, and the session that dispatched it owes the card (#1244)", withKit, async ($, on) => {
   world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST } }) })
   await start($)

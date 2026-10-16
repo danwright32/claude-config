@@ -14,6 +14,7 @@ const LOAD = `load the card tool with ToolSearch with the query "select:${TOOL}"
 // The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them, by
 // mod-kit's one reader of gh's arguments. Found by its file's name, as scope-modes finds it
 // (nobuild.ts, helperWords): that reading is not in mod-kit, so it cannot be shared from here.
+// Moving it into mod-kit for both mods is #1251.
 const HELPER = /(?:^|\/)merge-when-ready\.sh$/
 /** The words the merge helper hands `gh pr merge`, or undefined when the command does not run it. */
 export const helperWords = (words: readonly string[]): string[] | undefined => {

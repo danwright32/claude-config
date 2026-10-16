@@ -179,16 +179,14 @@ const afterMerges = async ($: EngineInterface, calls: MergeCall[], at: number, h
   return lines
 }
 
-// Whether a card made at or after the merge is kept for it, by this session or any other.
+// Whether a card made at or after the merge is kept for it: under its repository, by this session
+// or any other. A merge whose repository was not read is settled only by a card this session made
+// for its number, the card Claude makes when told about it; a card another session kept for some
+// other repository's PR of that number is no card for it (lessons review of #1244).
 const carded = async ($: EngineInterface, o: IsItLiveOwed): Promise<boolean> => {
-  const since = (c: IsItLiveCard) => c.pr === o.pr && c.at >= o.at
-  if (o.repo) return (await cardsOf($, o.repo)).some(since)
-  for (const k of await $.store.keys()) {
-    if (!k.startsWith(CARDS)) continue
-    const v = await $.store.get(k)
-    if (Array.isArray(v) && (v as IsItLiveCard[]).some(since)) return true
-  }
-  return false
+  if (o.repo) return (await cardsOf($, o.repo)).some(c => c.pr === o.pr && c.at >= o.at)
+  const verdicts = (await $.state.get(verdictsRef)).value ?? {}
+  return Object.entries(verdicts).some(([k, v]) => k.endsWith(`#${o.pr}`) && v.at >= o.at)
 }
 
 // The merges still owed a card at a turn end: a background merge GitHub now says merged becomes
