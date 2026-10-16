@@ -526,12 +526,19 @@ outright. A plain signal to the suite is not enough: bash holds it while the sui
 command substitution, so the wait after it used to last as long as whatever was blocking, with the
 sync lock held (#464).
 
-A verdict is remembered in `.send-suite-verdicts` against a digest of the whole staged hook set, and
-reused while that digest is unchanged. That is a bound on cost, not a shortcut: the watcher fires a
-send on every file event, so without it a suite that stays red is paid for again on every save, with
-the sync lock held throughout. Any hook edit changes the digest and retires every entry, so a
-remembered verdict can never outlive a change to what it judged, and the send says how many verdicts
-it reused rather than saving the time silently.
+A verdict is remembered in `.send-suite-verdicts` against a digest of the whole staged hook set and of
+`claude-sync` itself, and reused while that digest is unchanged. That is a bound on cost, not a
+shortcut: the watcher fires a send on every file event, so without it a suite that stays red is paid
+for again on every save, with the sync lock held throughout. Any hook edit, or any change to the tool,
+changes the digest and retires every entry, so a remembered verdict can never outlive a change to
+what it judged, and the send says how many verdicts it reused rather than saving the time silently.
+
+Every suite the send or the pull runs gets the environment a person's own run would give it: every
+`SYNC_` variable is removed before the suite starts, apart from the switches the gate sets on
+purpose. Without that, the watcher's `SYNC_IN_WATCH` reached `test-claude-sync.sh`, whose fake two
+way sync then behaved as the watcher does and failed, so every section the gate ran was red in the
+watcher and green by hand, and LESSONS.md was held back from 2026-10-09 to 2026-10-16 (#1240). The hold back
+notification leads with that reason and gives the held files as a count; the full list is in the log.
 
 ## Hygiene guards on every push
 

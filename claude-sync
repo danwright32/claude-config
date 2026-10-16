@@ -8464,8 +8464,11 @@ hook_suite_verdict(){   # prints the clause to fold into the closing line, or no
   # run, and every suite the runner starts would otherwise read them as describing its own: a
   # fixture clone's `claude-sync stuck` read this Mac's real record through SYNC_REPO, and a held
   # lock check saw this run's SYNC_LOCK, so two suites failed after every pull and passed on their
-  # own (L439, L169). The checkout is still handed over, by the one variable meant for it.
-  env -u SYNC_REEXECED -u SYNC_PULL_BASE -u SYNC_REPO -u SYNC_LOCK \
+  # own (L439, L169). The checkout is still handed over, by the one variable meant for it. Every
+  # SYNC_ variable goes, through suite_env_strip, rather than a list of the ones found so far: the
+  # send gate leaked another, SYNC_IN_WATCH, from 2026-10-09 to 2026-10-16 (claude-config#1240).
+  suite_env_strip
+  env ${SUITE_ENV_STRIP[@]+"${SUITE_ENV_STRIP[@]}"} \
     SYNC_NO_HOOK_TESTS=1 RUN_ALL_TESTS_CHECKOUT="$SYNC_REPO" bash "$runner" > "$out" 2>&1 &
   pid=$!
   started="$(date +%s)"
@@ -9257,10 +9260,32 @@ send_suites_covering(){   # $1 = a hook's basename -> the suites naming it, one 
 # its helpers, its fixtures and the library beside it, so a key narrowed to the covered file alone
 # would go on reporting a pass across a change to any of them (L336, L40). Empty when it cannot be
 # computed, and the caller then runs everything rather than sharing one blank key between suites.
+# This tool is folded in too (claude-config#1240): test-claude-sync.sh judges claude-sync itself, so
+# a key blind to the tool reused the failure a fix to the tool had just removed.
 send_hooks_digest(){
   local d
-  d="$(git -C "$SYNC_REPO" ls-files -s -- payload/hooks 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  d="$( { git -C "$SYNC_REPO" ls-files -s -- payload/hooks 2>/dev/null
+          shasum -a 256 "${BASH_SOURCE[0]}" 2>/dev/null; } | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
   case "$d" in ''|*[!0-9a-f]*) printf '' ;; *) printf '%s' "$d" ;; esac
+}
+
+# A test suite run in the environment a person's own run gives it (claude-config#1240): every SYNC_
+# variable this run carries is removed, and only the assignments passed here are set. The watcher's
+# SYNC_IN_WATCH, and the SYNC_REPO and SYNC_PULL_BASE a re-exec exports, change what claude-sync
+# does inside a suite that drives it, so the gate was measuring a different tool from the one a hand
+# run tests: red in the watcher on every run, green by hand on every run (L439, L504).
+# It fills SUITE_ENV_STRIP with `-u NAME` pairs for the caller's own `env` rather than running the
+# suite itself: a function sent to the background is a subshell, so $! named the wrapper and a suite
+# stopped at its deadline never ran its own EXIT trap (#464). With `env` started directly, env execs
+# the suite in the same process, and $! is the suite.
+SUITE_ENV_STRIP=()
+suite_env_strip(){
+  local v
+  SUITE_ENV_STRIP=()
+  while IFS= read -r v; do
+    [ -n "$v" ] && SUITE_ENV_STRIP+=(-u "$v")
+  done < <(compgen -e | grep '^SYNC_')
+  return 0
 }
 
 send_verdict_recall(){   # $1 = suite basename  $2 = digest -> prints pass|fail|timeout, or nothing
@@ -9417,10 +9442,14 @@ SCANS
         # One section alone: its timing record OFF, or a single section rewrites the timings the
         # full suite deals its shards by, and the machine wide suite lock SKIPPED, or any other run
         # holding it would read as this check failing and hold back a good file (#809).
-        SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
+        suite_env_strip
+        env ${SUITE_ENV_STRIP[@]+"${SUITE_ENV_STRIP[@]}"} \
+          SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 SUITE_NO_LOCK=1 SUITE_SECTION_TIMINGS= \
           SECTION_ONLY="$title" bash "$path" > "$out" 2>&1 &
       else
-        SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$path" > "$out" 2>&1 &
+        suite_env_strip
+        env ${SUITE_ENV_STRIP[@]+"${SUITE_ENV_STRIP[@]}"} \
+          SYNC_NO_SEND_TESTS=1 SYNC_NO_HOOK_TESTS=1 bash "$path" > "$out" 2>&1 &
       fi
       pid=$!
       started="$(date +%s)"; killed=0
@@ -9521,7 +9550,17 @@ $suite
       esac
       note_held_back "$(printf '%s\n' "$files" | sed 's|^payload/||')"
       echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
-      notify "held back $(printf '%s' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' '): $why"
+      # The reason FIRST and the files as a count after it: the banner shows a line or two, and the
+      # file list in front pushed the reason off it: on 2026-10-16 it showed 27 lesson file names and
+      # never a word that a test had failed (claude-config#1240, L79). The full list is on the line above, in the log.
+      local held_n held_first
+      held_n="$(printf '%s\n' "$files" | grep -c .)"
+      held_first="$(printf '%s\n' "$files" | sed -n '1{s|^payload/||; s|^hooks/||; p;}')"
+      if [ "$held_n" -gt 1 ]; then
+        notify "$why: held back $held_first and $(( held_n - 1 )) more"
+      else
+        notify "$why: held back $held_first"
+      fi
     done <<FAILED
 $failed_suites
 FAILED

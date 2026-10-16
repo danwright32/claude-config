@@ -17001,6 +17001,81 @@ check "#464 and the pull still reports the runner as stopped at its deadline" \
 SYNC_NO_SEND_TESTS=1
 
 
+section "== a send judges a suite as a hand run would, whoever started the send (claude-config#1240) =="
+# The watcher sends with SYNC_IN_WATCH=1, and the gate ran each suite inside that environment. A
+# suite that drives claude-sync itself then behaved as the watcher does: test-claude-sync.sh's fake
+# two way sync hit the watcher only CI gate and failed, so every section the gate ran was red in the
+# watcher and green by hand. From 2026-10-09 that held LESSONS.md back on the work MacBook 202 times
+# while every hand run passed (L439, L504). The suite here fails exactly when it can see the flag.
+unset SYNC_NO_SEND_TESTS
+WEB="$WORK/watchenv-bare.git"; git init -q --bare "$WEB"
+WER="$WORK/watchenv-repo"; git clone -q "$WEB" "$WER"
+WEH="$WORK/watchenv-home"; mkdir -p "$WEH/hooks"
+echo '{"hooks":{}}' > "$WEH/settings.json"
+printf '# rules\n' > "$WEH/CLAUDE.md"
+WERUNS="$WORK/watchenv-runs"; : > "$WERUNS"
+printf '#!/usr/bin/env bash\necho we\n' > "$WEH/hooks/we.sh"
+cat > "$WEH/hooks/test-we.sh" <<EOS
+#!/usr/bin/env bash
+# covers we.sh
+echo run >> "$WERUNS"
+# The gate's own switches still reach the suite: stripping them would let it start a send of its own.
+[ "\${SYNC_NO_SEND_TESTS:-}" = "1" ] || { echo "FAIL: the gate's own switch did not reach the suite"; exit 1; }
+[ -z "\${SYNC_IN_WATCH:-}" ] || { echo "FAIL: the suite saw SYNC_IN_WATCH=\$SYNC_IN_WATCH"; exit 1; }
+[ -z "\${SYNC_PULL_BASE:-}" ] || { echo "FAIL: the suite saw SYNC_PULL_BASE"; exit 1; }
+echo "SUITE-RESULT passed=1 failed=0"
+EOS
+WEREC="$WORK/watchenv-notify.rec"; WEN="$WORK/watchenv-notifier"
+cat > "$WEN" <<EOS
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$WEREC"
+EOS
+chmod +x "$WEN"
+out_1240a="$(CLAUDE_HOME="$WEH" SYNC_REPO="$WER" SYNC_IN_WATCH=1 SYNC_PULL_BASE=deadbeef SYNC_NO_NOTIFY=1 \
+  bash "$SCRIPT" send 2>&1)"
+dbg "#1240 watcher send: $out_1240a"
+check "#1240 the suite really ran (else a pass below proves nothing)" "[ -s '$WERUNS' ]"
+check "#1240 a send started by the watcher runs a suite without the watcher's own SYNC_ settings" \
+  "[ -f '$WER/payload/hooks/we.sh' ]"
+
+# A remembered verdict rests on the tool that ran the suite as much as on the hooks: test-claude-sync.sh
+# judges claude-sync itself, so a fix to the tool reused the failure it had fixed. The same hook
+# with a failing suite is recorded red, then a changed copy of the tool must run it again.
+WETOOL="$WORK/watchenv-tool"; mkdir -p "$WETOOL"; cp "$SCRIPT" "$WETOOL/claude-sync"
+printf '#!/usr/bin/env bash\necho we changed\n' > "$WEH/hooks/we.sh"
+cat > "$WEH/hooks/test-we.sh" <<EOS
+#!/usr/bin/env bash
+# covers we.sh
+echo run >> "$WERUNS"
+echo "SUITE-RESULT passed=0 failed=1"
+exit 1
+EOS
+CLAUDE_HOME="$WEH" SYNC_REPO="$WER" SYNC_NO_NOTIFY=1 bash "$WETOOL/claude-sync" send >/dev/null 2>&1
+we_runs_red="$(wc -l < "$WERUNS" | tr -d ' ')"
+CLAUDE_HOME="$WEH" SYNC_REPO="$WER" SYNC_NO_NOTIFY=1 bash "$WETOOL/claude-sync" send >/dev/null 2>&1
+we_runs_same="$(wc -l < "$WERUNS" | tr -d ' ')"
+# The control: an unchanged tool on unchanged inputs reuses the verdict, so the next check is not
+# passing merely because nothing is ever remembered.
+check "#1240 an unchanged tool reuses the remembered verdict" "[ '$we_runs_same' -eq '$we_runs_red' ]"
+printf '\n# a fix to the tool\n' >> "$WETOOL/claude-sync"
+out_1240b="$(CLAUDE_HOME="$WEH" SYNC_REPO="$WER" SYNC_NOTIFIER="$WEN" SYNC_NO_NOTIFY=0 \
+  bash "$WETOOL/claude-sync" send 2>&1)"
+dbg "#1240 send after the tool changed: $out_1240b"
+we_runs_new="$(wc -l < "$WERUNS" | tr -d ' ')"
+check "#1240 a changed tool runs the suite again rather than reusing its verdict" \
+  "[ '$we_runs_new' -gt '$we_runs_same' ]"
+
+# The banner has room for a line or two, and listing every held file first pushed the reason off
+# it: on 2026-10-16 the work MacBook's showed 27 lesson file names and never said a test had
+# failed (L79).
+we_note="$(grep 'held back' "$WEREC" 2>/dev/null | tail -1)"; we_note="${we_note#*-message }"
+dbg "#1240 notification: $we_note"
+check "#1240 the hold back notification was posted" "[ -n \"\$we_note\" ]"
+check "#1240 and it leads with why, before any file name" \
+  "case \"\$we_note\" in 'test-we.sh fails here'*) true ;; *) false ;; esac"
+SYNC_NO_SEND_TESTS=1
+
+
 section "== a burst of edits is one send, and a session can hold the watcher off (#262) =="
 # Two costs with one cause: the watcher commits and pushes on every fswatch event. It takes the
 # commit message out of a session's hands (twice on 2026-09-02 a change was written up with its
