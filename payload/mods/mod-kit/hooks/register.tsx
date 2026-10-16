@@ -13,7 +13,7 @@ import { workingTree } from './tree.ts'
 import { commandWrites } from './writes.ts'
 import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
-import { loginStarted, readAccount, registerLogin } from './login.ts'
+import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
@@ -240,7 +240,8 @@ export const register: Register = (on, options) => {
   // Read from the options each time the module loads, never kept in a session (#1012).
   const isAppleTerminalTrusted = appleTerminalTrusted(options)
   registerBand(on, isAppleTerminalTrusted)
-  // A /login in this session, raised as modkit.login for every mod that follows the account (#1205).
+  // A /login in this session, and a login made elsewhere that moves it (#1235), raised as
+  // modkit.login for every mod that follows the account (#1205).
   registerLogin(on)
   // Every mod's message to another session, tried once more when refused (hooks/send.ts). Only a
   // mod's: Claude's own SendMessage, and anything else, is left as it is.
@@ -612,8 +613,13 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
   // #939: where a click cannot land, a button is drawn as "type: /press <mod> <button>", and this is
   // that command. Only a button showing now is pressed, so an old line typed again presses nothing.
   on('session.start', async ($, e, next) => {
-    // A session started again in this process follows its /login afresh (#1205).
-    loginStarted()
+    // A session started again in this process follows its /login afresh (#1205), and the login it
+    // starts on is noted, so a later prompt can tell another session's login from it (#1235).
+    try {
+      await loginStarted($)
+    } catch (err) {
+      $.ui.log(`mod-kit could not note the login this session starts on: ${reason(err)}`, { to: 'debug' })
+    }
     if (e.isInteractive) await $.command.register({ name: 'press', description: 'Press a button in the band or a pane: /press <mod> <button>, as the band shows it', argumentHint: '<mod> <button>' })
     // #960: at a reload, the mods that changed with mod-kit are asked to load again.
     await onePass(async () => {
@@ -635,6 +641,12 @@ const registerBand = (on: On, isAppleTerminalTrusted: boolean) => {
       $.clock.after(0, () => void onePass(() => atTurnStart($, turnStart).catch(failed)))
     } catch (err) {
       failed(err)
+    }
+    // A login made in another session, or by a Switch, moves this session too (#1235).
+    try {
+      $.clock.after(0, () => void followAccount($))
+    } catch (err) {
+      $.ui.log(`mod-kit could not read the login file again at this prompt: ${reason(err)}`, { to: 'debug' })
     }
     return r
   })
