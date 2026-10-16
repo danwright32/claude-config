@@ -151,7 +151,7 @@ type World = {
   /** The Mac is in sleep mode (#841), or its sleep record cannot be read ('throws'). */
   asleep?: boolean | 'throws'
   /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, or thrown. */
-  submit?: 'drop' | 'throws'
+  submit?: 'drop' | 'throws' | 'hangs'
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -311,6 +311,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (e.origin.kind !== 'task-notification') w.submitted.push({ text: e.text, origin: e.origin })
     if (o.submit === 'throws') throw new Error('the prompt queue is closed')
     if (o.submit === 'drop') return { drop: 'held while Dan is away' } as never
+    // A submit that never answers: the turn it asks for never starts.
+    if (o.submit === 'hangs') return new Promise<never>(() => undefined)
     return { text: e.text } as never
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
@@ -2120,6 +2122,22 @@ test('a wake that throws is said once and carried on the next tool call instead 
   expect(quietSaid(w).length).toBe(1)
   await turnStarts($)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+test('a wake whose submit never answers holds up no look: a job still stalls and is said (lessons review of #1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [AGENT], submit: 'hangs' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  // Looks go on each minute: no look is given up for running past ten minutes, and the dev
+  // server, silent since it started, is still looked at.
+  await clock.advance(12 * MIN)
+  await turnStarts($)
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain('job1 (npm run dev) has had no new output for')
+  expect(said).not.toContain('was given up')
 })
 
 // Sleep mode (#841): the overnight sessions keep working, so a hung builder wakes the conversation

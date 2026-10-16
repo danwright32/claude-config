@@ -337,6 +337,7 @@ const wakeIfIdle = async ($: EngineInterface) => {
   if (mainTurn !== 'idle') return
   const due = notices.filter(n => n.wake && n.to === undefined)
   if (!due.length) return
+  // Taken before the first wait, so a second call meanwhile finds nothing of these to send.
   for (const n of due) notices.splice(notices.indexOf(n), 1)
   let asleep = false
   try {
@@ -414,7 +415,10 @@ const lookAll = async ($: EngineInterface, live: Live) => {
   // The agents first, in a failure boundary of their own (L73): which loops are live decides where
   // each job's notices go.
   await lookAtAgents($, now, live)
-  if (live()) await wakeIfIdle($)
+  // Never awaited here: a plugin's submit answers only once its turn has started, and the look must
+  // not hold on that (lessons review). The notices leave the queue before its first wait, so a wake
+  // still running when the next look comes can never be sent a second time.
+  if (live()) wakeIfIdle($).catch(err => $.ui.log(`job-watcher: could not wake this session: ${message(err)}`, { to: 'debug' }))
   for (const job of [...jobs.values()]) {
     if (!live()) return
     // One forgotten while an earlier job was looked at (stopped by Claude, or ended) is not looked at.
