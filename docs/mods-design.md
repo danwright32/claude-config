@@ -1686,6 +1686,12 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   Claude to check the steps again and pin them. It is still kept for the next session. With the
   scope modes mod not loaded it is home; one that cannot answer is named in a dim line and the
   card is shown, since a card shown while away costs less than steps nobody sees.
+- **Notified** (#1245). A card pinned with a step Dan can do now is announced off screen through
+  the goal tracker's notifier, `$.goalTracker.waitingOnYou`: titled "<project> is waiting on you",
+  its body `"<heading>" is pinned. Next, step N of M: <title>`. Never for a card held while away or
+  one whose every step is already done, and none while the Mac is asleep (the goal tracker asks
+  scope modes). One not sent, or the goal tracker not loaded, is added to the steps tool's reply so
+  Claude can tell Dan in its own words; the card is pinned either way.
 - The pane title is "Manual steps" (open: its words).
 - **A step another mod hands the card** (#1107). `$.manualSteps.add({ heading, step })` adds one
   step, read as the steps tool reads a step (a step with no link or location is refused, naming

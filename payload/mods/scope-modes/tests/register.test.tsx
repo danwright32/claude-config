@@ -1988,6 +1988,20 @@ test('another mod holds its own item while away, and is told nothing was held at
   expect((w.bands[w.bands.length - 1] as Row).lines[1]).toEqual([{ text: 'Paste the key into Stripe ' }, { button: 'held-1', label: 'Do it' }])
 })
 
+// The manual steps mod pins nothing on the Mac while it is asleep and so sends no notification for it
+// (#1245): what keeps it quiet is this noun holding the card, so that is held here, against the real
+// sleep record, not against a stand in.
+test('while the Mac is asleep another mod\'s item is held, even at home, and an ended sleep holds nothing (#1245, #841)', { plugins: [deps, isItLive, holder] }, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const holdIt = () => call($ as never, { tool: 'HoldIt', tool_use_id: 'h' } as never)
+  expect(await holdIt()).toBe('{"isHeld":false}')
+  w.files[CURRENT] = asleepRecord()
+  expect(JSON.parse(await holdIt())).toMatchObject({ isHeld: true })
+  w.files[CURRENT] = asleepRecord({ until: T0 })
+  expect(await holdIt()).toBe('{"isHeld":false}')
+})
+
 // ---- Sleep mode phase 1 (#840): the machine wide sleep record ----
 
 const SLEEP = '/Users/x/.claude/state/sleep'

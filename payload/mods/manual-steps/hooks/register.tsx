@@ -331,6 +331,30 @@ const holdWhileAway = async ($: EngineInterface, card: StepsCard): Promise<boole
   }
 }
 
+/** The goal tracker's noun (#1245) as its contract has it; it may not be loaded at all. */
+type GoalTracker = { waitingOnYou: (input: { message: string }) => Promise<{ isSent: boolean; reason?: string }> }
+
+// #1245: a card pinned while Dan is not looking at the terminal sat unseen, so a pin with a step he
+// can do now tells him through the goal tracker's notifier, the one that pages him for a session
+// waiting on him and stays silent while the Mac is asleep. Never on a card held while he is away or
+// one already done, neither of which reaches here. Why it was not sent, said to Claude, who can then
+// tell Dan in the reply; undefined once it was.
+const tellDan = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {
+  const n = nextStep(card)
+  const s = n === undefined ? undefined : card.steps[n]
+  if (n === undefined || !s) return undefined
+  const text = `"${card.heading}" is pinned. Next, step ${n + 1} of ${card.steps.length}: ${s.title}`
+  try {
+    const r = await ($ as unknown as { goalTracker: GoalTracker }).goalTracker.waitingOnYou({ message: text })
+    return r?.isSent === true ? undefined : r?.reason || 'the goal tracker did not say why'
+  } catch (err) {
+    // The noun missing is a TypeError in this mod's own code; one that failed inside the goal
+    // tracker reaches here rewrapped by the engine, and is said as it is.
+    const isAbsent = err instanceof TypeError && /goalTracker|undefined|not a function|null/.test(message(err))
+    return isAbsent ? 'the goal tracker mod, which sends the notifications, is not loaded' : message(err)
+  }
+}
+
 const left = (card: StepsCard) => {
   const n = nextStep(card)
   return n === undefined ? 'every step is finished' : `step ${n + 1} of ${card.steps.length} is next`
@@ -540,7 +564,8 @@ export const register: Register = on => {
     await change($, () => ({ card, out: undefined }))
     const failed = await placeNew($, card)
     if (failed) return { result: `The steps card could not be shown: ${failed}. Give Dan the steps in your reply instead.` }
-    return { result: `Pinned "${card.heading}": ${left(card)}.` }
+    const unsent = await tellDan($, card)
+    return { result: `Pinned "${card.heading}": ${left(card)}.${unsent ? ` Dan was not notified: ${unsent}.` : ''}` }
   })
 
   on('tool.call', { tool: VERDICT_TOOL }, async ($, e) => {

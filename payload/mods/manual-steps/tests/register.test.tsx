@@ -1214,3 +1214,68 @@ test('steps_done says only the open step takes a verdict, and to ask Dan which s
   expect(VERDICT_DESCRIPTION).toMatch(/only the open step/i)
   expect(VERDICT_DESCRIPTION).toMatch(/ask Dan which step he means/)
 })
+
+// ---- A pinned card tells Dan off screen (#1245) ----
+// On 2026-10-16 a card was pinned after a deploy finished and Dan did not know it was up. The goal
+// tracker, standing in: its noun is the one notifier for a session waiting on Dan, silent while the
+// Mac is asleep (its own suite proves that). Here each notification is a toast the test reads;
+// GOAL_NOTIFY=unsent answers as the real one does while asleep, and =throws as one that broke.
+const goalTracker: { name: string; register: Register } = {
+  name: 'goal-tracker',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        goalTracker: {
+          waitingOnYou: async ({ message }: { message: string }) => {
+            const how = await built.env.get('GOAL_NOTIFY')
+            if (how === 'throws') throw new Error('the notifier could not be reached')
+            if (how === 'unsent') return { isSent: false as const, reason: 'the Mac is asleep (sleep mode)' }
+            built.ui.toast(`notified: ${message}`)
+            return { isSent: true as const }
+          },
+        },
+      }
+    })
+  },
+}
+const notified = (toasts: string[]) => toasts.filter(t => t.startsWith('notified: ')).map(t => t.slice('notified: '.length))
+
+test('a pin with a step Dan can do now notifies him once, naming the card and its next step (#1245)', { plugins: [modKit, goalTracker] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const out = await hand($, [step({ checked: 'already-done', title: 'Made the token' }), step({ title: 'Save it' })])
+  expect(out).toBe('Pinned "Cloudflare WAF": step 2 of 2 is next.')
+  expect(notified(w.toasts)).toEqual(['"Cloudflare WAF" is pinned. Next, step 2 of 2: Save it'])
+})
+
+test('a pin whose every step is already done notifies nothing (#1245)', { plugins: [modKit, goalTracker] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await hand($, [step({ checked: 'already-done' })])).toMatch(/already done, so nothing was pinned/)
+  expect(notified(w.toasts)).toEqual([])
+})
+
+test('steps held while Dan is away notify nothing on the Mac (#1245, #621)', { plugins: [modKit, scopeModes, goalTracker] }, async ($, on) => {
+  const w = world(on, {}, {}, { AWAY: '1' })
+  await start($)
+  expect(await hand($, [step()])).toMatch(/Dan is away/)
+  expect(notified(w.toasts)).toEqual([])
+})
+
+test('a notification that was not sent leaves the card pinned and tells Claude why (#1245)', { plugins: [modKit, goalTracker] }, async ($, on) => {
+  const env: Record<string, string> = { GOAL_NOTIFY: 'unsent' }
+  world(on, {}, {}, env)
+  await start($)
+  expect(await hand($, [step()])).toBe('Pinned "Cloudflare WAF": step 1 of 1 is next. Dan was not notified: the Mac is asleep (sleep mode).')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done]')
+  env.GOAL_NOTIFY = 'throws'
+  expect(await hand($, [step()])).toMatch(/^Pinned "Cloudflare WAF": step 1 of 1 is next\. Dan was not notified: .*the notifier could not be reached/)
+})
+
+test('without the goal tracker loaded the card is pinned and Claude is told Dan was not notified (#1245)', withKit, async ($, on) => {
+  world(on)
+  await start($)
+  expect(await hand($, [step()])).toBe('Pinned "Cloudflare WAF": step 1 of 1 is next. Dan was not notified: the goal tracker mod, which sends the notifications, is not loaded.')
+})
