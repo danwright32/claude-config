@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { actsOf, addAnswer, dirsOf, HOLD_MERGES, isListed, judgeNight, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Place, type Scripts, type Where } from '../hooks/mergedeploy.ts'
+import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import type { Cmd } from '../hooks/nobuild.ts'
 import { API_MERGE_CASES } from './api-merge-cases.ts'
+import { mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { GH_REPO_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { readCommands } from './read.ts'
 
@@ -222,9 +225,21 @@ describe('what a command does, by effect', () => {
     expect(repoOf('gh api -X PUT https://api.github.com/repos/O/R/pulls/12/merge')).toBe('o/r')
   })
   test('a command the mod was given no gh reading for is judged as a merge into a repository that cannot be told (#961)', () => {
-    const unread = (command: string) => readCommands(command).map(({ gh: _gh, mergeHelper: _m, ...c }) => c)
+    const unread = (command: string) => readCommands(command).map(({ gh: _gh, ...c }) => c)
     expect(unread('gh pr view 12').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'run a gh command whose flags cannot be read', repo: null }])
-    expect(unread('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r').flatMap(c => actsOf(c, ON_BRANCH))).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: null }])
+    // A helper reading naming a repository that cannot be read is a merge into one that cannot be told.
+    expect(acts('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 -R')).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: null }])
+  })
+  // #1251: the merge helper is found by mod-kit's reading alone, so the judge reads that reading,
+  // never the command's words. A command with no helper reading runs no helper the judge can see: the
+  // #961 decision for the helper is kept where the reading is asked, a reading mod-kit cannot give
+  // refusing the call (register.test.tsx, "a merge helper reading mod-kit cannot give").
+  test('the merge helper is a merge wherever mod-kit finds it, never by the mod matching its name itself (#1251)', () => {
+    const [run] = readCommands('bash ./run-it.sh 12 --repo o/r')
+    const found = { ...(run as Cmd), mergeHelper: mergeHelperArgs(['merge-when-ready.sh', '12', '--repo', 'o/r']) as ModKitGh }
+    expect(actsOf(found, ON_BRANCH)).toEqual([{ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: 'o/r' }])
+    const { mergeHelper: _m, ...unfound } = readCommands('bash ~/.claude/hooks/lib/merge-when-ready.sh 12 --repo o/r')[0] as Cmd
+    expect(actsOf(unfound, ON_BRANCH)).toEqual([])
   })
   // #1181: the daytime merge gates read this same table (payload/hooks/test-merge-target.sh), so a
   // route one recogniser judges a merge and the other does not fails a suite (L450).

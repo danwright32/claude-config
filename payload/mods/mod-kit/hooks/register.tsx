@@ -5,7 +5,7 @@ import { appleTerminalTrusted, BUTTONS_OFF_NOTICE, clicksReach, compose, drop, f
 import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
-import { ghArgs } from './gh.ts'
+import { ghArgs, mergeHelperArgs } from './gh.ts'
 import { sendTwice } from './send.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
@@ -289,6 +289,7 @@ export const register: Register = (on, options) => {
       writes: async ({ command, cwd, home }) => commandWrites(command, cwd, home),
       git: async ({ words }) => git(words),
       gh: async ({ words }) => ghArgs(words),
+      mergeHelper: async ({ words }) => mergeHelperArgs(words),
       pipeline: async ({ command }) => pipeline(command),
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.

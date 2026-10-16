@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { flagOf, ghArgs, hasFlag, type GhArgs } from '../hooks/gh.ts'
+import { flagOf, ghArgs, hasFlag, mergeHelperArgs, type GhArgs } from '../hooks/gh.ts'
 
 // The one reading of a gh command's arguments (#834, moved here from scope-modes in #961): each
 // spelling gh accepts reads the same, and the repository it names is read by repo.ts's ghRepo.
@@ -38,6 +38,29 @@ describe('ghArgs reads gh as pflag does', () => {
   test('only gh api carries an api reading', () => {
     expect(gh('gh pr view 5').api).toBeUndefined()
     expect(api('gh api repos/o/r/pulls/5').method).toBe('GET')
+  })
+})
+
+// #1251: the merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them,
+// here alone; scope-modes and is it live each found it by its file's name themselves before.
+describe('the merge helper, read as the gh pr merge it runs', () => {
+  test('run by bash, by its path or by its name, its arguments are read as gh pr merge reads them', () => {
+    const viaBash = mergeHelperArgs(['bash', '/Users/x/.claude/hooks/lib/merge-when-ready.sh', '12', '--squash', '-Ro/x'])
+    expect(viaBash).toEqual(ghArgs(['gh', 'pr', 'merge', '12', '--squash', '-Ro/x']))
+    expect(viaBash).toMatchObject({ sub: 'pr', act: 'merge', positionals: ['12'], named: 'o/x', unreadable: false })
+    expect(mergeHelperArgs(['~/.claude/hooks/lib/merge-when-ready.sh', 'https://github.com/O/Z/pull/3'])?.named).toBe('o/z')
+    expect(mergeHelperArgs(['rtk', 'bash', 'merge-when-ready.sh', '7', '--repo=o/w'])?.named).toBe('o/w')
+    expect(mergeHelperArgs(['bash', 'merge-when-ready.sh'])).toMatchObject({ sub: 'pr', act: 'merge', positionals: [] })
+  })
+  test('a command that runs no helper, a name that only starts or ends like it included, gives none', () => {
+    expect(mergeHelperArgs(['gh', 'pr', 'merge', '12'])).toBeUndefined()
+    expect(mergeHelperArgs(['bash', 'merge-when-ready.sh.bak', '12'])).toBeUndefined()
+    expect(mergeHelperArgs(['bash', '/x/my-merge-when-ready.sh', '12'])).toBeUndefined()
+    expect(mergeHelperArgs(['bash', 'merge-when-readyXsh'])).toBeUndefined()
+    expect(mergeHelperArgs([])).toBeUndefined()
+  })
+  test('a repository flag the helper hands gh with no value is one that cannot be read', () => {
+    expect(mergeHelperArgs(['bash', 'merge-when-ready.sh', '12', '-R'])).toMatchObject({ named: null })
   })
 })
 

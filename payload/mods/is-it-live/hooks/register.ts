@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
-import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, helperWords, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
+import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -131,8 +131,8 @@ const repoOfLink = async ($: EngineInterface, url: string, named: string | undef
 }
 
 // Each merge a Bash call made at once, read by mod-kit's command and gh readers: gh pr merge in any
-// spelling mod-kit reads (behind rtk, sudo, an assignment), and the merge helper's arguments read as
-// the gh pr merge it runs.
+// spelling mod-kit reads (behind rtk, sudo, an assignment), and the merge helper, found and read as
+// the gh pr merge it runs by mod-kit alone (#1251).
 const mergesIn = async ($: EngineInterface, command: string): Promise<MergeCall[]> => {
   const out: MergeCall[] = []
   for (const c of await $.modkit.pipeline({ command })) {
@@ -141,8 +141,7 @@ const mergesIn = async ($: EngineInterface, command: string): Promise<MergeCall[
       out.push(direct)
       continue
     }
-    const hw = helperWords(c.words)
-    const viaHelper = hw ? mergeCallOf(await $.modkit.gh({ words: hw })) : undefined
+    const viaHelper = mergeCallOf(await $.modkit.mergeHelper({ words: c.words }))
     if (viaHelper) out.push(viaHelper)
   }
   return out

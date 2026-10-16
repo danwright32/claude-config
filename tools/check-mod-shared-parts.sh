@@ -58,7 +58,12 @@
 #             from its origin by hand (naming the composer      counting a handoff's opening prompt). Whether
 #             kind as a string)                                 it came from his phone (bridge alone) is
 #                                                               another question.
-#   typed-answer                                                use $.modkit.typedAnswer({ guard, typed, still,
+#   merge-helper                                                use $.modkit.mergeHelper({ words }), the gh
+#             finding the merge helper by its file's name      pr merge it runs read as gh reads it (#1251:
+#             (merge-when-ready\.sh in a pattern, or the        scope-modes and is it live each matched the
+#             name ending a string); never a sentence that      name themselves)
+#             only names it
+#   typed-answer                                               use $.modkit.typedAnswer({ guard, typed, still,
 #             telling Dan or Claude that an answer he typed     again }) (#1145: the design round guard and
 #             was not recorded (the phrase "typed answer was    ask before saving said it two ways, and only
 #             not recorded")                                    one told Dan at all)
@@ -154,6 +159,7 @@ PARTS=(
   "branch-reader|--show-current|--abbrev-ref|symbolic-ref|origin/HEAD|\\\\d\\{2,6\\}|\$.modkit.branch({ path }) (its branch, default branch, main working tree and issues)"
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
+  "merge-helper|merge-when-ready\\\\\\.sh|[\"'\`/]merge-when-ready\\.sh[\"'\`/)]|\$.modkit.mergeHelper({ words })"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
   "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"

@@ -101,6 +101,13 @@ export type ModKit = {
    */
   gh: (input: { words: string[] }) => Promise<ModKitGh | undefined>
   /**
+   * The `gh pr merge` one command runs through the merge helper (merge-when-ready.sh, found by any
+   * word that is its file, by path or by name), the words after it read as `gh` reads them;
+   * undefined when the command runs no helper (#1251: found here alone, never by a mod's own match
+   * on the name). Ask it once per command, as `gh` is.
+   */
+  mergeHelper: (input: { words: string[] }) => Promise<ModKitGh | undefined>
+  /**
    * A repository as gh reads one (-R, GH_REPO, a `gh repo` positional), as owner/name in lower
    * case; null when it is none (another host, more or less than owner and name). Here owner/name
    * alone IS a repository, where to git it is a local path, so a git remote is read by `repo`,

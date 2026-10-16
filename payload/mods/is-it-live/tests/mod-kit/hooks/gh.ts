@@ -160,6 +160,17 @@ export const flagOf = (a: GhArgs, ...names: string[]): string | true | undefined
 /** Whether any of these flags was given. */
 export const hasFlag = (a: GhArgs, ...names: string[]): boolean => a.flags.some(f => names.includes(f.name))
 
+// The merge helper (payload/hooks/lib/merge-when-ready.sh) merges by `gh pr merge` inside a script
+// no reader sees, handing it every word after its own name. It is found here alone (#1251: scope
+// modes and is it live each found it by its file's name themselves), by any word that is its file,
+// by path or by name, as both found it.
+const MERGE_HELPER = /(?:^|\/)merge-when-ready\.sh$/
+/** The `gh pr merge` a command runs through the merge helper, read as gh reads it; undefined when it runs no helper. */
+export const mergeHelperArgs = (words: readonly string[]): GhArgs | undefined => {
+  const at = words.findIndex(w => MERGE_HELPER.test(w))
+  return at < 0 ? undefined : ghArgs(['gh', 'pr', 'merge', ...words.slice(at + 1)])
+}
+
 const FIELD_FLAGS = ['-f', '-F', '--field', '--raw-field']
 const API = 'https://api.github.com/'
 const PLACEHOLDER = /^(?:\{owner\}|:owner|\{repo\}|:repo)$/

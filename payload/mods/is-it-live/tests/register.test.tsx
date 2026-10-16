@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
-import { ghArgs } from './mod-kit/hooks/gh.ts'
+import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
 import { REPO_FIXTURES } from './mod-kit/tests/repo-fixtures.ts'
@@ -66,6 +66,12 @@ const modKit: { name: string; register: Register } = {
         // asked of the world the same way.
         gh: async (input: { words: string[] }) => {
           const r = await built.process.run(['__modkit', 'gh', JSON.stringify(input)])
+          if (r.exitCode !== 0) throw new Error(r.stderr)
+          return r.stdout === '' ? undefined : JSON.parse(r.stdout)
+        },
+        // #1251: the merge helper is found by mod-kit's reader alone, asked of the world the same way.
+        mergeHelper: async (input: { words: string[] }) => {
+          const r = await built.process.run(['__modkit', 'mergeHelper', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return r.stdout === '' ? undefined : JSON.parse(r.stdout)
         },
@@ -179,9 +185,9 @@ const world = (on: On, init: Partial<World> = {}) => {
     // mod-kit's repo reader, standing in: its byte for byte copy, as the kit reads (#951).
     if (e.argv[0] === '__modkit') {
       if (w.kitFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit is not loaded', isStdoutTruncated: false, isStderrTruncated: false } } as never
-      if (e.argv[1] === 'gh' || e.argv[1] === 'pipeline') {
+      if (e.argv[1] === 'gh' || e.argv[1] === 'mergeHelper' || e.argv[1] === 'pipeline') {
         const input = JSON.parse(e.argv[2] as string) as { words: string[]; command: string }
-        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : pipeline(input.command)
+        const read = e.argv[1] === 'gh' ? ghArgs(input.words) : e.argv[1] === 'mergeHelper' ? mergeHelperArgs(input.words) : pipeline(input.command)
         return { value: { exitCode: 0, stdout: read === undefined ? '' : JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
       }
       if (e.argv[1] === 'linkRepo') {

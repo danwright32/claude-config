@@ -1089,6 +1089,22 @@ for m in link-open link-anchored link-class; do
     || check "and names $m, pointing it at modkit.linkRepo" "$out"
 done
 case "$out" in *clean-asks-link*) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" "$out" ;; *) check "a mod asking the kit, or taking api.github.com off an endpoint, passes" ok ;; esac
+# #1251: finding the merge helper by its file's name, as scope-modes (nobuild.ts) and is it live
+# (merges.ts) each did with the same pattern. Each shape fails the run, pointed at
+# $.modkit.mergeHelper; a mod asking the kit, or naming the helper only in what it says, passes.
+M9H="$TMPROOT/m9-merge-helper"
+mkmodsrc "$M9H" clean-asks-helper "const h = await \$.modkit.mergeHelper({ words: c.words }); const what = 'merge a PR with merge-when-ready.sh'; say(\`merge-when-ready.sh is merging #\${n}\`)"
+mkmodsrc "$M9H" helper-regex 'const HELPER = /(?:^|\/)merge-when-ready\.sh$/'
+mkmodsrc "$M9H" helper-unescaped 'const runs = words.some(w => /merge-when-ready.sh/.test(w))'
+mkmodsrc "$M9H" helper-ends "const at = words.findIndex(w => w.endsWith('/merge-when-ready.sh'))"
+mkmodsrc "$M9H" helper-equal 'if (base(w) === "merge-when-ready.sh") return true'
+out="$(bash "$SHARED" "$M9H" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod finding the merge helper by its own match on the name fails the run" ok || check "a mod finding the merge helper by its own match on the name fails the run" "exit=$code out=$out"
+for m in helper-regex helper-unescaped helper-ends helper-equal; do
+  printf '%s\n' "$out" | grep "$m keeps its own merge-helper" | grep -q 'modkit.mergeHelper(' && check "and names $m, pointing it at modkit.mergeHelper" ok \
+    || check "and names $m, pointing it at modkit.mergeHelper" "$out"
+done
+case "$out" in *clean-asks-helper*) check "a mod asking the kit, or naming the helper in what it says, passes" "$out" ;; *) check "a mod asking the kit, or naming the helper in what it says, passes" ok ;; esac
 # #1135: whether a prompt is Dan's words, read by hand from its origin, as five mods did two ways
 # (two of them also counting a handoff's opening prompt). Each shape fails the run, pointed at
 # $.modkit.isDans; a mod asking the kit passes, and so does one asking only whether a message came

@@ -1,4 +1,5 @@
-import { deployWith, hasFlag, operations, runnerScript, runsHelper, type Cmd } from './nobuild.ts'
+import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
+import { deployWith, hasFlag, operations, runnerScript, type Cmd } from './nobuild.ts'
 import { resolveDir, syncCall } from './overnight.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
@@ -168,10 +169,10 @@ export type Where = { defaultBranch: string | null | { unreadable: string }; cur
 
 const isFlag = (w: string) => w.startsWith('-') && w !== '-'
 const name = (w: string | undefined) => (w ?? '').split('/').pop() ?? ''
-// The merge helper hands its arguments to `gh pr merge`, so they are read as gh reads them, by
-// mod-kit's one reader (L613, #961), asked once per command: the repository it names, undefined for
-// none, null for one that cannot be read, or that no reading was given for.
-const helperRepo = (c: Cmd): string | null | undefined => (!c.mergeHelper || c.mergeHelper.unreadable ? null : c.mergeHelper.named)
+// The merge helper hands its arguments to `gh pr merge`, so mod-kit alone finds it and reads them as
+// gh reads them (L613, #961, #1251), asked once per command: the repository it names, undefined for
+// none, null for one that cannot be read.
+const helperRepo = (h: ModKitGh): string | null | undefined => (h.unreadable ? null : h.named)
 const MERGE_MUTATION = /^(?:mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|mergeBranch)$/
 // Mutations that write a branch directly, which can be the default branch: refused everywhere, as a push to it is.
 const BRANCH_MUTATION = /^(?:createCommitOnBranch|updateRef|updateRefs|createRef|deleteRef)$/
@@ -232,8 +233,9 @@ export const actsOf = (c: Cmd, where: Where): Act[] => {
   const out: Act[] = []
   const words = c.words
   const cmd = name(words[0])
-  // The merge helper merges by gh inside a script the reader never sees, so it is a merge by its name.
-  if (runsHelper(words)) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: helperRepo(c) })
+  // The merge helper merges by gh inside a script the reader never sees, so it is a merge whenever
+  // mod-kit finds it run, whatever its arguments (#1251).
+  if (c.mergeHelper) out.push({ kind: 'merge', what: 'merge a PR with merge-when-ready.sh', repo: helperRepo(c.mergeHelper) })
   if (c.git?.sub === 'push') {
     const p = pushToDefault(c.git.args, where)
     if (p) out.push({ kind: 'push-default', what: p })
