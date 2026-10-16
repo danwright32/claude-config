@@ -91,10 +91,8 @@ allowed "a git command that mentions watch" "git log --grep watch"
 # repository the hooks block is payload/settings.hooks.json; installed under ~/.claude it is
 # settings.json, the file Claude Code reads. Naming only the repository's spelling passed in CI and
 # failed in the hook suite every pull runs, on 2026-10-10, the first pull after #1049.
-SETTINGS=""
-for _gw_candidate in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
-  if [ -f "$_gw_candidate" ]; then SETTINGS="$_gw_candidate"; break; fi
-done
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 # Neither being there is not a pass: a check with no file to read answers like one that found the
 # hook unwired, and says nothing about why (L98).
 check_eq "#1014 a settings file holding the hooks block is beside the hooks" "yes" \

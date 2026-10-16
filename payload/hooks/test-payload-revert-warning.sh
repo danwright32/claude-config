@@ -250,13 +250,13 @@ esac
 # (L3, L27). Same two places as the sibling: the shipped settings in the checkout, the installed
 # ones on a deployed Mac.
 SETTINGS_DIR="${PAYLOAD_REVERT_SETTINGS_DIR:-$DIR/..}"
-SETTINGS=""
-SETTINGS_KIND=""
-if [ -f "$SETTINGS_DIR/settings.hooks.json" ]; then
-  SETTINGS="$SETTINGS_DIR/settings.hooks.json"; SETTINGS_KIND="the settings the sync ships"
-elif [ -f "$SETTINGS_DIR/settings.json" ]; then
-  SETTINGS="$SETTINGS_DIR/settings.json"; SETTINGS_KIND="the settings installed on this Mac"
-fi
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$SETTINGS_DIR")"
+case "$SETTINGS" in
+  */settings.json) SETTINGS_KIND="the settings installed on this Mac" ;;
+  ?*) SETTINGS_KIND="the settings the sync ships" ;;
+  *) SETTINGS_KIND="" ;;
+esac
 if [ -z "$SETTINGS" ]; then
   echo "test-payload-revert-warning: neither settings.hooks.json nor settings.json is in $SETTINGS_DIR, so nothing there states which hooks are registered and the wiring could not be checked." >&2
   printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hook, and $SETTINGS_DIR holds neither settings.hooks.json nor settings.json"

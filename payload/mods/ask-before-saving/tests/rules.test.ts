@@ -171,6 +171,85 @@ test('a target the words cannot name is judged by the lasting memory the command
   ])
 })
 
+// #1241: `S=<scratchpad>/sf; cp payload/LESSONS.md $S/LESSONS.md` was refused twice, as a write that
+// may reach lasting memory, because a target through a variable was judged by everything the command
+// mentions, its own source included. A variable the command gives one literal folder, first and
+// unconditionally, and that nothing after can change, holds that folder when the write runs, so the
+// write is judged by where it lands, read by the guard itself and matched against the reader's path.
+const SP = '/private/tmp/claude-501/p/s/scratchpad/sf'
+const throughS = (command: string, word = '$S/LESSONS.md', path = `${SP}/LESSONS.md`) => {
+  const { inCheckout } = checkouts()
+  return lastingFiles({ files: [{ word, path }], unnamed: [] }, HOME, inCheckout, command)
+}
+
+test('a write through a variable the command first sets to one plain folder, absolute or under home, is judged where it lands', async () => {
+  expect(await throughS(`S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`)).toEqual([])
+  expect(await throughS(`S="${SP}"; cp payload/LESSONS.md "$S/LESSONS.md"`)).toEqual([])
+  expect(await throughS(`S='${SP}' && cp payload/LESSONS.md \${S}/LESSONS.md`, '${S}/LESSONS.md')).toEqual([])
+  expect(await throughS(`D=/private/tmp/x S=${SP}\ncp payload/LESSONS.md $S/LESSONS.md`)).toEqual([])
+  // A folder under home by ~/, which an assignment expands, is judged where it lands too: a notes file
+  // there beside a command naming LESSONS.md is no save, and CLAUDE.md there is one.
+  expect(await throughS('S=~/notes; cp payload/LESSONS.md $S/notes.txt', '$S/notes.txt', '/Users/dan/notes/notes.txt')).toEqual([])
+  expect(await throughS('S=~/.claude; cp payload/LESSONS.md $S/CLAUDE.md', '$S/CLAUDE.md', '/Users/dan/.claude/CLAUDE.md')).toEqual(['~/.claude/CLAUDE.md'])
+  // The same folder inside a checkout there is a session's lasting memory, and is asked about.
+  expect(await throughS(`S=/tmp/repo; cp payload/LESSONS.md $S/LESSONS.md`, '$S/LESSONS.md', '/tmp/repo/LESSONS.md')).toEqual(['/tmp/repo/LESSONS.md'])
+})
+
+test('a write through a variable whose value the command cannot fix for certain is still judged by everything it mentions', async () => {
+  const asked = [
+    // Set conditionally: when the test fails, the variable keeps whatever the shell already held.
+    `[ -d x ] && S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`,
+    `true || S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`,
+    `if true; then S=${SP}; fi; cp payload/LESSONS.md $S/LESSONS.md`,
+    `cd /tmp && S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`,
+    // Set in a pipeline or in the background: a subshell, so the shell running the copy never sees it.
+    `S=${SP} | cat; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP} & cp payload/LESSONS.md $S/LESSONS.md`,
+    // Set only for one command, after the copy's own words were expanded.
+    `S=${SP} cp payload/LESSONS.md $S/LESSONS.md`,
+    // From a command's output, or from another variable.
+    `S=$(mktemp -d); cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=\`echo ${SP}\`; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=$TMPDIR/sf; cp payload/LESSONS.md $S/LESSONS.md`,
+    // Reassigned, appended to, read into, looped over, set by reference, or set again by zsh's ::=.
+    `S=${SP}; S=~/.claude; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; S+=/x; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; read S < f; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; for S in ~/.claude; do cp payload/LESSONS.md $S/LESSONS.md; done`,
+    `S=${SP}; typeset -n R=S; R=~/.claude; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; : \${S::=/Users/dan/.claude}; cp payload/LESSONS.md $S/LESSONS.md`,
+    // Exported from elsewhere: set nowhere in the command, so the environment's value is used.
+    'cp payload/LESSONS.md $S/LESSONS.md',
+    // Text the shell runs may set anything, the variable included, without naming it.
+    `S=${SP}; eval "$X"; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; source env.sh; cp payload/LESSONS.md $S/LESSONS.md`,
+    `S=${SP}; . ./env.sh; cp payload/LESSONS.md $S/LESSONS.md`,
+  ]
+  for (const command of asked) expect(`${command}: ${(await throughS(command)).length}`).not.toBe(`${command}: 0`)
+  // A value the shell may split, glob or climb out of through a link, or a relative folder, whose
+  // place depends on every cd the reader follows: each given the path a reader would read it as.
+  const unplain: [string, string][] = [
+    [`S=${SP}/*; cp payload/LESSONS.md $S/LESSONS.md`, `${SP}/*/LESSONS.md`],
+    [`S=${SP}/../x; cp payload/LESSONS.md $S/LESSONS.md`, '/private/tmp/claude-501/p/s/scratchpad/x/LESSONS.md'],
+    [`S="${SP} x"; cp payload/LESSONS.md $S/LESSONS.md`, `${SP} x/LESSONS.md`],
+    ['S=tmp/sf; cp payload/LESSONS.md $S/LESSONS.md', '/tmp/sf/LESSONS.md'],
+  ]
+  for (const [command, path] of unplain) expect(`${command}: ${(await throughS(command, '$S/LESSONS.md', path)).length}`).not.toBe(`${command}: 0`)
+  // A quoted ~, which the shell leaves as a folder named ~ wherever the command runs.
+  for (const q of ['"', "'"]) {
+    const command = `S=${q}~/notes${q}; cp payload/LESSONS.md $S/notes.txt`
+    expect(`${command}: ${(await throughS(command, '$S/notes.txt', '/Users/dan/notes/notes.txt')).length}`).not.toBe(`${command}: 0`)
+  }
+  // A variable the shell sets for itself changes under the command: `$_` after every command, REPLY on a read.
+  expect((await throughS(`_=${SP}; cp payload/LESSONS.md $_/LESSONS.md`, '$_/LESSONS.md')).length).not.toBe(0)
+  expect((await throughS(`REPLY=${SP}; read < f; cp payload/LESSONS.md $REPLY/LESSONS.md`, '$REPLY/LESSONS.md')).length).not.toBe(0)
+  // The reader's path and the command's own value disagree: the guard does not pick a side.
+  expect((await throughS(`S=${SP}; cp payload/LESSONS.md $S/LESSONS.md`, '$S/LESSONS.md', '/private/tmp/elsewhere/LESSONS.md')).length).not.toBe(0)
+  // A path under the variable that climbs out of the folder is judged where it lands.
+  expect(await throughS(`S=${SP}; cp payload/LESSONS.md $S/../../../../../../../Users/dan/.claude/CLAUDE.md`, '$S/../../../../../../../Users/dan/.claude/CLAUDE.md', '/Users/dan/.claude/CLAUDE.md')).toEqual(['~/.claude/CLAUDE.md'])
+})
+
 // The route a target the words cannot name takes asks the disk about a temporary path it mentions,
 // as every other route does, and a disk that cannot answer fails the judgement: the hook then
 // refuses the write rather than let it through.

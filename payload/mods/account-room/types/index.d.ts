@@ -1,4 +1,4 @@
-/** Who this session runs as, captured once at session start (L175), and where its files are. */
+/** Who this session runs as, read at session start and moved by each login mod-kit raises (#1202, #1235), and where its files are. */
 export type AccountRoomSession = {
   /** The account's key: a hash of its account and org ids, never the ids themselves. */
   id: string

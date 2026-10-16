@@ -121,9 +121,9 @@ const writeFacts = async ($: EngineInterface) => {
 
 // The account this session runs on, the one its limits belong to (#815): the Mac's login as it
 // stands at session start, read through mod-kit's one reader of the login file (#1205). Read then and
-// not again, because the login file names whatever the Mac is logged in to NOW, which another
-// session's Switch changes under this one; a /login in this session, which does change this
-// session's account, arrives as modkit.login (#1200). No login at all (an API key) is an empty
+// not again here: every later change arrives as modkit.login, a /login in this session at once
+// (#1200) and a login made elsewhere at the next prompt or re-read of the context (#1235), since
+// Claude Code keeps one credential per Mac. No login at all (an API key) is an empty
 // record; a file that cannot be read, or a mod-kit that cannot answer, is null, said as unknown,
 // never as no login (L11).
 const readAccount = async ($: EngineInterface): Promise<StatusBarAccount | null> => {
@@ -383,7 +383,7 @@ export const register: Register = on => {
     home = await $.env.get('HOME')
     if (home) {
       // Read once a session: a second session.start in the same process (a reload of the mod) keeps
-      // the account first read, since the login file may name another session's Switch by then.
+      // the account last taken in, since any change since arrives as modkit.login (#1235).
       if ((await $.state.get(accountRef)).value === undefined) await $.state.set(accountRef, await readAccount($))
       const made = await $.process.run(['mkdir', '-p', dirOf(home)]).catch(err => ({ exitCode: -1, stderr: msg(err) }))
       if (made.exitCode === 0) await writeFacts($)
@@ -419,7 +419,8 @@ export const register: Register = on => {
 
   // A /login in this session changes the account this session runs on (#1200), and mod-kit raises
   // it with the account the login file names, once the command is done and again if the file changes
-  // within the half minute after it (#1205). Taken in only while the session runs, so a login landing
+  // within the half minute after it (#1205); a login made elsewhere it raises at the next prompt or
+  // re-read of the context (#1235). Taken in only while the session runs, so a login landing
   // as it ends never writes an ended session's facts file back. A failure is logged, never thrown.
   // Taken in once the raise has returned, never inside it: mod-kit's login is a call Claude Code
   // cuts off at 10 seconds (#744), and writing the facts file runs a process.

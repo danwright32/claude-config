@@ -85,6 +85,20 @@ if grep -q test_b "$TMPROOT/diff-code"; then no "an exclude pathspec did not kee
 if grep -qx -- '- add a' "$TMPROOT/msgs"; then ok; else no "pc_messages did not list the commit the push carries: [$(cat "$TMPROOT/msgs")]"; fi
 if [ "$(cat "$TMPROOT/flags")" = "1 0" ]; then ok; else no "commit in chain and widened flags: [$(cat "$TMPROOT/flags")]"; fi
 
+# PC_DIFF_CONTEXT widens every diff to that many lines around each change, in both the committed
+# range and the pending commit, and leaving it unset keeps git's three (claude-config#1238).
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf 'far_marker\n2\n3\n4\n5\n6\n7\n8\nlast\n' > lib/c.js \
+    && git add lib/c.js && git commit -qm base && git push -q \
+    && printf 'far_marker\n2\n3\n4\n5\n6\n7\n8\ncommitted\n' > lib/c.js && git commit -qam one \
+    && printf 'far_marker\n2\n3\n4\n5\n6\n7\n8\npending\n' > lib/c.js ) >/dev/null 2>&1
+( cd "$W" && pc_resolve "git add lib/c.js && git commit -m two && git push" >/dev/null 2>&1
+  PC_DIFF_CONTEXT=100 pc_diff lib/c.js > "$TMPROOT/diff-wide"
+  pc_diff lib/c.js > "$TMPROOT/diff-narrow" )
+[ "$(grep -c '^ far_marker' "$TMPROOT/diff-wide")" = 2 ] && ok \
+  || no "PC_DIFF_CONTEXT did not show the far line around both changes: [$(cat "$TMPROOT/diff-wide")]"
+grep -q '^ far_marker' "$TMPROOT/diff-narrow" && no "without PC_DIFF_CONTEXT the diff showed more than git's default context" || ok
+
 # A push level with its upstream carries nothing: 1, quiet.
 W="$(mk_repo)"
 ( cd "$W" && pc_resolve "git push"; echo "$?" ) > "$TMPROOT/rc" 2>/dev/null

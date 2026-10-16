@@ -250,10 +250,15 @@ def declared_value(f, at):
 
 
 def constants(files):
-    """Each constant the mod defines with a value on one line, by name; the first definition wins."""
+    """Each constant the mod defines with a value on one line, by name; the first definition wins.
+
+    Only spaces and tabs may follow the `=`, never a newline (#1254). code_only blanks a string, so
+    `const ASLEEP = 'x'` reads as `=` and then nothing on its line; a gap that could cross newlines
+    ran on through any comment lines into the next declaration, took `const NOTIFY_MS = 5_000` as
+    ASLEEP's value, and so never read NOTIFY_MS at all."""
     out = {}
     for f in files:
-        for m in re.finditer(r"(?<![\w$.])(?:const|let|var)\s+(" + IDENT + r")\s*(?::[^=\n]+)?=(?!=)\s*([^;\n]+)", f.code):
+        for m in re.finditer(r"(?<![\w$.])(?:const|let|var)\s+(" + IDENT + r")\s*(?::[^=\n]+)?=(?!=)[ \t]*([^;\n]+)", f.code):
             out.setdefault(m.group(1), m.group(2))
     return out
 

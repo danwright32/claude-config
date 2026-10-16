@@ -70,7 +70,8 @@ const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f
  * do not name at all: by the lasting memory the command mentions anywhere, an assignment such as
  * `F=<path>` included (#743), read from `read.text` where given: the command with the sentences
  * its python programs hold taken out (#940). One that mentions none goes through
- * (docs/mods-design.md).
+ * (docs/mods-design.md). The one exception: a target through a variable the command itself fixed
+ * for certain, at the path the reader gave (certainPath, #1241), is judged by that path alone.
  */
 export const lastingFiles = async (
   w: Writes,
@@ -95,8 +96,9 @@ export const lastingFiles = async (
     }
     // A target through a variable that can hold no path, one only a fresh temporary file sets or
     // nothing sets at all, reaches no lasting memory, so what the command mentions is not read for it
-    // (#830: an issue body written to `$(mktemp)` named a memory path).
-    else if (unread(f) && (await throughSettable(f.word, command, isSet)))
+    // (#830: an issue body written to `$(mktemp)` named a memory path). Nor does one through a
+    // variable the command fixed for certain, which lands where its path says (#1241, certainPath).
+    else if (unread(f) && !(f.path && certainPath(f.word, command, home) === f.path) && (await throughSettable(f.word, command, isSet)))
       for (const m of (mentions ??= await mentioned(read.text ?? command, home, inCheckout, isSet))) add(m)
   }
   if (read.guessed) for (const m of out) if (!named.includes(m) && !read.guessed.includes(m)) read.guessed.push(m)
@@ -166,6 +168,68 @@ export const settable = async (name: string, text: string, isSet: IsSet, seen: S
 const throughSettable = async (word: string, text: string, isSet: IsSet): Promise<boolean> => {
   const named = ROOTED.exec(word)?.[1]
   return named === undefined || (await settable(named, text, isSet))
+}
+
+// A folder a variable can be fixed to for certain: absolute or under home by an unquoted ~/ (which an assignment
+// expands), spelled only with characters the shell
+// neither splits, globs nor expands, and never climbing out through `..`, which the disk reads
+// through links and resolvePath does not.
+const LITERAL = /^[\w.\/@%+,:~-]+$/
+const plainFolder = (s: string) => LITERAL.test(s) && !s.split('/').includes('..')
+
+// Variables the shell itself changes under a command without the command naming them: those every
+// fresh shell sets, `$_` after each command, REPLY on a bare read, the clocks and counters, what a
+// match or getopts leaves, and the arrays zsh ties to another.
+const SHELL_CHANGES = new Set([
+  ...SHELL_SET,
+  ...['_', 'REPLY', 'RANDOM', 'SRANDOM', 'SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'LINENO', 'OPTARG', 'OPTIND', 'MATCH', 'MBEGIN', 'MEND', 'match', 'mbegin', 'mend'],
+  ...['BASH_REMATCH', 'PIPESTATUS', 'pipestatus', 'status', 'ERRNO', 'HISTCMD', 'BASHPID', 'COLUMNS', 'LINES', 'IFS', 'CDPATH', 'cdpath', 'path', 'fpath', 'argv', 'TTYIDLE'],
+])
+
+// A command that runs text as shell code, which can set any variable without naming it.
+const RUNS_TEXT = /(?:^|[\s;&|(){}`])(?:eval|source|\.)(?=\s|$)/
+
+// One shell assignment of a value the reader can see whole: quoted, or a word holding no quote,
+// separator, substitution or escape.
+const ASSIGNMENT = String.raw`([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|<>()"'\x60\\]*)`
+// A statement made only of assignments, ended by ; or a new line or &&, where the next runs in the
+// same shell after it: never a | or a lone &, which put it in a subshell, nor a command it prefixes.
+const ASSIGNS = new RegExp(String.raw`^[ \t]*(?<all>(?:${ASSIGNMENT}[ \t]+)*${ASSIGNMENT})[ \t]*(?:;|\n|&&)`)
+
+/**
+ * Where a write through a variable lands, when the command itself fixes that variable for certain
+ * (#1241: `S=<scratchpad>/sf; cp payload/LESSONS.md $S/LESSONS.md` was refused as a write that may
+ * reach lasting memory). Certain means the command opens with statements made only of assignments,
+ * one of which gives the variable a plain absolute folder, or one under home by an unquoted ~/ (plainFolder), so nothing before it can
+ * make it conditional; the variable is named nowhere else in the command, so nothing reassigns,
+ * appends to, reads into, loops over, references or unsets it, and is read only whole (`$S`,
+ * `${S}`, never `${S::=x}`); no text is run as shell code (eval, source, `.`); and it is no variable
+ * the shell changes for itself. The word is the variable and a plain path under it. Undefined
+ * whenever any of that does not hold, and the write is then judged as before, by everything the
+ * command mentions. What it cannot see: a shell function from the profile, run by name, that sets
+ * the same variable, as no reader of the words can.
+ */
+export const certainPath = (word: string, command: string, home: string): string | undefined => {
+  const use = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(\/.*)?$/.exec(word)
+  if (!use) return undefined
+  const name = (use[1] ?? use[2]) as string
+  const under = use[3] ?? ''
+  if (SHELL_CHANGES.has(name) || RUNS_TEXT.test(command) || (under && !plainFolder(under))) return undefined
+  let value: string | undefined
+  let rest = command
+  for (let s = ASSIGNS.exec(rest); s; s = ASSIGNS.exec(rest)) {
+    for (const a of (s.groups?.all ?? '').matchAll(new RegExp(ASSIGNMENT, 'g'))) if (a[1] === name) value = a[2] as string
+    rest = rest.slice(s[0].length)
+  }
+  if (value === undefined) return undefined
+  // The shell expands a `~` only unquoted: a quoted one is a folder named ~ wherever the command
+  // runs, which is no certain place.
+  const quoted = /^["']/.test(value)
+  if (quoted) value = value.slice(1, -1)
+  if (!plainFolder(value) || !(value.startsWith('/') || (!quoted && value.startsWith('~/')))) return undefined
+  const bare = command.match(new RegExp(`(^|[^$\\w{])${name}(?!\\w)`, 'gm')) ?? []
+  if (bare.length !== 1 || command.split(`\${${name}`).length !== command.split(`\${${name}}`).length) return undefined
+  return resolvePath(value + under, '/', home)
 }
 
 // A lasting memory file named in a script's or a patch's text: a path ending in one of the names,

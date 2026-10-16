@@ -1643,6 +1643,23 @@ export const register = on => {
   })
 }
 TS
+  # A string constant the reader blanks, then comment lines, then the timeout constant (#1254). The
+  # value of a constant is read on its own line only: when the space after `=` could cross newlines,
+  # the blanked string's value ran on through the comments into the next line, swallowed NOTIFY_MS
+  # as that value, and the noun's timeoutMs was reported as one whose value cannot be read (found on
+  # #1245, goal-tracker's NOTIFY_MS, and worked around there by reordering the lines).
+  mknounmod "$M12W" string-then-comments notifier <<'TS'
+const ASLEEP = 'asleep'
+// a comment between the two constants
+// and another
+const NOTIFY_MS = 5_000
+export const register = on => {
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return { ...built, notifier: { send: () => built.process.run(['true'], { timeoutMs: NOTIFY_MS }), state: () => ASLEEP } }
+  })
+}
+TS
   mknounmod "$M12W" process-in-hook hooked <<'TS'
 export const register = on => {
   on('session.start', async ($, e, next) => {
@@ -1956,7 +1973,7 @@ export const register = on => {
 TS
   out="$(bash "$WAITS" "$M12W" 2>&1)"; code=$?
   [ "$code" -eq 1 ] && check "a noun that waits with no bound under 10 s fails the run" ok || check "a noun that waits with no bound under 10 s fails the run" "exit=$code out=$out"
-  case "$out" in *"44 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
+  case "$out" in *"45 mods checked"*) check "and the count is stated" ok ;; *) check "and the count is stated" "$out" ;; esac
   for at in waits-in-map/hooks/register.ts:8 passed-to-listener/hooks/register.ts:4 called-back-later/hooks/register.ts:5 through-helper/hooks/register.ts:3 named-executor/hooks/register.ts:8 long-timer/hooks/register.ts:5 unrelated-timer/hooks/register.ts:5 on-noun-event/hooks/register.ts:7 made-in-hook/hooks/register.ts:5 kept-in-variable/hooks/register.ts:5 raced-long/hooks/register.ts:6 same-local-waits/hooks/register.ts:7 same-local-args/hooks/register.ts:6 param-scope-ends/hooks/register.ts:2 shorthand-method/hooks/register.ts:3; do
     printf '%s\n' "$out" | grep -F "$at" | grep -q 'settled only by a later event' \
       && check "a wait settled only by a later event is named at ${at%%/*}'s line" ok \
@@ -1979,7 +1996,7 @@ TS
   done
   printf '%s\n' "$out" | grep -F 'model-call/hooks/register.ts:4' | grep -q 'model.complete' \
     && check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" ok || check "a noun's own model.complete with no timeoutMs under 10 s is named (#802)" "$out"
-  for m in short-process process-in-hook shorthand-timeout model-timed timer-defers timer-inline-code; do
+  for m in short-process process-in-hook shorthand-timeout string-then-comments model-timed timer-defers timer-inline-code; do
     ! printf '%s\n' "$out" | grep -q "$m/" && check "$m passes (#802)" ok || check "$m passes (#802)" "$out"
   done
   ! printf '%s\n' "$out" | grep -qF 'same-local-args/hooks/register.ts:2' \

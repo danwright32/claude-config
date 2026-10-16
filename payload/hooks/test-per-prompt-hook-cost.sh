@@ -7,7 +7,8 @@
 # whole shown list, 15 to 26 s at load 200 to 330 (measured 2026-10-03) against a 5 s timeout, so its output was thrown
 # away every time (fixed in #602). Nothing had checked any other per prompt hook for that shape.
 #
-# The hooks are read from settings.hooks.json, never listed here by hand (L41, L96): a UserPromptSubmit
+# The hooks are read from the hooks block beside them (settings.hooks.json in the checkout, settings.json
+# once installed, through lib/settings-file.sh), never listed here by hand (L41, L96): a UserPromptSubmit
 # or Stop hook added there and not given an entry below fails this suite until somebody has said how
 # its accumulated state is populated, or why it has none.
 #
@@ -25,14 +26,16 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETTINGS="$DIR/../settings.hooks.json"
+# The shipped hooks block in the checkout, the installed one under ~/.claude (claude-config#1237).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
-if [ ! -f "$SETTINGS" ] || ! command -v python3 >/dev/null 2>&1; then
-  printf 'SUITE-NOT-RUN %s\n' "needs settings.hooks.json beside payload/hooks and python3 to read it"
+if [ -z "$SETTINGS" ] || ! command -v python3 >/dev/null 2>&1; then
+  printf 'SUITE-NOT-RUN %s\n' "needs settings.hooks.json or settings.json beside the hooks and python3 to read it"
   echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
   exit 2

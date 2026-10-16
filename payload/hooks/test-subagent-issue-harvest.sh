@@ -837,6 +837,29 @@ grep -q '"status": *"none"' <<< "$got" \
   && check "an agent that said nothing is a none, not an error" ok \
   || check "an agent that said nothing is a none, not an error" "spool=$got"
 
+# ...and an agent whose ONLY words are a report handed back through the SubagentHandback tool did
+# say something (claude-config#1232). The report is that tool's input, not assistant text, so it
+# used to be harvested as a none with no model call, and every side finding in it was lost. The
+# line is in the shape measured from real transcripts (test-subagent-digest.sh says how); the text
+# is invented.
+HANDBACK_AGENT="$TMPROOT/handback.jsonl"
+cat > "$HANDBACK_AGENT" <<'JSONL'
+{"type":"user","message":{"content":"fix the invoice rounding"}}
+{"type":"assistant","message":{"role":"assistant","type":"message","content":[{"type":"tool_use","id":"toolu_01FixtureHandback0000000002","name":"SubagentHandback","caller":{"type":"direct"},"input":{"message":"Fixed the rounding. HANDBACK-HARVEST-MARKER: the tax helper still truncates negative totals and I left it alone."}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01FixtureHandback0000000002","content":"{\"success\":true,\"message\":\"Report delivered to your caller.\"}"}]}}
+JSONL
+reset_spool
+rm -f "$MODEL_INPUT"
+stub 'echo "FINDING: the tax helper truncates negative totals."'
+payload "$REPO" "$HANDBACK_AGENT" | bash "$HARVEST" >/dev/null 2>&1
+got="$(records)"
+grep -q 'HANDBACK-HARVEST-MARKER' "$MODEL_INPUT" 2>/dev/null \
+  && check "#1232 a report handed back through the tool reaches the harvest model" ok \
+  || check "#1232 a report handed back through the tool reaches the harvest model" "model input=$(head -c 300 "$MODEL_INPUT" 2>/dev/null || echo '(the model was never called)')"
+grep -q '"status": *"found"' <<< "$got" \
+  && check "#1232 and its finding is spooled, not a none" ok \
+  || check "#1232 and its finding is spooled, not a none" "spool=$got"
+
 # ---------------------------------------------------------------------------
 # Repeated identical failures must not be able to spam the review. A non-empty
 # spool bypasses the cooldown by design, so an error that recurs (measured
