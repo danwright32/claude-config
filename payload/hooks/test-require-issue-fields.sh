@@ -379,6 +379,11 @@ denies "#1246 a heredoc body on standard input without the line is refused" "gh 
 b
 EOF"
 denies "#1246 a body piped in from printf without the line is refused" "printf 'b\n' | gh issue create --title t --body-file - $ALL"
+# The attached spellings name standard input too, and are judged the same way, not as a file
+# called "-" that cannot be opened (lessons review of #1260).
+denies "#1246 --body-file=- is standard input, judged by the command text" "printf 'b\n' | gh issue create --title t --body-file=- $ALL"
+denies "#1246 -F- is standard input, judged by the command text" "printf 'b\n' | gh issue create --title t -F- $ALL"
+allows "#1246 --body-file=- with the line in the piped text passes" "printf 'b\n\nClaude-Session: https://claude.ai/code/session_01AbCdEf\n' | gh issue create --title t --body-file=- $ALL"
 allows "#1246 a heredoc body on standard input carrying the line passes" "gh issue create --title t -F - $ALL <<'EOF'
 b
 

@@ -108,8 +108,8 @@ def has_session_line(args, command):
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
     as a heredoc inside a command substitution is only ever present as text, and in a --body-file
-    when one is named. A body on standard input (`-F -`) is never read as a value by flag_values,
-    so it is judged by the command text alone.
+    when one is named. A body on standard input (`-F -`, `-F-`, `--body-file=-`) is judged by the
+    command text alone, since what feeds it is part of the command.
 
     A body file the same command writes is judged from the command, not the disk (claude-config#1246):
     this gate runs before the command, so the file is missing or holds an older body. When what is
@@ -125,6 +125,8 @@ def has_session_line(args, command):
     except scan.Unreadable:
         return True  # the other rules can still be judged, so this one alone stands down
     for path in paths:
+        if path == "-":
+            continue  # standard input, judged above from the command text
         written = [w for w in writes if _same_path(w[0], path)]
         if any(not shown for _, _, shown in written):
             return True
