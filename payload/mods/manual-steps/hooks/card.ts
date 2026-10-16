@@ -67,9 +67,11 @@ const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
 // author never writes them. A bare location line read to Dan as an unexplained fragment.
 const WHERE = 'Where: '
 const WHAT = 'What to do: '
+// #1239: what a step needs from an earlier one, said on the step now that every step is open at once.
+const NEEDS = 'Needs: '
 // A label an author wrote anyway, taken off the front so the card never draws it twice: the card's
-// own two and the names an author reaches for instead, however cased or spaced.
-const AUTHOR_LABEL = /^(?:where|location|what to do|then|clicks)\s*:\s*/i
+// own and the names an author reaches for instead, however cased or spaced.
+const AUTHOR_LABEL = /^(?:where|location|what to do|then|clicks|needs)\s*:\s*/i
 const unlabelled = (s: string | undefined) => (s === undefined ? undefined : str(s.replace(AUTHOR_LABEL, '')))
 // A list number an author put before an action, taken off since the card numbers the list itself.
 // Only one a space follows, so a number that is the action's own text ("1.5x zoom") stays whole.
@@ -124,6 +126,8 @@ export const cardFrom = (input: unknown): Made | Refused => {
     }
     // The value is kept exactly as given, since Copy must paste what Claude handed over.
     if (typeof s.value === 'string' && s.value.trim()) step.value = s.value
+    const needs = unlabelled(str(s.needs))
+    if (needs) step.needs = oneLine(needs)
     if (checked === 'already-done') step.finished = 'already'
     steps.push(step)
   }
@@ -193,6 +197,12 @@ export const finish = (card: StepsCard, n: number, verdict: StepsVerdict, at?: n
   const open = nextStep(card)
   if (verdict !== 'withdrawn' && open !== undefined && open !== n - 1) {
     const o = card.steps[open]
+    // #1239: Done can be pressed on any step, but steps are recorded in order (Dan, 2026-10-15). A
+    // press on a later step is his, so the question is whether the earlier ones are done too.
+    if (step.isSent || step.isPressed)
+      return {
+        refusal: `Dan pressed Done on step ${n} (${step.title}) while step ${open + 1} (${o?.title ?? ''}) is not finished. Record nothing yet: ask Dan whether every step before step ${n} is done. If he says yes, record them in order, step ${open + 1} first, then each after it up to step ${n}. If he says no, record nothing; step ${n} waits until every step before it is done.`,
+      }
     return {
       refusal: `Step ${n} (${step.title}) is not the open step; step ${open + 1} (${o?.title ?? ''}) is. Do not guess which step Dan means, and do not record the steps before it to reach it. Ask Dan which step he means, then record only the open step; a step further on can be recorded once every step before it is finished.`,
     }
@@ -266,7 +276,28 @@ export type CardText = { text: string; href?: string; color?: string; bold?: boo
  * not reach it (#939): Apple Terminal, whose tab reports clicks only while View > Allow Mouse
  * Reporting is ticked, and a terminal's main screen. Required here, so no button can ship without it.
  */
-export type CardPart = CardText | { button: 'done' | 'copy' | 'copy-link' | 'open-link'; label: string; instead: CardText[] }
+export type CardPart = CardText | { button: CardButton; label: string; instead: CardText[] }
+
+/** What a card button does. */
+export const BUTTONS = ['done', 'copy', 'copy-link', 'open-link'] as const
+export type CardAction = (typeof BUTTONS)[number]
+/**
+ * A button's id: what it does and its step's number (#1239), since every unfinished step is open
+ * with its own buttons and mod-kit keys each by `<mod>:<id>`, which must not repeat on one card.
+ */
+export type CardButton = `${CardAction}-${number}`
+export const buttonId = (action: CardAction, i: number): CardButton => `${action}-${i + 1}`
+
+/**
+ * The action and step (0 based) a pressed element names: `manual-steps:done-3` is step 3's Done. A
+ * bare id (`manual-steps:done`), drawn before #1239 and still on a screen not yet redrawn, names the
+ * open step, which `open` gives. Undefined for an element that is not one of the card's buttons.
+ */
+export const pressed = (element: string, open: number | undefined): { action: CardAction; step: number | undefined } | undefined => {
+  const m = /^manual-steps:(done|copy|copy-link|open-link)(?:-([1-9]\d*))?$/.exec(element)
+  if (!m) return undefined
+  return { action: m[1] as CardAction, step: m[2] === undefined ? open : Number(m[2]) - 1 }
+}
 
 /** The prompt Done sends for step `i` (0 based), and the words the card says to type where it cannot be clicked. */
 export const donePrompt = (i: number): string => `step ${i + 1} done`
@@ -276,12 +307,13 @@ export const donePrompt = (i: number): string => `step ${i + 1} done`
 const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { text: donePrompt(i) }]
 
 /**
- * The card's lines: the amber heading, "waiting on you" after it while the open step is Dan's,
- * then each step on its own line. Only the next step is open,
- * bold in the terminal's own text colour, with Done and, indented under it, its link or location
- * after a bold "Where:", its clicks after a bold "What to do:" (several actions numbered one per
- * line under it), and any value with Copy (#872). A later step is its title alone; a finished one is dimmed and
- * struck through, then how it finished. The link is a link part, which mod-kit draws as Claude
+ * The card's lines: the amber heading, "waiting on you" after it while any step is Dan's to do,
+ * then each step on its own line. Every unfinished step is open (#1239), bold in the terminal's own
+ * text colour, with its own Done (or "sent" once pressed) and, indented under it, what it needs from
+ * an earlier step after a bold "Needs:", its link or location after a bold "Where:", its clicks
+ * after a bold "What to do:" (several actions numbered one per line under it), and any value with
+ * Copy (#872). Each button is keyed by its step's number. A finished one is dimmed and struck
+ * through, then how it finished. The link is a link part, which mod-kit draws as Claude
  * Code's Link, so it opens and copies whole where the terminal draws hyperlinks, with Open (to the
  * default browser, #1215) and Copy link beside its label. Where a click may not land (Apple
  * Terminal, the main screen) mod-kit draws each button's instead text: Done the words to type,
@@ -289,11 +321,10 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * selected (#939).
  */
 export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
-  const open = nextStep(card)
-  // While the open step is Dan's to do, the heading says it waits on him (#863), on the card's own
-  // line rather than a row of its own beside the card, so the band and the pane state it once.
-  // Sent, it waits on Claude, and the step line says so.
-  const isDans = open !== undefined && !card.steps[open]?.isSent
+  // While any unfinished step is Dan's to do, the heading says it waits on him (#863), on the card's
+  // own line rather than a row of its own beside the card, so the band and the pane state it once.
+  // Every one sent, it waits on Claude, and each step line says so.
+  const isDans = card.steps.some(s => !s.finished && !s.isSent)
   const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }, ...(isDans ? [{ text: '  waiting on you', dim: true }] : [])]]
   card.steps.forEach((s, i) => {
     const label = `${i + 1}. ${s.title}`
@@ -301,22 +332,21 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       lines.push(finishedLine(s, label, card.isCarried === true, drawn))
       return
     }
-    if (i !== open) {
-      lines.push([{ text: label }])
-      return
-    }
-    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: 'done' as const, label: 'Done', instead: typeDone(i) }])])
+    // #1239: every unfinished step is open, so Dan can work ahead while Claude has yet to read a Done.
+    lines.push([{ text: label, bold: true }, ...(s.isSent ? [{ text: '  sent', dim: true }] : [{ text: '  ' }, { button: buttonId('done', i), label: 'Done', instead: typeDone(i) }])])
     // Under the title, where its text starts.
     const indent = String(i + 1).length + 2
     // Each led by its label, bold and drawn whole, so a long link cut at the edge or a long location
     // wrapping beside it never takes the label with it (#872).
     const lead = (text: string): CardPart => ({ text, bold: true, whole: true, indent })
+    // What it needs from an earlier step first, so Dan sees it before he starts (#1239).
+    if (s.needs) lines.push([lead(NEEDS), { text: s.needs, wrap: true }])
     // The link on a line of its own under the label, nothing beside it, wrapping whole under its own
     // first character, so a terminal can select every character of it where Copy link cannot be
     // pressed (#939: a Google Sheets link was cut at the edge). Open and Copy link sit beside the
     // label, Open first since opening is what the link is for (#1215); where a click cannot reach
     // them both draw nothing, and the link under them is there to select.
-    if (s.url) lines.push([lead(WHERE), { button: 'open-link', label: 'Open', instead: [] }, { text: '  ' }, { button: 'copy-link', label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
+    if (s.url) lines.push([lead(WHERE), { button: buttonId('open-link', i), label: 'Open', instead: [] }, { text: '  ' }, { button: buttonId('copy-link', i), label: 'Copy link', instead: [] }], [{ text: s.url, href: s.url, wrap: true, indent }])
     // A long location or click path wraps under its step rather than being cut at the edge (#734):
     // mod-kit's left rule reaches down every row it takes. It wraps beside its label, so the rows it
     // continues on sit under its own first word.
@@ -329,7 +359,7 @@ export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() })
       const width = String(s.clicks.length).length
       s.clicks.forEach((a, k) => lines.push([{ text: `${String(k + 1).padStart(width)}. `, whole: true, indent: indent + 2 }, { text: a, wrap: true }]))
     }
-    if (s.value) lines.push([{ text: oneLine(s.value), indent, wrap: true }, { text: '  ' }, { button: 'copy', label: 'Copy', instead: [] }])
+    if (s.value) lines.push([{ text: oneLine(s.value), indent, wrap: true }, { text: '  ' }, { button: buttonId('copy', i), label: 'Copy', instead: [] }])
   })
   return lines
 }
