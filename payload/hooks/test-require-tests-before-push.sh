@@ -68,9 +68,26 @@ want_style foo.c slash
 # only diff lines start with '*'. It must block.
 want_notdocsonly slash "$(printf -- '--- a/calc.js\n+++ b/calc.js\n@@\n-  * 2;\n+  * 3;\n')"
 want_notdocsonly slash "$(printf -- '--- a/calc.js\n+++ b/calc.js\n@@\n+  * factor;\n')"
-# Editing wording inside an EXISTING block comment has no '/*' opener in the
-# diff, so it conservatively blocks rather than reopen the hole above.
+# Editing wording inside an EXISTING block comment, with no '/*' opener in what
+# the diff shows, cannot be told from leading-operator code, so without the lines
+# above it this still blocks rather than reopen the hole above.
 want_notdocsonly slash "$(printf -- '--- a/foo.js\n+++ b/foo.js\n@@\n- * old wording\n+ * new wording\n')"
+
+# --- claude-config#1238: judged from the file the line sits in ---------------
+# The gate reads each file's diff with every line of the file around it, so a
+# '*' line is a comment exactly when its own image has a '/*' open above it and
+# no '*/' between. Rewording inside an existing JSDoc passes; the
+# leading-operator change still blocks, however many comments sit above it.
+want_docsonly slash "$(printf -- 'diff --git a/f.js b/f.js\n--- a/f.js\n+++ b/f.js\n@@ -1,6 +1,6 @@\n /**\n  * keep\n- * old wording\n+ * new wording\n  */\n const a = 1;\n')"
+want_docsonly slash "$(printf -- 'diff --git a/f.js b/f.js\n--- a/f.js\n+++ b/f.js\n@@ -1,4 +1,3 @@\n /*\n- * a line taken out\n  * kept\n  */\n')"
+want_notdocsonly slash "$(printf -- 'diff --git a/m.js b/m.js\n--- a/m.js\n+++ b/m.js\n@@ -1,3 +1,3 @@\n /* a note */\n const a = b\n-  * 2;\n+  * 3;\n')"
+want_notdocsonly slash "$(printf -- 'diff --git a/s.js b/s.js\n--- a/s.js\n+++ b/s.js\n@@ -1,2 +1,2 @@\n const s = "/*";\n-  * 2;\n+  * 3;\n')"
+# Lines above the first hunk, or between two, are not shown, so what they leave
+# open is unknown and a '*' line there is not trusted.
+want_notdocsonly slash "$(printf -- 'diff --git a/g.js b/g.js\n--- a/g.js\n+++ b/g.js\n@@ -4,2 +4,2 @@\n x = 1;\n- * old wording\n+ * new wording\n')"
+want_notdocsonly slash "$(printf -- 'diff --git a/h.js b/h.js\n--- a/h.js\n+++ b/h.js\n@@ -1,2 +1,2 @@\n /**\n- * one\n+ * two\n@@ -9,2 +9,2 @@\n x = 1;\n- * three\n+ * four\n')"
+# A line holding code beside a comment is code, whichever comes first.
+want_notdocsonly slash "$(printf -- 'diff --git a/i.js b/i.js\n--- a/i.js\n+++ b/i.js\n@@ -1,2 +1,2 @@\n x = 1;\n-/* a */ y = 2;\n+/* b */ y = 3;\n')"
 
 # ===========================================================================
 # END TO END: drive the real hook and assert its exit code. (#734)
@@ -364,6 +381,33 @@ W="$(mk_repo)"
 ( cd "$W" && printf 'const a = b\n  * 3;\n' > lib/m.js && git add lib/m.js && git commit -qm bump ) >/dev/null 2>&1
 run_hook "$W" "git push"
 want_code 2 "leading-operator change must BLOCK"
+
+# claude-config#1238: rewording a line inside a block comment that already exists
+# is documentation, judged from the file the line sits in. Before this it blocked,
+# because the diff shows no '/*' opener, and the comment fix on Bidspoke #2228
+# needed a one time override.
+# The opener sits more than git's three lines of default context above the changed
+# line, so only a diff read with the whole file around it can see it.
+DOC_BEFORE='/**\n * Adds two numbers.\n *\n * Both may be negative.\n * Neither may be NaN.\n *\n * Returns their sum.\n */\nfunction add(a, b) {\n  return a + b;\n}\n'
+DOC_AFTER='/**\n * Adds two numbers.\n *\n * Both may be negative.\n * Neither may be NaN.\n *\n * Returns the sum of both.\n */\nfunction add(a, b) {\n  return a + b;\n}\n'
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$DOC_BEFORE" > lib/doc.js && git add lib/doc.js && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$DOC_AFTER" > lib/doc.js && git add lib/doc.js && git commit -qm reword ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 0 "#1238 rewording inside an existing block comment is allowed"
+# The same edit made by the commit in the command, which reads a different diff.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf "$DOC_BEFORE" > lib/doc.js && git add lib/doc.js && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf "$DOC_AFTER" > lib/doc.js ) >/dev/null 2>&1
+run_hook "$W" "git add lib/doc.js && git commit -m reword && git push"
+want_code 0 "#1238 the same rewording made by the command's own commit is allowed"
+# And a leading-operator change BELOW a closed block comment still blocks: the
+# comment above it is closed, so the '*' line is code.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib && printf '/* the factor */\nconst a = b\n  * 2;\n' > lib/n.js && git add lib/n.js && git commit -qm base && git push -q ) >/dev/null 2>&1
+( cd "$W" && printf '/* the factor */\nconst a = b\n  * 3;\n' > lib/n.js && git add lib/n.js && git commit -qm bump ) >/dev/null 2>&1
+run_hook "$W" "git push"
+want_code 2 "#1238 a leading-operator change below a closed block comment still BLOCKS"
 
 # Mode-only change: the diff has no content lines, which is not the same as
 # having no change to see. Must block.
