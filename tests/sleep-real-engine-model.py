@@ -19,9 +19,10 @@ one word text answer. Otherwise the first user message names the script:
   BAN-STEP     runs the force push to a scratch branch, then the push to main, then answers.
   PERMISSION-STEP  runs a command a settings PermissionRequest hook denies, then one it does not.
   WORKER-STEP  answers "ready" until the overnight rules arrive in a Stop block, then works the
-               night from the commands those rules name: claim with `next`, commit and push in
-               the claim's worktree, propose an issue, release the claim done, claim again (none
-               left), write the stopped note, and end.
+               night from the commands those rules name: claim with `next` naming the issues the
+               rules' goal names (#1242), commit and push in the claim's worktree, propose an
+               issue, release the claim done, claim again (none left), write the stopped note, and
+               end. A worker with no goal is never given rules, so it only answers "ready".
   anything else (the morning turn after /wake) gets a short text answer.
 """
 import json
@@ -105,10 +106,16 @@ def permission_step(messages, ran):
 
 def worker_step(messages, ran):
     convo = all_text(messages)
-    m = re.search(r'`(bash ~/\.claude/hooks/lib/sleep-queue\.sh next [^`]+)`', convo)
-    if not m:
+    # The rules name the claim command with a place for the goal's issue numbers (#1242), and the
+    # goal itself; the issues are the ones the goal names, as a model would read them.
+    m = re.search(r"`(bash ~/\.claude/hooks/lib/sleep-queue\.sh next \S+ \S+) <the goal's issue numbers>`", convo)
+    goal = re.search(r"Tonight's goal, as Dan set it: \"([^\"]*)\"", convo)
+    if not m or not goal:
         return text('ready')
-    claim_cmd = m.group(1)
+    issues = re.findall(r'#(\d+)', goal.group(1))
+    if not issues:
+        return text('The goal names no issue, so there is nothing to claim.')
+    claim_cmd = m.group(1) + ' ' + ' '.join(issues)
     rel = re.search(r'`(bash ~/\.claude/hooks/lib/sleep-queue\.sh release \S+) <issue> (\S+) done\|parked\|failed "<why>"`', convo)
     stopped = re.search(r"`sleep_note '(\{\"kind\":\"stopped\"[^`']+)'`", convo)
     cmds = [c for c, _ in ran]
@@ -132,7 +139,7 @@ def worker_step(messages, ran):
     if cmds.count(claim_cmd) < 2:
         return bash(claim_cmd)
     if stopped:
-        note = note_cmd(stopped.group(1))
+        note = note_cmd(stopped.group(1).replace('<why>', 'the goal is done'))
         if note not in cmds:
             return bash(note)
     return text('Nothing left to claim tonight; stopping.')
