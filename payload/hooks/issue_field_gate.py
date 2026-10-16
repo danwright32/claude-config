@@ -99,25 +99,46 @@ def session_line():
     return line if r.returncode == 0 and line.startswith(SESSION_MARK) else None
 
 
+def _same_path(a, b):
+    return os.path.normpath(os.path.expanduser(a)) == os.path.normpath(os.path.expanduser(b))
+
+
 def has_session_line(args, command):
     """The body names the session that filed it (claude-config#536).
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
     as a heredoc inside a command substitution is only ever present as text, and in a --body-file
-    when one is named. A body file that cannot be read is not held against the create: this gate
-    fails open on what it cannot read.
+    when one is named. A body on standard input (`-F -`, `-F-`, `--body-file=-`) is judged by the
+    command text alone, since what feeds it is part of the command.
+
+    A body file the same command writes is judged from the command, not the disk (claude-config#1246):
+    this gate runs before the command, so the file is missing or holds an older body. When what is
+    written is text the command shows, and the line is nowhere in the command, the line is not in
+    the file either. Written by anything else (a script, an expansion), or not written here and not
+    readable, it is not held against the create: this gate fails open on what it cannot read.
     """
     if SESSION_MARK in command or any(SESSION_MARK in a for a in args):
         return True
-    for path in scan.flag_values(args, "--body-file", "-F"):
+    paths = scan.flag_values(args, "--body-file", "-F")
+    try:
+        writes = scan.file_writes(command) if paths else []
+    except scan.Unreadable:
+        return True  # the other rules can still be judged, so this one alone stands down
+    for path in paths:
         if path == "-":
+            continue  # standard input, judged above from the command text
+        written = [w for w in writes if _same_path(w[0], path)]
+        if any(not shown for _, _, shown in written):
             return True
+        if any(not appends for _, appends, _ in written):
+            continue  # written whole from shown text, which does not carry the line
         try:
             with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as f:
                 if SESSION_MARK in f.read():
                     return True
         except OSError:
-            return True
+            if not written:
+                return True
     return False
 
 
