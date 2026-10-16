@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 
 // The /goals pane (Dan, 2026-10-04, docs/mods-design.md "Goals pane"): every open session on this
@@ -23,6 +24,12 @@ const deps: { name: string; register: Register } = {
             if (r.exitCode !== 0) throw new Error(r.stderr)
             return JSON.parse(r.stdout) as boolean
           },
+          // #1252: a transcript's /goal, asked of the world, which reads with mod-kit's own copy.
+          goal: async (input: { transcript: string }) => {
+            const r = await built.process.run(['__modkit', 'goal', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
           typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
@@ -45,13 +52,28 @@ const withDeps = { plugins: [deps] }
 const MIN = 60_000
 
 type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfId: string } | 'throws'
-const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean) => {
-  const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0 }
-  on('process.run', ($, e) => {
+/** Each transcript's goal records, as the shell would find them, by path; a string is a read that fails with it. */
+type Transcripts = Record<string, string[] | string>
+const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean, transcripts: Transcripts = {}) => {
+  const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0, goalReads: [] as string[] }
+  on('process.run', async ($, e) => {
     // mod-kit's reader, as the stand-in above asks it: mod-kit's own copy (#1135).
     if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
       const { origin } = JSON.parse(String(e.argv[2])) as { origin: never }
       return { value: { exitCode: 0, stdout: JSON.stringify(isDans(origin)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    // mod-kit's goal reader (#1252), its own copy, its shell answered from the test's transcripts.
+    if (e.argv[0] === '__modkit' && e.argv[1] === 'goal') {
+      const { transcript } = JSON.parse(String(e.argv[2])) as { transcript: string }
+      const read = await goalAt(transcript, async argv => {
+        if (argv[0] !== 'bash' || argv[4] !== GOAL_MARK) throw new Error(`not the goal read: ${argv.join(' ')}`)
+        const path = argv[5] as string
+        w.goalReads.push(path)
+        const t = transcripts[path]
+        if (typeof t === 'string') return { exitCode: 2, stdout: '', stderr: t }
+        return t && t.length ? { exitCode: 0, stdout: `${t.join('\n')}\n`, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' }
+      })
+      return { value: { exitCode: 0, stdout: JSON.stringify(read), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] !== '__sessions') return { value: { exitCode: 1, stdout: '', stderr: 'unexpected', isStdoutTruncated: false, isStderrTruncated: false } }
     const l = listing.now
@@ -164,6 +186,41 @@ test('every open session shows as two lines, in the settled order, the state wor
     [', 4 of 4 steps, 1h 12m', true],
   ])
   expect(await ui.find({ text: /Long gone/ })).toBeUndefined()
+})
+
+// #1252: a /goal ends in its transcript, by /goal clear or by being met with none (33 of 45 ended
+// goals measured on 2026-10-16), and the pane reads each session's transcript through mod-kit's one
+// reader. The record lines are the shapes Claude Code writes, the conditions replaced.
+const goalRecord = (a: Record<string, unknown>) => JSON.stringify({ type: 'attachment', uuid: 'u', attachment: { type: 'goal_status', ...a } })
+const SET = (c: string) => goalRecord({ met: false, sentinel: true, condition: c })
+const MET = (c: string) => goalRecord({ met: true, condition: c, reason: 'Every test passes.' })
+test('a goal met without /goal clear is shown as ended, the session then showing its request; a transcript that cannot be read keeps the recorded goal', withDeps, async ($, on) => {
+  const now = 10 * MIN
+  mock.clock(on, { now })
+  const withTranscript = (s: ReturnType<typeof session>, path: string | null) => ({ ...s, transcriptPath: path })
+  const listing: Listing = {
+    open: [
+      withTranscript(session('k', 'claude-config', { total: 2, done: 1, goal: 'all tests in test/auth pass', request: 'Fix the auth tests', current: 'Running the suite', lastActivityAt: now }), '/t/k.jsonl'),
+      withTranscript(session('d', 'Downbeat', { total: 2, done: 1, request: 'Release notes', current: 'Writing', lastActivityAt: now }), '/t/d.jsonl'),
+      withTranscript(session('o', 'Overture', { total: 2, done: 1, goal: 'Gmail send fix', current: 'Sending', lastActivityAt: now }), '/t/o.jsonl'),
+      session('p', 'PostRoll', { total: 2, done: 1, goal: 'Caption retry', current: 'Retrying', lastActivityAt: now }),
+    ],
+    closed: [],
+    unreadable: [],
+    selfId: 'k',
+  }
+  const w = world(on, { now: listing }, undefined, undefined, {
+    '/t/k.jsonl': [SET('all tests in test/auth pass'), MET('all tests in test/auth pass')],
+    '/t/d.jsonl': [SET('ship the v2 release notes')],
+    '/t/o.jsonl': 'grep: /t/o.jsonl: Permission denied',
+  })
+  await start($)
+  await goals($)
+  const ui = await mount($)
+  const tops = (await rowsDrawn(ui)).map(r => r.top)
+  expect(tops).toEqual(['claude-config  Fix the auth tests', 'Downbeat  ship the v2 release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry'])
+  // Each transcript the registry names is read once a draw; a session with none is not asked about.
+  expect(w.goalReads.sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
 })
 
 test('a session registry that cannot be read is said, never drawn as no sessions', withDeps, async ($, on) => {
