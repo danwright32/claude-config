@@ -42,6 +42,20 @@ const deps: { name: string; register: Register } = {
           pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
           clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
         },
+        // Scope modes' sleep predicate and note (#841), standing in: the world answers both, so a
+        // test can put the Mac to sleep and read what was noted for the morning report (#1234).
+        scopeModes: {
+          isAsleep: async () => {
+            const r = await built.process.run(['__asleep'])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return r.stdout.trim() === 'yes'
+          },
+          sleepNote: async (note: unknown) => {
+            const r = await built.process.run(['__sleepnote', JSON.stringify(note)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return { isNoted: r.stdout.trim() === 'noted' }
+          },
+        },
         sessions: {
           list: async () => {
             const r = await built.process.run(['__sessions'])
@@ -134,6 +148,16 @@ type World = {
   claims?: Record<string, number>
   /** The claims cannot be made: 'folder', the claims folder itself; 'claim', each claim in it. */
   claimsFail?: 'folder' | 'claim'
+  /** The Mac is in sleep mode (#841), or its sleep record cannot be read ('throws'). */
+  asleep?: boolean | 'throws'
+  /** The sleep check answers only once this settles, so a test can act while a wake waits on it. */
+  asleepAfter?: Promise<unknown>
+  /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, thrown, or never answered (hangs). */
+  submit?: 'drop' | 'throws' | 'hangs'
+  /** A submit that throws only once this settles, so a test can act while the wake is in flight. */
+  submitFailsAfter?: Promise<unknown>
+  /** The engine's handling of a turn's end beneath the watcher throws (lessons review of #1234). */
+  turnEndThrows?: boolean
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -158,6 +182,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     claimed: [] as string[],
     /** Each row appended to the conversation, as it reached the bottom. */
     appended: [] as { content: unknown[] }[],
+    /** Each prompt submitted, with where the engine says it came from (#1234). */
+    submitted: [] as { text: string; origin: unknown }[],
+    /** Each note made for the morning report while asleep (#1234). */
+    sleepNotes: [] as Record<string, unknown>[],
     /** Answers the stops held open ('held'), in order, as Claude Code would: ok, or a refusal. */
     answerStops: (_how: 'ok' | 'refused') => undefined as void,
   }
@@ -182,6 +210,12 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       if (o.sessions && 'throwsOnce' in o.sessions && w.sessionAsks === 1) return res(1, '', 'no implementation for sessions.list')
       const s = o.sessions && 'throwsOnce' in o.sessions ? o.sessions.throwsOnce : o.sessions
       return ok(JSON.stringify({ open: s?.open ?? [], closed: s?.closed ?? [], unreadable: s?.unreadable ?? [], selfId: 'me' }))
+    }
+    if (cmd === '__asleep' && o.asleepAfter) await o.asleepAfter
+    if (cmd === '__asleep') return o.asleep === 'throws' ? res(1, '', 'the sleep record could not be read') : ok(o.asleep ? 'yes\n' : 'no\n')
+    if (cmd === '__sleepnote') {
+      w.sleepNotes.push(JSON.parse(args[0] ?? '{}'))
+      return ok('noted\n')
     }
     if (cmd === '__extra') {
       if (args[0] === 'jobs') o.onExtra?.(args[1] ?? '')
@@ -279,7 +313,21 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('prompt.submit', ($, e) => ({ text: e.text }) as never)
+  on('prompt.submit', ($, e) => {
+    // A notice from Claude Code (the tests of #706) is not one the watcher submitted.
+    if (e.origin.kind !== 'task-notification') w.submitted.push({ text: e.text, origin: e.origin })
+    if (o.submit === 'throws') throw new Error('the prompt queue is closed')
+    if (o.submit === 'drop') return { drop: 'held while Dan is away' } as never
+    // A submit that never answers: the turn it asks for never starts.
+    if (o.submit === 'hangs') return new Promise<never>(() => undefined)
+    if (o.submitFailsAfter) return o.submitFailsAfter.then(() => { throw new Error('the prompt queue is closed') }) as never
+    return { text: e.text } as never
+  })
+  on('turn.start', ($, e) => ({ turnId: e.turnId }) as never)
+  on('turn.complete', ($, e) => {
+    if (o.turnEndThrows) throw new Error('the transcript could not be written')
+    return { text: e.answer } as never
+  })
   // The rows the conversation keeps, as the plugins above handed them down. Nothing in the test
   // kit stores a row (2.1.289), so the call itself then fails; `appendRow` below catches that.
   on('session.append', ($, e, next) => {
@@ -1869,12 +1917,19 @@ test('an untraced job whose output file is gone is dropped, not reported (#784)'
   expect(contextOf(r)).toBe('')
 })
 
+// This conversation's own turn (#1234), as the engine raises it: a main loop turn carries no agentId.
+type Turns = { turn: { start: (e: unknown) => Promise<unknown>; complete: (e: unknown) => Promise<unknown> } }
+const turnStarts = ($: unknown, turnId = 't1') => ($ as Turns).turn.start({ text: 'build the partners page', turnId })
+const turnEnds = ($: unknown, turnId = 't1') => ($ as Turns).turn.complete({ answer: 'Waiting on the builders.', durationMs: 5, isAborted: false, turnId, reason: 'answer' })
+
 // #759: a background agent listed as running whose tool calls have stopped is flagged to this
-// session once, past twenty minutes, with how long and the last tool call it started.
+// session once, past twenty minutes, with how long and the last tool call it started. These read
+// the notice off this conversation's own tool calls, so they run inside a turn of its own (#1234).
 test('a running background agent quiet for twenty minutes is said to this session once, with its last tool call (#759)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
+  await turnStarts($)
   await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
   await clock.advance(19 * MIN)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
@@ -1893,6 +1948,7 @@ test('an agent whose last tool call never returned is said to be waiting on it (
   const clock = mock.clock(on, { now: 0 })
   world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
+  await turnStarts($)
   // A call that never returns (the world's git commit): the commit waiting on a heredoc of 2026-10-05.
   void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
   await clock.advance(21 * MIN)
@@ -1904,6 +1960,7 @@ test('an agent that moves again is no longer quiet, and is said again only after
   const clock = mock.clock(on, { now: 0 })
   world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
+  await turnStarts($)
   await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
   await clock.advance(21 * MIN)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('quiet for 20 minutes')
@@ -1952,6 +2009,7 @@ test('an agent back to running after waiting on a person is dated from its retur
   const agents: Agent[] = [{ ...AGENT }]
   world(on, { tail: '', size: 0 }, { agents })
   await start($)
+  await turnStarts($)
   await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
   ;(agents[0] as Agent).status = 'waiting'
   await clock.advance(30 * MIN)
@@ -1962,6 +2020,228 @@ test('an agent back to running after waiting on a person is dated from its retur
   await clock.advance(20 * MIN)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('Background agent "fix CI" (a1) has been quiet')
 })
+
+// #1234: on 2026-10-15 a builder's git commit never returned while this conversation sat idle
+// waiting on its builders, so a notice riding on its next tool call reached nobody for 80 minutes.
+// Idle, the quiet agent wakes the conversation with a prompt of its own, once per quiet spell.
+const HUNG = 'Bash (git commit -q -F /dev/stdin), started 20 minutes ago and has not finished'
+const quietSaid = (w: { submitted: { text: string }[] }) => w.submitted.filter(s => s.text.includes('has been quiet for'))
+
+test('an agent whose tool call never returns wakes this idle conversation exactly once, at the threshold (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  // The conversation sends its builder off and its turn ends: idle, waiting on the builder.
+  await turnStarts($)
+  await turnEnds($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(19 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  await clock.advance(MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+  const wake = quietSaid(w)[0] as { text: string; origin: unknown }
+  expect(wake.text).toContain('Background agent "fix CI" (a1) has been quiet for 20 minutes')
+  expect(wake.text).toContain(HUNG)
+  expect(wake.origin).toEqual({ kind: 'plugin', name: 'job-watcher' })
+  // The quiet spell goes on, the woken turn comes and goes: never a second wake, and never again
+  // on the conversation's own tool calls.
+  await turnStarts($, 't2')
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
+  await turnEnds($, 't2')
+  await clock.advance(60 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+// The build running here raises turn.start for a subagent's run too, naming it, though the pinned
+// 2.1.294 types declare no agentId there: that turn must not read as this conversation's own.
+test("a subagent's own turn starting leaves the idle conversation idle, so it is still woken (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
+  await ($ as Turns).turn.start({ text: 'fix CI', turnId: 'a1-t1', agentId: 'a1' })
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+test('a conversation busy in a turn is told on its next tool call and never woken as well (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+  await turnEnds($)
+  await clock.advance(MIN + 1)
+  expect(quietSaid(w)).toEqual([])
+})
+
+test('a notice left unread when the busy turn ends wakes the conversation then, once (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  // The turn ends with no tool call after the notice: nothing else would carry it.
+  await turnEnds($)
+  await clock.advance(1)
+  expect(quietSaid(w).length).toBe(1)
+  expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
+  await clock.advance(10 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+test('an agent that moves again and goes quiet again wakes the idle conversation once more, once per spell (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  await $.tool.call(asAgent({ tool: 'Read', file_path: '/x' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(2)
+  expect((quietSaid(w)[1] as { text: string }).text).toContain('the last one it started, Read, finished')
+})
+
+test('two agents gone quiet in one look wake the idle conversation with one prompt naming both (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT, { ...AGENT, id: 'a2', description: 'partners page PR3' }] })
+  await start($)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  const text = (quietSaid(w)[0] as { text: string }).text
+  expect(text).toContain('"fix CI" (a1)')
+  expect(text).toContain('"partners page PR3" (a2)')
+})
+
+test('a wake that is dropped is said once and carried on the next tool call instead, never retried each minute (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submit: 'drop' })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('held while Dan is away')])
+  await clock.advance(10 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+test('a wake that throws is said once and carried on the next tool call instead (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submit: 'throws' })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  // The engine skips a hook that throws and says nothing beneath answered, so the line carries its words.
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('Claude is told on its next tool call instead')])
+  await clock.advance(10 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+test('a turn whose end fails beneath the watcher still leaves the conversation idle, so it is woken (lessons review of #1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], turnEndThrows: true })
+  await start($)
+  await turnStarts($)
+  await turnEnds($).catch(() => undefined)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
+})
+
+// Lessons review of #1234: a wake still in flight when a new session starts must not, failing,
+// hand the old session's notice to the new one, which would read it as about its own agents.
+test("a wake that fails after a new session has started never carries the old session's notice into it (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let fail = () => {}
+  const failed = new Promise<void>(r => { fail = r })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submitFailsAfter: failed })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  await start($)
+  fail()
+  await clock.advance(1)
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
+  // Nothing about it reaches the new session's transcript either: the drop goes to the debug log.
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([])
+})
+
+// Lessons review of #1234, second round: a new session starting while the wake still waits on the
+// sleep check must stop the wake there, so even a submit that would succeed never sends the old
+// session's notice to the new one as a prompt of its own.
+test("a wake whose session ends while it waits on the sleep check is never submitted (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let answer = () => {}
+  const answered = new Promise<void>(r => { answer = r })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleepAfter: answered })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  await start($)
+  answer()
+  await clock.advance(1)
+  expect(quietSaid(w)).toEqual([])
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
+})
+
+test('a wake whose submit never answers holds up no look: a job still stalls and is said (lessons review of #1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'listening on 3000\n', size: 18 }, { agents: [AGENT], submit: 'hangs' })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  // Looks go on each minute: no look is given up for running past ten minutes, and the dev
+  // server, silent since it started, is still looked at.
+  await clock.advance(12 * MIN)
+  await turnStarts($)
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain('job1 (npm run dev) has had no new output for')
+  expect(said).not.toContain('was given up')
+})
+
+// Sleep mode (#841): the overnight sessions keep working, so a hung builder wakes the conversation
+// as by day (nothing it does reaches Dan: questions are refused and sounds stand down while asleep),
+// and the night's report names it for the morning.
+test('asleep, the idle conversation is still woken and the quiet agent is noted for the morning report (#1234)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleep: true })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+  expect(w.sleepNotes.length).toBe(1)
+  expect(w.sleepNotes[0]?.kind).toBe('finding')
+  expect(String(w.sleepNotes[0]?.text)).toContain('Background agent "fix CI" (a1) has been quiet for 20 minutes')
+})
+
+for (const [why, asleep] of [['awake', false], ['with a sleep record that cannot be read', 'throws']] as const) {
+  test(`${why}, the idle conversation is woken and nothing is noted for the morning report (#1234)`, withDeps, async ($, on) => {
+    const clock = mock.clock(on, { now: 0 })
+    const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleep })
+    await start($)
+    await clock.advance(21 * MIN)
+    expect(quietSaid(w).length).toBe(1)
+    expect(w.sleepNotes).toEqual([])
+  })
+}
 
 test("a second ask for the session list set before a new session starts is never made for it (lessons review of PR 794)", withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 60 * MIN })
