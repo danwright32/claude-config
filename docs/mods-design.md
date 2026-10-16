@@ -2133,6 +2133,16 @@ and the band question is removed rather than kept beside it (L29). Three defects
     pattern), and one the reader followed through a variable to a file that is no lasting memory, is
     judged like a write the words do not name: asked about when the command mentions lasting memory
     anywhere, the assignment `F=<path>` included, and the question shows the file it mentions.
+  - Since #1241 (2026-10-16), one exception: a write through a variable the command fixes for
+    certain is judged by where it lands, since `S=<scratchpad>/sf; cp payload/LESSONS.md
+    $S/LESSONS.md` was refused twice as a save. Certain is read by the guard itself, never taken
+    from the reader alone (whose value can be one a conditional set): the command opens with
+    statements made only of assignments, ended by `;`, a new line or `&&`, one giving the variable a
+    plain absolute folder (no quote, space, glob, substitution or `..`); the variable is named
+    nowhere else and read only whole; no `eval`, `source` or `.` runs text; it is no variable the
+    shell changes itself (`$_`, `REPLY` and the like); and the path that gives matches the reader's.
+    Anything else is judged as above. The gap left: a shell function from the profile, run by name,
+    that sets the same variable, which no reader of the words can see.
   - **Chosen: when the command mentions no lasting memory anywhere, the write goes through.** Asking
     is the harmless side for one save, but this question would name no file, since there is none to
     name, and would come on Claude's routine writes (`>> "$LOG"`, `> "$tmp"`, `tee "$out"`) many

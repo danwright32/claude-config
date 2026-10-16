@@ -70,7 +70,8 @@ const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f
  * do not name at all: by the lasting memory the command mentions anywhere, an assignment such as
  * `F=<path>` included (#743), read from `read.text` where given: the command with the sentences
  * its python programs hold taken out (#940). One that mentions none goes through
- * (docs/mods-design.md).
+ * (docs/mods-design.md). The one exception: a target through a variable the command itself fixed
+ * for certain, at the path the reader gave (certainPath, #1241), is judged by that path alone.
  */
 export const lastingFiles = async (
   w: Writes,
