@@ -783,8 +783,8 @@ esac
 # EVERY MERGE GATE asks it. A gate that judges a merge by mt_pr_number without asking first would judge
 # an API merge it cannot name as the current branch's pull request, so each one is listed from the
 # hooks block, not by hand (L96), and must call mt_api_merge_untold before its first mt_pr_number.
-SETTINGS_FILE="$HOOK_DIR/../settings.hooks.json"
-[ -f "$SETTINGS_FILE" ] || SETTINGS_FILE="$HOOK_DIR/../settings.json"
+. "$HOOK_DIR/lib/settings-file.sh"
+SETTINGS_FILE="$(hook_settings_file "$HOOK_DIR/..")"
 merge_gates="$(jq -r '.hooks.PreToolUse[]? | select((.matcher // "") | test("(^|[|])Bash($|[|])")) | .hooks[]? | .command' "$SETTINGS_FILE" 2>/dev/null \
   | sed 's#.*/##' | sort -u | while IFS= read -r h; do
       [ -f "$HOOK_DIR/$h" ] && grep -Eq 'mt_runs_merge|mt_is_pr_merge' "$HOOK_DIR/$h" && printf '%s\n' "$h"

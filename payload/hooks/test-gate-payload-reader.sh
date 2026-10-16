@@ -43,7 +43,8 @@
 # THE POPULATION IS DERIVED, never a list kept here, because a list checks only what somebody
 # remembered to add to it (L96). It is the UNION of two derivations, because neither alone is the
 # set of hooks that can refuse:
-#   every hook any event in payload/settings.hooks.json registers, not only PreToolUse: the fault
+#   every hook any event in the hooks block beside the hooks registers (settings.hooks.json in the
+#       checkout, settings.json once installed), not only PreToolUse: the fault
 #       reached PostToolUse (deferral-edit-check.sh, lesson-entry-check.sh) and TeammateIdle
 #       (teammate-challenge-gate.sh), and a scan reading one event would have called those exempt
 #   every *.sh in the hooks directory that is not a suite: a hook written but not yet registered,
@@ -456,11 +457,15 @@ esac
 
 echo "gate payload reader: every hook in this repo that can refuse"
 
-SETTINGS="${GATE_READER_SETTINGS:-$DIR/../settings.hooks.json}"
+# The shipped hooks block in the checkout, the installed one under ~/.claude, where the post sync
+# suite runs this and the shipped spelling is absent (claude-config#1237).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="${GATE_READER_SETTINGS:-$(hook_settings_file "$DIR/..")}"
 HOOKS="${GATE_READER_HOOKS:-$DIR}"
 if [ ! -f "$SETTINGS" ]; then
-  echo "test-gate-payload-reader: there is no settings file at $SETTINGS, so no gate could be enumerated." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hooks, and there is none at $SETTINGS"
+  where="${SETTINGS:-$DIR/.. (neither settings.hooks.json nor settings.json)}"
+  echo "test-gate-payload-reader: there is no settings file at $where, so no gate could be enumerated." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hooks, and there is none at $where"
   echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
   exit 2

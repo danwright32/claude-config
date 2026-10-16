@@ -77,13 +77,11 @@ fi
 # In the repository the hooks block is payload/settings.hooks.json; installed under ~/.claude it is
 # the "hooks" key of settings.json, the file Claude Code actually reads. claude-sync runs these suites
 # from the installed copy after every pull, where the repo's spelling does not exist, so naming it
-# alone reported "registered under: nothing" on both Macs. The same two candidates, in the same
-# order, as test-check-free-space.sh and test-check-gh-watch-interval.sh.
-SETTINGS_FILE=""
+# alone reported "registered under: nothing" on both Macs. Asked of the one shared lookup,
+# lib/settings-file.sh (claude-config#1237).
 _settings_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for _settings_candidate in "$_settings_dir/settings.hooks.json" "$_settings_dir/settings.json"; do
-  if [ -f "$_settings_candidate" ]; then SETTINGS_FILE="$_settings_candidate"; break; fi
-done
+. "$_settings_dir/hooks/lib/settings-file.sh"
+SETTINGS_FILE="$(hook_settings_file "$_settings_dir")"
 # Neither being there is its own failure, not "registered under nothing" (L11).
 [ -n "$SETTINGS_FILE" ] \
   && check "a settings file holding the hooks block is beside the hooks" ok \

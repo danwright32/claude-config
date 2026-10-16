@@ -215,7 +215,8 @@ silent "with no lessons file the Bash mode says nothing" "$out"
 
 # The Bash mode is only real if the platform calls it (L1004): the shipped settings must register
 # it on the Bash matcher of PostToolUse.
-python3 - "$REPO/payload/settings.hooks.json" <<'PY' && check "settings register the Bash mode on PostToolUse Bash" ok || check "settings register the Bash mode on PostToolUse Bash" "not registered"
+. "$DIR/lib/settings-file.sh"
+python3 - "$(hook_settings_file "$DIR/..")" <<'PY' && check "settings register the Bash mode on PostToolUse Bash" ok || check "settings register the Bash mode on PostToolUse Bash" "not registered"
 import json, sys
 d = json.load(open(sys.argv[1]))
 for group in d.get("hooks", {}).get("PostToolUse", []):
