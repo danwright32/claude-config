@@ -97,22 +97,27 @@ issue(){ # number priority author [extra label]
 claims_of(){ ls "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/$1" 2>/dev/null | tr '\n' ' '; }
 
 printf 'danwright32\ndwright-pennie\n' > "$FX/accounts"
-{
-  printf '['
-  issue 5 p2 danwright32; printf ','
-  issue 9 p0 danwright32; printf ','
-  issue 3 p1 dwright-pennie; printf ','
-  issue 7 p3 danwright32; printf ','
-  issue 8 p4 danwright32; printf ','
-  issue 10 - danwright32; printf ','
-  issue 11 p1 danwright32 needs-dan; printf ','
-  issue 12 p1 somebody-else; printf ','
-  issue 13 p2 danwright32; printf ','
-  issue 14 p2 danwright32; printf ','
-  issue 15 p2 danwright32; printf ','
-  issue 16 p2 danwright32
-  printf ']'
-} > "$FX/issues.json"
+# Every issue a goal names, each read on its own as gh issue view reads it. Sleep mode works only the
+# issues a goal names (#1242), so the queue never lists the repository's open issues; the stub still
+# answers a list, so a queue that asked for one is caught below rather than failing for want of it.
+fixtures(){
+  issue 5 p2 danwright32 > "$FX/issue-5.json"
+  issue 9 p0 danwright32 > "$FX/issue-9.json"
+  issue 3 p1 dwright-pennie > "$FX/issue-3.json"
+  issue 7 p3 danwright32 > "$FX/issue-7.json"
+  issue 8 p4 danwright32 > "$FX/issue-8.json"
+  issue 10 - danwright32 > "$FX/issue-10.json"
+  issue 11 p1 danwright32 needs-dan > "$FX/issue-11.json"
+  issue 12 p1 somebody-else > "$FX/issue-12.json"
+  issue 13 p2 danwright32 > "$FX/issue-13.json"
+  issue 14 p2 danwright32 > "$FX/issue-14.json"
+  issue 15 p2 danwright32 > "$FX/issue-15.json"
+  issue 16 p2 danwright32 > "$FX/issue-16.json"
+}
+fixtures
+printf '[]' > "$FX/issues.json"
+# The night's goal, in the order the claims below are made in.
+GOAL=(9 3 11 12 5 13 14 15 16 7)
 printf '[{"number":40,"title":"Fix the thing","body":"Closes #13","headRefName":"fix-thing"}]' > "$FX/prs.json"
 # A date or a version in a branch name names no issue: 7 and 5 stay in the queue beside these.
 printf 'main\nfix-14-thing\nrelease-2026-10-07\nv5-hotfix\nbump-1.5.7\n' > "$FX/branches"
@@ -132,53 +137,69 @@ if ! . "$LIB"; then
   exit 1
 fi
 
-# ---- the queue ----
+# ---- no goal, no work (#1242) ----
+# Dan, 2026-10-16: "Don't pick up random issues. If there's no goal set ... only work the goal." With
+# no goal issues named, the queue and next offer nothing, say why, and ask GitHub nothing at all.
 asleep
+NO_GOAL="$(printf 'none\t-\tno goal issues were named: sleep mode works only the issues a goal names, never the other open issues')"
 out="$(sleep_queue "$ROOT" s1)"; rc=$?
+check_eq "with no goal issues the queue offers nothing" 1 "$rc"
+check_eq "and says why" "$NO_GOAL" "$out"
+out="$(sleep_next "$ROOT" s1)"; rc=$?
+check_eq "with no goal issues next claims nothing" 1 "$rc"
+check_eq "and says why, the one line" "$NO_GOAL" "$out"
+check_eq "no claim was written" "" "$(ls -A "$HOME/.claude/state/sleep/claims" 2>/dev/null)"
+out="$(bash "$LIB" next "$ROOT" s1)"; rc=$?
+check_eq "run as a command with no goal issues, next claims nothing" 1 "$rc"
+check_eq "the same line" "$NO_GOAL" "$out"
+check_eq "and GitHub was asked nothing" "" "$(cat "$WORK/source.log" 2>/dev/null)"
+
+# ---- the queue ----
+out="$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "the queue answers" 0 "$rc"
-check_eq "the queue is p0 to p3 in priority order, nothing else" "9 3 5 7" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
-check_has "p4 is left out" "$(printf 'skip\t8\tnot p0 to p3')" "$out"
-check_has "an issue with no priority is left out" "$(printf 'skip\t10\tnot p0 to p3')" "$out"
+check_eq "the queue is the goal's issues in the goal's order, nothing else" "9 3 5 7" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
+check_not "an issue the goal does not name is never offered" "$(printf '\t8\t')" "$out"
 check_has "needs-dan is left out" "$(printf 'skip\t11\tneeds Dan')" "$out"
 check_has "another person's issue is left out, naming them" "$(printf 'skip\t12\topened by somebody-else')" "$out"
 check_has "an issue an open pull request names is left out" "$(printf 'skip\t13\topen pull request #40 names it')" "$out"
 check_has "an issue a branch names is left out" "$(printf 'skip\t14\tbranch fix-14-thing names it')" "$out"
 check_has "an issue whose before bed question went unanswered is left out" "$(printf 'skip\t15\ta before bed question')" "$out"
 check_has "an issue an open session is on is left out" "$(printf 'skip\t16\tan open session is working on it')" "$out"
-check_eq "every issue lands in exactly one of next and skip" "12" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"||$1=="skip"{print $2}' | sort -u | wc -l | tr -d ' ')"
-check_eq "and no issue twice" "12" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"||$1=="skip"' | wc -l | tr -d ' ')"
-check_has "the source was asked for the issues with an explicit limit" "issues danwright32/demo 500" "$(cat "$WORK/source.log")"
-check_has "and for the open pull requests with one" "prs danwright32/demo 500" "$(cat "$WORK/source.log")"
+check_eq "every goal issue lands in exactly one of next and skip" "10" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"||$1=="skip"{print $2}' | sort -u | wc -l | tr -d ' ')"
+check_eq "and no issue twice" "10" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"||$1=="skip"' | wc -l | tr -d ' ')"
+check_has "each goal issue was read on its own" "issue danwright32/demo 9" "$(cat "$WORK/source.log")"
+check_not "the repository's open issues were never listed" "issues danwright32/demo" "$(cat "$WORK/source.log")"
+check_has "and the open pull requests were read with an explicit limit" "prs danwright32/demo 500" "$(cat "$WORK/source.log")"
 
 # The session on 16 closing frees the issue: the registry decides, read live.
 session other-1 "$((NOW - 1000))" "$((NOW - 500))" "$WORK/other"
-check_has "a closed session names nothing" "$(printf 'next\t16\t')" "$(sleep_queue "$ROOT" s1)"
+check_has "a closed session names nothing" "$(printf 'next\t16\t')" "$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"
 session other-1 "$((NOW - 6 * 60000))" null "$WORK/other"
-check_has "nor does one silent past five minutes" "$(printf 'next\t16\t')" "$(sleep_queue "$ROOT" s1)"
+check_has "nor does one silent past five minutes" "$(printf 'next\t16\t')" "$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"
 session other-1 "$((NOW - 1000))" null "$WORK/other" "carry on with #16 please"
 git -C "$WORK/other" checkout -q -b unrelated
-check_has "an open session whose request names the issue is on it too" "$(printf 'skip\t16\tan open session')" "$(sleep_queue "$ROOT" s1)"
+check_has "an open session whose request names the issue is on it too" "$(printf 'skip\t16\tan open session')" "$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"
 rm -f "$HOME/.claude/state/sessions/other-1.json"
 
-# A full page of issues is never read as every issue (L24).
-out="$(SLEEP_QUEUE_LIMIT=12 sleep_queue "$ROOT" s1)"; rc=$?
+# A full page of pull requests is never read as every one (L24).
+out="$(SLEEP_QUEUE_LIMIT=1 sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "a page as long as the limit refuses" 3 "$rc"
-check_has "and says why" "the whole limit of 12, so the queue would be a partial one" "$out"
+check_has "and says why" "the whole limit of 1, so one naming an issue could be missed" "$out"
 check_not "and offers nothing" "$(printf 'next\t')" "$out"
 
 # No account of Dan's read means nothing can be judged his.
 : > "$FX/accounts"
-out="$(sleep_queue "$ROOT" s1)"; rc=$?
+out="$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "no accounts refuses" 3 "$rc"
 check_has "naming the cause" "no GitHub account of Dan's" "$out"
 printf 'danwright32\ndwright-pennie\n' > "$FX/accounts"
 
 # A source failure is a refusal that carries the source's words, never an empty queue (L215).
-echo "HTTP 502 from api.github.com" > "$FX/fail-issues"
-out="$(sleep_queue "$ROOT" s1)"; rc=$?
+echo "HTTP 502 from api.github.com" > "$FX/fail-prs"
+out="$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "a failed fetch refuses" 3 "$rc"
 check_has "with what the source said" "HTTP 502 from api.github.com" "$out"
-rm -f "$FX/fail-issues"
+rm -f "$FX/fail-prs"
 
 # ---- deadlines ----
 # A hang check gives its stand-in a 2s deadline (a setting, not measured), and on a busy machine the
@@ -234,7 +255,7 @@ check_has "saying it never said it had started" "never said it had started withi
 
 # A read from GitHub that hangs is stopped at its deadline and refuses the queue, saying so (L110).
 touch "$FX/hang-prs"
-out="$(SLEEP_DEADLINE_FROM="$FX/hang.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+out="$(SLEEP_DEADLINE_FROM="$FX/hang.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 t1=$(date +%s)
 rm -f "$FX/hang-prs"
 check_eq "a hung GitHub read refuses the queue" 3 "$rc"
@@ -246,7 +267,7 @@ check_eq "the hung read really ran, and is stopped with it" "ran stopped" "$(ran
 # stopped at the deadline and named as that, never read as no account seeing the repository.
 mkdir -p "$WORK/hangbin"
 hang_stub "$WORK/hangbin/gh" "$WORK/hanggh"
-out="$(PATH="$WORK/hangbin:$PATH" SLEEP_QUEUE_SOURCE= SLEEP_DEADLINE_FROM="$WORK/hanggh.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1)"; rc=$?
+out="$(PATH="$WORK/hangbin:$PATH" SLEEP_QUEUE_SOURCE= SLEEP_DEADLINE_FROM="$WORK/hanggh.pid" SLEEP_GH_TIMEOUT=2 sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 t1=$(date +%s)
 check_eq "a hung gh refuses the queue" 3 "$rc"
 check_has "named as GitHub not answering in time" "GitHub did not answer within 2s" "$out"
@@ -267,10 +288,13 @@ out="$(sleep_queue "$ROOT" s1 8 77 5)"; rc=$?
 check_eq "a goal issue that cannot be read does not refuse the queue" 0 "$rc"
 check_eq "the readable goal issues are still queued" "8 5" "$(printf '%s\n' "$out" | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
 check_has "and the unreadable one is a skip line saying why" "$(printf 'skip\t77\tthe goal issue #77 could not be read from GitHub')" "$out"
+# An issue with no priority label is queued when a goal names it: a goal is Dan's word on what to work.
+fixtures
+check_eq "a goal issue of p4, or of no priority, is queued too" "10 8" "$(sleep_queue "$ROOT" s1 10 8 | awk -F'\t' '$1=="next"{printf "%s ", $2}' | sed 's/ $//')"
 
 # Awake, there is no night to queue for.
 awake
-out="$(sleep_queue "$ROOT" s1)"; rc=$?
+out="$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "awake, the queue refuses" 3 "$rc"
 check_has "saying the Mac is not asleep" "not asleep" "$out"
 asleep
@@ -385,8 +409,8 @@ check_eq "and writes nothing" "1 " "$(claims_of 9)"
 out="$(sleep_claim "$ROOT" 9 s2)"; rc=$?
 check_eq "another live session cannot take it" 1 "$rc"
 check_has "and is told who holds it" "session s1 holds it" "$out"
-check_has "the queue leaves a held issue out for everyone else" "$(printf 'skip\t9\tclaim held')" "$(sleep_queue "$ROOT" s2)"
-check_has "but its holder still sees it, to carry on" "$(printf 'next\t9\tp0\tattempts=1\tmine')" "$(sleep_queue "$ROOT" s1)"
+check_has "the queue leaves a held issue out for everyone else" "$(printf 'skip\t9\tclaim held')" "$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"
+check_has "but its holder still sees it, to carry on" "$(printf 'next\t9\tp0\tattempts=1\tmine')" "$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"
 
 # A claim whose session died is free, and taking it over is an attempt of its own (L27, L409).
 session s1 "$((NOW - 1000))" "$((NOW - 100))"
@@ -412,11 +436,11 @@ printf '{"v":1,' > "$HOME/.claude/state/sessions/s4.json"
 out="$(sleep_claim "$ROOT" 25 s2)"; rc=$?
 check_eq "an owner whose record cannot be read keeps the claim" 1 "$rc"
 check_has "and the reason is said" "cannot be read" "$out"
-out="$(sleep_queue "$ROOT" s2)"; rc=$?
+out="$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"; rc=$?
 check_eq "a registry record changed just now that cannot be read refuses the queue" 3 "$rc"
 check_has "naming the record, since it may be a live session's" "cannot be read (s4.json)" "$out"
 touch -t 202001010000 "$HOME/.claude/state/sessions/s4.json"
-out="$(sleep_queue "$ROOT" s2)"; rc=$?
+out="$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"; rc=$?
 check_eq "an old damaged record is no live session's, and the queue goes on" 0 "$rc"
 session s4 "$((NOW - 1000))" null
 
@@ -442,7 +466,7 @@ check_eq "only the holder may release" 1 "$rc"
 check_has "and the refusal says whose it is" "session s2 holds it" "$out"
 out="$(sleep_release "$ROOT" 9 s2 parked "two hours with no progress")"; rc=$?
 check_eq "the holder parks it" 0 "$rc"
-check_has "the queue leaves a parked issue out, with why" "$(printf 'skip\t9\tclaim ended: parked: two hours with no progress')" "$(sleep_queue "$ROOT" s1)"
+check_has "the queue leaves a parked issue out, with why" "$(printf 'skip\t9\tclaim ended: parked: two hours with no progress')" "$(sleep_queue "$ROOT" s1 "${GOAL[@]}")"
 check_eq "nobody can claim a parked issue" 1 "$(sleep_claim "$ROOT" 9 s1 >/dev/null; echo $?)"
 check_eq "a release with a state nobody knows is refused" 2 "$(sleep_release "$ROOT" 26 s2 maybe >/dev/null 2>&1; echo $?)"
 check_eq "nor may a caller end a claim unstarted, which would erase an attempt" 2 "$(sleep_release "$ROOT" 26 s2 unstarted >/dev/null 2>&1; echo $?)"
@@ -454,9 +478,9 @@ check_has "a released issue can be claimed again, as another attempt" "$(printf 
 # Tonight's claim exempts an issue from its pull request only while its work is to be carried on.
 c13="$HOME/.claude/state/sleep/claims/g1/danwright32__demo/13"; mkdir -p "$c13"
 printf '{"kind":"claim","session":"ghost2","at":1}' > "$c13/1"
-check_has "a dead worker's issue is carried on despite its pull request" "$(printf 'next\t13\t')" "$(sleep_queue "$ROOT" s2)"
+check_has "a dead worker's issue is carried on despite its pull request" "$(printf 'next\t13\t')" "$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"
 printf '{"kind":"free","session":"ghost2","at":2}' > "$c13/2"
-check_has "one its holder released on purpose is judged afresh, and its pull request keeps it out" "$(printf 'skip\t13\topen pull request #40 names it')" "$(sleep_queue "$ROOT" s2)"
+check_has "one its holder released on purpose is judged afresh, and its pull request keeps it out" "$(printf 'skip\t13\topen pull request #40 names it')" "$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"
 rm -rf "$c13"
 
 # A claim that cannot be written is said as that, never as a lost race (L11).
@@ -487,7 +511,7 @@ mv "$HOME/.claude/state/sessions" "$WORK/sessions-aside"
 out="$(sleep_claim "$ROOT" 27 s2)"; rc=$?
 check_eq "with no registry a live looking claim is left alone" 1 "$rc"
 check_has "saying the registry could not be read" "session registry" "$out"
-out="$(sleep_queue "$ROOT" s2)"; rc=$?
+out="$(sleep_queue "$ROOT" s2 "${GOAL[@]}")"; rc=$?
 check_eq "and the queue refuses" 3 "$rc"
 mv "$WORK/sessions-aside" "$HOME/.claude/state/sessions"
 
@@ -496,29 +520,29 @@ rm -rf "$HOME/.claude/state/sleep/claims"
 # A claim refused outright stops next with that refusal, never read as an issue someone holds.
 mkdir -p "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
 chmod 555 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
-out="$(sleep_next "$ROOT" s1)"; rc=$?
+out="$(sleep_next "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 chmod 755 "$HOME/.claude/state/sleep/claims/g1/danwright32__demo"
 check_eq "next stops on a refused claim" 3 "$rc"
 check_has "with the refusal itself" "$(printf 'refused\t-\tthe claim folder')" "$out"
 check_not "never saying nothing is left" "nothing left" "$out"
-out="$(sleep_next "$ROOT" s1)"; rc=$?
+out="$(sleep_next "$ROOT" s1 "${GOAL[@]}")"; rc=$?
 check_eq "next claims something" 0 "$rc"
 check_has "the first issue in the queue" "$(printf 'claimed\t9\tattempts=1\tworktree=%s/.claude/worktrees/sleep-9' "$ROOT")" "$out"
 check_eq "in a worktree of its own, on its own branch" "sleep/9" "$(git -C "$ROOT/.claude/worktrees/sleep-9" branch --show-current 2>&1)"
 check_eq "the primary checkout is left on its branch" "main" "$(git -C "$ROOT" branch --show-current)"
-out="$(sleep_next "$ROOT" s2)"
+out="$(sleep_next "$ROOT" s2 "${GOAL[@]}")"
 check_has "a second worker gets the next issue" "$(printf 'claimed\t3\t')" "$out"
 # A fetch that fails just now gives the issue back for a later pass, never ends it for the night.
 mv "$WORK/demo.git" "$WORK/demo.git.aside"
 session s9 "$((NOW - 1000))" null
-out="$(sleep_next "$ROOT" s9)"; rc=$?
+out="$(sleep_next "$ROOT" s9 "${GOAL[@]}")"; rc=$?
 mv "$WORK/demo.git.aside" "$WORK/demo.git"
 check_eq "with no fetch possible, nothing is started" 1 "$rc"
 check_has "the issue is given back, saying so" "$(printf 'skip\t5\tclaimed but could not start (given back for a later pass): git fetch')" "$out"
 check_has "its claim ends unstarted" '"kind": "unstarted"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/2" 2>/dev/null)"
-check_has "so a later pass claims it again, with no attempt spent" "$(printf 'next\t5\tp2\tattempts=0\tfree')" "$(sleep_queue "$ROOT" s9)"
+check_has "so a later pass claims it again, with no attempt spent" "$(printf 'next\t5\tp2\tattempts=0\tfree')" "$(sleep_queue "$ROOT" s9 "${GOAL[@]}")"
 # A claim lost between the queue and the claim is said on a skip line, never dropped.
-out="$( sleep_claim(){ printf 'not-claimed\t%s\theld: session zz holds it\n' "$2"; return 1; }; sleep_next "$ROOT" s9 )"
+out="$( sleep_claim(){ printf 'not-claimed\t%s\theld: session zz holds it\n' "$2"; return 1; }; sleep_next "$ROOT" s9 "${GOAL[@]}" )"
 check_has "a claim lost after the queue is a skip line with its reason" "$(printf 'skip\t5\tnot claimed: held: session zz holds it')" "$out"
 # A repository whose git folder lives elsewhere still gets its worktree beside its checkout.
 git clone -q --separate-git-dir "$WORK/sep.git" "$WORK/demo.git" "$WORK/seprepo"
@@ -541,7 +565,7 @@ git init -q --bare "$WORK/bare.git"
 out="$(sleep_worktree "$WORK/bare.git" 32 2>&1)"; rc=$?
 check_eq "a bare repository is refused for good" 1 "$rc"
 check_has "saying why" "is a bare repository" "$out"
-out="$(sleep_next "$ROOT" s1)"
+out="$(sleep_next "$ROOT" s1 "${GOAL[@]}")"
 check_has "next for a holder carries on with its own issue" "$(printf 'claimed\t9\tattempts=1')" "$out"
 check_has "in the worktree it already has" "worktree=$ROOT/.claude/worktrees/sleep-9" "$out"
 # The holder of 9 dies: its branch is tonight's own work, which the next session carries on.
@@ -549,7 +573,7 @@ git -C "$WORK/repo/.claude/worktrees/sleep-9" push -q origin sleep/9
 printf 'main\nfix-14-thing\nsleep/9\n' > "$FX/branches"
 session s1 "$((NOW - 1000))" "$((NOW - 10))"
 session s5 "$((NOW - 1000))" null
-out="$(sleep_next "$ROOT" s5)"
+out="$(sleep_next "$ROOT" s5 "${GOAL[@]}")"
 check_has "a dead session's issue is taken over despite its own branch" "$(printf 'claimed\t9\tattempts=2')" "$out"
 check_has "in the worktree the dead session left" "worktree=$ROOT/.claude/worktrees/sleep-9" "$out"
 # Something else sitting where the worktree goes is never adopted (L421), and the claim ends failed.
@@ -557,7 +581,7 @@ mkdir -p "$ROOT/.claude/worktrees/sleep-5"; echo stranger > "$ROOT/.claude/workt
 session s6 "$((NOW - 1000))" null
 # The worktree's reason never goes through a temp file, so nothing is left in the temp folder.
 mkdir -p "$WORK/tmp6"
-out="$(TMPDIR="$WORK/tmp6" sleep_next "$ROOT" s6)"
+out="$(TMPDIR="$WORK/tmp6" sleep_next "$ROOT" s6 "${GOAL[@]}")"
 check_eq "next leaves no temp file for a worktree's failure" "" "$(ls -A "$WORK/tmp6")"
 check_has "a folder that is not this issue's worktree is refused" "is not a worktree of" "$out"
 check_has "the claim is ended as failed, never left held" '"kind": "failed"' "$(cat "$HOME/.claude/state/sleep/claims/g1/danwright32__demo/5/4" 2>/dev/null)"
@@ -566,9 +590,9 @@ first="${out%%$'\n'*}"
 check_eq "its one result line comes first" claimed "${first%%$'\t'*}"
 check_has "the issue it could not start follows as a skip line" "$(printf 'skip\t5\tclaimed but could not start (ended for tonight):')" "$out"
 session s7 "$((NOW - 1000))" null
-check_has "the last one goes to the next worker" "$(printf 'claimed\t7\t')" "$(sleep_next "$ROOT" s7)"
+check_has "the last one goes to the next worker" "$(printf 'claimed\t7\t')" "$(sleep_next "$ROOT" s7 "${GOAL[@]}")"
 session s8 "$((NOW - 1000))" null
-out="$(sleep_next "$ROOT" s8)"; rc=$?
+out="$(sleep_next "$ROOT" s8 "${GOAL[@]}")"; rc=$?
 check_eq "with nothing left, next says none" 1 "$rc"
 check_has "plainly" "none" "$out"
 
@@ -669,7 +693,7 @@ check_has "every claim of the night as one JSON line" '"repo": "danwright32/demo
 check_has "with its history" '"kind": "failed"' "$out"
 
 # ---- run as a command ----
-out="$(bash "$LIB" queue "$ROOT" s7)"; rc=$?
+out="$(bash "$LIB" queue "$ROOT" s7 "${GOAL[@]}")"; rc=$?
 check_eq "run as a command, the queue answers" 0 "$rc"
 check_has "the same lines" "$(printf 'skip\t9\t')" "$out"
 check_eq "an unknown command is refused" 2 "$(bash "$LIB" frobnicate >/dev/null 2>&1; echo $?)"
@@ -677,6 +701,12 @@ check_eq "an unknown command is refused" 2 "$(bash "$LIB" frobnicate >/dev/null 
 out="$(python3 "$DIR/lib/sleep-queue.py" queue repo=danwright32/demo)"; rc=$?
 check_eq "sleep-queue.py refuses a queue missing an input" 3 "$rc"
 check_has "naming it" "was not given limit" "$out"
+# And one given every input but no goal issues, so no caller can reach the old open issues queue.
+printf '[%s]' "$(issue 9 p0 danwright32)" > "$WORK/all-open.json"
+out="$(python3 "$DIR/lib/sleep-queue.py" queue repo=danwright32/demo limit=500 "issues=$WORK/all-open.json" "prs=$FX/prs.json" "branches=$FX/branches" "accounts=$FX/accounts" "unanswered=$WORK/none" "claims=$WORK/none" "registry=$HOME/.claude/state/sessions" "now=$NOW" self=s1 goal=)"; rc=$?
+check_eq "sleep-queue.py refuses a queue with no goal issues" 3 "$rc"
+check_has "saying sleep mode works only a goal's issues" "no goal issues were named" "$out"
+check_not "and never offers an open issue" "$(printf 'next\t9')" "$out"
 
 # ---- the seams fired, and nothing reached GitHub ----
 check_eq "the stub source was the one asked" yes "$([ -s "$WORK/source.log" ] && echo yes || echo no)"
