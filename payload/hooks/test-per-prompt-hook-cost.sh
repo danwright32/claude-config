@@ -7,7 +7,8 @@
 # whole shown list, 15 to 26 s at load 200 to 330 (measured 2026-10-03) against a 5 s timeout, so its output was thrown
 # away every time (fixed in #602). Nothing had checked any other per prompt hook for that shape.
 #
-# The hooks are read from settings.hooks.json, never listed here by hand (L41, L96): a UserPromptSubmit
+# The hooks are read from the hooks block beside them (settings.hooks.json in the checkout, settings.json
+# once installed, through lib/settings-file.sh), never listed here by hand (L41, L96): a UserPromptSubmit
 # or Stop hook added there and not given an entry below fails this suite until somebody has said how
 # its accumulated state is populated, or why it has none.
 #

@@ -43,7 +43,8 @@
 # THE POPULATION IS DERIVED, never a list kept here, because a list checks only what somebody
 # remembered to add to it (L96). It is the UNION of two derivations, because neither alone is the
 # set of hooks that can refuse:
-#   every hook any event in payload/settings.hooks.json registers, not only PreToolUse: the fault
+#   every hook any event in the hooks block beside the hooks registers (settings.hooks.json in the
+#       checkout, settings.json once installed), not only PreToolUse: the fault
 #       reached PostToolUse (deferral-edit-check.sh, lesson-entry-check.sh) and TeammateIdle
 #       (teammate-challenge-gate.sh), and a scan reading one event would have called those exempt
 #   every *.sh in the hooks directory that is not a suite: a hook written but not yet registered,
