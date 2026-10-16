@@ -104,12 +104,16 @@ $f"
 # pending commit takes (untracked now, so no diff shows it) as a diff against nothing, all limited
 # to the pathspecs and the shared excludes. Only files in PC_FILES are added as new, so an untracked
 # file the command's git add does not take is never shown as part of the push. Pathspecs are
-# relative to the repository root, where pc_resolve left the shell.
+# relative to the repository root, where pc_resolve left the shell. PC_DIFF_CONTEXT, when set, is
+# the lines of context around each change (git's -U), for a reader that needs the file around a
+# line, as the test gate's docs-only check does (claude-config#1238); unset, git's default.
 pc_diff() {   # $@ = pathspecs (a path, ".", or ":(exclude)..." items)
   local u
-  [ -n "$PC_MB" ] && git diff "$PC_MB" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  local -a ctx=()
+  [ -n "${PC_DIFF_CONTEXT:-}" ] && ctx=("-U$PC_DIFF_CONTEXT")
+  [ -n "$PC_MB" ] && git diff ${ctx[@]+"${ctx[@]}"} "$PC_MB" HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
   [ "${PC_COMMIT_IN_CHAIN:-0}" -eq 1 ] || return 0
-  git diff HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
+  git diff ${ctx[@]+"${ctx[@]}"} HEAD -- "$@" "${PC_EXCLUDES[@]}" 2>/dev/null
   # One join against PC_FILES rather than a search per untracked file: a tree can hold hundreds of
   # untracked files the push has nothing to do with. The list goes in through the environment, never
   # as a first file, so an empty list cannot be mistaken for the stream (test-two-file-awk.sh).

@@ -178,41 +178,98 @@ docs_style_for() {
 # override). That is why '#' is a comment ONLY for hash-style files -- in JS/TS
 # '#foo' is a private field, i.e. real code, and a bare '*ptr' in C is a deref.
 #
-# '*'-leading lines are only trusted as block-comment continuations when the diff
-# ALSO opens a block comment ('/*'). Without that guard, leading-operator code
-# style ("const a = b" / "  * 2;") lets a real behavior change (2 -> 3) pass as
-# documentation, because every changed line starts with '*'. The cost is that
-# editing wording INSIDE an existing block comment now blocks; that is the safe
-# direction and the override still exists.
+# A '*'-leading line is a block comment continuation only when its own file has a
+# '/*' open above it and no '*/' between (claude-config#1238). Leading-operator code
+# ("const a = b" / "  * 2;") starts with '*' too, so a real behavior change (2 to 3)
+# must not pass as documentation. Deciding that from the diff alone meant trusting
+# '*' lines only when the diff itself opened a '/*', which blocked every wording
+# fix inside a comment that already existed. So the gate reads each source file's
+# diff with the whole file around it (DOCS_ONLY_CONTEXT below), and this tracks
+# whether each line sits inside a block comment, separately for the old image
+# (context and removed lines) and the new one (context and added lines). Where the
+# lines above were not shown (a hunk not starting at line 1, a gap between hunks,
+# a bare @@), that state is unknown and a '*' line is code, as before. A line with
+# code beside a comment ('/* a */ y = 2;') is code. A string is skipped whole, so
+# a "/*" inside one opens nothing.
+#
+# Zero changed content lines (a permission/mode change such as chmod +x, or a pure
+# rename) means we can SEE no documentation change. "I saw nothing" is not "there
+# is nothing to see": treating it as docs-only let a chmod on a source file pass
+# untested, which the pre-#733 gate blocked. That fails CLOSED: the zero-test floor
+# below is the hard floor and must not be softened by a diff we could not read.
 diff_docs_only() {
-  local style="$1" comment_re code d changed
-  d="$(cat)"
-  changed="$(printf '%s\n' "$d" \
-    | grep -E '^[+-]' \
-    | grep -Ev '^(\+\+\+|---)([[:space:]]|$)')"
-  # Zero changed content lines (a permission/mode change such as chmod +x, or a
-  # pure rename) means we can SEE no documentation change. "I saw nothing" is not
-  # "there is nothing to see": treating it as docs-only let a chmod on a source
-  # file pass untested, which the pre-#733 gate blocked. Fail CLOSED here -- the
-  # zero-test floor below is the hard floor and must not be softened by a diff we
-  # could not read.
-  [ -n "$changed" ] || return 1
-  changed="$(printf '%s\n' "$changed" \
-    | sed -E 's/^[+-]//' \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-  case "$style" in
-    hash) comment_re='^#' ;;
-    *)
-      if printf '%s\n' "$changed" | grep -q '^/\*'; then
-        comment_re='^(//|/\*|\*([[:space:]/]|$))'
-      else
-        comment_re='^(//|/\*|\*/$)'
-      fi
-      ;;
-  esac
-  code="$(printf '%s\n' "$changed" | grep -Ev '^[[:space:]]*$' | grep -Ev "$comment_re")"
-  [ -z "$code" ]
+  LC_ALL=C awk -v style="$1" '
+    function reset() { ost = "unknown"; nst = "unknown"; on = -1; nn = -1 }
+    # One line read in state st (out, in, unknown): sets CODE when anything on it
+    # sits outside a comment, and returns the state after it.
+    function lex(s, st,    i, j, n, c, two, q) {
+      CODE = 0; i = 1; n = length(s)
+      while (i <= n) {
+        if (st == "in") {
+          j = index(substr(s, i), "*/")
+          if (!j) return "in"
+          i += j + 1; st = "out"; continue
+        }
+        c = substr(s, i, 1); two = substr(s, i, 2)
+        if (c == " " || c == "\t" || c == "\r") { i++; continue }
+        if (two == "//") return st
+        if (two == "/*") { st = "in"; i += 2; continue }
+        if (st == "unknown" && two == "*/") { st = "out"; i += 2; continue }
+        CODE = 1
+        if (c == "\"" || c == "'\''" || c == "`") {
+          q = c; i++
+          while (i <= n && substr(s, i, 1) != q) { if (substr(s, i, 1) == "\\") i++; i++ }
+        }
+        i++
+      }
+      return st
+    }
+    function hash_code(s) { gsub(/^[ \t]+|[ \t\r]+$/, "", s); return s != "" && s !~ /^#/ }
+    BEGIN { reset(); changed = 0; bad = 0 }
+    /^diff --git / { reset(); next }
+    /^(\+\+\+|---)([ \t]|$)/ { next }
+    /^@@/ {
+      # Where each image resumes. Contiguous with what was read, the state carries
+      # on; starting at line 1 it is out; anywhere else it is unknown.
+      if (match($0, /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+/)) {
+        split(substr($0, 5, RLENGTH - 4), p, " ")
+        a = p[1]; sub(/,.*/, "", a); c = substr(p[2], 2); a += 0; c += 0
+        if (a == 0) a = 1
+        if (c == 0) c = 1
+        if (on == -1 && a == 1) ost = "out"; else if (on != a) ost = "unknown"
+        if (nn == -1 && c == 1) nst = "out"; else if (nn != c) nst = "unknown"
+        on = a; nn = c
+      } else { ost = "unknown"; nst = "unknown"; on = -2; nn = -2 }
+      next
+    }
+    /^\+/ {
+      changed++; s = substr($0, 2)
+      if (style == "hash") { if (hash_code(s)) bad = 1 }
+      else { nst = lex(s, nst); if (CODE) bad = 1 }
+      if (nn > 0) nn++
+      next
+    }
+    /^-/ {
+      changed++; s = substr($0, 2)
+      if (style == "hash") { if (hash_code(s)) bad = 1 }
+      else { ost = lex(s, ost); if (CODE) bad = 1 }
+      if (on > 0) on++
+      next
+    }
+    /^ / || /^$/ {
+      s = substr($0, 2)
+      if (style != "hash") { nst = lex(s, nst); ost = lex(s, ost) }
+      if (on > 0) on++
+      if (nn > 0) nn++
+      next
+    }
+    END { exit (changed == 0 || bad) ? 1 : 0 }
+  '
 }
+
+# Lines of context the docs-only check reads around each change: the whole file, so a
+# '*' line can be placed inside or outside the block comment it sits in.
+DOCS_ONLY_CONTEXT=1000000
 
 source_changed=0
 test_changed=0
@@ -253,7 +310,7 @@ if [ "$test_changed" -eq 0 ]; then
     [ -z "$f" ] && continue
     examined=$((examined+1))
     style="$(docs_style_for "$f")"
-    if ! pc_diff "$f" | diff_docs_only "$style"; then
+    if ! PC_DIFF_CONTEXT="$DOCS_ONLY_CONTEXT" pc_diff "$f" | diff_docs_only "$style"; then
       docs_only=0; break
     fi
   done <<DOCS_ONLY_EOF
