@@ -150,7 +150,7 @@ type World = {
   claimsFail?: 'folder' | 'claim'
   /** The Mac is in sleep mode (#841), or its sleep record cannot be read ('throws'). */
   asleep?: boolean | 'throws'
-  /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, or thrown. */
+  /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, thrown, or never answered (hangs). */
   submit?: 'drop' | 'throws' | 'hangs'
   /** The engine's handling of a turn's end beneath the watcher throws (lessons review of #1234). */
   turnEndThrows?: boolean
@@ -2043,6 +2043,20 @@ test('an agent whose tool call never returns wakes this idle conversation exactl
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
   await turnEnds($, 't2')
   await clock.advance(60 * MIN)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+// The build running here raises turn.start for a subagent's run too, naming it, though the pinned
+// 2.1.294 types declare no agentId there: that turn must not read as this conversation's own.
+test("a subagent's own turn starting leaves the idle conversation idle, so it is still woken (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
+  await ($ as Turns).turn.start({ text: 'fix CI', turnId: 'a1-t1', agentId: 'a1' })
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(20 * MIN + 1)
   expect(quietSaid(w).length).toBe(1)
 })
 

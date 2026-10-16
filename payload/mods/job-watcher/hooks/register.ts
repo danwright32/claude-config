@@ -1011,8 +1011,11 @@ export const register: Register = on => {
 
   // This conversation's own turns (#1234): a background agent gone quiet while one runs is read on
   // its next tool call; one left unread when the turn ends, or gone quiet while none runs, wakes it.
+  // turn.start names a subagent's run only in later builds: the pinned 2.1.294 types the mods check
+  // runs against declare no agentId on it, while the build running here sets one. Read it where it
+  // exists, so a subagent's turn never marks this conversation busy on either.
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) mainTurn = 'busy'
+    if (!('agentId' in e) || e.agentId === undefined) mainTurn = 'busy'
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
