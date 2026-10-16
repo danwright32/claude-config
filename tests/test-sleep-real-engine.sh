@@ -380,10 +380,13 @@ fi
 # Code's own cap of 9 ended each one (measured 2026-10-16 on 2.1.301, the night's cap and the weekly
 # limit the same way).
 transcript_of() { find "$HOME/.claude/projects" -name "$1.jsonl" -print -quit 2>/dev/null; }
-# How many times the goal's hook blocked a session, or none when its transcript is not there: its
-# feedback as the transcript writes it, the line break escaped. grep -c prints 0 and exits 1 when
-# nothing matches, so its count is taken whatever its exit.
-goal_blocks() { local t n; t="$(transcript_of "$1")"; [ -n "$t" ] || { echo none; return; }; n="$(grep -c -F 'Stop hook feedback:\n[Close #1]' "$t")"; echo "${n:-0}"; }
+# How many times the goal's hook blocked a session, or none when its transcript is not there. Its
+# feedback is matched however the transcript stores the line break after the hook's words (the JSON
+# escape it writes today, a doubled escape, a space or nothing), so the worker's 0 below can never
+# come from a spelling the control never saw (lessons review of #1242); the control reading 0 still
+# fails loudly beside it. grep -c prints 0 and exits 1 when nothing matches, so its count is taken
+# whatever its exit.
+goal_blocks() { local t n; t="$(transcript_of "$1")"; [ -n "$t" ] || { echo none; return; }; n="$(grep -c -E 'Stop hook feedback:[^[]{0,4}\[Close #1\]' "$t")"; echo "${n:-0}"; }
 C1="$(uuid)"
 echo "-- a /goal in a session that is not a worker (session $C1), the control"
 session "$WORK/c1.jsonl" 180 2 "$C1" -- "/goal Close #1" "PLAIN-STEP: say hello"
