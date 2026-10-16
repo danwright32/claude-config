@@ -113,9 +113,19 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
     project-list-nudge.sh)
       REASON="reads the project list Dan writes by hand in CLAUDE.md, a curated list rather than anything that piles up"; return 1 ;;
     stale-worktree-nudge.sh)
-      # Once per session by construction: the record is written before the check runs. So the
-      # later prompts, which are every prompt but one, are what is measured, with N worktrees.
-      i=0; while [ "$i" -lt "$n" ]; do mkdir -p "$F/proj/.claude/worktrees/w$i"; i=$((i + 1)); done ;;
+      # Once per session by construction: the record is written before the run starts, and the run
+      # itself is never waited for (#1247). So the later prompts, which are every prompt but one, are
+      # what is measured, in a repository with N worktrees and with N answers from OTHER
+      # repositories' runs waiting in the state directory, which every prompt globs.
+      git init -q "$F/proj" >/dev/null 2>&1
+      i=0; while [ "$i" -lt "$n" ]; do
+        mkdir -p "$F/proj/.claude/worktrees/w$i"
+        printf 'removed w%d\n' "$i" > "$F/tmp/claude-stale-worktrees-repo-other$i.result.1700000000.$i"
+        i=$((i + 1))
+      done
+      # This session's record is already there, so neither run measured starts a background run
+      # whose processes would land in the count while it is being read.
+      : > "$F/tmp/claude-stale-worktrees-$(printf '%s' cost-session | shasum | cut -c1-12).state" ;;
     rule-files-changed.sh)
       # The rule files this session loaded: CLAUDE.md and every bare import, which grows with
       # every section the lessons index is split into.

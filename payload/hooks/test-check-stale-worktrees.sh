@@ -140,6 +140,19 @@ check_eq "the merged PRs are read once for the whole run, not once per worktree"
   1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
 check_eq "it removes nothing without --remove, including the ones it called stale" 9 "$(ls "$WT" | wc -l | tr -d ' ')"
 
+# What a worktree costs to inspect is paid only by one that could be removed (#1247). Asking git
+# for its status walks the whole tree, so a worktree whose PR has not landed is settled by that
+# alone and never asked. Counted through a git on PATH that logs each call, never timed (L224):
+# the five whose PR landed are asked, and the four that did not (newer, open, gone, detached) are not.
+REAL_GIT="$(command -v git)"
+mkdir -p "$TMP/shim"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$GIT_LOG"\nexec "%s" "$@"\n' "$REAL_GIT" >"$TMP/shim/git"
+chmod +x "$TMP/shim/git"
+export GIT_LOG="$TMP/git.log"; : >"$GIT_LOG"
+OUT="$(PATH="$TMP/shim:$PATH" STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" "$REPO" 2>&1)"
+check "the shimmed run still judges every worktree" "2 of 9 agent worktree(s)" "$OUT"
+check_eq "only the worktrees whose PR landed are asked for their status" 5 "$(grep -c 'status --porcelain' "$GIT_LOG" || true)"
+
 # REMOVE, with no time left: nothing is removed, and it says the rest wait for the next run.
 : >"$GH_CALLS"
 OUT="$(STALE_WT_GH="$TMP/bin/gh" STALE_WT_BUDGET_SECS=0 bash "$SCRIPT" --remove "$REPO" 2>&1)"; RC=$?
@@ -159,6 +172,101 @@ for d in newer open dirty recent busy gone detached; do [ -d "$WT/agent-$d" ] &&
 check_eq "every worktree it kept is still there" 7 "$remaining"
 check_eq "and the dirty one still holds its work" "work in progress" "$(cat "$WT/agent-dirty/wip.txt")"
 check "the summary says how many were removed" "removed 2 of 9 agent worktree(s)" "$OUT"
+MARKS="$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claude-worktree-removing"
+check_eq "a removal that finished leaves no progress marker behind" "" "$(ls "$MARKS" 2>/dev/null)"
+
+# --- a removal cut off part way (L617) --------------------------------------
+# A `git worktree remove` killed part way leaves a part deleted folder that git still lists, and
+# what is left reads as uncommitted DELETIONS, so without a marker every later run keeps it for ever
+# as a worktree somebody is working in. Measured 2026-10-16: killed 80ms in, 2412 of 3000 files were
+# left and git status showed 588 " D" lines and nothing else. The marker is the check's own, written
+# before each removal and cleared after it, so this fixture writes it the way the check does.
+cut_off(){ # cut_off <name> <branch> <PR>: a landed worktree whose removal stopped part way
+  add "$2" "$1"
+  printf 'a\n' >"$WT/$1/a.txt"; printf 'b\n' >"$WT/$1/b.txt"
+  G -C "$WT/$1" add a.txt b.txt; G -C "$WT/$1" commit -qm files
+  merged "$2" "$WT/$1" HEAD "$3"
+  mkdir -p "$MARKS"; printf '%s\n' "$REPO_REAL/.claude/worktrees/$1" >"$MARKS/$1"
+  rm -f "$WT/$1/a.txt"
+  age "$1"
+}
+cut_off agent-cut fix/500-cut 500
+cut_off agent-cut-changed fix/501-cut 501
+printf 'somebody wrote this since\n' >"$WT/agent-cut-changed/b.txt"
+age agent-cut-changed
+# A marker for a worktree git no longer lists is a removal that finished after all.
+printf '%s\n' "$REPO_REAL/.claude/worktrees/agent-long-gone" >"$MARKS/agent-long-gone"
+
+run "$REPO"
+check "report mode names a removal that was cut off, with the command that finishes it" \
+  "CUT OFF agent-cut [fix/500-cut]" "$OUT"
+check_eq "and finishes nothing" yes "$([ -d "$WT/agent-cut" ] && echo yes || echo no)"
+run --remove "$REPO"
+check "a removal cut off with nothing but deletions in it is finished" "finished removing agent-cut [fix/500-cut]" "$OUT"
+check_eq "its folder is gone" no "$([ -d "$WT/agent-cut" ] && echo yes || echo no)"
+check_eq "and so is its marker" no "$([ -e "$MARKS/agent-cut" ] && echo yes || echo no)"
+check_not "it is not also kept as holding uncommitted changes" "keeping agent-cut [" "$OUT"
+check "one changed since the cut is not finished, and says so loudly" \
+  "keeping agent-cut-changed [fix/501-cut]: an earlier removal of it was cut off part way, and something in it has changed since" "$OUT"
+check_eq "its folder stays" yes "$([ -d "$WT/agent-cut-changed" ] && echo yes || echo no)"
+check_eq "with the change in it" "somebody wrote this since" "$(cat "$WT/agent-cut-changed/b.txt")"
+check_eq "a marker for a worktree git no longer lists is cleared" no "$([ -e "$MARKS/agent-long-gone" ] && echo yes || echo no)"
+G -C "$REPO" worktree remove --force "$WT/agent-cut-changed" >/dev/null 2>&1; rm -f "$MARKS/agent-cut-changed"
+
+# --- a removal git refuses, and one that fails part way --------------------
+# A refusal before anything is deleted (here, a locked worktree) leaves nothing to finish, so its
+# marker goes. A failure PART WAY is different, measured 2026-10-16 with one unwritable folder: git
+# deleted the worktree's own files and its registration, stopped at that folder, and left a plain
+# folder git no longer lists. Clearing the marker there would leave it unexplained for ever, so the
+# marker stays and every later run names it as a folder to delete by hand.
+add fix/510-locked agent-locked; merged fix/510-locked "$WT/agent-locked" HEAD 510; age agent-locked
+G -C "$REPO" worktree lock "$WT/agent-locked"
+add fix/511-unwritable agent-unwritable
+mkdir -p "$WT/agent-unwritable/z"; printf 'z\n' >"$WT/agent-unwritable/z/z.txt"
+G -C "$WT/agent-unwritable" add z; G -C "$WT/agent-unwritable" commit -qm z
+merged fix/511-unwritable "$WT/agent-unwritable" HEAD 511; age agent-unwritable
+chmod 555 "$WT/agent-unwritable/z"
+trap 'chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+CAN_DENY=1
+: >"$WT/agent-unwritable/z/probe" 2>/dev/null && { CAN_DENY=0; rm -f "$WT/agent-unwritable/z/probe"; }
+run --remove "$REPO"
+check "a removal git refuses is said" "keeping agent-locked [fix/510-locked]: git would not remove it" "$OUT"
+check_eq "and, nothing having been deleted, leaves no marker" no "$([ -e "$MARKS/agent-locked" ] && echo yes || echo no)"
+if [ "$CAN_DENY" -eq 1 ]; then
+  check "a removal that fails part way is said" "keeping agent-unwritable [fix/511-unwritable]: git would not remove it" "$OUT"
+  check_eq "and its marker stays, since part of it is gone" yes "$([ -e "$MARKS/agent-unwritable" ] && echo yes || echo no)"
+  run --remove "$REPO"
+  check "the next run names what git left as a plain folder to delete by hand" \
+    "keeping agent-unwritable: an earlier removal of it stopped part way after git had already let go of it" "$OUT"
+  check "with the command that deletes it" "rm -rf $REPO_REAL/.claude/worktrees/agent-unwritable" "$OUT"
+  check_eq "and deletes nothing itself" yes "$([ -d "$WT/agent-unwritable" ] && echo yes || echo no)"
+else
+  echo "UNMEASURED: a folder made unwritable here can still be written (running as root?), so a removal failing part way cannot be staged"
+fi
+chmod -R u+w "$WT/agent-unwritable" 2>/dev/null; rm -rf "$WT/agent-unwritable"; rm -f "$MARKS/agent-unwritable"
+
+# And when that plain folder is ALL that is left, git lists no worktree at all, which is the case
+# the check answers "nothing here" to before it reads anything else. The marker has to be read
+# first, or the one folder it exists to explain is never named.
+if [ "$CAN_DENY" -eq 1 ]; then
+  SOLO="$TMP/solo"; mkdir -p "$SOLO"; G -C "$SOLO" init -q -b main
+  printf 'x\n' >"$SOLO/f.txt"; G -C "$SOLO" add f.txt; G -C "$SOLO" commit -qm base
+  SOLO_WT="$SOLO/.claude/worktrees"; mkdir -p "$SOLO_WT"
+  G -C "$SOLO" worktree add -q -b fix/520-solo "$SOLO_WT/agent-solo" >/dev/null 2>&1
+  mkdir -p "$SOLO_WT/agent-solo/z"; printf 'z\n' >"$SOLO_WT/agent-solo/z/z.txt"
+  G -C "$SOLO_WT/agent-solo" add z; G -C "$SOLO_WT/agent-solo" commit -qm z
+  merged fix/520-solo "$SOLO_WT/agent-solo" HEAD 520
+  find "$SOLO_WT/agent-solo" -exec touch -t 202601010000 {} + 2>/dev/null
+  chmod 555 "$SOLO_WT/agent-solo/z"
+  run --remove "$SOLO"
+  check "a lone worktree whose removal fails part way is said" "keeping agent-solo [fix/520-solo]: git would not remove it" "$OUT"
+  run --remove "$SOLO"
+  check_eq "with no worktree left for git to list, the next run still has something to say" 1 "$RC"
+  check "and names the plain folder left behind" "keeping agent-solo: an earlier removal of it stopped part way" "$OUT"
+  chmod -R u+w "$SOLO_WT" 2>/dev/null
+fi
+G -C "$REPO" worktree unlock "$WT/agent-locked"; G -C "$REPO" worktree remove --force "$WT/agent-locked" >/dev/null 2>&1
+G -C "$REPO" worktree prune
 
 # --- a number that is a PREFIX of a merged branch is not merged -------------
 add fix/41 agent-prefix; age agent-prefix
