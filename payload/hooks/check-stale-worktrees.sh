@@ -105,16 +105,29 @@ while IFS= read -r line; do
 done < <(git -C "$top" worktree list --porcelain 2>/dev/null || true)
 [ -n "$cur" ] && flush
 
-[ "${#paths[@]}" -gt 0 ] || exit 0
+# The progress markers, one file per removal in flight, named for the worktree and holding its
+# path. In the git directory, so they are never part of anybody's working tree. Read BEFORE the
+# answer "no worktrees, nothing to say", because a removal git failed part way can leave a folder
+# git no longer lists, and when it is the last one there are no worktrees left to list at all.
+common="$(cd "$top" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"
+MARKS="${common:-$top/.git}/claude-worktree-removing"
+marked=0
+for m in "$MARKS"/*; do [ -f "$m" ] && marked=1; done
 
-command -v "$GH" >/dev/null 2>&1 || {
-  echo "check-stale-worktrees: no gh on PATH, so whether these branches' PRs merged cannot be read. ${#paths[@]} worktree(s) left unjudged rather than called clean." >&2
-  exit 2
-}
-merged="$(cd "$top" && merged_prs "$GH" "$LIMIT")" || {
-  echo "check-stale-worktrees: could not read the merged pull requests, so ${#paths[@]} worktree(s) are left unjudged rather than called clean." >&2
-  exit 2
-}
+[ "${#paths[@]}" -gt 0 ] || [ "$marked" -eq 1 ] || exit 0
+
+# GitHub is asked only when there is a worktree to judge; a marker alone needs nothing from it.
+merged=""
+if [ "${#paths[@]}" -gt 0 ]; then
+  command -v "$GH" >/dev/null 2>&1 || {
+    echo "check-stale-worktrees: no gh on PATH, so whether these branches' PRs merged cannot be read. ${#paths[@]} worktree(s) left unjudged rather than called clean." >&2
+    exit 2
+  }
+  merged="$(cd "$top" && merged_prs "$GH" "$LIMIT")" || {
+    echo "check-stale-worktrees: could not read the merged pull requests, so ${#paths[@]} worktree(s) are left unjudged rather than called clean." >&2
+    exit 2
+  }
+fi
 # An EMPTY list is a legitimate answer, from a repo that has merged nothing, and is left as one.
 
 # The working directories of every running process, read once. Without lsof or /proc nothing can
@@ -133,11 +146,6 @@ in_use(){   # $1 = a worktree's resolved path
   [ -n "$cwds" ] || return 1
   printf '%s\n' "$cwds" | awk -v p="$1" '$0 == p || index($0, p "/") == 1 { found = 1 } END { exit !found }'
 }
-
-# The progress markers, one file per removal in flight, named for the worktree and holding its
-# path. In the git directory, so they are never part of anybody's working tree.
-common="$(cd "$top" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"
-MARKS="${common:-$top/.git}/claude-worktree-removing"
 
 landed=0; removed=0; left=0; cut=0
 settled=" "   # the worktrees a cut off removal already accounts for, so the loop below skips them

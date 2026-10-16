@@ -244,6 +244,27 @@ else
   echo "UNMEASURED: a folder made unwritable here can still be written (running as root?), so a removal failing part way cannot be staged"
 fi
 chmod -R u+w "$WT/agent-unwritable" 2>/dev/null; rm -rf "$WT/agent-unwritable"; rm -f "$MARKS/agent-unwritable"
+
+# And when that plain folder is ALL that is left, git lists no worktree at all, which is the case
+# the check answers "nothing here" to before it reads anything else. The marker has to be read
+# first, or the one folder it exists to explain is never named.
+if [ "$CAN_DENY" -eq 1 ]; then
+  SOLO="$TMP/solo"; mkdir -p "$SOLO"; G -C "$SOLO" init -q -b main
+  printf 'x\n' >"$SOLO/f.txt"; G -C "$SOLO" add f.txt; G -C "$SOLO" commit -qm base
+  SOLO_WT="$SOLO/.claude/worktrees"; mkdir -p "$SOLO_WT"
+  G -C "$SOLO" worktree add -q -b fix/520-solo "$SOLO_WT/agent-solo" >/dev/null 2>&1
+  mkdir -p "$SOLO_WT/agent-solo/z"; printf 'z\n' >"$SOLO_WT/agent-solo/z/z.txt"
+  G -C "$SOLO_WT/agent-solo" add z; G -C "$SOLO_WT/agent-solo" commit -qm z
+  merged fix/520-solo "$SOLO_WT/agent-solo" HEAD 520
+  find "$SOLO_WT/agent-solo" -exec touch -t 202601010000 {} + 2>/dev/null
+  chmod 555 "$SOLO_WT/agent-solo/z"
+  run --remove "$SOLO"
+  check "a lone worktree whose removal fails part way is said" "keeping agent-solo [fix/520-solo]: git would not remove it" "$OUT"
+  run --remove "$SOLO"
+  check_eq "with no worktree left for git to list, the next run still has something to say" 1 "$RC"
+  check "and names the plain folder left behind" "keeping agent-solo: an earlier removal of it stopped part way" "$OUT"
+  chmod -R u+w "$SOLO_WT" 2>/dev/null
+fi
 G -C "$REPO" worktree unlock "$WT/agent-locked"; G -C "$REPO" worktree remove --force "$WT/agent-locked" >/dev/null 2>&1
 G -C "$REPO" worktree prune
 
