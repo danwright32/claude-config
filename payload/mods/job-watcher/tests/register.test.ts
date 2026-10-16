@@ -150,6 +150,8 @@ type World = {
   claimsFail?: 'folder' | 'claim'
   /** The Mac is in sleep mode (#841), or its sleep record cannot be read ('throws'). */
   asleep?: boolean | 'throws'
+  /** The sleep check answers only once this settles, so a test can act while a wake waits on it. */
+  asleepAfter?: Promise<unknown>
   /** How a prompt the watcher submits fares (#1234): entered (the default), dropped by a hook, thrown, or never answered (hangs). */
   submit?: 'drop' | 'throws' | 'hangs'
   /** A submit that throws only once this settles, so a test can act while the wake is in flight. */
@@ -209,6 +211,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const s = o.sessions && 'throwsOnce' in o.sessions ? o.sessions.throwsOnce : o.sessions
       return ok(JSON.stringify({ open: s?.open ?? [], closed: s?.closed ?? [], unreadable: s?.unreadable ?? [], selfId: 'me' }))
     }
+    if (cmd === '__asleep' && o.asleepAfter) await o.asleepAfter
     if (cmd === '__asleep') return o.asleep === 'throws' ? res(1, '', 'the sleep record could not be read') : ok(o.asleep ? 'yes\n' : 'no\n')
     if (cmd === '__sleepnote') {
       w.sleepNotes.push(JSON.parse(args[0] ?? '{}'))
@@ -2176,6 +2179,26 @@ test("a wake that fails after a new session has started never carries the old se
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
   // Nothing about it reaches the new session's transcript either: the drop goes to the debug log.
   expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([])
+})
+
+// Lessons review of #1234, second round: a new session starting while the wake still waits on the
+// sleep check must stop the wake there, so even a submit that would succeed never sends the old
+// session's notice to the new one as a prompt of its own.
+test("a wake whose session ends while it waits on the sleep check is never submitted (#1234)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  let answer = () => {}
+  const answered = new Promise<void>(r => { answer = r })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleepAfter: answered })
+  await start($)
+  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  await start($)
+  answer()
+  await clock.advance(1)
+  expect(quietSaid(w)).toEqual([])
+  await turnStarts($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
 })
 
 test('a wake whose submit never answers holds up no look: a job still stalls and is said (lessons review of #1234)', withDeps, async ($, on) => {

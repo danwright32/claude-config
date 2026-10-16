@@ -357,6 +357,12 @@ const wakeIfIdle = async ($: EngineInterface) => {
       }
     }
   }
+  // A new session started while the sleep check or the notes were awaited (lessons review of
+  // #1234): the notice is about the old session's agents, so it is never submitted to the new one.
+  if (sessionNo !== mine) {
+    $.ui.log('The background job watcher dropped a wake about a quiet background agent: the session it was for has ended.', { to: 'debug' })
+    return
+  }
   try {
     const r = await $.prompt.submit({ text: due.map(n => n.text).join('\n\n') })
     if (r.drop !== undefined) throw new Error(r.drop)
