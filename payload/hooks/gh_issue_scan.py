@@ -8,7 +8,8 @@ gate needs it identically, so it lives here rather than as a second copy that
 drifts: a fix to the splitting logic must reach both gates at once.
 
 Every gate keeps its own rule and its own message. This module only answers "which
-creates are in this command, what flags do they carry, and was each one waived".
+creates are in this command, what flags do they carry, and was each one waived", and
+"which files does the command write, from text it shows" (file_writes, claude-config#1246).
 
 Both gates fail OPEN: anything unparseable is not ours to judge. These are
 completeness gates, not safety gates, and a false block on a command we merely
@@ -236,6 +237,194 @@ def scan_creates(command):
         i += 1
 
     return creates
+
+
+# ---- file_writes: which files the command itself writes, and whether it shows what goes in them ----
+#
+# Written for claude-config#1246. A gate runs BEFORE the command, so a body file the same command
+# writes (`cat > body.md <<'EOF' ... EOF` then `gh issue create --body-file body.md`) is not on disk
+# yet, or holds an older body the command is about to replace. Reading the disk judged nothing (the
+# file was missing, so the gate failed open) or judged the wrong text. What the command writes is
+# readable from the command whenever it comes from text the command shows: a heredoc whose body
+# expands nothing, a here-string, or echo and printf of plain words.
+HEREDOC_OPENER = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))")
+HEREDOC_MARK = "\x1fheredoc%d\x1f"
+HEREDOC_TOKEN = re.compile(r"^\x1fheredoc(\d+)\x1f$")
+# Commands whose output is only what the command text shows them: echo and printf print their own
+# words, `:` and true print nothing, and cat and tee pass through what they are fed.
+SHOWS_ITS_WORDS = {"echo", "printf", ":", "true"}
+PASSES_ITS_INPUT = {"cat", "tee"}
+HEAD_WORDS = {"!", "{", "if", "then", "else", "elif", "do", "while", "until", "time"}
+EXPANDS = re.compile(r"[$`]")
+
+
+def _cut_heredocs(command):
+    """The command with every heredoc body taken out, and the bodies.
+
+    Each opener is replaced by a token of its own, so a reader can tell which command a body feeds.
+    Returns (text, [shown]), one entry per body: True when the body is text the command shows
+    verbatim, which a quoted delimiter guarantees and an unquoted one gives only when the body holds
+    nothing the shell would expand. A body that never closes ends the text, as the shell reads it.
+    """
+    out, bodies, pending = [], [], []
+    i, n, quote, openers = 0, len(command), None, 0
+    while i < n:
+        c = command[i]
+        if quote:
+            if c == "\\" and quote == '"' and i + 1 < n:
+                out.append(command[i:i + 2])
+                i += 2
+                continue
+            out.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(" " if command[i + 1] == "\n" else command[i:i + 2])
+            i += 2
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if command.startswith("<<<", i):
+            out.append(" <<< ")
+            i += 3
+            continue
+        if command.startswith("<<", i):
+            m = HEREDOC_OPENER.match(command, i)
+            if m:
+                word = next(g for g in m.groups()[1:] if g is not None)
+                # 'EOF', "EOF" and \EOF all stop the body expanding; a bare EOF does not.
+                quoted = m.group(4) is None or command[m.start(4) - 1] == "\\"
+                pending.append((word, m.group(1) == "-", quoted))
+                out.append(" " + HEREDOC_MARK % openers + " ")
+                openers += 1
+                i = m.end()
+                continue
+        if c == "\n":
+            # A line ending in a pipe or && carries the command on to the next line.
+            last = next((piece.rstrip()[-1] for piece in reversed(out) if piece.strip()), "")
+            out.append(" " if last in ("|", "&") else " ; ")
+            i += 1
+            for word, strip_tabs, quoted in pending:
+                lines = []
+                while i < n:
+                    e = command.find("\n", i)
+                    line = command[i:(e if e != -1 else n)]
+                    i = (e + 1) if e != -1 else n
+                    if (line.lstrip("\t") if strip_tabs else line) == word:
+                        break
+                    lines.append(line)
+                body = "\n".join(lines)
+                bodies.append(quoted or not EXPANDS.search(body))
+            pending = []
+            continue
+        out.append(c)
+        i += 1
+    bodies += [False] * len(pending)  # opened on the last line, so no body the command shows
+    return "".join(out), bodies
+
+
+def _stages(command):
+    """Every pipeline in the command, as a list of stages, each a (words, redirects, heredocs) triple.
+
+    redirects are (operator, target) pairs; heredocs the indexes of the bodies feeding that stage.
+    Raises Unreadable when the command cannot be tokenized.
+    """
+    text, bodies = _cut_heredocs(command)
+    try:
+        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        raise Unreadable("unbalanced quotes")
+    pipelines, stages, stage = [], [], ([], [], [])
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        h = HEREDOC_TOKEN.match(tok)
+        if h:
+            stage[2].append(int(h.group(1)))
+        elif set(tok) <= set("&|;()") and tok not in ("|", "|&"):
+            if stage[0] or stage[1] or stage[2]:
+                stages.append(stage)
+            if stages:
+                pipelines.append(stages)
+            stages, stage = [], ([], [], [])
+        elif tok in ("|", "|&"):
+            stages.append(stage)
+            stage = ([], [], [])
+        elif set(tok) <= set("<>&|") and ("<" in tok or ">" in tok):
+            target = tokens[i + 1] if i + 1 < len(tokens) else ""
+            stage[1].append((tok, target))
+            i += 1
+        else:
+            stage[0].append(tok)
+        i += 1
+    if stage[0] or stage[1] or stage[2]:
+        stages.append(stage)
+    if stages:
+        pipelines.append(stages)
+    return pipelines, bodies
+
+
+def _name(words):
+    """The command a stage runs, past reserved words and assignments, and the words after it."""
+    i = 0
+    while i < len(words) and (words[i] in HEAD_WORDS or ASSIGNMENT.match(words[i])):
+        i += 1
+    return (words[i], words[i + 1:]) if i < len(words) else (None, [])
+
+
+def _shown(stage, fed, bodies):
+    """Whether everything the stage writes out is text the command shows."""
+    words, redirects, heredocs = stage
+    name, rest = _name(words)
+    if name is None:
+        return True  # a bare redirect writes nothing
+    if name in SHOWS_ITS_WORDS:
+        return not any(EXPANDS.search(w) for w in rest)
+    if name in PASSES_ITS_INPUT:
+        if name == "cat" and any(w != "-" and not w.startswith("-") for w in rest):
+            return False  # it copies a file the command does not show
+        if heredocs:
+            return all(bodies[h] for h in heredocs)
+        strings = [t for op, t in redirects if op == "<<<"]
+        if strings:
+            return not any(EXPANDS.search(t) for t in strings)
+        if any(op.startswith("<") for op, _ in redirects):
+            return False  # fed from a file
+        return fed
+    return False
+
+
+def file_writes(command):
+    """Every file the command writes, as (path, appends, shown) in the order written.
+
+    appends is True for >> and tee -a. shown is True when what is written is text the command
+    itself shows, so a reader may judge the file's new content from the command; False when it
+    comes from anything else (a script, a file, an expansion), which nothing here can read.
+    Raises Unreadable when the command cannot be tokenized.
+    """
+    pipelines, bodies = _stages(command)
+    writes = []
+    for stages in pipelines:
+        fed = False  # the first stage reads whatever the command was started with
+        for stage in stages:
+            shown = _shown(stage, fed, bodies)
+            name, rest = _name(stage[0])
+            if name == "tee":
+                appends = any(w in ("-a", "--append") for w in rest)
+                writes += [(w, appends, shown) for w in rest if not w.startswith("-")]
+            for op, target in stage[1]:
+                if ">" in op and not op.endswith("&"):
+                    writes.append((target, op.endswith(">>"), shown))
+            fed = shown
+    return writes
 
 
 def flag_values(args, long_flag, short_flag=None):

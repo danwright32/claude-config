@@ -329,6 +329,61 @@ printf 'b\n\nClaude-Session: https://claude.ai/code/session_01AbCdEf\n' > "$BODY
 allows "#536 a body file carrying the line passes" "gh issue create --title t --body-file $BODYF $ALL"
 printf 'b\n' > "$BODYF"
 denies "#536 a body file without the line is refused" "gh issue create --title t --body-file $BODYF $ALL"
+# A body file the same command writes (claude-config#1246). The gate runs before the command does, so
+# the file is not there yet, or holds an older body, and reading the disk let #1242 through with no
+# line. When the command writes the file from text it shows (a heredoc, echo, printf), that text is
+# the body, and the line is in it only if it is somewhere in the command.
+NEWF="$TMP_DIR/written-by-the-command.md"
+denies "#1246 a heredoc written body file without the line is refused" "cat > $NEWF <<'EOF'
+b
+EOF
+gh issue create --title t --body-file $NEWF $ALL"
+allows "#1246 a heredoc written body file carrying the line passes" "cat > $NEWF <<'EOF'
+b
+
+Claude-Session: https://claude.ai/code/session_01AbCdEf
+EOF
+gh issue create --title t --body-file $NEWF $ALL"
+denies "#1246 the redirect may follow the heredoc opener" "cat <<'EOF' > $NEWF
+b
+EOF
+gh issue create --title t --body-file $NEWF $ALL"
+denies "#1246 a body file written by printf without the line is refused" "printf 'b\n' > $NEWF && gh issue create --title t --body-file $NEWF $ALL"
+denies "#1246 a body file written by echo without the line is refused" "echo b > \"$NEWF\"; gh issue create --title t -F $NEWF $ALL"
+denies "#1246 a body file written by tee from a heredoc is refused" "tee $NEWF >/dev/null <<'EOF'
+b
+EOF
+gh issue create --title t --body-file $NEWF $ALL"
+printf 'b\n\nClaude-Session: https://claude.ai/code/session_01AbCdEf\n' > "$BODYF"
+denies "#1246 an older body on disk does not answer for the one the command writes over it" "cat > $BODYF <<'EOF'
+b
+EOF
+gh issue create --title t --body-file $BODYF $ALL"
+allows "#1246 text appended to a body that carries the line keeps it" "echo more >> $BODYF && gh issue create --title t --body-file $BODYF $ALL"
+printf 'b\n' > "$BODYF"
+denies "#1246 text appended to a body without the line does not add it" "echo more >> $BODYF && gh issue create --title t --body-file $BODYF $ALL"
+# What the gate cannot see the text of, it does not judge: the line can come from a script, a
+# substitution or a variable, and a refusal there would be a false block.
+allows "#1246 a body file a script writes is not judged" "bash make-body.sh > $NEWF && gh issue create --title t --body-file $NEWF $ALL"
+allows "#1246 a heredoc that expands a substitution is not judged" "cat > $NEWF <<EOF
+b
+
+\$(bash ~/.claude/hooks/lib/claude-session-line.sh)
+EOF
+gh issue create --title t --body-file $NEWF $ALL"
+allows "#1246 printf of a variable is not judged" "printf '%s\n' \"\$BODY\" > $NEWF && gh issue create --title t --body-file $NEWF $ALL"
+allows "#1246 a body file nothing in the command writes, and that cannot be read, still passes" "gh issue create --title t --body-file $TMP_DIR/never-written.md $ALL"
+# A body read from standard input is judged by the command text alone, as it always was: the
+# line has to be in the text the command pipes or feeds in.
+denies "#1246 a heredoc body on standard input without the line is refused" "gh issue create --title t -F - $ALL <<'EOF'
+b
+EOF"
+denies "#1246 a body piped in from printf without the line is refused" "printf 'b\n' | gh issue create --title t --body-file - $ALL"
+allows "#1246 a heredoc body on standard input carrying the line passes" "gh issue create --title t -F - $ALL <<'EOF'
+b
+
+Claude-Session: https://claude.ai/code/session_01AbCdEf
+EOF"
 allows "#536 the line has its own visible override" "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body b $ALL"
 denies "#536 and that override waives nothing else" "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body b $M $C"
 # A session with no claude.ai link is named by its local id, which is what Claude Code gives every
