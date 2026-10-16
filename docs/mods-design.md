@@ -2660,6 +2660,25 @@ with a space in it and a sentence read alike there, so the sentence read as two 
   into the scratchpad, held before only through a printed sentence, now pass as round files. The
   Ovation program patching three design pages is still held for all three.
 
+### What #1248 changed, 2026-10-16
+
+A subagent building #1245 had its Edit to manual steps' hook file refused (call
+toolu_013hHV3QP5RaaVGuwwQJvTXj). The Edit added a type and `tellDan`, a helper sending Dan a
+notification when a card is pinned, above `const left = (card: StepsCard) => {`; nothing in the file
+called it yet. Replayed against the file as it stood (5681b31a^), `modHookLogicOnly` said no for one
+reason only: the word `card` (the `card` parameter, `card.heading`, `StepsCard`), both in the added
+lines and in the untouched `const left` line below them, which the reading took in because its
+region ran to the end of the line after the change.
+
+- **The lines a change touches end where it ends.** A change that only adds lines, or only takes
+  them, is moved to the start of a line where it reads the same (`changedSpan`), and its region stops
+  at the last changed line, so a logic line added directly above a line that draws is judged alone.
+  Changing the drawing line itself is still asked about.
+- **No word is exempted (Dan, 2026-10-16: the line fix only).** A rule letting new code nothing runs
+  yet name what is drawn was built and offered, and declined. So the #1245 helper is still asked
+  about, for the card it reads, and so is the edit that calls it with the card; #1248's aim of
+  letting logic only edits through is met only as far as the line fix reaches.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on

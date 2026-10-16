@@ -1295,6 +1295,20 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
   expect(w.ran.length).toBe(3)
 })
 
+// #1248: a logic line added directly above a line that draws was asked about for that untouched line.
+// Through the whole guard, as the session's Edit reaches it.
+test('#1248: a logic line added above one that draws passes unasked; changing that line, or adding one that names the card, is asked', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, '/w/slate/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }' } })
+  const resolve = '    const { Box, Button, Text } = $.ui.resolve(e)\n'
+  const edit = (old_string: string, new_string: string) => ({ tool: 'Edit', file_path: MOD_HOOK, old_string, new_string })
+  expect(refusalOf(await call($, edit(resolve, `    if (e.props.text === 'z') return next(e)\n${resolve}`)))).toBe('')
+  expect(w.ran.length).toBe(1)
+  // The drawing line itself, and an added line naming what is drawn, as Dan chose for #1248.
+  expect(refusalOf(await call($, edit(resolve, '    const { Box, Button, Text, Newline } = $.ui.resolve(e)\n')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit(resolve, `    const card = e.props.text\n${resolve}`)))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
 // #1158: on 2026-10-13 the guard let a subagent's logic Edit to account room's hook file through,
 // then refused the `git checkout HEAD -- <that file>` that tried to undo it, judging the restore as a
 // look change by the whole file, and told it not to change the file any other way, so the unwanted
