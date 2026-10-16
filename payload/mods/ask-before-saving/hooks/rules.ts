@@ -170,7 +170,8 @@ const throughSettable = async (word: string, text: string, isSet: IsSet): Promis
   return named === undefined || (await settable(named, text, isSet))
 }
 
-// A folder a variable can be fixed to for certain: absolute, spelled only with characters the shell
+// A folder a variable can be fixed to for certain: absolute or under home by ~/ (which an assignment
+// expands), spelled only with characters the shell
 // neither splits, globs nor expands, and never climbing out through `..`, which the disk reads
 // through links and resolvePath does not.
 const LITERAL = /^[\w.\/@%+,:~-]+$/
@@ -199,7 +200,7 @@ const ASSIGNS = new RegExp(String.raw`^[ \t]*(?<all>(?:${ASSIGNMENT}[ \t]+)*${AS
  * Where a write through a variable lands, when the command itself fixes that variable for certain
  * (#1241: `S=<scratchpad>/sf; cp payload/LESSONS.md $S/LESSONS.md` was refused as a write that may
  * reach lasting memory). Certain means the command opens with statements made only of assignments,
- * one of which gives the variable a plain absolute folder (plainFolder), so nothing before it can
+ * one of which gives the variable a plain absolute folder, or one under home by ~/ (plainFolder), so nothing before it can
  * make it conditional; the variable is named nowhere else in the command, so nothing reassigns,
  * appends to, reads into, loops over, references or unsets it, and is read only whole (`$S`,
  * `${S}`, never `${S::=x}`); no text is run as shell code (eval, source, `.`); and it is no variable
