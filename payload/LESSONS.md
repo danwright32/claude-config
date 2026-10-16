@@ -7,6 +7,10 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L779. A bar meant to hold every sample must be written as a maximum, never a percentile: over a few samples a p95 is the slowest one, and as the count grows it quietly becomes a lower rank, so the bar loosens with no change to its code.**
+  (slate#3824, 2026-10-16)
+  SHORT: A bar meant to hold every sample is a max, never a percentile: a p95 is the slowest only while samples are few.
+
 - **L1001. A control run that swaps back only ONE of the two artifacts a change touched, the code
   or the tests that travel with it, leaves the other's fault present in BOTH arms**, so a red in
   both exonerates nothing while reading as proof the change is innocent. Revert every artifact the
