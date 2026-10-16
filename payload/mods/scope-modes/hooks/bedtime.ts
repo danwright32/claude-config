@@ -190,7 +190,7 @@ export const NO_GOAL = 'No work for it tonight'
 
 /** The before bed question for a worker with no goal set: who it is, and what having none means. */
 export const goalQuestion = (who: string) =>
-  `${who} has no /goal set, so it does no work tonight unless you give it one. What should it work toward: a milestone, issues, or a task, in your words?`
+  `${who.charAt(0).toUpperCase()}${who.slice(1)} has no /goal set, so it does no work tonight unless you give it one. What should it work toward: a milestone, issues, or a task, in your words?`
 
 /** No work for it, or go to sleep; anything Dan types is the goal. */
 export const goalOptions = () => [NO_GOAL, GO_TO_SLEEP]
