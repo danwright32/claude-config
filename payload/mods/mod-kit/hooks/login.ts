@@ -73,10 +73,15 @@ const stop = () => {
 // so a reload of mod-kit keeps what it last told the mods rather than taking the file as it is then.
 const knownRef = { plugin: 'mod-kit', key: 'login' } as const
 
-/** Raised for every mod following the account, after noting it as the login this session is on. */
+/**
+ * Raised for every mod following the account, then noted as the login this session is on: noted
+ * only once the raise has returned, so a raise that failed or was cut off is raised again at the
+ * next look rather than taken as told (lessons review of #1235). A mod taking it twice compares it
+ * with its own record and changes nothing.
+ */
 async function raise($: EngineInterface, account: ModKitAccount | null) {
-  await $.state.set(knownRef, account === null ? null : loginKey(account))
   await $.modkit.login({ account })
+  await $.state.set(knownRef, account === null ? null : loginKey(account))
 }
 
 /**

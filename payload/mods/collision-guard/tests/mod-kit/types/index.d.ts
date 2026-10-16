@@ -168,8 +168,8 @@ export type ModKit = {
    * changes within the half minute after it. Raised too when a login made elsewhere (another
    * session's /login, the account room's Switch) moves this session (#1235): Claude Code keeps one
    * credential per Mac, so the login file is read again at each prompt and each re-read of the
-   * context, and a login other than the one last raised is raised; a file that cannot be read then
-   * raises nothing.
+   * context, and a login other than the one the session is known to be on (the one it started on,
+   * or the last one raised and taken) is raised; a file that cannot be read then raises nothing.
    */
   login: (input: ModKitLogin) => Promise<void>
   /**
@@ -489,7 +489,7 @@ declare module 'claude-code' {
      * `buttonsOff`: true once this session has taken the one saying of why buttons show as text on
      * this Mac (#1190), so a redraw never says it twice whatever the store does. `login`: the login
      * this session is known to be on (account and org ids, '' for none, null for a file that could
-     * not be read), noted at its start and moved by every modkit.login raised (#1235).
+     * not be read), noted at its start and moved by every modkit.login once it has been raised (#1235).
      */
     'mod-kit': { band: ModKitBandRow[]; panes: ModKitPane[]; started: number; askAgain: string[]; stamped: Record<string, number>; swept: { from: number; at: Record<string, number> }; buttonsOff: boolean; login: string | null }
   }
