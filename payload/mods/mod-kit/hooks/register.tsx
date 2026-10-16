@@ -446,18 +446,24 @@ const drawCard = <E extends ResolveInput>($: EngineInterface, e: E, columns: num
       drawn
     )
   }
-  // A divider is as wide as the site and cut at the edge of whatever frame it sits in.
+  const key = `${row.mod}/${row.id}`
+  // A divider is as wide as its frame leaves: the left rule and its gap take two columns, a box's
+  // border and padding four (#1263). Never cut with truncate-end, which Claude Code ends with an
+  // ellipsis, but drawn in a box one row high that clips it, so a site narrower than it was told
+  // hides the rest rather than wrapping or ending in one.
+  const inset = row.frame?.kind === 'box' ? 4 : row.frame?.kind === 'left-rule' ? 2 : 0
   const line = (l: ModKitBandLine, n: number) =>
     isDivider(l) ? (
-      <Text key={String(n)} color="gray" wrap="truncate-end">
-        {'─'.repeat(Math.max(1, columns))}
-      </Text>
+      <Box key={`${key}:divider:${n}`} height={1} overflow="hidden" flexShrink={0}>
+        <Text key={`${key}:divider:${n}:line`} color="gray" wrap="wrap">
+          {'─'.repeat(Math.max(1, columns - inset))}
+        </Text>
+      </Box>
     ) : (
       <Box key={String(n)} flexDirection="row">
         {l.map(part)}
       </Box>
     )
-  const key = `${row.mod}/${row.id}`
   const lines = row.lines.map(line)
   const color = row.frame?.color ?? 'gray'
   if (row.frame?.kind === 'box')

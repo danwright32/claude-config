@@ -11,7 +11,14 @@ import type { StepsCard } from '../types/index.d.ts'
 // band and the pane, text and buttons keyed as the real one keys them, so a test reads and presses
 // what Dan would. It refuses every row and pane while KIT_REFUSE is set. mod-kit's own tests prove
 // the real drawing, the same in both (#690).
-type Row = { mod: string; id: string; slot: string; frame?: { kind: string; color?: string }; lines: Record<string, unknown>[][] }
+// A line is its parts, or mod-kit's divider in their place (#1263), drawn here as one rule mark.
+type Parts = Record<string, unknown>[]
+type Row = { mod: string; id: string; slot: string; frame?: { kind: string; color?: string }; lines: (Parts | { divider: true })[] }
+const DIVIDER = '\u2500'
+// A row's lines of words, its dividers taken out.
+const words = (row: Row | undefined): Parts[] => (row?.lines ?? []).filter((l): l is Parts => Array.isArray(l))
+// A line as text: its runs, a button as its id in brackets, a divider as one rule mark.
+const textOf = (l: Parts | { divider: true }) => (Array.isArray(l) ? l.map(p => (p.text as string) ?? `[${p.button as string}]`).join('') : DIVIDER)
 const modKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
@@ -79,7 +86,10 @@ const modKit: { name: string; register: Register } = {
       const { Box, Button, Text } = $.ui.resolve(e)
       return (
         <Box flexDirection="column">
-          {pane.lines.map((l, n) => (
+          {pane.lines.map((l, n) =>
+            !Array.isArray(l) ? (
+              <Text key={String(n)}>{'\u2500'}</Text>
+            ) : (
             <Box key={String(n)} flexDirection="row">
               {l.map((p, i) =>
                 p.button ? (
@@ -91,7 +101,8 @@ const modKit: { name: string; register: Register } = {
                 ),
               )}
             </Box>
-          ))}
+            ),
+          )}
         </Box>
       )
     })
@@ -102,7 +113,10 @@ const modKit: { name: string; register: Register } = {
       return (
         <Box flexDirection="column">
           {shown.flatMap(r =>
-            r.lines.map((l, n) => (
+            r.lines.map((l, n) =>
+              !Array.isArray(l) ? (
+                <Text key={`${r.id}${n}`}>{'\u2500'}</Text>
+              ) : (
               <Box key={`${r.id}${n}`} flexDirection="row">
                 {l.map((p, i) =>
                   p.button ? (
@@ -112,7 +126,8 @@ const modKit: { name: string; register: Register } = {
                   ),
                 )}
               </Box>
-            )),
+              ),
+            ),
           )}
         </Box>
       )
@@ -268,7 +283,7 @@ const paneShown = async ($: Engine) => {
   expect(mine.length).toBeLessThanOrEqual(1)
   return mine[0]
 }
-const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(l => l.map(p => (p.text as string) ?? `[${p.button as string}]`).join(''))
+const bandText = async ($: Engine) => ((await band($))?.lines ?? []).map(textOf)
 const stored = (mem: Record<string, unknown>) => mem[`card:${ROOT}`] as StepsCard | undefined
 const bandProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {} }
 // Dan pressing a button the card shows in the band, as he would: on mod-kit's drawing.
@@ -345,8 +360,11 @@ test('at laptop width the card is the steps row of the band, with the amber left
   expect(await bandText($)).toEqual([
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done-1]', 'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf',
+    // #1263: mod-kit's divider between the steps.
+    DIVIDER,
     '2. Purge the cache  [done-2]', 'Where: [open-link-2]  [copy-link-2]', 'https://dash.cloudflare.com/waf',
   ])
+  expect((await band($))?.lines[4]).toEqual({ divider: true })
 })
 
 test('when the terminal is wide the card is the side pane, and the band stays clear', withKit, async ($, on) => {
@@ -368,7 +386,7 @@ test('when the terminal is wide the card is the side pane, and the band stays cl
   expect(w.prompts).toEqual(['step 1 done'])
   await ui.unmount()
   // The pane shows the change: the step waits on Claude, its Done gone.
-  const after = ((await paneShown($))?.lines ?? []).map(l => l.map(p => (p.text as string) ?? `[${p.button as string}]`).join(''))
+  const after = ((await paneShown($))?.lines ?? []).map(textOf)
   expect(after[1]).toBe('1. Turn on the WAF rule  sent')
   // Claude's verdict ends the card, and the pane with it.
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
@@ -394,7 +412,7 @@ test('steps found already done are marked so, and a card that is all done is not
   expect(await band($)).toBeUndefined()
   expect(w.opened).toEqual([])
   await hand($, [step({ checked: 'already-done', title: 'Made the token' }), step({ title: 'Second' })])
-  expect((await bandText($)).slice(0, 3)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done before this card', '2. Second  [done-2]'])
+  expect((await bandText($)).slice(0, 4)).toEqual(['Cloudflare WAF  waiting on you', '1. Made the token  already done before this card', DIVIDER, '2. Second  [done-2]'])
 })
 
 test('a step that does not say it was checked first is refused', withKit, async ($, on) => {
@@ -411,8 +429,8 @@ test('Done on a step Claude can check: "step 1 done" is sent, then Claude marks 
   expect(w.prompts).toEqual(['step 1 done'])
   expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
-  expect((await band($))?.lines[1]?.[1]).toMatchObject({ text: expect.stringMatching(/^  checked on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/), color: 'success' })
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done-2]')
+  expect(words(await band($))[1]?.[1]).toMatchObject({ text: expect.stringMatching(/^  checked on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/), color: 'success' })
+  expect((await bandText($)).slice(2, 4)).toEqual([DIVIDER, '2. Purge the cache  [done-2]'])
 })
 
 // #939 review: where Done cannot be clicked the card says what to type, which must be the very prompt
@@ -421,7 +439,7 @@ test('the words Done says to type are the prompt a Done press sends', withKit, a
   const w = world(on)
   await start($)
   await hand($, [step(), step({ title: 'Purge the cache' })])
-  const done = (await band($))?.lines[1]?.find(p => p.button === 'done-1') as { instead?: { text: string }[] } | undefined
+  const done = words(await band($))[1]?.find(p => p.button === 'done-1') as { instead?: { text: string }[] } | undefined
   const typed = (done?.instead ?? []).map(r => r.text).join('')
   await press($, 'done-1')
   expect(typed).toBe(`type: ${w.prompts[0]}`)
@@ -434,7 +452,7 @@ test('Done on a step Claude cannot check reads "done, you pressed Done" with its
   await press($, 'done-1')
   expect(w.prompts).toEqual(['step 1 done'])
   await call($, VERDICT, { step: 1, checked: 'per-you' })
-  expect((await band($))?.lines[1]?.[1]).toEqual({ text: expect.stringMatching(/^  done, you pressed Done on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/) })
+  expect(words(await band($))[1]?.[1]).toEqual({ text: expect.stringMatching(/^  done, you pressed Done on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M$/) })
   expect(stored(w.mem)?.steps[0]?.finished).toBe('per-you')
   expect(await call($, VERDICT, { step: 2, checked: 'per-you' })).toMatch(/every step is finished/i)
   expect(await band($)).toBeUndefined()
@@ -738,7 +756,7 @@ test('a reload mid session keeps the live card live: verdicts land, and no carri
   await start($)
   expect((await context($)).find(b => b.name === 'manualSteps')).toBeUndefined()
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/step 2 of 2 is next/)
-  expect((await bandText($))[2]).toBe('2. Purge the cache  [done-2]')
+  expect((await bandText($)).slice(2, 4)).toEqual([DIVIDER, '2. Purge the cache  [done-2]'])
   expect(w.toasts).toEqual([])
 })
 
@@ -920,7 +938,7 @@ test('a card pinned while /steps has the pane open replaces the card in that pan
   await hand($, [step({ title: 'Purge the cache' })])
   expect(w.opened).toHaveLength(opens)
   expect(await band($)).toBeUndefined()
-  expect((await paneShown($))?.lines[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
+  expect(words(await paneShown($))[1]?.[0]).toMatchObject({ text: '1. Purge the cache' })
 })
 
 test('the pane asks for a dock as wide as the card\'s lines, so a click path is not cut, up to 80 columns', withKit, async ($, on) => {
@@ -1046,6 +1064,7 @@ test('steps_done withdrawn takes a pinned step off the card as not done, and the
     'Cloudflare WAF  waiting on you',
     '1. Turn on the WAF rule  [done-1]',
     'Where: [open-link-1]  [copy-link-1]', 'https://dash.cloudflare.com/waf',
+    DIVIDER,
     expect.stringMatching(/^2\. Watch the next merge  taken off on [A-Z][a-z]{2} \d{1,2} at \d{1,2}:\d{2} [AP]M, not done$/),
   ])
   expect(await call($, VERDICT, { step: 1, checked: 'withdrawn' })).toMatch(/card is gone/)
@@ -1073,7 +1092,7 @@ test('a step recorded per you, with no Done pressed, is labelled so with its tim
   await start($)
   await hand($, [step({ checked: 'cannot-check' }), step({ title: 'Purge the cache' })])
   await call($, VERDICT, { step: 1, checked: 'per-you' })
-  const how = (await band($))?.lines[1]
+  const how = words(await band($))[1]
   expect(how?.[0]).toEqual({ text: '1. Turn on the WAF rule', strikethrough: true })
   expect(how?.[1]).toEqual({ text: '  done, per you, recorded on Oct 7 at 12:00 PM' })
   expect(stored(w.mem)?.steps[0]).toMatchObject({ finished: 'per-you', finishedAt: Date.UTC(2026, 9, 7, 16, 0) })
@@ -1093,11 +1112,13 @@ test('a step finished in an earlier session shows its age and is grey, on the he
   const w = world(on, {}, { [`card:${ROOT}`]: card }, { TZ: 'Asia/Tokyo' })
   await start($)
   await slashSteps($, w.w)
-  const held = (await paneShown($))?.lines.map(l => l.map(p => (p.text as string) ?? '').join(''))
+  const held = words(await paneShown($)).map(l => l.map(p => (p.text as string) ?? '').join(''))
   expect(held?.[1]).toBe('1. Sign out  done, per you, in an earlier session on Oct 5 at 1:00 AM')
-  expect((await paneShown($))?.lines[1]?.[1]).toMatchObject({ dim: true })
+  expect(words(await paneShown($))[1]?.[1]).toMatchObject({ dim: true })
+  // The pane draws the same divider between the steps as the band (#1263).
+  expect((await paneShown($))?.lines[2]).toEqual({ divider: true })
   await hand($, [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Sign in again', url: 'https://b.example' })], 'Chrome sign out')
-  const shown = (await paneShown($))?.lines ?? (await band($))?.lines ?? []
+  const shown = words((await paneShown($)) ?? (await band($)))
   expect(shown[1]?.map(p => p.text).join('')).toBe('1. Sign out  done, per you, in an earlier session on Oct 5 at 1:00 AM')
 })
 
@@ -1319,10 +1340,12 @@ test('a card with three steps shows all three open, each with Done, before any i
     'Partners page monitor  waiting on you',
     '1. Make the password  [done-1]',
     'Where: 1Password, the Private vault',
+    DIVIDER,
     '2. Create the user  [done-2]',
     'Needs: the password made in step 1',
     'Where: [open-link-2]  [copy-link-2]',
     'https://supabase.com/dashboard/project/x/auth/users',
+    DIVIDER,
     '3. Give the Worker the password  [done-3]',
     'Needs: the password made in step 1',
     'Where: [open-link-3]  [copy-link-3]',
