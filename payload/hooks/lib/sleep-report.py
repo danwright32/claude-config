@@ -47,6 +47,8 @@ report knows, and the fields each reads (every other field is kept, and shown no
   lesson     text                           a proposed lesson, the rule word for word: offered
                                             at wake in the durable lesson picker (#837)
   finding    repo?, text                    anything else noticed
+  progress   text                           a step done toward a goal that names no issue, which
+                                            has no claim whose commits could show it (#1242)
   heartbeat  repo?, issue?, usage?          each pass of the overnight driver (phase 8)
   wait       minutes, error?, text?         each rate limit or overload wait (#844)
   usage      usage                          a reading taken at report time
@@ -105,7 +107,7 @@ CLAIM_BRANCH = re.compile(r"^sleep/([1-9][0-9]*)$")
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
-         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured") + ENDED
+         "heartbeat", "wait", "usage", "stopped", "save", "outward", "unmeasured", "progress") + ENDED
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -389,8 +391,16 @@ def build(record, notes, bad, final, now, github):
         head += " No woke or limit note was written, so the night is read up to %s." % et_when(end_at)
     out.append(head)
     workers = [w for w in record.get("workers") or [] if isinstance(w, str)]
+    # Each worker's goal (#1242): sleep mode works only a goal Dan set, and a worker without one does
+    # no work. A record from before goals were kept has no goals at all and says nothing about them.
+    kept = record.get("goals") if isinstance(record.get("goals"), dict) else None
+    goals = {w: " ".join(str(g).split()) for w, g in (kept or {}).items() if isinstance(g, str) and g.strip()}
+    idle = [w for w in workers if kept is not None and w not in goals]
     if workers:
         out.append("Overnight workers: %d session%s (%s)." % (len(workers), "" if len(workers) == 1 else "s", ", ".join(short(w) for w in workers)))
+        if idle:
+            out.append("No goal was set for %d session%s (%s), so %s no work tonight." % (
+                len(idle), "" if len(idle) == 1 else "s", ", ".join(short(w) for w in idle), "it did" if len(idle) == 1 else "they did"))
     else:
         out.append("No session was enrolled to work overnight.")
     out.append("")
@@ -408,6 +418,9 @@ def build(record, notes, bad, final, now, github):
     if final:
         for w in workers:
             mine = [n for n in notes if n.get("by") == w and num(n.get("at"))]
+            # A worker with no goal had nothing to do, so its silence is expected, said in the header.
+            if w in idle and not mine:
+                continue
             if not mine:
                 look.append("Session %s ended unexpectedly: it never wrote a note." % short(w))
                 continue
@@ -498,6 +511,7 @@ def build(record, notes, bad, final, now, github):
     section("Saves waiting for you", ["%s, to %s" % (" ".join(str(n.get("rule") or text_of(n) or "(no rule given)").split()),
                                                     ", ".join(str(f) for f in n["files"]) if isinstance(n.get("files"), list) and n["files"] else "a file not named")
                                       for n in notes if n["kind"] == "save"])
+    section("Progress toward goals", ["%s: %s" % (short(n.get("by")), text_of(n)) for n in notes if n["kind"] == "progress"])
     section("Findings", ["%s%s" % ("%s: " % n["repo"] if n.get("repo") else "", text_of(n)) for n in notes if n["kind"] == "finding"])
 
     limits = []
@@ -544,7 +558,8 @@ def build(record, notes, bad, final, now, github):
         rows = []
         for w in workers:
             ats = [n["at"] for n in notes if n.get("by") == w and num(n.get("at"))]
-            rows.append("%s: %s" % (short(w), "last heard %s" % et_time(max(ats)) if ats else "not heard from"))
+            goal = 'goal "%s", ' % goals[w] if w in goals else ""
+            rows.append("%s: %s%s" % (short(w), goal, "last heard %s" % et_time(max(ats)) if ats else "not heard from"))
         section("Workers", rows)
     return "\n".join(out).rstrip() + "\n"
 

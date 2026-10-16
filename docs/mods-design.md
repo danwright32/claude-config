@@ -1115,7 +1115,7 @@ overwrite control always eight. The seam acts only on a folder holding a `partie
 writes, and has a deadline, so a night never waits on it. What the build decided, each open to Dan
 changing it:
 
-- `next REPO_ROOT SESSION_ID [GOAL_ISSUE...]` is the one call an overnight session makes: queue,
+- `next REPO_ROOT SESSION_ID GOAL_ISSUE...` is the one call an overnight session makes: queue,
   claim the first issue nobody holds, and give it a worktree, `PRIMARY/.claude/worktrees/sleep-N` on
   branch `sleep/N`, never a checkout in the primary checkout. A folder already at that path that is
   not this repository's worktree is never adopted (L421); the claim ends `failed` and `next` goes on.
@@ -1129,10 +1129,12 @@ changing it:
   other run of digits does, which errs toward leaving an issue out, with the branch named.
 - Only while asleep, judged by `sleep_active`, the one predicate; the claims live under the night's
   `generation`, so nothing carries from one night to the next.
-- The queue is the goal's issues in the goal's order when given (one that cannot be read is a skip
-  line with the reason, never a refusal of the rest), else open p0 to p3 issues fetched
-  with an explicit limit (500) and refused when a page that full comes back (L24), sorted by
-  priority then number. Each issue left out gets a `skip` line with its reason, for the report.
+- The queue is the goal's issues in the goal's order, whatever their priority (one that cannot be
+  read is a skip line with the reason, never a refusal of the rest), and nothing else: with no goal
+  issues `queue` and `next` print `none` saying so and read nothing from GitHub (#1242, Dan's
+  decision of 2026-10-16, which removed the old fallback to every open p0 to p3 issue). The open
+  pull requests are fetched with an explicit limit (500) and refused when a page that full comes back
+  (L24). Each issue left out gets a `skip` line with its reason, for the report.
   Dan's accounts are the ones signed in to `gh`; no account read refuses rather than judging every
   issue someone else's.
 - An open session "names" an issue when its checkout of the same repository is on a branch whose
@@ -1201,9 +1203,12 @@ The overnight driver, in the scope modes mod: its decisions in `hooks/driver.ts`
 the minute's tick. Changed from the plan by the engine spike (#839) and Dan's decision of 2026-10-07.
 
 - It drives only a session the sleep record names in `workers`, while the record reads asleep; every
-  other Stop passes to winding down as before. Each block carries the whole overnight rules (claim
-  with `sleep-queue.sh next`, work in its worktree, end the claim with `release`, write to Dan only
-  through `sleep_note`, a `stopped` note when the queue is empty), so they survive compaction.
+  other Stop passes to winding down as before. Each block carries the whole overnight rules (the
+  session's goal from the record's `goals`, claim only the goal's issues with `sleep-queue.sh next`,
+  or work a goal naming no issue as a task noting each step as `progress`, work in its worktree,
+  end the claim with `release`, write to Dan only through `sleep_note`, a `stopped` note when the
+  goal is met or nothing more can be done), so they survive compaction. A worker the record keeps
+  no goal for is let stop at its first Stop with a note and never blocked (#1242).
 - Its own loop counter, one file a night and session, `~/.claude/state/sleep/driver/GEN/SESSION.json`,
   never `stop_hook_active` (true from the second Stop on). A counter that cannot be read or written
   stops the session with a `stopped` note rather than loop on a count it cannot keep.
