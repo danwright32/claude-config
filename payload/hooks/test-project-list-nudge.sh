@@ -196,17 +196,16 @@ esac
 # `FAIL: the settings the sync ships could be read` on every deployed run, on both Macs, and a
 # permanently red suite is one nobody reads (L36).
 SETTINGS_DIR="${PROJECT_LIST_NUDGE_SETTINGS_DIR:-$DIR/..}"
-SETTINGS=""
-SETTINGS_KIND=""
-if [ -f "$SETTINGS_DIR/settings.hooks.json" ]; then
-  # Preferred where both exist: inside the checkout an installed copy sitting beside the shipped
-  # one would otherwise answer for the version about to be shipped.
-  SETTINGS="$SETTINGS_DIR/settings.hooks.json"
-  SETTINGS_KIND="the settings the sync ships"
-elif [ -f "$SETTINGS_DIR/settings.json" ]; then
-  SETTINGS="$SETTINGS_DIR/settings.json"
-  SETTINGS_KIND="the settings installed on this Mac"
-fi
+# The one lookup (lib/settings-file.sh, claude-config#1237), which prefers the shipped file where
+# both exist: inside the checkout an installed copy sitting beside the shipped one would otherwise
+# answer for the version about to be shipped.
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$SETTINGS_DIR")"
+case "$SETTINGS" in
+  */settings.json) SETTINGS_KIND="the settings installed on this Mac" ;;
+  ?*) SETTINGS_KIND="the settings the sync ships" ;;
+  *) SETTINGS_KIND="" ;;
+esac
 if [ -z "$SETTINGS" ]; then
   # Neither file is there, so there is nothing that could answer the question. Said in the one
   # agreed shape the runner reads, in wording of its own, so a settings file that could not be READ

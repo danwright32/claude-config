@@ -366,9 +366,8 @@ missing_rc=$?
   || check "#413 a settings file that cannot be read is neither clean nor faulty" "exit $missing_rc"
 
 # The real settings: the payload copy inside the checkout, the installed copy once deployed.
-SETTINGS=""
-if [ -f "$DIR/../settings.hooks.json" ]; then SETTINGS="$DIR/../settings.hooks.json"
-elif [ -f "$DIR/../settings.json" ]; then SETTINGS="$DIR/../settings.json"; fi
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 if [ -z "$SETTINGS" ]; then
   check "the settings file registering the hooks could be read" "neither settings.hooks.json nor settings.json is in $(cd "$DIR/.." && pwd), so no registration was checked"
 else

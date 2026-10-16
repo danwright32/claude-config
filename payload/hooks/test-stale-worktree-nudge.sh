@@ -22,7 +22,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/stale-worktree-nudge.sh"
-SETTINGS="$DIR/../settings.hooks.json"
+# The hooks block beside this copy of the hooks, the shipped or the installed one (claude-config#1237).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 TMP="$(mktemp -d)"
 case "${TMP%/}" in
   ''|/|"${HOME%/}") echo "refusing to run: throwaway directory came back as '$TMP'." >&2; exit 2 ;;
@@ -49,7 +51,7 @@ for m in json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"]:
         if "stale-worktree-nudge.sh" in h.get("command", ""):
             print(h.get("timeout", 60))
 ' "$SETTINGS" 2>/dev/null)"
-[ -n "$TIMEOUT" ] && ok || bad "settings.hooks.json names a timeout for stale-worktree-nudge.sh"
+[ -n "$TIMEOUT" ] && ok || bad "${SETTINGS:-no settings file beside $DIR} names a timeout for stale-worktree-nudge.sh"
 TIMEOUT="${TIMEOUT:-5}"
 
 # The stub check. Its verdict, output and stderr are set from outside. It RECORDS every call and

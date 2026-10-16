@@ -149,9 +149,8 @@ echo "playwright subagent gate: it is wired"
 # matcher is tested as a regex over whole names, which is the stricter reading of how Claude Code
 # applies it.
 SETTINGS_DIR="${PLAYWRIGHT_GATE_SETTINGS_DIR:-$DIR/..}"
-SETTINGS=""
-if [ -f "$SETTINGS_DIR/settings.hooks.json" ]; then SETTINGS="$SETTINGS_DIR/settings.hooks.json"
-elif [ -f "$SETTINGS_DIR/settings.json" ]; then SETTINGS="$SETTINGS_DIR/settings.json"; fi
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$SETTINGS_DIR")"
 if [ -z "$SETTINGS" ]; then
   echo "test-playwright-subagent-gate: neither settings.hooks.json nor settings.json is in $SETTINGS_DIR, so the wiring could not be checked." >&2
   printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hook, and $SETTINGS_DIR holds neither"

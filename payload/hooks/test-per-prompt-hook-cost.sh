@@ -25,14 +25,16 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETTINGS="$DIR/../settings.hooks.json"
+# The shipped hooks block in the checkout, the installed one under ~/.claude (claude-config#1237).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
-if [ ! -f "$SETTINGS" ] || ! command -v python3 >/dev/null 2>&1; then
-  printf 'SUITE-NOT-RUN %s\n' "needs settings.hooks.json beside payload/hooks and python3 to read it"
+if [ -z "$SETTINGS" ] || ! command -v python3 >/dev/null 2>&1; then
+  printf 'SUITE-NOT-RUN %s\n' "needs settings.hooks.json or settings.json beside the hooks and python3 to read it"
   echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
   exit 2

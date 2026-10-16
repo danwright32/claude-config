@@ -546,10 +546,8 @@ check_eq "#1178 control: the real gate lets a labelled pull request through the 
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
 # recognises a merge through the shared reader (mt_runs_merge or mt_is_pr_merge) must be asked, or
 # a merge through this helper skips it, which is exactly how the changelog gate was skipped.
-SETTINGS=""
-for _cand in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
-  [ -f "$_cand" ] && { SETTINGS="$_cand"; break; }
-done
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 if [ -z "$SETTINGS" ]; then
   bad "#1178 neither settings.hooks.json nor settings.json beside $DIR, so the merge gates cannot be listed"
 else

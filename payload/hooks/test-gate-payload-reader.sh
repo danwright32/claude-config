@@ -456,11 +456,15 @@ esac
 
 echo "gate payload reader: every hook in this repo that can refuse"
 
-SETTINGS="${GATE_READER_SETTINGS:-$DIR/../settings.hooks.json}"
+# The shipped hooks block in the checkout, the installed one under ~/.claude, where the post sync
+# suite runs this and the shipped spelling is absent (claude-config#1237).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="${GATE_READER_SETTINGS:-$(hook_settings_file "$DIR/..")}"
 HOOKS="${GATE_READER_HOOKS:-$DIR}"
 if [ ! -f "$SETTINGS" ]; then
-  echo "test-gate-payload-reader: there is no settings file at $SETTINGS, so no gate could be enumerated." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hooks, and there is none at $SETTINGS"
+  where="${SETTINGS:-$DIR/.. (neither settings.hooks.json nor settings.json)}"
+  echo "test-gate-payload-reader: there is no settings file at $where, so no gate could be enumerated." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the settings file that registers the hooks, and there is none at $where"
   echo "passed: $pass, failed: $fail"
   printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
   exit 2

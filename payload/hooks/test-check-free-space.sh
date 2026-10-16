@@ -507,10 +507,8 @@ check "and still does not block the prompt" "$([ "$n_blind_rc" -eq 0 ] && echo o
 # fire. The first version of this named the repo's spelling alone, so it passed in the checkout and
 # failed on the machine the config was installed on, which is the side where wired actually means
 # something. Caught by the hook suite claude-sync runs after a pull.
-SETTINGS=""
-for _fs_candidate in "$DIR/../settings.hooks.json" "$DIR/../settings.json"; do
-  if [ -f "$_fs_candidate" ]; then SETTINGS="$_fs_candidate"; break; fi
-done
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
 # Neither being there is NOT a pass. A check with no file to read would otherwise answer exactly as
 # one that found the hook properly wired (L98).
 check "there is a settings file holding the hooks block to read" \
