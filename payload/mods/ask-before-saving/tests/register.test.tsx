@@ -538,7 +538,7 @@ test('a save through a path the command holds in a variable is refused, naming t
 
 // #1241: a copy into the scratchpad through a variable the command set was refused twice, as a write
 // that may reach lasting memory. Read by mod-kit's own reader, as in a session.
-test('a copy into a temporary folder through a variable the command first sets to it goes through; one set only conditionally is still refused', withKit, async ($, on) => {
+test('a copy into a temporary folder through a variable the command first sets to it goes through; one set conditionally, or beside an eval, is still refused', withKit, async ($, on) => {
   const w = world($, on)
   const S = '/private/tmp/claude-501/p/s/scratchpad/sf'
   const copy = `S=${S}; cp payload/LESSONS.md $S/LESSONS.md`
