@@ -25,6 +25,11 @@ export type StepsStep = {
    * was shown has none, and nor does one kept before #886.
    */
   finishedAt?: number
+  /**
+   * What this step needs from an earlier one, in a few words ("the password made in step 1"), drawn
+   * under its title now that every step is open at once (#1239).
+   */
+  needs?: string
   /** Dan pressed its Done, so a verdict on it was asked for by the card, not taken from his words. */
   isPressed?: boolean
   /** Finished in an earlier session and carried into this one's card, so drawn grey with its age (#886). */
@@ -60,7 +65,7 @@ export type StepsCard = {
 }
 
 /** A step another mod hands the card (#1107): the steps tool's own fields, a link or a location required. */
-export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string }
+export type ManualStepsAdded = { title: string; url?: string; location?: string; clicks?: string | string[]; value?: string; needs?: string }
 
 /**
  * This mod's noun, for other mods (#1107). Each method is answered by this mod's own hook on its
