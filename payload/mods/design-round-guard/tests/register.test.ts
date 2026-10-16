@@ -1294,6 +1294,21 @@ test("#1138: a mod hook file: a logic edit outside its JSX passes unasked; its J
   expect(w.ran.length).toBe(3)
 })
 
+// #1248: an Edit adding a helper nothing calls yet, which reads a card (manual steps' notification for
+// #1245), was asked about as a look change, and so was a logic line added above a line that draws.
+// Through the whole guard, as the session's Edit reaches it.
+test('#1248: a mod hook edit adding code nothing runs yet, or a logic line above one that draws, passes unasked; adding a colour or an element is asked', withKit, async ($, on) => {
+  const w = world($, on, { files: { [MOD_HOOK]: MOD_TEXT, '/w/slate/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }' } })
+  const above = (code: string) => ({ tool: 'Edit', file_path: MOD_HOOK, old_string: 'export const register: Register', new_string: `${code}export const register: Register` })
+  expect(refusalOf(await call($, above('type Card = { heading: string }\n\nconst headingOf = (card: Card): string => card.heading\n\n')))).toBe('')
+  const resolve = '    const { Box, Button, Text } = $.ui.resolve(e)\n'
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: MOD_HOOK, old_string: resolve, new_string: `    if (e.props.text === 'z') return next(e)\n${resolve}` }))).toBe('')
+  expect(w.ran.length).toBe(2)
+  for (const code of ["const edgeOf = (card: { heading: string }) => (card.heading ? AMBER : 'grey')\n\n", 'const Note = (card: { heading: string }) => <Text>{card.heading}</Text>\n\n'])
+    expect(`${code}: ${refusalOf(await call($, above(code)))}`).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(2)
+})
+
 // #1158: on 2026-10-13 the guard let a subagent's logic Edit to account room's hook file through,
 // then refused the `git checkout HEAD -- <that file>` that tried to undo it, judging the restore as a
 // look change by the whole file, and told it not to change the file any other way, so the unwanted

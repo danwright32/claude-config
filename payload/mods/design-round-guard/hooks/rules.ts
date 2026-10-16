@@ -637,7 +637,8 @@ export const modManifestOf = (path: string): string => `${path.slice(0, path.las
 type Span = readonly [number, number]
 
 /**
- * Where a TSX file's JSX elements and comments lie, as [start, end) offsets, or null for text this
+ * Where a TSX file's JSX elements, comments and texts (its strings, template literals and regular
+ * expressions, #1248) lie, as [start, end) offsets, or null for text this
  * reader cannot follow (an unclosed element, string or comment, or a closing tag naming another
  * element), which the caller holds rather than passes. A small reader of the code around the JSX:
  * strings, template literals, regular expressions, comments and a generic arrow's type parameters
@@ -645,9 +646,10 @@ type Span = readonly [number, number]
  * an expression may start (after `(`, `,`, `=`, `=>`, `?`, `:`, `&&`, `return` and the like), so
  * `Promise<X>` and `a < b` are never read as one.
  */
-export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | null => {
+export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[]; texts: Span[] } | null => {
   const jsx: Span[] = []
   const comments: Span[] = []
+  const texts: Span[] = []
   const n = text.length
   const unread = new Error('unread')
   const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
@@ -761,13 +763,19 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
         i = e + 2
       } else if (space(c)) i++
       else if (stringQuote(c)) {
+        const s = i
         i = quoted(i)
+        texts.push([s, i])
         prev = c
       } else if (c === '`') {
+        const s = i
         i = template(i)
+        texts.push([s, i])
         prev = c
       } else if (c === '/' && starts()) {
+        const s = i
         i = regex(i)
+        texts.push([s, i])
         prev = ')'
       } else if (c === '<' && starts() && /^<\s*[A-Za-z_$][\w$]*\s*(,|=|extends\b)/.test(text.slice(i, i + 200))) {
         // A generic arrow's type parameters (`<T,>(`, `<E extends X>(`, `<T = X>(`), which no
@@ -812,7 +820,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
   }
   try {
     code(0, false)
-    return { jsx, comments }
+    return { jsx, comments, texts }
   } catch (err) {
     if (err === unread) return null
     throw err
@@ -832,25 +840,144 @@ const MOD_LOOK_WORDS = new Set(
 const MOD_LOOK_LITERAL = /#[0-9a-f]{3,8}\b|\\x1b|\\u001b|\\u\{1b\}|\\033|\\e\[|\b(rgb|hsl)a?\(/i
 
 /**
- * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
- * the file draws (#1138): every line the change touches, in both texts, lies outside every JSX element
- * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS) and spells no
- * colour or terminal style (MOD_LOOK_LITERAL). A text the reader cannot follow (sourceSpans) is never
- * judged so. A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
- * reading leaves, as a mod's `.ts` files, never held, leave every one.
+ * Where two texts differ: `at`, the offset both share up to, and the end of the changed part in each,
+ * exclusive. Where one only adds to the other or takes from it, the change is moved as early as it
+ * reads the same, to the start of a line where it can be (#1248), so whole lines added above a line
+ * are never read as reaching into it, as `const a = 1` added above `const b` would otherwise be.
  */
-export const modHookLogicOnly = (before: string, after: string): boolean => {
-  if (before === after) return false
+export const changedSpan = (before: string, after: string): { at: number; before: number; after: number } => {
   const max = Math.min(before.length, after.length)
   let p = 0
   while (p < max && before[p] === after[p]) p++
   let s = 0
   while (s < max - p && before[before.length - 1 - s] === after[after.length - 1 - s]) s++
-  for (const text of [before, after]) {
+  if (p + s < max) return { at: p, before: before.length - s, after: after.length - s }
+  const long = after.length > before.length ? after : before
+  const d = long.length - max
+  while (p > 0 && long[p - 1] !== '\n' && long[p - 1] === long[p + d - 1]) p--
+  return { at: p, before: before.length > max ? p + d : p, after: after.length > max ? p + d : p }
+}
+
+// The words a mod's drawing is spelled in that name WHAT is drawn (a card, a row, a pane, a band, a
+// panel, a button) or the act of drawing it (draw, render), rather than how it looks (#1248). In code
+// nothing in the file can run (unusedCode), they only say what the code is about: manual steps' own
+// record of a card is a StepsCard, which a notification reads. Every other drawing word is a colour, a
+// style or a size, a value such code could hand to a later line that names none, so it still holds.
+const MOD_SURFACE_WORDS = new Set(['card', 'row', 'rows', 'pane', 'band', 'panel', 'button', 'draw', 'render'])
+
+// A declaration that runs nothing where it stands: a type, an interface, a function, or a const given
+// a function (an arrow, whose parameter list is followed by => or a return type, or a function
+// expression). Never exported, since what is exported is reached from outside the file.
+const DECLARES = /^(?:type\s+([A-Za-z_$][\w$]*)\b|interface\s+([A-Za-z_$][\w$]*)\b|(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*[(<]|const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(function\b|\())/
+
+// What may follow an insertion in the file: the start of a declaration, an import or export, a
+// comment, or the end of the text. A line opening with a bracket, an operator or a backtick could be
+// read on from the inserted text's last line.
+const FOLLOWS = /^(?:\s*$|\s*(?:\/\/|\/\*)|(?:export|import|const|let|var|type|interface|function|async|declare|enum|class)\b)/
+
+// A text with its comments and texts (strings, template literals, regular expressions) blanked, every
+// line kept, so brackets and words in it are code alone.
+const codeOnly = (text: string, spans: { comments: readonly Span[]; texts: readonly Span[] }): string => {
+  const out = text.split('')
+  for (const [a, b] of [...spans.comments, ...spans.texts]) for (let i = a; i < b; i++) if (out[i] !== '\n') out[i] = ' '
+  return out.join('')
+}
+
+/**
+ * Whether changing a mod's hook file from `before` to `after` only adds code nothing in the file can
+ * run (#1248: a subagent's edit adding a notification helper to manual steps was held, because the
+ * helper reads the steps card's heading, and `card` is a word a mod draws with). True when the change
+ * is one insertion (changedSpan) of whole lines at the file's top
+ * level (outside every bracket, string, comment and element) and before a line that starts a
+ * declaration, an import, an export or a comment, or at the end; when the inserted text, read alone,
+ * holds no JSX element and spells no colour (MOD_LOOK_LITERAL), names no drawing word but those that
+ * only say what is drawn (MOD_SURFACE_WORDS), comments aside, and is made only of declarations that
+ * run nothing (DECLARES), each opening a line, each closing every bracket it opens before its line or
+ * its last line ends, with nothing after a `;` on a line and no second name after a `,`; and when no
+ * name it declares appears anywhere in `before`, so nothing there calls or reads it. Whatever later
+ * calls the new code is judged then, by its own lines.
+ */
+export const unusedCode = (before: string, after: string): boolean => {
+  const span = changedSpan(before, after)
+  const p = span.at
+  if (span.before !== p || span.after === p) return false
+  const added = after.slice(p, span.after)
+  if ((p > 0 && before[p - 1] !== '\n') || !added.endsWith('\n')) return false
+  const nl = before.indexOf('\n', p)
+  if (!FOLLOWS.test(before.slice(p, nl < 0 ? before.length : nl))) return false
+  // Where it goes in `before`: outside every bracket, string, comment and element.
+  const old = sourceSpans(before)
+  if (!old || [...old.jsx, ...old.comments, ...old.texts].some(([a, b]) => a < p && p < b)) return false
+  let depth = 0
+  for (const c of codeOnly(before, old).slice(0, p)) depth += c === '(' || c === '[' || c === '{' ? 1 : c === ')' || c === ']' || c === '}' ? -1 : 0
+  if (depth !== 0) return false
+  const spans = sourceSpans(added)
+  if (!spans || spans.jsx.length) return false
+  let shown = ''
+  for (let i = 0; i < added.length; i++) if (!spans.comments.some(([a, b]) => a <= i && i < b)) shown += added[i]
+  if (MOD_LOOK_LITERAL.test(shown)) return false
+  for (const w of shown.match(/[A-Za-z]+/g) ?? [])
+    for (const part of w.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')) if (MOD_LOOK_WORDS.has(part) && !MOD_SURFACE_WORDS.has(part)) return false
+  const code = codeOnly(added, spans)
+  const names: string[] = []
+  depth = 0
+  let line = 0
+  for (const text of code.split('\n')) {
+    const at = line
+    line += text.length + 1
+    if (depth === 0) {
+      if (!text.trim()) continue
+      const d = DECLARES.exec(text)
+      if (!d) return false
+      names.push((d[1] ?? d[2] ?? d[3] ?? d[4]) as string)
+      // A const's parenthesis must be an arrow's parameters: followed by => or a return type.
+      if (d[5] === '(') {
+        let k = at + d[0].length - 1
+        let open = 0
+        for (; k < code.length; k++) {
+          if (code[k] === '(') open++
+          else if (code[k] === ')' && --open === 0) break
+        }
+        if (!/^\s*(?:=>|:)/.test(code.slice(k + 1))) return false
+      }
+    }
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i] as string
+      if (c === '(' || c === '[' || c === '{') depth++
+      else if (c === ')' || c === ']' || c === '}') depth--
+      else if (depth === 0 && c === ',') return false
+      else if (depth === 0 && c === ';' && text.slice(i + 1).trim()) return false
+      if (depth < 0) return false
+    }
+  }
+  if (depth !== 0 || !names.length) return false
+  return names.every(n => !new RegExp(`(?<![\\w$])${n.replace(/\$/g, '\\$')}(?![\\w$])`).test(before))
+}
+
+/**
+ * Whether changing a mod's hook file (isModHook) from `before` to `after` changes only logic, by what
+ * the file draws (#1138): every line the change touches, in both texts, lies outside every JSX element
+ * and, its comments aside, names no word a mod's drawing is spelled in (MOD_LOOK_WORDS) and spells no
+ * colour or terminal style (MOD_LOOK_LITERAL). A text the reader cannot follow (sourceSpans) is never
+ * judged so. An insertion of code nothing in the file can run is judged by unusedCode instead (#1248).
+ * A size held in a constant whose name says nothing of it (`const MAX = 40`) is a gap this
+ * reading leaves, as a mod's `.ts` files, never held, leave every one.
+ */
+export const modHookLogicOnly = (before: string, after: string): boolean => {
+  if (before === after) return false
+  if (unusedCode(before, after)) return true
+  const span = changedSpan(before, after)
+  for (const [text, end] of [
+    [before, span.before],
+    [after, span.after],
+  ] as const) {
     const spans = sourceSpans(text)
     if (!spans) return false
-    const from = text.lastIndexOf('\n', p - 1) + 1
-    const nl = text.indexOf('\n', text.length - s)
+    // The lines the change touches in this text, ending where it ends, never on the unchanged line
+    // after them (#1248). Where it only adds to the other text, none, so all this text is asked is
+    // whether an element spans the place the lines go.
+    const from = text.lastIndexOf('\n', span.at - 1) + 1
+    const nl = text[end - 1] === '\n' ? end - 1 : text.indexOf('\n', end)
     const to = nl < 0 ? text.length : nl
     if (spans.jsx.some(([a, b]) => a < to && from < b)) return false
     let shown = ''

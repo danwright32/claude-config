@@ -2637,6 +2637,30 @@ with a space in it and a sentence read alike there, so the sentence read as two 
   into the scratchpad, held before only through a printed sentence, now pass as round files. The
   Ovation program patching three design pages is still held for all three.
 
+### What #1248 changed, 2026-10-16
+
+A subagent building #1245 had its Edit to manual steps' hook file refused (call
+toolu_013hHV3QP5RaaVGuwwQJvTXj). The Edit added a type and `tellDan`, a helper sending Dan a
+notification when a card is pinned, above `const left = (card: StepsCard) => {`; nothing in the file
+called it yet. Replayed against the file as it stood (5681b31a^), `modHookLogicOnly` said no for one
+reason only: the word `card` (the `card` parameter, `card.heading`, `StepsCard`), both in the added
+lines and in the untouched `const left` line below them, which the reading took in because its
+region ran to the end of the line after the change.
+
+- **The lines a change touches end where it ends.** A change that only adds lines, or only takes
+  them, is moved to the start of a line where it reads the same (`changedSpan`), and its region stops
+  at the last changed line, so a logic line added directly above a line that draws is judged alone.
+- **Code nothing runs yet is no look change.** An insertion of whole top level declarations that run
+  nothing where they stand (a type, an interface, a function, a const given a function), between
+  declarations, never exported, under names the file does not use, passes (`unusedCode`), provided it
+  holds no element, no colour literal, and no drawing word but those naming what is drawn (card, row,
+  pane, band, panel, button) or the act (draw, render). Colour, style and size words still hold it,
+  since a helper holding one could hand it to a later line naming none.
+- **The gap, left open.** The edit that later calls the helper is judged by its own lines. #1245's
+  wiring line names `card`, so it is still asked; a helper whose body names only what is drawn,
+  called from a line naming none of it, would pass both edits. Each check was seen to fail its test
+  with the check removed.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
