@@ -63,7 +63,7 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, RESUME, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, thenNext,
+  LIMITS, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, startPrompt, thenNext,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
@@ -641,9 +641,11 @@ const readGoal = async ($: EngineInterface, seat: Seat, who: string): Promise<Go
 const seatName = (seat: Seat, self: string, repo: string | null) =>
   seat.id === self ? 'this session' : `${repo ? `the session in ${repo}` : 'another session'}${seat.request ? ` ("${seat.request}")` : ''}`
 
-type GoalRound = { goals: Record<string, string>; said: string }
+// `names` is how /sleep names each worker that has a goal, for telling it to start.
+type GoalRound = { goals: Record<string, string>; names: Record<string, string>; said: string }
 const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string, string | null>, self: string, round: Round): Promise<GoalRound> => {
   const goals: Record<string, string> = {}
+  const names: Record<string, string> = {}
   const set: string[] = []
   const without: string[] = []
   const unread: string[] = []
@@ -652,6 +654,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
     const read = await readGoal($, seat, who)
     if ('goal' in read) {
       goals[seat.id] = read.goal
+      names[seat.id] = who
       set.push(`${who}, "${read.goal}"`)
       continue
     }
@@ -689,13 +692,14 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
       continue
     }
     goals[seat.id] = a.goal
+    names[seat.id] = who
     set.push(`${who}, "${a.goal}"`)
   }
   let said = ''
   if (set.length) said += ` Tonight's goals: ${set.join('; ')}.`
   if (without.length) said += ` No goal, so no work tonight: ${without.join('; ')}.`
   if (unread.length) said += ` Read as no goal because ${andList(unread)}.`
-  return { goals, said }
+  return { goals, names, said }
 }
 
 // ---- Sleep mode phase 6 (#836): the before bed questions about the queue's issues ----
@@ -1309,13 +1313,44 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   }
   if (issueNoteFailed.length)
     unnoted += ` The morning report may miss ${issueNoteFailed.length} of the ${issues.notes.length} notes about before bed questions: ${[...new Set(issueNoteFailed)].join('; ')}.`
+  // Every other worker with a goal is told to start (#1242): one idle at its prompt has no turn to
+  // end, so the driver would never reach it. Its own scope modes starts the turn, once the record it
+  // reads to know it is a worker is in place. One that cannot be told is said and noted.
+  const told: string[] = []
+  const untold: string[] = []
+  const unnotedStarts: string[] = []
+  for (const id of Object.keys(goals.goals)) {
+    if (id === self) continue
+    const who = goals.names[id] ?? 'another session'
+    let why: string | null
+    try {
+      // mod-kit tries a refused send once more, so a refusal here is the second.
+      const sent = await $.session.send({ to: { sessionId: id }, text: SLEEP_START })
+      why = sent.isDelivered ? null : sent.reason
+    } catch (err) {
+      why = msg(err)
+    }
+    if (why === null) {
+      told.push(who)
+      continue
+    }
+    untold.push(`${who} (${why})`)
+    try {
+      await sleepNote($, p.current, { kind: 'finding', at: now, by: self, text: `${who} could not be told to start at bedtime (${why}), so it may have done no work tonight` })
+    } catch (err) {
+      unnotedStarts.push(msg(err))
+    }
+  }
+  let startSaid = told.length ? ` Told to start now: ${told.join('; ')}.` : ''
+  if (untold.length) startSaid += ` Could not be told to start, so it may do no work tonight: ${untold.join('; ')}.`
+  if (unnotedStarts.length) startSaid += ` The morning report may not say so: ${[...new Set(unnotedStarts)].join('; ')}.`
   const awake = await holdAwake($, p.dir, record.until, now)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
   let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
-  s += goals.said + closedSentence(repos) + issues.said + unnoted + tookOver
+  s += goals.said + startSaid + closedSentence(repos) + issues.said + unnoted + tookOver
   // The report exists from the first minute, header first, so a night that ends badly still has one (#835, L10).
   const started = await report($, ['start', '--record', p.current, '--by', self])
   s += started ? ` The night's report could not be started: ${started}.` : ` The night's report is at ${record.report}.`
@@ -3270,6 +3305,19 @@ export const register: Register = on => {
       await setPlace($, e.text === AWAY_TEXT ? 'away' : 'home')
       return { consumed: `scope-modes: switched to ${e.text === AWAY_TEXT ? 'away' : 'home'} from another session` }
     }
+    // /sleep telling this session to start the night's work (#1242). Started only when the record
+    // names it a worker with a goal, read here, so a forged start can do no more than /sleep would;
+    // the turn is started once this delivery is done, as the driver starts one after a wait.
+    if (origin.plugin === MOD && e.text === SLEEP_START) {
+      const en = await enrolledNow($)
+      if (!en) return { consumed: 'scope-modes: a start for the night arrived, but this session is not a worker tonight' }
+      const goal = goalOf(en.record, en.self)
+      if (goal === null) return { consumed: 'scope-modes: a start for the night arrived, but this session has no goal tonight' }
+      const where = await repoOf($)
+      const text = startPrompt(en.self, where.root ?? (await $.session.cwd()), goal)
+      $.clock.after(0, () => void $.prompt.submit({ text }).catch(err => $.ui.log(`scope-modes: the night's work could not be started: ${msg(err)}`)))
+      return { consumed: "scope-modes: started the night's work toward this session's goal" }
+    }
     return next(e)
   })
 
@@ -3492,9 +3540,14 @@ export const register: Register = on => {
 
   // Winding down refuses the turn end until finished; Claude keeps watching CI and the deploy.
   on('classic.Stop', async ($, e, next) => {
-    // An enrolled session while the Mac sleeps is the overnight driver's (#844): kept working, or let go with a note.
+    // An enrolled session while the Mac sleeps is the overnight driver's (#844): kept working, or let
+    // go with a note. Either way its answer ends the Stop chain (#1242): Claude Code's own /goal hook
+    // sits beneath and blocks every Stop until its condition holds, so a stop passed on to it was
+    // blocked again (measured on 2.1.301: 9 more blocks a turn, every turn, past the circuit
+    // breaker), and the night's limits held only while a goal happened to be met. The settings Stop
+    // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
     const driven = await driveStop($)
-    if (driven !== 'not-driven') return driven ?? next(e)
+    if (driven !== 'not-driven') return driven ?? {}
     // A turn end asks GitHub afresh about everything that can still change (#1037).
     const c = await check($, true)
     if (c === null) return next(e)

@@ -24,6 +24,9 @@ one word text answer. Otherwise the first user message names the script:
                issue, release the claim done, claim again (none left), write the stopped note, and
                end. A worker with no goal is never given rules, so it only answers "ready".
   anything else (the morning turn after /wake) gets a short text answer.
+
+A side call judging a /goal condition (Claude Code's goal evaluator, which must answer JSON) is
+answered that the condition does not hold, so the goal's Stop hook blocks whenever it is reached.
 """
 import json
 import re
@@ -81,6 +84,11 @@ def bash(cmd):
 def note_cmd(line):
     """sleep_note run the way the rules name it, sourced from sleep.sh in bash whatever the shell."""
     return "bash -c '. ~/.claude/hooks/lib/sleep.sh && sleep_note \"$1\"' _ " + shlex.quote(line)
+
+
+def system_text(body):
+    s = body.get('system')
+    return s if isinstance(s, str) else ' '.join(x.get('text', '') for x in s or [] if isinstance(x, dict))
 
 
 def first_user(messages):
@@ -148,6 +156,10 @@ def worker_step(messages, ran):
 def answer(body):
     messages = body.get('messages') or []
     tools = [t.get('name') for t in body.get('tools') or [] if isinstance(t, dict)]
+    # Claude Code's /goal judges its condition with a side call that must answer JSON; here it never
+    # holds, so the goal's own Stop hook blocks every Stop it is asked about (#1242).
+    if 'evaluating a stop-condition hook' in system_text(body):
+        return text('{"ok": false, "reason": "not yet"}')
     if 'Bash' not in tools:
         return text('ok')
     first = first_user(messages)

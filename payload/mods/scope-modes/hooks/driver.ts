@@ -404,6 +404,17 @@ export const decideFailure = (i: { now: number; self: string; generation: string
 /** Whether a wait is over and the session is due to be started again. */
 export const resumeDue = (d: DriverRecord, now: number) => !d.stopped && d.resumeAt !== null && now >= d.resumeAt
 
+/**
+ * What /sleep sends each other worker with a goal (#1242): a worker idle at its prompt has no turn to
+ * end, so the driver, which acts at a Stop, would never reach it. Its own scope modes takes the
+ * message and starts the night's work with startPrompt, so the words a model reads are this mod's.
+ */
+export const SLEEP_START = 'Sleep mode is on: start the night\'s work toward your goal.'
+
+/** The turn a worker told to start begins with: the overnight rules, its goal among them. */
+export const startPrompt = (self: string, root: string, goal: string) =>
+  `Sleep mode is on and Dan is asleep: start the night's work now. ${overnightRules(self, root, goal)}`
+
 /** What the session is told when it is started again after a wait. */
 export const RESUME = 'Sleep mode: the wait after the API error is over. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'
 
