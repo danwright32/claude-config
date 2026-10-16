@@ -5631,6 +5631,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Refuse enabling a rule whose input another step must supply but does not: the consumer fails closed on everything and it reads as merely stricter.
 - **L773. A per-consumer record of what has been seen that is created empty on first use treats all history as new, so seed it with a baseline when it is created.** (claude-config#1216, claude-config#1218, 2026-10-15: a new Slate session had no `shown/<session>.list` yet, so ai-review-nudge.sh took every finished push review of its repository from the last 14 days as unshown, about 650, mostly pushes by background agents of other, earlier sessions, and printed about 8,000 characters of them on every prompt for dozens of prompts, none about the work in hand. The fix writes what has already finished into the record as its baseline on the first pass, and says in one line how many it left out and where they are.)
   SHORT: A seen record created empty on first use treats all history as new, so seed it with a baseline when it is created.
+- **L776. A check that decides whether another writer changed a field must compare that field's own value against what it held when our write began, never infer it from the record's last modified time, because a write to any other field, including one our own previous step caused, moves that time and turns every field into a false conflict.** (bidspoke#2264, 2026-10-16)
+  SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
 
@@ -8703,6 +8705,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L778. A work queue that retries permanent failures rarely and also orders by least recently attempted puts those failures at the front every time their retry comes up, so a batch fills with work that cannot succeed and reads as the whole queue failing; drop records that can never succeed rather than backing them off.**
+  (Try-Pennie/slate#3805, 2026-10-16)
+  SHORT: Rarely retried permanent failures jump to the front of a least recently attempted queue; drop work that can never succeed instead of backing it off.
+
+- **L777. A repair a request triggers must finish before that request's response whenever the client's next read depends on it, because the client's next request arrives within a second and reads the unrepaired state if the repair runs after the response.**
+  (Try-Pennie/slate#3796, 2026-10-16)
+  SHORT: A repair a request triggers must finish before its response when the client's next read depends on it, or that read sees unrepaired state.
+
 - **L774. When several unrelated dependencies slow down or time out in the same minutes, split the latency by the location that ran each call before blaming any one of them, because one degraded hosting location looks exactly like every dependency failing at once and each per-dependency alert names a wrong cause.**
   (Try-Pennie/bidspoke#2209, 2026-10-15)
   SHORT: When unrelated dependencies all slow at once, split latency by the hosting location before blaming one; a bad location looks like all of them failing.

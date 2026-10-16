@@ -5,6 +5,8 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L778. Rarely retried permanent failures jump to the front of a least recently attempted queue; drop work that can never succeed instead of backing it off.
+- L777. A repair a request triggers must finish before its response when the client's next read depends on it, or that read sees unrepaired state.
 - L774. When unrelated dependencies all slow at once, split latency by the hosting location before blaming one; a bad location looks like all of them failing.
 - L1025. A dev or test build declaring the production URL scheme competes for its links, so a link opened with the app closed can launch it on real data.
 - L766. A write a deadline stopped waiting on is UNKNOWN, so record it and read the target back later, resending only if absent; unchecked it is a silent loss.

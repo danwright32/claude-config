@@ -82,3 +82,4 @@ which is NOT loaded into the session.
 - L1019. A memory address names an object only while it lives; the next one reuses it and inherits its record, so key on a stored identity, never an address.
 - L769. Refuse enabling a rule whose input another step must supply but does not: the consumer fails closed on everything and it reads as merely stricter.
 - L773. A seen record created empty on first use treats all history as new, so seed it with a baseline when it is created.
+- L776. Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
