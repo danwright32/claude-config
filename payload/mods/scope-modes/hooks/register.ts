@@ -11,7 +11,7 @@ import type {
   ScopeModesScope,
   ScopeModesTarget,
 } from '../types/index.d.ts'
-import { heldCard, heldRefusal, heldTool, needsTheMac } from './away.ts'
+import { awayAllows, heldCard, heldRefusal, heldTool, isTestBuild, needsTheMac, targetPath, type TestBuildFs } from './away.ts'
 import { EDITORS, ghWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
@@ -147,6 +147,18 @@ let checkingFresh = false
 type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[]; notMine?: string[] }
 
 const msg = (err: unknown) => String((err as Error)?.message ?? err)
+// What isTestBuild asks of the Mac (#1269), for a tool call; the noun reads the same in place, since
+// the engine refuses handing `built` to a helper. A home that cannot be read is unknown, which
+// isTestBuild reads as any folder in /Users.
+const testBuildFs = async ($: EngineInterface): Promise<TestBuildFs> => {
+  let home: string | undefined
+  try {
+    home = await $.env.get('HOME')
+  } catch {
+    home = undefined
+  }
+  return { home, exists: p => $.fs.exists(p) }
+}
 
 const scopeOf = async ($: EngineInterface) => (await $.state.get(scopeRef)).value ?? null
 const placeOf = async ($: EngineInterface): Promise<ScopeModesPlace> => (await $.state.get(placeRef)).value ?? 'home'
@@ -2897,8 +2909,11 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
     if (used.length) cleanupsLet = used
   }
   if (away) {
-    // A Bash call by what its commands do on the Mac; another tool by what it opens (#702).
-    const label = raw ? needsTheMac({ raw, commands }) : heldTool(tool, input)
+    // A Bash call by what its commands do on the Mac; another tool by what it opens (#702). Typing
+    // or clicking into a test build runs (#1269), so the app TARGET_APP names is looked up first.
+    const target = raw ? targetPath(raw) : undefined
+    const testBuild = target ? await isTestBuild(target, await testBuildFs($)) : false
+    const label = raw ? needsTheMac({ raw, commands, testBuild }) : heldTool(tool, input)
     if (label) {
       const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
       await hold($, label, `Do it now. What was held: ${raw || `${tool} ${JSON.stringify(args)}`}`)
@@ -2999,8 +3014,19 @@ export const register: Register = on => {
     const nounSeesAsleep = async (): Promise<boolean> => (await nounReading())?.reading.state === 'asleep'
     const scopeModes: ScopeModes = {
       isAway: async () => ((await built.state.get(placeRef)).value ?? 'home') === 'away' || (await nounSeesAsleep()),
-      hold: async ({ label, prompt }) => {
+      hold: async ({ label, prompt, action }) => {
         if (((await built.state.get(placeRef)).value ?? 'home') !== 'away' && !(await nounSeesAsleep())) return { isHeld: false }
+        // What a guard names that runs while away or asleep (#1269): it goes ahead asking nobody.
+        // The engine refuses handing `built` to a helper, so its file system is read in place here.
+        if (action) {
+          let home: string | undefined
+          try {
+            home = await built.env.get('HOME')
+          } catch {
+            home = undefined
+          }
+          if (await awayAllows(action, { home, exists: p => built.fs.exists(p) })) return { isHeld: false, isAway: true }
+        }
         const held = (await built.state.get(heldRef)).value ?? []
         if (!held.some(h => h.prompt === prompt)) {
           const seq = ((await built.state.get(heldSeqRef)).value ?? 0) + 1
@@ -3028,7 +3054,7 @@ export const register: Register = on => {
       ['nobuild', 'No build: read, research and file only, until /build.'],
       ['winddown', 'Wind down: finish this issue, start nothing new, then stop.'],
       ['build', 'Turn no build or winding down off.'],
-      ['away', "Away: every session publishes pages for the phone and opens nothing on the Mac."],
+      ['away', 'Away: every session publishes pages for the phone and holds what needs you at the Mac.'],
       ['home', 'Home: every session delivers on the Mac again.'],
       ['sleep', 'Sleep: the whole Mac goes quiet until noon ET tomorrow; interactive sessions are enrolled to work overnight.'],
       ['wake', 'Wake: sleep mode off, every session back where it was.'],

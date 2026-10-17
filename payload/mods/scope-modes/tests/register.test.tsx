@@ -792,6 +792,9 @@ const command = async ($: $T, name: string, origin: string = 'composer') =>
 const say = async ($: $T, text: string, origin: string | object = 'composer') =>
   (await $.prompt.submit({ text, origin: typeof origin === 'string' ? { kind: origin } : origin, wait: false } as never)) as { text: string; context?: string[] }
 const bash = (command: string, id = 'c1') => ({ tool: 'Bash', command, tool_use_id: id }) as never
+// What away and sleep still hold after #1269, standing for "needs Dan at the Mac" wherever a test
+// asks only whether a call is held: a dialog waits for a press nobody is there to give.
+const DIALOG = `osascript -e 'display dialog "Done?"'`
 const edit = (path: string, id = 'c1') => ({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', tool_use_id: id }) as never
 const call = async ($: $T, e: never) => {
   const r = (await $.tool.call(e)) as { deny?: string; text?: string }
@@ -1849,7 +1852,7 @@ test('the session ending turns every mode off: nothing carries into a new sessio
   await $.session.end({ sessionId: 's1', reason: 'clear' } as never)
   expect(lastModes(w)).toEqual([])
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
 })
 
 // ---- Away and home (#621) ----
@@ -1862,37 +1865,117 @@ test('a new session starts at home: no mode, nothing added to the prompt, openin
   expect(w.modes).toEqual([])
 })
 
-test('away: Claude is told to publish pages for the phone; opening on the Mac is held, not run', withDeps, async ($, on) => {
+test('away: Claude is told to publish pages for the phone; what needs Dan at the Mac is held, not run', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   expect((await command($ as never, 'away')).text).toBe('Away is on in this session.')
   expect(lastModes(w)).toEqual(['AWAY'])
-  expect((await say($ as never, 'show me the report')).context?.join('\n')).toMatch(/Dan is away from the Mac.*private claude\.ai page/s)
-  const r = await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o1'))
-  expect(r).toMatch(/^Held: Dan is away from the Mac, so "Open report\.html in Google Chrome" waits for him to come back\./)
+  const note = (await say($ as never, 'show me the report')).context?.join('\n') ?? ''
+  expect(note).toMatch(/Dan is away from the Mac.*private claude\.ai page/s)
+  // What Claude is told matches what is held (#1269), so it neither avoids testing nor expects a
+  // dialog to be answered.
+  expect(note).toMatch(/Do not show a dialog, run a script whose text cannot be read, type or click into anything but a test build/)
+  expect(note).toMatch(/bringing apps forward, opening files and test automation run/)
+  const r = await call($ as never, bash(DIALOG, 'o1'))
+  expect(r).toMatch(/^Held: Dan is away from the Mac, so "Show a dialog on the Mac" waits for him to come back\./)
   expect(w.reached).toEqual([])
-  expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Open report.html in Google Chrome.', safeWay: 'Claude publishes a private page for your phone instead.' }])
+  expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Show a dialog on the Mac.', safeWay: 'Claude publishes a private page for your phone instead.' }])
   // No card while away: Dan is not at the Mac to press it.
   expect(w.bands).toEqual([])
 })
 
-test('away holds a browser opened by another tool, the Artifact open action and an AppleScript dialog, and a press replays the call (#702)', withDeps, async ($, on) => {
+// #1269, Dan (2026-10-16 ET): "I don't care if you bring apps to the front or do automations for
+// testing". What only moves focus runs while away; what waits for him, or exists to show him
+// something, is still held.
+test('away runs an app brought forward, a file opened, BBEdit and browser automation, and still holds a dialog, an unreadable script and the Artifact open action (#1269)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'p1' } as never)).toMatch(
-    /^Held: Dan is away from the Mac, so "Open https:\/\/x\.dev\/a in the Playwright browser" waits for him to come back\./,
-  )
+  expect(await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'r1'))).toBe('ran')
+  expect(await call($ as never, bash(`osascript -e 'tell application "Simulator" to activate'`, 'r2'))).toBe('ran')
+  expect(await call($ as never, bash('/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window /tmp/d.md', 'r3'))).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'r4' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__claude-in-chrome__tabs_create_mcp', tool_use_id: 'r5' } as never)).toBe('ran')
+  expect(w.cards).toEqual([])
   expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p2' } as never)).toMatch(/"Open https:\/\/claude\.ai\/artifact\/abc" waits/)
-  expect(await call($ as never, bash(`osascript -e 'display dialog "Done?"'`, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
-  // Publishing the page for the phone goes ahead.
-  expect(await call($ as never, { tool: 'Artifact', file_path: '/tmp/p.html', tool_use_id: 'p4' } as never)).toBe('ran')
-  expect(w.reached).toEqual(['/tmp/p.html'])
+  expect(await call($ as never, bash(DIALOG, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
+  expect(await call($ as never, bash('osascript ~/bin/front.applescript', 'p4'))).toMatch(/"Run an AppleScript on the Mac" waits/)
   expect(w.cards.map(c => c.reason)).toEqual([
-    'Held for when you are back: Open https://x.dev/a in the Playwright browser.',
     'Held for when you are back: Open https://claude.ai/artifact/abc.',
     'Held for when you are back: Show a dialog on the Mac.',
+    'Held for when you are back: Run an AppleScript on the Mac.',
   ])
+})
+
+// Typing and clicking run only into a test build (Dan, 2026-10-16 ET): an executable under Xcode's
+// DerivedData or a project checkout, plus Simulator. Anything else waits, since a keystroke into
+// Mail or Messages could send what nobody reviewed. The keystroke guard still proves the target is
+// in front before any keystroke (its own tests).
+const TYPE = (target: string) => `TARGET_APP=${target} osascript -e 'tell application "System Events" to keystroke "n"'`
+const DERIVED = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
+const CHECKOUT_BUILD = '/Users/x/Apps/Ovation/build/Debug/Ovation.app/Contents/MacOS/Ovation'
+test('away types into a test build, from DerivedData or a checkout, and holds typing into any other app (#1269)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { '/Users/x/Apps/Ovation/.git/HEAD': 'ref: refs/heads/main\n' } })
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  expect(await call($ as never, bash(TYPE(DERIVED), 't1'))).toBe('ran')
+  expect(await call($ as never, bash(TYPE(CHECKOUT_BUILD), 't2'))).toBe('ran')
+  expect(await call($ as never, bash(`TARGET_APP=${DERIVED} cliclick c:10,10`, 't3'))).toBe('ran')
+  expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 't4'))).toMatch(/^Held: Dan is away from the Mac, so "Type into Mail" waits/)
+  expect(await call($ as never, bash('TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail cliclick c:10,10', 't5'))).toMatch(/"Click in Mail" waits/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5'])
+})
+
+// The keystroke guard (#707) asks this noun, naming its action, and is answered by the same rules.
+const guardStandIn: { name: string; register: Register } = {
+  name: 'keystroke-guard',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'GuardHold') return next(e)
+      const action = (e as unknown as { action: { kind: 'input' | 'focus'; target?: string } }).action
+      const r = await $.scopeModes.hold({ label: 'x', prompt: 'y', action })
+      return { result: r, text: JSON.stringify({ isHeld: r.isHeld, isAway: 'isAway' in r ? r.isAway : undefined }) } as never
+    })
+  },
+}
+test("the keystroke guard's actions through the noun: away, focus and a test build are not held and say Dan is away; other typing is held; at home nothing is (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const ask = async (action: object, id: string) => JSON.parse(await call($ as never, { tool: 'GuardHold', action, tool_use_id: id } as never))
+  expect(await ask({ kind: 'focus' }, 'g1')).toEqual({ isHeld: false })
+  await command($ as never, 'away')
+  expect(await ask({ kind: 'focus' }, 'g2')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: DERIVED }, 'g3')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: '/Applications/Mail.app/Contents/MacOS/Mail' }, 'g4')).toEqual({ isHeld: true })
+  expect(await ask({ kind: 'input' }, 'g5')).toEqual({ isHeld: true })
+})
+
+// Sleep mode gets the same (Dan, 2026-10-16 ET): it keeps every session quiet as away.
+test('asleep, the same: focus, files, browser automation and a test build run; a dialog, other typing and the Artifact open action are held (#1269)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf', 's1'))).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 's2' } as never)).toBe('ran')
+  expect(await call($ as never, bash(TYPE(DERIVED), 's3'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 's4'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 's5'))).toMatch(/"Type into Mail" waits/)
+  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 's6' } as never)).toMatch(/^Held: /)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['s4', 's5', 's6'])
+})
+test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  w.files[CURRENT] = asleepRecord()
+  const ask = async (action: object, id: string) => JSON.parse(await call($ as never, { tool: 'GuardHold', action, tool_use_id: id } as never))
+  expect(await ask({ kind: 'input', target: DERIVED }, 'z1')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: '/Applications/Mail.app/Contents/MacOS/Mail' }, 'z2')).toEqual({ isHeld: true })
+})
+
+test('a held call is replayed by its press when Dan is back (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p1' } as never)
   await command($ as never, 'home')
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
@@ -1900,7 +1983,7 @@ test('away holds a browser opened by another tool, the Artifact open action and 
   await clock.settle()
   await ui.unmount()
   expect(w.prompts).toEqual([
-    'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
+    'Dan is back and picked this from what was held while he was away: Open https://claude.ai/artifact/abc. Do it now. What was held: Artifact {"action":"open","url":"https://claude.ai/artifact/abc"}',
   ])
 })
 
@@ -1958,8 +2041,8 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o1'))
-  await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o2'))
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'o1' } as never)
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'o2' } as never)
   await call($ as never, bash('TARGET_APP=/Applications/Overture.app/Contents/MacOS/Overture osascript -e \'tell application "System Events" to keystroke "n"\'', 'o3'))
   const runsBefore = w.runs.length
   expect((await command($ as never, 'home')).text).toBe('Home is on in this session.')
@@ -1968,7 +2051,7 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   // The same open held twice is one row.
   expect(card.lines).toEqual([
     [{ text: 'Held while you were away', color: 'warning' }],
-    [{ text: 'Open report.html in Google Chrome ' }, { button: 'held-1', label: 'Open' }],
+    [{ text: 'Open https://claude.ai/artifact/abc ' }, { button: 'held-1', label: 'Open' }],
     { divider: true },
     [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }],
   ])
@@ -1981,7 +2064,7 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   await ui.press({ key: 'scope-modes:held-1' })
   await clock.settle()
   expect(w.prompts.filter(p => p.startsWith('Dan is back'))).toEqual([
-    'Dan is back and picked this from what was held while he was away: Open report.html in Google Chrome. Do it now. What was held: open -a "Google Chrome" /tmp/report.html',
+    'Dan is back and picked this from what was held while he was away: Open https://claude.ai/artifact/abc. Do it now. What was held: Artifact {"action":"open","url":"https://claude.ai/artifact/abc"}',
   ])
   const after = w.bands[w.bands.length - 1] as Row
   expect(after.lines).toEqual([[{ text: 'Held while you were away', color: 'warning' }], [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }]])
@@ -2580,15 +2663,15 @@ test("Dan's own \"I'm up\" wakes it; the same words from another session do not"
   expect(r.context?.join('\n')).toMatch(/Dan's message woke sleep mode\. Say so in one line first, saying what the block below says\.\n.*\n<untrusted-overnight-text>\nSleep mode is off\./)
 })
 
-test('while asleep every session is quiet as away: opening on the Mac is held, though place was home', withDeps, async ($, on) => {
+test('while asleep every session is quiet as away: what needs Dan at the Mac is held, though place was home', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   expect(w.reached).toEqual([])
   const r = await say($ as never, 'how is it going')
   expect(r.context?.join('\n')).toMatch(/Sleep mode is on until 12:00 PM ET on Thu Jan 1\. This session is not one of the overnight workers\./)
   await command($ as never, 'wake')
-  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 'c2'))).toBe('ran')
 })
 
 test('the record ends by itself at noon ET: asleep a ms before, awake at noon, and the first to see it notes it and notifies once', withDeps, async ($, on) => {
@@ -2599,11 +2682,11 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   await startBefore($ as never, clock, began + MIN)
   await clock.set(UNTIL - 1)
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   expect(w.notified).toEqual([])
   // At noon exactly the record no longer holds for any decision, before the minute's check moves it.
   await clock.set(UNTIL)
-  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 'c2'))).toBe('ran')
   // The minute's check, counted from the session's start, is the first to see it.
   const tick = began + Math.ceil((UNTIL - began) / MIN) * MIN
   await clock.set(tick)
@@ -2633,7 +2716,7 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
 test('a record from another boot reads as awake, and is ended with that reason', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootTime: BOOT - 1000 }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
   await clock.advance(MIN)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
@@ -2653,7 +2736,7 @@ test('a record whose start moved 2 seconds, with this boot session, is still asl
 test('a record naming another boot session is ended as a restart, though its start matches', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootSession: 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
   await clock.advance(MIN)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
@@ -2688,18 +2771,18 @@ test('a new sleep begun between reading the old record and moving it is put back
 test('what is held while asleep is not offered until wake, and then is', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   const heldRows = () => w.bands.filter(b => b.id === 'held')
   expect(heldRows()).toEqual([])
   await command($ as never, 'wake')
-  expect((heldRows()[heldRows().length - 1] as Row).lines[1]).toEqual([{ text: 'Open a.pdf in Preview ' }, { button: 'held-1', label: 'Open' }])
+  expect((heldRows()[heldRows().length - 1] as Row).lines[1]).toEqual([{ text: 'Show a dialog on the Mac ' }, { button: 'held-1', label: 'Do it' }])
 })
 
 test('sleep beginning takes the held card away until wake', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  await call($ as never, bash('open -a Preview a.pdf'))
+  await call($ as never, bash(DIALOG))
   await command($ as never, 'home')
   expect(w.bands.some(b => b.id === 'held')).toBe(true)
   const cleared = w.cleared.length

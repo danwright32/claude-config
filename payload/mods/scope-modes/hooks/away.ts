@@ -1,58 +1,95 @@
 import type { ModKitBandRow, ModKitCommand } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
 
-// Away and home (#621). While Dan is away nothing opens on the Mac and nothing takes focus: what
-// needs him at the Mac is held, and on coming home each session shows what it held in one boxed
-// card in the band, nothing opening until he presses its button (design round, 2026-10-04).
+// Away and home (#621). While Dan is away what needs him at the Mac is held, and on coming home each
+// session shows what it held in one boxed card in the band, nothing running until he presses its
+// button (design round, 2026-10-04). Sleep mode holds the same (#840).
+//
+// WHAT IS HELD changed with #1269. Dan, 2026-10-16 ET: "I don't care if you bring apps to the front
+// or do automations for testing". Focus moving costs him nothing while he is not at the Mac, so
+// opening an app or a file, BBEdit's helper, bringing an app forward and browser automation opening
+// a page or a tab all run. Typing and clicking run only into a test build (isTestBuild), and the
+// keystroke guard still proves by pid that the target is in front before any keystroke. Held, on
+// his answers the same day: a dialog (it waits for a press nobody is there to give), a script whose
+// text cannot be read (it could hold a dialog, or keystrokes no frontmost proof covers), typing or
+// clicking into anything else (a keystroke into Mail or Messages could send what nobody reviewed),
+// and what exists only to show him something: the Artifact tool's open action here, the report and
+// the manual steps card in their own code.
 
 const base = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p
 const isFlag = (w: string) => w.startsWith('-')
 // A link is named by where it goes, never by its query or fragment, which can carry a token (L741).
 const shown = (target: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? target.replace(/[?#].*$/, '') : base(target))
 
-// The app a keystroke guard action names: TARGET_APP=<executable path> is the guard's own rule, and
-// the reader drops assignments, so it is read from the command as written.
-const targetApp = (raw: string): string | undefined => {
+/** The executable a keystroke guard action names: TARGET_APP=<executable path>, the guard's own rule, read from the command as written, since the reader drops assignments. */
+export const targetPath = (raw: string): string | undefined => {
   const m = /\bTARGET_APP=("[^"]+"|'[^']+'|\S+)/.exec(raw)
-  if (!m) return undefined
-  const path = (m[1] as string).replace(/^["']|["']$/g, '')
+  return m ? (m[1] as string).replace(/^["']|["']$/g, '') : undefined
+}
+// The app it names, for the held row.
+const targetApp = (raw: string): string | undefined => {
+  const path = targetPath(raw)
+  if (path === undefined) return undefined
   const app = /([^/]+)\.app\//.exec(path)
   return app ? (app[1] as string) : base(path)
 }
 
-// An AppleScript that only reads (the frontmost app's name, a window list) takes no focus, and nor
-// does a notification banner; a dialog does, and waits for a press nobody is there to give (#702).
-const SCRIPT_ACTS = /\b(?:keystroke|key code|click|activate|frontmost to true|set frontmost|open location|reopen|launch|open)\b/i
+/** What isTestBuild asks of the Mac: the home folder, and whether a path exists (a folder included). */
+export type TestBuildFs = { home: string | undefined; exists: (path: string) => Promise<boolean> }
+
+const SIMULATOR = /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/Applications\/Simulator\.app\/Contents\/MacOS\/Simulator$/
+/**
+ * Whether an executable is a test build (Dan, 2026-10-16 ET): under Xcode's DerivedData, inside a
+ * project checkout (a folder holding .git, a worktree's .git file included), or Simulator where Xcode
+ * keeps it. Only an absolute path with no `..` is judged. The home folder and the folders above it
+ * are never a checkout, so a repository of dotfiles there cannot make every app beneath it one. A
+ * file system that cannot answer is no test build, so the action stays held (L42).
+ */
+export const isTestBuild = async (path: string, fs: TestBuildFs): Promise<boolean> => {
+  if (!path.startsWith('/') || path.split('/').includes('..')) return false
+  const home = fs.home?.replace(/\/+$/, '')
+  if (home ? path.startsWith(`${home}/Library/Developer/Xcode/DerivedData/`) : /^\/Users\/[^/]+\/Library\/Developer\/Xcode\/DerivedData\//.test(path)) return true
+  if (SIMULATOR.test(path)) return true
+  const parts = path.split('/').filter(Boolean)
+  for (let n = parts.length - 1; n >= 1; n--) {
+    const dir = `/${parts.slice(0, n).join('/')}`
+    if (home && (dir === home || home.startsWith(`${dir}/`))) break
+    // Any home folder, so a home that could not be read still stops the walk at one.
+    if (dir === '/Users' || /^\/Users\/[^/]+$/.test(dir)) break
+    try {
+      if (await fs.exists(`${dir}/.git`)) return true
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+/** What a guard acting on the Mac names when it asks to hold (the keystroke guard, #707). */
+export type AwayAction = { kind: 'input' | 'focus'; target?: string }
+/** Whether that action runs while Dan is away or asleep (#1269): bringing an app forward does; typing or clicking only into a test build. */
+export const awayAllows = async (action: AwayAction, fs: TestBuildFs): Promise<boolean> =>
+  action.kind === 'focus' || (action.target !== undefined && (await isTestBuild(action.target, fs)))
+
+// A script that types or clicks; one that only reads, shows a notification banner or brings an app
+// forward needs nobody (#1269). A dialog waits for a press nobody is there to give (#702).
 const SCRIPT_TYPES = /\b(?:keystroke|key code|click)\b/i
 // JavaScript for Automation spells each one as a method, `app.displayDialog()` (#730).
 const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name)|display(?:Dialog|Alert)|choose(?:File(?:Name)?|Folder|FromList|Color|Application|RemoteApplication|URL))\b/i
 
 /**
- * What a Bash call would do on the Mac that needs Dan there (open something, take focus, type or
- * click), as the line his held card names it by, or undefined when it needs nothing of the Mac.
- * Each command comes with what mod-kit's reader found it runs (#712): its program and what that can
- * do, or the script file it runs, so an AppleScript fed on standard input, or piped in from a file
- * (`cat notify.scpt | osascript`, #730), is judged too.
+ * What a Bash call would do on the Mac that needs Dan there (show a dialog, run a script it cannot
+ * read, type or click into anything but a test build), as the line his held card names it by, or
+ * undefined when it needs nothing of him. Each command comes with what mod-kit's reader found it
+ * runs (#712): its program and what that can do, or the script file it runs, so an AppleScript fed
+ * on standard input, or piped in from a file (`cat notify.scpt | osascript`, #730), is judged too.
+ * `testBuild` says whether the app TARGET_APP names is a test build (isTestBuild, asked by the
+ * caller, since it reads the file system).
  */
-export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): string | undefined => {
+export const needsTheMac = (call: { raw: string; commands: ModKitCommand[]; testBuild?: boolean }): string | undefined => {
   for (const { words, program, script: file, verdict } of call.commands) {
     const cmd = base(words[0] ?? '')
     const args = words.slice(1)
-    if (cmd === 'open') {
-      let app: string | undefined
-      const targets: string[] = []
-      for (let i = 0; i < args.length; i++) {
-        const a = args[i] as string
-        if (a === '-a' || a === '-b') app = args[++i]
-        else if (!isFlag(a)) targets.push(shown(a))
-      }
-      const what = targets.length ? `Open ${targets.join(', ')}` : `Open ${app ?? 'an app'}`
-      return app && targets.length ? `${what} in ${app}` : what
-    }
-    if (cmd === 'bbedit_tool' || cmd === 'bbedit') {
-      const files = args.filter(a => !isFlag(a)).map(shown)
-      return files.length ? `Open ${files.join(', ')} in BBEdit` : 'Open BBEdit'
-    }
     if (cmd === 'osascript') {
       // A script whose text the reader never saw may do anything on the Mac: one piped in from what
       // cannot be read, a script file (#724: `osascript notify.scpt` ran while away; #730: one cat
@@ -62,12 +99,12 @@ export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): s
       if (verdict?.does === 'unreadable') return 'Run an AppleScript on the Mac'
       const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
       if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
-      if (!SCRIPT_ACTS.test(script)) continue
+      // Bringing an app forward runs (#1269); typing or clicking only into a test build.
+      if (!SCRIPT_TYPES.test(script) || call.testBuild) continue
       const app = targetApp(call.raw)
-      if (SCRIPT_TYPES.test(script)) return app ? `Type into ${app}` : 'Type into an app'
-      return app ? `Bring ${app} to the front` : 'Bring an app to the front'
+      return app ? `Type into ${app}` : 'Type into an app'
     }
-    if (cmd === 'cliclick' || cmd === 'peekaboo') {
+    if ((cmd === 'cliclick' || cmd === 'peekaboo') && !call.testBuild) {
       const app = targetApp(call.raw)
       return app ? `Click in ${app}` : `Click or type with ${cmd}`
     }
@@ -76,27 +113,14 @@ export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): s
 }
 
 /**
- * What a call to a tool other than Bash would open on the Mac (#702), as its held row reads, or
- * undefined: a browser opened or pointed somewhere, by Playwright or in Dan's Chrome, and the
- * Artifact tool's open action, which opens the page in his browser. Reading a page already open
- * and publishing a page go ahead. An MCP tool is `mcp__<server>__<tool>`, its server's name
- * standing in a plugin's (`mcp__plugin_playwright_playwright__`).
+ * What a call to a tool other than Bash would show Dan on the Mac (#702), as its held row reads, or
+ * undefined: the Artifact tool's open action, which opens a page in his browser for him to read.
+ * Browser automation opening a page or a tab, by Playwright or in Chrome, is testing and runs
+ * (#1269), as do reading a page already open and publishing a page.
  */
 export const heldTool = (tool: string, input: Record<string, unknown>): string | undefined => {
   const url = typeof input.url === 'string' ? shown(input.url) : undefined
   if (tool === 'Artifact') return input.action === 'open' ? `Open ${url ?? 'the page'}` : undefined
-  const at = tool.lastIndexOf('__')
-  if (!tool.startsWith('mcp__') || at < 5) return undefined
-  const server = tool.slice(5, at).toLowerCase()
-  const name = tool.slice(at + 2)
-  if (server.includes('playwright')) {
-    if (name === 'browser_navigate') return `Open ${url ?? 'a page'} in the Playwright browser`
-    if (name === 'browser_tabs' && (input.action === 'new' || input.action === 'select')) return 'Open a tab in the Playwright browser'
-  }
-  if (server.includes('chrome')) {
-    if (name === 'navigate') return `Open ${url ?? 'a page'} in Chrome`
-    if (/^tabs_create/.test(name)) return 'Open a tab in Chrome'
-  }
   return undefined
 }
 

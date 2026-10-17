@@ -314,16 +314,20 @@ test('an action a settings hook refuses is never asked about (#707)', withKit, a
 // The scope modes mod (#621), standing in: while Dan is away it holds what it is handed for the held
 // card and answers with the refusal worded as its own held actions are; at home nothing is held.
 // Where Dan is comes from the world (an inline plugin cannot reach this file's variables): a
-// process.run of __away answers 0 while he is away.
+// process.run of __away answers 0 while he is away. Since #1269 it answers as the real one does for
+// the action the guard names: bringing an app forward is not held, nor is typing into a test build
+// (here, as there, an executable under Xcode's DerivedData), and either answers that Dan is away so
+// nobody is asked. The real predicate is tested in scope-modes (a mod cannot import another's files).
 const scopeModes: { name: string; register: Register } = {
   name: 'scope-modes',
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
       const isAway = async () => (await built.process.run(['__away'])).exitCode === 0
-      const hold = async (h: { label: string; prompt: string }) => {
+      const hold = async (h: { label: string; prompt: string; action?: { kind: 'input' | 'focus'; target?: string } }) => {
         built.ui.log('HOLD ' + JSON.stringify(h))
         if (!(await isAway())) return { isHeld: false }
+        if (h.action?.kind === 'focus' || (h.action?.kind === 'input' && h.action.target?.includes('/Library/Developer/Xcode/DerivedData/'))) return { isHeld: false, isAway: true }
         return {
           isHeld: true,
           card: { guard: 'Away', reason: `Held for when you are back: ${h.label}.`, safeWay: 'Claude publishes a private page for your phone instead.' },
@@ -335,20 +339,60 @@ const scopeModes: { name: string; register: Register } = {
   },
 }
 
-test('while Dan is away an action is held for when he is back, never asked about in the band (#707)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
+test('while Dan is away typing into an app that is not a test build is held for when he is back, never asked about in the band (#707, #1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
   // The wrong app in front: held all the same, since Dan cannot bring it forward from his phone.
   const w = world($, on, { front: 77, running: { 10: OVERTURE, 77: LIGHTROOM }, answer: 'Go ahead', away: true })
   const r = await $.tool.call(bash(KEY, 'h1'))
   expect(w.asked).toEqual([])
   expect(w.reached).not.toContain('Bash')
-  expect(w.holds).toEqual([{ label: 'Type into Overture', prompt: `Do it now. What was held: ${KEY}` }])
+  expect(w.holds).toEqual([{ label: 'Type into Overture', prompt: `Do it now. What was held: ${KEY}`, action: { kind: 'input', target: OVERTURE } }])
   expect(refusal(r)).toBe('Held: Dan is away from the Mac, so "Type into Overture" waits for him to come back.')
   expect(w.cards).toEqual([{ toolUseId: 'h1', guard: 'Away', reason: 'Held for when you are back: Type into Overture.', safeWay: 'Claude publishes a private page for your phone instead.' }])
-  const r2 = await $.tool.call(bash('open -a "Google Chrome" report.html', 'h2'))
-  expect(w.holds[1]?.label).toBe('Bring Google Chrome to the front')
-  expect(refusal(r2)).toContain('waits for him to come back')
+})
+
+// #1269, Dan (2026-10-16 ET): "I don't care if you bring apps to the front or do automations for
+// testing". Away, an app brought forward runs and nobody is asked, since nobody is there to answer.
+test('while Dan is away an app is brought to the front with no question and nothing held (#1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead', away: true })
+  const r = await $.tool.call(bash('open -a "Google Chrome" report.html', 'f2'))
+  expect(w.reached).toContain('Bash')
   expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
+  expect(refusal(r)).toBe('ran')
+  expect(w.holds).toEqual([{ label: 'Bring Google Chrome to the front', prompt: 'Do it now. What was held: open -a "Google Chrome" report.html', action: { kind: 'focus' } }])
+})
+
+// Typing into a test build runs while away, but only past the same frontmost proof as at home: the
+// target's pid by its executable path, read apart from the frontmost pid (the 2026-07-12 Lightroom
+// and 2026-08-04 Overture incidents). Only the Taking over question is skipped.
+const TEST_BUILD = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
+const TEST_KEY = `TARGET_APP=${TEST_BUILD} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
+test('while Dan is away a keystroke to a test build of Overture is refused when Lightroom is in front (#1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 77, running: { 10: TEST_BUILD, 77: LIGHTROOM }, answer: 'Go ahead', away: true })
+  const r = await $.tool.call(bash(TEST_KEY, 'a1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.asked).toEqual([])
+  expect(refusal(r)).toBe("Blocked: Overture isn't the front app (Adobe Lightroom Classic is). Bring it forward first, then type.")
+  expect(w.cards.map(c => c.guard)).toEqual(['Keystroke guard'])
+})
+test('while Dan is away a keystroke to a test build of Overture runs when it is in front, with no question (#1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: TEST_BUILD, 77: LIGHTROOM }, answer: 'Not now', away: true })
+  const r = await $.tool.call(bash(TEST_KEY, 'a2'))
+  expect(w.reached).toContain('Bash')
+  expect(w.asked).toEqual([])
+  expect(w.cards).toEqual([])
+  expect(refusal(r)).toBe('ran')
+})
+test('while Dan is away a test build with a second copy running is refused, as at home (#1269)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: TEST_BUILD, 11: OVERTURE }, answer: 'Go ahead', away: true })
+  const r = await $.tool.call(bash(TEST_KEY, 'a3'))
+  expect(w.reached).not.toContain('Bash')
+  expect(refusal(r)).toContain('Another copy of Overture is running')
 })
 
 test('at home nothing is held and the heads up is asked as before (#707)', { plugins: [secDefault, kit, scopeModes] }, async ($, on) => {
