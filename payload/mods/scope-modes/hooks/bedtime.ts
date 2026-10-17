@@ -24,10 +24,28 @@ const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 // The dialog carries four choices at most: two a session suggested, then skip and go to sleep.
 const SUGGESTED_MAX = 2
 
-/** A question one note asked about one issue. */
-export type IssueQuestion = { repo: string; issue: number; text: string; options: string[]; at: number }
-/** One question as Dan is asked it: every issue that is waiting on the same words. */
-export type OpenQuestion = { repo: string; text: string; issues: number[]; options: string[]; at: number }
+/**
+ * A question one note asked about one issue, or one open item in the issue's Open questions section
+ * (#1279), which `inSection` marks, so its answer is checked off there too.
+ */
+export type IssueQuestion = { repo: string; issue: number; text: string; options: string[]; at: number; inSection?: number[] }
+/** One question as Dan is asked it: every issue that is waiting on the same words, and those whose section holds it. */
+export type OpenQuestion = { repo: string; text: string; issues: number[]; options: string[]; at: number; inSection?: number[] }
+
+/**
+ * The issues a goal names (#1279), so their Open questions are asked before the night: `#N` in the
+ * worker's repository, or `owner/name#N` anywhere. A goal naming a milestone names no issue here.
+ */
+export const goalIssues = (goal: string, repo: string | null): { repo: string; issue: number }[] => {
+  const out: { repo: string; issue: number }[] = []
+  for (const m of goal.matchAll(/(?:\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)\b/g)) {
+    const r = m[1] ?? repo
+    const n = Number(m[2])
+    if (!r || !REPO.test(r) || !Number.isInteger(n) || n <= 0) continue
+    if (!out.some(x => x.repo.toLowerCase() === r.toLowerCase() && x.issue === n)) out.push({ repo: r, issue: n })
+  }
+  return out
+}
 
 /** Whitespace collapsed, so the same words noted on two nights are one question. */
 export const sameText = (s: string) => s.split(/\s+/).filter(Boolean).join(' ')
@@ -78,10 +96,11 @@ export const groupQuestions = (qs: IssueQuestion[]): OpenQuestion[] => {
     const k = `${q.repo.toLowerCase()}\n${sameText(q.text)}`
     const had = out.get(k)
     if (!had) {
-      out.set(k, { repo: q.repo, text: sameText(q.text), issues: [q.issue], options: [...q.options], at: q.at })
+      out.set(k, { repo: q.repo, text: sameText(q.text), issues: [q.issue], options: [...q.options], at: q.at, ...(q.inSection ? { inSection: [...q.inSection] } : {}) })
       continue
     }
     if (!had.issues.includes(q.issue)) had.issues.push(q.issue)
+    for (const n of q.inSection ?? []) if (!(had.inSection ??= []).includes(n)) had.inSection.push(n)
     if (!had.options.length && q.options.length) had.options = [...q.options]
   }
   for (const q of out.values()) q.issues.sort((a, b) => a - b)

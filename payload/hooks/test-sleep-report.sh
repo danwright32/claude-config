@@ -178,6 +178,9 @@ check_eq "and every line is whole JSON" 29 "$(notes_of g5 | python3 -c 'import j
 r="$(report_of g5)"
 missing=""; for i in $(seq 1 20); do [[ "$r" == *"finding $i"$'\n'* || "$r" == *"finding $i" ]] || missing="$missing $i"; done
 check_eq "the report after them carries every finding (#909)" "" "$missing"
+# #1279: a before bed question left unasked or unanswered says why, so the morning names it.
+note '{"kind":"question","by":"aaaa1111","repo":"o/r","issue":14,"text":"Keep the old flag?","why":"not asked: the 10 minutes for bedtime questions ran out"}' >/dev/null 2>&1
+has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (left before bed: not asked: the 10 minutes for bedtime questions ran out)" "$(report_of g5)"
 
 # Two renders out of order, made to happen every time (#909): the first note's render reads the
 # notes and is then held before it replaces the report; a second note lands and renders. The held

@@ -336,6 +336,10 @@ type Opts = {
   issueAnswers?: Record<string, string | null | Promise<string>>
   /** Each issue's labels as gh reads them (#836). */
   issueLabels?: Record<number, string[]>
+  /** Each issue's body as gh issue view gives it (#1279: its Open questions section), by number. */
+  issueBodies?: Record<number, string>
+  /** gh issue edit failing, with its stderr (#1279: checking an answered question off). */
+  editFails?: string
   /** gh issue view failing, with its stderr (#836). */
   issueViewFails?: string
   /** gh issue comment failing on an issue, with its stderr (#836). */
@@ -391,6 +395,7 @@ const world = (on: On, o: Opts = {}) => {
     askedOptions: [] as string[][],
     /** Every comment posted on an issue (#836). */
     comments: [] as { repo: string; issue: string; body: string }[],
+    edits: [] as { repo: string; issue: number; body: string }[],
     tools: [] as string[],
     logs: [] as string[],
     files: { ...o.files } as Record<string, string>,
@@ -687,7 +692,15 @@ const world = (on: On, o: Opts = {}) => {
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
-      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })) }))
+      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone' }))
+      // An issue's body written whole (#1279), from standard input.
+      if (a[0] === 'issue' && a[1] === 'edit') {
+        if (o.editFails) return fail(1, o.editFails)
+        const body = String(e.init?.stdin ?? '')
+        w.edits.push({ repo: a[a.indexOf('--repo') + 1] as string, issue: Number(a[2]), body })
+        o.issueBodies = { ...(o.issueBodies ?? {}), [Number(a[2])]: body }
+        return ok(`https://github.com/o/r/issues/${a[2]}\n`)
+      }
       // A decision posted on an issue (#836): gh prints the new comment's link.
       if (a[0] === 'issue' && a[1] === 'comment') {
         const repo = a[a.indexOf('--repo') + 1] as string
@@ -4180,7 +4193,7 @@ test("the open questions on the queue's issues are asked one at a time after the
   // Each question left is named with why it was not asked or answered (#1279).
   expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. Left for the morning, so tonight the queue skips them: o/r#20, "Rename it?" (you skipped it).'))
   // The one left is noted for the morning report as the same question, so it is asked again next time.
-  expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text])).toEqual([['o/r', 20, 'Rename it?']])
+  expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text, n.why])).toEqual([['o/r', 20, 'Rename it?', 'you skipped it']])
   // Every answer posted is kept, one record per issue and question.
   expect(answeredRecords(w).length).toBe(3)
 })
@@ -4335,6 +4348,61 @@ test('earlier questions are asked after goal questions answered quickly with no 
   expect(w.asked).toEqual([S2_GOAL_Q, 'o/r#12 and #14: Keep the old flag?', 'o/r#20: Rename it?', 'o/r#12: Which copy?'])
   expect(w.files[UNANSWERED]).toBe('')
   expect(r.text).not.toContain('Left for the morning')
+})
+
+// #1279, Dan 2026-10-17: /sleep asks every open item in the Open questions section of each goal's
+// issues before the night begins, as well as the questions earlier nights noted, each once, and
+// checks an answered one off in the section, so it is never asked again and the issue shows it.
+const SECTIONED = ['The bug.', '', '## Open questions', '', '- [ ] Keep the old flag?', '- [x] Rename it? (answered 2026-10-15 ET: Yes)', '', 'Claude-Session: https://claude.ai/code/session_01AbCdEf'].join('\n')
+test("the open questions in a goal issue's section are asked before the night, answered, posted and checked off (#1279)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED() },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: SECTIONED },
+    issueAnswers: { 'o/r#7: Keep the old flag?': 'Drop it' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  // The goal is "Close #7": its one open item is asked, the answered one is not.
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits).toEqual([{ repo: 'o/r', issue: 7, body: SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)') }])
+  expect(w.files[UNANSWERED]).toBe('')
+  expect(r.text).toMatch(asRegExp(' Before bed: 1 question answered and posted on o/r#7.'))
+})
+
+test('a question in both a goal issue\'s section and an earlier night\'s notes is asked once (#1279)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: noted({ kind: 'question', repo: 'o/r', issue: 7, text: 'Keep the old flag?' }) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: SECTIONED },
+    issueAnswers: { 'o/r#7: Keep the old flag?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.edits).toEqual([])
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#7, "Keep the old flag?" (you skipped it).'))
+})
+
+test("a goal issue with no section, or whose section cannot be read or checked off, is said, never passed over silently (#1279)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: 'The bug, from before sections.' } })
+  await start($ as never, clock)
+  let r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).toContain('o/r#7 has no Open questions section, so nothing in it was asked.')
+  await command($ as never, 'wake')
+  w.o.issueViewFails = 'HTTP 502'
+  r = await command($ as never, 'sleep')
+  expect(r.text).toContain("The Open questions of o/r#7 could not be read (HTTP 502), so none of them was asked.")
+  await command($ as never, 'wake')
+  w.o.issueViewFails = undefined
+  w.o.issueBodies = { 7: SECTIONED }
+  w.o.editFails = 'HTTP 403'
+  w.o.issueAnswers = { 'o/r#7: Keep the old flag?': 'Drop it' }
+  r = await command($ as never, 'sleep')
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(r.text).toContain('Your answer on o/r#7 is posted, but it could not be checked off in its Open questions (HTTP 403), so the issue still shows it open; it is not asked again.')
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {

@@ -50,8 +50,10 @@ import {
   GO_TO_SLEEP,
   goalAnswer,
   goalOptions,
+  goalIssues,
   goalQuestion,
   groupQuestions,
+  sameText as oneSpaced,
   orderQuestions,
   priorityRank,
   questionsIn,
@@ -66,6 +68,7 @@ import {
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
@@ -352,8 +355,8 @@ const ghSaid = (r: { stderr: string; exitCode: number }) => r.stderr.trim().spli
 // the call (never gh auth switch, which other sessions share) and never printed. `tryNext` says
 // which failures are worth asking the next account about; a write passes only GitHub's own not
 // found, so a write that may have landed is never sent again as another account (assume it runs twice).
-const ghAnyAccount = async ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true): Promise<{ stdout: string } | { failures: GhRun[] }> => {
-  const first = await run($, ['gh', ...args])
+const ghAnyAccount = async ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true, stdin?: string): Promise<{ stdout: string } | { failures: GhRun[] }> => {
+  const first = await run($, ['gh', ...args], RUN_MS, undefined, stdin)
   if (first.exitCode === 0) return { stdout: first.stdout }
   const failures: GhRun[] = [first]
   if (!tryNext(first)) return { failures }
@@ -361,7 +364,7 @@ const ghAnyAccount = async ($: EngineInterface, args: string[], tryNext: (r: GhR
   for (const a of new Set([...`${status.stdout}\n${status.stderr}`.matchAll(/account (\S+)/g)].map(m => m[1] as string))) {
     const tok = await run($, ['gh', 'auth', 'token', '-u', a])
     if (tok.exitCode !== 0 || !tok.stdout.trim()) continue
-    const r = await run($, ['gh', ...args], RUN_MS, { GH_TOKEN: tok.stdout.trim() })
+    const r = await run($, ['gh', ...args], RUN_MS, { GH_TOKEN: tok.stdout.trim() }, stdin)
     if (r.exitCode === 0) return { stdout: r.stdout }
     failures.push(r)
     if (!tryNext(r)) break
@@ -725,7 +728,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
 // Which questions, in what order, and what is posted are bedtime.ts's; here they are read, asked,
 // posted and written down.
 
-type Left = { repo: string; issue: number; text: string }
+type Left = { repo: string; issue: number; text: string; why: string }
 type IssueRound = {
   /** Every issue whose question went unanswered tonight, for sleep-queue.sh to leave out. */
   left: Left[]
@@ -770,22 +773,38 @@ const postAnswer = async ($: EngineInterface, dir: string, repo: string, issue: 
   return kept ? { posted: true, unkept: kept } : { posted: true }
 }
 
-// The questions earlier nights noted about the workers' repositories, still open: not yet answered
-// on their issue, and their issue not closed. Each failure to read is said, never read as no
-// questions (L215).
-const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): Promise<{ questions: OpenQuestion[]; rank: Map<string, number>; problems: string[] }> => {
+// An answered question checked off in its issue's Open questions section (#1279): the body read and
+// written whole through gh, the item marked with the answer and its date. Null once it is; else why.
+const checkOff = async ($: EngineInterface, repo: string, issue: number, text: string, answer: string): Promise<string | null> => {
+  const r = await ghAnyAccount($, ['issue', 'view', String(issue), '--repo', repo, '--json', 'body'])
+  if (!('stdout' in r)) return ghSaid(r.failures[0] as GhRun)
+  let body: string
+  try {
+    const j = JSON.parse(r.stdout) as { body?: unknown }
+    body = typeof j.body === 'string' ? j.body : ''
+  } catch {
+    return "GitHub's answer was not JSON"
+  }
+  const next = withQuestion(body, text, { answer, date: etDate(await $.clock.now()) })
+  if (next === body) return null
+  const w = await ghAnyAccount($, ['issue', 'edit', String(issue), '--repo', repo, '--body-file', '-'], notFoundOnGitHub, next)
+  return 'stdout' in w ? null : ghSaid(w.failures.find(f => !notFoundOnGitHub(f)) ?? (w.failures[0] as GhRun))
+}
+
+// The questions earlier nights noted about the workers' repositories, and the open items in the Open
+// questions section of each goal's issues (#1279), still open: not yet answered on their issue, and
+// their issue not closed. Each failure to read is said, never read as no questions (L215).
+type GoalIssue = { repo: string; issue: number }
+const openQuestions = async ($: EngineInterface, dir: string, repos: string[], goalIssueList: GoalIssue[] = []): Promise<{ questions: OpenQuestion[]; rank: Map<string, number>; problems: string[] }> => {
   const problems: string[] = []
+  const found: IssueQuestion[] = []
   const notesDir = `${dir}/notes`
   const ls = await run($, ['ls', '-1', notesDir])
-  if (ls.exitCode !== 0) {
-    if (/No such file/i.test(ls.stderr)) return { questions: [], rank: new Map(), problems }
-    return { questions: [], rank: new Map(), problems: [`Questions from earlier nights could not be read (${ls.stderr.trim() || `ls exited ${ls.exitCode}`}), so none were asked.`] }
-  }
+  if (ls.exitCode !== 0 && !/No such file/i.test(ls.stderr)) problems.push(`Questions from earlier nights could not be read (${ls.stderr.trim() || `ls exited ${ls.exitCode}`}), so none were asked.`)
   const wanted = new Set(repos.map(r => r.toLowerCase()))
-  const found: IssueQuestion[] = []
   let bad = 0
   const unread: string[] = []
-  for (const name of ls.stdout.split('\n').filter(n => n.endsWith('.jsonl'))) {
+  for (const name of ls.exitCode === 0 ? ls.stdout.split('\n').filter(n => n.endsWith('.jsonl')) : []) {
     let text: string
     try {
       text = await $.fs.read(`${notesDir}/${name}`)
@@ -799,6 +818,33 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): 
   }
   if (unread.length) problems.push(`Earlier notes could not be read (${unread.join('; ')}), so a question in them may not have been asked.`)
   if (bad) problems.push(`${plural(bad, 'line')} of earlier notes could not be read, so a question in ${bad === 1 ? 'it' : 'them'} may not have been asked.`)
+  // Each goal issue's section, read once (#1279). Its state and labels come with it, kept for the
+  // reading of every issue below.
+  const viewed = new Map<string, string>()
+  for (const g of goalIssueList) {
+    const k = `${g.repo.toLowerCase()}#${g.issue}`
+    const r = await ghAnyAccount($, ['issue', 'view', String(g.issue), '--repo', g.repo, '--json', 'state,labels,body'])
+    if (!('stdout' in r)) {
+      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (${ghSaid(r.failures[0] as GhRun)}), so none of them was asked.`)
+      continue
+    }
+    let body: string
+    try {
+      const j = JSON.parse(r.stdout) as { state?: unknown; body?: unknown }
+      if (String(j.state).toUpperCase() === 'CLOSED') continue
+      body = typeof j.body === 'string' ? j.body : ''
+    } catch {
+      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (GitHub's answer was not JSON), so none of them was asked.`)
+      continue
+    }
+    viewed.set(k, r.stdout)
+    const section = openQuestionsIn(body)
+    if (!section.found) {
+      problems.push(`${g.repo}#${g.issue} has no Open questions section, so nothing in it was asked.`)
+      continue
+    }
+    for (const text of section.open) found.push({ repo: g.repo, issue: g.issue, text: oneSpaced(text), options: [], at: 0, inSection: [g.issue] })
+  }
   const open: IssueQuestion[] = []
   for (const q of found) if (!(await $.fs.exists(answeredPath(dir, q.repo, q.issue, q.text)))) open.push(q)
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
@@ -807,7 +853,8 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): 
   const closed = new Set<string>()
   for (const k of new Set(open.map(q => `${q.repo.toLowerCase()}#${q.issue}`))) {
     const q = open.find(x => `${x.repo.toLowerCase()}#${x.issue}` === k) as IssueQuestion
-    const r = await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'])
+    const seen = viewed.get(k)
+    const r = seen !== undefined ? { stdout: seen } : await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'])
     if (!('stdout' in r)) {
       rank.set(k, 5)
       continue
@@ -828,8 +875,8 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): 
 // repository's answer is kept for every night and covers all its issues, while an issue's covers
 // one), sharing their round. Every issue a question was left on goes into the night's unanswered
 // list; each answer is posted on its issue as Dan's dated decision.
-const askIssues = async ($: EngineInterface, dir: string, repos: string[], round: Round): Promise<IssueRound> => {
-  const { questions, rank, problems } = await openQuestions($, dir, repos)
+const askIssues = async ($: EngineInterface, dir: string, repos: string[], round: Round, goalIssueList: GoalIssue[] = []): Promise<IssueRound> => {
+  const { questions, rank, problems } = await openQuestions($, dir, repos, goalIssueList)
   const ordered = orderQuestions(questions, (repo, n) => rank.get(`${repo.toLowerCase()}#${n}`) ?? 5)
   const left: Left[] = []
   const notes: Record<string, unknown>[] = []
@@ -841,7 +888,7 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
   // way they went.
   const leftSaid: string[] = []
   const leave = (q: OpenQuestion, why: string, issues = q.issues) => {
-    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text })))
+    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text, why })))
     leftSaid.push(`${issues.map(issue => `${q.repo}#${issue}`).join(' and ')}, "${q.text}" (${why})`)
   }
   for (const q of ordered) {
@@ -887,12 +934,18 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       }
       posted.push(`${q.repo}#${issue}`)
       landed = true
+      // Checked off in the issue's Open questions too, when it was asked from there (#1279). Read
+      // afresh and written whole, so an item already checked off by another /sleep stays as it is.
+      if (q.inSection?.includes(issue)) {
+        const off = await checkOff($, q.repo, issue, q.text, asked.answer)
+        if (off) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open; it is not asked again.`)
+      }
       if (p.unkept) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but the record that it was could not be kept (${p.unkept}), so it may be asked again.`)
     }
     if (landed) answered++
   }
   // The questions left are noted for the morning report as the same words, so they are asked again.
-  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text })
+  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text, why: l.why })
   let said = ''
   if (answered) said += ` Before bed: ${plural(answered, 'question')} answered and posted on ${andList([...new Set(posted)])}.`
   if (leftSaid.length) said += ` Left for the morning, so tonight the queue skips them: ${leftSaid.join('; ')}.`
@@ -1249,7 +1302,9 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
     // a question for each worker's repository on neither list, every entry checked with GitHub.
     repos = await settleNight($, p.home, worked, round)
-    issues = await askIssues($, p.dir, worked, round)
+    // The issues each worker's goal names, whose Open questions are asked too (#1279).
+    const goalIssueList = Object.entries(goals.goals).flatMap(([id, g]) => goalIssues(g, bySeat.get(id) ?? null))
+    issues = await askIssues($, p.dir, worked, round, goalIssueList)
     // Read before the list is written, so nothing between the list and the record can throw and
     // leave a list for a night that never began.
     startedIn = await $.session.cwd()
@@ -1817,9 +1872,9 @@ const readWrites = async ($: EngineInterface, raw: string) =>
   $.modkit.writes({ command: raw, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
 const NO_WRITES = { files: [], changes: [], unnamed: [] }
 
-const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS, env?: Record<string, string>) => {
+const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS, env?: Record<string, string>, stdin?: string) => {
   try {
-    return await $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) })
+    return await $.process.run(argv, { timeoutMs, ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
   } catch (err) {
     return { exitCode: -1, stdout: '', stderr: msg(err), isStdoutTruncated: false, isStderrTruncated: false }
   }
