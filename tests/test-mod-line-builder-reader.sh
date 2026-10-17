@@ -11,6 +11,8 @@
 #   - In the real manual steps card.ts, a divider added to cardLines (#1263's change) is a look
 #     change, and the time a sent step waits (DROPPED_AFTER_MS) is not.
 #   - A changed comment line in each real .ts hook file is no look change.
+#   - #1296: in the real design round guard register.ts, a sentence its blocked card says, handed to
+#     its own drawCard, is a look change, and the store key it keeps refused calls under is not.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -63,6 +65,13 @@ const card = files.find(f => f.name === 'card.ts')?.text ?? ''
 const each = '  card.steps.forEach((s, i) => {\n'
 const wait = 'export const DROPPED_AFTER_MS = 2 * 60_000'
 const once = (s) => card.split(s).length === 2
+const guard = readdirSync(`${mods}/design-round-guard/hooks`).filter(f => /\.(ts|tsx)$/.test(f) && !/\.d\.ts$/.test(f)).map(name => ({ name, text: readFileSync(`${mods}/design-round-guard/hooks/${name}`, 'utf8') }))
+const reg = guard.find(f => f.name === 'register.ts')?.text ?? ''
+const swap = (a, b) => (reg.split(a).length === 2 ? drawsChange(guard, 'register.ts', reg, reg.replace(a, b)) : 'missing')
+console.log(JSON.stringify({
+  sentence: swap(`"This would change the design round guard's own record."`, `"This changes the design round guard's own record."`),
+  pending: swap("key: 'pending' }", "key: 'waiting' }"),
+}))
 console.log(JSON.stringify({
   divider: once(each) ? drawsChange(files, 'card.ts', card, card.replace(each, `${each}    if (i > 1) lines.push({ divider: true })\n`)) : 'missing',
   waits: once(wait) ? drawsChange(files, 'card.ts', card, card.replace(wait, 'export const DROPPED_AFTER_MS = 3 * 60_000')) : 'missing',
@@ -88,6 +97,8 @@ else
   [ "$quiet" -gt "$drawing" ] && check "most real .ts hook files draw nothing" ok || check "most real .ts hook files draw nothing" "$quiet quiet against $drawing drawing: $out"
   case "$out" in *'"divider":true'*) check "a divider added to the real cardLines is a look change" ok ;; *) check "a divider added to the real cardLines is a look change" "$out" ;; esac
   case "$out" in *'"waits":false'*) check "the real DROPPED_AFTER_MS is no look change" ok ;; *) check "the real DROPPED_AFTER_MS is no look change" "$out" ;; esac
+  case "$out" in *'"sentence":true'*) check "#1296: the real guard's blocked card sentence, handed to its drawCard, is a look change" ok ;; *) check "#1296: the real guard's blocked card sentence, handed to its drawCard, is a look change" "$out" ;; esac
+  case "$out" in *'"pending":false'*) check "#1296: the real guard's store key for refused calls is no look change" ok ;; *) check "#1296: the real guard's store key for refused calls is no look change" "$out" ;; esac
 fi
 
 echo "passed: $pass, failed: $fail"
