@@ -2646,7 +2646,7 @@ lw_got="$(lw_seen)"
   || check "#1297 under CI a suite is asked to wait for nothing" "the suite saw '$lw_got'"
 out_lwb="$(env -u CI HOOK_TESTS_LOCK_WAIT=soon HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LW" 2>&1)"; code_lwb=$?
 lw_got="$(lw_seen)"
-[ "$code_lwb" -ne 0 ] && [ -z "$lw_got" ] && printf '%s\n' "$out_lwb" | grep -q "HOOK_TESTS_LOCK_WAIT='soon'" \
+[ "$code_lwb" -ne 0 ] && [ -z "$lw_got" ] && case "$out_lwb" in *"HOOK_TESTS_LOCK_WAIT='soon'"*) true ;; *) false ;; esac \
   && check "#1297 a wait that is not a whole number of seconds is refused by name, and nothing runs" ok \
   || check "#1297 a wait that is not a whole number of seconds is refused by name, and nothing runs" "exit=$code_lwb seen='$lw_got' out=$out_lwb"
 
@@ -2695,7 +2695,7 @@ case "$lt_plain" in
   ''|*[!0-9]*|0) check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'" ;;
   *) check "#1297 and a suite that did not wait keeps its measured time" ok ;;
 esac
-printf '%s\n' "$out_lt" | grep -q 'note: waited 1000s for the suite lock' \
+case "$out_lt" in *'note: waited 1000s for the suite lock'*) true ;; *) false ;; esac \
   && check "#1297 and the wait is said beside that suite's verdict" ok \
   || check "#1297 and the wait is said beside that suite's verdict" "out=$out_lt"
 

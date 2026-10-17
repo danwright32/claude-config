@@ -8166,8 +8166,9 @@ check "#1297 and the refusal names the setting" "grep -q 'SUITE_LOCK_WAIT=' <<< 
 # Judged only on a run that WAS given one, which every run under run-all-tests.sh is; on a run
 # started by hand there is nothing to hand on, and a pass there would be over nothing (L98).
 if [ "$SUITE_LOCK_WAIT_GIVEN" = 1 ]; then
+  _lw_env="$(env)"
   check "#1297 a wait this run was given does not reach the runs it starts" \
-    "! env | grep -q '^SUITE_LOCK_WAIT'"
+    "! grep -q '^SUITE_LOCK_WAIT' <<< \"\$_lw_env\""
 fi
 
 section "== a run killed from outside cleans up after itself (#163) =="
