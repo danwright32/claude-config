@@ -86,7 +86,10 @@ type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfI
 type Transcripts = Record<string, string[] | string>
 const KIT_FAILS = 'the kit itself fails'
 const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean, transcripts: Transcripts = {}) => {
-  const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0, goalReads: [] as string[] }
+  // Waits on the condition itself (L290): resolved once the pane has been asked to draw again n times.
+  const waits: { n: number; done: () => void }[] = []
+  const untilInvalidated = (n: number) => new Promise<void>(done => (w.invalidated >= n ? done() : waits.push({ n, done })))
+  const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0, goalReads: [] as string[], untilInvalidated }
   on('process.run', async ($, e) => {
     // mod-kit's reader, as the stand-in above asks it: mod-kit's own copy (#1135).
     if (e.argv[0] === '__modkit' && e.argv[1] === 'isDans') {
@@ -128,6 +131,10 @@ const world = (on: On, listing: { now: Listing }, openReason?: string, closeThro
   })
   on('ui.invalidate', () => {
     w.invalidated += 1
+    for (const wait of waits.filter(x => w.invalidated >= x.n)) {
+      waits.splice(waits.indexOf(wait), 1)
+      wait.done()
+    }
     return { value: undefined } as never
   })
   on('prompt.submit', ($, e) => ({ text: e.text }) as never)
@@ -229,7 +236,7 @@ const SET = (c: string) => goalRecord({ met: false, sentinel: true, condition: c
 const MET = (c: string) => goalRecord({ met: true, condition: c, reason: 'Every test passes.' })
 test('a goal met without /goal clear is shown as ended, the session then showing its request; a transcript that cannot be read keeps the recorded goal', withDeps, async ($, on) => {
   const now = 10 * MIN
-  mock.clock(on, { now })
+  const clock = mock.clock(on, { now })
   const withTranscript = (s: ReturnType<typeof session>, path: string | null) => ({ ...s, transcriptPath: path })
   const listing: Listing = {
     open: [
@@ -257,41 +264,55 @@ test('a goal met without /goal clear is shown as ended, the session then showing
   await start($)
   await goals($)
   const ui = await mount($)
-  const tops = (await rowsDrawn(ui)).map(r => r.top)
-  expect(tops).toEqual(['claude-config  Fix the auth tests', 'Downbeat  ship the v2 release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry', 'Ovation  Invoice export'])
-  // Each read that fails is said in the debug log once, however often the pane draws.
+  const recorded = ['claude-config  all tests in test/auth pass', 'Downbeat  Release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry', 'Ovation  Invoice export']
+  // A read can take a second on a 100 MB transcript (measured 2026-10-16), so a draw never waits on
+  // one: the first shows what the tracker recorded, and each finished read draws the pane again.
+  expect((await rowsDrawn(ui)).map(r => r.top)).toEqual(recorded)
+  await w.untilInvalidated(4)
   await ui.redraw()
+  expect((await rowsDrawn(ui)).map(r => r.top)).toEqual(['claude-config  Fix the auth tests', 'Downbeat  ship the v2 release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry', 'Ovation  Invoice export'])
+  // Each read that fails is said in the debug log once.
   expect(debug.filter(t => t.includes('could not be read')).sort()).toEqual([
     'goal-tracker: the /goal of the session in /t/o.jsonl could not be read (grep: /t/o.jsonl: Permission denied), so the goals pane shows the goal it last recorded',
     'goal-tracker: the /goal of the session in /t/v.jsonl could not be read ($.modkit.goal is not a function), so the goals pane shows the goal it last recorded',
   ])
-  // Each transcript the registry names is read once a draw; a session with none is not asked about.
-  expect([...new Set(w.goalReads)].sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
+  // Each transcript the registry names is read once; a session with none is not asked about. Drawn
+  // again inside a minute, nothing is read again; a minute on, each is read once more.
+  expect([...w.goalReads].sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
+  await ui.redraw()
+  await ui.redraw()
+  expect(w.goalReads).toHaveLength(3)
+  const before = w.invalidated
+  await clock.advance(60_000)
+  await ui.redraw()
+  await w.untilInvalidated(before + 1 + 4)
+  expect([...w.goalReads].sort()).toEqual(['/t/d.jsonl', '/t/d.jsonl', '/t/k.jsonl', '/t/k.jsonl', '/t/o.jsonl', '/t/o.jsonl'])
+  expect(debug.filter(t => t.includes('could not be read'))).toHaveLength(2)
 })
 
-{
-  test('a mod-kit with no /goal reader still draws the pane, each session keeping the goal it recorded (#1252)', { plugins: [depsWithoutGoal] }, async ($, on) => {
-    const now = 10 * MIN
-    mock.clock(on, { now })
-    const listing: Listing = {
-      open: [{ ...session('k', 'claude-config', { total: 2, done: 1, goal: 'all tests in test/auth pass', request: 'Fix the auth tests', current: 'Running', lastActivityAt: now }), transcriptPath: '/t/k.jsonl' }],
-      closed: [],
-      unreadable: [],
-      selfId: 'k',
-    }
-    world(on, { now: listing }, undefined, undefined, { '/t/k.jsonl': [SET('all tests in test/auth pass'), MET('all tests in test/auth pass')] })
-    const debug: string[] = []
-    on('ui.log', ($, e) => {
-      if (e.to === 'debug') debug.push(e.text)
-      return { value: undefined } as never
-    })
-    await start($)
-    await goals($)
-    const ui = await mount($)
-    expect((await rowsDrawn(ui)).map(r => r.top)).toEqual(['claude-config  all tests in test/auth pass'])
-    expect(debug.filter(t => t.includes('could not be read'))).toEqual([expect.stringMatching(/^goal-tracker: the \/goal of the session in \/t\/k\.jsonl could not be read \(.+\), so the goals pane shows the goal it last recorded$/)])
+test('a mod-kit with no /goal reader still draws the pane, each session keeping the goal it recorded (#1252)', { plugins: [depsWithoutGoal] }, async ($, on) => {
+  const now = 10 * MIN
+  mock.clock(on, { now })
+  const listing: Listing = {
+    open: [{ ...session('k', 'claude-config', { total: 2, done: 1, goal: 'all tests in test/auth pass', request: 'Fix the auth tests', current: 'Running', lastActivityAt: now }), transcriptPath: '/t/k.jsonl' }],
+    closed: [],
+    unreadable: [],
+    selfId: 'k',
+  }
+  const w = world(on, { now: listing }, undefined, undefined, { '/t/k.jsonl': [SET('all tests in test/auth pass'), MET('all tests in test/auth pass')] })
+  const debug: string[] = []
+  on('ui.log', ($, e) => {
+    if (e.to === 'debug') debug.push(e.text)
+    return { value: undefined } as never
   })
-}
+  await start($)
+  await goals($)
+  const ui = await mount($)
+  await w.untilInvalidated(1)
+  await ui.redraw()
+  expect((await rowsDrawn(ui)).map(r => r.top)).toEqual(['claude-config  all tests in test/auth pass'])
+  expect(debug.filter(t => t.includes('could not be read'))).toEqual([expect.stringMatching(/^goal-tracker: the \/goal of the session in \/t\/k\.jsonl could not be read \(.+\), so the goals pane shows the goal it last recorded$/)])
+})
 
 test('a session registry that cannot be read is said, never drawn as no sessions', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })

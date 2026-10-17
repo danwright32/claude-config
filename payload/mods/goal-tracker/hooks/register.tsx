@@ -262,32 +262,53 @@ const open = async ($: EngineInterface): Promise<string | undefined> => {
   return r.isPlaced ? undefined : `The goals pane is open but not shown: ${r.reason}.`
 }
 
-// What each open session's transcript says its /goal is now (#1252), read at each draw through
-// mod-kit's one reader, since a /goal can end with no /goal clear (met, or paused in Dan's words) and
-// the tracker sees only the command. A session whose registry record names no transcript is not
-// asked about; a reading that fails keeps the goal the tracker recorded, and is said once in the
-// debug log for each transcript and reason, never at every draw.
+// What each open session's transcript says its /goal is now (#1252), through mod-kit's one reader,
+// since a /goal can end with no /goal clear (met, or paused in Dan's words) and the tracker sees only
+// the command. A read greps the whole transcript, which took up to a second on a 106 MB one under
+// load (measured 2026-10-16, 7,755 transcripts on this Mac), so a draw never waits on one: it shows
+// the last reading, else the goal the tracker recorded, and starts a read for each transcript not
+// read in the last minute, drawing the pane again when it lands. While the pane is open each
+// transcript is read at most once a minute (a minute chosen, not measured: how late an ended goal
+// may still show). A session whose record names no transcript is not asked about; a reading that
+// fails keeps the recorded goal, and is said once in the debug log for each transcript and reason.
+const GOAL_FRESH_MS = 60_000
 const goalSaid = new Set<string>()
-const goalsNow = async ($: EngineInterface, open: { sessionId: string; transcriptPath: string | null }[]): Promise<Record<string, ModKitGoal>> => {
-  const read = await Promise.all(
-    open
-      .filter(r => r.transcriptPath)
-      .map(async r => {
-        const transcript = r.transcriptPath as string
-        // Asked inside the promise, so a mod-kit without the member (a TypeError thrown at the call,
-        // before any promise) is caught as a reading that failed, as a rejection is.
-        const g: ModKitGoal = await Promise.resolve()
-          .then(() => $.modkit.goal({ transcript }))
-          .catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
-        const said = `${transcript}\n${g.state === 'unreadable' ? g.why : ''}`
-        if (g.state === 'unreadable' && !goalSaid.has(said)) {
-          goalSaid.add(said)
-          $.ui.log(`goal-tracker: the /goal of the session in ${transcript} could not be read (${g.why}), so the goals pane shows the goal it last recorded`, { to: 'debug' })
-        }
-        return [r.sessionId, g] as const
-      }),
-  )
-  return Object.fromEntries(read)
+const goalRead = new Map<string, { goal: ModKitGoal; at: number }>()
+const goalReading = new Set<string>()
+const readGoalOf = async ($: EngineInterface, transcript: string, at: number) => {
+  goalReading.add(transcript)
+  try {
+    // Asked inside the promise, so a mod-kit without the member (a TypeError thrown at the call,
+    // before any promise) is caught as a reading that failed, as a rejection is.
+    const g: ModKitGoal = await Promise.resolve()
+      .then(() => $.modkit.goal({ transcript }))
+      .catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
+    const said = `${transcript}\n${g.state === 'unreadable' ? g.why : ''}`
+    if (g.state === 'unreadable' && !goalSaid.has(said)) {
+      goalSaid.add(said)
+      $.ui.log(`goal-tracker: the /goal of the session in ${transcript} could not be read (${g.why}), so the goals pane shows the goal it last recorded`, { to: 'debug' })
+    }
+    goalRead.set(transcript, { goal: g, at })
+  } finally {
+    goalReading.delete(transcript)
+  }
+  if (!isOpen) return
+  try {
+    await $.ui.invalidate('ui.render')
+  } catch (err) {
+    $.ui.log(`goal-tracker: could not draw the goals pane again after reading a /goal: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
+const goalsNow = ($: EngineInterface, open: { sessionId: string; transcriptPath: string | null }[], now: number): Record<string, ModKitGoal> => {
+  const out: Record<string, ModKitGoal> = {}
+  for (const r of open) {
+    const transcript = r.transcriptPath
+    if (!transcript) continue
+    const last = goalRead.get(transcript)
+    if (last) out[r.sessionId] = last.goal
+    if ((!last || now - last.at >= GOAL_FRESH_MS) && !goalReading.has(transcript)) void readGoalOf($, transcript, now)
+  }
+  return out
 }
 
 // The module has one session.start and one prompt.submit hook (in register below), which call these.
@@ -507,7 +528,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const rows = rowsOf(list.open, now, await goalsNow($, list.open))
+    const rows = rowsOf(list.open, now, goalsNow($, list.open, now))
     const unreadable = list.unreadable.length
     return (
       <Box flexDirection="column">
