@@ -22,7 +22,10 @@ check() { if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); ec
 design() {
   printf '<!doctype html>\n<html><head><title>Settled</title></head><body>\n<main>the screen</main>\n<script type="application/json" id="decision-map">\n%s\n</script>\n</body></html>\n' "$2" > "$1"
 }
-run() { out="$(python3 "$CHECK" "$@" 2>&1)"; rc=$?; }
+# The output is kept in a file too, and grep reads that file: a grep -q at the end of a pipe can stop
+# reading early and fail the writer under pipefail (test-pipefail-shortcircuit.sh).
+run() { out="$(python3 "$CHECK" "$@" 2>&1)"; rc=$?; printf '%s\n' "$out" > "$T/out.txt"; }
+said() { grep -q -- "$1" "$T/out.txt"; }
 
 MAPPED='{"decisions": [
   {"id": "D1", "decision": "The invoice list is one column", "requirement": "6.4"},
@@ -41,9 +44,9 @@ design "$T/unmapped.html" '{"decisions": [
 ]}'
 run "$T/unmapped.html"
 [ "$rc" -eq 1 ] && check "a decision with no owner is refused (exit 1)" ok || check "a decision with no owner is refused (exit 1)" "rc=$rc $out"
-printf '%s\n' "$out" | grep -q '^UNMAPPED D2: The empty state shows last month$' && check "the refusal names the unmapped decision" ok \
+said '^UNMAPPED D2: The empty state shows last month$' && check "the refusal names the unmapped decision" ok \
   || check "the refusal names the unmapped decision" "$out"
-[ "$(printf '%s\n' "$out" | grep -c '^[A-Z-]* D[0-9]')" = 1 ] && check "and only that one" ok || check "and only that one" "$out"
+[ "$(grep -c '^[A-Z-]* D[0-9]' "$T/out.txt")" = 1 ] && check "and only that one" ok || check "and only that one" "$out"
 
 # 2. A reason that is empty is no reason, and a decision cannot be both owned and code free.
 design "$T/empty-reason.html" '{"decisions": [{"id": "D1", "decision": "Dense rows", "noCode": "  "}]}'
@@ -51,13 +54,13 @@ run "$T/empty-reason.html"
 [ "$rc" -eq 1 ] && check "an empty no code reason is refused" ok || check "an empty no code reason is refused" "rc=$rc $out"
 design "$T/both.html" '{"decisions": [{"id": "D1", "decision": "Dense rows", "requirement": "6.1", "noCode": "none"}]}'
 run "$T/both.html"
-[ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q '^AMBIGUOUS D1' && check "a decision both owned and code free is refused" ok \
+[ "$rc" -eq 1 ] && said '^AMBIGUOUS D1' && check "a decision both owned and code free is refused" ok \
   || check "a decision both owned and code free is refused" "rc=$rc $out"
 
 # 3. Two decisions under one id would let one owner stand for both.
 design "$T/dup.html" '{"decisions": [{"id": "D1", "decision": "A", "requirement": "6.1"}, {"id": "D1", "decision": "B", "requirement": "6.2"}]}'
 run "$T/dup.html"
-[ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q '^DUPLICATE D1' && check "a repeated decision id is refused" ok || check "a repeated decision id is refused" "rc=$rc $out"
+[ "$rc" -eq 1 ] && said '^DUPLICATE D1' && check "a repeated decision id is refused" ok || check "a repeated decision id is refused" "rc=$rc $out"
 
 # 4. A map that cannot be read is exit 2, never a pass (L98, L11).
 printf '<html><body>no map here</body></html>\n' > "$T/nomap.html"
@@ -91,13 +94,13 @@ cat > "$T/plan-gap.json" <<'EOF'
 EOF
 run "$T/mapped.html" "$T/plan-gap.json"
 [ "$rc" -eq 1 ] && check "a requirement no issue names is refused" ok || check "a requirement no issue names is refused" "rc=$rc $out"
-printf '%s\n' "$out" | grep -q '^NO-ISSUE Requirement 6.4 (D1)$' && check "the refusal names the requirement and the decisions it owns" ok \
+said '^NO-ISSUE Requirement 6.4 (D1)$' && check "the refusal names the requirement and the decisions it owns" ok \
   || check "the refusal names the requirement and the decisions it owns" "$out"
-printf '%s\n' "$out" | grep -q 'NO-ISSUE Requirement 6.5' && check "a requirement named in another spelling is not counted as named" ok \
+said 'NO-ISSUE Requirement 6.5' && check "a requirement named in another spelling is not counted as named" ok \
   || check "a requirement named in another spelling is not counted as named" "$out"
 # The unmapped decision is refused before any issue is looked at, and both are reported together.
 run "$T/unmapped.html" "$T/plan-ok.json"
-[ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q '^UNMAPPED D2' && check "an unmapped decision is refused with a plan too" ok \
+[ "$rc" -eq 1 ] && said '^UNMAPPED D2' && check "an unmapped decision is refused with a plan too" ok \
   || check "an unmapped decision is refused with a plan too" "rc=$rc $out"
 printf '{"title": "x", "issues": [ nope ' > "$T/plan-bad.json"
 run "$T/mapped.html" "$T/plan-bad.json"
