@@ -1,3 +1,4 @@
+import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import { FAIL_STREAK, isStepStatus, stateOf, type Progress, type State } from './progress.ts'
 
 // The /goals pane's rows, apart from the drawing (claude-config#612, docs/mods-design.md "Goals
@@ -88,7 +89,13 @@ const detailOf = (p: Progress, state: State, now: number): string | undefined =>
 
 type Listed = { sessionId: string; cwd: string; repoRoot: string | null; extra: Record<string, unknown> }
 
-export const rowsOf = (records: Listed[], now: number): Row[] => {
+/**
+ * Each session's rows, with `goals`, what each session's transcript says its /goal is now (#1252,
+ * read by mod-kit's one reader): set or none decides, so a goal that ended without /goal clear (met,
+ * or paused in Dan's words) is gone and the first request shows again; a transcript that could not
+ * be read, or was not read, leaves the goal the tracker recorded from the /goal command.
+ */
+export const rowsOf = (records: Listed[], now: number, goals: Record<string, ModKitGoal> = {}): Row[] => {
   const rows: (Row & { startedAt: number })[] = []
   for (const r of records) {
     const p = r.extra?.progress
@@ -96,7 +103,8 @@ export const rowsOf = (records: Listed[], now: number): Row[] => {
     const state = stateOf(p, now)
     const steps = p.total > 0 ? `, ${p.done} of ${p.total} steps` : ''
     const detail = detailOf(p, state, now)
-    const goal = p.goal ?? p.request
+    const read = goals[r.sessionId]
+    const goal = read?.state === 'set' ? read.condition : read?.state === 'none' ? p.request : (p.goal ?? p.request)
     rows.push({
       sessionId: r.sessionId,
       project: projectOf(r),

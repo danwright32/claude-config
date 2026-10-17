@@ -4,7 +4,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { GOAL_MARK, goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { SLEEP_START } from '../hooks/driver.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
@@ -62,6 +63,7 @@ const deps: { name: string; register: Register } = {
           git: async (input: { words: string[] }) => kit('git', input),
           gh: async (input: { words: string[] }) => kit('gh', input),
           mergeHelper: async (command: Command) => kit('mergeHelper', command),
+          goal: async (input: { transcript: string }) => kit('goal', input),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
           linkRepo: async (input: { link: string }) => kit('linkRepo', input),
@@ -308,6 +310,8 @@ type Opts = {
   linkReaderFails?: boolean
   /** mod-kit's reader of the merge helper fails (#1251). */
   mergeHelperReaderFails?: boolean
+  /** mod-kit's reader of a transcript's /goal fails (#1252). */
+  goalReaderFails?: boolean
   /** mod-kit's link reader fails only for a link holding this text (#961). */
   linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -536,6 +540,12 @@ const world = (on: On, o: Opts = {}) => {
         const under = Object.entries({ '/Applications/': null, ...o.trees }).find(([prefix]) => (input.path ?? '').startsWith(prefix))
         if (under) return ok(JSON.stringify(under[1]))
         return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
+      }
+      // A transcript's /goal (#1252), read by mod-kit's own reader asking this world's shell.
+      if (a[0] === 'goal' && o.goalReaderFails) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'goal') {
+        const sh = async (argv: string[]) => ((await answer($, { ...e, argv })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
+        return goalAt((input as { transcript?: string }).transcript ?? '', sh).then(g => ok(JSON.stringify(g)))
       }
       if (a[0] === 'branch') {
         if (o.branchReaderFails) return fail(1, o.branchReaderFails)
@@ -2297,6 +2307,16 @@ test("a transcript whose goal cannot be read, or that cannot be found, is asked 
   // Why each was asked is said, so a goal Dan did set and the mod could not read is not a mystery.
   expect(r.text).toMatch(/this session's \/goal could not be read \(grep: Permission denied\)/)
   expect(r.text).toMatch(/the session in o\/other \("Fix the parser"\)'s transcript was not found/)
+})
+
+// #1252: the goal is read by mod-kit's one reader; a mod-kit that cannot answer is said the same way.
+test('a goal reader mod-kit cannot give is said and asked about, never read as a goal (#1252)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { goalReaderFails: true, issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toMatch(/this session's \/goal could not be read \(mod-kit is not loaded\)/)
 })
 
 test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {
