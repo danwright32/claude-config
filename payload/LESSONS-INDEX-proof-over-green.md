@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L781. Prove a generated file has ONE output across cold-cache runs before pinning or guarding it; a timing-dependent generator fails a guard at random.
 - L779. A bar meant to hold every sample is a max, never a percentile: a p95 is the slowest only while samples are few.
 - L1001. A control that swaps back only the code while keeping the new tests cannot exonerate the change: the tests' own fault is in both arms.
 - L713. A determinism check that repeats a run back to back cannot see a dependence on the clock, so move the input or read the source instead.
