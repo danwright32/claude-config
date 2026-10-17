@@ -828,6 +828,12 @@ test('#1275 (lessons review): a statement continued on an unindented line stays 
   const files = [{ name: 'look.ts', text: split }]
   expect(drawsChange(files, 'look.ts', split, split.replace("'warning'", "'error'"))).toBe(true)
   expect(drawsChange(files, 'look.ts', split, split.replace('later = 1', 'later = 2'))).toBe(false)
+  // A statement ending in a generic's `>` is whole, so the declaration after it is its own; an
+  // arrow left open at `=>` goes on.
+  const generic = ['export type Rows = Array<string>', "const AMBER = 'warning'", 'export const row = (t: string) =>', '  [{ text: t, color: AMBER }]', ''].join('\n')
+  const g = [{ name: 'look.ts', text: generic }]
+  expect(drawsChange(g, 'look.ts', generic, generic.replace("'warning'", "'error'"))).toBe(true)
+  expect(drawsChange(g, 'look.ts', generic, generic.replace('Array<string>', 'Array<number>'))).toBe(false)
   // The names a drawing file imports from './card' or './card.js' are the card.ts file's.
   for (const spec of ['./card', './card.js']) {
     const tsx = DRAW_TSX.replace("from './card.ts'", `from '${spec}'`)
