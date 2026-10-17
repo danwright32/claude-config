@@ -1870,8 +1870,14 @@ BBEdit (focus moves there), unless you are away or woke it from your phone, when
 for you in the held card. That session then summarises its own night and offers what the overnight
 sessions proposed: new issues in one multi select picker, with the priority, labels and milestone
 each was proposed with so you can correct them, and new lessons one at a time. Nothing is filed and
-no lesson is added until you pick it. Every other session that worked overnight is asked for its
-own short summary.
+no lesson is added until you pick it. Ending sleep is the night's review (#1285), so it never needs
+the report read: every live session, worker or not, puts its own morning to you, the one you woke
+it in at once and every other at its next minute (the same when sleep ends by itself at noon, when
+the session that ended it offers the proposals). Each summarises its night if it worked, delivers
+what it held, and asks as pickers, one at a time, every question it noted overnight and every merge
+or deploy the night's lists held in it, so nothing you have to answer, decide or approve exists only
+in the report. A session with nothing of its own starts no turn. A picker left unanswered is not
+dropped: that session asks it again the next time you write to it.
 
 **What it does overnight.** Each enrolled session works only toward its goal, never any other open
 issue. Sessions with a goal that are sitting idle at their prompt are told to start as sleep begins. A goal that names issues or a milestone is worked one of its issues at a time, each in a

@@ -2463,7 +2463,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   await start($ as never, clock)
   await clock.settle()
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. One session that worked overnight has closed since, so its night is only in the report.")
+  expect(r.text).toBe("Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Away is on in this session and 1 other. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md. You are away, so it was not opened on the Mac: opening it waits in the held card for when you are back. The other open session puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers. One session that worked overnight has closed since, so its night is only in the report.")
   // The waking session notes its usage on the record it moved aside, then renders the report once more, checked against GitHub (#835).
   const moved = `${SLEEP}/ended/${T0}-woke-s1.json`
   expect(w.appended.map(a => [a.file, JSON.parse(a.line)])).toEqual([[moved, { kind: 'woke', at: T0, by: 's1', usage: { costUsd: 1.5, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }] } }]])
@@ -2516,14 +2516,12 @@ test('/wake opens the report in BBEdit on the front window, says focus moved, an
   const { w, clock } = world(on, { open: [interactive('s2'), { sessionId: 's3' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session and 2 others. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Asked the other session that worked overnight for its summary.`)
+  expect(r.text).toBe(`Sleep mode is off. It began at 7:11 PM ET on Wed Dec 31. Home is on in this session and 2 others. The night's report is at ${REPORT}. Focus moved to BBEdit, where it is open. Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers.`)
   // Opened only after the final render, so BBEdit shows the finished report.
   expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', REPORT]])
   expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
-  // Each other worker summarises its own night; a session that did not work is only told the place.
-  const asks = w.sent.filter(x => x.text.startsWith('Dan is up'))
-  expect(asks.map(x => x.to)).toEqual(['s2'])
-  expect(asks[0]?.text).toMatch(/^Dan is up: sleep mode is off\. Summarise for him/)
+  // No session is sent a summary request any more (#1285): each puts its own morning at its minute.
+  expect(w.sent.filter(x => x.text.startsWith('Dan is up'))).toEqual([])
   expect(w.sent.filter(x => x.to === 's3').map(x => x.text)).toEqual(['Dan switched every session on this Mac to home.'])
   // The waking session's own turn: started once the command is done, with its summary and both pickers.
   expect(morningOf(w)).toEqual([])
@@ -2538,13 +2536,12 @@ test('/wake opens the report in BBEdit on the front window, says focus moved, an
   expect(w.fsWrites.some(f => f.endsWith('LESSONS.md'))).toBe(false)
 })
 
-test('two /wake calls at once open the report once, ask each worker once and start one morning turn (#837)', withDeps, async ($, on) => {
+test('two /wake calls at once open the report once and start one morning turn (#837)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { open: [interactive('s2')], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }), [PROPOSED_AT]: PROPOSED } })
   await start($ as never, clock)
   await Promise.all([command($ as never, 'wake'), command($ as never, 'wake')])
   await clock.settle()
   expect(w.opened.length).toBe(1)
-  expect(w.sent.filter(x => x.text.startsWith('Dan is up')).length).toBe(1)
   expect(morningOf(w).length).toBe(1)
 })
 
@@ -2595,19 +2592,19 @@ test('a report that is not on the disk is not opened, and that is said (#837)', 
   expect(w.opened).toEqual([])
 })
 
-test('a worker that closed overnight, or that cannot be told, is said rather than counted as asked (#837)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { open: [interactive('s2'), interactive('s3')], sends: [true, true, true, { refused: 'session s3 is busy' }, { refused: 'session s3 is busy' }], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2', 's3', 's4'] }) } })
+test('a worker that closed overnight is said, its night only in the report, and the open ones put their own morning (#837, #1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2'), interactive('s3')], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2', 's3', 's4'] }) } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/Asked the other session that worked overnight for its summary\. One session that worked overnight could not be asked for its summary: session s3 is busy\. One session that worked overnight has closed since, so its night is only in the report\.$/)
-  expect(w.sent.filter(x => x.text.startsWith('Dan is up')).map(x => x.to)).toEqual(['s2', 's3', 's3'])
+  expect(r.text).toMatch(/Each of the 2 other open sessions puts to you within a minute whatever it has from the night: its summary if it worked overnight, and its questions and approvals as pickers\. One session that worked overnight has closed since, so its night is only in the report\.$/)
+  expect(w.sent.filter(x => x.text.startsWith('Dan is up'))).toEqual([])
 })
 
-test('a session registry that answers garbled never loses the wake reply: the summaries are said as not asked (#837)', withDeps, async ($, on) => {
+test('a session registry that answers garbled never loses the wake reply: the other sessions are said as not known (#837, #1285)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { registryGarbled: true, files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2'] }) } })
   await start($ as never, clock)
   const r = await command($ as never, 'wake')
-  expect(r.text).toMatch(/^Sleep mode is off\..*The other sessions that worked overnight could not be asked for their summaries: .+\.$/s)
+  expect(r.text).toMatch(/^Sleep mode is off\..*Whether other sessions are open could not be read \(.+\); any that are put to you within a minute whatever they have from the night\.$/s)
   // Telling the others the place met the same answer, and says so rather than throwing.
   expect(r.text).toMatch(/The other sessions could not be told: the session registry's answer could not be read \(.+?\)\. The night's report/)
   expect(w.files[CURRENT]).toBeUndefined()
@@ -2699,7 +2696,7 @@ test('a session that did not wake sleep delivers what it held at its next minute
   await clock.advance(MIN)
   await clock.settle()
   expect(heldAtWakeOf(w).length).toBe(1)
-  expect(heldAtWakeOf(w)[0]).toMatch(/^Dan is up: sleep mode is off\. While Dan slept, this session held one thing it would have handed him: Publish status\.html\. Deliver each now, where he is now/)
+  expect(heldAtWakeOf(w)[0]).toMatch(/^Dan is up: sleep mode is off\. This session was not enrolled overnight, so it has nothing of its own to summarise\.\nWhile Dan slept, this session held one thing it would have handed him: Publish status\.html\. Deliver each now, where he is now/)
   await clock.advance(3 * MIN)
   expect(heldAtWakeOf(w).length).toBe(1)
 })
@@ -2777,6 +2774,108 @@ test('a held delivery whose morning prompt cannot start is kept, and asked for a
   await clock.advance(MIN)
   await clock.settle()
   expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+// #1285: ending sleep is the night's review in every live session, each putting its own to Dan.
+const myQuestion = proposal({ kind: 'question', by: 's1', cwd: '/repo', questions: ['Keep the old export flag?'] })
+const theirQuestion = proposal({ kind: 'question', by: 's2', cwd: '/other', questions: ['Rename the parser?'] })
+const CLOSED_NIGHT = { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'o/r waits overnight' }] }
+
+test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, never the proposals (#1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  // Woken in another session.
+  delete w.files[CURRENT]
+  expect(morningOf(w)).toEqual([])
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/^Dan is up: sleep mode is off\. Summarise for him in a few plain lines what this session did overnight/)
+  expect(m).toContain('3.1 /repo: Keep the old export flag?')
+  expect(m).not.toContain('Rename the parser?')
+  // The proposals are the session that ended sleep's to offer, so none is offered twice.
+  expect(m).not.toContain('1.1 ')
+  expect(m).not.toContain('2.1 ')
+  await clock.advance(3 * MIN)
+  expect(morningOf(w).length).toBe(1)
+})
+
+test('a session with nothing of its own from the night starts no turn at wake (#1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${theirQuestion}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+})
+
+test('a session that is not a worker still asks its own questions at wake (#1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${myQuestion}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/^Dan is up: sleep mode is off\. This session was not enrolled overnight, so it has nothing of its own to summarise\./)
+  expect(m).toContain('3.1 /repo: Keep the old export flag?')
+  expect(m).toMatch(/put it to him again the next time he writes in this session/)
+})
+
+test('a merge the night held in a session is put to Dan as a picker in its morning (#1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ repos: CLOSED_NIGHT }) } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 12 --squash', 'm1'))).toMatch(/^Blocked overnight/)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/What the night's merge and deploy lists held in this session, numbered 4\.n in the block below/)
+  expect(m).toMatch(/4\.1 merge a PR \(.*o\/r.*\)\. The call held: gh pr merge 12 --squash/)
+})
+
+test("notes that cannot be read at a session's morning are said, never read as no question (#1285)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${myQuestion}\n` }, unreadableFiles: [PROPOSED_AT] })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w)[0]).toMatch(/The night's notes could not be read \(.+\), so any question this session noted for Dan is not listed here/)
+})
+
+test('the session whose minute ends sleep at noon offers the night\'s proposals in its morning (#1285)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: PROPOSED } })
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  expect(w.files[CURRENT]).toBeUndefined()
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('1.1 o/r: Date parse drops the zone')
+  expect(m).toContain('2.1 Parse a date with its zone.')
+})
+
+test("/wake's own morning turn asks its own questions with the proposals, and a turn that fails is put to Dan by the minute, proposals included (#1285)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n` } })
+  await start($ as never, clock)
+  w.o.promptFails = 1
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('3.1 /repo: Keep the old export flag?')
+  expect(m).toContain('1.1 o/r: Date parse drops the zone')
+  await clock.advance(2 * MIN)
+  expect(morningOf(w).length).toBe(1)
 })
 
 test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
