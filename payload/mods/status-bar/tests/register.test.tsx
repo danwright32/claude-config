@@ -624,6 +624,31 @@ test('no job watcher loaded is no job item, and no error', withKit, async ($, on
   await ui.unmount()
 })
 
+// #1281: a job watcher loaded in this session whose copy lacks list (measured on 2.1.302: a mod
+// reloaded before the one it depends on keeps the older copy). No job item, and Dan is told once,
+// by the one sentence naming the skew and its remedy, however often the band reads the jobs.
+const listlessWatcher: { name: string; register: Register } = {
+  name: 'job-watcher',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, jobs: { agents: async () => [] } }
+    })
+  },
+}
+test('a job watcher whose loaded copy lacks list shows no job item and is told once (#1281)', { plugins: [modKit, listlessWatcher] }, async ($, on) => {
+  const { clock, toasts } = world(on, { unpushed: '1\n' })
+  await start($, clock)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('1 unpushed commit')
+  expect(toasts.filter(t => t.includes('out of step'))).toEqual([
+    'status-bar and job-watcher are out of step in this session: the job-watcher loaded here has no list, which status-bar needs, so a mod was updated after this session loaded it. A new session loads them together.',
+  ])
+  await ui.unmount()
+})
+
 test('a job watcher that fails to answer is named once in the debug log, and the rest still shows', { plugins: [modKit, brokenWatcher] }, async ($, on) => {
   const { clock, debug } = world(on, { unpushed: '1\n' })
   await start($, clock)

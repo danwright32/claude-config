@@ -3,6 +3,7 @@ import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalTracker } from '../types/index.d.ts'
 import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
 import { empty, FAIL_STREAK, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Goal tracker (claude-config#612). Each session's task list, its goal text, its last activity and
 // whether it waits on Dan go into the shared session registry, where the /goals pane (below)
@@ -73,10 +74,13 @@ const isAsleep = async ($: EngineInterface): Promise<boolean> => {
   try {
     return (await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep()) === true
   } catch (err) {
-    const why = err instanceof Error ? err.message : String(err)
-    // Only the noun itself missing (scope modes not loaded) goes unsaid, as the keystroke guard reads it.
-    if (!(err instanceof TypeError && /scopeModes/.test(why)))
-      $.ui.log(`goal-tracker: could not tell whether the Mac is asleep (${why}), so the notification is sent`, { to: 'debug' })
+    // Only the noun itself missing (scope modes not loaded) goes unsaid, read by the one reader
+    // (#1281). A scope modes whose loaded copy lacks isAsleep is told to Dan once, and is awake too.
+    const missing = missingOf(err)
+    if (missing?.kind === 'noun') return false
+    const news = skewNews(err, 'goal-tracker')
+    if (news) $.ui.toast(news)
+    if (!missing) $.ui.log(`goal-tracker: could not tell whether the Mac is asleep (${errorText(err, 'goal-tracker')}), so the notification is sent`, { to: 'debug' })
     return false
   }
 }

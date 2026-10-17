@@ -1691,6 +1691,21 @@ then is touched the same way, so its tools come back at the end of that turn. A 
 be touched is named in the session (by a turn's look only the first time) and tried again at the
 next look or mod-kit reload. If a mod's tools are still missing, a new session brings them back.
 
+A mod that loads again before a mod it depends on keeps that mod's older members (#1281, measured on
+Claude Code 2.1.302 with two throwaway mods in a headless session that hot reloads): the provider
+reloading afterwards does not reach it, and a call to a member added since throws at the call site,
+on every call, until the mod loads again. mod-kit's touch above does load it again, but only once
+the session is idle, which a worker the overnight driver keeps busy never is. Each mod that reads
+such a failure reads it with one reader, mod-kit's `hooks/skew.ts`, kept as a byte for byte copy at
+`hooks/mod-kit/skew.ts` in the mod (it cannot be a member of mod-kit's noun, which is the older copy
+just then): the message names the two mods, the member and the remedy (a new session), Dan is told
+once per load, and a noun that is absent (its mod not loaded) stays its own case.
+`tools/check-mod-shared-parts.sh` holds each copy to mod-kit's and fails a mod that reads a
+`TypeError` by hand. Overnight every call is still refused while the mods are out of step (none can
+be checked for a merge or deploy), but at the worker's next Stop the driver lets it rest a minute,
+touching its own manifest so it loads again while idle, then starts it again; still out of step, it
+stops for the night with its claim parked and the reason in the morning report.
+
 After each apply, and after a send that changed which mods are named, `claude plugin list --json`
 and `claude plugin validate` are asked about every mod,
 and the pull names any mod Claude Code does not list as enabled, or that validation refuses, with

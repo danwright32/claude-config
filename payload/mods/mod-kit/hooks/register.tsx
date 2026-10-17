@@ -16,6 +16,7 @@ import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
+import { errorText, missingOf } from './skew.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -370,12 +371,13 @@ export const register: Register = (on, options) => {
     try {
       return { value: await ($ as unknown as { secretGuard: SecretGuardScreen }).secretGuard.screen(e) }
     } catch (err) {
-      const why = String((err as Error)?.message ?? err)
       // The engine needs the noun called in place, so the secret guard not being loaded arrives as a
-      // TypeError naming the noun; whatever the noun itself throws arrives wrapped as the engine's
-      // own error, and is a failure, never taken for absence.
-      if (err instanceof TypeError && /secretGuard/.test(why)) return { value: null }
-      return { value: screenFailed(e, why) }
+      // TypeError naming the noun, read by the one reader (#1281); whatever the noun itself throws
+      // arrives wrapped as the engine's own error, and is a failure, never taken for absence. A
+      // secret guard whose loaded copy lacks screen is loaded, so it refuses too (L42).
+      const missing = missingOf(err)
+      if (missing?.kind === 'noun' && missing.noun === 'secretGuard') return { value: null }
+      return { value: screenFailed(e, errorText(err, 'mod-kit')) }
     }
   })
 

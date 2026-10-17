@@ -91,6 +91,13 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
       }
+      // A mod-kit loaded before it had these members (#1281): a mod reloaded before the mod-kit it
+      // depends on keeps the older one, so each is not there at all, as in a session. Named by a
+      // plugin in the fold, kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
       return { ...built, modkit }
     })
     // A result row with a card is drawn as its title's runs, then its lines' runs, as plain Texts.
@@ -141,6 +148,8 @@ const modKit: { name: string; register: Register } = {
   },
 }
 const withKit = { plugins: [modKit] }
+// #1281: the same, with a mod-kit loaded before it had mergeHelper.
+const withOldKit = { plugins: [modKit, { name: 'kit-lacks-merge-helper', register: (() => undefined) as Register }] }
 
 const T0 = 1_800_000_000_000
 const REPO = 'danwright32/slate'
@@ -854,6 +863,26 @@ test('a merge is recognised as plain gh, through rtk, and through the merge help
   expect(said(await bash($, 'grep -n gh ~/.claude/hooks/lib/merge-when-ready.sh'))).not.toContain('merg')
   expect(said(await bash($, 'bash -c "$MERGE"'))).not.toContain('merg')
   expect(views(runs)).toEqual([])
+})
+
+// #1281: a session holding a mod-kit older than this mod, which has no mergeHelper. A gh pr merge is
+// still read by the readers it does have, and is owed its card; whether a command ran the merge
+// helper cannot be told, so Claude is told that on each such call (fail loud), and Dan once.
+const SKEW = 'is-it-live and mod-kit are out of step in this session: the mod-kit loaded here has no mergeHelper, which is-it-live needs, so a mod was updated after this session loaded it. A new session loads them together.'
+test('with a mod-kit older than this mod, a gh merge is still owed its card, the merge helper is said unreadable naming the skew, and Dan hears it once (#1281)', withOldKit, async ($, on) => {
+  const w = world(on, { prView: github({ [`${REPO}#412`]: { state: 'MERGED', mergedAt: JUST }, [`${OTHER}#7`]: { state: 'MERGED', mergedAt: JUST } }) })
+  await start($)
+  const direct = said(await bash($, 'gh pr merge 412 --squash && echo merged'))
+  expect(direct).toContain(`You merged ${REPO}#412.`)
+  expect(direct).toContain(`is it live could not tell whether this command also ran the merge helper (${SKEW})`)
+  for (let n = 0; n < 2; n++) {
+    const viaHelper = said(await bash($, `bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo ${OTHER} --squash`))
+    expect(viaHelper).toContain(`is it live could not tell whether this command also ran the merge helper (${SKEW})`)
+    expect(viaHelper).toContain('select:mcp__is-it-live__card')
+  }
+  expect(w.toasts.filter(t => t.includes('out of step'))).toEqual([SKEW])
+  // The owed merge is still owed: the turn end asks for its card.
+  expect((await turnEnd($)).block).toContain(`${REPO}#412`)
 })
 
 test('the turn end is refused once per PR in a chain of turn ends, so a card that cannot be made never traps it (#1244)', withKit, async ($, on) => {

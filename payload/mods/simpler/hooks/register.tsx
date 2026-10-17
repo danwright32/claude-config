@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { SimplerOffer } from '../types/index.d.ts'
 import { REPORT_EVERY_MS, judge, pressAt, pressKey, replyHead, requestText, sameReply, weeklyLine } from './simpler.ts'
+import { missingOf } from './mod-kit/skew.ts'
 
 // The Simpler button (claude-config#619, settled in docs/mods-design.md). After an answer over the
 // length threshold or heavy in technical terms, a Simpler button sits at the top of that answer,
@@ -30,7 +31,8 @@ const resumeOf = async ($: EngineInterface, text: string, say = false): Promise<
   try {
     return (await ($ as unknown as { addonNotes: AddonNotesNoun }).addonNotes.resumeLine({ text })) ?? null
   } catch (err) {
-    if (say && !(err instanceof TypeError) && !toldResume) {
+    // Absent, or a loaded copy lacking the member (#1281, read by the one reader): no line, unsaid.
+    if (say && !missingOf(err) && !toldResume) {
       toldResume = true
       $.ui.log(`simpler: add-on notes could not read a reply's opening line, so the button goes above it: ${why(err)}`, { to: 'debug' })
     }

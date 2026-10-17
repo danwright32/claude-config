@@ -107,6 +107,25 @@ test('a failed screen of a call with no id refuses it and keeps no card under an
   }
 })
 
+// #1281: a secret guard loaded in this session whose copy lacks screen (a mod reloaded before the
+// one it depends on keeps the older copy, measured on 2.1.302) is loaded, so the call is refused,
+// naming the skew, never taken for the guard being absent, which let the call through unscreened.
+const olderSecretGuard: { name: string; register: Register } = {
+  name: 'secret-guard',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, secretGuard: {} }
+    })
+  },
+}
+test('a secret guard whose loaded copy lacks screen refuses the call, naming the skew (#1281)', { plugins: [answerer, olderSecretGuard] }, async ($, on) => {
+  const w = world(on)
+  const r = await $.tool.call(pin('public', 's6'))
+  expect(textOf(r)).toMatch(/^Blocked: the secret guard could not be asked about this \(mod-kit and secret-guard are out of step in this session: the secret-guard loaded here has no screen/)
+  expect(w.toasts).toEqual([])
+})
+
 test('a secret guard that fails to answer refuses the call, with the grey card (#707, L42)', { plugins: [answerer, secretGuard] }, async ($, on) => {
   const w = world(on)
   const r = await $.tool.call(pin('BREAK', 's4'))
