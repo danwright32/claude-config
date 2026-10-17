@@ -3311,6 +3311,7 @@ test('asleep, a merge helper reading mod-kit cannot give refuses the call, where
 // does not reach it, and a reload it is owed lands only once the session is idle, which a worker the
 // driver keeps blocking never is. Here the stand in mod-kit lacks mergeHelper the same way.
 const SKEW = 'scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no mergeHelper, which scope-modes needs, so a mod was updated after this session loaded it. A new session loads them together.'
+const NOTES_LOST = 'Until then scope modes cannot note the branches this session makes or the PRs it opens, so winding down may not finish them.'
 const SKEW_DENY = `Blocked overnight: ${SKEW} So no call can be checked for a merge or deploy, and none runs. End this turn now so this session can load its mods again; do not try this call another way.`
 
 test('asleep, a mod-kit older than this mod refuses each call as one it cannot check, naming the skew and its remedy, and tells Dan once (#1281)', withOldKit, async ($, on) => {
@@ -3388,7 +3389,8 @@ test('awake, a mod-kit older than this mod is told once, never on every call tha
   const { w, clock } = world(on)
   await start($ as never, clock)
   for (let n = 0; n < 3; n++) await call($ as never, bash(`git commit -m "change ${n}"`))
-  expect(w.toasts.filter(t => t.includes('out of step') || t.includes('mergeHelper'))).toEqual([SKEW])
+  // Said once with what it costs until then, since every later note is dropped (lessons review).
+  expect(w.toasts.filter(t => t.includes('out of step') || t.includes('mergeHelper'))).toEqual([`${SKEW} ${NOTES_LOST}`])
 })
 
 test('a package script whose body deploys is refused where deploying is not allowed; a push to main is refused everywhere', withDeps, async ($, on) => {

@@ -154,6 +154,8 @@ const msg = (err: unknown) => errorText(err, MOD)
 // lasts, and the driver reads it at the next Stop. Kept in the module, so a reload, which is what
 // can mend it, starts it over.
 let skewMet: string | null = null
+// What a skew costs the notes winding down reads, said with it once (#1281 lessons review).
+const NOTES_LOST = 'Until then scope modes cannot note the branches this session makes or the PRs it opens, so winding down may not finish them.'
 // What isTestBuild asks of the Mac (#1269), for a tool call; the noun reads the same in place, since
 // the engine refuses handing `built` to a helper. A home that cannot be read is unknown, which
 // isTestBuild reads as any folder in /Users.
@@ -2808,10 +2810,11 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
     }
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
   } catch (err) {
-    // A skew is said once, never on every call that notes a branch (#1281).
+    // A skew is said once, never on every call that notes a branch (#1281), with what it costs
+    // until then, since every later note is dropped too (lessons review).
     if (missingOf(err)?.kind === 'member') {
       const news = skewNews(err, MOD)
-      if (news) $.ui.toast(news)
+      if (news) $.ui.toast(`${news} ${NOTES_LOST}`)
       return
     }
     $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
@@ -2845,7 +2848,7 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
   } catch (err) {
     if (missingOf(err)?.kind === 'member') {
       const news = skewNews(err, MOD)
-      if (news) $.ui.toast(news)
+      if (news) $.ui.toast(`${news} ${NOTES_LOST}`)
       return
     }
     $.ui.toast(`Scope modes could not note the PR this call opened (${msg(err)}), so winding down will not know to finish it.`)
