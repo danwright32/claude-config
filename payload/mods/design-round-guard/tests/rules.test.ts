@@ -12,6 +12,8 @@ import {
   callKey,
   changedRuns,
   isModHook,
+  isModHookTs,
+  drawsChange,
   modHookLogicOnly,
   onScreenProblem,
   sourceSpans,
@@ -682,4 +684,146 @@ test('changedRuns: each run of changed lines as its own step, the last step endi
   expect(changedRuns(lines.join(''), many)).toEqual([[lines.join(''), many]])
   const few = lines.map((l, i) => (i % 20 ? l : l.toUpperCase())).join('')
   expect(changedRuns(lines.join(''), few).length).toBe(10)
+})
+
+// #1275: on 2026-10-16 the #1263 divider was added in manual steps' card.ts (cardLines), which builds
+// every line the steps card draws, and the guard never saw it: only .tsx and .jsx files counted. A
+// mod's .ts hook file is judged by what in it reaches what the mod draws: a line builder (a function
+// making mod-kit's text runs, dividers or buttons), anything handed to a drawing call (mod-kit's
+// band, pane and card, a blocked card, a pane's size) or used inside JSX, and every name those use.
+// The fixture is shaped after manual steps: card.ts builds the lines, register.tsx draws them.
+const LINES_TS = [
+  "import type { StepsCard } from '../types/index.d.ts'",
+  '',
+  '/** How long a sent step waits for the turn its Done starts. */',
+  'export const DROPPED_AFTER_MS = 2 * 60_000',
+  "const AMBER = 'warning'",
+  'export type CardText = { text: string; color?: string; dim?: boolean }',
+  '// One line each.',
+  "const oneLine = (s: string) => s.replace(/\\s+/g, ' ').trim()",
+  'export const finish = (card: StepsCard, n: number): string | undefined => {',
+  '  if (!card.steps[n - 1]) return `There is no step ${n}; the card has ${card.steps.length}.`',
+  '  return undefined',
+  '}',
+  'const finishedWhen = (at: number): string => `on ${new Date(at).toISOString().slice(0, 10)}`',
+  'export const cardLines = (card: StepsCard): (CardText[] | { divider: true })[] => {',
+  '  // The heading first, then each step.',
+  '  const lines: (CardText[] | { divider: true })[] = [[{ text: card.heading, color: AMBER }]]',
+  '  card.steps.forEach((s, i) => {',
+  '    const label = `${i + 1}. ${oneLine(s.title)}`',
+  '    lines.push([{ text: label }, ...(s.finishedAt === undefined ? [] : [{ text: `  ${finishedWhen(s.finishedAt)}`, dim: true }])])',
+  '  })',
+  '  return lines',
+  '}',
+  'export const MAX_PANE_COLUMNS = 80',
+  'export const paneColumns = (card: StepsCard): number => Math.min(MAX_PANE_COLUMNS, 2 + Math.max(...card.steps.map(s => s.title.length)))',
+  '// A generic arrow, which a .ts file may write with no comma.',
+  'const serial = <T>(work: () => Promise<T>): Promise<T> => work()',
+  'export const later = serial',
+  '',
+].join('\n')
+const WAITING_TS = ['export const phrase = (n: number): string => `waiting ${n} min`', 'export const waitedLong = (n: number): boolean => n > 5', ''].join('\n')
+const STORE_TS = ["export const KEY = 'steps'", 'export const keyOf = (repo: string): string => `${KEY}:${repo}`', ''].join('\n')
+const DRAW_TSX = [
+  "import type { Register } from 'claude-code'",
+  "import { cardLines, DROPPED_AFTER_MS, finish, paneColumns } from './card.ts'",
+  "import { phrase, waitedLong } from './waiting.ts'",
+  "import { keyOf } from './store.ts'",
+  '',
+  'export const register: Register = on => {',
+  "  on('session.start', async ($, e, next) => {",
+  '    const card = await $.store.get(keyOf(e.repo))',
+  '    if (finish(card, 1) || waitedLong(DROPPED_AFTER_MS)) return next(e)',
+  "    await $.modkit.bandRow({ mod: 'demo', id: 'steps', slot: 'steps', lines: cardLines(card) as never })",
+  '    await $.ui',
+  "      .open({ id: 'pane', title: 'Steps', columns: paneColumns(card) })",
+  '    return next(e)',
+  '  })',
+  "  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {",
+  '    const { Text } = $.ui.resolve(e)',
+  '    return <Text dimColor>{phrase(e.props.n)}</Text>',
+  '  })',
+  '}',
+  '',
+].join('\n')
+const MOD_FILES = [
+  { name: 'card.ts', text: LINES_TS },
+  { name: 'waiting.ts', text: WAITING_TS },
+  { name: 'store.ts', text: STORE_TS },
+  { name: 'register.tsx', text: DRAW_TSX },
+]
+// Whether changing `name` from its text in MOD_FILES, replacing `from` with `to`, changes what the mod draws.
+const draws = (name: string, from: string, to: string): boolean => {
+  const was = MOD_FILES.find(f => f.name === name)?.text ?? ''
+  if (was.split(from).length !== 2) throw new Error(`${name} holds ${from} other than once`)
+  return drawsChange(MOD_FILES, name, was, was.replace(from, to))
+}
+
+test('#1275: a mod hook .ts file is one in its hooks folder, never a declaration file or one elsewhere in the mod', () => {
+  for (const rel of ['payload/mods/manual-steps/hooks/card.ts', 'mods/x/hooks/a.mts', '/r/payload/mods/x/hooks/a.cts']) expect(isModHookTs(rel)).toBe(true)
+  for (const rel of ['payload/mods/x/hooks/types.d.ts', 'payload/mods/x/types/index.ts', 'payload/mods/x/hooks/sub/a.ts', 'payload/mods/x/hooks/register.tsx', 'src/hooks/a.ts', 'payload/mods/x/tests/a.ts']) expect(isModHookTs(rel)).toBe(false)
+})
+
+test('#1275: a change to what a line builder draws is asked about: the #1263 divider, a run it builds, a helper or value it uses, and a pane size', () => {
+  // The #1263 divider, as it was added to cardLines.
+  expect(draws('card.ts', '    const label = `${i + 1}. ${oneLine(s.title)}`', '    if (i > 0) lines.push({ divider: true })\n    const label = `${i + 1}. ${oneLine(s.title)}`')).toBe(true)
+  // A run's look, and its words.
+  expect(draws('card.ts', '{ text: card.heading, color: AMBER }', '{ text: card.heading, color: AMBER, bold: true }')).toBe(true)
+  expect(draws('card.ts', 'const label = `${i + 1}. ', 'const label = `Step ${i + 1}: ')).toBe(true)
+  // What it uses: a helper's words, a colour's value, a trimming of what is shown.
+  expect(draws('card.ts', '`on ${new Date', '`finished ${new Date')).toBe(true)
+  expect(draws('card.ts', "const AMBER = 'warning'", "const AMBER = 'error'")).toBe(true)
+  expect(draws('card.ts', ".replace(/\\s+/g, ' ')", ".replace(/\\s+/g, '  ')")).toBe(true)
+  // A value handed to a drawing call that builds no run: the pane's width, and what it is made of.
+  expect(draws('card.ts', 'Math.min(MAX_PANE_COLUMNS, 2 +', 'Math.min(MAX_PANE_COLUMNS, 4 +')).toBe(true)
+  expect(draws('card.ts', 'MAX_PANE_COLUMNS = 80', 'MAX_PANE_COLUMNS = 100')).toBe(true)
+  // Used inside JSX in another file of the mod.
+  expect(draws('waiting.ts', '`waiting ${n} min`', '`waiting ${n} minutes`')).toBe(true)
+})
+
+test('#1275: a logic only edit to a line builder file passes, as does any edit to a .ts file that draws nothing', () => {
+  // Logic beside the builder: a value only a condition reads, a refusal Claude reads (naming the card), a new function.
+  expect(draws('card.ts', '2 * 60_000', '3 * 60_000')).toBe(false)
+  expect(draws('card.ts', 'the card has ${card.steps.length}', 'the card holds ${card.steps.length} steps')).toBe(false)
+  expect(draws('card.ts', 'export const MAX_PANE_COLUMNS', 'export const isOpen = (card: StepsCard): boolean => card.steps.length > 0\nexport const MAX_PANE_COLUMNS')).toBe(false)
+  // A comment inside the builder, its spacing, and a type, none of which is drawn.
+  expect(draws('card.ts', '// The heading first, then each step.', '// The heading first, then each step, in order.')).toBe(false)
+  expect(draws('card.ts', '  return lines\n}', '  return   lines\n}')).toBe(false)
+  expect(draws('card.ts', 'dim?: boolean }', 'dim?: boolean; bold?: boolean }')).toBe(false)
+  // A function the mod uses only to decide, in a file that also feeds JSX.
+  expect(draws('waiting.ts', 'n > 5', 'n > 10')).toBe(false)
+  // What an element does when pressed is no part of how it looks, so a handler's names are not followed.
+  const pressed = MOD_FILES.map(f => (f.name === 'register.tsx' ? { ...f, text: f.text.replace('<Text dimColor>', '<Text dimColor onPress={() => waitedLong(1)}>') } : f))
+  expect(drawsChange(pressed, 'waiting.ts', WAITING_TS, WAITING_TS.replace('n > 5', 'n > 10'))).toBe(false)
+  expect(drawsChange(pressed, 'waiting.ts', WAITING_TS, WAITING_TS.replace('min`', 'minutes`'))).toBe(true)
+  // A file that draws nothing, edited anywhere, made or taken away.
+  expect(draws('store.ts', "export const KEY = 'steps'", "export const KEY = 'manual-steps'")).toBe(false)
+  expect(drawsChange(MOD_FILES, 'store.ts', STORE_TS, undefined)).toBe(false)
+  expect(drawsChange(MOD_FILES, 'new.ts', undefined, 'export const twice = (n: number) => n * 2\n')).toBe(false)
+})
+
+test('#1275: a new line builder, a builder taken away, a call drawing in the file itself, and what cannot be read are asked about', () => {
+  expect(drawsChange(MOD_FILES, 'new.ts', undefined, "export const row = (t: string) => [{ text: t, color: 'warning' }]\n")).toBe(true)
+  expect(drawsChange(MOD_FILES, 'card.ts', LINES_TS, undefined)).toBe(true)
+  // A .ts file of its own that draws through mod-kit: the call's own values, and none beside it.
+  const own = [
+    'export const show = async ($: { modkit: { bandRow: (r: unknown) => Promise<void> } }, n: number) => {',
+    '  if (n > 2) return',
+    "  await $.modkit.bandRow({ mod: 'demo', id: 'x', slot: 'steps', frame: { kind: 'left-rule' }, lines: [] })",
+    '}',
+    '',
+  ].join('\n')
+  const files = [...MOD_FILES, { name: 'show.ts', text: own }]
+  expect(drawsChange(files, 'show.ts', own, own.replace("kind: 'left-rule'", "kind: 'box'"))).toBe(true)
+  expect(drawsChange(files, 'show.ts', own, own.replace('n > 2', 'n > 3'))).toBe(false)
+  // Text the reader cannot follow, in the file or beside it, is held rather than passed.
+  expect(drawsChange(MOD_FILES, 'store.ts', STORE_TS, STORE_TS.replace("'steps'", "'steps"))).toBe(true)
+  const broken = MOD_FILES.map(f => (f.name === 'register.tsx' ? { ...f, text: f.text.replace('<Text dimColor>', '<Text dimColor') } : f))
+  expect(drawsChange(broken, 'store.ts', STORE_TS, STORE_TS.replace("'steps'", "'manual-steps'"))).toBe(true)
+})
+
+test('#1275: the reader follows a .ts file with no JSX in it, a generic arrow with no comma included', () => {
+  const serial = 'const serial = <T>(work: () => Promise<T>): Promise<T> => work()\n'
+  expect(sourceSpans(serial)).toBeNull()
+  expect(sourceSpans(serial, false)?.jsx).toEqual([])
 })

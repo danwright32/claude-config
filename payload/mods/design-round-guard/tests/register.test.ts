@@ -103,7 +103,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
-  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; existsFails?: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; existsFails?: boolean; listFails?: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
   const blobs: Record<string, string> = { ...(init.blobs ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -172,6 +172,13 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   on('fs.exists', ($, e) => {
     if (ctl.existsFails) throw new Error(`EIO: ${e.path}`)
     return { value: files[e.path] !== undefined || Object.keys(files).some(f => f.startsWith(`${e.path}/`)) } as never
+  })
+  // A folder's entries: the files the test put directly in it (#1275, a mod's hooks folder).
+  on('fs.list', ($, e) => {
+    if (ctl.listFails) throw new Error(`EACCES: ${e.path}`)
+    const dir = `${e.path.replace(/\/$/, '')}/`
+    const names = Object.keys(files).filter(f => f.startsWith(dir) && !f.slice(dir.length).includes('/'))
+    return { value: names.map(f => ({ name: f.slice(dir.length), kind: 'file' as const, size: 1, mtimeMs: T0, isLink: false })) } as never
   })
   on('fs.read', ($, e) => {
     reads.push(e.path)
@@ -1306,6 +1313,93 @@ test('#1248: a logic line added above one that draws passes unasked; changing th
   // The drawing line itself, and an added line naming what is drawn, as Dan chose for #1248.
   expect(refusalOf(await call($, edit(resolve, '    const { Box, Button, Text, Newline } = $.ui.resolve(e)\n')))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, edit(resolve, `    const card = e.props.text\n${resolve}`)))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(1)
+})
+
+// #1275: the #1263 divider was added to manual steps' card.ts, which builds every line the steps card
+// draws, and the guard never saw it, since only a mod's .tsx and .jsx files counted. A mod's .ts hook
+// file is judged by what in it reaches what the mod draws (rules.ts drawsChange), read beside the
+// mod's other hook files. The fixture is shaped after manual steps: card.ts builds, register.tsx draws.
+const DEMO = '/w/slate/payload/mods/demo/hooks'
+const LINES = `${DEMO}/card.ts`
+const LINES_TEXT = `export const DROPPED_AFTER_MS = 2 * 60_000
+const AMBER = 'warning'
+export const cardLines = (card: { heading: string; steps: { title: string }[] }) => {
+  const lines: unknown[] = [[{ text: card.heading, color: AMBER }]]
+  card.steps.forEach((s, i) => {
+    lines.push([{ text: \`\${i + 1}. \${s.title}\`, bold: true }])
+  })
+  return lines
+}
+`
+const KEYS_TEXT = "export const keyOf = (repo: string): string => `steps:${repo}`\n"
+const DRAWS_TEXT = `import type { Register } from 'claude-code'
+import { cardLines, DROPPED_AFTER_MS } from './card.ts'
+import { keyOf } from './keys.ts'
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const card = await $.store.get(keyOf(e.repo))
+    if (DROPPED_AFTER_MS < 0) return next(e)
+    await $.modkit.bandRow({ mod: 'demo', id: 'steps', slot: 'steps', lines: cardLines(card) as never })
+    return next(e)
+  })
+}
+`
+const DEMO_FILES = { [LINES]: LINES_TEXT, [`${DEMO}/keys.ts`]: KEYS_TEXT, [`${DEMO}/register.tsx`]: DRAWS_TEXT, '/w/slate/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }' }
+const DIVIDER = { tool: 'Edit', file_path: LINES, old_string: '  card.steps.forEach((s, i) => {\n', new_string: '  card.steps.forEach((s, i) => {\n    if (i > 0) lines.push({ divider: true })\n' }
+const LOGIC = { tool: 'Edit', file_path: LINES, old_string: '2 * 60_000', new_string: '3 * 60_000' }
+
+test('#1275: a look change in a mod line builder file is asked about; a logic only edit there, and any edit to a .ts file that draws nothing, pass', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES } })
+  const why = refusalOf(await call($, DIVIDER))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('payload/mods/demo/hooks/card.ts')
+  // Undoing an edit of its own is judged by what it changes there too, and the refusal says so.
+  expect(why).toContain('undoing an earlier edit of your own is judged by the lines it changes')
+  // So is a value the builder uses, though its line names no drawing word.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: "const AMBER = 'warning'", new_string: "const AMBER = 'error'" }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, LOGIC))).toBe('')
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: `${DEMO}/keys.ts`, old_string: '`steps:${repo}`', new_string: '`manual-steps:${repo}`' }))).toBe('')
+  // A new .ts file: one building a run is asked about, one that draws nothing passes.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${DEMO}/row.ts`, content: "export const row = (t: string) => [{ text: t, color: 'warning' }]\n" }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Write', file_path: `${DEMO}/twice.ts`, content: 'export const twice = (n: number) => n * 2\n' }))).toBe('')
+  expect(w.ran.map(r => r.input.file_path)).toEqual([LINES, `${DEMO}/keys.ts`, `${DEMO}/twice.ts`])
+})
+
+test("#1275: a shell write to a line builder file is asked about, to one that draws nothing passes, and an app's .ts or a mod's test file is never read so", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, '/w/slate/src/mods/shop/hooks/card.ts': LINES_TEXT, '/w/slate/payload/mods/demo/tests/card.test.ts': LINES_TEXT } })
+  // What sed leaves cannot be read before it runs, so a file that draws is held whole.
+  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/60_000/90_000/' payload/mods/demo/hooks/card.ts" }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/steps:/s:/' payload/mods/demo/hooks/keys.ts" }))).toBe('')
+  // Under a folder named mods with no plugin.json, and a mod's own test: no mod hook file, as before.
+  expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/src/mods/shop/hooks/card.ts' }))).toBe('')
+  expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/payload/mods/demo/tests/card.test.ts' }))).toBe('')
+  expect(w.ran.length).toBe(3)
+})
+
+test('#1275: a mod whose hook files cannot be listed or read is asked about rather than passed', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES } })
+  w.ctl.listFails = true
+  expect(refusalOf(await call($, LOGIC))).toContain(SKIP_QUESTION)
+  w.ctl.listFails = false
+  w.files[`${DEMO}/keys.ts`] = 'UNREADABLE'
+  expect(refusalOf(await call($, LOGIC))).toContain(SKIP_QUESTION)
+  w.files[`${DEMO}/keys.ts`] = KEYS_TEXT
+  expect(refusalOf(await call($, LOGIC))).toBe('')
+  expect(w.ran.length).toBe(1)
+})
+
+test('#1275: undoing a logic edit to a line builder file with git restore passes; putting back a look change is asked', withKit, async ($, on) => {
+  const rel = 'payload/mods/demo/hooks/card.ts'
+  const logic = LINES_TEXT.replace('2 * 60_000', '3 * 60_000')
+  const look = LINES_TEXT.replace("const AMBER = 'warning'", "const AMBER = 'error'")
+  const w = world($, on, { files: { ...DEMO_FILES, [LINES]: logic }, blobs: { [`/w/slate :${rel}`]: LINES_TEXT, [`/w/slate main:${rel}`]: look } })
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git restore ${rel}` }))).toBe('')
+  const why = refusalOf(await call($, { tool: 'Bash', command: `git restore --source=main ${rel}` }))
+  expect(why).toContain(SKIP_QUESTION)
+  // One git cannot read is judged whole, and the refusal says why.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `git restore --source=gone ${rel}` }))).toContain('could not read what git puts back')
   expect(w.ran.length).toBe(1)
 })
 

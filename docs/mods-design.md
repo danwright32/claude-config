@@ -2671,6 +2671,36 @@ region ran to the end of the line after the change.
   about, for the card it reads, and so is the edit that calls it with the card; #1248's aim of
   letting logic only edits through is met only as far as the line fix reaches.
 
+### What #1275 changed, 2026-10-16
+
+#1263's divider between steps was added in manual steps' `card.ts` (`cardLines`), which builds every
+line the steps card draws, and the guard never saw it: only a mod's `.tsx` and `.jsx` hook files
+counted, so a look change made in a plain `.ts` file passed, and only the companion mod-kit `.tsx`
+edit was held. Judging every `.ts` file would have asked about the logic most of them hold, so the
+guard now works out from the code which parts of a mod's `.ts` hook files feed what it draws.
+
+- **What draws.** In each of the mod's hook files: a drawing call (`$.modkit.bandRow`, `pane`,
+  `card`, `blocked`, and `$.ui.open`, for a pane's size), a JSX element (its event handlers aside,
+  which are what it does, not how it looks), and a function building mod-kit's line data (an object
+  with `text` and a look such as `color`, `bold` or `dim`, a `{ divider: true }`, or a button), the
+  whole top level function where it is the statement's own. Then every top level declaration any of
+  those names, in that file or another of the mod's through its imports, and what each of those
+  names in turn. A type draws nothing.
+- **How an edit is judged.** What draws in the file, its comments taken out and its spacing made
+  one space, is compared before and after the edit, beside the mod's other hook files as they are;
+  any difference is a look change, however it is worded, so the #1263 divider, which names no
+  drawing word, is held. Nothing else in the file is read, so a refusal Claude reads that names the
+  card passes, unlike in a `.tsx` file, where the drawing words still decide.
+- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`): every hook file is read,
+  19 of the 67 `.ts` files hold anything that draws (most of those only a drawing call or a
+  guard's name on its blocked card), the divider added to the real `cardLines` is
+  held and `DROPPED_AFTER_MS` is not. A generic arrow written `<T>(`, which status bar and scope
+  modes use, could not be read by the JSX reader, so a `.ts` file is now read with no JSX at all.
+- **The gaps.** A value reaching a drawing call through a local variable or a function's parameter
+  is not followed unless it builds a run: a guard's blocked card sentence, handed to its own
+  `drawCard`, passes. A shell write whose result cannot be read is held where the file draws now,
+  so one making a file that drew nothing draw is not seen.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
