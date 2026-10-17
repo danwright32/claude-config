@@ -732,6 +732,22 @@ test('the default branch is held for this session only: a no there does not carr
   expect(Object.keys(w.store)).toEqual(['record:/w/slate|branch:main|session:s1'])
 })
 
+// #1306: an agent worktree's branch names no issue, whatever digits its random id holds, so a no there
+// is kept under that branch and never under issues its id happens to spell, where every later agent
+// whose id spelled them too would inherit it without Dan being asked.
+test("an agent worktree's branch is keyed by its own name, so another agent's branch sharing its digits is still asked", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'worktree-agent-ad4e7831d26de84f8'
+  const why = refusalOf(await call($, PAGE))
+  expect(why).toContain('branch worktree-agent-ad4e7831d26de84f8 in slate')
+  expect(why).not.toContain('issue #')
+  await askSkip($, w, why, SKIP_YES)
+  expect(Object.keys(w.store)).toEqual(['record:/w/slate|branch:worktree-agent-ad4e7831d26de84f8'])
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  w.branches['/w/slate'] = 'worktree-agent-a26c84e7831f0b1c2'
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
 test('the settled question may name the issue when the branch does not, and Dan reads that issue in it', withKit, async ($, on) => {
   const w = world($, on)
   w.branches['/w/slate'] = 'main'
