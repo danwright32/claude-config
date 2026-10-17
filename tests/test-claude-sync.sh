@@ -16433,13 +16433,13 @@ check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_n
 _wbl(){ LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" 2>&1; }
 _wbl_busy="$(_wbl 2536 3600 1379 59.86)"; _wbl_busy_rc=$?
 check "#1259 the 2026-10-16 run, past budget at load 59.86 on 12 cores, does not fail" "[ '$_wbl_busy_rc' -eq 0 ]"
-check "#1259 and it is not dressed as a failure" "! printf '%s\n' \"\$_wbl_busy\" | grep -q '^FAIL:'"
+check "#1259 and it is not dressed as a failure" "! line_has \"\$_wbl_busy\" '^FAIL:' 'test suite'"
 check "#1259 and it says the budget was UNMEASURED" "case \"\$_wbl_busy\" in *UNMEASURED*) true ;; *) false ;; esac"
 check "#1259 and records the load it saw, the cores, and the figures it could not judge" \
   "line_has \"\$_wbl_busy\" '59.86' '12 cores' '2536' '2520' '1379'"
 # It reaches CI: run-all-tests.sh carries a SUITE-NOTE line and drops plain stderr.
 check "#1259 and it is carried to CI as a marked note" \
-  "printf '%s\n' \"\$_wbl_busy\" | grep -q '^SUITE-NOTE .*UNMEASURED.*59.86'"
+  "line_has \"\$_wbl_busy\" '^SUITE-NOTE ' 'UNMEASURED.*59.86'"
 # The positive control in the same shape (L159): the same figures on a quiet machine still fail.
 _wbl_quiet="$(_wbl 2536 3600 1379 10.00)"; _wbl_quiet_rc=$?
 check "#1259 the same figures on a quiet machine still fail" "[ '$_wbl_quiet_rc' -eq 1 ]"
@@ -16561,7 +16561,7 @@ check "#167 and just over it is the suite's"                                    
 _hd_busy="$(LOAD_AVERAGE_CMD="echo 59.86" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 2>&1)"; _hd_busy_rc=$?
 check "#1259 a run that filled its deadline on a machine past its cores does not fail" "[ '$_hd_busy_rc' -eq 0 ]"
 check "#1259 and says UNMEASURED with the load it saw" "line_has \"\$_hd_busy\" 'UNMEASURED' '59.86' '12 cores'"
-check "#1259 and is carried to CI as a marked note" "printf '%s\n' \"\$_hd_busy\" | grep -q '^SUITE-NOTE .*UNMEASURED'"
+check "#1259 and is carried to CI as a marked note" "line_has \"\$_hd_busy\" '^SUITE-NOTE ' 'UNMEASURED'"
 _hd_quiet_rc=0; LOAD_AVERAGE_CMD="echo 10.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 >/dev/null 2>&1 || _hd_quiet_rc=$?
 check "#1259 and the same run on a quiet machine still fails" "[ '$_hd_quiet_rc' -ne 0 ]"
 

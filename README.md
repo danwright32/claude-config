@@ -1173,8 +1173,8 @@ caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh
 suite's two cost guards, its section time budget and its wall clock headroom, go further: where
 either would fail a run, a load average more than the machine has cores beyond the suite's own
 shards makes it `UNMEASURED` instead, said on a `SUITE-NOTE` line with the load it saw, since under
-that much contention the processor time each guard trusts inflates too (#1259: 2536s against a
-2520s budget at load 59.86 on 12 cores, green on a rerun with nothing changed). The shards are taken
+that much contention the processor time each guard trusts inflates too (#1259: on 2026-10-16,
+2536s against a 2520s budget at load 59.86 on 12 cores, green on a rerun with nothing changed). The shards are taken
 off so CI's two cores, which the shards alone outnumber, are still judged.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
