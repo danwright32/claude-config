@@ -3538,7 +3538,11 @@ export const register: Register = on => {
       // "I'm up" carried this session's morning (#1285) and what it held (#1284): a turn that did not
       // go in keeps them for the minute. Only this turn's own morning settles it, never another
       // prompt (lessons review of #1284).
-      if (carriesMorning) await morningDone($, false)
+      if (carriesMorning) {
+        // No morning turn started, so no picker is watched for it (lessons review).
+        morningPickers = undefined
+        await morningDone($, false)
+      }
       throw err
     }
     // The prompt is in, so a mark that fails is logged, never thrown past a turn that started.
