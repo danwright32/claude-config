@@ -1456,18 +1456,42 @@ let askingHeld = false
 // main loop) each saw the same list through their own hook's $.state, and the second write dropped
 // the first (lessons review, reproduced with three at once).
 let heldNow: HeldDelivery[] | undefined
-// One read, shared by calls that arrive together before it answers.
+let heldLoaded = false
+// One read, shared by calls that arrive together before it answers. A read that fails is not kept,
+// so the next call reads again; what was held meanwhile stays in memory and is merged in once a
+// read answers, never written over a list that could not be read (lessons review).
 let heldLoad: Promise<HeldDelivery[]> | undefined
+const loadHeld = async ($: EngineInterface) => {
+  if (heldLoaded) return
+  try {
+    const loaded = await (heldLoad ??= wakeHeldOf($))
+    if (heldLoaded) return
+    heldNow = [...loaded, ...without(heldNow ?? [], loaded)]
+    heldLoaded = true
+  } catch (err) {
+    heldLoad = undefined
+    throw err
+  }
+}
+// The list as far as it is known: one that could not be read is what this session held since.
 const heldList = async ($: EngineInterface): Promise<HeldDelivery[]> => {
-  heldLoad ??= wakeHeldOf($)
-  const loaded = await heldLoad
-  heldNow ??= loaded
-  return heldNow
+  try {
+    await loadHeld($)
+  } catch (err) {
+    $.ui.log(`scope-modes: what this session held overnight could not be read from its state (${msg(err)}), so only what it held since is known`, { to: 'debug' })
+  }
+  return heldNow ?? []
 }
 const changeHeld = async ($: EngineInterface, fn: (held: HeldDelivery[]) => HeldDelivery[]): Promise<void> => {
+  let unread: unknown
+  try {
+    await loadHeld($)
+  } catch (err) {
+    unread = err
+  }
   // Changed from the list as it stands after the read, never from a copy taken before another change.
-  const loaded = await heldList($)
-  heldNow = fn(heldNow ?? loaded)
+  heldNow = fn(heldNow ?? [])
+  if (unread !== undefined) throw unread
   // The reference written at the call: the engine's reader of state references refused this write
   // through the const, though it reads the others (measured on this branch, #1284).
   await $.state.set({ plugin: 'scope-modes', key: 'wakeHeld' }, heldNow)
@@ -1493,10 +1517,11 @@ const heldMorningDone = async ($: EngineInterface, entered: boolean) => {
 // morning. A prompt that does not go in keeps it, asked again at the next minute.
 const askHeldAtWake = async ($: EngineInterface, reading: SleepReading) => {
   if (reading.state !== 'none' || heldInMorning || askingHeld) return
-  const held = [...(await heldList($))]
-  if (!held.length) return
+  // Taken before the first wait, so two minutes overlapping never both ask (lessons review).
   askingHeld = true
   try {
+    const held = [...(await heldList($))]
+    if (!held.length) return
     try {
       await $.prompt.submit({ text: `Dan is up: sleep mode is off. ${heldAtWake(held)}` })
     } catch (err) {
@@ -3756,6 +3781,7 @@ export const register: Register = on => {
     morningWatch = undefined
     // What was held overnight is this session's (#1284), so a new session starts with none.
     heldNow = []
+    heldLoaded = true
     heldInMorning = null
     await $.state.set(wakeHeldRef, [] as HeldDelivery[])
     prSeen.clear()
