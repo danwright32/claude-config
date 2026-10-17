@@ -31,6 +31,30 @@ const sectionOf = (lines: string[]): { head: number; end: number } | null => {
 const wordsOf = (text: string) => text.replace(/ \(answered [^)]*\)$/, '').trim()
 const oneLine = (q: string) => q.split(/\s*\n\s*/).join(' ').trim()
 
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+/**
+ * The issues a question to Dan is about: `owner/name#N` anywhere, or `issue #N` in the session's
+ * repository. A bare `#N` names nothing, since it may as well be a pull request.
+ */
+export const issueRefsIn = (question: string, sessionRepo: string | null): { repo: string; issue: number }[] => {
+  const out: { repo: string; issue: number }[] = []
+  for (const m of question.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)\b|\bissue\s+#(\d+)\b/gi)) {
+    const repo = m[1] ?? (m[3] !== undefined ? sessionRepo : null)
+    const issue = Number(m[2] ?? m[3])
+    if (!repo || !REPO.test(repo) || !Number.isInteger(issue) || issue <= 0) continue
+    if (!out.some(x => x.repo.toLowerCase() === repo.toLowerCase() && x.issue === issue)) out.push({ repo, issue })
+  }
+  return out
+}
+
+/** A question's own words, without the issues /sleep puts in front of them ("o/r#12 and #14: "). */
+export const questionWords = (question: string): string => question.replace(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+(?: and #\d+)*:\s*/, '').trim()
+
+const ET_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
+/** A moment's calendar date in ET, as an answer is dated in the section. */
+export const etDateOf = (ms: number): string => ET_DATE.format(ms)
+
 /** Whether the body has the section, and its open items' words, in order. */
 export const openQuestionsIn = (body: string): { found: boolean; open: string[] } => {
   const lines = body.split('\n')

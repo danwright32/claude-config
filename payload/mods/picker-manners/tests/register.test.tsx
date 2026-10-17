@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
@@ -180,4 +180,92 @@ test('while next issue pickers are off, the system prompt tells Claude so, and s
   expect(section).toContain('never as a picker')
   await $.command.run({ command: 'pickers', args: 'on' } as never)
   expect(await memory($ as never)).toBe('core memory')
+})
+
+// #1279, Dan 2026-10-17: a question Dan is asked about an issue is added to that issue's Open
+// questions section, checked off with his answer when he gave one, so /sleep never asks it again and
+// asks one he did not answer. The issue is named as owner/name#N, or issue #N in this session's
+// repository; GitHub is asked through gh, after the dialog has answered, off its path.
+const kitWithRepo: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { isDans: async () => false, repo: async () => ({ github: 'o/r', name: 'r' }) } as never }
+    })
+  },
+}
+type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; settle: () => Promise<void> }
+const issueWorld = (on: On, answer: string | null, bodies: Record<number, string> = {}): IssueWorld => {
+  const clock = mock.clock(on, { now: 0 })
+  const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
+  on('tool.call', ($, e) => {
+    const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
+    return { result: { questions: [], answers: answer === null ? {} : { [q]: answer } }, text: 'answered' } as never
+  })
+  on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('ui.log', ($, e) => {
+    w.logs.push(String((e as { text?: string }).text))
+    return { value: undefined } as never
+  })
+  const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as never
+  const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
+  on('process.run', ($, e) => {
+    const a = e.argv
+    if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'view') {
+      if (w.viewFails) return fail(w.viewFails)
+      return ok(JSON.stringify({ state: 'OPEN', body: w.bodies[Number(a[3])] ?? '' }))
+    }
+    if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'edit') {
+      if (w.editFails) return fail(w.editFails)
+      const body = String((e as unknown as { init?: { stdin?: string } }).init?.stdin ?? '')
+      w.edits.push({ issue: Number(a[3]), repo: String(a[a.indexOf('--repo') + 1]), body })
+      w.bodies[Number(a[3])] = body
+      return ok()
+    }
+    throw new Error(`unexpected run: ${a.join(' ')}`)
+  })
+  return w
+}
+const askAbout = ($: T$, question: string) => $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q2', questions: [{ ...QUESTION, question }] } as never) as Promise<Answered>
+const SECTION = 'The bug.\n\n## Open questions\n\nNone'
+
+test('a question about an issue Dan answers is added to its Open questions, checked off with the answer (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, '7 days', { 7: SECTION })
+  const r = await askAbout($ as never, 'For o/r#7, how long should the registry keep a record?')
+  expect(r.result?.answers).toEqual({ 'For o/r#7, how long should the registry keep a record?': '7 days' })
+  await w.settle()
+  expect(w.edits).toEqual([{ issue: 7, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [x] For o/r#7, how long should the registry keep a record? (answered 1969-12-31 ET: 7 days)' }])
+})
+
+test("one he did not answer is added open, and issue #N is read in the session's repository (#1279)", { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, null, { 12: SECTION })
+  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await w.settle()
+  expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] Skip design rounds for issue #12?' }])
+})
+
+test('a question naming no issue, or only a bare #N, touches no issue; one /sleep asked is recorded by its own words (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Yes', { 7: 'B\n\n## Open questions\n\n- [ ] Keep the old flag?' })
+  await askAbout($ as never, 'Merge PR #31?')
+  await askAbout($ as never, 'Which approach do you prefer?')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  await askAbout($ as never, 'o/r#7: Keep the old flag?')
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual(['B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Yes)'])
+})
+
+test('an issue that cannot be read or written is said, and the answer still reaches Claude (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, '7 days', { 7: SECTION })
+  w.viewFails = 'HTTP 502'
+  const r = await askAbout($ as never, 'For o/r#7, keep it?')
+  expect(r.result?.answers).toEqual({ 'For o/r#7, keep it?': '7 days' })
+  await w.settle()
+  expect(w.logs).toContain("Picker manners could not add this question to o/r#7's Open questions (HTTP 502), so /sleep will not see it there.")
+  w.viewFails = undefined
+  w.editFails = 'HTTP 403'
+  await askAbout($ as never, 'For o/r#7, ship it?')
+  await w.settle()
+  expect(w.logs).toContain("Picker manners could not add this question to o/r#7's Open questions (HTTP 403), so /sleep will not see it there.")
 })

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { openQuestionsIn, withQuestion } from '../hooks/openquestions.ts'
+import { etDateOf, issueRefsIn, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
 
 // #1279, Dan 2026-10-17: every issue's body holds an "Open questions" section (the filing gate
 // refuses one without it), listing what only Dan can decide, or None. /sleep asks every open item in
@@ -45,6 +45,27 @@ test('an answer checks the item off, saying the answer and its date; asked again
 
 test('a question asked and answered at once is added already checked off', () => {
   expect(withQuestion('B\n\n## Open questions\n\nNone', 'Ship it?', { answer: 'Yes', date: '2026-10-17' })).toBe('B\n\n## Open questions\n\n- [x] Ship it? (answered 2026-10-17 ET: Yes)')
+})
+
+test('the issues a question to Dan is about: owner/name#N, or issue #N in the session\'s repository', () => {
+  expect(issueRefsIn('Should o/r#7 keep the old flag?', null)).toEqual([{ repo: 'o/r', issue: 7 }])
+  expect(issueRefsIn('Skip design rounds for issue #1279?', 'danwright32/claude-config')).toEqual([{ repo: 'danwright32/claude-config', issue: 1279 }])
+  expect(issueRefsIn('For Issue #12 and o/other#3, which first?', 'o/r')).toEqual([{ repo: 'o/r', issue: 12 }, { repo: 'o/other', issue: 3 }])
+  // A bare #N may be a pull request, so it names nothing; nor does issue #N with no repository known.
+  expect(issueRefsIn('Merge PR #31?', 'o/r')).toEqual([])
+  expect(issueRefsIn('Skip design rounds for issue #1279?', null)).toEqual([])
+})
+
+test("a question's words, without the issues /sleep puts in front of them", () => {
+  expect(questionWords('o/r#7: Keep the old flag?')).toBe('Keep the old flag?')
+  expect(questionWords('o/r#12 and #14: Keep the old flag?')).toBe('Keep the old flag?')
+  expect(questionWords('Should o/r#7 keep it?')).toBe('Should o/r#7 keep it?')
+})
+
+test('the date an answer is given, in ET', () => {
+  // 03:30 UTC on Oct 18 is still Oct 17 in New York.
+  expect(etDateOf(Date.UTC(2026, 9, 18, 3, 30))).toBe('2026-10-17')
+  expect(etDateOf(Date.UTC(2026, 9, 18, 5, 0))).toBe('2026-10-18')
 })
 
 test('a question on several lines is kept on one, so it stays one item', () => {

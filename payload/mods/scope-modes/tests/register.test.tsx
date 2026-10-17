@@ -2348,6 +2348,21 @@ test('a goal reader mod-kit cannot give is said and asked about, never read as a
   expect(r.text).toMatch(/this session's \/goal could not be read \(mod-kit is not loaded\)/)
 })
 
+// #1252's fallback, with no test of its own until now: a mod-kit loaded before it had the goal reader
+// (a mod reloaded before the one it depends on keeps the older copy, #1281) has no $.modkit.goal at
+// all. The TypeError is thrown at the call itself, so it is caught only because the call is made
+// inside the promise; the goal is then said as unreadable, naming the skew, and Dan is asked for one.
+const withNoGoalReader = { plugins: [deps, isItLive, { name: 'kit-lacks-goal', register: (() => undefined) as Register }] }
+test('a mod-kit with no goal reader at all is said, naming the skew, and the goal is asked for (#1252)', withNoGoalReader, async ($, on) => {
+  const { w, clock } = world(on, { issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toContain("this session's /goal could not be read (scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no goal")
+})
+
 test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {
   // A session that is not interactive enrols no worker of its own and can ask nothing.
   const { w, clock } = world(on, withOther({ goals: { s2: null } }))

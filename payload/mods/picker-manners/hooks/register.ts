@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
+import { etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -36,6 +37,43 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   }
 }
 
+// #1279, Dan 2026-10-17: a question Dan is asked about an issue (owner/name#N, or issue #N in this
+// session's repository) is added to the issue's Open questions section, checked off with his answer
+// when he gave one, so /sleep asks one still open and never one he answered. Read and written whole
+// through gh; a failure is said, since /sleep would otherwise never see the question.
+const sessionRepo = async ($: EngineInterface): Promise<string | null> => {
+  try {
+    const here = await $.session.repo()
+    return here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+  } catch {
+    return null
+  }
+}
+const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
+const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
+  const refs = issueRefsIn(question, /\bissue\s+#\d/i.test(question) ? await sessionRepo($) : null)
+  const words = questionWords(question)
+  for (const ref of refs) {
+    const said = (why: string) => $.ui.log(`Picker manners could not add this question to ${ref.repo}#${ref.issue}'s Open questions (${why}), so /sleep will not see it there.`)
+    try {
+      const view = await $.process.run(['gh', 'issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body'], { timeoutMs: 20_000 })
+      if (view.exitCode !== 0) {
+        said(ghLine(view))
+        continue
+      }
+      const j = JSON.parse(view.stdout) as { state?: unknown; body?: unknown }
+      if (String(j.state).toUpperCase() === 'CLOSED') continue
+      const body = typeof j.body === 'string' ? j.body : ''
+      const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) })
+      if (next === body) continue
+      const edit = await $.process.run(['gh', 'issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], { timeoutMs: 20_000, stdin: next })
+      if (edit.exitCode !== 0) said(ghLine(edit))
+    } catch (err) {
+      said(err instanceof Error ? err.message : String(err))
+    }
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pickers', description: 'Turns next issue pickers back on for this session.', argumentHint: 'on' })
@@ -47,7 +85,15 @@ export const register: Register = on => {
       quiet: (await $.state.get(quietRef)).value ?? false,
       source: (e.metadata as { source?: string } | undefined)?.source,
     })
-    return why ? { deny: why } : next(e)
+    if (why) return { deny: why }
+    const r = await next(e)
+    // #1279: a question about an issue goes into that issue's Open questions, after the dialog has
+    // answered and off its path, so a slow GitHub never holds the answer back.
+    const question = String(e.questions?.[0]?.question ?? '')
+    const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
+    const answer = typeof answers?.[question] === 'string' ? (answers[question] as string) : null
+    if (!r.deny && question) $.clock.after(0, () => void recordOnIssues($, question, answer))
+    return r
   })
 
   // What Dan types, at the Mac or from his phone through Remote Control, as mod-kit's one reader says
