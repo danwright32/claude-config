@@ -1,58 +1,129 @@
 import type { ModKitBandRow, ModKitCommand } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { ScopeModesHeld } from '../types/index.d.ts'
 
-// Away and home (#621). While Dan is away nothing opens on the Mac and nothing takes focus: what
-// needs him at the Mac is held, and on coming home each session shows what it held in one boxed
-// card in the band, nothing opening until he presses its button (design round, 2026-10-04).
+// Away and home (#621). While Dan is away what needs him at the Mac is held, and on coming home each
+// session shows what it held in one boxed card in the band, nothing running until he presses its
+// button (design round, 2026-10-04). Sleep mode holds the same (#840).
+//
+// WHAT IS HELD changed with #1269. Dan, 2026-10-16 ET: "I don't care if you bring apps to the front
+// or do automations for testing". Focus moving costs him nothing while he is not at the Mac, so
+// opening an app or a file, BBEdit's helper, bringing an app forward and browser automation opening
+// a page or a tab all run. Typing and clicking run only into a test build (isTestBuild), and the
+// keystroke guard still proves by pid that the target is in front before any keystroke. Held, on
+// his answers the same day: a dialog (it waits for a press nobody is there to give), a script whose
+// text cannot be read (it could hold a dialog, or keystrokes no frontmost proof covers), typing or
+// clicking into anything else (a keystroke into Mail or Messages could send what nobody reviewed),
+// and what exists only to show him something: the Artifact tool's open action here, the report and
+// the manual steps card in their own code.
 
 const base = (p: string) => p.replace(/\/+$/, '').split('/').pop() || p
 const isFlag = (w: string) => w.startsWith('-')
 // A link is named by where it goes, never by its query or fragment, which can carry a token (L741).
 const shown = (target: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? target.replace(/[?#].*$/, '') : base(target))
 
-// The app a keystroke guard action names: TARGET_APP=<executable path> is the guard's own rule, and
-// the reader drops assignments, so it is read from the command as written.
+/**
+ * Every executable a keystroke guard action names: TARGET_APP=<executable path>, the guard's own
+ * rule, read from the command as written, since the reader drops assignments. Every one, wherever
+ * it stands (an echo, a second command), since a call is a test build's only when all of them are
+ * (lessons review of #1269); the guard itself proves the one it reads is in front before any input.
+ */
+export const targetPaths = (raw: string): string[] =>
+  [...raw.matchAll(/\bTARGET_APP=("[^"]+"|'[^']+'|\S+)/g)].map(m => (m[1] as string).replace(/^["']|["']$/g, ''))
+/** The first of them, which the keystroke guard reads and the held row names. */
+export const targetPath = (raw: string): string | undefined => targetPaths(raw)[0]
+// The app it names, for the held row.
 const targetApp = (raw: string): string | undefined => {
-  const m = /\bTARGET_APP=("[^"]+"|'[^']+'|\S+)/.exec(raw)
-  if (!m) return undefined
-  const path = (m[1] as string).replace(/^["']|["']$/g, '')
+  const path = targetPath(raw)
+  if (path === undefined) return undefined
   const app = /([^/]+)\.app\//.exec(path)
   return app ? (app[1] as string) : base(path)
 }
 
-// An AppleScript that only reads (the frontmost app's name, a window list) takes no focus, and nor
-// does a notification banner; a dialog does, and waits for a press nobody is there to give (#702).
-const SCRIPT_ACTS = /\b(?:keystroke|key code|click|activate|frontmost to true|set frontmost|open location|reopen|launch|open)\b/i
+/**
+ * What isTestBuild asks of the Mac: the home folder, and the checkout a path sits in, which is
+ * mod-kit's one reading of it ($.modkit.workingTree: the nearest folder at or above it holding .git,
+ * a worktree's .git file included, or null), never a walk of this mod's own (L613).
+ */
+export type TestBuildFs = { home: string | undefined; treeOf: (path: string) => Promise<string | null> }
+
+const SIMULATOR = /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/Applications\/Simulator\.app\/Contents\/MacOS\/Simulator$/
+/**
+ * Whether an executable is a test build (Dan, 2026-10-16 ET): under Xcode's DerivedData, inside a
+ * project checkout, or Simulator where Xcode keeps it. Only an absolute path with no `..` is judged.
+ * A checkout that is the home folder, any folder in /Users, or anything above them is not one, so a
+ * repository of dotfiles in the home folder cannot make every app beneath it a test build. A
+ * checkout that cannot be read (mod-kit not loaded, the disk not answering) is no test build, so the
+ * action stays held (L42).
+ */
+export const isTestBuild = async (path: string, fs: TestBuildFs): Promise<boolean> => {
+  if (!path.startsWith('/') || path.split('/').includes('..')) return false
+  const home = fs.home?.replace(/\/+$/, '')
+  if (home ? path.startsWith(`${home}/Library/Developer/Xcode/DerivedData/`) : /^\/Users\/[^/]+\/Library\/Developer\/Xcode\/DerivedData\//.test(path)) return true
+  if (SIMULATOR.test(path)) return true
+  let tree: string | null
+  try {
+    tree = await fs.treeOf(path)
+  } catch {
+    return false
+  }
+  if (!tree || tree === '/' || tree === '/Users' || /^\/Users\/[^/]+$/.test(tree)) return false
+  return !(home && (tree === home || home.startsWith(`${tree}/`)))
+}
+
+/** What a guard acting on the Mac names when it asks to hold (the keystroke guard, #707). */
+export type AwayAction = { kind: 'input' | 'focus'; target?: string }
+/** Whether that action runs while Dan is away or asleep (#1269): bringing an app forward does; typing or clicking only into a test build. */
+export const awayAllows = async (action: AwayAction, fs: TestBuildFs): Promise<boolean> =>
+  action.kind === 'focus' || (action.target !== undefined && (await isTestBuild(action.target, fs)))
+
+// A script that types or clicks; one that only reads, shows a notification banner or brings an app
+// forward needs nobody (#1269). A dialog waits for a press nobody is there to give (#702).
 const SCRIPT_TYPES = /\b(?:keystroke|key code|click)\b/i
 // JavaScript for Automation spells each one as a method, `app.displayDialog()` (#730).
 const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name)|display(?:Dialog|Alert)|choose(?:File(?:Name)?|Folder|FromList|Color|Application|RemoteApplication|URL))\b/i
 
+// The text of an osascript command's script, as the reader gave it.
+const scriptOf = ({ words, program }: ModKitCommand): string =>
+  [...words.slice(1).filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
+// The programs that drive the Mac's keyboard and mouse.
+const DRIVERS = new Set(['osascript', 'cliclick', 'peekaboo'])
+// A command that types or clicks: an AppleScript keystroke, key code or click, cliclick, Peekaboo.
+const typesOrClicks = (c: ModKitCommand): boolean => {
+  const cmd = base(c.words[0] ?? '')
+  return cmd === 'cliclick' || cmd === 'peekaboo' || (cmd === 'osascript' && SCRIPT_TYPES.test(scriptOf(c)))
+}
+// A marker in command position (the start, after a separator, or after env), written right before
+// the program it names, as the keystroke guard's rule writes it.
+const ATTACHED = /(?:^|[;&|\n(]|\benv)\s*TARGET_APP=("[^"]+"|'[^']+'|\S+)\s+(?:\S*\/)?(?:osascript|cliclick|peekaboo)\b/g
 /**
- * What a Bash call would do on the Mac that needs Dan there (open something, take focus, type or
- * click), as the line his held card names it by, or undefined when it needs nothing of the Mac.
- * Each command comes with what mod-kit's reader found it runs (#712): its program and what that can
- * do, or the script file it runs, so an AppleScript fed on standard input, or piped in from a file
- * (`cat notify.scpt | osascript`, #730), is judged too.
+ * The executable a call's typing or clicking names, or undefined when that cannot be told for sure
+ * (lessons review of #1269). Only a call with ONE command that drives the Mac, which types or
+ * clicks, and ONE TARGET_APP, written in command position right before it, has one: the marker can
+ * then belong to nothing else, so a marker in an echo, or one command's standing for another's,
+ * never makes a call a test build's. A call driving the Mac twice is judged as not a test build's;
+ * each step can go in a call of its own. The keystroke guard then proves the one named is in front.
  */
-export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): string | undefined => {
-  for (const { words, program, script: file, verdict } of call.commands) {
+export const typedTarget = (raw: string, commands: ModKitCommand[]): string | undefined => {
+  const drivers = commands.filter(c => DRIVERS.has(base(c.words[0] ?? '')))
+  if (drivers.length !== 1 || !typesOrClicks(drivers[0] as ModKitCommand)) return undefined
+  const attached = [...raw.matchAll(ATTACHED)]
+  if (attached.length !== 1 || targetPaths(raw).length !== 1) return undefined
+  return ((attached[0] as RegExpMatchArray)[1] as string).replace(/^["']|["']$/g, '')
+}
+
+/**
+ * What a Bash call would do on the Mac that needs Dan there (show a dialog, run a script it cannot
+ * read, type or click into anything but a test build), as the line his held card names it by, or
+ * undefined when it needs nothing of him. Each command comes with what mod-kit's reader found it
+ * runs (#712): its program and what that can do, or the script file it runs, so an AppleScript fed
+ * on standard input, or piped in from a file (`cat notify.scpt | osascript`, #730), is judged too.
+ * `testBuild` says whether the app the call types into is a test build (typedTarget, then
+ * isTestBuild, asked by the caller, since it reads the file system).
+ */
+export const needsTheMac = (call: { raw: string; commands: ModKitCommand[]; testBuild?: boolean }): string | undefined => {
+  for (const command of call.commands) {
+    const { words, program, script: file, verdict } = command
     const cmd = base(words[0] ?? '')
-    const args = words.slice(1)
-    if (cmd === 'open') {
-      let app: string | undefined
-      const targets: string[] = []
-      for (let i = 0; i < args.length; i++) {
-        const a = args[i] as string
-        if (a === '-a' || a === '-b') app = args[++i]
-        else if (!isFlag(a)) targets.push(shown(a))
-      }
-      const what = targets.length ? `Open ${targets.join(', ')}` : `Open ${app ?? 'an app'}`
-      return app && targets.length ? `${what} in ${app}` : what
-    }
-    if (cmd === 'bbedit_tool' || cmd === 'bbedit') {
-      const files = args.filter(a => !isFlag(a)).map(shown)
-      return files.length ? `Open ${files.join(', ')} in BBEdit` : 'Open BBEdit'
-    }
     if (cmd === 'osascript') {
       // A script whose text the reader never saw may do anything on the Mac: one piped in from what
       // cannot be read, a script file (#724: `osascript notify.scpt` ran while away; #730: one cat
@@ -60,14 +131,14 @@ export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): s
       if (program && 'unreadable' in program) return 'Run an AppleScript on the Mac'
       if (file) return 'Run an AppleScript on the Mac'
       if (verdict?.does === 'unreadable') return 'Run an AppleScript on the Mac'
-      const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
+      const script = scriptOf(command)
       if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
-      if (!SCRIPT_ACTS.test(script)) continue
+      // Bringing an app forward runs (#1269); typing or clicking only into a test build.
+      if (!SCRIPT_TYPES.test(script) || call.testBuild) continue
       const app = targetApp(call.raw)
-      if (SCRIPT_TYPES.test(script)) return app ? `Type into ${app}` : 'Type into an app'
-      return app ? `Bring ${app} to the front` : 'Bring an app to the front'
+      return app ? `Type into ${app}` : 'Type into an app'
     }
-    if (cmd === 'cliclick' || cmd === 'peekaboo') {
+    if ((cmd === 'cliclick' || cmd === 'peekaboo') && !call.testBuild) {
       const app = targetApp(call.raw)
       return app ? `Click in ${app}` : `Click or type with ${cmd}`
     }
@@ -76,27 +147,14 @@ export const needsTheMac = (call: { raw: string; commands: ModKitCommand[] }): s
 }
 
 /**
- * What a call to a tool other than Bash would open on the Mac (#702), as its held row reads, or
- * undefined: a browser opened or pointed somewhere, by Playwright or in Dan's Chrome, and the
- * Artifact tool's open action, which opens the page in his browser. Reading a page already open
- * and publishing a page go ahead. An MCP tool is `mcp__<server>__<tool>`, its server's name
- * standing in a plugin's (`mcp__plugin_playwright_playwright__`).
+ * What a call to a tool other than Bash would show Dan on the Mac (#702), as its held row reads, or
+ * undefined: the Artifact tool's open action, which opens a page in his browser for him to read.
+ * Browser automation opening a page or a tab, by Playwright or in Chrome, is testing and runs
+ * (#1269), as do reading a page already open and publishing a page.
  */
 export const heldTool = (tool: string, input: Record<string, unknown>): string | undefined => {
   const url = typeof input.url === 'string' ? shown(input.url) : undefined
   if (tool === 'Artifact') return input.action === 'open' ? `Open ${url ?? 'the page'}` : undefined
-  const at = tool.lastIndexOf('__')
-  if (!tool.startsWith('mcp__') || at < 5) return undefined
-  const server = tool.slice(5, at).toLowerCase()
-  const name = tool.slice(at + 2)
-  if (server.includes('playwright')) {
-    if (name === 'browser_navigate') return `Open ${url ?? 'a page'} in the Playwright browser`
-    if (name === 'browser_tabs' && (input.action === 'new' || input.action === 'select')) return 'Open a tab in the Playwright browser'
-  }
-  if (server.includes('chrome')) {
-    if (name === 'navigate') return `Open ${url ?? 'a page'} in Chrome`
-    if (/^tabs_create/.test(name)) return 'Open a tab in Chrome'
-  }
   return undefined
 }
 
