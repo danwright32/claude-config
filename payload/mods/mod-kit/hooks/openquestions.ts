@@ -33,7 +33,9 @@ const sectionOf = (lines: string[]): { head: number; end: number } | null => {
 const oneLine = (q: string) => q.split(/\s+/).filter(Boolean).join(' ')
 // An item's own words, without what was added when it was answered, its spacing collapsed so an item
 // written by hand with other spacing is still the same question (lessons review).
-const wordsOf = (text: string) => oneLine(text.replace(/ \(answered [^)]*\)$/, ''))
+// The suffix is matched from its dated start, so an answer with brackets of its own ("Keep it
+// (recommended)") is taken off whole (lessons review).
+const wordsOf = (text: string) => oneLine(text.replace(/ \(answered \d{4}-\d{2}-\d{2} ET: .*\)$/, ''))
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 

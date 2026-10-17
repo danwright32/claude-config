@@ -388,7 +388,7 @@ n_marked="$(grep -c 'Claude-Session:' "$TMP/calls.log")"
 check_eq "and outside a session no line is invented" "0" "$n_marked"
 # #1279: every filed issue carries an Open questions section, None when its plan gave it none, since
 # this script calls gh itself and the filing gate never sees its creates.
-n_sections="$(grep -c '^## Open questions' "$TMP/calls.log")"
+n_sections="$(grep -c '^## Open questions$' "$TMP/calls.log")"
 check_eq "#1279 every issue filed carries an Open questions section" "3" "$n_sections"
 # Over this run's own creates: the log was emptied as the run began, so three creates are its three.
 check_eq "#1279 counted over this run's three creates alone (lessons review)" "3" "$(grep -c '^issue create' "$TMP/calls.log")"
@@ -399,7 +399,7 @@ check_eq "#1279 None right under each heading, since the plan gave them none" "3
 # A phase whose plan already carries the section keeps its own, never a second one.
 jq '.issues[0].body = "Design empty states.\n\n## Open questions\n\n- [ ] Which illustration style?"' "$TMP/plan.json" > "$TMP/plan-q.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"
-check_eq "#1279 a plan's own section is kept, and none added beside it" "3" "$(grep -c '^## Open questions' "$TMP/calls.log")"
+check_eq "#1279 a plan's own section is kept, and none added beside it" "3" "$(grep -c '^## Open questions$' "$TMP/calls.log")"
 check_eq "#1279 with its question right under its heading" "1" "$(under $'## Open questions\n\n- [ ] Which illustration style?')"
 check_eq "#1279 and None right under only the other two" "2" "$(under $'## Open questions\n\nNone')"
 # A heading that only starts with the words is another section, so the issue still gets its own.

@@ -52,6 +52,13 @@ test('an item written with other spacing is the same question, so it is checked 
   expect(withQuestion(body, 'Keep the old flag?')).toBe(body)
 })
 
+test('an answer holding brackets of its own still leaves the item the same question (lessons review)', () => {
+  const body = 'B\n\n## Open questions\n\n- [ ] Keep the old flag?'
+  const answered = withQuestion(body, 'Keep the old flag?', { answer: 'Keep it (recommended)', date: '2026-10-17' })
+  expect(answered).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-17 ET: Keep it (recommended))')
+  expect(withQuestion(answered, 'Keep the old flag?')).toBe(answered)
+})
+
 test('a question asked and answered at once is added already checked off', () => {
   expect(withQuestion('B\n\n## Open questions\n\nNone', 'Ship it?', { answer: 'Yes', date: '2026-10-17' })).toBe('B\n\n## Open questions\n\n- [x] Ship it? (answered 2026-10-17 ET: Yes)')
 })
