@@ -53,6 +53,8 @@ export const ASLEEP_DELIVERY = `Dan is asleep, so hand him nothing tonight: publ
 
 /** One call held while asleep: its row, and the call as it was made, to be made again at wake. */
 export type HeldDelivery = { label: string; call: string }
+/** A merge, deploy or push the night's lists refused in this session (#1285): put to Dan at wake. */
+export type HeldMerge = HeldDelivery & { why: string }
 
 /** What a session is told at wake about what it held: empty when it held nothing. */
 export const heldAtWake = (held: readonly HeldDelivery[]): string => {
