@@ -386,6 +386,10 @@ check_eq "every issue filed from a session carries its session line" "3" "$n_mar
 out="$(env -u CLAUDE_CODE_BRIDGE_SESSION_ID -u CLAUDE_CODE_SESSION_ID PATH="$TMP/bin:$PATH" GH_CALLS="$TMP/calls.log" GH_FIXTURE="$TMP/none.json" bash -c ': > "$GH_CALLS"; bash "$0" "$@"' "$SCRIPT" "acme/widgets" "$TMP/plan.json" 2>&1)"
 n_marked="$(grep -c 'Claude-Session:' "$TMP/calls.log")"
 check_eq "and outside a session no line is invented" "0" "$n_marked"
+# #1279: every filed issue carries an Open questions section, None when its plan gave it none, since
+# this script calls gh itself and the filing gate never sees its creates.
+n_sections="$(grep -c '^## Open questions' "$TMP/calls.log")"
+check_eq "#1279 every issue filed carries an Open questions section" "3" "$n_sections"
 
 # --- a category label new to the repo is created before anything is filed (claude-config#1034) ---
 # gh refuses an issue carrying a label the repo does not have ("could not add label: X not found"),
