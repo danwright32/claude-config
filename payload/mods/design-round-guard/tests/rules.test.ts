@@ -822,6 +822,20 @@ test('#1275: a new line builder, a builder taken away, a call drawing in the fil
   expect(drawsChange(broken, 'store.ts', STORE_TS, STORE_TS.replace("'steps'", "'manual-steps'"))).toBe(true)
 })
 
+test('#1275 (lessons review): a statement continued on an unindented line stays one, and an import written without .ts is followed', () => {
+  // A drawn constant whose value goes on past its first line, at the left edge.
+  const split = ["export const AMBER =", "'warning'", 'export const row = (t: string) => [{ text: t, color: AMBER }]', 'export const later = 1', ''].join('\n')
+  const files = [{ name: 'look.ts', text: split }]
+  expect(drawsChange(files, 'look.ts', split, split.replace("'warning'", "'error'"))).toBe(true)
+  expect(drawsChange(files, 'look.ts', split, split.replace('later = 1', 'later = 2'))).toBe(false)
+  // The names a drawing file imports from './card' or './card.js' are the card.ts file's.
+  for (const spec of ['./card', './card.js']) {
+    const tsx = DRAW_TSX.replace("from './card.ts'", `from '${spec}'`)
+    const mod = MOD_FILES.map(f => (f.name === 'register.tsx' ? { ...f, text: tsx } : f))
+    expect(drawsChange(mod, 'card.ts', LINES_TS, LINES_TS.replace('MAX_PANE_COLUMNS = 80', 'MAX_PANE_COLUMNS = 100'))).toBe(true)
+  }
+})
+
 test('#1275: the reader follows a .ts file with no JSX in it, a generic arrow with no comma included', () => {
   const serial = 'const serial = <T>(work: () => Promise<T>): Promise<T> => work()\n'
   expect(sourceSpans(serial)).toBeNull()

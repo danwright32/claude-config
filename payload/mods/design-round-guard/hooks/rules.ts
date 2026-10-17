@@ -946,9 +946,14 @@ const readMod = (f: ModFile): ModRead | null => {
   const close = new Map<number, number>()
   const open: number[] = []
   const starts: number[] = []
+  // The last character of code before here, so a line going on with an expression the line before
+  // left open (`export const X =` then `'warning'` at the left edge) is never a statement of its own.
+  let last = ''
   for (let i = 0; i < n; i++) {
-    if (i === 0 || blank[i - 1] === '\n') if (open.length === 0 && /\S/.test(blank[i] ?? '')) starts.push(i)
+    if ((i === 0 || blank[i - 1] === '\n') && open.length === 0 && /\S/.test(blank[i] ?? ''))
+      if (!/[=,([{?:|&+\-*/<>!.]$/.test(last) && !/^[?:.|&+\-*/,)\]}=]/.test(blank[i] ?? '')) starts.push(i)
     const c = blank[i]
+    if (c !== undefined && /\S/.test(c)) last = c
     if (c === '(' || c === '[' || c === '{') open.push(i)
     else if (c === ')' || c === ']' || c === '}') {
       const o = open.pop()
@@ -1101,7 +1106,9 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
       return
     }
     const via = r.imports.get(x)
-    const g = via ? read.get(via.file) : undefined
+    // The file an import names, as TypeScript finds it: as written, then with `.js` read as `.ts`,
+    // then with `.ts` or `.tsx` added (lessons review).
+    const g = via ? [via.file, via.file.replace(/\.(m|c)?js$/, '.$1ts'), `${via.file}.ts`, `${via.file}.tsx`].map(x => read.get(x)).find(Boolean) : undefined
     if (!via || !g) return
     if (via.name !== '*') {
       reach(g.name, via.name)
