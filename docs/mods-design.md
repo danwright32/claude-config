@@ -1540,7 +1540,8 @@ morning offers what the night proposed, filing nothing he has not picked.
 - The morning reminder (#1107; Dan, 2026-10-12 and 13: "Basically I want a way to remember in the
   morning to review the issues"; design rounds skipped on his word, 2026-10-13). A /sleep that began
   a night, in a session with somebody at its prompt, pins one step on the manual steps card through
-  `$.manualSteps.add`: "When you are up: review the night's proposed issues (<night>)", at the end of
+  `$.manualSteps.add` (every other live session pins it too since #1283, below, and its words are
+  now "When you are up, end sleep mode (<night>)"), at the end of
   any card already pinned, or a card of its own headed "The morning after sleep mode". It is shown
   at once, though Dan cannot do it until morning, because he asked for it to pop up then. The night
   is first noted as waiting on its review in `~/.claude/state/sleep/morning-review.json` (the latest
