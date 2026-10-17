@@ -1448,7 +1448,18 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
     }
   }
   const p = 'unread' in read ? { issues: [], lessons: [], unread: read.unread } : { issues: read.issues, lessons: read.lessons, bad: read.bad }
-  const questions = 'unread' in read ? [] : read.questions.filter(q => q.by === self)
+  // Its own questions, and, in the session that offers the proposals, every question no open session
+  // will ask: one naming no session, or one whose session has closed (lessons review). A registry
+  // that cannot be read leaves only the ones naming no session, and that is logged.
+  let open: Set<string> | null = null
+  if (night.offers && !('unread' in read) && read.questions.some(q => q.by !== null && q.by !== self)) {
+    try {
+      open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
+    } catch (err) {
+      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions from other sessions are left to them`, { to: 'debug' })
+    }
+  }
+  const questions = 'unread' in read ? [] : read.questions.filter(q => q.by === self || (night.offers && (q.by === null || (open !== null && !open.has(q.by)))))
   return {
     prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions, ...p }),
     nothing: nothingProposed(p),
@@ -1523,7 +1534,16 @@ const nightNow = async ($: EngineInterface): Promise<Night | null> => {
 }
 const setNight = async ($: EngineInterface, n: Night | null) => {
   nightSeen = n
-  await $.state.set({ plugin: 'scope-modes', key: 'nightSeen' }, n ? { generation: n.generation, worker: n.worker, offers: n.offers } : null)
+  // Whole, `unread` included, so a reload never turns notes that could not be read into none (lessons review).
+  await $.state.set({ plugin: 'scope-modes', key: 'nightSeen' }, n ? { generation: n.generation, worker: n.worker, offers: n.offers, ...(n.unread !== undefined ? { unread: n.unread } : {}) } : null)
+}
+// A morning that went in: the night and what it carried are done, each written on its own, so one
+// write that fails never keeps the other from being done (lessons review). Throws the first failure.
+const markMorning = async ($: EngineInterface, carried: readonly HeldItem[]) => {
+  const failed: unknown[] = []
+  await setNight($, null).catch(err => failed.push(err))
+  await changeHeld($, held => without(held, carried)).catch(err => failed.push(err))
+  if (failed.length) throw failed[0]
 }
 // The waking session's morning turn went in (or did not): the night and what it carried are done,
 // or kept for the minute. Memory is what this session reads, so a state write that fails after it
@@ -1533,10 +1553,7 @@ const morningDone = async ($: EngineInterface, entered: boolean) => {
   const carried = morningInFlight
   if (!carried) return
   try {
-    if (entered) {
-      await setNight($, null)
-      await changeHeld($, held => without(held, carried))
-    }
+    if (entered) await markMorning($, carried)
   } finally {
     morningInFlight = null
   }
@@ -1574,8 +1591,7 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
       return
     }
     try {
-      await setNight($, null)
-      await changeHeld($, now => without(now, held))
+      await markMorning($, held)
     } catch (err) {
       $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' })
     }

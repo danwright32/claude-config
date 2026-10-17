@@ -124,7 +124,7 @@ declare module 'claude-code' {
        * once the record is gone: whether it worked that night, and whether it offers the night's
        * proposals (the session that ended sleep does). Null once its morning went in.
        */
-      nightSeen: { generation: string | null; worker: boolean; offers: boolean } | null
+      nightSeen: { generation: string | null; worker: boolean; offers: boolean; unread?: string } | null
     }
   }
 }

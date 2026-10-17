@@ -2878,6 +2878,30 @@ test("/wake's own morning turn asks its own questions with the proposals, and a 
   expect(morningOf(w).length).toBe(1)
 })
 
+test('a question from a session that has closed, or that names no session, is asked by the session that ended sleep, and an open one\'s is left to it (lessons review)', withDeps, async ($, on) => {
+  const gone = proposal({ kind: 'question', by: 's5', cwd: '/gone', questions: ['Drop the legacy route?'] })
+  const nobody = JSON.stringify({ v: 1, generation: 'g0', at: T0 - MIN, kind: 'question', cwd: '/x', questions: ['Which locale?'] })
+  const { w, clock } = world(on, { open: [interactive('s2')], files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${gone}\n${nobody}\n${theirQuestion}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('/gone: Drop the legacy route?')
+  expect(m).toContain('/x: Which locale?')
+  expect(m).not.toContain('Rename the parser?')
+})
+
+test('a record naming no generation whose morning turn fails is still said as unread by the minute, never read as a night with nothing (lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: JSON.stringify({ ...JSON.parse(asleepRecord({ workers: ['s1'] })), generation: undefined }) } })
+  await start($ as never, clock)
+  w.o.promptFails = 1
+  await command($ as never, 'wake')
+  await clock.settle()
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w)[0]).toMatch(/could not be read \(the sleep record names no generation\)/)
+})
+
 test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   const began = UNTIL - 5 * MIN + 40_000

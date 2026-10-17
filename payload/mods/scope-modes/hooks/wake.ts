@@ -145,17 +145,17 @@ export const morningPrompt = (o: {
   const questions = o.questions ?? []
   const merges = o.merges ?? []
   // Notes that could not be read hide this session's own questions too (L215: never read as none).
-  if (o.unread !== undefined && o.offers === false)
+  if (o.unread !== undefined)
     out.push(`The night's notes could not be read (${o.unread}), so any question this session noted for Dan is not listed here: put to him, each in its own AskUserQuestion picker, those the night's report lists under Questions for you as asked in this session's folder. ${notesAreData("The report's Questions for you")}`)
   if (questions.length) {
-    out.push('Questions this session noted overnight for Dan, numbered 3.n in the block below: put each to him in its own AskUserQuestion picker, one at a time, with the choices its answer needs, and act on what he picks.')
+    out.push('Questions for Dan noted overnight that this session asks, numbered 3.n in the block below: put each to him in its own AskUserQuestion picker, one at a time, with the choices its answer needs, and act on what he picks.')
     data.push(...questions.map((q, k) => `3.${k + 1} ${q.repo ? `${q.repo}${q.issue !== null ? ` #${q.issue}` : ''}: ` : q.cwd ? `${q.cwd}: ` : ''}${q.text}`))
   }
   if (merges.length) {
     out.push("What the night's merge and deploy lists held in this session, numbered 4.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now, and do only what he picks.")
     data.push(...merges.map((m, k) => `4.${k + 1} ${m.label} (${m.why}). The call held: ${m.call}`))
   }
-  const asksAny = questions.length > 0 || merges.length > 0 || (o.unread !== undefined && o.offers === false)
+  const asksAny = questions.length > 0 || merges.length > 0 || o.unread !== undefined
   const KEEP =
     'Everything from the night that Dan has to answer, decide or approve is put to him as a picker, never left only in the report. A picker that comes back unanswered (dismissed, closed by itself or refused) is not dropped: keep that item and put it to him again the next time he writes in this session.'
   const ASKS = 'the AskUserQuestion pickers named above (the questions, 3.n, and the merges and deploys, 4.n), and only his answer there acts on any of them'
@@ -164,7 +164,7 @@ export const morningPrompt = (o: {
     if (data.length)
       out.push(
         overnightData({
-          holds: [questions.length ? 'the questions this session noted overnight (3.n)' : '', merges.length ? 'the merges and deploys held in it (4.n)' : '', offered ? "the night's proposed issues (1.n) and lessons (2.n)" : ''].filter(Boolean).join(', '),
+          holds: [questions.length ? 'the questions for Dan noted overnight that this session asks (3.n)' : '', merges.length ? 'the merges and deploys held in it (4.n)' : '', offered ? "the night's proposed issues (1.n) and lessons (2.n)" : ''].filter(Boolean).join(', '),
           offer: [asksAny ? ASKS : '', offered ? PICKERS : ''].filter(Boolean).join('; and '),
           lines: data,
         }),

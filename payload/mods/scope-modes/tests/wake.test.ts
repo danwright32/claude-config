@@ -199,7 +199,7 @@ describe('morningPrompt in every session: its own questions and approvals as pic
     expect(morningPrompt({ worker: false, issues: [], lessons: [] }).split('\n')[0]).toBe('Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.')
   })
   test('each question it noted is put to Dan in a picker of its own, from the data block', () => {
-    expect(p).toMatch(/Questions this session noted overnight for Dan, numbered 3\.n in the block below: put each to him in its own AskUserQuestion picker, one at a time/)
+    expect(p).toMatch(/Questions for Dan noted overnight that this session asks, numbered 3\.n in the block below: put each to him in its own AskUserQuestion picker, one at a time/)
     expect(p).toContain('3.1 o/r #7: Which date format does the export want?')
   })
   test('each merge or deploy the night held in it is put to Dan as a picker too', () => {
@@ -222,6 +222,11 @@ describe('morningPrompt in every session: its own questions and approvals as pic
   })
   test('none of it uses a dash as punctuation', () => {
     expect(p).not.toMatch(DASHES)
+  })
+  test('the session offering the proposals is sent to the report for its own questions too, when the notes could not be read (lessons review)', () => {
+    const u = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES' })
+    expect(u).toMatch(/so any question this session noted for Dan is not listed here/)
+    expect(u).toMatch(/The night's proposed issues and lessons could not be read \(EACCES\)/)
   })
   test("notes it could not read are said, sending it to the report for its own questions, never read as none", () => {
     const u = morningPrompt({ worker: false, offers: false, issues: [], lessons: [], unread: 'EACCES' })
