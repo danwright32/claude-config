@@ -1180,6 +1180,48 @@ for m in file-own file-own-sq file-own-join file-own-resolve; do
     || check "and names $m, pointing it at modkit.account" "$out"
 done
 case "$out" in *clean-asks-account*) check "a mod asking the kit for the account passes" "$out" ;; *) check "a mod asking the kit for the account passes" ok ;; esac
+# #1281: a mod loaded before a mod it depends on keeps that mod's older members, so a call to a member
+# added since throws a TypeError at the call site. The one reader of that failure is mod-kit's
+# hooks/skew.ts, and it cannot be a member of mod-kit's noun (it is needed exactly when mod-kit's
+# loaded copy is the older one), so a mod reading such a failure keeps a copy of it at
+# hooks/mod-kit/skew.ts, byte for byte, and imports it, and no mod reads a TypeError by hand.
+M9K="$TMPROOT/m9-skew"
+mkmodsrc "$M9K" mod-kit "export const reader = 1"
+printf 'export const missingOf = (err: unknown) => (err instanceof TypeError ? {} : null)\n' > "$M9K/mod-kit/hooks/skew.ts"
+mkdepmod(){   # $1 = mod name  $2 = the hooks module's source; depends on mod-kit, with a copy of its reader
+  mkmodsrc "$M9K" "$1" "$2"
+  printf '{ "name": "%s", "version": "0.1.0", "description": "t", "dependencies": ["mod-kit"] }\n' "$1" > "$M9K/$1/.claude-plugin/plugin.json"
+  mkdir -p "$M9K/$1/hooks/mod-kit"
+  cp "$M9K/mod-kit/hooks/skew.ts" "$M9K/$1/hooks/mod-kit/skew.ts"
+}
+mkdepmod clean-reads-missing "import { missingOf } from './mod-kit/skew.ts'
+const home = (err: unknown) => missingOf(err)?.kind === 'noun'"
+mkdepmod typeerror-own "import { errorText } from './mod-kit/skew.ts'
+const home = (err: unknown) => err instanceof TypeError && /scopeModes/.test(errorText(err, 'x'))"
+mkdepmod unimported "export const register = () => {}"
+mkmodsrc "$M9K" clean-depends-on-nothing "export const register = () => {}"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1281: a mod reading a missing noun or member its own way fails the run" ok || check "#1281: a mod reading a missing noun or member its own way fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep "typeerror-own keeps its own missing-reader at /hooks/register.ts:2" | grep -q 'missingOf(err)' \
+  && check "#1281: and names the TypeError read by hand, pointing it at the copy's missingOf" ok || check "#1281: and names the TypeError read by hand, pointing it at the copy's missingOf" "$out"
+printf '%s\n' "$out" | grep -q "unimported keeps hooks/mod-kit/skew.ts but no hooks file imports it" \
+  && check "#1281: a copy no hooks file imports fails, named" ok || check "#1281: a copy no hooks file imports fails, named" "$out"
+case "$out" in *clean-reads-missing*|*clean-depends-on-nothing*) check "#1281: a mod using the copy, and a mod depending on nothing, pass, the copy's own TypeError read not taken for a hand rolled one" "$out" ;; *) check "#1281: a mod using the copy, and a mod depending on nothing, pass, the copy's own TypeError read not taken for a hand rolled one" ok ;; esac
+rm -rf "$M9K/typeerror-own" "$M9K/unimported"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "#1281: with those gone the run passes" ok || check "#1281: with those gone the run passes" "exit=$code out=$out"
+printf 'export const missingOf = () => null\n' > "$M9K/mod-kit/hooks/skew.ts"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+remedy="$(printf '%s\n' "$out" | grep "clean-reads-missing's hooks/mod-kit/skew.ts differs" | sed 's/.*: \(cp .*\)$/\1/')"
+[ "$code" -eq 1 ] && case "$remedy" in cp*) true ;; *) false ;; esac \
+  && check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" ok || check "#1281: a copy that no longer matches mod-kit's reader fails, naming the cp that brings it back" "exit=$code out=$out"
+[ -n "$remedy" ] && eval "$remedy"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "#1281: and running that cp passes the run again" ok || check "#1281: and running that cp passes the run again" "exit=$code out=$out"
+printf 'export const x = 1\n' > "$M9K/clean-reads-missing/hooks/mod-kit/gone.ts"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q "clean-reads-missing's hooks/mod-kit/gone.ts copies no file of mod-kit's hooks" \
+  && check "#1281: a file under hooks/mod-kit that mod-kit's hooks do not have fails the run, named" ok || check "#1281: a file under hooks/mod-kit that mod-kit's hooks do not have fails the run, named" "exit=$code out=$out"
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.

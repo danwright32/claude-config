@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
 import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
 //
@@ -213,8 +214,11 @@ const readJobs = async ($: EngineInterface) => {
   } catch (err) {
     jobs = []
     agents = []
-    const msg = String((err as Error)?.message ?? err)
-    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(msg)
+    const msg = errorText(err, MOD)
+    // The job watcher not loaded is no job; one whose loaded copy lacks list is told once (#1281).
+    const news = skewNews(err, MOD)
+    if (news) $.ui.toast(news)
+    const isAbsent = missingOf(err) !== null
     if (!isAbsent && !jobsNoted) {
       jobsNoted = true
       $.ui.log(`status-bar: the job watcher's jobs could not be read, so no job shows: ${msg}`, { to: 'debug' })
@@ -229,8 +233,9 @@ const readJobs = async ($: EngineInterface) => {
     agentsNoted = false
   } catch (err) {
     agents = []
-    const msg = String((err as Error)?.message ?? err)
-    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(msg)
+    const msg = errorText(err, MOD)
+    // A watcher from before the quiet agents lacks the member: none, by design, so unsaid (#759).
+    const isAbsent = missingOf(err) !== null
     if (!isAbsent && !agentsNoted) {
       agentsNoted = true
       $.ui.log(`status-bar: the job watcher's quiet agents could not be read, so none shows: ${msg}`, { to: 'debug' })

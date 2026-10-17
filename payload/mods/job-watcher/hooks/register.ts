@@ -1,6 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { Jobs, JobsEntry } from '../types/index.d.ts'
 import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, type Outcome, type Verdict } from './jobs.ts'
+import { errorText } from './mod-kit/skew.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -44,7 +45,8 @@ type Watch = {
 const MOD = 'job-watcher'
 const TICK_MS = 60_000
 const REARM_MS = 5 * 60_000
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+// A member another mod's loaded copy lacks is said as the one sentence naming the skew (#1281).
+const message = (err: unknown) => errorText(err, MOD)
 const KEEP_TOOL = 'keep_job'
 const KEEP_CALL = 'mcp__job-watcher__keep_job'
 const KEEP_SPEC = {

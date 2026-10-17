@@ -383,6 +383,30 @@ const typeErrorScopeModes: { name: string; register: Register } = {
     })
   },
 }
+// #1281: a scope modes loaded before it had hold (a mod reloaded before the one it depends on keeps
+// the older copy, measured on 2.1.302). It holds nothing, so this is home as before, and Dan is told
+// once, by the one sentence naming the skew and its remedy, never on each action.
+const olderScopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, scopeModes: { isAway: async () => false } }
+    })
+  },
+}
+test('a scope modes whose loaded copy lacks hold is home, and Dan is told the skew once (#1281)', { plugins: [secDefault, kit, olderScopeModes] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })
+  await $.tool.call(bash(KEY, 'o1'))
+  await $.tool.call(bash('open -a "Google Chrome" report.html', 'o2'))
+  // Asked in the band each time, as at home.
+  expect(w.asked.length).toBe(2)
+  expect(w.toasts.filter(t => t.includes('out of step'))).toEqual([
+    'keystroke-guard and scope-modes are out of step in this session: the scope-modes loaded here has no hold, which keystroke-guard needs, so a mod was updated after this session loaded it. A new session loads them together.',
+  ])
+})
+
 test('a TypeError from inside a loaded scope modes refuses the action too (#707 review)', { plugins: [secDefault, kit, typeErrorScopeModes] }, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })

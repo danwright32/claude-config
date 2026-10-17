@@ -1,6 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
+import { errorText } from './mod-kit/skew.ts'
 import {
   CONTRACT,
   GUARD,
@@ -123,7 +124,9 @@ const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
 // beneath, which cannot see which loop a call runs in, does not judge them again.
 const fromAgent = new Set<string>()
 
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
+// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
+const message = (err: unknown) => errorText(err, 'design-round-guard')
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {

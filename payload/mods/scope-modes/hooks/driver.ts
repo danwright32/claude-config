@@ -37,6 +37,8 @@ export const LIMITS = {
   waitsMin: [5, 10, 20, 40, 60] as readonly number[],
   /** Reads of the claims in a row that may fail before the night stops: one failed read never does. */
   claimReadFails: 3,
+  /** How long a worker whose mods are out of step rests, idle, so a reload it is owed can land (#1281). */
+  skewRestMs: MIN,
 }
 
 /** The errors worth waiting out: a usage limit, and the server being busy or failing (overloaded arrives as server_error, #839). */
@@ -78,6 +80,10 @@ export type DriverRecord = {
   parked: string | null
   /** Why the driver let this session stop for the night; once set, it never blocks again. */
   stopped: string | null
+  /** A rest for mods out of step was taken and no Stop since has been clear of it (#1281); absent in a counter from before. */
+  rested?: boolean
+  /** The wait now running is that rest, so the session is started again with the words for it (#1281). */
+  restDue?: boolean
 }
 
 export type DriverReading = { state: 'none' } | { state: 'ok'; record: DriverRecord } | { state: 'unreadable'; why: string }
@@ -86,7 +92,7 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 
 export const freshDriver = (generation: string, session: string, now: number): DriverRecord => ({
   v: 1, generation, session, since: now, blocks: 0, idleBlocks: 0, progressAt: now, fingerprint: null,
-  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, claimFails: 0, parked: null, stopped: null,
+  waitStep: 0, resumeAt: null, waits: [], weeklyAt: null, finishing: false, claimFails: 0, parked: null, stopped: null, rested: false, restDue: false,
 })
 
 /** The counter as stored. Anything but a whole record for this night and session is unreadable, never a fresh start (L105). */
@@ -111,7 +117,8 @@ export const readDriver = (text: string | null, generation: string, session: str
   if (!r.waits.every(w => !!w && typeof w === 'object' && isNum((w as Wait).from) && isNum((w as Wait).until))) {
     return { state: 'unreadable', why: "the driver's counter has a wait it cannot read" }
   }
-  if (typeof r.finishing !== 'boolean' || !strOrNull(r.stopped) || !strOrNull(r.parked) || !strOrNull(r.fingerprint)) {
+  const boolOrAbsent = (x: unknown) => x === undefined || typeof x === 'boolean'
+  if (typeof r.finishing !== 'boolean' || !strOrNull(r.stopped) || !strOrNull(r.parked) || !strOrNull(r.fingerprint) || !boolOrAbsent(r.rested) || !boolOrAbsent(r.restDue)) {
     return { state: 'unreadable', why: "the driver's counter has a field it cannot read" }
   }
   return { state: 'ok', record: r as DriverRecord }
@@ -197,6 +204,8 @@ export type Release = { issue: number; state: 'parked' | 'failed'; why: string }
 export type StopDecision =
   | { kind: 'block'; reason: string; record: DriverRecord; notes: Note[]; release?: Release }
   | { kind: 'stop'; record: DriverRecord | null; notes: Note[]; release?: Release; why: string }
+  /** Let the session stop, idle, until `record.resumeAt`, keeping its claim, then start it again (#1281). */
+  | { kind: 'rest'; record: DriverRecord; notes: Note[]; why: string; release?: undefined }
 
 export type StopInput = {
   now: number
@@ -213,6 +222,11 @@ export type StopInput = {
   goal: string | null
   /** The rules every block carries, so they survive compaction. */
   rules: string
+  /**
+   * The sentence of a skew this load of the mod met (#1281): a member another mod's loaded copy
+   * lacks, so every call is refused. Null or absent for none.
+   */
+  skew?: string | null
 }
 
 /**
@@ -250,6 +264,7 @@ export const decideStop = (i: StopInput): StopDecision => {
   // A turn that ended (rather than failed) starts the waits over.
   d.waitStep = 0
   d.resumeAt = null
+  d.restDue = false
   if (i.weekly !== null) d.weeklyAt = now
   const progressed = i.fingerprint !== null && i.fingerprint !== d.fingerprint
   if (progressed) {
@@ -281,6 +296,23 @@ export const decideStop = (i: StopInput): StopDecision => {
     const why = `this session reached the night's cap of ${LIMITS.nightCap} blocks`
     return stop(why, claim ? { issue: claim.issue, state: 'failed', why } : undefined, claim ? [] : [{ kind: 'failed', ...where, text: why }])
   }
+  // #1281: mods out of step refuse every call, and a busy session never loads its mods again (a
+  // reload lands only once it is idle, measured on 2.1.302). One rest lets it idle so the reload can
+  // land, its claim kept; a skew still met after that rest stops it for the night, the claim parked.
+  const skew = i.skew ?? null
+  if (skew !== null) {
+    if (!d.rested) {
+      d.rested = true
+      d.restDue = true
+      d.resumeAt = now + LIMITS.skewRestMs
+      d.waits.push({ from: now, until: d.resumeAt })
+      const why = `${skew} Every call was refused, since none could be checked for a merge or deploy, so this session rests a minute to load its mods again.`
+      return { kind: 'rest', record: d, why, notes: [{ kind: 'finding', ...where, text: why }] }
+    }
+    const why = `${skew} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
+    return stop(why, claim ? { issue: claim.issue, state: 'parked', why } : undefined)
+  }
+  d.rested = false
   // Claims that cannot be read just now judge nothing stuck and park nothing, and the work goes on:
   // one failed read never stops the night. A run of them does, said, since a claim nobody can read
   // cannot be ended either (the breaker and the night's cap still bound the run).
@@ -397,6 +429,7 @@ export const decideFailure = (i: { now: number; self: string; generation: string
   const minutes = LIMITS.waitsMin[Math.min(d.waitStep, LIMITS.waitsMin.length - 1)] as number
   d.waitStep++
   d.resumeAt = i.now + minutes * MIN
+  d.restDue = false
   d.waits.push({ from: i.now, until: d.resumeAt })
   return { kind: 'wait', record: d, minutes, notes: [{ kind: 'wait', ...where, minutes, error: i.error, ...(said ? { text: said } : {}) }] }
 }
@@ -417,6 +450,9 @@ export const startPrompt = (self: string, root: string, goal: string) =>
 
 /** What the session is told when it is started again after a wait. */
 export const RESUME = 'Sleep mode: the wait after the API error is over. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'
+
+/** What a worker is told when its rest for mods out of step is over (#1281). */
+export const REST_RESUME = 'Sleep mode: this session rested so its mods could load again. Carry on with the overnight work where it stopped, checking the claim and the branch before redoing anything.'
 
 /**
  * The overnight rules, carried in every block so they survive compaction (#844). `self` and `root`

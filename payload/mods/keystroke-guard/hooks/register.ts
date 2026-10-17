@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { appNameOf, classify, judge, refusalText, type Refusal } from './keys.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Keystroke guard (claude-config#608). A Go ahead holds for its app until ten minutes pass with
 // nothing sent to it (Dan, 2026-10-03). Kept in memory: a reload asks again, which errs toward
@@ -87,16 +88,20 @@ type Held = { card?: { guard: string; reason: string; safeWay: string }; deny?: 
 // While Dan is away (#621) the action is held for the held card he sees on coming home, rather than
 // asked about in the band, which his phone cannot show, so the turn would wait on nobody. The
 // engine needs the noun called in place, so the scope modes mod not being loaded (which is home)
-// arrives as a TypeError naming the noun; any other failure, a TypeError from inside a loaded mod
-// included, is a refusal: whether a question can be answered at all is unknown (L42).
+// arrives as a TypeError naming the noun, read by the one reader (#1281). A scope modes whose loaded
+// copy lacks hold cannot hold anything either, so it is home too, told to Dan once. Any other
+// failure is a refusal: whether a question can be answered at all is unknown (L42).
 const holdWhileAway = async ($: EngineInterface, label: string, prompt: string): Promise<{ held: Held } | 'home' | { failed: string }> => {
   try {
     const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt })
     return r?.isHeld === true ? { held: { card: r.card, deny: r.deny } } : 'home'
   } catch (err) {
-    const why = String((err as Error)?.message ?? err)
-    if (err instanceof TypeError && /scopeModes/.test(why)) return 'home'
-    return { failed: why }
+    if (missingOf(err)?.noun === 'scopeModes') {
+      const news = skewNews(err, 'keystroke-guard')
+      if (news) $.ui.toast(news)
+      return 'home'
+    }
+    return { failed: errorText(err, 'keystroke-guard') }
   }
 }
 
@@ -157,6 +162,6 @@ export const register: Register = on => {
     // A hook that fails is skipped and the verdict beneath stands, which would let the keystroke
     // through unchecked, so a failure here refuses (L42). Nothing has run yet at tool.check.
     decision: 'deny' as const,
-    reason: `Blocked: the keystroke guard could not check this command (${next.error?.message ?? next.error?.kind ?? 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+    reason: `Blocked: the keystroke guard could not check this command (${next.error ? errorText(next.error, 'keystroke-guard') : 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
   }))
 }
