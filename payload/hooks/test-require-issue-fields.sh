@@ -147,11 +147,11 @@ says   "category fix says not fixed"  "not a fixed list" "gh issue create --titl
 
 # ============================ the combined message ============================
 # The old design ran three gates, so a create missing everything reported whichever
-# one happened to be seen first. One gate says it all at once.
-says   "all three named together"     "a milestone, a priority label, a category label" 'gh issue create --title "T"'
+# one happened to be seen first. One gate says all four rules at once.
+says   "all four named together"      "a milestone, a priority label, a category label, an Open questions section" 'gh issue create --title "T"'
 says   "counts one issue"             "file 1 issue" 'gh issue create --title "T"'
 says   "counts two issues"            "file 2 issues" 'gh issue create --title "A" && gh issue create --title "B"'
-says   "lists all three overrides"    "SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1" 'gh issue create --title "T"'
+says   "lists all four overrides"     "SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1 / SKIP_OPEN_QUESTIONS_CHECK=1 <the same command>" 'gh issue create --title "T"'
 says   "points at the shared rule"    "NAMING.md" 'gh issue create --title "T"'
 says   "only the failing override"    "SKIP_CATEGORY_CHECK=1 <the same command>" "gh issue create --title \"T\" $M $P $Q"
 omits  "no milestone advice when fine" "ensure-milestone.sh" "gh issue create --title \"T\" $M $P"

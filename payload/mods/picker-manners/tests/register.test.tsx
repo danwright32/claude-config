@@ -195,7 +195,7 @@ const kitWithRepo: { name: string; register: Register } = {
     })
   },
 }
-type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; settle: () => Promise<void> }
+type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; settle: () => Promise<void> }
 const issueWorld = (on: On, answer: string | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
   const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
@@ -219,7 +219,9 @@ const issueWorld = (on: On, answer: string | null, bodies: Record<number, string
     if (a[0] === 'gh' && a[1] === 'issue' && w.onlyAccount && env?.GH_TOKEN !== `tok-${w.onlyAccount}`) return fail('GraphQL: Could not resolve to a Repository with the name o/r')
     if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'view') {
       if (w.viewFails) return fail(w.viewFails)
-      return ok(JSON.stringify({ state: 'OPEN', body: w.bodies[Number(a[3])] ?? '' }))
+      const n = Number(a[3])
+      // gh issue view answers for a pull request's number too, with its pull link.
+      return ok(JSON.stringify({ state: 'OPEN', body: w.bodies[n] ?? '', url: `https://github.com/o/r/${w.pulls?.includes(n) ? 'pull' : 'issues'}/${n}` }))
     }
     if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'edit') {
       if (w.editFails) return fail(w.editFails)
@@ -269,6 +271,17 @@ test('an issue only another gh account can see is still recorded (#1279)', { plu
   await askAbout($ as never, 'For o/r#7, ship it?')
   await w.settle()
   expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] For o/r#7, ship it? (answered 1969-12-31 ET: Yes)'])
+})
+
+// Lessons review: gh issue view and gh issue edit both take a pull request's number, so a question
+// naming one would rewrite the pull request's description. Its link says what it is.
+test('a question naming a pull request leaves the pull request alone (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Yes', { 31: 'The change.' })
+  w.pulls = [31]
+  await askAbout($ as never, 'Merge o/r#31 now?')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  expect(w.logs).toEqual([])
 })
 
 test('issue #N whose repository cannot be told is said, never dropped silently (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {

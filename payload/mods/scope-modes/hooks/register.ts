@@ -765,7 +765,7 @@ const postAnswer = async ($: EngineInterface, dir: string, repo: string, issue: 
 // written whole through gh, the item marked with the answer and its date. Null once it is; else why.
 const checkOff = async ($: EngineInterface, repo: string, issue: number, text: string, answer: string): Promise<string | null> => {
   const r = await ghAnyAccount($, ['issue', 'view', String(issue), '--repo', repo, '--json', 'body'])
-  if (!('stdout' in r)) return ghSaid(r.failures[0] as GhRun)
+  if (!('stdout' in r)) return ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun))
   let body: string
   try {
     const j = JSON.parse(r.stdout) as { body?: unknown }
@@ -811,15 +811,16 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
   const viewed = new Map<string, string>()
   for (const g of goalIssueList) {
     const k = `${g.repo.toLowerCase()}#${g.issue}`
-    const r = await ghAnyAccount($, ['issue', 'view', String(g.issue), '--repo', g.repo, '--json', 'state,labels,body'])
+    const r = await ghAnyAccount($, ['issue', 'view', String(g.issue), '--repo', g.repo, '--json', 'state,labels,body,url'])
     if (!('stdout' in r)) {
-      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (${ghSaid(r.failures[0] as GhRun)}), so none of them was asked.`)
+      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (${ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun))}), so none of them was asked.`)
       continue
     }
     let body: string
     try {
-      const j = JSON.parse(r.stdout) as { state?: unknown; body?: unknown }
-      if (String(j.state).toUpperCase() === 'CLOSED') continue
+      const j = JSON.parse(r.stdout) as { state?: unknown; body?: unknown; url?: unknown }
+      // A pull request's number reads as an issue in gh issue view: it has no section to ask.
+      if (String(j.state).toUpperCase() === 'CLOSED' || /\/pull\/\d+/.test(String(j.url ?? ''))) continue
       body = typeof j.body === 'string' ? j.body : ''
     } catch {
       problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (GitHub's answer was not JSON), so none of them was asked.`)

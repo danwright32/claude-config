@@ -338,6 +338,8 @@ type Opts = {
   issueLabels?: Record<number, string[]>
   /** Each issue's body as gh issue view gives it (#1279: its Open questions section), by number. */
   issueBodies?: Record<number, string>
+  /** Numbers that are pull requests, which gh issue view answers for too, with a pull link (#1279). */
+  pullNumbers?: number[]
   /** gh issue edit failing, with its stderr (#1279: checking an answered question off). */
   editFails?: string
   /** gh issue view failing, with its stderr (#836). */
@@ -692,7 +694,7 @@ const world = (on: On, o: Opts = {}) => {
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
-      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone' }))
+      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone', url: `https://github.com/o/r/${o.pullNumbers?.includes(Number(a[2])) ? 'pull' : 'issues'}/${a[2]}` }))
       // An issue's body written whole (#1279), from standard input.
       if (a[0] === 'issue' && a[1] === 'edit') {
         if (o.editFails) return fail(1, o.editFails)
@@ -4384,6 +4386,14 @@ test("the open questions in a goal issue's section are asked before the night, a
   expect(w.edits).toEqual([{ repo: 'o/r', issue: 7, body: SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)') }])
   expect(w.files[UNANSWERED]).toBe('')
   expect(r.text).toMatch(asRegExp(' Before bed: 1 question answered and posted on o/r#7.'))
+})
+
+test('a goal number that is a pull request is not read as a goal issue (#1279 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: 'The change, with no section.' }, pullNumbers: [7] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).not.toContain('Open questions')
 })
 
 test('a question in both a goal issue\'s section and an earlier night\'s notes is asked once (#1279)', withDeps, async ($, on) => {

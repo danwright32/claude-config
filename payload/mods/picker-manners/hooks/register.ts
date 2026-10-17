@@ -69,13 +69,14 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
       // his work account (lessons review), through mod-kit's one helper.
       const gh = (argv: string[], env?: Record<string, string>, stdin?: string) =>
         $.process.run(argv, { timeoutMs: 20_000, ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
-      const view = await askAnyAccount(gh, ['issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body'])
+      const view = await askAnyAccount(gh, ['issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body,url'])
       if (!('stdout' in view)) {
         said(saidOf(view.failures))
         continue
       }
-      const j = JSON.parse(view.stdout) as { state?: unknown; body?: unknown }
-      if (String(j.state).toUpperCase() === 'CLOSED') continue
+      const j = JSON.parse(view.stdout) as { state?: unknown; body?: unknown; url?: unknown }
+      // gh issue view answers for a pull request's number too: its description is left alone.
+      if (String(j.state).toUpperCase() === 'CLOSED' || /\/pull\/\d+/.test(String(j.url ?? ''))) continue
       const body = typeof j.body === 'string' ? j.body : ''
       const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) })
       if (next === body) continue
