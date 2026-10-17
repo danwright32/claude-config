@@ -2210,6 +2210,25 @@ PY
 [ "$fc" = "True True function other() { return 2 } None" ] \
   && check "ts_source's public function_code and function_span read a function's code and where it lies" ok \
   || check "ts_source's public function_code and function_span read a function's code and where it lies" "$fc"
+# 13. No mod test sends a tool call and leaves it in flight with a bare `void` (#1297). The test can
+#     end while the call is still on its way through the hooks beneath the mod, and on a loaded Mac
+#     it lands after the test's own hooks are gone: job-watcher's file failed that way when four full
+#     runs overlapped, on "no implementation for tool.call", a rejection nothing handled. Wait on the
+#     call reaching wherever the test holds it instead, as job-watcher's sendHanging does (L290).
+abandoned_calls(){   # $1 = mods dir -> each offending line, as file:line:text
+  grep -rn -E 'void \$\.tool\.call\(' "$1" --include='*.test.ts' --include='*.test.tsx' 2>/dev/null | grep -v '/\.claude-plugin/types/' || true
+}
+M13="$TMPROOT/m13"
+mkdir -p "$M13/leaves/tests"
+printf "test('x', async (\$) => {\n  void \$.tool.call({ tool: 'Bash' } as never)\n})\n" > "$M13/leaves/tests/a.test.ts"
+got="$(abandoned_calls "$M13")"
+[ -n "$got" ] && check "a mod test that leaves a tool call in flight with a bare void is found (#1297)" ok \
+  || check "a mod test that leaves a tool call in flight with a bare void is found (#1297)" "nothing found in $M13"
+if [ -d "$ROOT/payload/mods" ]; then
+  got="$(abandoned_calls "$ROOT/payload/mods")"
+  [ -z "$got" ] && check "no mod test in payload/mods leaves a tool call in flight with a bare void (#1297)" ok \
+    || check "no mod test in payload/mods leaves a tool call in flight with a bare void (#1297)" "$got"
+fi
 # Every check this suite runs can be run directly, as its header says, so each is committed
 # executable (the lessons review of #744: the noun wait check was committed 644 beside its 755
 # siblings, which this suite's own `bash <check>` could never notice).
