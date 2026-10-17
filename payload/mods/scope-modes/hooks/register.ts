@@ -1416,7 +1416,9 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (works && !named) reportNamed.add(generation)
   const started = await report($, ['start', '--record', p.current, '--by', self])
   const problem = named ? `its name could not be recorded (${named}), so it is tried again at the next minute` : started
-  s += problem ? ` The night's report could not be started: ${problem}.` : works ? ` The night's report is at ${record.report}.` : ''
+  // Said as recorded, read back, since whichever namer is first keeps the name (lessons review).
+  const recorded = works && !problem ? ((await ownReport($, generation).catch(() => null)) ?? record.report) : record.report
+  s += problem ? ` The night's report could not be started: ${problem}.` : works ? ` The night's report is at ${recorded}.` : ''
   if (awake) s += ` The Mac may sleep tonight: ${awake}.`
   return s
 }
@@ -3922,6 +3924,13 @@ export const register: Register = on => {
     const sleeping = await sleepNow($)
     if (sleeping.state === 'asleep') {
       notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
+      // A worker names its report as its first prompt asleep goes in (#1287), before any note it
+      // writes, so its own name by its title is the one kept, not the report script's by its id.
+      try {
+        await reportMinute($, sleeping)
+      } catch (err) {
+        $.ui.log(`scope-modes: this session's sleep report could not be named on this prompt (${msg(err)}); tried again at the next minute`, { to: 'debug' })
+      }
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
       // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
       // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.
@@ -4202,8 +4211,6 @@ export const register: Register = on => {
     return { value: { isAnswered: true } }
   })
 
-  // This session's title, which names its sleep report (#1287): the engine hands it only to this
-  // session's own hooks, at its start and with each of Dan's messages, as auto naming reads it.
   // Sleep mode phase 3 (#834, Dan's decision 7): overnight, Claude Code's own permission prompts in
   // an enrolled session are approved, while Dan's own checks stay on (the settings hooks and every
   // mod's tool.call refusal run before this step, and a decision beneath is never overridden). Never

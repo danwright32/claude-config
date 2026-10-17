@@ -655,10 +655,19 @@ has "the named one holds its own question" "Rename the list?" "$(cat "$DL2/2026-
 # A name already on the disk from an earlier sleep the same night is never written over: (2).
 per_record g23 '["gggg7777"]' "$SLEEPDIR/ended/g23.json"
 : > "$DL2/2026-10-07 gggg7777 sleep report.md"
-py render --record "$SLEEPDIR/ended/g23.json" >/dev/null 2>&1
+py render --record "$SLEEPDIR/ended/g23.json" --final >/dev/null 2>&1
 check_eq "a second sleep the same night gets (2), the first night's file untouched" "|$DL2/2026-10-07 gggg7777 sleep report (2).md" \
   "$(cat "$DL2/2026-10-07 gggg7777 sleep report.md")|$(cat "$SLEEPDIR/reports/g23/gggg7777.path" 2>/dev/null)"
 rm -f "$DL2/2026-10-07 gggg7777 sleep report.md" "$DL2/2026-10-07 gggg7777 sleep report (2).md"
+# Before the night ends a session gets two minutes to name its own report by its title: a fresh note
+# names nothing yet, and a worker with no note is named only at the end (lessons review).
+per_record g24 '["hhhh8888"]' "$SLEEPDIR/ended/g24.json"
+echo '{"v":1,"kind":"question","at":'"$SINCE"',"by":"iiii9999","cwd":"/w/slate","questions":["Keep it?"],"generation":"g24"}' > "$SLEEPDIR/notes/g24.jsonl"
+NOW=$((SINCE + 60000)) py render --record "$SLEEPDIR/ended/g24.json" >/dev/null 2>&1
+check_eq "within its two minutes, and for a worker with no note, no name is given for them" "" "$(ls "$SLEEPDIR/reports/g24" 2>/dev/null | tr '\n' ' ')"
+NOW=$((SINCE + 120000)) py render --record "$SLEEPDIR/ended/g24.json" >/dev/null 2>&1
+check_eq "past its two minutes the session that noted is named; the worker with no note still waits for the end" "iiii9999.path " "$(ls "$SLEEPDIR/reports/g24" 2>/dev/null | tr '\n' ' ')"
+rm -f "$DL2"/*iiii9999*
 # A night where no session has named a report yet writes nothing, and says so rather than failing.
 per_record g21 '[]' "$SLEEPDIR/ended/g21.json"
 out="$(py render --record "$SLEEPDIR/ended/g21.json" 2>&1)"; rc=$?

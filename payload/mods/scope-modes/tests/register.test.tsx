@@ -3098,6 +3098,13 @@ test('a worker that did not run /sleep names its own report at its first minute 
   expect(w.reports.length).toBe(renders)
 })
 
+test("a worker names its report as its first prompt asleep goes in, before any note and any minute (#1287 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await say($ as never, 'start the night')
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+})
+
 test('a session that is not a worker gets a report only once it has noted something overnight (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: perSession() } })
   await start($ as never, clock)

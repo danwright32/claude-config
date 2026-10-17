@@ -924,16 +924,30 @@ def session_reports(notes_file, record):
 UNSAFE_NAME = re.compile(r"[/\\:\x00-\x1f\x7f]")
 
 
-def fallback_reports(notes_file, record, notes, named):
+# How long a session has to name its own report, by its title, before this script names it by id:
+# its minute runs every 60 seconds, so two leave it room (a chosen limit, not a measurement).
+NAMING_GRACE_MS = 2 * 60 * 1000
+
+
+def fallback_reports(notes_file, record, notes, named, final, now):
     """A report for every session with news (every worker, and any session that wrote a note of its
     own) that has not named its own (#1287): one that died before it could, or never ran its minute.
-    Named as the mod names one, by night, the project its notes give and the first 8 characters of
-    its id; a name on the disk already (an earlier sleep the same night) takes (2) and on. Recorded by
-    linking the name into place, so whichever of this and the session itself is first keeps it."""
+    Before the night ends only a session whose first note of its own is past NAMING_GRACE_MS, so a
+    session's own name, by its title, is never beaten by this one (lessons review); at the end, every
+    session with news. Named as the mod names one, by night, the folder its notes give and the first
+    8 characters of its id; a name on the disk already (an earlier sleep the same night) takes (2)
+    and on. Recorded by linking the name into place, so whichever is first keeps it."""
     folder = os.path.join(os.path.dirname(os.path.dirname(notes_file)), "reports", re.sub(r"[^\w.-]", "_", record["generation"]))
     downloads = os.path.dirname(record["report"])
-    news = [w for w in record.get("workers") or [] if isinstance(w, str) and w]
-    news += [n["by"] for n in notes if isinstance(n.get("by"), str) and n["by"] and n["kind"] not in MAC_WIDE]
+    own = [n for n in notes if isinstance(n.get("by"), str) and n["by"] and n["kind"] not in MAC_WIDE]
+    if final:
+        news = [w for w in record.get("workers") or [] if isinstance(w, str) and w] + [n["by"] for n in own]
+    else:
+        first = {}
+        for n in own:
+            if num(n.get("at")):
+                first[n["by"]] = min(first.get(n["by"], n["at"]), n["at"])
+        news = [sid for sid, at in first.items() if now - at >= NAMING_GRACE_MS]
     out = dict(named)
     for sid in dict.fromkeys(news):
         if sid in out:
@@ -976,7 +990,8 @@ def scoped(github, repos):
     """GitHub's reading for one session's report: what was done in the repos it worked, and every
     flag, since what could not be checked belongs to the whole night."""
     low = [r.lower() for r in repos]
-    done = [d for d in github.get("done", []) if any(d.lower().startswith(r) for r in low)]
+    # A repo's own lines only: "o/r PR #3" or "o/r#3: ...", never "o/ra" (lessons review).
+    done = [d for d in github.get("done", []) if any(d.lower().startswith(r) and d[len(r):len(r) + 1] in (" ", "#", ":") for r in low)]
     return {**github, "done": done}
 
 
@@ -1004,7 +1019,7 @@ def _render_once(path, record, final, github):
     now = now_ms()
     dests = session_reports(path, record)
     if dests is not None:
-        dests = fallback_reports(path, record, notes, dests)
+        dests = fallback_reports(path, record, notes, dests, final, now)
         # One report per session with news (#1287): its own notes, with the whole Mac's sections.
         texts = {}
         for sid, dest in dests.items():

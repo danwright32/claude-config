@@ -1112,7 +1112,9 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   /rename and auto naming set, else its last `ai-title`, read with grep rather than through the
   classic hooks carrying `session_title`, which Claude Code's security default sends past a mod
   (#875), so no bypass entry is needed), else the report script for a session with news that never named one (its
-  id and the folder its notes give). Every render writes each: that session's own notes with
+  id and the folder its notes give), which waits `NAMING_GRACE_MS` (two minutes) after that session's
+  first note, and names a worker with no note only at the end of the night, so a session's own name
+  by its title is never beaten; a worker also names its report as its first prompt asleep goes in. Every render writes each: that session's own notes with
   `MAC_WIDE` (start, end, the overnight check, limits and usage), and the sessions gone quiet read
   from every note; GitHub's done lines are kept for the repositories that session noted. The record's
   `report` is the /sleep session's own name, kept for older readers. At wake a session opens its own

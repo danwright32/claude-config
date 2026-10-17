@@ -1962,8 +1962,9 @@ sleep report.md`, the session's title where it has one (auto naming's `(project)
 else the first 8 characters of its id (`2026-10-16 Bidspoke 3f2a9c1e sleep report.md`), and a
 second sleep the same night adds ` (2)` rather than writing over the first. The night is the evening
 sleep started (anything before noon ET counts as the night before). The name is fixed when the file
-is first written, by the session itself (at `/sleep`, or its first minute asleep with news) or, for
-a session that never got to it, by the report script from its id and the folder its notes name, and
+is first written, by the session itself (at `/sleep`, its first prompt asleep as a worker, or its
+first minute asleep with news) or, for a session that never got to it, by the report script from its
+id and the folder its notes name (two minutes after its first note, or at the end of the night), and
 a page of the night's results a session publishes at wake is given the same name. Each report holds
 that session's own notes, with the parts that belong to the whole Mac (the overnight check, limits
 and usage, sessions gone quiet) repeated in every one. It exists from the first minute it has news
