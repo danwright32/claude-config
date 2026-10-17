@@ -137,7 +137,8 @@ def _read(url, clock):
 
 
 def check_issue(url, line, now, clock):
-    """What to say about one issue the command printed, or None for nothing to say."""
+    """(what Claude is told, what Dan is told) about one issue the command printed, each None when
+    there is nothing to tell that reader; (None, None) for nothing to say at all."""
     number = ISSUE_URL.match(url).group(1)
     if clock.left() < MIN_CALL_S:
         return ("there was no time left to read issue #%s (%s) back from GitHub, so whether it names this "
