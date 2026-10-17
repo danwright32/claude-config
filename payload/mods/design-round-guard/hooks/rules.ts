@@ -949,11 +949,11 @@ const readMod = (f: ModFile): ModRead | null => {
   // The last character of code before here, so a line going on with an expression the line before
   // left open (`export const X =` then `'warning'` at the left edge) is never a statement of its own.
   // A `>` leaves one open only as an arrow's `=>`: one closing a generic (`Array<Row>`) ends the
-  // statement (lessons review).
+  // statement; nor does a non-null assertion's `!`, or `++` and `--` (lessons review).
   let last = ''
   for (let i = 0; i < n; i++) {
     if ((i === 0 || blank[i - 1] === '\n') && open.length === 0 && /\S/.test(blank[i] ?? ''))
-      if (!/(?:[=,([{?:|&+\-*/!.]|=>)$/.test(last) && !/^[?:.|&+\-*/,)\]}=]/.test(blank[i] ?? '')) starts.push(i)
+      if (!/(?:[=,([{?:|&*/.]|=>|(?:^|[^+])\+|(?:^|[^-])-)$/.test(last) && !/^[?:.|&+\-*/,)\]}=]/.test(blank[i] ?? '')) starts.push(i)
     const c = blank[i]
     if (c !== undefined && /\S/.test(c)) last = last.slice(-1) + c
     if (c === '(' || c === '[' || c === '{') open.push(i)

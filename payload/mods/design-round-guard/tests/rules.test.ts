@@ -834,6 +834,11 @@ test('#1275 (lessons review): a statement continued on an unindented line stays 
   const g = [{ name: 'look.ts', text: generic }]
   expect(drawsChange(g, 'look.ts', generic, generic.replace("'warning'", "'error'"))).toBe(true)
   expect(drawsChange(g, 'look.ts', generic, generic.replace('Array<string>', 'Array<number>'))).toBe(false)
+  // So is one ending in a non-null assertion or an increment, which leave nothing open.
+  for (const end of ['export const sure = maybe!', 'export let n = 0; n++', 'export let m = 9; m--']) {
+    const t = [end, "const AMBER = 'warning'", 'export const row = (t: string) => [{ text: t, color: AMBER }]', ''].join('\n')
+    expect(drawsChange([{ name: 'look.ts', text: t }], 'look.ts', t, t.replace("'warning'", "'error'"))).toBe(true)
+  }
   // The names a drawing file imports from './card' or './card.js' are the card.ts file's.
   for (const spec of ['./card', './card.js']) {
     const tsx = DRAW_TSX.replace("from './card.ts'", `from '${spec}'`)
