@@ -325,6 +325,7 @@ removing a label strips it from every issue that carries it, so that is Dan's ca
 | An issue has a milestone | `~/.claude/hooks/require-issue-fields.sh` (PreToolUse) | `SKIP_MILESTONE_CHECK=1 <command>` |
 | An issue has a priority | the same gate | `SKIP_PRIORITY_CHECK=1 <command>` |
 | An issue has at least one category | the same gate | `SKIP_CATEGORY_CHECK=1 <command>` |
+| An issue's body has an `## Open questions` section (claude-config#1279, Dan 2026-10-17): one unchecked item (`- [ ] ...`) for each decision only Dan can make, or `None`. `/sleep` asks every open item in its goal issues' sections before the night begins, and a question Dan is asked about an issue later is added there. Any heading level counts; the words in a sentence do not | the same gate, in and out of a session | `SKIP_OPEN_QUESTIONS_CHECK=1 <command>` |
 | An issue filed from a Claude session ends with its `Claude-Session:` line (claude-config#536), the same line commits and pull requests carry, so concurrent sessions can tell who filed what. The refusal names the exact line; `hooks/lib/claude-session-line.sh` is the one place it is spelled, and `create-milestone.sh` and `post-discussion.sh` append it themselves. A body the gate cannot read before the command runs (written by a script, by `cat` of another file, or by a heredoc or `printf` expanding a variable) is checked after it: `hooks/check-filed-issue-session.sh` reads the filed issue back from GitHub and, where the line is missing, adds it to the issue's body and says so to Dan and to Claude (claude-config#1272) | the same gate and the check after it, only inside a session | `SKIP_SESSION_LINE_CHECK=1 <command>` |
 | A plan's issues carry both | `create-milestone.sh`, which the gates cannot see into | none, fix the plan JSON |
 | A new milestone title names a feature | `ensure-milestone.sh`, on the create path only | `ALLOW_ANY_MILESTONE_TITLE=1 <command>` |
@@ -335,7 +336,7 @@ Every override is visible in the command itself, so it cannot happen by accident
 go unnoticed in the transcript. Explain to Dan why you are using one, first. An
 override is good for that one command, never standing permission.
 
-One gate carries all three rules, in a table in `~/.claude/hooks/issue_field_gate.py`.
+One gate carries these rules, in a table in `~/.claude/hooks/issue_field_gate.py`.
 A create missing two things says so once, and each rule keeps its own override so
 waiving one never waives another. Adding a fourth rule is one entry in that table.
 

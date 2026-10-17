@@ -104,7 +104,23 @@ def _same_path(a, b):
 
 
 def has_session_line(args, command):
-    """The body names the session that filed it (claude-config#536).
+    """The body names the session that filed it (claude-config#536). See body_carries."""
+    return body_carries(args, command, lambda text: SESSION_MARK in text)
+
+
+# The body's Open questions section (claude-config#1279, Dan 2026-10-17): a heading, at any level,
+# at a line's start or right after the quote that opens the body. The words in a sentence ("no open
+# questions") are not a section.
+OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"'])[ \t]*#{1,6}[ \t]*Open questions\b")
+
+
+def has_open_questions(args, command):
+    """The body holds an Open questions section, listing what only Dan can decide, or None."""
+    return body_carries(args, command, lambda text: OPEN_QUESTIONS.search(text) is not None)
+
+
+def body_carries(args, command, found):
+    """Whether the body of a create holds what `found` looks for in a text.
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
     as a heredoc inside a command substitution is only ever present as text, and in a --body-file
@@ -117,7 +133,7 @@ def has_session_line(args, command):
     the file either. Written by anything else (a script, an expansion), or not written here and not
     readable, it is not held against the create: this gate fails open on what it cannot read.
     """
-    if SESSION_MARK in command or any(SESSION_MARK in a for a in args):
+    if found(command) or any(found(a) for a in args):
         return True
     paths = scan.flag_values(args, "--body-file", "-F")
     try:
@@ -134,7 +150,7 @@ def has_session_line(args, command):
             continue  # written whole from shown text, which does not carry the line
         try:
             with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as f:
-                if SESSION_MARK in f.read():
+                if found(f.read()):
                     return True
         except OSError:
             if not written:
@@ -198,6 +214,21 @@ RULES = [
 ]
 
 
+# Judged on the body, so it reads the command as the session line does (claude-config#1279).
+OPEN_QUESTIONS_RULE = {
+    "name": "an Open questions section",
+    "check": lambda args, command: has_open_questions(args, command),
+    "fix": ("OPEN QUESTIONS. The body ends its prose with a section listing what only Dan can decide about "
+            "this issue, so /sleep asks each before the night begins instead of a worker finding it "
+            "overnight. One unchecked item a question; if there are none, write None under it:\n"
+            "   ## Open questions\n"
+            "   - [ ] <a decision only Dan can make>\n"
+            "   (or: None)\n"
+            "   It goes in --body or the --body-file, before the session line."),
+    "override": "SKIP_OPEN_QUESTIONS_CHECK=1",
+}
+
+
 def session_rule(line):
     """The session line rule, which exists only inside a session: its fix names the exact line."""
     return {
@@ -219,6 +250,7 @@ def evaluate(command):
     """
     creates = scan.scan_creates(command)
     rules = [dict(r, check=(lambda args, command, f=r["check"]: f(args))) for r in RULES]
+    rules.append(OPEN_QUESTIONS_RULE)
     line = session_line() if creates else None
     if line:
         rules.append(session_rule(line))
