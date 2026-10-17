@@ -195,7 +195,7 @@ const kitWithRepo: { name: string; register: Register } = {
     })
   },
 }
-type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; settle: () => Promise<void> }
+type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; settle: () => Promise<void> }
 const issueWorld = (on: On, answer: string | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
   const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
@@ -212,6 +212,11 @@ const issueWorld = (on: On, answer: string | null, bodies: Record<number, string
   const fail = (stderr: string) => ({ value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }) as never
   on('process.run', ($, e) => {
     const a = e.argv
+    const env = (e as unknown as { init?: { env?: Record<string, string> } }).init?.env
+    // Only one account can see the repository: the active one is told it does not exist.
+    if (a[0] === 'gh' && a[1] === 'auth' && a[2] === 'status') return ok(`  Logged in to github.com account dan-personal\n  Logged in to github.com account ${w.onlyAccount ?? 'dan-personal'}\n`)
+    if (a[0] === 'gh' && a[1] === 'auth' && a[2] === 'token') return ok(`tok-${a[4]}\n`)
+    if (a[0] === 'gh' && a[1] === 'issue' && w.onlyAccount && env?.GH_TOKEN !== `tok-${w.onlyAccount}`) return fail('GraphQL: Could not resolve to a Repository with the name o/r')
     if (a[0] === 'gh' && a[1] === 'issue' && a[2] === 'view') {
       if (w.viewFails) return fail(w.viewFails)
       return ok(JSON.stringify({ state: 'OPEN', body: w.bodies[Number(a[3])] ?? '' }))
@@ -254,6 +259,16 @@ test('a question naming no issue, or only a bare #N, touches no issue; one /slee
   await askAbout($ as never, 'o/r#7: Keep the old flag?')
   await w.settle()
   expect(w.edits.map(x => x.body)).toEqual(['B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Yes)'])
+})
+
+// Lessons review: Dan's work repositories are visible only to his work account, so GitHub is asked as
+// each account gh is logged in to, as /sleep asks, through the one helper.
+test('an issue only another gh account can see is still recorded (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Yes', { 7: SECTION })
+  w.onlyAccount = 'dan-work'
+  await askAbout($ as never, 'For o/r#7, ship it?')
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] For o/r#7, ship it? (answered 1969-12-31 ET: Yes)'])
 })
 
 test('issue #N whose repository cannot be told is said, never dropped silently (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {

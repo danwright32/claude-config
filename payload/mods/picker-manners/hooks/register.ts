@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 import { etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
+import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -52,6 +53,9 @@ const sessionRepo = async ($: EngineInterface): Promise<{ repo: string } | { why
   }
 }
 const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
+const notFound = (r: GhRun) => /Could not resolve to a Repository/i.test(r.stderr)
+// What a failure says: the first one that is not another account's not found, as /sleep says it.
+const saidOf = (failures: GhRun[]) => ghLine(failures.find(f => !notFound(f)) ?? (failures[0] as GhRun))
 const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
   const bare = question.match(/\bissue\s+#\d+/gi) ?? []
   const here = bare.length ? await sessionRepo($) : null
@@ -61,9 +65,13 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
   for (const ref of refs) {
     const said = (why: string) => $.ui.log(`Picker manners could not add this question to ${ref.repo}#${ref.issue}'s Open questions (${why}), so /sleep will not see it there.`)
     try {
-      const view = await $.process.run(['gh', 'issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body'], { timeoutMs: 20_000 })
-      if (view.exitCode !== 0) {
-        said(ghLine(view))
+      // As each account gh is logged in to, as /sleep asks: Dan's work repositories are visible only to
+      // his work account (lessons review), through mod-kit's one helper.
+      const gh = (argv: string[], env?: Record<string, string>, stdin?: string) =>
+        $.process.run(argv, { timeoutMs: 20_000, ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
+      const view = await askAnyAccount(gh, ['issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body'])
+      if (!('stdout' in view)) {
+        said(saidOf(view.failures))
         continue
       }
       const j = JSON.parse(view.stdout) as { state?: unknown; body?: unknown }
@@ -71,8 +79,8 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
       const body = typeof j.body === 'string' ? j.body : ''
       const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) })
       if (next === body) continue
-      const edit = await $.process.run(['gh', 'issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], { timeoutMs: 20_000, stdin: next })
-      if (edit.exitCode !== 0) said(ghLine(edit))
+      const edit = await askAnyAccount(gh, ['issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], notFound, next)
+      if (!('stdout' in edit)) said(saidOf(edit.failures))
     } catch (err) {
       said(err instanceof Error ? err.message : String(err))
     }

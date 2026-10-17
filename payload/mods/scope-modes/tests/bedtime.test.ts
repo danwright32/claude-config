@@ -170,6 +170,9 @@ describe('the issues a goal names', () => {
     expect(goalIssues('Close #7 and #9, then #7 again', 'o/r')).toEqual([{ repo: 'o/r', issue: 7 }, { repo: 'o/r', issue: 9 }])
     expect(goalIssues('Land o/other#12 and #3', 'o/r')).toEqual([{ repo: 'o/other', issue: 12 }, { repo: 'o/r', issue: 3 }])
   })
+  test('a number named as a pull request is not read as an issue (lessons review)', () => {
+    expect(goalIssues('Merge PR #31, then close #7; pull request #40 too', 'o/r')).toEqual([{ repo: 'o/r', issue: 7 }])
+  })
   test('a goal naming no issue, or a worker in no repository, names none it can read', () => {
     expect(goalIssues('Finish the Saved views milestone', 'o/r')).toEqual([])
     expect(goalIssues('Close #7', null)).toEqual([])

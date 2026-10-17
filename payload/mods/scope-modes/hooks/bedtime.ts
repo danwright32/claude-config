@@ -39,6 +39,8 @@ export type OpenQuestion = { repo: string; text: string; issues: number[]; optio
 export const goalIssues = (goal: string, repo: string | null): { repo: string; issue: number }[] => {
   const out: { repo: string; issue: number }[] = []
   for (const m of goal.matchAll(/(?:\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)\b/g)) {
+    // A number named as a pull request is not an issue (lessons review): it has no section to read.
+    if (/\b(?:PR|pull request|pull)\s*$/i.test(goal.slice(0, m.index))) continue
     const r = m[1] ?? repo
     const n = Number(m[2])
     if (!r || !REPO.test(r) || !Number.isInteger(n) || n <= 0) continue
