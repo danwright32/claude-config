@@ -155,10 +155,14 @@ export const morningPrompt = (o: {
   forRepo?: string
   /** The opening line in place of waking's, for proposals from an earlier night offered later (#1286). */
   lead?: string
+  /** This session's report's name without .md (#1287), which a page of the night's results is titled. */
+  reportName?: string
 }): string => {
   const out: string[] = [
     o.lead ?? (o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.'),
   ]
+  // One name for every sleep output, text and page alike (#1287).
+  if (o.reportName) out.push(`If you publish a page of the night's results for Dan, title it "${o.reportName}", the name of this session's report.`)
   // What this session held instead of handing it to Dan while he slept (#1284), delivered now.
   const held = heldAtWake(o.held ?? [])
   if (held) out.push(held)

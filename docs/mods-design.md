@@ -1055,7 +1055,7 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
 - Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
   so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
   `report` path in the record (`~/Downloads/Sleep report <night>.md`, the name Dan asked for in
-  decision 4), is derived from the record
+  decision 4, superseded by #1287 below), is derived from the record
   and the notes and replaced whole after each note, best effort: a note whose render fails is still
   written, the failure said on stderr, and the call exits 0 so nobody writes it twice. Renders take
   turns under a per night flock (`notes/<generation>.render.lock`, a 15 second deadline, then the
@@ -1100,6 +1100,22 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
   and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
   line under Limits and usage.
+- One report per session with news (#1287; Dan, 2026-10-17: "One file per session. Even if multiple
+  sessions are working on the same project", and on the three questions that followed: the whole
+  Mac's sections repeated in every report, every worker and any session that noted something gets
+  one, and the name night first). A record carrying `reportsPerSession` has each session name its
+  own file in `reports/<generation>/<session>.path`, linked into place so the first namer keeps it:
+  the session itself at `/sleep` or its first minute asleep with news (`reportBase` in
+  `hooks/reportname.ts`: `<night> <project folder> <title or first 8 of the id> sleep report`, auto
+  naming's `(project)` prefix dropped, ` (n)` past a name already on the disk or held by another
+  session tonight; the title is read off `session_title`, which the engine hands only to that
+  session's own hooks), else the report script for a session with news that never named one (its
+  id and the folder its notes give). Every render writes each: that session's own notes with
+  `MAC_WIDE` (start, end, the overnight check, limits and usage), and the sessions gone quiet read
+  from every note; GitHub's done lines are kept for the repositories that session noted. The record's
+  `report` is the /sleep session's own name, kept for older readers. At wake a session opens its own
+  report, or says it has none, and its morning names a page of the night's results after it. An
+  older record keeps the one report.
 
 ### Sleep mode phase 5: the overnight queue and per issue claims (#842), built
 

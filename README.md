@@ -1886,9 +1886,9 @@ night ends, and the band above the prompt shows ASLEEP in every session.
 **Ending it.** Type `/wake`, or say "I'm up", in any session. If you write to a session between 7 AM
 and 7 PM ET while sleep is still on, Claude asks you once, in a plain line, whether you are up; it
 never ends sleep by itself. If you forget, sleep ends on its own at noon ET the next day (or when the
-Mac restarts) and sends one notification. The session you woke it in opens the night's report in
+Mac restarts) and sends one notification. The session you woke it in opens its own report in
 BBEdit (focus moves there), unless you are away or woke it from your phone, when opening it waits
-for you in the held card. That session then summarises its own night and offers what the overnight
+for you in the held card; a session with no report of its own says so and opens nothing. That session then summarises its own night and offers what the overnight
 sessions proposed: new issues in one multi select picker, with the priority, labels and milestone
 each was proposed with so you can correct them, and new lessons one at a time. Nothing is filed and
 no lesson is added until you pick it. Ending sleep is the night's review (#1285), so it never needs
@@ -1955,9 +1955,19 @@ other two), `mergeOnly` (merging allowed, deploying never; each entry says with 
 whether a merge there deploys by itself, and only `false` lets the merge run) and `mayDeploy`. A
 repository on both lists, or one GitHub cannot confirm at bedtime, waits.
 
-**The report** is `Sleep report YYYY-MM-DD.md` in your Downloads folder, dated for the evening sleep
-started (anything before noon ET counts as the night before). It exists from the first minute and is
-rebuilt after every note, so it is there however the night ends. At wake it is finished: what was
+**The reports** are one per session with news (#1287): every worker, and any other session that
+noted something overnight; a session with nothing to say gets none. Each is in your Downloads
+folder, named night first, then the project, then the session: `2026-10-16 Bidspoke Fix the parser
+sleep report.md`, the session's title where it has one (auto naming's `(project)` prefix dropped),
+else the first 8 characters of its id (`2026-10-16 Bidspoke 3f2a9c1e sleep report.md`), and a
+second sleep the same night adds ` (2)` rather than writing over the first. The night is the evening
+sleep started (anything before noon ET counts as the night before). The name is fixed when the file
+is first written, by the session itself (at `/sleep`, or its first minute asleep with news) or, for
+a session that never got to it, by the report script from its id and the folder its notes name, and
+a page of the night's results a session publishes at wake is given the same name. Each report holds
+that session's own notes, with the parts that belong to the whole Mac (the overnight check, limits
+and usage, sessions gone quiet) repeated in every one. It exists from the first minute it has news
+and is rebuilt after every note, so it is there however the night ends. At wake it is finished: what was
 done is read from GitHub (merged pull requests and closed issues) and checked against what the
 sessions noted, with any disagreement flagged. Above that comes Needs a look (anything outward,
 anything that could not be checked, and any session or claim that went quiet without saying why),

@@ -219,7 +219,7 @@ PORT="$(cat "$WORK/model.port")"
 touch "$WORK/started"
 real_changed() {
   { find "$REAL_HOME/.claude/state/sleep" -mindepth 1 -newer "$WORK/started" 2>/dev/null
-    find "$REAL_HOME/Downloads" -maxdepth 1 -name 'Sleep report*' -newer "$WORK/started" 2>/dev/null; } | sort
+    find "$REAL_HOME/Downloads" -maxdepth 1 -iname '*sleep report*' -newer "$WORK/started" 2>/dev/null; } | sort
 }
 
 # One headless session: OUT DEADLINE RESULTS SESSION_ID [claude args...] -- MESSAGE...
@@ -313,9 +313,15 @@ r = rec.get('repos') or {}
 closed = {c.get('repo') for c in r.get('closed', [])}
 sys.exit(0 if named and named <= closed and not r.get('mayDeploy') and not r.get('mergeOnly') else 1)
 PY
-REPORT="$(jget "$REC" report)"
-case "$REPORT" in "$HOME/Downloads/Sleep report "*.md) check "the report is named for the night, in the scratch Downloads" ok ;; *) check "the report is named for the night, in the scratch Downloads" "report=$REPORT" ;; esac
-[ -s "$REPORT" ] && check "the report exists from the first minute (#835)" ok || check "the report exists from the first minute (#835)" "nothing at $REPORT"
+# One report per session with news (#1287): the record says so. This headless /sleep works nothing
+# tonight, so it names no report while it is starting the night; the repositories it closed are noted
+# as its questions, which is news, and the report script names a report for it from those. Each
+# worker's is read below.
+[ "$(jget "$REC" reportsPerSession)" = true ] \
+  && check "the record keeps one report per session with news (#1287)" ok \
+  || check "the record keeps one report per session with news (#1287)" "reportsPerSession=$(jget "$REC" reportsPerSession)"
+S1_REPORT="$(cat "$STATE/reports/$(jget "$REC" generation)/$S1.path" 2>/dev/null)"
+case "$S1_REPORT" in "$HOME/Downloads/$(jget "$REC" night) "*" ${S1:0:8} sleep report.md") check "the /sleep session's questions put it in a report of its own, named by its id since it has no title (#1287)" ok ;; *) check "the /sleep session's questions put it in a report of its own, named by its id since it has no title (#1287)" "report=${S1_REPORT:-none named}" ;; esac
 CAF="$(cut -d' ' -f1 "$STATE/caffeinate.pid" 2>/dev/null)"
 case "$(ps -o comm= -p "${CAF:-0}" 2>/dev/null)" in *caffeinate) check "/sleep holds the Mac awake with caffeinate (#844)" ok ;; *) check "/sleep holds the Mac awake with caffeinate (#844)" "caffeinate.pid=${CAF:-none}" ;; esac
 GEN="$(jget "$REC" generation)"
@@ -466,6 +472,11 @@ git -C "$WORK/sleepdemo.git" cat-file -e "refs/heads/sleep/1:hello.txt" 2>/dev/n
   || check "the primary checkout was never switched off main (H7)" "it is on $(git -C "$REPO" branch --show-current)"
 
 # ---- 5. notes reach the report ----
+# The worker's own report (#1287), named by the worker itself or, when it never ran a minute asleep,
+# by the report script, "<night> <project> <session> sleep report.md" in the scratch Downloads.
+REPORT="$(cat "$STATE/reports/$GEN/$W1.path" 2>/dev/null)"
+case "$REPORT" in "$HOME/Downloads/$(jget "$REC" night) "*" sleep report.md") check "the worker's report is named night first, in the scratch Downloads (#1287)" ok ;; *) check "the worker's report is named night first, in the scratch Downloads (#1287)" "report=${REPORT:-none named}" ;; esac
+[ -s "$REPORT" ] && check "the worker's report exists before wake (#835)" ok || check "the worker's report exists before wake (#835)" "nothing at ${REPORT:-a path never named}"
 grep -q 'Add goodbye.txt' "$REPORT" && check "the worker's proposed issue is in the report" ok || check "the worker's proposed issue is in the report" "$(head -c 400 "$REPORT")"
 grep -q '#1' "$REPORT" && check "the report names the claimed issue" ok || check "the report names the claimed issue" "$(head -c 400 "$REPORT")"
 grep -q 'issue create\|pr merge\|pr create' "$WORK/gh-called" 2>/dev/null \
@@ -489,13 +500,15 @@ WAKE_SAID="$(result_text "$WORK/s3.jsonl" 0)"
   && check "/wake moves the record aside, in the waking session's name (#840)" ok \
   || check "/wake moves the record aside, in the waking session's name (#840)" "current: $(ls "$REC" 2>&1); ended: $(ls "$STATE/ended" 2>&1)"
 grep -q '^scope-modes: Sleep mode is off' <<<"$WAKE_SAID" && check "/wake says sleep mode is off" ok || check "/wake says sleep mode is off" "said: $WAKE_SAID"
-grep -q 'not opened on the Mac' <<<"$WAKE_SAID" && check "away before sleep, the report waits in the held card, never opened on the screen (#837)" ok || check "away before sleep, the report waits in the held card, never opened on the screen (#837)" "said: $WAKE_SAID"
+# The waking session worked nothing overnight, so it has no report of its own to open (#1287); the
+# worker's report stays where it is, and nothing opens on the screen.
+grep -q 'no report of its own' <<<"$WAKE_SAID" && check "a waking session with no news says it has no report of its own, and opens none (#1287)" ok || check "a waking session with no news says it has no report of its own, and opens none (#1287)" "said: $WAKE_SAID"
 case "$(ps -o comm= -p "${CAF:-0}" 2>/dev/null)" in *caffeinate) check "/wake lets the caffeinate hold go" "pid $CAF still running" ;; *) check "/wake lets the caffeinate hold go" ok ;; esac
 grep -q '"kind": *"woke"' "$NOTES" && check "the end of the night is noted (woke)" ok || check "the end of the night is noted (woke)" "no woke note in $NOTES"
 grep -qF "No goal was set for 1 session (${N1:0:8}), so it did no work tonight." "$REPORT" \
   && check "the finished report says the worker with no goal did no work (#1242)" ok \
   || check "the finished report says the worker with no goal did no work (#1242)" "$(head -c 600 "$REPORT")"
-grep -q 'Add goodbye.txt' "$REPORT" && grep -qi 'sleep/1\|claim' "$REPORT" \
+grep -q 'Add goodbye.txt' "$REPORT" && grep -q 'sleepdemo#1' "$REPORT" \
   && check "the finished report still holds the night's claim and proposal" ok \
   || check "the finished report still holds the night's claim and proposal" "$(head -c 400 "$REPORT")"
 MORNING="$(python3 - "$HOME/.claude/projects" "$S3" <<'PY'

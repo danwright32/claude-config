@@ -85,6 +85,7 @@ import {
 } from './wake.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge } from './nightheld.ts'
+import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import {
@@ -1288,6 +1289,13 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     await releaseMarker($, p.preparing, claim.claimed)
     throw err
   }
+  let ownReportPath: string
+  try {
+    ownReportPath = await chooseReport($, night, generation)
+  } catch (err) {
+    await releaseMarker($, p.preparing, claim.claimed)
+    return `Sleep mode did not start: its report could not be named (${msg(err)}).`
+  }
   const record: SleepRecord = {
     v: 1,
     generation,
@@ -1296,8 +1304,10 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     night,
     bootTime: startedBoot,
     ...(b.boot.session !== null ? { bootSession: b.boot.session } : {}),
-    // Named as Dan asked (decision 4, 2026-10-06): "Sleep report <night>.md", the night's ET date.
-    report: `${p.home}/Downloads/Sleep report ${night}.md`,
+    // One report per session with news (#1287, superseding decision 4 of 2026-10-06): this
+    // session's own, named by night, project and session; every other session names its own.
+    report: ownReportPath,
+    reportsPerSession: true,
     startedBy: { sessionId: self, cwd: startedIn },
     workers: e.workers,
     goals: goals.goals,
@@ -1399,9 +1409,14 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
   s += goals.said + startSaid + closedSentence(repos) + issues.said + unnoted + tookOver
-  // The report exists from the first minute, header first, so a night that ends badly still has one (#835, L10).
+  // This session's report, when it works tonight (#1287), is named before the start renders it, so
+  // it exists from the first minute, header first, and a night that ends badly still has one (#835, L10).
+  const works = e.workers.includes(self)
+  const named = works ? await recordReport($, generation, record.report) : null
+  if (works && !named) reportNamed.add(generation)
   const started = await report($, ['start', '--record', p.current, '--by', self])
-  s += started ? ` The night's report could not be started: ${started}.` : ` The night's report is at ${record.report}.`
+  const problem = named ? `its name could not be recorded (${named}), so it is tried again at the next minute` : started
+  s += problem ? ` The night's report could not be started: ${problem}.` : works ? ` The night's report is at ${record.report}.` : ''
   if (awake) s += ` The Mac may sleep tonight: ${awake}.`
   return s
 }
@@ -1485,9 +1500,19 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
       read = { unread: msg(err) }
     }
   }
+  // A page of the night's results is named as this session's report is (#1287); a report that cannot
+  // be found only leaves the page's name to Claude, so a failed read is logged, not said.
+  let reportName: string | undefined
+  if (night.generation !== null) {
+    const own = await ownReport($, night.generation).catch((err: unknown) => {
+      $.ui.log(`scope-modes: where this session's report is could not be read (${msg(err)})`, { to: 'debug' })
+      return null
+    })
+    if (own) reportName = (own.split('/').pop() ?? own).replace(/\.md$/, '')
+  }
   if ('unread' in read) {
     const p = { issues: [], lessons: [], unread: read.unread }
-    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p }), anything: true }
+    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p, ...(reportName ? { reportName } : {}) }), anything: true }
   }
   // What this session offers is its own repository's (#1286): the proposed issues and the questions
   // no open session will ask (one naming no session, or one whose session has closed), each keyed by
@@ -1519,7 +1544,7 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   // offer, and this session says nothing of them (lessons review).
   const offers = issues.length > 0 || lessons.length > 0 || (night.offers && ![...keys].some(has))
   return {
-    prompt: morningPrompt({ worker: night.worker, offers, held: deliveries, merges, questions, issues, lessons, bad: read.bad, ...(mine ? { forRepo: mine } : {}) }),
+    prompt: morningPrompt({ worker: night.worker, offers, held: deliveries, merges, questions, issues, lessons, bad: read.bad, ...(mine ? { forRepo: mine } : {}), ...(reportName ? { reportName } : {}) }),
     anything: night.worker || offers || held.length > 0 || questions.length > 0,
   }
 }
@@ -1769,6 +1794,114 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
   }
 }
 
+// ---- One report per session with news (#1287): its name is decided in hooks/reportname.ts ----
+
+// This session's title, read off what the engine hands this session's own hooks (the only place a
+// mod can read it, as auto naming found); null until one arrives.
+let knownTitle: string | null = null
+const reportsDirOf = async ($: EngineInterface, generation: string) => `${(await sleepPaths($)).dir}/reports/${generation.replace(/[^\w.-]/g, '_')}`
+// This session's report on a night, as recorded, or null when it has none.
+const ownReport = async ($: EngineInterface, generation: string): Promise<string | null> => {
+  const f = `${await reportsDirOf($, generation)}/${await $.session.id()}.path`
+  if (!(await $.fs.exists(f))) return null
+  return (await $.fs.read(f)).trim() || null
+}
+// The paths every other session holds tonight.
+const othersReports = async ($: EngineInterface, generation: string, self: string): Promise<Set<string>> => {
+  const dir = await reportsDirOf($, generation)
+  const ls = await run($, ['ls', dir])
+  const out = new Set<string>()
+  if (ls.exitCode !== 0) return out
+  for (const name of ls.stdout.split('\n').map(s => s.trim())) {
+    if (!name.endsWith('.path') || name === `${self}.path`) continue
+    out.add((await $.fs.read(`${dir}/${name}`)).trim())
+  }
+  return out
+}
+// The project a report is named by: its checkout's folder, as Dan names his projects, else the session's.
+const projectName = async ($: EngineInterface): Promise<string> => {
+  let root: string | null = null
+  try {
+    root = (await $.session.repo())?.root ?? null
+  } catch {
+    root = null
+  }
+  const dir = (root ?? (await $.session.cwd())).replace(/\/+$/, '')
+  return dir.split('/').pop() || dir
+}
+// This session's report for a night: the first name neither on the disk (an earlier sleep's, the
+// same night) nor held by another session tonight.
+const chooseReport = async ($: EngineInterface, night: string, generation: string): Promise<string> => {
+  const home = (await sleepPaths($)).home
+  const self = await $.session.id()
+  const taken = await othersReports($, generation, self)
+  const project = await projectName($)
+  for (let n = 1; n <= 50; n++) {
+    const path = `${home}/Downloads/${reportBase({ night, project, title: reportTitle(knownTitle), sessionId: self, n })}.md`
+    if (!taken.has(path) && !(await $.fs.exists(path))) return path
+  }
+  throw new Error('fifty names for it were all taken')
+}
+// Records where this session's report goes, so the render writes it from then on: linked into place,
+// so whichever of this session and the report script (which names a report for a session with news
+// that has not named its own) is first keeps the name, fixed from then on. Null once recorded, by
+// either; otherwise why not.
+const recordReport = async ($: EngineInterface, generation: string, path: string): Promise<string | null> => {
+  const dir = await reportsDirOf($, generation)
+  const self = await $.session.id()
+  const tmp = `${dir}/.${self}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    const mk = await run($, ['mkdir', '-p', dir])
+    if (mk.exitCode !== 0) return mk.stderr.trim() || `mkdir exited ${mk.exitCode}`
+    await $.fs.write(tmp, path)
+    const ln = await run($, ['ln', tmp, `${dir}/${self}.path`])
+    if (ln.exitCode === 0 || /File exists/i.test(ln.stderr)) return null
+    return ln.stderr.trim() || `ln exited ${ln.exitCode}`
+  } catch (err) {
+    return msg(err)
+  } finally {
+    await run($, ['rm', '-f', tmp])
+  }
+}
+
+// The nights whose report this session has named, or found named: once each.
+const reportNamed = new Set<string>()
+// Each minute while asleep on a per session night: a session with news, a worker or one that noted
+// something, names its report once and renders it, so it exists from that minute. A failure is
+// logged and tried again at the next minute.
+const reportMinute = async ($: EngineInterface, reading: SleepReading) => {
+  if (reading.state !== 'asleep' || reading.record.reportsPerSession !== true) return
+  const { generation, night } = reading.record
+  if (typeof generation !== 'string' || typeof night !== 'string' || reportNamed.has(generation)) return
+  if (await ownReport($, generation)) {
+    reportNamed.add(generation)
+    return
+  }
+  const self = await $.session.id()
+  const worker = Array.isArray(reading.record.workers) && reading.record.workers.includes(self)
+  if (!worker) {
+    const p = await sleepPaths($)
+    const path = notesOf(p.home, generation)
+    const notes = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const mine = notes.split('\n').some(l => {
+      try {
+        return (JSON.parse(l) as { by?: unknown }).by === self
+      } catch {
+        return false
+      }
+    })
+    if (!mine) return
+  }
+  const failed = await recordReport($, generation, await chooseReport($, night, generation))
+  if (failed) {
+    $.ui.log(`scope-modes: this session's sleep report could not be named (${failed}); tried again at the next minute`, { to: 'debug' })
+    return
+  }
+  reportNamed.add(generation)
+  const unrendered = await report($, ['render', '--record', (await sleepPaths($)).current])
+  if (unrendered) $.ui.log(`scope-modes: this session's sleep report was named but could not be rendered yet (${unrendered})`, { to: 'debug' })
+}
+
 // ---- The morning reminder (#1107): its decisions are in hooks/morning.ts ----
 
 /** The manual steps mod's noun, as its contract has it; it may not be loaded at all. */
@@ -1972,8 +2105,21 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   // The report once more, checked against GitHub, by the one session that woke it (#835).
   if (record?.report) {
     const problems = await finishReport($, moved.to, { kind: 'woke' })
-    s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
-    s += ` ${await openReport($, record.report, fromPhone)}`
+    // A per session night (#1287) opens this session's own report; an older record its one report.
+    let own: string | null | { unread: string } = record.report
+    if (record.reportsPerSession === true && typeof record.generation === 'string') {
+      const g = record.generation
+      own = await ownReport($, g).catch((err: unknown) => ({ unread: msg(err) }))
+    }
+    if (own !== null && typeof own === 'object') {
+      s += ` Where this session's report is could not be read (${own.unread}); each session's report is in Downloads, named by night, project and session.`
+    } else if (own) {
+      s += problems.length ? ` The night's report at ${own} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${own}.`
+      s += ` ${await openReport($, own, fromPhone)}`
+    } else {
+      s += ' This session noted nothing overnight, so it has no report of its own; each session with news has one in Downloads, named by night, project and session.'
+      if (problems.length) s += ` The night's reports are not complete: ${problems.join('; ')}.`
+    }
   } else {
     // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
     s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
@@ -3554,6 +3700,12 @@ export const register: Register = on => {
         } catch (err) {
           $.ui.log(`scope-modes: the minute's check for this session's morning failed: ${msg(err)}`, { to: 'debug' })
         }
+        // Asleep, this session's own report named once it has news (#1287).
+        try {
+          await reportMinute($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the minute's check for this session's sleep report failed: ${msg(err)}`, { to: 'debug' })
+        }
         // Once a session, awake: its repository's proposals no session was open to offer (#1286).
         try {
           await offerBacklog($, seen)
@@ -4007,6 +4159,21 @@ export const register: Register = on => {
       })().catch(err => $.ui.toast(`That held row did not finish: ${msg(err)}`))
     })
     return { value: { isAnswered: true } }
+  })
+
+  // This session's title, which names its sleep report (#1287): the engine hands it only to this
+  // session's own hooks, at its start and with each of Dan's messages, as auto naming reads it.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    const t = typeof e.session_title === 'string' ? e.session_title.trim() : ''
+    if (t) knownTitle = t
+    return r
+  })
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const r = await next(e)
+    const t = typeof e.session_title === 'string' ? e.session_title.trim() : ''
+    if (t) knownTitle = t
+    return r
   })
 
   // Sleep mode phase 3 (#834, Dan's decision 7): overnight, Claude Code's own permission prompts in
