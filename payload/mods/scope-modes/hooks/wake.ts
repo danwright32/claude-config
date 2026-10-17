@@ -122,8 +122,9 @@ const PICKERS =
   "offered to Dan through the end of turn issue review's AskUserQuestion multiSelect picker (the issues, numbered 1.n) and the durable lesson picker (the lessons, numbered 2.n), and only his selection there files an issue or adds a lesson"
 
 /**
- * What the session that woke sleep is told to do, as one prompt: its own summary, then the morning
- * pickers. `unread` is why the proposals could not be read, when they could not.
+ * Each live session's own morning, as one prompt (#1285): its summary if it worked, what it held,
+ * its questions and held merges as pickers, and, only where `offers` is not false (the session that
+ * ended sleep), the night's proposed issues and lessons. `unread` is why the notes could not be read.
  */
 export const morningPrompt = (o: {
   worker: boolean

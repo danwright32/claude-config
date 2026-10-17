@@ -4906,6 +4906,16 @@ test("a morning picker left unanswered is put to Dan again with his next message
   expect(ctxOf(await say($ as never, 'and then?'))).not.toMatch(/morning pickers came back unanswered/)
 })
 
+test('a summary only morning interrupted asks nothing again, since it had no picker to ask (#1285 lessons review)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  await turnStart($, 'm1', morningOf(w)[0])
+  await turnEnd($, 'm1', 'interrupted')
+  expect(ctxOf(await say($ as never, 'morning'))).not.toMatch(/morning pickers came back unanswered/)
+})
+
 test('a morning whose pickers were all answered adds nothing to his next message (#1285 lessons review)', withSteps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${myQuestion}\n` }, ask: 'Yes' })
   await start($ as never, clock)

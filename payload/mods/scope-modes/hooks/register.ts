@@ -132,6 +132,7 @@ const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
 const wakeHeldRef = { plugin: 'scope-modes', key: 'wakeHeld' } as const
 const nightSeenRef = { plugin: 'scope-modes', key: 'nightSeen' } as const
+const morningUnansweredRef = { plugin: 'scope-modes', key: 'morningUnanswered' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
@@ -1485,10 +1486,21 @@ let askingMorning = false
 // This session's morning turn, its pickers counted while it runs (#1285): one left unanswered, or a
 // turn that ended other than by answering, has the unanswered ones asked again with Dan's next
 // message here, by this mod (lessons review: a rule only in the prompt is a hope, L27).
-let morningPickers: { turnId?: string; answered: number; unanswered: number } | undefined
-let morningLeftUnanswered = false
-const watchMorningPickers = () => {
-  morningPickers = { answered: 0, unanswered: 0 }
+let morningPickers: { turnId?: string; answered: number; unanswered: number; asks: boolean } | undefined
+// Kept in $.state too, so a reload between the morning turn and his next message still asks again
+// (lessons review); undefined until read from there.
+let morningLeftUnanswered: boolean | undefined
+// `prompt` is the morning's text: only one that asks something can leave a picker unanswered.
+const watchMorningPickers = (prompt: string) => {
+  morningPickers = { answered: 0, unanswered: 0, asks: prompt.includes('AskUserQuestion') }
+}
+const leftUnanswered = async ($: EngineInterface): Promise<boolean> => {
+  if (morningLeftUnanswered === undefined) morningLeftUnanswered = (await $.state.get(morningUnansweredRef)).value ?? false
+  return morningLeftUnanswered
+}
+const setLeftUnanswered = async ($: EngineInterface, v: boolean) => {
+  morningLeftUnanswered = v
+  await $.state.set({ plugin: 'scope-modes', key: 'morningUnanswered' }, v)
 }
 // The list as this session holds it, in memory, read from $.state once (a reload keeps it there),
 // then changed here and written whole: two calls held at once (parallel calls, a subagent beside the
@@ -1599,7 +1611,7 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
       await setNight($, null)
       return
     }
-    watchMorningPickers()
+    watchMorningPickers(m.prompt)
     try {
       await $.prompt.submit({ text: m.prompt })
     } catch (err) {
@@ -3385,7 +3397,7 @@ export const register: Register = on => {
     // that fails is never said as a morning turn that could not start (lessons review of #1284).
     if (morning)
       $.clock.after(0, () => {
-        watchMorningPickers()
+        watchMorningPickers(morning)
         void $.prompt
           .submit({ text: morning })
           .then(
@@ -3468,7 +3480,7 @@ export const register: Register = on => {
           if (woke?.morning) {
             notes.push(woke.morning)
             carriesMorning = true
-            watchMorningPickers()
+            watchMorningPickers(woke.morning)
           }
           // Waking is acknowledged as any other switch is (#1086), right after waking's own line.
           if (woke?.off) acks.push(ackOnSaid('wake'))
@@ -3496,7 +3508,7 @@ export const register: Register = on => {
     }
     // A morning picker left unanswered is asked again with his next message here (#1285), counted
     // as asked once the prompt carrying it went in.
-    const askAgain = isDans && morningLeftUnanswered
+    const askAgain = isDans && (await leftUnanswered($))
     if (askAgain) notes.push(MORNING_UNANSWERED)
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
@@ -3535,7 +3547,7 @@ export const register: Register = on => {
         $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' }),
       )
     if (asking !== undefined) askedUp = asking
-    if (askAgain) morningLeftUnanswered = false
+    if (askAgain) await setLeftUnanswered($, false)
     return entered
   })
 
@@ -3562,7 +3574,8 @@ export const register: Register = on => {
     const mp = morningPickers
     if (mp && e.agentId === undefined && mp.turnId === e.turnId) {
       morningPickers = undefined
-      if (mp.unanswered > 0 || e.reason !== 'answer') morningLeftUnanswered = true
+      // Only a morning that asked something can leave a picker unanswered (lessons review).
+      if (mp.asks && (mp.unanswered > 0 || e.reason !== 'answer')) await setLeftUnanswered($, true)
     }
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if (lastOrigin === 'bridge' && (await placeOf($)) === 'home') return { ...r, text: PHONE_LINE }
@@ -3900,6 +3913,7 @@ export const register: Register = on => {
     morningLeftUnanswered = false
     await $.state.set(wakeHeldRef, [] as HeldDelivery[])
     await $.state.set(nightSeenRef, null)
+    await $.state.set(morningUnansweredRef, false)
     prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
