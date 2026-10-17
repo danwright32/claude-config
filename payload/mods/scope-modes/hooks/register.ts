@@ -1293,6 +1293,8 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   try {
     ownReportPath = await chooseReport($, night, generation)
   } catch (err) {
+    // The night never began, so its unanswered list goes with it (lessons review).
+    await run($, ['rm', '-f', `${p.dir}/unanswered/${generation}`])
     await releaseMarker($, p.preparing, claim.claimed)
     return `Sleep mode did not start: its report could not be named (${msg(err)}).`
   }

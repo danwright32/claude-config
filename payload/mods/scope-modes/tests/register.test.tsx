@@ -3086,6 +3086,17 @@ test('a second sleep the same night gets its own name, never writing over the fi
   expect(w.files[OWN]).toBe('# Sleep report, the first night')
 })
 
+test('a /sleep whose report cannot be named does not start, and leaves no unanswered list behind (#1287 lessons review)', withDeps, async ($, on) => {
+  const taken: Record<string, string> = { [OWN]: 'x' }
+  for (let n = 2; n <= 50; n++) taken[OWN.replace('.md', ` (${n}).md`)] = 'x'
+  const { w, clock } = world(on, { files: taken })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('Sleep mode did not start: its report could not be named (fifty names for it were all taken).')
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(Object.keys(w.files).filter(f => f.includes('/unanswered/'))).toEqual([])
+})
+
 test('a worker that did not run /sleep names its own report at its first minute asleep, and renders it (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1', 's9'] }) } })
   await start($ as never, clock)

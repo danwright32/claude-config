@@ -1033,22 +1033,7 @@ def _render_once(path, record, final, github):
     text = build(record, notes, bad, final, now, github)
     _pause()
     dest = record["report"]
-    try:
-        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-        # Written whole beside it and moved into place, so a reader never sees half a report.
-        fd, tmp = tempfile.mkstemp(prefix=".sleep-report-", suffix=".tmp", dir=os.path.dirname(dest) or ".")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(text)
-            os.replace(tmp, dest)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-    except OSError as e:
-        raise Refused("the report could not be written to %s (%s)" % (dest, e))
+    _write(dest, text)
     return dest
 
 
