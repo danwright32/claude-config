@@ -702,6 +702,17 @@ one. The same pull request means a review labelled with the same branch, of a he
 descends from, so a reused branch name or a rewritten branch starts with no history. The history
 is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way first, saying so.
 
+An update from the base that changed nothing the review reads is not reviewed again
+(claude-config#1280). A review reads the branch's diff and the full text of every file it changes,
+so when the base moved since the nearest earlier review of the same pull request, and the new head
+changes exactly the same files, each the same blob at its base and at its head as then, the new
+head carries that review: its findings, and whether they were read, so a point answered and read
+does not stop the merge again, and one still unread is refused again with a key of its own. Every
+verdict on such a head says whose review it carries. Anything else is reviewed whole as before: a
+changed file the base also touched, a file added or gone, and every commit of the branch's own, an
+empty one included. On Bidspoke on 2026-10-16 #2305 took 73 minutes and 11 updates to land, and
+#2301 and #2304 each stopped twice on a new wording point about lines the branch already had.
+
 Since claude-config#1161 that history also carries the pull request's own description and comments,
 where agents actually write their answers ("not a defect, because..."). They are read from GitHub
 once, when the review starts, on every review that names a branch or a pull request
