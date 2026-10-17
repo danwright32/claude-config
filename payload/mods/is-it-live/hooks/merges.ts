@@ -34,8 +34,12 @@ export const mergeCallOf = (a: ModKitGh | undefined): MergeCall | undefined => {
 export const VIEW_FIELDS = 'number,state,mergedAt,url'
 /** How far GitHub's clock may sit behind this Mac's before a merge reads as older than the command. */
 export const SKEW_MS = 10 * 60_000
-/** How long a merge the helper makes in the background is asked about before it is let go: its own deadline is an hour. */
-export const WAIT_MS = 3 * 60 * 60_000
+/**
+ * How long a merge the helper makes in the background is asked about before it is let go: twice its
+ * own deadline of three hours (claude-config#1271), a ratio test-merge-when-ready.sh checks against
+ * the helper's measured deadline, so neither number can be raised alone (L227).
+ */
+export const WAIT_MS = 6 * 60 * 60_000
 
 /**
  * What GitHub said about the PR a merge named, for a command that ran at `since`: merged by it, open
