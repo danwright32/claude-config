@@ -465,6 +465,21 @@ test('a queued Compact that fails once the turn ends says so; one cancelled does
   await ui.unmount()
 })
 
+test('a /clear drops a queued Compact: the conversation it was for is gone (#1278)', withKit, async ($, on) => {
+  const { clock, compacts } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  await ui.unmount()
+})
+
 test('the amber line and the Compact row show together, amber line on top', withKit, async ($, on) => {
   const { clock } = world(on, { unpushed: '1\n' })
   await start($, clock)
