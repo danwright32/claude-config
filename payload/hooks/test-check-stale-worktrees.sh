@@ -214,8 +214,10 @@ check_eq "a marker for a worktree git no longer lists is cleared" no "$([ -e "$M
 G -C "$REPO" worktree remove --force "$WT/agent-cut-changed" >/dev/null 2>&1; rm -f "$MARKS/agent-cut-changed"
 
 # --- a removal git refuses, and one that fails part way --------------------
-# A refusal before anything is deleted (here, a locked worktree) leaves nothing to finish, so its
-# marker goes. A failure PART WAY is different, measured 2026-10-16 with one unwritable folder: git
+# A refusal before anything is deleted leaves nothing to finish, so its marker goes (the case is
+# staged with a git that refuses, under the locks below). A lock that is not a Claude agent's is
+# never put to git at all: it keeps the worktree before any removal starts, so no marker is written.
+# A failure PART WAY is different, measured 2026-10-16 with one unwritable folder: git
 # deleted the worktree's own files and its registration, stopped at that folder, and left a plain
 # folder git no longer lists. Clearing the marker there would leave it unexplained for ever, so the
 # marker stays and every later run names it as a folder to delete by hand.
@@ -230,8 +232,8 @@ trap 'chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' 
 CAN_DENY=1
 : >"$WT/agent-unwritable/z/probe" 2>/dev/null && { CAN_DENY=0; rm -f "$WT/agent-unwritable/z/probe"; }
 run --remove "$REPO"
-check "a removal git refuses is said" "keeping agent-locked [fix/510-locked]: git would not remove it" "$OUT"
-check_eq "and, nothing having been deleted, leaves no marker" no "$([ -e "$MARKS/agent-locked" ] && echo yes || echo no)"
+check "a worktree locked with no reason is kept before any removal is tried" "keeping agent-locked [fix/510-locked]: git has it locked, and not by a Claude agent (no reason given), so the lock is left alone" "$OUT"
+check_eq "and leaves no marker" no "$([ -e "$MARKS/agent-locked" ] && echo yes || echo no)"
 if [ "$CAN_DENY" -eq 1 ]; then
   check "a removal that fails part way is said" "keeping agent-unwritable [fix/511-unwritable]: git would not remove it" "$OUT"
   check_eq "and its marker stays, since part of it is gone" yes "$([ -e "$MARKS/agent-unwritable" ] && echo yes || echo no)"
@@ -289,6 +291,161 @@ run --remove "$REPO"
 check_eq "a repo that has merged nothing exits 0" 0 "$RC"
 check_not "and removes nothing" "removed" "$OUT"
 check "while still saying what it kept and why" "keeping agent-later [fix/421-later]: no merged PR has this branch" "$OUT"
+
+# --- a lock left by a Claude agent that is no longer running (#1282) --------
+# Claude Code locks the worktree of a running agent with the reason
+# "claude agent <name> (pid <pid> start <its start time>)", and git refuses to remove a locked
+# worktree, so a lock outliving its agent kept a landed worktree for ever: on 2026-10-17 five of
+# them, each locked for pid 95065, which died when the Mac went down the evening before. Which
+# processes are running and when the machine booted are both injected (a fake ps reading a table,
+# and a boot time), so nothing here depends on this machine's own processes, apart from the last
+# case, which reads the real ps on purpose so the default lookup is proven too (L3, L411).
+# Its own repository, so the counts the cases above assert are not disturbed.
+LREPO="$TMP/locks"; mkdir -p "$LREPO"; G -C "$LREPO" init -q -b main
+printf 'x\n' >"$LREPO/f.txt"; G -C "$LREPO" add f.txt; G -C "$LREPO" commit -qm base
+LWT="$LREPO/.claude/worktrees"; mkdir -p "$LWT"
+LREPO_REAL="$(cd "$LREPO" && pwd -P)"
+ladd(){ # ladd <name> <branch> <PR> [lock reason]: a landed, clean, aged worktree, locked if given a reason
+  G -C "$LREPO" worktree add -q -b "$2" "$LWT/$1" >/dev/null 2>&1
+  merged "$2" "$LWT/$1" HEAD "$3"
+  find "$LWT/$1" -exec touch -t 202601010000 {} + 2>/dev/null
+  if [ -n "${4:-}" ]; then G -C "$LREPO" worktree lock --reason "$4" "$LWT/$1"; fi
+}
+lockof(){ # the lock git holds on one of these worktrees right now, or UNLOCKED
+  git -C "$LREPO" worktree list --porcelain | awk -v p="worktree $LREPO_REAL/.claude/worktrees/$1" '
+    $0 == p { f = 1; next } /^worktree / { f = 0 }
+    f && /^locked/ { sub(/^locked ?/, ""); print; found = 1 }
+    END { if (!found) print "UNLOCKED" }'
+}
+gone(){ [ -e "$LWT/$1" ] && echo no || echo yes; }
+
+# The fake ps answers `ps -o lstart= -p <pid>` from a table of "pid<TAB>start", the way the real
+# one does: the start on stdout and exit 0 for a running pid, nothing and exit 1 for one that is not.
+cat >"$TMP/bin/ps" <<'STUB'
+#!/usr/bin/env bash
+pid=""; while [ $# -gt 0 ]; do [ "$1" = -p ] && { pid="$2"; shift; }; shift; done
+printf '%s\n' "$pid" >>"$PS_CALLS"
+if [ -n "${PS_FAIL:-}" ]; then echo "ps: simulated failure" >&2; exit 2; fi
+line="$(awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }' "$PS_TABLE")"
+[ -n "$line" ] || exit 1
+printf '%s\n' "$line"
+STUB
+chmod +x "$TMP/bin/ps"
+export PS_CALLS="$TMP/ps-calls.log" PS_TABLE="$TMP/ps-table.tsv"
+printf '4002\tThu Oct 15 12:00:00 2026\n4003\tFri Oct 16 08:30:00 2026\n' >"$PS_TABLE"
+BOOT=1791590400   # Sat Oct 10 00:00:00 2026 UTC; every start below is days either side, so no time zone moves one across it
+
+# A git on PATH that, when told to, refuses one removal (so the lock it lifted has to be put back)
+# and, for another, has a new agent take the lock between the first look and the unlock (so the
+# unlock has to see the lock it judged is no longer the one there).
+mkdir -p "$TMP/lshim"
+cat >"$TMP/lshim/git" <<STUB
+#!/usr/bin/env bash
+case " \$* " in
+  *" worktree remove "*agent-lrefused*)
+    if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
+  *agent-lrace" status --porcelain"*)
+    if [ -n "\${SHIM_RACE:-}" ]; then
+      "$REAL_GIT" -C "$LREPO" worktree unlock "$LWT/agent-lrace"
+      "$REAL_GIT" -C "$LREPO" worktree lock --reason "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$LWT/agent-lrace"
+    fi ;;
+esac
+exec "$REAL_GIT" "\$@"
+STUB
+chmod +x "$TMP/lshim/git"
+
+lrun(){ : >"$PS_CALLS"; OUT="$(PATH="$TMP/lshim:$PATH" STALE_WT_GH="$TMP/bin/gh" AGENT_LOCK_PS="$TMP/bin/ps" AGENT_LOCK_BOOT_EPOCH="$BOOT" bash "$SCRIPT" "$@" "$LREPO" 2>&1)"; RC=$?; }
+
+R_DEAD="claude agent agent-ldead (pid 4001 start Thu Oct 15 12:00:00 2026)"
+R_LIVE="claude agent agent-llive (pid 4002 start Thu Oct 15 12:00:00 2026)"
+R_REUSED="claude agent agent-lreused (pid 4003 start Thu Oct 15 12:00:00 2026)"
+# ctime pads a one digit day with a second space, which a lock copied from it keeps.
+R_PREBOOT="claude agent agent-lpreboot (pid 4004 start Mon Oct  5 12:00:00 2026)"
+R_OTHER="kept on an external disk"
+R_REFUSED="claude agent agent-lrefused (pid 4005 start Thu Oct 15 12:00:00 2026)"
+R_RACE="claude agent agent-lrace (pid 4006 start Thu Oct 15 12:00:00 2026)"
+ladd agent-ldead fix/601-dead 601 "$R_DEAD"
+ladd agent-llive fix/602-live 602 "$R_LIVE"
+ladd agent-lreused fix/603-reused 603 "$R_REUSED"
+ladd agent-lpreboot fix/604-preboot 604 "$R_PREBOOT"
+ladd agent-lother fix/605-other 605 "$R_OTHER"
+ladd agent-lrefused fix/606-refused 606 "$R_REFUSED"
+ladd agent-lrace fix/607-race 607 "$R_RACE"
+
+# REPORT: a stale agent lock is no reason to keep a landed worktree, so it is called stale with the
+# unlock in its commands; a live agent's lock keeps its worktree; and nothing is unlocked, since a
+# mode that reads like an inspection must change nothing (L206).
+lrun
+check "report mode calls a landed worktree whose agent is gone stale" "STALE agent-ldead [fix/601-dead]" "$OUT"
+check "and says the lock was left by an agent that is gone, naming the pid" "pid 4001 is no longer running" "$OUT"
+check "and carries the command that lifts the lock" "git -C $LREPO_REAL worktree unlock $LREPO_REAL/.claude/worktrees/agent-ldead" "$OUT"
+check "a live agent's lock keeps its worktree, naming the pid" "keeping agent-llive [fix/602-live]: a Claude agent that is still running holds its lock (pid 4002" "$OUT"
+check_not "and the live one is never called stale" "STALE agent-llive" "$OUT"
+check_not "nor is one whose lock is not a Claude agent's, which --remove would not take" "STALE agent-lother" "$OUT"
+for n in ldead lreused lpreboot; do
+  check_eq "report mode leaves the lock on agent-$n alone" "claude agent agent-$n" "$(lockof "agent-$n" | cut -d' ' -f1-3)"
+done
+
+# REMOVE with neither the processes nor the boot time readable: nothing can say a lock is stale,
+# so every agent lock is kept, and says why, rather than read as gone (L10, L11).
+PS_FAIL=1 BOOT=unknown lrun --remove
+for n in ldead lreused lpreboot llive; do
+  check "an unreadable process list keeps agent-$n, saying so" "keeping agent-$n" "$OUT"
+  check_eq "with agent-$n still there" no "$(gone "agent-$n")"
+done
+check "and the reason given is that it could not be read, with what ps said" \
+  "whether that agent is still running could not be read (pid 4001, and ps said: ps: simulated failure)" "$OUT"
+check_eq "and the lock it could not judge is left exactly as it was" "$R_DEAD" "$(lockof agent-ldead)"
+
+# REMOVE with only the processes unreadable: a lock whose agent started before the machine last
+# booted is stale without asking ps at all, since no process survives a boot.
+PS_FAIL=1 lrun --remove
+check "an agent started before the last boot has its worktree removed although ps cannot be read" \
+  "removed agent-lpreboot [fix/604-preboot]" "$OUT"
+check "and says the agent started before the machine last booted" "pid 4004 started Mon Oct 5 12:00:00 2026, before this machine last booted" "$OUT"
+check_eq "its folder is gone" yes "$(gone agent-lpreboot)"
+check_eq "and its branch is kept" 0 "$(G -C "$LREPO" rev-parse -q --verify fix/604-preboot >/dev/null; echo $?)"
+check_eq "ps was never asked about the agent the boot already settled" 0 "$(grep -cx 4004 "$PS_CALLS" || true)"
+check "while one started since the boot is kept, ps being unreadable" "keeping agent-ldead [fix/601-dead]: it is locked by a Claude agent" "$OUT"
+
+# REMOVE, everything readable.
+SHIM_REFUSE=1 SHIM_RACE=1 lrun --remove
+check "a landed worktree whose agent's pid is no longer running is removed" "removed agent-ldead [fix/601-dead]" "$OUT"
+check_eq "its folder is gone" yes "$(gone agent-ldead)"
+check "one whose pid now belongs to a process started at another time is removed" "removed agent-lreused [fix/603-reused]" "$OUT"
+check "and says the pid is a different process now" "pid 4003 is now a different process, started Fri Oct 16 08:30:00 2026" "$OUT"
+check_eq "its folder is gone" yes "$(gone agent-lreused)"
+check "a live agent's worktree is kept" "keeping agent-llive [fix/602-live]: a Claude agent that is still running holds its lock" "$OUT"
+check_eq "and its lock is left exactly as it was" "$R_LIVE" "$(lockof agent-llive)"
+check "a lock that is not a Claude agent's keeps its worktree, naming the lock" "keeping agent-lother [fix/605-other]: git has it locked, and not by a Claude agent (kept on an external disk), so the lock is left alone" "$OUT"
+check_eq "and that lock is left exactly as it was" "$R_OTHER" "$(lockof agent-lother)"
+check "a removal git refuses after the stale lock is lifted is said" "keeping agent-lrefused [fix/606-refused]: git would not remove it" "$OUT"
+check_eq "and the lock is put back exactly as it was found" "$R_REFUSED" "$(lockof agent-lrefused)"
+LMARKS="$(cd "$LREPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claude-worktree-removing"
+check_eq "and a refusal, nothing having been deleted, leaves no marker" no "$([ -e "$LMARKS/agent-lrefused" ] && echo yes || echo no)"
+check "a lock that changed hands while the run was looking is not lifted" "keeping agent-lrace [fix/607-race]: its lock changed while this run was looking at it" "$OUT"
+check_eq "and the new holder's lock is left in place" "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$(lockof agent-lrace)"
+check "the summary counts the removals" "removed 2 of 6 agent worktree(s)" "$OUT"
+
+# The REAL ps, and the real boot time, on a process this suite started: its lock, written the way
+# Claude Code writes one (its start time as ps gives it under UTC), keeps its worktree, and the same
+# pid with another start time does not.
+(cd "$TMP" && exec sleep 120) &
+LIVE=$!
+trap 'kill "$LIVE" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+LIVE_START="$(TZ=UTC ps -o lstart= -p "$LIVE" 2>/dev/null | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+if [ -n "$LIVE_START" ]; then
+  ladd agent-lreal fix/608-real 608 "claude agent agent-lreal (pid $LIVE start $LIVE_START)"
+  ladd agent-lrealold fix/609-realold 609 "claude agent agent-lrealold (pid $LIVE start Thu Jan  1 00:00:00 2026)"
+  : >"$PS_CALLS"
+  OUT="$(STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" --remove "$LREPO" 2>&1)"; RC=$?
+  check "the real ps sees a running agent's lock, and keeps its worktree" "keeping agent-lreal [fix/608-real]: a Claude agent that is still running holds its lock (pid $LIVE" "$OUT"
+  check_eq "with its lock in place" "claude agent agent-lreal (pid $LIVE start $LIVE_START)" "$(lockof agent-lreal)"
+  check "and the same pid with another start time is not that agent, so its worktree goes" "removed agent-lrealold [fix/609-realold]" "$OUT"
+else
+  echo "UNMEASURED: ps here gave no start time for a process this suite started, so the real lookup cannot be tested"
+fi
+kill "$LIVE" 2>/dev/null
 
 kill "$BUSY" 2>/dev/null
 echo

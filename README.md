@@ -1627,6 +1627,20 @@ rather than the synced config. Which branch counts as main is one rule both read
 `tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
+Agent worktrees are also removed automatically. On the first prompt of a session
+`hooks/stale-worktree-nudge.sh` starts `hooks/check-stale-worktrees.sh --remove` in the
+background. It removes a worktree only when its PR merged holding every commit, nothing in it is
+uncommitted, nothing changed in the last six hours, and no running process is working in it. A locked worktree is kept, with one exception:
+a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
+worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
+agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
+lock behind. The check lifts that lock just before the removal when the pid is gone, when the pid
+now belongs to a process that started at another time, or when the agent started before the Mac
+last booted. If git then refuses the removal, the lock is put back. A live agent's lock, a lock
+whose agent cannot be checked because ps could not be read, and any lock that is not a Claude
+agent's are left alone, and each of those is named with the reason it was kept. Without
+`--remove` the check reports and changes nothing, locks included.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
