@@ -301,13 +301,10 @@ const readGoalOf = async ($: EngineInterface, transcript: string, at: number) =>
   }
 }
 // The read runs beside the draw, where nothing awaits it, so a debug line that cannot be written is
-// dropped rather than left as a rejection nobody handles (lessons review of #1252).
+// dropped (the debug log is the last place it could be said) rather than left as a rejection nobody
+// handles (lessons review of #1252).
 const debugLog = ($: EngineInterface, text: string) => {
-  try {
-    void Promise.resolve($.ui.log(text, { to: 'debug' })).catch(() => undefined)
-  } catch {
-    // The debug log is the last place this could be said.
-  }
+  void Promise.resolve($.ui.log(text, { to: 'debug' })).catch(() => undefined)
 }
 const goalsNow = ($: EngineInterface, open: { sessionId: string; transcriptPath: string | null }[], now: number): Record<string, ModKitGoal> => {
   const out: Record<string, ModKitGoal> = {}
