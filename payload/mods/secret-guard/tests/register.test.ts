@@ -343,3 +343,49 @@ test('a tool result with no secret is kept as it was', withKit, async ($, on) =>
   expect(stored).toContain('all fine')
   expect(w.toasts.length).toBe(0)
 })
+
+// #1298: a check that throws inside the tool.call hook must refuse the call. Without a .catch the
+// engine skips a failed hook and runs the call with no screening at all (L42). An older mod-kit
+// loaded beside this mod (#1281) has no commands reader, so reading a Bash command throws.
+const olderKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } } as never
+    })
+  },
+}
+
+test('a tool call whose secret check throws is refused, never run unscreened (#1298, L42)', { plugins: [olderKit] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await $.tool.call({ tool: 'Bash', command: `git commit -m "token ${KNOWN}"`, tool_use_id: 'f1' } as never)
+  const said = String((r as { text?: string }).text ?? (r as { deny?: string }).deny)
+  expect(w.reached).not.toContain('Bash')
+  expect(said).toStartWith('Blocked: the secret guard could not check this for secrets (')
+  expect(said).toEndWith('), so it did not run. Try it again; if it fails the same way, tell Dan.')
+})
+
+// The session.append hook fails open the same way: a scrub that throws is skipped and the row is
+// kept as it came, secret and all. Its .catch withholds the text instead.
+test('a tool result the guard cannot scrub is withheld rather than kept as it was (#1298, L42)', withKit, async ($, on) => {
+  let stored = ''
+  world(on)
+  on('session.append', ($, e, next) => {
+    stored = JSON.stringify(e.message.content)
+    return next(e)
+  })
+  const w = { stored: () => stored }
+  await start($)
+  // A block the scrub cannot read makes the scrub itself throw, and a second try throws the same way.
+  await appendRow($, {
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'Bash' },
+    uuid: 'u4',
+    message: { type: 'user', role: 'user', content: [null, { type: 'tool_result', tool_use_id: 't4', content: `out: ${KNOWN}` }] },
+  })
+  expect(w.stored()).not.toContain(KNOWN)
+  expect(w.stored()).toContain('withheld: the secret guard could not check it for secrets')
+  expect(w.stored()).toContain('t4')
+})

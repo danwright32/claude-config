@@ -79,7 +79,25 @@ const loadSecrets = async ($: EngineInterface, cwd: string): Promise<string[]> =
 
 const GUARD = 'Secret guard'
 const OUTBOUND = 'Refer to it by its name, not its value.'
-const SCREEN_FAILED = 'Blocked: the secret guard could not check this for secrets, so it did not run. Try it again; if it fails the same way, tell Dan.'
+// The refusal when the check itself failed, with why when the engine says (#1298).
+const cannotCheck = (why?: string): string =>
+  `Blocked: the secret guard could not check this for secrets${why ? ` (${why})` : ''}, so it did not run. Try it again; if it fails the same way, tell Dan.`
+const SCREEN_FAILED = cannotCheck()
+const WITHHELD = '[Output withheld: the secret guard could not check it for secrets.]'
+
+// A row the scrub could not read, with every text it carries replaced, so a scrub that fails keeps
+// nothing it could not check (#1298, L42). Each tool result keeps its id, so the call it answers
+// still has its answer; a block of another kind (an image) is kept, as the scrub keeps it.
+const withheld = (content: unknown): unknown[] => {
+  if (!Array.isArray(content)) return [{ type: 'text', text: WITHHELD }]
+  return content.map(b => {
+    if (!b || typeof b !== 'object') return { type: 'text', text: WITHHELD }
+    const block = b as Record<string, unknown>
+    if (block.type === 'tool_result') return { type: 'tool_result', tool_use_id: block.tool_use_id, content: WITHHELD, ...(block.is_error === true ? { is_error: true } : {}) }
+    if (block.type === 'text' || typeof block.text === 'string') return { type: 'text', text: WITHHELD }
+    return block
+  })
+}
 
 // The one check of a tool call, made for every call reaching this mod's tool.call hook and for one
 // another mod answers itself, through the screen below: the refusal, card and toast included, or
@@ -130,7 +148,12 @@ export const register: Register = on => {
     const path = String(input.file_path ?? input.notebook_path ?? '')
     if (WRITERS.has(String(e.tool)) && isEnvFile(path)) known = [...new Set([...known, ...secretsFromEnvText(newTextOf(input))])]
     return next(e)
-  })
+  }).catch(($, e, next) =>
+    // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older
+    // mod-kit with no commands reader, #1281) refuses (#1298, L42). Once next was called the call
+    // was judged and passed on, and what it settled to stands.
+    next.called ? next(e) : { deny: cannotCheck(next.error?.message ?? next.error?.kind) },
+  )
 
   on('session.append', async ($, e, next) => {
     if (e.door !== 'tool-result' && e.door !== 'tool-message') return next(e)
@@ -159,7 +182,16 @@ export const register: Register = on => {
       return block
     }) as typeof e.message.content
     if (count === 0) return next(e)
+    // The scrubbed row is passed on before the toast, so a toast that fails cannot keep it back.
+    const kept = await next({ ...e, message: { ...e.message, content } })
     await $.ui.toast(`Hid ${count} secret${count === 1 ? '' : 's'} from a command's output.`)
-    return next({ ...e, message: { ...e.message, content } })
+    return kept
+  }).catch(($, e, next) => {
+    // A hook that fails is skipped and the row is kept as it came, secrets and all, so a scrub that
+    // throws withholds the row's text instead (#1298, L42). Once next was called the scrubbed row
+    // was kept, and that stands.
+    if (next.called) return next(e)
+    if (e.door !== 'tool-result' && e.door !== 'tool-message') return next(e)
+    return next({ ...e, message: { ...e.message, content: withheld(e.message?.content) as typeof e.message.content } })
   })
 }
