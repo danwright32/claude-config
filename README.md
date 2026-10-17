@@ -1898,7 +1898,11 @@ the session that ended it offers the proposals). Each summarises its night if it
 what it held, and asks as pickers, one at a time, every question it noted overnight and every merge
 or deploy the night's lists held in it, so nothing you have to answer, decide or approve exists only
 in the report. A session with nothing of its own starts no turn. A picker left unanswered is not
-dropped: that session asks it again the next time you write to it.
+dropped: that session asks it again the next time you write to it. While sleep is on, every live
+session with somebody at its prompt, in every project, shows one step on its manual steps card,
+"When you are up, end sleep mode", and ending sleep, by any route, takes it off every card (the
+session that ended it at once, every other at its next minute), since ending sleep is the night's
+review (#1283).
 
 **What it does overnight.** Each enrolled session works only toward its goal, never any other open
 issue. Sessions with a goal that are sitting idle at their prompt are told to start as sleep begins. A goal that names issues or a milestone is worked one of its issues at a time, each in a
