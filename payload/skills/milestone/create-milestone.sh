@@ -16,11 +16,19 @@
 #     "due_on": "2026-09-01T00:00:00Z",   # optional, ISO8601 due date
 #     "priority": "p2",                   # optional default for every issue below
 #     "labels": ["enhancement"],          # optional default for every issue below
+#     "design": "/abs/path/settled.html", # REQUIRED when the feature has a settled design file
 #     "issues": [                         # optional, one GitHub issue each
 #       { "title": "Phase 1: ...", "body": "...", "priority": "p1",
 #         "labels": ["tech-debt", "accessibility"] }
 #     ]
 #   }
+#
+# With "design", the settled design file's decision map is checked first by
+# design-rounds/check-decision-map.py: a decision no requirement owns (and not marked as having no
+# code consequence), or a requirement no issue names as "Requirement <number>", files nothing at all
+# (exit 10), and neither does a design path that is not absolute or a file that cannot be read. A
+# plan that passes gets one more issue at its end, "Compare the built screens against every frame of
+# the settled design", unless it already carries one by that title (claude-config#1290).
 #
 # Every issue needs a priority AND at least one category label, either its own or the
 # plan-level default. Priority accepts "p2" or "priority-p2". Categories are not
@@ -76,6 +84,44 @@ title="$(jq -r '.title // empty' "$plan")"
 if [[ -z "$title" ]]; then
   echo "Plan is missing a required \"title\" (used as the milestone title)." >&2
   exit 1
+fi
+
+# --- a feature with a settled design is held to its decision map (claude-config#1290) ---
+# On 2026-10-17 a redesign settled 65 decisions and its PRD got 16 numbered requirements. The build
+# was one issue per requirement, every one shipped and closed, and about 35 decisions nobody owned
+# shipped as the old screen while the milestone read as nearly done. So a plan naming its settled
+# design files nothing until the design's decision map holds (every decision owned by a requirement
+# or marked as having no code consequence, and every requirement named by one of the plan's issues),
+# and then the milestone gets one more issue: the comparison of the built screens against every
+# design frame, which finds drift on the decisions that did have owners. Checked before the plan's
+# other refusals, and before anything is written, so a refused plan creates nothing.
+design="$(jq -r '.design // empty' "$plan")"
+if [[ -n "$design" ]]; then
+  if [[ "$design" != /* ]]; then
+    echo "DESIGN-NOT-ABSOLUTE the plan's \"design\" is $design, and it must be the settled design file's absolute path, so it names the same file wherever this runs." >&2
+    echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
+    exit 10
+  fi
+  map_check="${DECISION_MAP_CHECK:-$HERE/../design-rounds/check-decision-map.py}"
+  map_out="$(python3 "$map_check" "$design" "$plan" 2>&1)"
+  map_rc=$?
+  printf '%s\n' "$map_out"
+  if [[ "$map_rc" -ne 0 ]]; then
+    echo "ABORTED: no issues were filed, and the milestone was not touched, because the settled design's decision map does not hold (the design rounds skill's deliverable says how to write it)." >&2
+    exit 10
+  fi
+  compare_title="Compare the built screens against every frame of the settled design"
+  if [[ "$(jq --arg t "$compare_title" '[(.issues // [])[] | select(.title == $t)] | length' "$plan")" -eq 0 ]]; then
+    compare_body="The last step of this milestone, before it is closed (claude-config#1290). Open the settled design, $design, and screenshot the built page against every frame in it, each at that frame's own width. List every difference here, then fix each one or settle it with Dan as a decision. Drift on a decision that had an owner is found here, since every requirement can ship and close while the screen still differs from the design."
+    with_compare="$(mktemp)"
+    if ! jq --arg t "$compare_title" --arg b "$compare_body" '.issues = ((.issues // []) + [{title: $t, body: $b}])' "$plan" >"$with_compare"; then
+      echo "ABORTED: the comparison issue could not be added to the plan, so nothing was filed." >&2
+      rm -f "$with_compare"
+      exit 10
+    fi
+    plan="$with_compare"
+    trap 'rm -f "$with_compare"' EXIT
+  fi
 fi
 
 description="$(jq -r '.description // ""' "$plan")"

@@ -564,6 +564,69 @@ check "and the rule" "LABEL-NOT-KEBAB" "$out"
 check_eq "no label is created, not even the well named one" "0" "$(grep -c '^label create' "$TMP/calls.log")"
 check_eq "and nothing is filed" "0" "$(issues_filed)"
 
+# --- a feature with a settled design (claude-config#1290) ------------------------
+# A plan naming its settled design is held to the design's decision map before anything is written:
+# every decision owned by a requirement or marked as having no code consequence, and every
+# requirement named by an issue. Then the milestone gets one more issue, the comparison of the built
+# screens against every design frame, so drift on the decisions that did have owners is found too.
+design_file() { # design_file <path> <decisions json>
+  printf '<!doctype html><html><body><main>screen</main>\n<script type="application/json" id="decision-map">{"decisions": %s}</script>\n</body></html>\n' "$2" >"$1"
+}
+design_file "$TMP/settled.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Heading reads Invoices", "noCode": "copy only"}]'
+design_file "$TMP/gap.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Empty state shows last month"}]'
+design_plan() { # design_plan <out> <design path> <phase 1 body>
+  cat >"$1" <<JSON
+{
+  "title": "Invoices screen",
+  "priority": "p2",
+  "labels": ["enhancement"],
+  "design": "$2",
+  "issues": [
+    { "title": "Phase 1: the list", "body": "$3" },
+    { "title": "Phase 2: the heading", "body": "Copy." }
+  ]
+}
+JSON
+}
+labels_are enhancement
+
+design_plan "$TMP/plan-gap.json" "$TMP/gap.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-gap.json")"; rc=$?
+check_eq "#1290 a design with an unowned decision exits 10" "10" "$rc"
+check "#1290 the refusal names the unowned decision" "UNMAPPED D2: Empty state shows last month" "$out"
+check_eq "#1290 and nothing is filed" "0" "$(issues_filed)"
+check_eq "#1290 and no milestone is written" "0" "$(milestone_writes)"
+
+design_plan "$TMP/plan-noissue.json" "$TMP/settled.html" "Builds the list."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-noissue.json")"; rc=$?
+check_eq "#1290 a requirement no issue names exits 10" "10" "$rc"
+check "#1290 the refusal names the requirement" "NO-ISSUE Requirement 6.4 (D1)" "$out"
+check_eq "#1290 and nothing is filed for it either" "0" "$(issues_filed)"
+
+design_plan "$TMP/plan-relative.json" "settled.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-relative.json")"; rc=$?
+check_eq "#1290 a design path that is not absolute exits 10" "10" "$rc"
+check "#1290 and says so" "absolute" "$out"
+
+design_plan "$TMP/plan-missing.json" "$TMP/not-there.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-missing.json")"; rc=$?
+check_eq "#1290 a design file that is not there exits 10" "10" "$rc"
+check "#1290 and says it could not be read" "DECISION-MAP UNREADABLE" "$out"
+
+design_plan "$TMP/plan-design.json" "$TMP/settled.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design.json")"; rc=$?
+check_eq "#1290 a design whose map holds files the plan" "0" "$rc"
+check_eq "#1290 with one more issue than the plan's phases" "3" "$(issues_filed)"
+# From the last create to the end of the log, since a body spanning lines spreads one call over several.
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 the last is the comparison against every design frame" "--title Compare the built screens against every frame of the settled design" "$last_create"
+check "#1290 which names the design file" "$TMP/settled.html" "$last_create"
+check "#1290 and carries the plan's priority and labels" "--label priority-p2 --label enhancement" "$last_create"
+# A plan that already ends with the comparison does not get it twice.
+jq '.issues += [{"title": "Compare the built screens against every frame of the settled design", "body": "own words"}]' "$TMP/plan-design.json" >"$TMP/plan-design-own.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-own.json")"; rc=$?
+check_eq "#1290 a plan carrying its own comparison files once" "3" "$(issues_filed)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
