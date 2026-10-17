@@ -6,6 +6,7 @@ import { blockedCard, cardRefusal } from './card.ts'
 import { commands, git, pipeline } from './commands.ts'
 import { dependsOn, judgeProviders, newestFile, reloadedUnder } from './dependents.ts'
 import { ghArgs, mergeHelperArgs } from './gh.ts'
+import { goalAt } from './goal.ts'
 import { sendTwice } from './send.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './repo.ts'
 import { branchAt } from './branch.ts'
@@ -15,6 +16,7 @@ import { pythonText } from './code.ts'
 import { isDans } from './origin.ts'
 import { followAccount, loginStarted, readAccount, registerLogin } from './login.ts'
 import { typedAnswerText, typedMissing, typedToast } from './typed.ts'
+import { errorText, missingOf } from './skew.ts'
 
 // What every mod draws the same way (claude-config milestone 18, docs/mods-design.md), in one
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
@@ -290,6 +292,9 @@ export const register: Register = (on, options) => {
       git: async ({ words }) => git(words),
       gh: async ({ words }) => ghArgs(words),
       mergeHelper: async command => mergeHelperArgs(command),
+      // The one reader of a transcript's /goal (#1252), each read bounded at 5 seconds (chosen, not
+      // measured: a grep of one file).
+      goal: async ({ transcript }) => goalAt(transcript, argv => built.process.run(argv, { timeoutMs: 5_000 })),
       pipeline: async ({ command }) => pipeline(command),
       pythonText: async ({ code }) => pythonText(code),
       // The bottom of every login (#1205): each mod following it takes it in on its way down.
@@ -366,12 +371,13 @@ export const register: Register = (on, options) => {
     try {
       return { value: await ($ as unknown as { secretGuard: SecretGuardScreen }).secretGuard.screen(e) }
     } catch (err) {
-      const why = String((err as Error)?.message ?? err)
       // The engine needs the noun called in place, so the secret guard not being loaded arrives as a
-      // TypeError naming the noun; whatever the noun itself throws arrives wrapped as the engine's
-      // own error, and is a failure, never taken for absence.
-      if (err instanceof TypeError && /secretGuard/.test(why)) return { value: null }
-      return { value: screenFailed(e, why) }
+      // TypeError naming the noun, read by the one reader (#1281); whatever the noun itself throws
+      // arrives wrapped as the engine's own error, and is a failure, never taken for absence. A
+      // secret guard whose loaded copy lacks screen is loaded, so it refuses too (L42).
+      const missing = missingOf(err)
+      if (missing?.kind === 'noun' && missing.noun === 'secretGuard') return { value: null }
+      return { value: screenFailed(e, errorText(err, 'mod-kit')) }
     }
   })
 

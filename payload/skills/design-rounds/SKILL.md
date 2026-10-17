@@ -284,6 +284,32 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    in an HTML file standing in for a SwiftUI window.
 4. Every decision with code consequences goes back into the PRD as numbered requirements,
    so the PRD stays the single alignment document.
+5. **It carries a decision map, and the map is checked, not trusted** (claude-config#1290). On
+   2026-10-17 a redesign settled 65 decisions and its PRD got 16 requirements; every
+   requirement shipped and closed, and about 35 decisions nobody owned (the layout, most
+   controls, whole sections of three tabs, four page states) shipped as the old screen while
+   the milestone read as nearly done. So the settled file holds one block listing every
+   decision in its record, each with the PRD requirement that owns it, or `noCode` and the
+   reason it needs no code:
+
+   ```html
+   <script type="application/json" id="decision-map">
+   {"decisions": [
+     {"id": "D1", "decision": "The invoice list is one column", "requirement": "6.4"},
+     {"id": "D2", "decision": "The heading reads Invoices", "noCode": "Copy only, already in the PRD"}
+   ]}
+   </script>
+   ```
+
+   Run `python3 ~/.claude/skills/design-rounds/check-decision-map.py <the settled file>`
+   before calling the deliverable done. It refuses (exit 1) a decision with neither, or both,
+   by name, and a map it cannot read is exit 2, never a pass. Who reads the map next: the
+   planner. `/plan-council`, `/plan-lite` and `/milestone` put the settled file's path in
+   their plan as `"design"`, and `create-milestone.sh` runs the same check with the plan,
+   filing nothing while a decision has no requirement or a requirement has no issue naming it
+   as `Requirement <number>`. It then adds the milestone's last issue: screenshot the built
+   page against every frame of the design at the frame's own width and list every
+   difference, which finds drift on the decisions that did have owners.
 
 ## Common mistakes
 

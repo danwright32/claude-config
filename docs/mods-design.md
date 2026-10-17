@@ -1493,6 +1493,18 @@ is still asked once at bedtime and closed if unanswered.
   `$.scopeModes.sleepNote`.
 - Findings reach the report through the overnight rules' `sleep_note`, not the reflection hooks,
   which stand down on `stop_hook_active` and would run once a night (H5).
+- Nothing is handed to Dan overnight (#1284; Dan, 2026-10-17: "some sessions give me something to
+  do immediately ... and some wait until the morning"; design rounds skipped on his word the same
+  day). Each prompt used to say "deliver as when he is away", a page at once, and only the Artifact
+  open action was held, so a session whose turn ended overnight published there and then. Now every
+  prompt says to hand him nothing (`ASLEEP_DELIVERY` in `hooks/nightheld.ts`), and in every session,
+  a subagent's call included, an Artifact publish or open, or a Claude doc made or changed, is
+  refused with the grey Asleep card and kept in that session's state (`wakeHeld`). When sleep mode
+  ends the session that woke it carries what it held in its morning turn, and every other session
+  asks for it in a turn of its own at its next minute once the record is gone (an unreadable record
+  is not a wake, and a new night keeps it for its own morning; a prompt that does not go in keeps it
+  for the next minute). What needs Dan at the Mac while asleep is refused without away's "publish a
+  page instead" (`heldAsleep`).
 
 ### Sleep mode phase 9: waking (#837), built
 
@@ -1938,7 +1950,10 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   toast included, from a hook on its own noun's event, where every mod's noun is reachable whatever
   the load order; a noun's own method sees only the mods loaded beneath it. With the secret guard
   not loaded nothing refuses; a screen that cannot ask refuses the call with a card (L42), and so
-  does the secret guard's own when its check fails. Only the secret guard is asked: no build and
+  does the secret guard's own when its check fails, and so does its own `tool.call` hook, through a
+  refusing `.catch` (#1298): a hook that throws is otherwise skipped and the call runs unscreened.
+  Its `session.append` scrub carries one too, which keeps a row it cannot read with every text
+  withheld rather than as it came. Only the secret guard is asked: no build and
   the style check refuse what a call would change or write, which an answered call does not.
   `tools/check-mod-shared-parts.sh` fails each `tool.call` hook that answers a call with a result
   and never asks in its own body (#732): a screen in the hook beside it covers nothing, a screen
@@ -2678,6 +2693,36 @@ region ran to the end of the line after the change.
   yet name what is drawn was built and offered, and declined. So the #1245 helper is still asked
   about, for the card it reads, and so is the edit that calls it with the card; #1248's aim of
   letting logic only edits through is met only as far as the line fix reaches.
+
+### What #1275 changed, 2026-10-16
+
+#1263's divider between steps was added in manual steps' `card.ts` (`cardLines`), which builds every
+line the steps card draws, and the guard never saw it: only a mod's `.tsx` and `.jsx` hook files
+counted, so a look change made in a plain `.ts` file passed, and only the companion mod-kit `.tsx`
+edit was held. Judging every `.ts` file would have asked about the logic most of them hold, so the
+guard now works out from the code which parts of a mod's `.ts` hook files feed what it draws.
+
+- **What draws.** In each of the mod's hook files: a drawing call (`$.modkit.bandRow`, `pane`,
+  `card`, `blocked`, and `$.ui.open`, for a pane's size), a JSX element (its event handlers aside,
+  which are what it does, not how it looks), and a function building mod-kit's line data (an object
+  with `text` and a look such as `color`, `bold` or `dim`, a `{ divider: true }`, or a button), the
+  whole top level function where it is the statement's own. Then every top level declaration any of
+  those names, in that file or another of the mod's through its imports, and what each of those
+  names in turn. A type draws nothing.
+- **How an edit is judged.** What draws in the file, its comments taken out and its spacing made
+  one space, is compared before and after the edit, beside the mod's other hook files as they are;
+  any difference is a look change, however it is worded, so the #1263 divider, which names no
+  drawing word, is held. Nothing else in the file is read, so a refusal Claude reads that names the
+  card passes, unlike in a `.tsx` file, where the drawing words still decide.
+- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`): every hook file is read,
+  19 of the 67 `.ts` files hold anything that draws (most of those only a drawing call or a
+  guard's name on its blocked card), the divider added to the real `cardLines` is
+  held and `DROPPED_AFTER_MS` is not. A generic arrow written `<T>(`, which status bar and scope
+  modes use, could not be read by the JSX reader, so a `.ts` file is now read with no JSX at all.
+- **The gaps.** A value reaching a drawing call through a local variable or a function's parameter
+  is not followed unless it builds a run: a guard's blocked card sentence, handed to its own
+  `drawCard`, passes. A shell write whose result cannot be read is held where the file draws now,
+  so one making a file that drew nothing draw is not seen.
 
 ## Picker manners (#615), built 2026-10-04
 

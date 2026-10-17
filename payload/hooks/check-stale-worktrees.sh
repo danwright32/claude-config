@@ -19,6 +19,18 @@
 #      does not stay in the folder between commands, so a running process is not enough to see a
 #      session at work; a recent change is.
 #   4. No running process has it as its working directory.
+#   5. It is not locked, or its lock was left by a Claude agent that is no longer running
+#      (lib/agent-lock.sh, #1282). Claude Code locks a running agent's worktree and lifts the lock
+#      when the agent finishes, so an agent that never finished (the Mac going down) left a lock
+#      git refuses to remove past, and five landed worktrees were kept for ever on 2026-10-17. A
+#      lock naming a pid no process has, or an agent that started before the last boot, is lifted
+#      just before the removal; that covers the older form with no start time, "claude agent
+#      <name> (pid <pid>)", whose pid nothing has. If git then refuses and leaves the worktree
+#      whole, the lock is put back; if git stops part way and leaves it part deleted, the lock
+#      stays off, so the next run can finish the removal. A live agent's lock, a pid now held by a
+#      process whose start does not match the lock, an older lock whose pid is running, one whose
+#      agent cannot be read, and any lock that is not a Claude agent's are left exactly as they
+#      are. The same reading decides tools/shipped-worktrees.sh, so the two cleanups agree.
 # Its BRANCH is never deleted, so every commit can be had back with `git worktree add`. What goes
 # with the folder is only what git ignores (installed packages, a local settings file).
 #
@@ -62,6 +74,8 @@
 #                            whose PR is older than these is kept, the harmless direction
 #   STALE_WT_BUDGET_SECS     no removal starts later than this from the start (default 300)
 #   STALE_WT_RECENT_MINUTES  a change this recent keeps a worktree (default 360)
+#   AGENT_LOCK_PS            the ps that says whether a lock's agent is running (lib/agent-lock.sh)
+#   AGENT_LOCK_BOOT_EPOCH    when this machine booted, in epoch seconds (lib/agent-lock.sh)
 
 set -uo pipefail
 
@@ -75,6 +89,10 @@ RECENT="${STALE_WT_RECENT_MINUTES:-360}"
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/merged-prs.sh" || {
   echo "check-stale-worktrees: lib/merged-prs.sh is missing, so whether any work landed cannot be read." >&2
+  exit 2
+}
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agent-lock.sh" || {
+  echo "check-stale-worktrees: lib/agent-lock.sh is missing, so whether a locked worktree's agent is still running cannot be read." >&2
   exit 2
 }
 
@@ -92,17 +110,20 @@ WTDIR="$top/.claude/worktrees"
 # The worktrees GIT knows about, narrowed to the ones under that directory. Read from git rather
 # than from the filesystem, because a directory sitting there that git has forgotten is not a
 # worktree and removing it is a different operation with a different command.
-paths=(); branches=(); heads=()
-cur=""; curbranch=""; curhead=""
+# A lock is kept as the whole "locked ..." line, so the one read again just before an unlock can be
+# compared with it exactly; a worktree with no lock has an empty one.
+paths=(); branches=(); heads=(); locks=()
+cur=""; curbranch=""; curhead=""; curlock=""
 flush(){
-  case "$cur" in "$WTDIR"/*) paths+=("$cur"); branches+=("$curbranch"); heads+=("$curhead") ;; esac
-  cur=""; curbranch=""; curhead=""
+  case "$cur" in "$WTDIR"/*) paths+=("$cur"); branches+=("$curbranch"); heads+=("$curhead"); locks+=("$curlock") ;; esac
+  cur=""; curbranch=""; curhead=""; curlock=""
 }
 while IFS= read -r line; do
   case "$line" in
     "worktree "*) [ -n "$cur" ] && flush; cur="${line#worktree }" ;;
     "HEAD "*)     curhead="${line#HEAD }" ;;
     "branch "*)   curbranch="${line#branch refs/heads/}" ;;
+    locked|"locked "*) curlock="$line" ;;
   esac
 done < <(git -C "$top" worktree list --porcelain 2>/dev/null || true)
 [ -n "$cur" ] && flush
@@ -147,6 +168,26 @@ in_use(){   # $1 = a worktree's resolved path
   [ "$can_see_use" -eq 1 ] || return 0
   [ -n "$cwds" ] || return 1
   printf '%s\n' "$cwds" | awk -v p="$1" '$0 == p || index($0, p "/") == 1 { found = 1 } END { exit !found }'
+}
+
+# The lock git holds on one worktree now, as the whole "locked ..." line, or nothing.
+# Read whole into a variable first: awk stopping at the first match would cut git off mid write,
+# and under pipefail that fails the read.
+lock_now(){
+  local all; all="$(git -C "$top" worktree list --porcelain 2>/dev/null)"
+  printf '%s\n' "$all" | awk -v p="worktree $1" '
+    $0 == p { f = 1; next } /^worktree / { f = 0 } f && /^locked/ && !done { print; done = 1 }'
+}
+
+# Put back a lock this run lifted for a removal that then did not happen, so the worktree is left
+# as it was found. Reads the loop's own $stale_lock, $reason and $p.
+relock(){
+  [ -n "$stale_lock" ] || return 0
+  if git -C "$top" worktree lock --reason "$reason" "$p" >/dev/null 2>&1; then
+    echo "    its lock is put back as it was found"
+  else
+    echo "    and its lock, lifted for the removal, could not be put back"
+  fi
 }
 
 landed=0; removed=0; left=0; cut=0
@@ -208,6 +249,21 @@ for i in "${!paths[@]}"; do
     unconfirmed) echo "  keeping $name [$b]: PR #$num merged at a commit this repository does not have, so whether it holds this worktree's commits cannot be read here"; continue ;;
     *) echo "  keeping $name [$b]: no merged PR has this branch"; continue ;;
   esac
+  # A lock is judged next, before anything walks the folder. Only a lock a Claude agent left behind
+  # lets the worktree go on to the rules below; every other lock keeps it here, in report mode too,
+  # so a worktree is never called stale when --remove would not take it.
+  lock="${locks[$i]}"; reason="${lock#locked}"; reason="${reason# }"; stale_lock=""
+  if [ -n "$lock" ]; then
+    IFS=$'\t' read -r lv ldetail <<<"$(agent_lock_verdict "$reason")"
+    case "$lv" in
+      live) echo "  keeping $name [$b]: a Claude agent that is still running holds its lock ($ldetail)"; continue ;;
+      unreadable) echo "  keeping $name [$b]: it is locked by a Claude agent, and whether that agent is still running could not be read ($ldetail), so the lock is left alone"; continue ;;
+      reused) echo "  keeping $name [$b]: its lock names a pid now held by another process, which cannot prove its agent gone ($ldetail), so the lock is left alone"; continue ;;
+      nostart) echo "  keeping $name [$b]: its lock names $ldetail, so the lock is left alone"; continue ;;
+      dead|preboot) stale_lock="$ldetail" ;;
+      *) echo "  keeping $name [$b]: git has it locked, and not by a Claude agent (${reason:-no reason given}), so the lock is left alone"; continue ;;
+    esac
+  fi
   # Uncommitted work settles it on its own: somebody may be part way through a change, and nothing
   # below is worth risking that (L5).
   dirty="$(git -C "$p" status --porcelain 2>/dev/null | grep -c . || true)"
@@ -230,7 +286,12 @@ for i in "${!paths[@]}"; do
   fi
   landed=$((landed + 1))
   if [ "$REMOVE" -eq 0 ]; then
-    echo "  STALE $name [$b]: PR #$num merged and nothing is uncommitted"
+    if [ -n "$stale_lock" ]; then
+      echo "  STALE $name [$b]: PR #$num merged and nothing is uncommitted, and its lock was left by a Claude agent that is gone ($stale_lock)"
+      echo "    git -C $top worktree unlock $p"
+    else
+      echo "  STALE $name [$b]: PR #$num merged and nothing is uncommitted"
+    fi
     echo "    git -C $top worktree remove $p"
     continue
   fi
@@ -238,30 +299,56 @@ for i in "${!paths[@]}"; do
     left=$((left + 1))
     continue
   fi
+  # A stale agent lock is lifted only now, the last moment before the removal, and only if it is
+  # still the lock judged above: an agent that has taken the worktree since holds a lock of its own,
+  # and that one is left alone.
+  if [ -n "$stale_lock" ]; then
+    if [ "$(lock_now "$p")" != "$lock" ]; then
+      echo "  keeping $name [$b]: its lock changed while this run was looking at it, so whoever holds it now is left alone"
+      continue
+    fi
+    if ! err="$(git -C "$top" worktree unlock "$p" 2>&1)"; then
+      echo "  keeping $name [$b]: its lock was left by a Claude agent that is gone ($stale_lock), and git would not lift it: $(printf '%s' "$err" | tr '\n' ' ')"
+      continue
+    fi
+  fi
   # The marker goes down BEFORE git starts deleting. A removal that cannot leave one is not started,
   # since one cut off without it would read as somebody's work for ever.
   if ! { mkdir -p "$MARKS" && printf '%s\n' "$p" >"$MARKS/$name"; } 2>/dev/null; then
     echo "  keeping $name [$b]: its progress marker could not be written in $MARKS, so a removal cut off part way could not be finished later"
+    relock
     continue
   fi
   # No --force: git refuses a worktree with anything untracked or modified, so a change made since
   # the check above is a refusal, never a loss.
   if err="$(git -C "$top" worktree remove "$p" 2>&1)"; then
     removed=$((removed + 1))
-    echo "  removed $name [$b]: PR #$num merged and nothing in it was newer (its branch is kept)"
+    if [ -n "$stale_lock" ]; then
+      echo "  removed $name [$b]: PR #$num merged and nothing in it was newer, and its lock was left by a Claude agent that is gone ($stale_lock). Its branch is kept"
+    else
+      echo "  removed $name [$b]: PR #$num merged and nothing in it was newer (its branch is kept)"
+    fi
     rm -f "$MARKS/$name"
   else
     echo "  keeping $name [$b]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
-    # A refusal before anything is deleted (a lock, a change made since the check above) leaves the
-    # worktree listed, whole and as it was, so there is nothing to finish. A failure PART WAY does
+    # A refusal before anything is deleted (a change made since the check above, say) leaves the
+    # worktree listed, whole and as it was, so there is nothing to finish. A lock no longer gets
+    # this far: every lock but a stale agent's keeps the worktree before any removal is tried, and
+    # a stale one is lifted first. A failure PART WAY does
     # not: measured 2026-10-16 with one unwritable folder, git deleted the worktree's own files and
     # its registration and then stopped. The marker stays for anything but the first, so a later
     # run can say what is left.
     still="$(git -C "$top" worktree list --porcelain 2>/dev/null)"
     case $'\n'"$still"$'\n' in
       *$'\n'"worktree $p"$'\n'*)
+        # A lifted lock goes back only on a worktree left whole. One left part deleted keeps its
+        # marker for the finisher above, whose single --force git refuses on a locked worktree, so
+        # putting a dead agent's lock back there would keep it part deleted for ever.
         if [ -d "$p" ] && [ -z "$(git -C "$p" status --porcelain 2>/dev/null | grep '^ D ')" ]; then
           rm -f "$MARKS/$name"
+          relock
+        elif [ -n "$stale_lock" ]; then
+          echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal"
         fi ;;
     esac
   fi

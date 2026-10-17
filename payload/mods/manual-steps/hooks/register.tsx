@@ -3,6 +3,7 @@ import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
 import { waitingPhrase } from './waiting.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // The manual steps card (#614), settled with Dan on 2026-10-03 (spec) and 2026-10-04 (design
 // rounds, docs/mods-design.md "Manual steps"). Claude hands steps over through the `steps` tool,
@@ -27,7 +28,9 @@ const cardRef = { plugin: 'manual-steps', key: 'card' } as const
 const placeRef = { plugin: 'manual-steps', key: 'place' } as const
 const waitingRef = { plugin: 'manual-steps', key: 'waiting' } as const
 
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
+// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
+const message = (err: unknown) => errorText(err, MOD)
 const isPane = (place: unknown): place is StepsPaneId => (PANES as readonly unknown[]).includes(place)
 
 // The project a card belongs to: the repository's root, the main checkout's for a worktree, so a
@@ -337,8 +340,10 @@ const holdWhileAway = async ($: EngineInterface, card: StepsCard): Promise<boole
     })
     return r?.isHeld === true
   } catch (err) {
-    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(message(err))
-    if (!isAbsent) $.ui.log(`Manual steps could not ask whether Dan is away, so the card is shown: ${message(err)}`)
+    // Absent is home; a scope modes whose loaded copy lacks hold is home too, told to Dan once (#1281).
+    const news = skewNews(err, MOD)
+    if (news) $.ui.toast(news)
+    if (!missingOf(err)) $.ui.log(`Manual steps could not ask whether Dan is away, so the card is shown: ${message(err)}`)
     return false
   }
 }
@@ -362,8 +367,9 @@ const tellDan = async ($: EngineInterface, card: StepsCard): Promise<string | un
   } catch (err) {
     // The noun missing is a TypeError in this mod's own code; one that failed inside the goal
     // tracker reaches here rewrapped by the engine, and is said as it is.
-    const isAbsent = err instanceof TypeError && /goalTracker|undefined|not a function|null/.test(message(err))
-    return isAbsent ? 'the goal tracker mod, which sends the notifications, is not loaded' : message(err)
+    // Read by the one reader (#1281): a goal tracker whose loaded copy lacks the member is said as
+    // the skew's own sentence.
+    return missingOf(err)?.kind === 'noun' ? 'the goal tracker mod, which sends the notifications, is not loaded' : message(err)
   }
 }
 

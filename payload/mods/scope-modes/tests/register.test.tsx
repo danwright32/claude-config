@@ -4,7 +4,8 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { GOAL_MARK, goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
@@ -60,6 +61,7 @@ const deps: { name: string; register: Register } = {
           git: async (input: { words: string[] }) => kit('git', input),
           gh: async (input: { words: string[] }) => kit('gh', input),
           mergeHelper: async (command: Command) => kit('mergeHelper', command),
+          goal: async (input: { transcript: string }) => kit('goal', input),
           repo: async (input: { root?: string | null; remote: string | null }) => kit('repo', input),
           ghRepo: async (input: { spelling: string }) => kit('ghRepo', input),
           linkRepo: async (input: { link: string }) => kit('linkRepo', input),
@@ -292,6 +294,11 @@ type Opts = {
   remote?: string | null
   /** mod-kit's walk for the checkout a folder sits in fails (#996), with what it threw. */
   workingTreeFails?: string
+  /**
+   * The checkout a path under each prefix sits in, for mod-kit's walk (#1269): null for none. A path
+   * under no prefix here is its own checkout, as before.
+   */
+  trees?: Record<string, string | null>
   /** The folders git status finds uncommitted changes in (#996); none by default. */
   dirty?: string[]
   /** The files git status names in those folders (#1051); app.ts unless said. */
@@ -315,6 +322,8 @@ type Opts = {
   mergeHelperReaderFails?: boolean
   /** `touch` failing, with its stderr (#1281: the driver touches this mod's manifest to load it again). */
   touchFails?: string
+  /** mod-kit's reader of a transcript's /goal fails (#1252). */
+  goalReaderFails?: boolean
   /** mod-kit's link reader fails only for a link holding this text (#961). */
   linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -538,7 +547,18 @@ const world = (on: On, o: Opts = {}) => {
       // session's when it is in no repository.
       // The checkout a folder sits in (#996), as the branch reader's walk below finds it.
       if (a[0] === 'workingTree' && o.workingTreeFails) return fail(1, o.workingTreeFails)
-      if (a[0] === 'workingTree') return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
+      if (a[0] === 'workingTree') {
+        // An installed app is in no checkout, as on the Mac.
+        const under = Object.entries({ '/Applications/': null, ...o.trees }).find(([prefix]) => (input.path ?? '').startsWith(prefix))
+        if (under) return ok(JSON.stringify(under[1]))
+        return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
+      }
+      // A transcript's /goal (#1252), read by mod-kit's own reader asking this world's shell.
+      if (a[0] === 'goal' && o.goalReaderFails) return fail(1, 'mod-kit is not loaded')
+      if (a[0] === 'goal') {
+        const sh = async (argv: string[]) => ((await answer($, { ...e, argv })) as { value: { exitCode: number; stdout: string; stderr: string } }).value
+        return goalAt((input as { transcript?: string }).transcript ?? '', sh).then(g => ok(JSON.stringify(g)))
+      }
       if (a[0] === 'branch') {
         if (o.branchReaderFails) return fail(1, o.branchReaderFails)
         const walk = async (p: string) => (o.noRepo && p === '/repo' ? null : p)
@@ -806,6 +826,9 @@ const command = async ($: $T, name: string, origin: string = 'composer') =>
 const say = async ($: $T, text: string, origin: string | object = 'composer') =>
   (await $.prompt.submit({ text, origin: typeof origin === 'string' ? { kind: origin } : origin, wait: false } as never)) as { text: string; context?: string[] }
 const bash = (command: string, id = 'c1') => ({ tool: 'Bash', command, tool_use_id: id }) as never
+// What away and sleep still hold after #1269, standing for "needs Dan at the Mac" wherever a test
+// asks only whether a call is held: a dialog waits for a press nobody is there to give.
+const DIALOG = `osascript -e 'display dialog "Done?"'`
 const edit = (path: string, id = 'c1') => ({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', tool_use_id: id }) as never
 const call = async ($: $T, e: never) => {
   const r = (await $.tool.call(e)) as { deny?: string; text?: string }
@@ -1863,7 +1886,7 @@ test('the session ending turns every mode off: nothing carries into a new sessio
   await $.session.end({ sessionId: 's1', reason: 'clear' } as never)
   expect(lastModes(w)).toEqual([])
   expect(await call($ as never, edit('/repo/app.ts'))).toBe('ran')
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
 })
 
 // ---- Away and home (#621) ----
@@ -1876,37 +1899,126 @@ test('a new session starts at home: no mode, nothing added to the prompt, openin
   expect(w.modes).toEqual([])
 })
 
-test('away: Claude is told to publish pages for the phone; opening on the Mac is held, not run', withDeps, async ($, on) => {
+test('away: Claude is told to publish pages for the phone; what needs Dan at the Mac is held, not run', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   expect((await command($ as never, 'away')).text).toBe('Away is on in this session.')
   expect(lastModes(w)).toEqual(['AWAY'])
-  expect((await say($ as never, 'show me the report')).context?.join('\n')).toMatch(/Dan is away from the Mac.*private claude\.ai page/s)
-  const r = await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o1'))
-  expect(r).toMatch(/^Held: Dan is away from the Mac, so "Open report\.html in Google Chrome" waits for him to come back\./)
+  const note = (await say($ as never, 'show me the report')).context?.join('\n') ?? ''
+  expect(note).toMatch(/Dan is away from the Mac.*private claude\.ai page/s)
+  // What Claude is told matches what is held (#1269), so it neither avoids testing nor expects a
+  // dialog to be answered.
+  expect(note).toMatch(/Do not show a dialog, run a script whose text cannot be read, type or click into anything but a test build/)
+  expect(note).toMatch(/bringing apps forward, opening files and test automation run/)
+  const r = await call($ as never, bash(DIALOG, 'o1'))
+  expect(r).toMatch(/^Held: Dan is away from the Mac, so "Show a dialog on the Mac" waits for him to come back\./)
   expect(w.reached).toEqual([])
-  expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Open report.html in Google Chrome.', safeWay: 'Claude publishes a private page for your phone instead.' }])
+  expect(w.cards).toEqual([{ toolUseId: 'o1', guard: 'Away', reason: 'Held for when you are back: Show a dialog on the Mac.', safeWay: 'Claude publishes a private page for your phone instead.' }])
   // No card while away: Dan is not at the Mac to press it.
   expect(w.bands).toEqual([])
 })
 
-test('away holds a browser opened by another tool, the Artifact open action and an AppleScript dialog, and a press replays the call (#702)', withDeps, async ($, on) => {
+// #1269, Dan (2026-10-16 ET): "I don't care if you bring apps to the front or do automations for
+// testing". What only moves focus runs while away; what waits for him, or exists to show him
+// something, is still held.
+test('away runs an app brought forward, a file opened, BBEdit and browser automation, and still holds a dialog, an unreadable script and the Artifact open action (#1269)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'p1' } as never)).toMatch(
-    /^Held: Dan is away from the Mac, so "Open https:\/\/x\.dev\/a in the Playwright browser" waits for him to come back\./,
-  )
+  expect(await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'r1'))).toBe('ran')
+  expect(await call($ as never, bash(`osascript -e 'tell application "Simulator" to activate'`, 'r2'))).toBe('ran')
+  expect(await call($ as never, bash('/Applications/BBEdit.app/Contents/Helpers/bbedit_tool --front-window /tmp/d.md', 'r3'))).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 'r4' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__claude-in-chrome__tabs_create_mcp', tool_use_id: 'r5' } as never)).toBe('ran')
+  expect(w.cards).toEqual([])
   expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p2' } as never)).toMatch(/"Open https:\/\/claude\.ai\/artifact\/abc" waits/)
-  expect(await call($ as never, bash(`osascript -e 'display dialog "Done?"'`, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
-  // Publishing the page for the phone goes ahead.
-  expect(await call($ as never, { tool: 'Artifact', file_path: '/tmp/p.html', tool_use_id: 'p4' } as never)).toBe('ran')
-  expect(w.reached).toEqual(['/tmp/p.html'])
+  expect(await call($ as never, bash(DIALOG, 'p3'))).toMatch(/"Show a dialog on the Mac" waits/)
+  expect(await call($ as never, bash('osascript ~/bin/front.applescript', 'p4'))).toMatch(/"Run an AppleScript on the Mac" waits/)
   expect(w.cards.map(c => c.reason)).toEqual([
-    'Held for when you are back: Open https://x.dev/a in the Playwright browser.',
     'Held for when you are back: Open https://claude.ai/artifact/abc.',
     'Held for when you are back: Show a dialog on the Mac.',
+    'Held for when you are back: Run an AppleScript on the Mac.',
   ])
+})
+
+// Typing and clicking run only into a test build (Dan, 2026-10-16 ET): an executable under Xcode's
+// DerivedData or a project checkout, plus Simulator. Anything else waits, since a keystroke into
+// Mail or Messages could send what nobody reviewed. The keystroke guard still proves the target is
+// in front before any keystroke (its own tests).
+const TYPE = (target: string) => `TARGET_APP=${target} osascript -e 'tell application "System Events" to keystroke "n"'`
+const DERIVED = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
+const CHECKOUT_BUILD = '/Users/x/Apps/Ovation/build/Debug/Ovation.app/Contents/MacOS/Ovation'
+test('away types into a test build, from DerivedData or a checkout, and holds typing into any other app (#1269)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { trees: { '/Users/x/Apps/Ovation/': '/Users/x/Apps/Ovation' } })
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  expect(await call($ as never, bash(TYPE(DERIVED), 't1'))).toBe('ran')
+  expect(await call($ as never, bash(TYPE(CHECKOUT_BUILD), 't2'))).toBe('ran')
+  expect(await call($ as never, bash(`TARGET_APP=${DERIVED} cliclick c:10,10`, 't3'))).toBe('ran')
+  expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 't4'))).toMatch(/^Held: Dan is away from the Mac, so "Type into Mail" waits/)
+  expect(await call($ as never, bash('TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail cliclick c:10,10', 't5'))).toMatch(/"Click in Mail" waits/)
+  // A call naming a test build anywhere and another app elsewhere (an echo, a second command) is
+  // held: every TARGET_APP it carries must be a test build (lessons review of #1269).
+  expect(await call($ as never, bash(`echo TARGET_APP=${DERIVED} && TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail osascript -e 'tell application "System Events" to keystroke "n"'`, 't6'))).toMatch(/"Type into .*" waits/)
+  // A test build named only in an echo does not stand for the typing command after it.
+  expect(await call($ as never, bash(`echo TARGET_APP=${DERIVED} && osascript -e 'tell application "System Events" to keystroke "n"'`, 't7'))).toMatch(/waits/)
+  // Nor does a test build named on a command that does not type stand for one that does.
+  expect(await call($ as never, bash(`TARGET_APP=${DERIVED} osascript -e 'display notification "x"'; osascript -e 'tell application "System Events" to keystroke "n"'`, 't8'))).toMatch(/waits/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5', 't6', 't7', 't8'])
+})
+
+// The keystroke guard (#707) asks this noun, naming its action, and is answered by the same rules.
+const guardStandIn: { name: string; register: Register } = {
+  name: 'keystroke-guard',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (String(e.tool) !== 'GuardHold') return next(e)
+      const action = (e as unknown as { action: { kind: 'input' | 'focus'; target?: string } }).action
+      const r = await $.scopeModes.hold({ label: 'x', prompt: 'y', action })
+      return { result: r, text: JSON.stringify({ isHeld: r.isHeld, isAway: 'isAway' in r ? r.isAway : undefined }) } as never
+    })
+  },
+}
+test("the keystroke guard's actions through the noun: away, focus and a test build are not held and say Dan is away; other typing is held; at home nothing is (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
+  const { clock } = world(on)
+  await start($ as never, clock)
+  const ask = async (action: object, id: string) => JSON.parse(await call($ as never, { tool: 'GuardHold', action, tool_use_id: id } as never))
+  expect(await ask({ kind: 'focus' }, 'g1')).toEqual({ isHeld: false })
+  await command($ as never, 'away')
+  expect(await ask({ kind: 'focus' }, 'g2')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: DERIVED }, 'g3')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: '/Applications/Mail.app/Contents/MacOS/Mail' }, 'g4')).toEqual({ isHeld: true })
+  expect(await ask({ kind: 'input' }, 'g5')).toEqual({ isHeld: true })
+})
+
+// Sleep mode holds what away holds on the Mac (Dan, 2026-10-16 ET), and every result until wake
+// besides, where away delivers a page at once (#1284).
+test('asleep, the same: focus, files, browser automation and a test build run; a dialog and other typing are held, and the Artifact open action is held until wake (#1269, #1284)',withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('open -a Preview a.pdf', 's1'))).toBe('ran')
+  expect(await call($ as never, { tool: 'mcp__playwright__browser_navigate', url: 'https://x.dev/a', tool_use_id: 's2' } as never)).toBe('ran')
+  expect(await call($ as never, bash(TYPE(DERIVED), 's3'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 's4'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 's5'))).toMatch(/"Type into Mail" waits/)
+  // Asleep, the open action is held until wake and delivered then, as a publish is (#1284).
+  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 's6' } as never)).toMatch(/^Held until Dan wakes: /)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['s4', 's5', 's6'])
+})
+test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  w.files[CURRENT] = asleepRecord()
+  const ask = async (action: object, id: string) => JSON.parse(await call($ as never, { tool: 'GuardHold', action, tool_use_id: id } as never))
+  expect(await ask({ kind: 'input', target: DERIVED }, 'z1')).toEqual({ isHeld: false, isAway: true })
+  expect(await ask({ kind: 'input', target: '/Applications/Mail.app/Contents/MacOS/Mail' }, 'z2')).toEqual({ isHeld: true })
+})
+
+test('a held call is replayed by its press when Dan is back (#702)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p1' } as never)
   await command($ as never, 'home')
   const ui = await ($ as never as { ui: { mount: (m: object) => Promise<{ press: (t: object) => Promise<unknown>; unmount: () => Promise<void> }> } }).ui.mount({ plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false } })
   await ui.press({ key: 'scope-modes:held-1' })
@@ -1914,7 +2026,7 @@ test('away holds a browser opened by another tool, the Artifact open action and 
   await clock.settle()
   await ui.unmount()
   expect(w.prompts).toEqual([
-    'Dan is back and picked this from what was held while he was away: Open https://x.dev/a in the Playwright browser. Do it now. What was held: mcp__playwright__browser_navigate {"url":"https://x.dev/a"}',
+    'Dan is back and picked this from what was held while he was away: Open https://claude.ai/artifact/abc. Do it now. What was held: Artifact {"action":"open","url":"https://claude.ai/artifact/abc"}',
   ])
 })
 
@@ -1972,8 +2084,8 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o1'))
-  await call($ as never, bash('open -a "Google Chrome" /tmp/report.html', 'o2'))
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'o1' } as never)
+  await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 'o2' } as never)
   await call($ as never, bash('TARGET_APP=/Applications/Overture.app/Contents/MacOS/Overture osascript -e \'tell application "System Events" to keystroke "n"\'', 'o3'))
   const runsBefore = w.runs.length
   expect((await command($ as never, 'home')).text).toBe('Home is on in this session.')
@@ -1982,7 +2094,7 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   // The same open held twice is one row.
   expect(card.lines).toEqual([
     [{ text: 'Held while you were away', color: 'warning' }],
-    [{ text: 'Open report.html in Google Chrome ' }, { button: 'held-1', label: 'Open' }],
+    [{ text: 'Open https://claude.ai/artifact/abc ' }, { button: 'held-1', label: 'Open' }],
     { divider: true },
     [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }],
   ])
@@ -1995,7 +2107,7 @@ test('coming home: one boxed card of what was held, nothing opens until a button
   await ui.press({ key: 'scope-modes:held-1' })
   await clock.settle()
   expect(w.prompts.filter(p => p.startsWith('Dan is back'))).toEqual([
-    'Dan is back and picked this from what was held while he was away: Open report.html in Google Chrome. Do it now. What was held: open -a "Google Chrome" /tmp/report.html',
+    'Dan is back and picked this from what was held while he was away: Open https://claude.ai/artifact/abc. Do it now. What was held: Artifact {"action":"open","url":"https://claude.ai/artifact/abc"}',
   ])
   const after = w.bands[w.bands.length - 1] as Row
   expect(after.lines).toEqual([[{ text: 'Held while you were away', color: 'warning' }], [{ text: 'Type into Overture ' }, { button: 'held-2', label: 'Do it' }]])
@@ -2211,6 +2323,16 @@ test("a transcript whose goal cannot be read, or that cannot be found, is asked 
   // Why each was asked is said, so a goal Dan did set and the mod could not read is not a mystery.
   expect(r.text).toMatch(/this session's \/goal could not be read \(grep: Permission denied\)/)
   expect(r.text).toMatch(/the session in o\/other \("Fix the parser"\)'s transcript was not found/)
+})
+
+// #1252: the goal is read by mod-kit's one reader; a mod-kit that cannot answer is said the same way.
+test('a goal reader mod-kit cannot give is said and asked about, never read as a goal (#1252)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { goalReaderFails: true, issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toMatch(/this session's \/goal could not be read \(mod-kit is not loaded\)/)
 })
 
 test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {
@@ -2530,6 +2652,160 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
 })
 
+// #1284: while asleep nothing is handed to Dan in any session, and what was held is delivered at wake.
+const PUBLISH = (id: string, file = '/s/sleep-wake/status.html') => ({ tool: 'Artifact', file_path: file, tool_use_id: id }) as never
+const heldAtWakeOf = (w: { prompts: string[] }) => w.prompts.filter(p => p.includes('While Dan slept, this session held'))
+
+test('asleep, a session that is not a worker publishes no page: the call is held for the morning, never reaching the tool (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const said = await call($ as never, PUBLISH('p1'))
+  expect(said).toMatch(/^Held until Dan wakes: sleep mode is on, so nothing is published or opened for him tonight, and "Publish status\.html" did not run\./)
+  expect(w.reached).toEqual([])
+  expect(w.cards).toEqual([{ toolUseId: 'p1', guard: 'Asleep', reason: 'Held for the morning: Publish status.html.', safeWay: 'Claude delivers it when you wake.' }])
+  // A Claude doc is a delivery too, and an Artifact read is not.
+  expect(await call($ as never, { tool: 'mcp__claude_ai_Claude_Docs__batch', container: { kind: 'project', create: { name: 'Bidspoke morning status' } }, tool_use_id: 'p2' } as never)).toMatch(/^Held until Dan wakes/)
+  expect(await call($ as never, { tool: 'Artifact', action: 'read', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p3' } as never)).toBe('ran')
+  // A subagent's publish is held as well: it would hand Dan the same page.
+  expect(await call($ as never, { tool: 'Artifact', file_path: '/s/b.html', agentId: 'a1', tool_use_id: 'p4' } as never)).toMatch(/^Held until Dan wakes/)
+})
+
+test('asleep, every prompt says to hand Dan nothing tonight, never to deliver as when he is away (#1284)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, 'how is it going')).context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan is asleep, so hand him nothing tonight: publish no page and open nothing for him to read\./)
+  expect(ctx).not.toMatch(/deliver as when he is away|deliver results as a private claude\.ai page/)
+})
+
+test("asleep, a dialog held for the morning is never answered with publishing a page instead (#1284)", withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const said = await call($ as never, bash(DIALOG, 'd1'))
+  expect(said).toMatch(/^Held: Dan is asleep, so "Show a dialog on the Mac" waits in the held card for the morning\./)
+  expect(said).not.toMatch(/private claude\.ai page/)
+})
+
+test('the session that wakes sleep is asked, in its morning turn, to deliver what it held, once (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('While Dan slept, this session held one thing it would have handed him: Publish status.html.')
+  expect(m).toContain('<untrusted-overnight-text>\nArtifact {"file_path":"/s/sleep-wake/status.html"}\n</untrusted-overnight-text>')
+  // Its own minute does not ask again.
+  await clock.advance(2 * MIN)
+  expect(heldAtWakeOf(w).length).toBe(1)
+  // Awake now, a publish runs.
+  expect(await call($ as never, PUBLISH('p2'))).toBe('ran')
+})
+
+test('a session that did not wake sleep delivers what it held at its next minute once the record is gone, once (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await clock.advance(MIN)
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Woken in another session: the record moved aside there.
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+  expect(heldAtWakeOf(w)[0]).toMatch(/^Dan is up: sleep mode is off\. While Dan slept, this session held one thing it would have handed him: Publish status\.html\. Deliver each now, where he is now/)
+  await clock.advance(3 * MIN)
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a record that cannot be read is not a wake: nothing held is delivered until the record is really gone (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  w.files[CURRENT] = 'not json'
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a session that held nothing is asked nothing at wake, and a new sleep keeps what was held for its own morning (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  delete w.files[CURRENT]
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Held under one night, then that night is replaced by a new one before any minute saw it end.
+  w.files[CURRENT] = asleepRecord()
+  await clock.advance(MIN)
+  await call($ as never, PUBLISH('p1'))
+  w.files[CURRENT] = asleepRecord({ generation: 'g1' })
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('two deliveries held at once, as parallel calls or a subagent beside the main loop make them, are both kept (#1284 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await Promise.all([call($ as never, PUBLISH('p1', '/s/a.html')), call($ as never, PUBLISH('p2', '/s/b.html')), call($ as never, PUBLISH('p3', '/s/c.html'))])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)[0]).toMatch(/held 3 things it would have handed him: Publish a\.html; Publish b\.html; Publish c\.html\./)
+})
+
+test("Dan's own message going in before /wake's morning turn does not take what the morning turn carries (#1284 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await command($ as never, 'wake')
+  // Dan types before the morning turn is submitted, and then the morning turn fails to go in.
+  await say($ as never, 'morning')
+  w.o.promptFails = 1
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Kept, so the minute asks for it.
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a held delivery whose morning prompt cannot start is kept, and asked for again at the next minute (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  delete w.files[CURRENT]
+  w.o.promptFails = 1
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await call($ as never, PUBLISH('p1'))
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  expect(w.files[CURRENT]).toBeUndefined()
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
 // A session started a minute before the moment a test is about, never at T0 (#1016). Once started,
 // the session checks every minute, so moving the mock clock from T0 to the evening ran about 1,400
 // of those checks, which took 5,105 ms beside 96 CPU burners on 2026-10-09 and failed the runner's
@@ -2594,15 +2870,15 @@ test("Dan's own \"I'm up\" wakes it; the same words from another session do not"
   expect(r.context?.join('\n')).toMatch(/Dan's message woke sleep mode\. Say so in one line first, saying what the block below says\.\n.*\n<untrusted-overnight-text>\nSleep mode is off\./)
 })
 
-test('while asleep every session is quiet as away: opening on the Mac is held, though place was home', withDeps, async ($, on) => {
+test('while asleep every session is quiet as away: what needs Dan at the Mac is held, though place was home', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   expect(w.reached).toEqual([])
   const r = await say($ as never, 'how is it going')
   expect(r.context?.join('\n')).toMatch(/Sleep mode is on until 12:00 PM ET on Thu Jan 1\. This session is not one of the overnight workers\./)
   await command($ as never, 'wake')
-  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 'c2'))).toBe('ran')
 })
 
 test('the record ends by itself at noon ET: asleep a ms before, awake at noon, and the first to see it notes it and notifies once', withDeps, async ($, on) => {
@@ -2613,11 +2889,11 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
   await startBefore($ as never, clock, began + MIN)
   await clock.set(UNTIL - 1)
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   expect(w.notified).toEqual([])
   // At noon exactly the record no longer holds for any decision, before the minute's check moves it.
   await clock.set(UNTIL)
-  expect(await call($ as never, bash('open -a Preview a.pdf', 'c2'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG, 'c2'))).toBe('ran')
   // The minute's check, counted from the session's start, is the first to see it.
   const tick = began + Math.ceil((UNTIL - began) / MIN) * MIN
   await clock.set(tick)
@@ -2647,7 +2923,7 @@ test('the record ends by itself at noon ET: asleep a ms before, awake at noon, a
 test('a record from another boot reads as awake, and is ended with that reason', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootTime: BOOT - 1000 }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
   await clock.advance(MIN)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
@@ -2667,7 +2943,7 @@ test('a record whose start moved 2 seconds, with this boot session, is still asl
 test('a record naming another boot session is ended as a restart, though its start matches', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ bootSession: 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE' }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toBe('ran')
+  expect(await call($ as never, bash(DIALOG))).toBe('ran')
   await clock.advance(MIN)
   expect(w.files[CURRENT]).toBeUndefined()
   expect(w.notified).toEqual(['Sleep mode ended by itself at 7:17 PM ET on Wed Dec 31: the Mac restarted.'])
@@ -2702,18 +2978,18 @@ test('a new sleep begun between reading the old record and moving it is put back
 test('what is held while asleep is not offered until wake, and then is', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ placeBefore: 'home' }) } })
   await start($ as never, clock)
-  expect(await call($ as never, bash('open -a Preview a.pdf'))).toMatch(/^Held: /)
+  expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   const heldRows = () => w.bands.filter(b => b.id === 'held')
   expect(heldRows()).toEqual([])
   await command($ as never, 'wake')
-  expect((heldRows()[heldRows().length - 1] as Row).lines[1]).toEqual([{ text: 'Open a.pdf in Preview ' }, { button: 'held-1', label: 'Open' }])
+  expect((heldRows()[heldRows().length - 1] as Row).lines[1]).toEqual([{ text: 'Show a dialog on the Mac ' }, { button: 'held-1', label: 'Do it' }])
 })
 
 test('sleep beginning takes the held card away until wake', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
   await command($ as never, 'away')
-  await call($ as never, bash('open -a Preview a.pdf'))
+  await call($ as never, bash(DIALOG))
   await command($ as never, 'home')
   expect(w.bands.some(b => b.id === 'held')).toBe(true)
   const cleared = w.cleared.length

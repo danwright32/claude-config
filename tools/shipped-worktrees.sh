@@ -27,7 +27,18 @@
 #                 request recorded. The last one matters because this repo deletes the remote
 #                 branch on merge, and the squash rewrote the commits, so the merged head is the
 #                 only place a finished branch's work is still recorded as shipped.
-#   unlocked    not locked. Claude Code locks the worktree of an agent that is still running.
+#   unlocked    not locked, or locked by a Claude agent that is gone. Claude Code locks the
+#                 worktree of an agent it starts and lifts the lock when the agent finishes, so an
+#                 agent that never finished (the Mac going down) leaves a lock behind (#1282). The
+#                 lock is read by payload/hooks/lib/agent-lock.sh, the one reading
+#                 check-stale-worktrees.sh uses too, so the two cleanups agree: a lock whose pid no
+#                 process has, or whose agent started before the last boot, keeps nothing, and is
+#                 lifted just before the removal (only if it is still that lock, and put back if
+#                 git then refuses and leaves the worktree whole; one left part deleted stays
+#                 unlocked so a single --force can finish it). An older lock with no start time, "claude agent <name> (pid
+#                 <pid>)", keeps nothing only when no process has its pid. A live agent's lock, a
+#                 pid now held by a process started at another time, an older lock whose pid is
+#                 running, a lock whose agent cannot be read, and any other lock keep it.
 #   unoccupied  no running process has its current directory in it. Another session's shell can
 #                 be standing there, and removing a directory out from under it is not safe.
 #
@@ -75,6 +86,10 @@ done
 . "$libdir/default-branch.sh"
 # shellcheck source=lib/pull-requests.sh
 . "$libdir/pull-requests.sh"
+agent_lock_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/payload/hooks/lib/agent-lock.sh"
+[ -f "$agent_lock_lib" ] || fail "its library is missing: $agent_lock_lib"
+# shellcheck source=../payload/hooks/lib/agent-lock.sh
+. "$agent_lock_lib"
 
 refuse_gh() {  # refuse_gh <what gh said>
   printf 'shipped-worktrees: could not read GitHub, so nothing was judged and nothing was removed.\n' >&2
@@ -144,9 +159,18 @@ dirty_count() {  # dirty_count <worktree>: changed or untracked files, or fails 
   printf '%s\n' "$s" | wc -l | tr -d ' '
 }
 
+# The lock git holds on one worktree now, as the whole "locked ..." line, or nothing. Read whole
+# first, so an awk stopping at its match cannot cut git off under pipefail.
+lock_now() {  # lock_now <path as git lists it>
+  local all; all="$(git -C "$primary" worktree list --porcelain 2>/dev/null)"
+  printf '%s\n' "$all" | awk -v p="worktree $1" '
+    $0 == p { f = 1; next } /^worktree / { f = 0 } f && /^locked/ && !done { print; done = 1 }'
+}
+
 rows=()
 removable=()
 removable_detail=()
+wt_stalelock=()
 kept=0
 outside=0
 
@@ -207,9 +231,18 @@ for ((n = 1; n <= i; n++)); do
     reasons+=("which of its commits are pushed could not be read")
   fi
 
-  # UNLOCKED.
+  # UNLOCKED, or locked by a Claude agent that is gone.
+  wt_stalelock[n]=""
   if [ "${wt_locked[n]}" = 1 ]; then
-    reasons+=("locked${wt_lockreason[n]:+: ${wt_lockreason[n]}}")
+    IFS=$'\t' read -r lv ldetail <<< "$(agent_lock_verdict "${wt_lockreason[n]}")"
+    case "$lv" in
+      dead|preboot) wt_stalelock[n]="$ldetail" ;;
+      live) reasons+=("a Claude agent that is still running holds its lock ($ldetail)") ;;
+      reused) reasons+=("its lock names a pid now held by another process, which cannot prove its agent gone ($ldetail)") ;;
+      nostart) reasons+=("its lock names $ldetail (locked: ${wt_lockreason[n]})") ;;
+      unreadable) reasons+=("it is locked by a Claude agent, and whether that agent is still running could not be read ($ldetail; locked: ${wt_lockreason[n]})") ;;
+      *) reasons+=("locked${wt_lockreason[n]:+: ${wt_lockreason[n]}}") ;;
+    esac
   fi
 
   # UNOCCUPIED.
@@ -222,6 +255,7 @@ for ((n = 1; n <= i; n++)); do
 
   if [ "${#reasons[@]}" -eq 0 ]; then
     detail="$branch: pull request $merged_numbers merged, clean, nothing unpushed"
+    [ -z "${wt_stalelock[n]}" ] || detail="$detail; its lock was left by a Claude agent that is gone (${wt_stalelock[n]})"
     rows+=("$(printf '  %-9s  %-46s %s' REMOVABLE "$rel" "$detail")")
     removable+=("$n")
     removable_detail+=("$detail")
@@ -264,8 +298,36 @@ else
     if [ "$d" != 0 ]; then
       printf '  %-9s  %-46s %s: it changed after it was judged (%s files)\n' KEPT "$rel" "$branch" "$d"; continue
     fi
+    # A lock its agent left behind is lifted only now, and only if it is still that lock: an agent
+    # that has taken the worktree since holds a lock of its own, and that one is left alone.
+    stale="${wt_stalelock[n]}"
+    if [ -n "$stale" ]; then
+      if [ "$(lock_now "${wt_path[n]}")" != "locked ${wt_lockreason[n]}" ]; then
+        printf '  %-9s  %-46s %s: its lock changed after it was judged\n' KEPT "$rel" "$branch"; continue
+      fi
+      if ! err="$(git -C "$primary" worktree unlock "${wt_path[n]}" 2>&1)"; then
+        printf '  %-9s  %-46s %s: git would not lift the lock its agent left: %s\n' KEPT "$rel" "$branch" "$err"; continue
+      fi
+    fi
     if ! err="$(git -C "$primary" worktree remove "$real" 2>&1)"; then
       printf '  %-9s  %-46s %s: git refused: %s\n' "NOT DONE" "$rel" "$branch" "$err"
+      # Put a lifted lock back on a worktree git left whole, so a removal that did not happen leaves
+      # it as it was found. One git left part deleted (still listed, files gone) stays unlocked, the
+      # same rule as check-stale-worktrees.sh: finishing it takes one --force, which git refuses on
+      # a locked worktree, and the agent the lock names is gone.
+      if [ -n "$stale" ] && [ -d "$real" ]; then
+        still="$(git -C "$primary" worktree list --porcelain 2>/dev/null)"
+        case $'\n'"$still"$'\n' in
+          *$'\n'"worktree ${wt_path[n]}"$'\n'*)
+            gone_files="$(git -C "$real" status --porcelain 2>/dev/null | grep -c '^ D ' || true)"
+            if [ "${gone_files:-0}" -gt 0 ]; then
+              printf '             its lock, left by a Claude agent that is gone, is not put back, so it can be finished with: git -C %s worktree remove --force %s\n' "$primary" "$real"
+            else
+              git -C "$primary" worktree lock --reason "${wt_lockreason[n]}" "${wt_path[n]}" >/dev/null 2>&1 \
+                || printf '             and its lock, lifted for the removal, could not be put back\n'
+            fi ;;
+        esac
+      fi
       failed=$((failed + 1)); continue
     fi
     if err="$(git -C "$primary" branch -D "$branch" 2>&1)"; then

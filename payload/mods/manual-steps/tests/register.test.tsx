@@ -67,6 +67,7 @@ const modKit: { name: string; register: Register } = {
         repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
         gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
         mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
+        goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
         ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
         branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
@@ -1295,6 +1296,28 @@ test('a pin whose every step is already done notifies nothing (#1245)', { plugin
   await start($)
   expect(await hand($, [step({ checked: 'already-done' })])).toMatch(/already done, so nothing was pinned/)
   expect(notified(w.toasts)).toEqual([])
+})
+
+// #1281: a scope modes loaded in this session whose copy lacks hold (a mod reloaded before the one it
+// depends on keeps the older copy, measured on 2.1.302) holds nothing, so the card is shown as at
+// home, and Dan is told once, by the one sentence naming the skew and its remedy.
+const olderScopeModes: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, scopeModes: { isAway: async () => false } }
+    })
+  },
+}
+test('a scope modes whose loaded copy lacks hold shows the card, and Dan is told the skew once (#1281)', { plugins: [modKit, olderScopeModes] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  expect(await hand($, [step()])).not.toMatch(/Dan is away/)
+  await hand($, [step()])
+  expect(w.toasts.filter(t => t.includes('out of step'))).toEqual([
+    'manual-steps and scope-modes are out of step in this session: the scope-modes loaded here has no hold, which manual-steps needs, so a mod was updated after this session loaded it. A new session loads them together.',
+  ])
 })
 
 test('steps held while Dan is away notify nothing on the Mac (#1245, #621)', { plugins: [modKit, scopeModes, goalTracker] }, async ($, on) => {

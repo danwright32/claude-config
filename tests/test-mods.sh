@@ -1105,6 +1105,21 @@ for m in helper-regex helper-unescaped helper-ends helper-equal; do
     || check "and names $m, pointing it at modkit.mergeHelper" "$out"
 done
 case "$out" in *clean-asks-helper*) check "a mod asking the kit, or naming the helper in what it says, passes" "$out" ;; *) check "a mod asking the kit, or naming the helper in what it says, passes" ok ;; esac
+# #1252: reading a transcript's goal_status records by hand, as scope-modes' bedtime.ts did before
+# the reader moved into mod-kit. Each shape fails the run, pointed at $.modkit.goal; a mod asking
+# the kit, or naming the record only in what it says, passes.
+M9G2="$TMPROOT/m9-goal-reader"
+mkmodsrc "$M9G2" clean-asks-goal "const g = await \$.modkit.goal({ transcript }); log('no goal_status record was found')"
+mkmodsrc "$M9G2" goal-type-check "if (!a || a.type !== 'goal_status') continue"
+mkmodsrc "$M9G2" goal-mark "export const GOAL_MARK = '\"type\":\"goal_status\"'"
+mkmodsrc "$M9G2" goal-template 'const hits = lines.filter(l => l.includes(`goal_status`))'
+out="$(bash "$SHARED" "$M9G2" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "a mod reading a transcript's /goal records itself fails the run" ok || check "a mod reading a transcript's /goal records itself fails the run" "exit=$code out=$out"
+for m in goal-type-check goal-mark goal-template; do
+  printf '%s\n' "$out" | grep "$m keeps its own goal-reader" | grep -q 'modkit.goal(' && check "and names $m, pointing it at modkit.goal" ok \
+    || check "and names $m, pointing it at modkit.goal" "$out"
+done
+case "$out" in *clean-asks-goal*) check "a mod asking the kit for a /goal, or naming the record in what it says, passes" "$out" ;; *) check "a mod asking the kit for a /goal, or naming the record in what it says, passes" ok ;; esac
 # #1135: whether a prompt is Dan's words, read by hand from its origin, as five mods did two ways
 # (two of them also counting a handoff's opening prompt). Each shape fails the run, pointed at
 # $.modkit.isDans; a mod asking the kit passes, and so does one asking only whether a message came

@@ -7,6 +7,7 @@
 // Only the decisions live here; register.ts carries them out on the one session whose move of the
 // record succeeded, so the report opens once and the pickers are offered once.
 
+import { heldAtWake, type HeldDelivery } from './nightheld.ts'
 import { notesAreData, overnightData } from './overnightdata.ts'
 
 /** The BBEdit helper (bbedit is not on PATH); without --front-window it opens in the background. */
@@ -107,12 +108,15 @@ const PICKERS =
  * What the session that woke sleep is told to do, as one prompt: its own summary, then the morning
  * pickers. `unread` is why the proposals could not be read, when they could not.
  */
-export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; lessons: string[]; bad?: number; unread?: string }): string => {
+export const morningPrompt = (o: { worker: boolean; issues: ProposedIssue[]; lessons: string[]; bad?: number; unread?: string; held?: readonly HeldDelivery[] }): string => {
   const out: string[] = [
     o.worker
       ? `Dan is up: sleep mode is off. ${SUMMARISE} Every other session that worked overnight was asked for its own.`
       : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise. Every session that worked overnight was asked for its own.',
   ]
+  // What this session held instead of handing it to Dan while he slept (#1284), delivered now.
+  const held = heldAtWake(o.held ?? [])
+  if (held) out.push(held)
   // Proposals that could not be read are still offered, from the report, in the same two pickers.
   const fromReport = o.unread !== undefined
   if (fromReport) {

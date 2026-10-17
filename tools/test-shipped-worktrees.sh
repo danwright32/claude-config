@@ -291,6 +291,121 @@ if [ "$rc_flag" = 2 ]; then ok; else bad "an unknown flag should exit 2, got $rc
 out_in="$(cd "$WT/open" && bash "$TOOL" 2>&1)"
 says "run from a worktree it still finds the others" ".claude/worktrees/dirty" "$out_in"
 
+echo "shipped-worktrees: locks left by Claude agents (claude-config#1282)"
+
+# Claude Code locks a running agent's worktree with "claude agent <name> (pid <pid> start <time>)"
+# and lifts it when the agent finishes, so an agent that never finished (the Mac going down) left a
+# lock that kept a shipped worktree for ever. The lock is read by payload/hooks/lib/agent-lock.sh,
+# the same reading check-stale-worktrees.sh uses, so the two cleanups agree: a lock whose pid is
+# gone, or whose agent started before the last boot, keeps nothing; a live agent's, a reused pid's,
+# an unreadable one and any other lock still keep the worktree. A fake ps reading a table and an
+# injected boot time stand in for this machine's processes (L411).
+cat > "$WORK/bin/ps" <<'PS'
+#!/usr/bin/env bash
+pid=""; while [ $# -gt 0 ]; do [ "$1" = -p ] && { pid="$2"; shift; }; shift; done
+if [ -n "${PS_FAIL:-}" ]; then echo "ps: simulated failure" >&2; exit 2; fi
+line="$(awk -F'\t' -v p="$pid" '$1 == p { print $2; exit }' "$PS_TABLE")"
+[ -n "$line" ] || exit 1
+printf '%s\n' "$line"
+PS
+chmod +x "$WORK/bin/ps"
+export AGENT_LOCK_PS="$WORK/bin/ps" PS_TABLE="$WORK/ps-table.tsv"
+export AGENT_LOCK_BOOT_EPOCH=1791590400   # Sat Oct 10 00:00:00 2026 UTC
+printf '5002\tThu Oct 15 12:00:00 2026\n5003\tFri Oct 16 08:30:00 2026\n' > "$PS_TABLE"
+
+# A git that, when told to, refuses one removal (so a lifted lock has to go back), and has a new
+# agent take another worktree's lock part way through the run (so it must not be lifted).
+REAL_GIT="$(command -v git)"
+mkdir -p "$WORK/lshim"
+cat > "$WORK/lshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in
+  *" worktree remove "*lk-half*)
+    if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$WT/lk-half/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
+  *" worktree remove "*lk-refused*)
+    if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
+  *lk-race" status "*)
+    if [ -n "\${SHIM_RACE:-}" ]; then
+      "$REAL_GIT" -C "$R" worktree unlock "$WT/lk-race" 2>/dev/null
+      "$REAL_GIT" -C "$R" worktree lock --reason "claude agent lk-race (pid 5010 start Sat Oct 17 09:00:00 2026)" "$WT/lk-race" 2>/dev/null
+    fi ;;
+esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$WORK/lshim/git"
+
+lockof() {  # the lock git holds on a worktree now, or UNLOCKED
+  git -C "$R" worktree list --porcelain | awk -v p="worktree $WT/$1" '
+    $0 == p { f = 1; next } /^worktree / { f = 0 }
+    f && /^locked/ { sub(/^locked ?/, ""); print; found = 1 }
+    END { if (!found) print "UNLOCKED" }'
+}
+locked_agent() {  # locked_agent <name> <PR> <lock reason>: shipped, clean, and locked
+  tip="$(agent "$1" "fix/$1")"; merged_at "fix/$1" "$2" "$tip"
+  git_q "$R" worktree lock --reason "$3" "$WT/$1"
+}
+L_DEAD="claude agent lk-dead (pid 5001 start Thu Oct 15 12:00:00 2026)"
+L_LIVE="claude agent lk-live (pid 5002 start Thu Oct 15 12:00:00 2026)"
+L_REUSED="claude agent lk-reused (pid 5003 start Thu Oct 15 12:00:00 2026)"
+L_PREBOOT="claude agent lk-preboot (pid 5004 start Mon Oct  5 12:00:00 2026)"
+L_OTHER="kept on an external disk"
+L_REFUSED="claude agent lk-refused (pid 5005 start Thu Oct 15 12:00:00 2026)"
+L_RACE="claude agent lk-race (pid 5006 start Thu Oct 15 12:00:00 2026)"
+locked_agent lk-dead 31 "$L_DEAD"
+locked_agent lk-live 32 "$L_LIVE"
+locked_agent lk-reused 33 "$L_REUSED"
+locked_agent lk-preboot 34 "$L_PREBOOT"
+locked_agent lk-other 35 "$L_OTHER"
+locked_agent lk-refused 36 "$L_REFUSED"
+locked_agent lk-race 37 "$L_RACE"
+L_OLDDEAD="claude agent lk-olddead (pid 5008)"
+L_OLDLIVE="claude agent lk-oldlive (pid 5002)"
+locked_agent lk-olddead 38 "$L_OLDDEAD"
+locked_agent lk-oldlive 39 "$L_OLDLIVE"
+L_HALF="claude agent lk-half (pid 5007 start Thu Oct 15 12:00:00 2026)"
+locked_agent lk-half 40 "$L_HALF"
+
+out_l="$(bash "$TOOL" "$R" 2>&1)"
+says "a shipped worktree whose agent's pid is gone is removable" "#31" "$(row REMOVABLE lk-dead "$out_l")"
+says "and says its lock was left by an agent that is gone" "pid 5001 is no longer running" "$(row REMOVABLE lk-dead "$out_l")"
+says "one whose agent started before the last boot is removable" "before this machine last booted" "$(row REMOVABLE lk-preboot "$out_l")"
+says "a live agent's lock keeps its worktree" "a Claude agent that is still running holds its lock (pid 5002" "$(row KEEP lk-live "$out_l")"
+says "a reused pid's lock keeps its worktree, since a start time that does not match cannot prove the agent gone" "pid 5003" "$(row KEEP lk-reused "$out_l")"
+says "any other lock keeps its worktree and is quoted" "locked: kept on an external disk" "$(row KEEP lk-other "$out_l")"
+if [ "$(lockof lk-dead)" = "$L_DEAD" ]; then ok; else bad "the report lifted a lock (lk-dead is now: $(lockof lk-dead))"; fi
+says "an older lock with no start time whose pid nothing has is removable" "#38" "$(row REMOVABLE lk-olddead "$out_l")"
+says "an older lock whose pid is running keeps its worktree, since a reuse cannot be ruled out" "pid 5002, which is running, and records no start time" "$(row KEEP lk-oldlive "$out_l")"
+
+out_u="$(PS_FAIL=1 bash "$TOOL" "$R" 2>&1)"
+says "with ps unreadable, a lock since the boot keeps its worktree, saying why" "could not be read" "$(row KEEP lk-dead "$out_u")"
+says "while one from before the boot needs no ps and is still removable" "#34" "$(row REMOVABLE lk-preboot "$out_u")"
+
+out_r="$(PATH="$WORK/lshim:$PATH" SHIM_REFUSE=1 SHIM_RACE=1 SHIM_HALF=1 bash "$TOOL" --remove "$R" 2>&1)"
+says "--remove removes the worktree whose agent's pid is gone" "#31" "$(row REMOVED lk-dead "$out_r")"
+if exists "$WT/lk-dead"; then bad "lk-dead is still there after --remove"; else ok; fi
+says "and the one whose agent started before the boot" "#34" "$(row REMOVED lk-preboot "$out_r")"
+if exists "$WT/lk-preboot"; then bad "lk-preboot is still there after --remove"; else ok; fi
+for n in lk-live lk-reused lk-other; do
+  if exists "$WT/$n"; then ok; else bad "--remove removed $n, whose lock should have kept it"; fi
+done
+if [ "$(lockof lk-live)" = "$L_LIVE" ]; then ok; else bad "a live agent's lock was changed (now: $(lockof lk-live))"; fi
+if [ "$(lockof lk-reused)" = "$L_REUSED" ]; then ok; else bad "a reused pid's lock was changed (now: $(lockof lk-reused))"; fi
+if [ "$(lockof lk-other)" = "$L_OTHER" ]; then ok; else bad "a lock that is not an agent's was changed (now: $(lockof lk-other))"; fi
+says "--remove removes the worktree whose older lock names a pid nothing has" "#38" "$(row REMOVED lk-olddead "$out_r")"
+if exists "$WT/lk-oldlive"; then ok; else bad "--remove removed lk-oldlive, whose running pid should have kept it"; fi
+if [ "$(lockof lk-oldlive)" = "$L_OLDLIVE" ]; then ok; else bad "an older lock with a running pid was changed (now: $(lockof lk-oldlive))"; fi
+says "a removal git refuses after the lock is lifted is said" "simulated refusal" "$(row "NOT DONE" lk-refused "$out_r")"
+if [ "$(lockof lk-refused)" = "$L_REFUSED" ]; then ok; else bad "the refused worktree's lock was not put back (now: $(lockof lk-refused))"; fi
+# Git stopping part way leaves the worktree listed and part deleted. Its dead agent's lock is not put
+# back, the same rule as check-stale-worktrees.sh: a person finishing it by hand with one --force
+# would otherwise be refused by a lock nobody holds.
+says "a removal git stops part way is said" "simulated stop part way" "$(row "NOT DONE" lk-half "$out_r")"
+if [ "$(lockof lk-half)" = UNLOCKED ]; then ok; else bad "a part deleted worktree had its dead agent's lock put back (now: $(lockof lk-half))"; fi
+says "and says the lock is left off" "is not put back" "$out_r"
+says "a lock that changed hands during the run is not lifted" "its lock changed after it was judged" "$(row KEPT lk-race "$out_r")"
+if [ "$(lockof lk-race)" = "claude agent lk-race (pid 5010 start Sat Oct 17 09:00:00 2026)" ]; then ok
+else bad "the new holder's lock on lk-race was not left in place (now: $(lockof lk-race))"; fi
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

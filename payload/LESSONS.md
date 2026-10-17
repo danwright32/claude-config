@@ -8026,6 +8026,13 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Codebase hygiene
 
+- **L780. When a settled design becomes build work, map EVERY decision in its record to a
+  numbered requirement and an issue before the first phase starts, and refuse the plan while any
+  decision is unmapped: a decision with no owner ships as whatever the screen already was, and a
+  milestone whose issues all close then reads as the design shipped.**
+  (bidspoke#2317, 2026-10-17)
+  SHORT: Map every decision in a settled design to a numbered requirement and issue before building; an unmapped one ships as the old screen.
+
 - **L217. A guard whose forbidden or expected values are DERIVED from a shipped dataset covers
   only what that dataset happens to contain, so a real value that never enters it is permanently
   exempt from the very check written to catch it.** Being generated rather than typed reads as

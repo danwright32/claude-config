@@ -1361,6 +1361,37 @@ test('a sleep check that fails inside scope modes with a TypeError is still said
   expect(w.debug.some(d => /could not tell whether the Mac is asleep \(undefined is not an object/.test(d))).toBe(true)
 })
 
+// #1281: a scope modes loaded in this session whose copy lacks isAsleep (a mod reloaded before the
+// one it depends on keeps the older copy, measured on 2.1.302) counts as awake, so the notification
+// goes, and Dan is told once by the one sentence naming the skew and its remedy.
+const olderSleeper: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, scopeModes: {} }
+    })
+  },
+}
+test('a scope modes whose loaded copy lacks isAsleep is awake, and Dan is told the skew once (#1281)', { plugins: [deps, olderSleeper] }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const toasts: string[] = []
+  on('ui.toast', ($e, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  const w = world($, on)
+  await start($)
+  await idle($)
+  await settled()
+  await idle($)
+  await settled()
+  expect(w.notified.length).toBeGreaterThan(0)
+  expect(toasts.filter(t => t.includes('out of step'))).toEqual([
+    'goal-tracker and scope-modes are out of step in this session: the scope-modes loaded here has no isAsleep, which goal-tracker needs, so a mod was updated after this session loaded it. A new session loads them together.',
+  ])
+})
+
 // Scope modes not loaded: $.scopeModes is undefined in this mod's own code, a TypeError naming it,
 // never rewrapped by a noun, so nothing is said and the notification goes (#841).
 test('without scope modes loaded the notification is sent and no failed sleep check is said (#841)', unseated, async ($, on) => {

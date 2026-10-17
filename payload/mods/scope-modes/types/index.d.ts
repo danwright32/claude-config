@@ -50,9 +50,11 @@ export type ScopeModes = {
    * whether it was held: false at home, where nothing is held and the caller goes ahead as usual.
    * Held, it also gives the refusal worded as this mod's own held calls are, for a guard holding a
    * tool call (the keystroke guard, #707): `card` to draw with `$.modkit.blocked` under the call's
-   * id, and `deny` for Claude to read.
+   * id, and `deny` for Claude to read. A guard acting on the Mac names its `action` (#1269): one that
+   * runs while away or asleep (bringing an app forward, typing or clicking into a test build) is not
+   * held, and the answer says `isAway: true` so the guard asks nobody.
    */
-  hold: (input: { label: string; prompt: string }) => Promise<ScopeModesHold>
+  hold: (input: { label: string; prompt: string; action?: { kind: 'input' | 'focus'; target?: string } }) => Promise<ScopeModesHold>
   /**
    * Whether the Mac is asleep (sleep mode, #840), read from the sleep record now through the one
    * predicate, readSleep. A record that cannot be read, or past its end, is awake. For a mod that
@@ -67,8 +69,11 @@ export type ScopeModes = {
   sleepNote: (note: { kind: string } & Record<string, unknown>) => Promise<{ isNoted: boolean }>
 }
 
-/** What `hold` answers: not held (at home), or held with the refusal a held tool call is answered with. */
-export type ScopeModesHold = { isHeld: false } | { isHeld: true; card: { guard: string; reason: string; safeWay: string }; deny: string }
+/**
+ * What `hold` answers: not held (at home, or away with an action that runs there, `isAway: true`), or
+ * held with the refusal a held tool call is answered with.
+ */
+export type ScopeModesHold = { isHeld: false; isAway?: true } | { isHeld: true; card: { guard: string; reason: string; safeWay: string }; deny: string }
 
 declare module 'claude-code' {
   interface EngineInterface {
@@ -108,6 +113,11 @@ declare module 'claude-code' {
       written: string[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
+      /**
+       * What this session would have handed Dan while asleep (#1284): each call held, delivered when
+       * sleep mode ends, its row and the call as made. Cleared once the session is asked to deliver them.
+       */
+      wakeHeld: { label: string; call: string }[]
     }
   }
 }

@@ -81,20 +81,32 @@ const headsUp = async ($: EngineInterface, app: string, typing: boolean, named: 
 
 /** The scope modes mod's noun (#621) as its contract has it; it may not be loaded at all. */
 type ScopeModes = {
-  hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean; card?: { guard: string; reason: string; safeWay: string }; deny?: string }>
+  hold: (input: {
+    label: string
+    prompt: string
+    action?: { kind: 'input' | 'focus'; target?: string }
+  }) => Promise<{ isHeld: boolean; isAway?: boolean; card?: { guard: string; reason: string; safeWay: string }; deny?: string }>
 }
 type Held = { card?: { guard: string; reason: string; safeWay: string }; deny?: string }
 
-// While Dan is away (#621) the action is held for the held card he sees on coming home, rather than
-// asked about in the band, which his phone cannot show, so the turn would wait on nobody. The
-// engine needs the noun called in place, so the scope modes mod not being loaded (which is home)
-// arrives as a TypeError naming the noun, read by the one reader (#1281). A scope modes whose loaded
-// copy lacks hold cannot hold anything either, so it is home too, told to Dan once. Any other
+// While Dan is away (#621) an action scope modes holds waits in the held card he sees on coming
+// home, rather than being asked about in the band, which his phone cannot show, so the turn would
+// wait on nobody. Since #1269 scope modes decides, from the action named here, what is held: an app
+// brought forward is not, nor is typing into a test build, and it answers 'away' so nobody is asked.
+// The engine needs the noun called in place, so the scope modes mod not being loaded (which is
+// home) arrives as a TypeError naming the noun, read by the one reader (#1281). A scope modes whose
+// loaded copy lacks hold cannot hold anything either, so it is home too, told to Dan once. Any other
 // failure is a refusal: whether a question can be answered at all is unknown (L42).
-const holdWhileAway = async ($: EngineInterface, label: string, prompt: string): Promise<{ held: Held } | 'home' | { failed: string }> => {
+const holdWhileAway = async (
+  $: EngineInterface,
+  label: string,
+  prompt: string,
+  action: { kind: 'input' | 'focus'; target?: string },
+): Promise<{ held: Held } | 'home' | 'away' | { failed: string }> => {
   try {
-    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt })
-    return r?.isHeld === true ? { held: { card: r.card, deny: r.deny } } : 'home'
+    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({ label, prompt, action })
+    if (r?.isHeld === true) return { held: { card: r.card, deny: r.deny } }
+    return r?.isAway === true ? 'away' : 'home'
   } catch (err) {
     if (missingOf(err)?.noun === 'scopeModes') {
       const news = skewNews(err, 'keystroke-guard')
@@ -138,8 +150,13 @@ export const register: Register = on => {
     }
 
     // Held as scope modes words its own held actions, so the two read the same (L605).
-    const away = await holdWhileAway($, typing ? `Type into ${app}` : `Bring ${app} to the front`, `Do it now. What was held: ${command}`)
-    if (away !== 'home') {
+    const away = await holdWhileAway(
+      $,
+      typing ? `Type into ${app}` : `Bring ${app} to the front`,
+      `Do it now. What was held: ${command}`,
+      typing ? { kind: 'input', ...(c.target ? { target: c.target } : {}) } : { kind: 'focus' },
+    )
+    if (away !== 'home' && away !== 'away') {
       if ('failed' in away) {
         const reason = `Couldn't tell whether you are away (${away.failed}), so this was stopped.`
         return refuse({ reason, safeWay: 'Try again in a moment.' }, `Couldn't tell whether you are away, so ${action} was stopped.`)
@@ -148,6 +165,7 @@ export const register: Register = on => {
       return { decision: 'deny' as const, reason: away.held.deny ?? 'Held: Dan is away from the Mac, so this waits for him to come back.' }
     }
 
+    // The frontmost proof, at home and away alike: away only skips the question below (#1269).
     if (typing) {
       const verdict = c.target
         ? judge({ target: c.target, ...(await facts($, c.target)) })
@@ -155,6 +173,8 @@ export const register: Register = on => {
       if (verdict) return refuse(verdict)
     }
 
+    // Away, nobody is there to answer the Taking over question, and Dan said he does not mind.
+    if (away === 'away') return decided
     const declined = await headsUp($, app, typing, c.app !== undefined)
     if (declined) return refuse(declined)
     return decided
