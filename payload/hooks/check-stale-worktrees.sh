@@ -24,9 +24,11 @@
 #      when the agent finishes, so an agent that never finished (the Mac going down) left a lock
 #      git refuses to remove past, and five landed worktrees were kept for ever on 2026-10-17. A
 #      lock naming a pid that is gone, a pid now held by a process started at another time, or a
-#      start before the last boot is lifted just before the removal, and put back if git then
-#      refuses. A live agent's lock, one whose agent cannot be read, and any lock that is not a
-#      Claude agent's are left exactly as they are.
+#      start before the last boot is lifted just before the removal. If git then refuses and
+#      leaves the worktree whole, the lock is put back; if git stops part way and leaves it part
+#      deleted, the lock stays off, so the next run can finish the removal. A live agent's lock,
+#      one whose agent cannot be read, and any lock that is not a Claude agent's are left exactly
+#      as they are.
 # Its BRANCH is never deleted, so every commit can be had back with `git worktree add`. What goes
 # with the folder is only what git ignores (installed packages, a local settings file).
 #

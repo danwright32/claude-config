@@ -1636,10 +1636,12 @@ worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lift
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
 lock behind. The check lifts that lock just before the removal when the pid is gone, when the pid
 now belongs to a process that started at another time, or when the agent started before the Mac
-last booted. If git then refuses the removal, the lock is put back. A live agent's lock, a lock
-whose agent cannot be checked because ps could not be read, and any lock that is not a Claude
-agent's are left alone, and each of those is named with the reason it was kept. Without
-`--remove` the check reports and changes nothing, locks included.
+last booted. If git then refuses the removal and leaves the worktree whole, the lock is put back.
+If git stops part way and leaves the worktree part deleted, the lock stays off so the next run
+can finish the removal. A live agent's lock, a lock whose agent cannot be checked because ps could
+not be read, and any lock that is not a Claude agent's are left alone, and each of those is named
+with the reason it was kept. Without `--remove` the check reports and changes nothing, locks
+included.
 
 ## Mods
 
