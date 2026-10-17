@@ -47,6 +47,7 @@ const modKit: { name: string; register: Register } = {
         git: async (input: { words: string[] }) => ask('git', input),
         gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
         mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
+        goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
         ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
         linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
         bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },

@@ -137,6 +137,7 @@ const modKit: { name: string; register: Register } = {
         git: never('git'),
         gh: never('gh'),
         mergeHelper: never('mergeHelper'),
+        goal: never('goal'),
         pipeline: never('pipeline'),
         workingTree: never('workingTree'),
         repo: never('repo'),

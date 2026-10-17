@@ -18,6 +18,23 @@ describe('a session in the goals pane', () => {
     expect(withRequest?.goal).toBe('fix the tests')
   })
 
+  // #1252: a /goal ends in the transcript, by /goal clear or by being met with none (33 of 45 ended
+  // goals measured on 2026-10-16), and the transcript's reading, by mod-kit's one reader, decides.
+  test('the goal its transcript says is set now decides: one met without /goal clear is gone, leaving the request', () => {
+    const recorded = [rec('met', '/r/A', at({ goal: 'all tests pass', request: 'fix the tests' })), rec('changed', '/r/B', at({ goal: 'old goal', request: 'fix the parser' }))]
+    const rows = rowsOf(recorded, 0, { met: { state: 'none' }, changed: { state: 'set', condition: 'close #12 and #14' } })
+    expect(rows.map(r => [r.sessionId, r.goal])).toEqual([
+      ['met', 'fix the tests'],
+      ['changed', 'close #12 and #14'],
+    ])
+    // A goal set in the transcript is shown even when the tracker never saw the /goal command.
+    expect(rowsOf([rec('quiet', '/r/C', at({}))], 0, { quiet: { state: 'set', condition: 'ship the CSV export' } })[0]?.goal).toBe('ship the CSV export')
+  })
+  test('a transcript that could not be read, or no reading at all, leaves the goal the tracker recorded', () => {
+    const recorded = [rec('a', '/r/A', at({ goal: 'all tests pass', request: 'fix the tests' })), rec('b', '/r/B', at({ goal: 'close #9' }))]
+    expect(rowsOf(recorded, 0, { a: { state: 'unreadable', why: 'grep exited 2' } }).map(r => r.goal)).toEqual(['all tests pass', 'close #9'])
+  })
+
   test('the five states are ordered waiting, failed, stalled, working, done', () => {
     const now = 30 * MIN
     const rows = rowsOf(
