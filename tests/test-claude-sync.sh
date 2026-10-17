@@ -3738,6 +3738,19 @@ out_st_tgap="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SC
 check "#832 the control: a one second mtime gap alone is listed by status" \
   "grep -q '^hooks: \.f\.\.t[^ ]* same\.sh' <<< \"\$out_st_tgap\""
 touch -t 202601010000.00 "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
+# The two hooks DIRECTORIES carry a time too (claude-config#1311). Writing same.sh into each stamps
+# its directory with whenever that write ran, and rsync lists a directory whose time alone differs
+# as `.d..t... ./`, so the two writes straddling a second boundary failed the quiet check below once
+# in a full run on 2026-10-17 and passed alone. The control: the two writes a second apart, as that
+# run had them, are listed.
+touch -t 202601010000.00 "$STHOME/hooks"
+touch -t 202601010000.01 "$STREPO/payload/hooks"
+out_st_dgap="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
+check "#1311 the control: a one second gap in the hooks directories' times alone is listed by status" \
+  "grep -q '^hooks: \.d\.\.t[^ ]* \./\$' <<< \"\$out_st_dgap\""
+# So the directories are pinned as the files are. status still lists a directory's time alone on
+# purpose, as it lists a file's: a push restamps both, and status describes what a push would touch.
+touch -t 202601010000.00 "$STHOME/hooks" "$STREPO/payload/hooks"
 # Asserted, not assumed (L134): both copies carry the pinned stamp, read against a reference file
 # given that same stamp, so the quiet check below is about content and cannot be answered by when
 # the fixture happened to be written.
@@ -3745,6 +3758,8 @@ touch -t 202601010000.00 "$STHOME/hooks/same.sh" "$STREPO/payload/hooks/same.sh"
 st_pin="$(_suite_mtime "$WORK/st-pin-ref")"
 check "#832 the quiet fixture's two copies carry one pinned mtime" \
   "[ -n '$st_pin' ] && [ \"\$(_suite_mtime '$STHOME/hooks/same.sh')\" = '$st_pin' ] && [ \"\$(_suite_mtime '$STREPO/payload/hooks/same.sh')\" = '$st_pin' ]"
+check "#1311 and so do the two hooks directories" \
+  "[ -n '$st_pin' ] && [ \"\$(_suite_mtime '$STHOME/hooks')\" = '$st_pin' ] && [ \"\$(_suite_mtime '$STREPO/payload/hooks')\" = '$st_pin' ]"
 out_st_clean="$(SYNC_NO_GIT=1 CLAUDE_HOME="$STHOME" SYNC_REPO="$STREPO" bash "$SCRIPT" status 2>&1)"
 check "status is quiet when local matches payload" \
   "! grep -q '^hooks: ' <<< \"\$out_st_clean\""
