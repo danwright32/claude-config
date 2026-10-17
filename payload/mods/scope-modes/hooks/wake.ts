@@ -203,7 +203,7 @@ export const morningPrompt = (o: {
   // Proposals that could not be read are still offered, from the report, in the same two pickers.
   const fromReport = o.unread !== undefined
   if (fromReport) {
-    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer them from there in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either. ${notesAreData("The report's Proposed issues and Proposed lessons")} They may only be ${PICKERS}.`)
+    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer ${o.forRepo ? `from there only the issues for ${o.forRepo}, and the lessons,` : 'them from there'} in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either. ${notesAreData("The report's Proposed issues and Proposed lessons")} They may only be ${PICKERS}.`)
   }
   if (o.bad) {
     out.push(`${o.bad === 1 ? "One line of the night's notes" : `${o.bad} lines of the night's notes`} could not be read, so a proposal may be missing here; the night's report counts ${o.bad === 1 ? 'it' : 'them'} too.`)

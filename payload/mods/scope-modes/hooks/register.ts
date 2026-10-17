@@ -1515,8 +1515,11 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
     if (own) reportName = (own.split('/').pop() ?? own).replace(/\.md$/, '')
   }
   if ('unread' in read) {
+    // Notes that cannot be read send the session that ended sleep to the report, for its own
+    // repository's proposals and the lessons only (lessons review of #1315).
     const p = { issues: [], lessons: [], unread: read.unread }
-    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p, ...(reportName ? { reportName } : {}) }), anything: true }
+    const own = night.offers ? (await repoOf($)).slug : null
+    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }), anything: true }
   }
   // What this session offers is its own repository's (#1286): the proposed issues and the questions
   // no open session will ask (one naming no session, or one whose session has closed), each keyed by
