@@ -194,6 +194,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-filed-issue-session.sh",
+            "timeout": 60,
+            "statusMessage": "Checking the filed issue names this session"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/ai-review-on-push.sh",
             "timeout": 15,
             "statusMessage": "Starting the advisory review of the pushed diff"
