@@ -64,3 +64,8 @@ calling session's records; other sessions' findings are marked seen and stay pen
 ## Folding in the reflection
 When both Stop hooks fire on one turn, two banners and two pickers crowded each other, so the
 reflection's points go into this review's second pass and one picker.
+
+## The Open questions section
+Every issue body ends with a "## Open questions" section (claude-config#1279, Dan 2026-10-17): one "- [ ]"
+line for each decision only Dan can make, or None, so /sleep asks each before the night begins. The
+filing gate refuses a create without it, and its refusal says what to write; NAMING.md has the rule.
