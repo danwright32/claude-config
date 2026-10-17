@@ -333,10 +333,15 @@ for i in "${!paths[@]}"; do
     still="$(git -C "$top" worktree list --porcelain 2>/dev/null)"
     case $'\n'"$still"$'\n' in
       *$'\n'"worktree $p"$'\n'*)
+        # A lifted lock goes back only on a worktree left whole. One left part deleted keeps its
+        # marker for the finisher above, whose single --force git refuses on a locked worktree, so
+        # putting a dead agent's lock back there would keep it part deleted for ever.
         if [ -d "$p" ] && [ -z "$(git -C "$p" status --porcelain 2>/dev/null | grep '^ D ')" ]; then
           rm -f "$MARKS/$name"
-        fi
-        [ -d "$p" ] && relock ;;
+          relock
+        elif [ -n "$stale_lock" ]; then
+          echo "    its lock, left by a Claude agent that is gone, is not put back, so the next run can finish the removal"
+        fi ;;
     esac
   fi
 done

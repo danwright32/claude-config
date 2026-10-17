@@ -342,6 +342,8 @@ mkdir -p "$TMP/lshim"
 cat >"$TMP/lshim/git" <<STUB
 #!/usr/bin/env bash
 case " \$* " in
+  *" worktree remove "*agent-lhalf*)
+    if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$LWT/agent-lhalf/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*agent-lrefused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
   *agent-lrace" status --porcelain"*)
@@ -371,6 +373,8 @@ ladd agent-lpreboot fix/604-preboot 604 "$R_PREBOOT"
 ladd agent-lother fix/605-other 605 "$R_OTHER"
 ladd agent-lrefused fix/606-refused 606 "$R_REFUSED"
 ladd agent-lrace fix/607-race 607 "$R_RACE"
+R_HALF="claude agent agent-lhalf (pid 4007 start Thu Oct 15 12:00:00 2026)"
+ladd agent-lhalf fix/610-half 610 "$R_HALF"
 
 # REPORT: a stale agent lock is no reason to keep a landed worktree, so it is called stale with the
 # unlock in its commands; a live agent's lock keeps its worktree; and nothing is unlocked, since a
@@ -409,7 +413,7 @@ check_eq "ps was never asked about the agent the boot already settled" 0 "$(grep
 check "while one started since the boot is kept, ps being unreadable" "keeping agent-ldead [fix/601-dead]: it is locked by a Claude agent" "$OUT"
 
 # REMOVE, everything readable.
-SHIM_REFUSE=1 SHIM_RACE=1 lrun --remove
+SHIM_REFUSE=1 SHIM_RACE=1 SHIM_HALF=1 lrun --remove
 check "a landed worktree whose agent's pid is no longer running is removed" "removed agent-ldead [fix/601-dead]" "$OUT"
 check_eq "its folder is gone" yes "$(gone agent-ldead)"
 check "one whose pid now belongs to a process started at another time is removed" "removed agent-lreused [fix/603-reused]" "$OUT"
@@ -425,7 +429,17 @@ LMARKS="$(cd "$LREPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claud
 check_eq "and a refusal, nothing having been deleted, leaves no marker" no "$([ -e "$LMARKS/agent-lrefused" ] && echo yes || echo no)"
 check "a lock that changed hands while the run was looking is not lifted" "keeping agent-lrace [fix/607-race]: its lock changed while this run was looking at it" "$OUT"
 check_eq "and the new holder's lock is left in place" "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$(lockof agent-lrace)"
-check "the summary counts the removals" "removed 2 of 6 agent worktree(s)" "$OUT"
+check "the summary counts the removals" "removed 2 of 7 agent worktree(s)" "$OUT"
+# A removal that stops part way with the worktree still listed leaves it part deleted. Its marker
+# stays for the next run to finish, and that finish (one --force) is refused on a locked worktree,
+# so the dead agent's lock must NOT be put back there.
+check "a removal stopped part way after the lock was lifted is said" "keeping agent-lhalf [fix/610-half]: git would not remove it" "$OUT"
+check "and says the lock is not put back, so the next run can finish it" "is not put back, so the next run can finish the removal" "$OUT"
+check_eq "the part deleted worktree is left unlocked" UNLOCKED "$(lockof agent-lhalf)"
+check_eq "with its marker kept" yes "$([ -e "$LMARKS/agent-lhalf" ] && echo yes || echo no)"
+lrun --remove
+check "and the next run finishes that removal" "finished removing agent-lhalf [fix/610-half]" "$OUT"
+check_eq "its folder is gone" yes "$(gone agent-lhalf)"
 
 # The REAL ps, and the real boot time, on a process this suite started: its lock, written the way
 # Claude Code writes one (its start time as ps gives it under UTC), keeps its worktree, and the same
