@@ -24,8 +24,8 @@ names is named by no issue in the plan, as `Requirement <number>` in the issue's
 
 Exit codes, each distinct so no caller can read one as another (L11):
   0  every decision is owned (and, with a plan, every requirement has an issue)
-  1  refused: the lines starting UNMAPPED, AMBIGUOUS, DUPLICATE, UNSTATED or NO-ISSUE say what is
-     missing
+  1  refused: the lines starting UNMAPPED, AMBIGUOUS, DUPLICATE, UNSTATED, MISTYPED or NO-ISSUE
+     say what is missing
   2  unreadable: no file, no map, more than one map, a map or plan that is not JSON or not the
      shape above, or a map with no decisions, which is never read as a pass (L98)
 """
@@ -116,6 +116,14 @@ def main(argv):
         if did in seen:
             problems.append("DUPLICATE %s: two decisions share this id" % did)
         seen.add(did)
+        # An owner or reason given as something other than text (a requirement written as the number
+        # 6.4) is named as mistyped, never reported as missing (lessons review of #1290, L11).
+        mistyped = [(k, d[k]) for k in ("requirement", "noCode") if k in d and d[k] is not None and not isinstance(d[k], str)]
+        if mistyped:
+            for k, v in mistyped:
+                problems.append("MISTYPED %s: %s (its %s is %s, a %s; write it as text, \"%s\")"
+                                % (did, what, k, json.dumps(v), "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "list" if isinstance(v, list) else "object", v))
+            continue
         req = text(d.get("requirement"))
         reason = text(d.get("noCode"))
         if req and reason:

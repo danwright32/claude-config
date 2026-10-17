@@ -67,6 +67,13 @@ design "$T/unstated.html" '{"decisions": [{"id": "D1", "decision": " ", "require
 run "$T/unstated.html"
 [ "$rc" -eq 1 ] && said '^UNSTATED D1' && check "a decision with no text is refused" ok || check "a decision with no text is refused" "rc=$rc $out"
 
+# An owner given as a number is said to be mistyped, not reported as missing (lessons review).
+design "$T/numeric.html" '{"decisions": [{"id": "D1", "decision": "Dense rows", "requirement": 6.4}]}'
+run "$T/numeric.html"
+[ "$rc" -eq 1 ] && said '^MISTYPED D1: Dense rows (its requirement is 6.4, a number; write it as text, "6.4")$' \
+  && check "a requirement written as a number is named as mistyped" ok || check "a requirement written as a number is named as mistyped" "rc=$rc $out"
+said '^UNMAPPED' && check "and is not reported as unmapped" "$out" || check "and is not reported as unmapped" ok
+
 # 4. A map that cannot be read is exit 2, never a pass (L98, L11).
 printf '<html><body>no map here</body></html>\n' > "$T/nomap.html"
 run "$T/nomap.html"
