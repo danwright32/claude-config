@@ -645,6 +645,12 @@ out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-perissue.json")"; r
 check_eq "#1290 a plan with only per phase levels and labels still files" "0" "$rc"
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
 check "#1290 and the comparison takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
+# An empty plan level default is no default, as labels_for reads it, so the last phase's still apply.
+jq '.labels = [] | .priority = ""' "$TMP/plan-design-perissue.json" >"$TMP/plan-design-emptydefaults.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-emptydefaults.json")"; rc=$?
+check_eq "#1290 empty plan level defaults still file" "0" "$rc"
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 with the last phase's level and labels on the comparison" "--label priority-p3 --label ui-ux" "$last_create"
 
 # And the comparison is not counted as a phase: a design plan of ONE phase gets the same answer from
 # the milestone helper as the same plan without a design, never a milestone it would refuse.

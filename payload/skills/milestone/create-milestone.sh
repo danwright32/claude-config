@@ -120,8 +120,8 @@ if [[ -n "$design" ]]; then
     if ! jq --arg t "$compare_title" --arg b "$compare_body" '
         (.issues // []) as $is | ($is | last) as $l
         | .issues = $is + [{title: $t, body: $b}
-            + (if .priority then {} elif $l.priority then {priority: $l.priority} else {} end)
-            + (if .labels then {} elif $l.labels then {labels: $l.labels} else {} end)]' "$plan" >"$with_compare"; then
+            + (if (.priority // "") != "" then {} elif ($l.priority // "") != "" then {priority: $l.priority} else {} end)
+            + (if ((.labels // []) | length) > 0 then {} elif (($l.labels // []) | length) > 0 then {labels: $l.labels} else {} end)]' "$plan" >"$with_compare"; then
       echo "ABORTED: the comparison issue could not be added to the plan, so nothing was filed." >&2
       rm -f "$with_compare"
       exit 11
