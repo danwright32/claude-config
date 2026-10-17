@@ -223,8 +223,10 @@ export type ModKit = {
    * `workingTree` finds it), a linked worktree's own folder where `$.session.repo().root` is the
    * main tree (#996); `main`, its project's main working tree, which every worktree of it
    * shares; `branch`; `defaultBranch`, the one origin/HEAD names, null when it names none;
-   * `isDefault`, that branch, or main or master when there is none; and `issues`, every run of 2 to
-   * 6 digits the branch name holds on its own (`978-guard`, `fix/issue-41-and-52`). Null when the
+   * `isDefault`, that branch, or main or master when there is none; and `issues`, each part of the
+   * branch name between a `/`, `-`, `_` or `.` that is 2 to 6 digits with at most one letter after
+   * (`978-guard`, `fix/issue-41-and-52`, `961a-gh-reader`), never digits inside a word such as an
+   * agent worktree's hex id (#1306), so such a branch names none. Null when the
    * path is in no checkout. A branch git cannot read, a detached head, or no main working tree is
    * `unreadable`, saying which, with `main` where git named it. Rejects as `workingTree` does. Asked
    * of git with three reads at once, each bounded at 3 seconds. The one reading every mod uses (L613).
