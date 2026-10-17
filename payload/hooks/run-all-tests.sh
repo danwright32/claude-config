@@ -30,9 +30,10 @@
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
-#   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). Its FAIL
-#                             line then says FLAKY, recheck timed out, or recheck could not run
-#                             because another run holds the suite lock, naming who (#1312)
+#   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). With it
+#                             on, the failed suite's FAIL line says FLAKY, recheck timed out, or
+#                             recheck could not run because another run holds the suite lock,
+#                             naming who (#1312)
 #   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds a recheck may take before it is called hung (default 60)
 #   HOOK_TESTS_FLAKE_RECHECK_POLL  how long each wait for it lasts (default 1)
 #   HOOK_TESTS_JOBS           how many suites run at once
