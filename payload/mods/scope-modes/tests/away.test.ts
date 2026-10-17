@@ -10,11 +10,16 @@ const HOME = '/Users/x'
 const DD = `${HOME}/Library/Developer/Xcode/DerivedData`
 
 // What a test build is (#1269, Dan 2026-10-16 ET: "an executable under Xcode's DerivedData or a
-// project checkout, plus Simulator"). A checkout is a folder holding .git, found by asking the file
-// system; the home folder itself and the folders above it are never one, so a dotfiles repository in
-// the home folder cannot make every app beneath it a test build.
+// project checkout, plus Simulator"). A checkout is the nearest folder holding .git, as mod-kit's
+// workingTree reads it (stood in here by the same nearest first walk over the .git entries given);
+// the home folder itself and the folders above it are never one, so a dotfiles repository in the
+// home folder cannot make every app beneath it a test build.
+const treeOver = (present: string[]) => async (path: string): Promise<string | null> => {
+  for (let dir = path; dir; dir = dir.slice(0, dir.lastIndexOf('/'))) if (present.includes(`${dir}/.git`)) return dir
+  return present.includes('/.git') ? '/' : null
+}
 describe('isTestBuild: what typing and clicking may target while away', () => {
-  const fsWith = (...present: string[]) => ({ home: HOME, exists: async (p: string) => present.includes(p) })
+  const fsWith = (...present: string[]) => ({ home: HOME, treeOf: treeOver(present) })
   test('an executable under Xcode\'s DerivedData', async () => {
     expect(await isTestBuild(`${DD}/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture`, fsWith())).toBe(true)
   })
@@ -40,18 +45,21 @@ describe('isTestBuild: what typing and clicking may target while away', () => {
     expect(await isTestBuild('build/Debug/Overture', fsWith('build/.git'))).toBe(false)
     expect(await isTestBuild(`${DD}/../../../../../Applications/Mail.app/Contents/MacOS/Mail`, fsWith())).toBe(false)
   })
-  test('a file system that cannot answer is not a test build, so the action stays held (L42)', async () => {
-    const throws = { home: HOME, exists: async () => { throw new Error('denied') } }
+  test('a checkout that cannot be read (mod-kit not loaded, the disk not answering) is not a test build, so the action stays held (L42)', async () => {
+    const throws = { home: HOME, treeOf: async () => { throw new Error('denied') } }
     expect(await isTestBuild(`${HOME}/Apps/Overture/build/Overture`, throws)).toBe(false)
   })
   test('with no home known, DerivedData under any home still counts, and no home folder is a checkout', async () => {
-    expect(await isTestBuild('/Users/y/Library/Developer/Xcode/DerivedData/a/Tool', { home: undefined, exists: async () => false })).toBe(true)
-    expect(await isTestBuild('/Users/y/Applications/Mail.app/Contents/MacOS/Mail', { home: undefined, exists: async p => p === '/Users/y/.git' })).toBe(false)
+    expect(await isTestBuild('/Users/y/Library/Developer/Xcode/DerivedData/a/Tool', { home: undefined, treeOf: async () => null })).toBe(true)
+    expect(await isTestBuild('/Users/y/Applications/Mail.app/Contents/MacOS/Mail', { home: undefined, treeOf: treeOver(['/Users/y/.git']) })).toBe(false)
+  })
+  test('a checkout inside a home folder that is itself a repository still counts, as the nearest one', async () => {
+    expect(await isTestBuild(`${HOME}/Apps/Overture/build/Overture`, fsWith(`${HOME}/.git`, `${HOME}/Apps/Overture/.git`))).toBe(true)
   })
 })
 
 describe('awayAllows: what another guard may do while away without its action being held (#1269)', () => {
-  const fs = { home: HOME, exists: async () => false }
+  const fs = { home: HOME, treeOf: async () => null }
   test('bringing an app forward', async () => {
     expect(await awayAllows({ kind: 'focus' }, fs)).toBe(true)
   })

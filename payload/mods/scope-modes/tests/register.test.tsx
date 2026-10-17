@@ -282,6 +282,11 @@ type Opts = {
   remote?: string | null
   /** mod-kit's walk for the checkout a folder sits in fails (#996), with what it threw. */
   workingTreeFails?: string
+  /**
+   * The checkout a path under each prefix sits in, for mod-kit's walk (#1269): null for none. A path
+   * under no prefix here is its own checkout, as before.
+   */
+  trees?: Record<string, string | null>
   /** The folders git status finds uncommitted changes in (#996); none by default. */
   dirty?: string[]
   /** The files git status names in those folders (#1051); app.ts unless said. */
@@ -526,7 +531,12 @@ const world = (on: On, o: Opts = {}) => {
       // session's when it is in no repository.
       // The checkout a folder sits in (#996), as the branch reader's walk below finds it.
       if (a[0] === 'workingTree' && o.workingTreeFails) return fail(1, o.workingTreeFails)
-      if (a[0] === 'workingTree') return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
+      if (a[0] === 'workingTree') {
+        // An installed app is in no checkout, as on the Mac.
+        const under = Object.entries({ '/Applications/': null, ...o.trees }).find(([prefix]) => (input.path ?? '').startsWith(prefix))
+        if (under) return ok(JSON.stringify(under[1]))
+        return ok(JSON.stringify(o.noRepo && input.path === '/repo' ? null : (input.path ?? null)))
+      }
       if (a[0] === 'branch') {
         if (o.branchReaderFails) return fail(1, o.branchReaderFails)
         const walk = async (p: string) => (o.noRepo && p === '/repo' ? null : p)
@@ -1915,7 +1925,7 @@ const TYPE = (target: string) => `TARGET_APP=${target} osascript -e 'tell applic
 const DERIVED = '/Users/x/Library/Developer/Xcode/DerivedData/Overture-abc/Build/Products/Debug/Overture.app/Contents/MacOS/Overture'
 const CHECKOUT_BUILD = '/Users/x/Apps/Ovation/build/Debug/Ovation.app/Contents/MacOS/Ovation'
 test('away types into a test build, from DerivedData or a checkout, and holds typing into any other app (#1269)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { '/Users/x/Apps/Ovation/.git/HEAD': 'ref: refs/heads/main\n' } })
+  const { w, clock } = world(on, { trees: { '/Users/x/Apps/Ovation/': '/Users/x/Apps/Ovation' } })
   await start($ as never, clock)
   await command($ as never, 'away')
   expect(await call($ as never, bash(TYPE(DERIVED), 't1'))).toBe('ran')

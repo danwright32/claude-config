@@ -157,7 +157,7 @@ const testBuildFs = async ($: EngineInterface): Promise<TestBuildFs> => {
   } catch {
     home = undefined
   }
-  return { home, exists: p => $.fs.exists(p) }
+  return { home, treeOf: path => $.modkit.workingTree({ path }) }
 }
 
 const scopeOf = async ($: EngineInterface) => (await $.state.get(scopeRef)).value ?? null
@@ -3025,7 +3025,7 @@ export const register: Register = on => {
           } catch {
             home = undefined
           }
-          if (await awayAllows(action, { home, exists: p => built.fs.exists(p) })) return { isHeld: false, isAway: true }
+          if (await awayAllows(action, { home, treeOf: path => built.modkit.workingTree({ path }) })) return { isHeld: false, isAway: true }
         }
         const held = (await built.state.get(heldRef)).value ?? []
         if (!held.some(h => h.prompt === prompt)) {

@@ -34,35 +34,35 @@ const targetApp = (raw: string): string | undefined => {
   return app ? (app[1] as string) : base(path)
 }
 
-/** What isTestBuild asks of the Mac: the home folder, and whether a path exists (a folder included). */
-export type TestBuildFs = { home: string | undefined; exists: (path: string) => Promise<boolean> }
+/**
+ * What isTestBuild asks of the Mac: the home folder, and the checkout a path sits in, which is
+ * mod-kit's one reading of it ($.modkit.workingTree: the nearest folder at or above it holding .git,
+ * a worktree's .git file included, or null), never a walk of this mod's own (L613).
+ */
+export type TestBuildFs = { home: string | undefined; treeOf: (path: string) => Promise<string | null> }
 
 const SIMULATOR = /^\/Applications\/Xcode[^/]*\.app\/Contents\/Developer\/Applications\/Simulator\.app\/Contents\/MacOS\/Simulator$/
 /**
  * Whether an executable is a test build (Dan, 2026-10-16 ET): under Xcode's DerivedData, inside a
- * project checkout (a folder holding .git, a worktree's .git file included), or Simulator where Xcode
- * keeps it. Only an absolute path with no `..` is judged. The home folder and the folders above it
- * are never a checkout, so a repository of dotfiles there cannot make every app beneath it one. A
- * file system that cannot answer is no test build, so the action stays held (L42).
+ * project checkout, or Simulator where Xcode keeps it. Only an absolute path with no `..` is judged.
+ * A checkout that is the home folder, any folder in /Users, or anything above them is not one, so a
+ * repository of dotfiles in the home folder cannot make every app beneath it a test build. A
+ * checkout that cannot be read (mod-kit not loaded, the disk not answering) is no test build, so the
+ * action stays held (L42).
  */
 export const isTestBuild = async (path: string, fs: TestBuildFs): Promise<boolean> => {
   if (!path.startsWith('/') || path.split('/').includes('..')) return false
   const home = fs.home?.replace(/\/+$/, '')
   if (home ? path.startsWith(`${home}/Library/Developer/Xcode/DerivedData/`) : /^\/Users\/[^/]+\/Library\/Developer\/Xcode\/DerivedData\//.test(path)) return true
   if (SIMULATOR.test(path)) return true
-  const parts = path.split('/').filter(Boolean)
-  for (let n = parts.length - 1; n >= 1; n--) {
-    const dir = `/${parts.slice(0, n).join('/')}`
-    if (home && (dir === home || home.startsWith(`${dir}/`))) break
-    // Any home folder, so a home that could not be read still stops the walk at one.
-    if (dir === '/Users' || /^\/Users\/[^/]+$/.test(dir)) break
-    try {
-      if (await fs.exists(`${dir}/.git`)) return true
-    } catch {
-      return false
-    }
+  let tree: string | null
+  try {
+    tree = await fs.treeOf(path)
+  } catch {
+    return false
   }
-  return false
+  if (!tree || tree === '/' || tree === '/Users' || /^\/Users\/[^/]+$/.test(tree)) return false
+  return !(home && (tree === home || home.startsWith(`${tree}/`)))
 }
 
 /** What a guard acting on the Mac names when it asks to hold (the keystroke guard, #707). */
