@@ -1938,7 +1938,10 @@ Not put to Dan; each is the plainest reading of the issue, and each is open to h
   toast included, from a hook on its own noun's event, where every mod's noun is reachable whatever
   the load order; a noun's own method sees only the mods loaded beneath it. With the secret guard
   not loaded nothing refuses; a screen that cannot ask refuses the call with a card (L42), and so
-  does the secret guard's own when its check fails. Only the secret guard is asked: no build and
+  does the secret guard's own when its check fails, and so does its own `tool.call` hook, through a
+  refusing `.catch` (#1298): a hook that throws is otherwise skipped and the call runs unscreened.
+  Its `session.append` scrub carries one too, which keeps a row it cannot read with every text
+  withheld rather than as it came. Only the secret guard is asked: no build and
   the style check refuse what a call would change or write, which an answered call does not.
   `tools/check-mod-shared-parts.sh` fails each `tool.call` hook that answers a call with a result
   and never asks in its own body (#732): a screen in the hook beside it covers nothing, a screen
