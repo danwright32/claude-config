@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths, typedTargets } from '../hooks/away.ts'
+import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths, typedTarget } from '../hooks/away.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 
 // Each command with what it runs, read by mod-kit's own reader (a byte for byte copy under
@@ -78,16 +78,21 @@ describe('targetPath: the executable TARGET_APP names, as written', () => {
     expect(targetPath('cliclick c:1,1')).toBeUndefined()
   })
   // Lessons review of #1269: a marker in an echo, or one command's marker standing for another's,
-  // must not make a call a test build's. Each typing or clicking command carries its own marker,
-  // written right before it, and there is no other marker.
-  test('typedTargets: the target of each typing or clicking command, only when each names its own', () => {
+  // must not make a call a test build's. So a call counts only when it has ONE command that drives
+  // the Mac (osascript, cliclick, Peekaboo), that one types or clicks, and the call's only marker is
+  // written in command position right before it, where it can belong to nothing else.
+  test('typedTarget: the target of the one typing or clicking command, only when it names its own', () => {
     const KS = `osascript -e 'tell application "System Events" to keystroke "n"'`
-    const t = (raw: string) => typedTargets(raw, pipeline(raw))
-    expect(t(`TARGET_APP=/a/Tool ${KS}`)).toEqual(['/a/Tool'])
-    expect(t(`open -a Simulator && TARGET_APP="/b c/Tool" ${KS}`)).toEqual(['/b c/Tool'])
-    expect(t('TARGET_APP=/a/Tool cliclick c:1,1')).toEqual(['/a/Tool'])
+    const t = (raw: string) => typedTarget(raw, pipeline(raw))
+    expect(t(`TARGET_APP=/a/Tool ${KS}`)).toBe('/a/Tool')
+    expect(t(`open -a Simulator && TARGET_APP="/b c/Tool" ${KS}`)).toBe('/b c/Tool')
+    expect(t('TARGET_APP=/a/Tool cliclick c:1,1')).toBe('/a/Tool')
+    expect(t(`env TARGET_APP=/a/Tool ${KS}`)).toBe('/a/Tool')
     expect(t(`echo TARGET_APP=/a/Tool && ${KS}`)).toBeUndefined()
+    expect(t(`echo TARGET_APP=/a/Tool ${KS}; ${KS}`)).toBeUndefined()
+    expect(t(`TARGET_APP=/a/Tool osascript -e 'display notification "x"'; ${KS}`)).toBeUndefined()
     expect(t(`TARGET_APP=/a/Tool ${KS}; ${KS}`)).toBeUndefined()
+    expect(t(`TARGET_APP=/a/Tool osascript -e 'display notification "x"'`)).toBeUndefined()
     expect(t(KS)).toBeUndefined()
   })
   test('every one a call carries, wherever it stands, for the rule that all of them must be test builds', () => {

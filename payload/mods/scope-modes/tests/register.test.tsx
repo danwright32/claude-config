@@ -1938,7 +1938,9 @@ test('away types into a test build, from DerivedData or a checkout, and holds ty
   expect(await call($ as never, bash(`echo TARGET_APP=${DERIVED} && TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail osascript -e 'tell application "System Events" to keystroke "n"'`, 't6'))).toMatch(/"Type into .*" waits/)
   // A test build named only in an echo does not stand for the typing command after it.
   expect(await call($ as never, bash(`echo TARGET_APP=${DERIVED} && osascript -e 'tell application "System Events" to keystroke "n"'`, 't7'))).toMatch(/waits/)
-  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5', 't6', 't7'])
+  // Nor does a test build named on a command that does not type stand for one that does.
+  expect(await call($ as never, bash(`TARGET_APP=${DERIVED} osascript -e 'display notification "x"'; osascript -e 'tell application "System Events" to keystroke "n"'`, 't8'))).toMatch(/waits/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5', 't6', 't7', 't8'])
 })
 
 // The keystroke guard (#707) asks this noun, naming its action, and is answered by the same rules.

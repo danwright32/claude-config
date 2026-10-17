@@ -82,38 +82,44 @@ const SCRIPT_TYPES = /\b(?:keystroke|key code|click)\b/i
 // JavaScript for Automation spells each one as a method, `app.displayDialog()` (#730).
 const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from list|color|application|remote application|URL|file name)|display(?:Dialog|Alert)|choose(?:File(?:Name)?|Folder|FromList|Color|Application|RemoteApplication|URL))\b/i
 
+// The text of an osascript command's script, as the reader gave it.
+const scriptOf = ({ words, program }: ModKitCommand): string =>
+  [...words.slice(1).filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
+// The programs that drive the Mac's keyboard and mouse.
+const DRIVERS = new Set(['osascript', 'cliclick', 'peekaboo'])
+// A command that types or clicks: an AppleScript keystroke, key code or click, cliclick, Peekaboo.
+const typesOrClicks = (c: ModKitCommand): boolean => {
+  const cmd = base(c.words[0] ?? '')
+  return cmd === 'cliclick' || cmd === 'peekaboo' || (cmd === 'osascript' && SCRIPT_TYPES.test(scriptOf(c)))
+}
+// A marker in command position (the start, after a separator, or after env), written right before
+// the program it names, as the keystroke guard's rule writes it.
+const ATTACHED = /(?:^|[;&|\n(]|\benv)\s*TARGET_APP=("[^"]+"|'[^']+'|\S+)\s+(?:\S*\/)?(?:osascript|cliclick|peekaboo)\b/g
+/**
+ * The executable a call's typing or clicking names, or undefined when that cannot be told for sure
+ * (lessons review of #1269). Only a call with ONE command that drives the Mac, which types or
+ * clicks, and ONE TARGET_APP, written in command position right before it, has one: the marker can
+ * then belong to nothing else, so a marker in an echo, or one command's standing for another's,
+ * never makes a call a test build's. A call driving the Mac twice is judged as not a test build's;
+ * each step can go in a call of its own. The keystroke guard then proves the one named is in front.
+ */
+export const typedTarget = (raw: string, commands: ModKitCommand[]): string | undefined => {
+  const drivers = commands.filter(c => DRIVERS.has(base(c.words[0] ?? '')))
+  if (drivers.length !== 1 || !typesOrClicks(drivers[0] as ModKitCommand)) return undefined
+  const attached = [...raw.matchAll(ATTACHED)]
+  if (attached.length !== 1 || targetPaths(raw).length !== 1) return undefined
+  return ((attached[0] as RegExpMatchArray)[1] as string).replace(/^["']|["']$/g, '')
+}
+
 /**
  * What a Bash call would do on the Mac that needs Dan there (show a dialog, run a script it cannot
  * read, type or click into anything but a test build), as the line his held card names it by, or
  * undefined when it needs nothing of him. Each command comes with what mod-kit's reader found it
  * runs (#712): its program and what that can do, or the script file it runs, so an AppleScript fed
  * on standard input, or piped in from a file (`cat notify.scpt | osascript`, #730), is judged too.
- * `testBuild` says whether the app TARGET_APP names is a test build (isTestBuild, asked by the
- * caller, since it reads the file system).
+ * `testBuild` says whether the app the call types into is a test build (typedTarget, then
+ * isTestBuild, asked by the caller, since it reads the file system).
  */
-// The text of an osascript command's script, as the reader gave it.
-const scriptOf = ({ words, program }: ModKitCommand): string =>
-  [...words.slice(1).filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
-// A command that types or clicks: an AppleScript keystroke, key code or click, cliclick, Peekaboo.
-const typesOrClicks = (c: ModKitCommand): boolean => {
-  const cmd = base(c.words[0] ?? '')
-  return cmd === 'cliclick' || cmd === 'peekaboo' || (cmd === 'osascript' && SCRIPT_TYPES.test(scriptOf(c)))
-}
-// A marker written right before the command it names, as the keystroke guard's rule writes it.
-const ATTACHED = /\bTARGET_APP=("[^"]+"|'[^']+'|\S+)\s+(?:\S*\/)?(?:osascript|cliclick|peekaboo)\b/g
-/**
- * The executable each typing or clicking command in a call names, or undefined when that cannot be
- * told (lessons review of #1269): every one carries its own TARGET_APP written right before it, and
- * the call carries no other, so a marker in an echo, or one command's standing for another's, never
- * makes a call a test build's. The keystroke guard then proves the one it names is in front.
- */
-export const typedTargets = (raw: string, commands: ModKitCommand[]): string[] | undefined => {
-  const attached = [...raw.matchAll(ATTACHED)].map(m => (m[1] as string).replace(/^["']|["']$/g, ''))
-  const inputs = commands.filter(typesOrClicks).length
-  if (!attached.length || attached.length !== targetPaths(raw).length || attached.length !== inputs) return undefined
-  return attached
-}
-
 export const needsTheMac = (call: { raw: string; commands: ModKitCommand[]; testBuild?: boolean }): string | undefined => {
   for (const command of call.commands) {
     const { words, program, script: file, verdict } = command
