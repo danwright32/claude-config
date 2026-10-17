@@ -406,6 +406,65 @@ test('a Compact that does not run says why in a toast, rather than nothing', wit
   await ui.unmount()
 })
 
+// #1278, Dan 2026-10-16: "the compact mod can't be clicked unless the session is totally stopped. it
+// errors if claude is saying something." Claude Code refuses a compaction while a turn runs (its
+// types: $.session.compact "rejects while a turn runs"), so a press then is queued, shown on the
+// row with Cancel, and run once the turn ends; a queued one that then fails still says so.
+const busy = (w: { compact: () => unknown }) => {
+  w.compact = () => {
+    throw new Error('a turn is running')
+  }
+}
+test('Compact pressed while Claude is working is queued, shown, and runs when the turn ends (#1278)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  expect(await shown(ui as never)).toBe('ctx 80% Compact queued, runs when this reply ends ')
+  expect((await ui.find({ type: 'Button', key: 'status-bar:compact-cancel' }))?.props).toMatchObject({ label: 'Cancel' })
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a queued Compact that fails once the turn ends says so; one cancelled does not run (#1278)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await turn($)
+  await clock.settle()
+  expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
+  // Cancelled before the turn ends: nothing runs, and the row offers Compact again.
+  await step($, clock)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await press({ key: 'status-bar:compact-cancel' })
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('ctx 80% ')
+  const before = compacts.length
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(before)
+  await ui.unmount()
+})
+
 test('the amber line and the Compact row show together, amber line on top', withKit, async ($, on) => {
   const { clock } = world(on, { unpushed: '1\n' })
   await start($, clock)

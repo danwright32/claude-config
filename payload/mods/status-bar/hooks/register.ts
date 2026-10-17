@@ -476,6 +476,13 @@ export const register: Register = on => {
   // Compact, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   on('modkit.press', ($, e, next) => {
     if (e.element !== 'status-bar:compact') return next(e)
+    // #1278: Claude Code refuses a compaction while a turn runs, so a press then is queued, shown on
+    // the row, and run when the turn ends.
+    if (turnRunning) {
+      compactQueued = true
+      void publish()
+      return { value: { isAnswered: true } }
+    }
     // Taken at once and done just after: a noun's call is cut off at 10 s (#744), and compacting
     // runs a model call that takes longer.
     $.clock.after(0, () => {
