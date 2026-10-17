@@ -835,13 +835,19 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
   const notes: Record<string, unknown>[] = []
   const posted: string[] = []
   let answered = 0
-  const dismissed: string[] = []
   const unposted: string[] = []
-  const leave = (q: OpenQuestion, issues = q.issues) => left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text })))
+  // Every question left is said with why it was not asked or answered (#1279): on 2026-10-16 two
+  // were left as "2 questions left for the morning" with no reason, and nothing could tell which
+  // way they went.
+  const leftSaid: string[] = []
+  const leave = (q: OpenQuestion, why: string, issues = q.issues) => {
+    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text })))
+    leftSaid.push(`${issues.map(issue => `${q.repo}#${issue}`).join(' and ')}, "${q.text}" (${why})`)
+  }
   for (const q of ordered) {
     const waitMs = round.until - (await $.clock.now())
     if (!interactive || round.slept || waitMs <= 0) {
-      leave(q)
+      leave(q, !interactive ? 'not asked: nobody was at this session to ask' : round.slept ? 'not asked: you chose to go to sleep first' : 'not asked: the 10 minutes for bedtime questions ran out')
       continue
     }
     const asked = await askOne($, askText(q), askOptions(q), BEDTIME_HEADER, waitMs, async a => {
@@ -852,18 +858,21 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
         if ('failed' in p) $.ui.toast(`Your late answer on ${q.repo}#${issue} ("${a}") could not be posted (${p.failed}); it is asked again next time.`)
       }
     })
-    if ('unanswered' in asked || ('answer' in asked && asked.answer === SKIP_QUESTION)) {
-      leave(q)
+    if ('unanswered' in asked) {
+      leave(q, 'not answered in the 10 minutes')
       continue
     }
     if ('failed' in asked) {
-      dismissed.push(`The question on ${q.repo}#${q.issues.join(' and #')} was dismissed or could not be shown (${asked.failed}).`)
-      leave(q)
+      leave(q, `the question was dismissed or could not be shown: ${asked.failed}`)
+      continue
+    }
+    if (asked.answer === SKIP_QUESTION) {
+      leave(q, 'you skipped it')
       continue
     }
     if (asked.answer === GO_TO_SLEEP) {
       round.slept = true
-      leave(q)
+      leave(q, 'you chose to go to sleep')
       continue
     }
     let landed = false
@@ -873,7 +882,7 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
         const why = `Your answer on ${q.repo}#${issue} ("${asked.answer}") could not be posted (${p.failed}), so the issue is skipped tonight and the question is asked again next time.`
         unposted.push(why)
         notes.push({ kind: 'finding', repo: q.repo, issue, text: why })
-        leave(q, [issue])
+        leave(q, 'its answer could not be posted', [issue])
         continue
       }
       posted.push(`${q.repo}#${issue}`)
@@ -884,12 +893,10 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
   }
   // The questions left are noted for the morning report as the same words, so they are asked again.
   for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text })
-  const skipped = [...new Set(left.map(l => `${l.repo}#${l.issue}`))]
-  const leftQuestions = new Set(left.map(l => `${l.repo.toLowerCase()}\n${l.text}`)).size
   let said = ''
   if (answered) said += ` Before bed: ${plural(answered, 'question')} answered and posted on ${andList([...new Set(posted)])}.`
-  if (skipped.length) said += ` ${plural(leftQuestions, 'question')} left for the morning, so tonight the queue skips ${andList(skipped)}.`
-  for (const s of [...dismissed, ...unposted, ...problems]) said += ` ${s}`
+  if (leftSaid.length) said += ` Left for the morning, so tonight the queue skips them: ${leftSaid.join('; ')}.`
+  for (const s of [...unposted, ...problems]) said += ` ${s}`
   return { left, notes, said }
 }
 

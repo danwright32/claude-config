@@ -4178,7 +4178,7 @@ test("the open questions on the queue's issues are asked one at a time after the
   expect(listed).toBeGreaterThan(-1)
   expect(placed).toBeGreaterThan(listed)
   // Each question left is named with why it was not asked or answered (#1279).
-  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. Left for the morning, so tonight the queue skips them: o/r#20 (you skipped it).'))
+  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. Left for the morning, so tonight the queue skips them: o/r#20, "Rename it?" (you skipped it).'))
   // The one left is noted for the morning report as the same question, so it is asked again next time.
   expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text])).toEqual([['o/r', 20, 'Rename it?']])
   // Every answer posted is kept, one record per issue and question.
@@ -4211,7 +4211,7 @@ test('Go to sleep now asks nothing more: every question left is its issue skippe
   expect(w.comments).toEqual([])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
   expect(r.text).toMatch(/^Sleep mode is on until/)
-  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14 (you chose to go to sleep); o/r#20 (not asked: you chose to go to sleep first).'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (you chose to go to sleep); o/r#20, "Rename it?" (not asked: you chose to go to sleep first); o/r#12, "Which copy?" (not asked: you chose to go to sleep first).'))
 })
 
 test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
@@ -4241,7 +4241,7 @@ test('the ten minutes are shared with the repository questions: once they run ou
   const r = await pending
   expect(w.asked).toEqual(['o/r#12 and #14: Keep the old flag?'])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
-  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14 (not answered in the 10 minutes); o/r#20 (not asked: the 10 minutes for bedtime questions ran out).'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (not answered in the 10 minutes); o/r#20, "Rename it?" (not asked: the 10 minutes for bedtime questions ran out); o/r#12, "Which copy?" (not asked: the 10 minutes for bedtime questions ran out).'))
   // Dan answers after sleep began: the decision is posted, and the issue stays out of tonight's queue.
   answer('Drop it')
   await clock.settle()
@@ -4315,7 +4315,7 @@ test('a question dismissed or that could not be shown leaves its issue out, said
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.files[UNANSWERED]).toBe('o/r#20\n')
-  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#20 (the question was dismissed or could not be shown: '))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#20, "Rename it?" (the question was dismissed or could not be shown: '))
 })
 
 // #1279, the night of 2026-10-16 as far as the stand in can play it: goal questions answered quickly
