@@ -2197,8 +2197,10 @@ case "$hook_rc:$hook_err" in
   0:*"no session_id"*) check "#1291 a payload with no session says so and never blocks" ok ;;
   *) check "#1291 a payload with no session says so and never blocks" "rc=$hook_rc err=$hook_err" ;;
 esac
-grep -q 'issue-spool-session-end.sh' "$DIR/../settings.hooks.json" && check "#1291 the SessionEnd hook is registered" ok \
-  || check "#1291 the SessionEnd hook is registered" "not in settings.hooks.json"
+SETTINGS_1291="$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")"
+on_end="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum("issue-spool-session-end.sh" in h.get("command", "") for m in d["hooks"].get("SessionEnd", []) for h in m.get("hooks", [])))' "$SETTINGS_1291" 2>&1)"
+[ "$on_end" = 1 ] && check "#1291 the hook is registered on SessionEnd, once" ok \
+  || check "#1291 the hook is registered on SessionEnd, once" "found=$on_end in ${SETTINGS_1291:-no settings file}"
 
 # A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
 # which is what every record did before this existed. Leaving it pending for ever would be a worse
