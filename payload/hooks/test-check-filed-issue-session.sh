@@ -134,7 +134,7 @@ case "$out" in *'no time left'*'#42'*"$LINE"*) check "#1272 an issue there was n
 # An edit GitHub does not answer in time has an outcome nobody knows, so it is read back with the
 # time kept for that, and never said as refused (lessons review). Here it did not land.
 body 'no line'
-out="$(GH_EDIT_HANGS=1 FILED_ISSUE_BUDGET_S=6.5 run "${shapes[1]}" "$URL")"
+out="$(GH_EDIT_HANGS=1 FILED_ISSUE_EDIT_WAIT_S=1 run "${shapes[1]}" "$URL")"
 case "$out" in *'did not answer in time'*'read the body'*"$LINE"*) check "#1272 an edit that timed out is said as unknown, from the read back" ok ;; *) check "#1272 an edit that timed out is said as unknown, from the read back" "$out" ;; esac
 case "$out" in *'could not add it'*) check "#1272 an edit that timed out is never said as refused" "$out" ;; *) check "#1272 an edit that timed out is never said as refused" ok ;; esac
 [ "$(grep -c '^issue view' "$TMP/gh.log")" = 2 ] && check "#1272 the timed out edit was read back" ok || check "#1272 the timed out edit was read back" "$(cat "$TMP/gh.log")"

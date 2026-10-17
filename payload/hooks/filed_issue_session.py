@@ -78,6 +78,19 @@ class Clock:
         return max(0.0, self.end - time.monotonic())
 
 
+def _seconds(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+# The most an edit waits, at most GH_TIMEOUT_S; FILED_ISSUE_EDIT_WAIT_S shortens it for the test of an
+# edit GitHub never answers, so that test waits a second rather than fifteen, whatever the load.
+def _edit_wait():
+    return min(GH_TIMEOUT_S, _seconds("FILED_ISSUE_EDIT_WAIT_S", GH_TIMEOUT_S))
+
+
 def _budget():
     try:
         return float(os.environ.get("FILED_ISSUE_BUDGET_S", BUDGET_S))
@@ -89,11 +102,11 @@ class TimedOut(Exception):
     """gh did not answer in time, so what it did is not known."""
 
 
-def _gh_issue(action, args, clock, stdin=None, keep=0.0):
+def _gh_issue(action, args, clock, stdin=None, keep=0.0, most=GH_TIMEOUT_S):
     """Run `gh issue <action> <args>`: (ok, stdout, the reason it failed), leaving `keep` seconds of
     the budget unused. It runs gh, and reads no command, so it is no reading of a subcommand
     (lib/word-position-scan.py). Raises TimedOut when gh does not answer in the time it is given."""
-    wait = max(0.1, min(GH_TIMEOUT_S, clock.left() - keep))
+    wait = max(0.1, min(most, clock.left() - keep))
     try:
         r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=wait)
     except subprocess.TimeoutExpired:
@@ -143,7 +156,7 @@ def check_issue(url, line, now, clock):
                 "to add it and read it back. Add it at the end of the body yourself:\n%s" % (number, url, line)), None
     timed_out = None
     try:
-        ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], clock, stdin=fixed, keep=READ_BACK_S)
+        ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], clock, stdin=fixed, keep=READ_BACK_S, most=_edit_wait())
     except TimedOut as e:
         timed_out = str(e)
     else:
