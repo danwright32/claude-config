@@ -462,6 +462,13 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'sysctl' && ops[0] === 'kern.bootsessionuuid') return o.session === null ? fail(1, 'sysctl: unknown oid') : ok(`${o.session ?? SESSION}\n`)
     if (cmd === 'mkdir') return ok()
+    // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
+    if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
+      const file = a[3] as string
+      if (!(file in w.files)) return fail(2, `grep: ${file}: No such file or directory`)
+      const found = (w.files[file] as string).match(new RegExp(a[2] as string, 'g'))
+      return found ? ok(`${found.join('\n')}\n`) : fail(1)
+    }
     // A folder's names, from the files beneath it (#836).
     if (cmd === 'ls') {
       const dir = String(ops[ops.length - 1]).replace(/\/+$/, '')
@@ -745,8 +752,6 @@ const world = (on: On, o: Opts = {}) => {
   on('classic.PermissionRequest', () => (o.beneathDecision ? { decision: o.beneathDecision } : {}) as never)
   on('classic.PermissionDenied', () => (o.beneathRetries ? { retry: true } : {}) as never)
   on('classic.StopFailure', () => ({}) as never)
-  on('classic.UserPromptSubmit', () => ({}) as never)
-  on('classic.SessionStart', () => ({}) as never)
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
     return { value: undefined }
@@ -2799,7 +2804,7 @@ const myQuestion = proposal({ kind: 'question', by: 's1', cwd: '/repo', question
 const theirQuestion = proposal({ kind: 'question', by: 's2', cwd: '/other', questions: ['Rename the parser?'] })
 const CLOSED_NIGHT = { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'o/r waits overnight' }] }
 
-test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, never the proposals (#1285)', withDeps, async ($, on) => {
+test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, leaving the proposals of its repository to the session that claimed them (#1285, #1286)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
@@ -3032,7 +3037,6 @@ test("a claim that cannot be written offers nothing rather than risk offering tw
 const REPORTS_G0 = `${SLEEP}/reports/g0`
 const perSession = (extra: Record<string, unknown> = {}) => asleepRecord({ reportsPerSession: true, ...extra })
 const OWN = '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md'
-const titled = ($: unknown, title: string) => ($ as { classic: { UserPromptSubmit: (e: never) => Promise<unknown> } }).classic.UserPromptSubmit({ prompt: 'hi', session_title: title } as never)
 
 test('/sleep names its own report by night, project and session, marks the record as per session, and says where it is (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
@@ -3045,12 +3049,33 @@ test('/sleep names its own report by night, project and session, marks the recor
   expect(r.text).toContain(` The night's report is at ${OWN}.`)
 })
 
-test("a session's title, once it has one, names its report, auto naming's prefix dropped (#1287)", withDeps, async ($, on) => {
+test("a session's title, as its transcript records it, names its report, auto naming's prefix dropped and the latest /rename winning (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const lines = [
+    '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Old name","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Fix the \\"parser\\"","sessionId":"s1"}',
+  ].join('\n')
+  const { w, clock } = world(on, { files: { [T]: lines } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Fix the "parser" sleep report.md')
+})
+
+test("with no /rename, Claude Code's own title names the report (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const { w, clock } = world(on, { files: { [T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+})
+
+test('a transcript that cannot be read names the report by id, and says why in the log (#1287)', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
-  await titled($, '(repo) Fix the parser')
   await command($ as never, 'sleep')
-  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Fix the parser sleep report.md')
+  expect(recordOf(w).report).toBe(OWN)
+  expect(w.logs.some(l => l.includes("this session's title could not be read (grep: /Users/x/.claude/projects/-repo/s1.jsonl: No such file or directory)"))).toBe(true)
 })
 
 test('a second sleep the same night gets its own name, never writing over the first night\'s report (#1287)', withDeps, async ($, on) => {

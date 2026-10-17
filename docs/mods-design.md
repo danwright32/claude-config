@@ -1108,8 +1108,10 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   the session itself at `/sleep` or its first minute asleep with news (`reportBase` in
   `hooks/reportname.ts`: `<night> <project folder> <title or first 8 of the id> sleep report`, auto
   naming's `(project)` prefix dropped, ` (n)` past a name already on the disk or held by another
-  session tonight; the title is read off `session_title`, which the engine hands only to that
-  session's own hooks), else the report script for a session with news that never named one (its
+  session tonight; the title is the last `custom-title` line in the session's own transcript, what
+  /rename and auto naming set, else its last `ai-title`, read with grep rather than through the
+  classic hooks carrying `session_title`, which Claude Code's security default sends past a mod
+  (#875), so no bypass entry is needed), else the report script for a session with news that never named one (its
   id and the folder its notes give). Every render writes each: that session's own notes with
   `MAC_WIDE` (start, end, the overnight check, limits and usage), and the sessions gone quiet read
   from every note; GitHub's done lines are kept for the repositories that session noted. The record's
@@ -1536,7 +1538,7 @@ morning offers what the night proposed, filing nothing he has not picked.
   things. basically I shouldn't have to literally read the review because everything that is
   relevant should show up in a picker"; design rounds: see the PR). `SUMMARY_ASK`, sent only to the
   workers and offering no pickers, is gone. Each session's minute remembers the night while asleep
-  (`nightSeen` in its state: the generation, whether it worked, whether it offers the proposals) and,
+  (`nightSeen` in its state: the generation, whether it worked, whether it ended sleep and so offers the lessons too) and,
   once the record is gone, submits its own morning (`morningOf`, then `morningPrompt`): its summary
   if it worked, what it held (#1284), each question it noted (`by` itself, read from the notes by
   `proposalsIn`, numbered 3.n) and each merge, deploy or push the night's lists refused in it

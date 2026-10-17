@@ -1468,7 +1468,11 @@ const othersAtWake = async ($: EngineInterface, record: SleepRecord | null, self
   }
 }
 
-/** The night a session's morning is about: its generation (null when not known), whether it worked, and whether it offers the proposals. */
+/**
+ * The night a session's morning is about: its generation (null when not known), whether it worked,
+ * and `offers`, whether it ended sleep and so also offers the lessons and what names no repository
+ * (every session offers its own repository's proposals once claimed, #1286).
+ */
 type Night = { generation: string | null; worker: boolean; offers: boolean; unread?: string }
 // The night as the session that ended it notes it, by a wake or its noon end alike: one naming no
 // generation is said as unread, never read as a night with nothing in it (lessons review).
@@ -1796,9 +1800,42 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
 
 // ---- One report per session with news (#1287): its name is decided in hooks/reportname.ts ----
 
-// This session's title, read off what the engine hands this session's own hooks (the only place a
-// mod can read it, as auto naming found); null until one arrives.
-let knownTitle: string | null = null
+// This session's title, as its own transcript records it: the last `custom-title` line (what /rename
+// and auto naming set), else the last `ai-title`. Read from the transcript rather than the classic
+// hooks that carry `session_title`, which Claude Code's security default sends past a mod (#875),
+// so no bypass entry is needed. Null when there is none yet, or it cannot be read, which is logged.
+const TITLE_LINE = /"(customTitle|aiTitle)":"((?:\\.|[^"\\])*)"/g
+const titleNow = async ($: EngineInterface): Promise<string | null> => {
+  let path: string | null = null
+  try {
+    const self = await $.session.id()
+    path = (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+  } catch (err) {
+    $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
+    return null
+  }
+  if (!path) return null
+  const r = await run($, ['grep', '-o', '-E', '"(customTitle|aiTitle)":"([^"\\\\]|\\\\.)*"', path])
+  // grep exits 1 when nothing matches: no title yet, which is no failure.
+  if (r.exitCode !== 0) {
+    if (r.exitCode !== 1) $.ui.log(`scope-modes: this session's title could not be read (${r.stderr.trim() || `grep exited ${r.exitCode}`}), so its report is named by its id`, { to: 'debug' })
+    return null
+  }
+  let custom: string | null = null
+  let ai: string | null = null
+  for (const m of r.stdout.matchAll(TITLE_LINE)) {
+    let v: unknown
+    try {
+      v = JSON.parse(`"${m[2]}"`)
+    } catch {
+      continue
+    }
+    if (typeof v !== 'string') continue
+    if (m[1] === 'customTitle') custom = v
+    else ai = v
+  }
+  return custom ?? ai
+}
 const reportsDirOf = async ($: EngineInterface, generation: string) => `${(await sleepPaths($)).dir}/reports/${generation.replace(/[^\w.-]/g, '_')}`
 // This session's report on a night, as recorded, or null when it has none.
 const ownReport = async ($: EngineInterface, generation: string): Promise<string | null> => {
@@ -1836,8 +1873,9 @@ const chooseReport = async ($: EngineInterface, night: string, generation: strin
   const self = await $.session.id()
   const taken = await othersReports($, generation, self)
   const project = await projectName($)
+  const title = reportTitle(await titleNow($))
   for (let n = 1; n <= 50; n++) {
-    const path = `${home}/Downloads/${reportBase({ night, project, title: reportTitle(knownTitle), sessionId: self, n })}.md`
+    const path = `${home}/Downloads/${reportBase({ night, project, title, sessionId: self, n })}.md`
     if (!taken.has(path) && !(await $.fs.exists(path))) return path
   }
   throw new Error('fifty names for it were all taken')
@@ -4163,19 +4201,6 @@ export const register: Register = on => {
 
   // This session's title, which names its sleep report (#1287): the engine hands it only to this
   // session's own hooks, at its start and with each of Dan's messages, as auto naming reads it.
-  on('classic.SessionStart', async ($, e, next) => {
-    const r = await next(e)
-    const t = typeof e.session_title === 'string' ? e.session_title.trim() : ''
-    if (t) knownTitle = t
-    return r
-  })
-  on('classic.UserPromptSubmit', async ($, e, next) => {
-    const r = await next(e)
-    const t = typeof e.session_title === 'string' ? e.session_title.trim() : ''
-    if (t) knownTitle = t
-    return r
-  })
-
   // Sleep mode phase 3 (#834, Dan's decision 7): overnight, Claude Code's own permission prompts in
   // an enrolled session are approved, while Dan's own checks stay on (the settings hooks and every
   // mod's tool.call refusal run before this step, and a decision beneath is never overridden). Never
