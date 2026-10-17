@@ -145,6 +145,16 @@ body 'no line'
 out="$(run "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body-file body.md $FIELDS" "$URL")"
 [ -z "$out" ] && [ "$(calls)" = 0 ] && check "#1272 the session line's override is honoured after the create too" ok || check "#1272 the session line's override is honoured after the create too" "$out $(cat "$TMP/gh.log")"
 
+# check_issue answers as its docstring says (lessons review): a pair, what Claude is told and what
+# Dan is told, each None when there is nothing for that reader. With no time left, Claude is told
+# the issue was not checked and Dan is told nothing.
+pair="$(GATE_DIR="$DIR" python3 -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("f", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+r = m.check_issue(sys.argv[2], "L", 0, m.Clock(0))
+print(type(r).__name__, len(r), r[0] is not None, r[1] is None)' "$DIR/filed_issue_session.py" "$URL" 2>&1)"
+[ "$pair" = "tuple 2 True True" ] && check "#1272 check_issue gives one answer for each reader" ok || check "#1272 check_issue gives one answer for each reader" "$pair"
+
 # The settings timeout leaves room past the budget the hook works within.
 budget="$(GATE_DIR="$DIR" python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("f", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.BUDGET_S)' "$DIR/filed_issue_session.py" 2>&1)"
 limit="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["timeout"] for m in d["hooks"]["PostToolUse"] for h in m["hooks"] if "check-filed-issue-session.sh" in h["command"]][0])' "$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")" 2>&1)"
