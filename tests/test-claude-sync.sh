@@ -1390,6 +1390,15 @@ suite_lock_wait_more(){   # $1 = who holds it, as the refusal names them
 }
 # Said on the refusal of a run that did wait, so it cannot read as one that never tried.
 suite_lock_waited_words(){ [ -n "$_lk_wait_said" ] && printf ', after waiting %ss' "$_lk_waited"; return 0; }
+# And in the sentence a person reads: a run that waited out its bound says so, never that it refused
+# rather than queueing, which is the opposite of what it just did (lessons review of #1297, L11).
+suite_lock_refusing_words(){
+  if [ -n "$_lk_wait_said" ]; then
+    printf 'Waited %ss for it, the most SUITE_LOCK_WAIT allowed, and it is still going, so this refuses rather than wait longer' "$_lk_waited"
+  else
+    printf 'Refusing rather than queueing behind it'
+  fi
+}
 
 # The cleanup handler is installed BEFORE the lock is taken, not after, or a run that dies in the
 # gap between taking it and arming the handler leaves it standing. One cleanup, ADDED to rather
@@ -1611,7 +1620,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         # run they killed minutes ago, and a refusal naming only a number sent two separate
         # investigations looking for a bug in the suite (L80, L148). The orphan case is named
         # explicitly, because it is the commonest reason a live run is here that nobody expects.
-        echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. $_lk_evidence Refusing rather than queueing behind it: two suites competing for this machine make each other slower and make every timing either of them reports wrong. Wait for it to finish. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        echo "test suite: another run is already going: a suite run, process $_lk_pid on $_lk_host, started ${_lk_age}s ago. $_lk_evidence $(suite_lock_refusing_words): two suites competing for this machine make each other slower and make every timing either of them reports wrong. Run this again once it finishes. If you killed a run and this is the orphan it left behind, end it and everything it started with: pkill -9 -P $_lk_pid; kill -9 $_lk_pid. Or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         # The one line run-all-tests.sh reads, so this refusal is reported as NOT RUN with its
         # holder rather than as a failed suite (claude-config#1083). Only the two refusals for a
         # lock another run really holds say it; a lock this cannot read or take is a fault here.
@@ -1632,7 +1641,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         # and the holder here is a process on a DIFFERENT machine: the number means nothing on this
         # one, and a kill aimed at it would land on an unrelated local process. Distinct causes,
         # distinct remedies (L11, L111).
-        echo "test suite: another run is already going: a suite run on $_lk_host, which is not this machine, process $_lk_pid there, started ${_lk_age}s ago. Refusing rather than queueing behind it. Nothing here can end it, and its process id means nothing on this machine, so wait for it, clear $SUITE_LOCK yourself if that machine is gone, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
+        echo "test suite: another run is already going: a suite run on $_lk_host, which is not this machine, process $_lk_pid there, started ${_lk_age}s ago. $(suite_lock_refusing_words). Nothing here can end it, and its process id means nothing on this machine, so wait for it, clear $SUITE_LOCK yourself if that machine is gone, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
         printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, not this machine, started ${_lk_age}s ago$(suite_lock_waited_words)"
         exit 5
       fi
@@ -8154,6 +8163,10 @@ check "#1297 a holder that outlasts the wait is still refused" "[ '$_ow_rc' -ne 
 check "#1297 and in the line the runner reads, naming the holder" \
   "grep -qE '^SUITE-LOCK-REFUSED process $$ on .*after waiting [0-9]+s' <<< \"\$_ow\""
 check "#1297 and it ran none of the checks" "! grep -q '^PASS=' <<< \"\$_ow\""
+check "#1297 and its sentence says it waited, never that it refused rather than queueing" \
+  "grep -q 'Waited [0-9]*s for it, the most SUITE_LOCK_WAIT allowed' <<< \"\$_ow\" && ! grep -q 'rather than queueing' <<< \"\$_ow\""
+check "#1297 while a run that was not asked to wait still says it refused rather than queueing" \
+  "grep -q 'Refusing rather than queueing behind it' <<< \"\$_held\""
 
 # A wait that is not a whole number of seconds is refused rather than guessed at: guessing could
 # mean no wait at all, which is the refusal this exists to avoid, or one with no end (L50).
