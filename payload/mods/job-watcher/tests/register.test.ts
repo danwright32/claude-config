@@ -345,8 +345,29 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     w.reached.push({ tool: e.tool, input })
     if (e.tool === 'Bash' && input.run_in_background) {
       started += 1
-      const text = startedText(`job${started}`)
+      // A command that changes directory gets Claude Code's note that the session's own did not.
+      const hint = /(^|&&|;)\s*cd\s/.test(String(input.command)) ? '\nSession cwd remains /repo; directory changes made by the backgrounded command do not apply to subsequent commands.' : ''
+      const text = `${startedText(`job${started}`)}${hint}`
       return { result: text, text } as never
+    }
+    // #1302: the other ways Claude Code moves a foreground call to the background, in its own words
+    // (the 2.1.302 build): so a message can reach Claude, by the user, or left running as its turn
+    // stopped. structured: what it printed first, then the move, with the task named in the result.
+    const moved = /^(deliver|userbg|aborted|structured) /.exec(String(input.command))?.[1]
+    if (e.tool === 'Bash' && moved) {
+      started += 1
+      const id = `job${started}`
+      const notice =
+        moved === 'userbg'
+          ? `Command was manually backgrounded by user with ID: ${id}. Output is being written to: ${outOf(id)}.`
+          : moved === 'aborted'
+            ? startedText(id)
+            : `Command was moved to the background (ID: ${id}) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: ${outOf(id)}. You will be notified when it completes.`
+      if (moved === 'structured') {
+        const text = `warning: 1 uncommitted change\n${notice}`
+        return { result: { stdout: '', stderr: 'warning: 1 uncommitted change', interrupted: false, backgroundTaskId: id }, text } as never
+      }
+      return { result: notice, text: notice } as never
     }
     // A foreground command whose own output quotes both start texts: a cat of a test file.
     if (e.tool === 'Bash' && String(input.command).startsWith('cat ')) {
@@ -1664,6 +1685,43 @@ test('a command moved to the background at its timeout is recorded and named lik
   expect(w.extra[w.extra.length - 1]).toEqual([{ id: 'job1', command: 'slow npm test', outputPath: OUT, pgid: 501, startedAt: 0 }])
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toContain(`${REMINDER} background job job1 (slow npm test)`)
+})
+
+// #1302: on 2026-10-17 keep_job answered "None is running" for merge helper runs that were running,
+// in a session waiting on its builders, because the watcher read only two of the ways Claude Code
+// says a call went to the background. Each other way is recorded, named, and can be kept.
+for (const [how, command] of [
+  ['moved so a message could reach Claude', 'deliver bash ~/.claude/hooks/lib/merge-when-ready.sh 2343 --squash'],
+  ['sent to the background by the user', 'userbg bash ~/.claude/hooks/lib/merge-when-ready.sh 2344 --squash'],
+  ['left running as its turn stopped', 'aborted bash ~/.claude/hooks/lib/merge-when-ready.sh 2352 --squash'],
+  ['named by the task in the result, after what it printed first', 'structured gh pr comment 2343 --body x && cd /repo/.claude/worktrees/b && bash merge-when-ready.sh 2343'],
+] as const) {
+  test(`a foreground command ${how} is recorded and can be kept (#1302)`, withDeps, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    const w = world(on, { tail: 'merge-when-ready: waiting\n', size: 26 })
+    await start($)
+    await $.tool.call({ tool: 'Bash', command } as never)
+    expect(lastRecs(w).map(r => r.id)).toEqual(['job1'])
+    const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+    expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
+    const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge', reason: 'it merges once checks pass' }))) as { result?: unknown; deny?: string }
+    expect(r.deny).toBeUndefined()
+    expect(String(r.result)).toContain('Kept job1')
+  })
+}
+
+// The shape the issue named, run in the background as the helper asks: gh pr comment, then a cd into
+// a worktree, so Claude Code's note about the cd follows the start. Recorded and kept like any job.
+test('a background merge helper run that comments and then changes directory can be kept (#1302)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on, { tail: 'merge-when-ready: waiting\n', size: 26 })
+  await start($)
+  const command = 'gh pr comment 2343 --body "merging" && cd /repo/.claude/worktrees/b && bash ~/.claude/hooks/lib/merge-when-ready.sh 2343 --squash'
+  await $.tool.call({ tool: 'Bash', command, run_in_background: true } as never)
+  expect(lastRecs(w).map(r => r.id)).toEqual(['job1'])
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge 2343', reason: 'it merges once checks pass' }))) as { result?: unknown; deny?: string }
+  expect(r.deny).toBeUndefined()
+  expect(String(r.result)).toContain('Kept job1')
 })
 
 // #706: a leftover is a job whose Claude Code process has gone, measured from the job's own process
