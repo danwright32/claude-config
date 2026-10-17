@@ -12,12 +12,16 @@
 #   other       not a Claude agent's lock, so nothing here can say whose it is or whether it is done
 #   live        that pid is running and started when the lock says, so its agent is still there
 #   dead        no process has that pid
-#   reused      a process has that pid but started at another time, so it is not that agent
+#   reused      a process has that pid but its start time does not match the lock's
 #   preboot     the lock says its agent started before this machine last booted, which no process
 #               survives, so ps is not even asked
 #   unreadable  whether it is running could not be read, so nothing is claimed either way (L10)
-# Only dead, reused and preboot say the lock is stale. A pid alone proves nothing: pids are reused,
-# so the start time is what names the process.
+# Only dead and preboot say the lock is stale, because each is certain: no process has the pid, or
+# no process survives a boot. A pid alone proves nothing (pids are reused), so the start time is what
+# names a LIVE agent, but a start time that does not match is not proof the agent is gone: it is a
+# comparison of two strings, and a format or time zone the lock was written in that this reader does
+# not expect makes a live agent read as reused. So reused keeps the lock, the harmless direction
+# (L648), as the brief for #1282 asked.
 #
 # THE START TIME IN THE REASON WAS UTC when measured on 2026-10-17: a lock reading "start Sat Oct 17
 # 14:06:12 2026" was held by a process ps gave as started 10:06:12 local time (EDT) and 14:06:12

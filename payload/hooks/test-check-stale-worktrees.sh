@@ -386,6 +386,8 @@ check "and carries the command that lifts the lock" "git -C $LREPO_REAL worktree
 check "a live agent's lock keeps its worktree, naming the pid" "keeping agent-llive [fix/602-live]: a Claude agent that is still running holds its lock (pid 4002" "$OUT"
 check_not "and the live one is never called stale" "STALE agent-llive" "$OUT"
 check_not "nor is one whose lock is not a Claude agent's, which --remove would not take" "STALE agent-lother" "$OUT"
+check "a reused pid's lock keeps its worktree, since a start that does not match cannot prove the agent gone" \
+  "keeping agent-lreused [fix/603-reused]: its lock names a pid now held by another process" "$OUT"
 for n in ldead lreused lpreboot; do
   check_eq "report mode leaves the lock on agent-$n alone" "claude agent agent-$n" "$(lockof "agent-$n" | cut -d' ' -f1-3)"
 done
@@ -416,9 +418,10 @@ check "while one started since the boot is kept, ps being unreadable" "keeping a
 SHIM_REFUSE=1 SHIM_RACE=1 SHIM_HALF=1 lrun --remove
 check "a landed worktree whose agent's pid is no longer running is removed" "removed agent-ldead [fix/601-dead]" "$OUT"
 check_eq "its folder is gone" yes "$(gone agent-ldead)"
-check "one whose pid now belongs to a process started at another time is removed" "removed agent-lreused [fix/603-reused]" "$OUT"
-check "and says the pid is a different process now" "pid 4003 is now a different process, started Fri Oct 16 08:30:00 2026" "$OUT"
-check_eq "its folder is gone" yes "$(gone agent-lreused)"
+check "one whose pid is now held by a process started at another time is kept" "keeping agent-lreused [fix/603-reused]" "$OUT"
+check "and says when the process holding the pid now started" "pid 4003 is now a different process, started Fri Oct 16 08:30:00 2026" "$OUT"
+check_eq "its folder stays" no "$(gone agent-lreused)"
+check_eq "and its lock is left exactly as it was" "$R_REUSED" "$(lockof agent-lreused)"
 check "a live agent's worktree is kept" "keeping agent-llive [fix/602-live]: a Claude agent that is still running holds its lock" "$OUT"
 check_eq "and its lock is left exactly as it was" "$R_LIVE" "$(lockof agent-llive)"
 check "a lock that is not a Claude agent's keeps its worktree, naming the lock" "keeping agent-lother [fix/605-other]: git has it locked, and not by a Claude agent (kept on an external disk), so the lock is left alone" "$OUT"
@@ -429,7 +432,7 @@ LMARKS="$(cd "$LREPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claud
 check_eq "and a refusal, nothing having been deleted, leaves no marker" no "$([ -e "$LMARKS/agent-lrefused" ] && echo yes || echo no)"
 check "a lock that changed hands while the run was looking is not lifted" "keeping agent-lrace [fix/607-race]: its lock changed while this run was looking at it" "$OUT"
 check_eq "and the new holder's lock is left in place" "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$(lockof agent-lrace)"
-check "the summary counts the removals" "removed 2 of 7 agent worktree(s)" "$OUT"
+check "the summary counts the removals" "removed 1 of 7 agent worktree(s)" "$OUT"
 # A removal that stops part way with the worktree still listed leaves it part deleted. Its marker
 # stays for the next run to finish, and that finish (one --force) is refused on a locked worktree,
 # so the dead agent's lock must NOT be put back there.
@@ -455,7 +458,7 @@ if [ -n "$LIVE_START" ]; then
   OUT="$(STALE_WT_GH="$TMP/bin/gh" bash "$SCRIPT" --remove "$LREPO" 2>&1)"; RC=$?
   check "the real ps sees a running agent's lock, and keeps its worktree" "keeping agent-lreal [fix/608-real]: a Claude agent that is still running holds its lock (pid $LIVE" "$OUT"
   check_eq "with its lock in place" "claude agent agent-lreal (pid $LIVE start $LIVE_START)" "$(lockof agent-lreal)"
-  check "and the same pid with another start time is not that agent, so its worktree goes" "removed agent-lrealold [fix/609-realold]" "$OUT"
+  check "and the same pid in a lock from before the real boot is stale, so its worktree goes" "removed agent-lrealold [fix/609-realold]" "$OUT"
 else
   echo "UNMEASURED: ps here gave no start time for a process this suite started, so the real lookup cannot be tested"
 fi

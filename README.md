@@ -1610,7 +1610,8 @@ row that fell back to the guess "GitHub not read", never unmerged.
 REMOVABLE or KEEP, naming every reason it keeps one. REMOVABLE needs all of: GitHub (read with `gh`)
 reports a merged pull request from its branch and none still open; no uncommitted or untracked
 files; no commit that is not on main, on the remote branch, or at the head the merged pull request
-recorded; not locked (Claude Code locks the worktree of a running agent); and no running process
+recorded; not locked, or locked by a Claude agent that is gone (read the way described below for
+the automatic cleanup); and no running process
 has its current directory inside it. It reports and changes nothing unless given `--remove`, which
 removes each REMOVABLE worktree with an unforced `git worktree remove`, deletes its local branch,
 and names each removal. It never touches a remote branch or the primary checkout. When `gh` cannot
@@ -1634,13 +1635,14 @@ uncommitted, nothing changed in the last six hours, and no running process is wo
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
-lock behind. The check lifts that lock just before the removal when the pid is gone, when the pid
-now belongs to a process that started at another time, or when the agent started before the Mac
-last booted. If git then refuses the removal and leaves the worktree whole, the lock is put back.
+lock behind. The check lifts that lock just before the removal when no process has the pid, or
+when the agent started before the Mac last booted. If git then refuses the removal and leaves the worktree whole, the lock is put back.
 If git stops part way and leaves the worktree part deleted, the lock stays off so the next run
-can finish the removal. A live agent's lock, a lock whose agent cannot be checked because ps could
-not be read, and any lock that is not a Claude agent's are left alone, and each of those is named
-with the reason it was kept. Without `--remove` the check reports and changes nothing, locks
+can finish the removal. A live agent's lock, a pid now held by a process whose start time does not
+match the lock (which cannot prove the agent gone), a lock whose agent cannot be checked because ps
+could not be read, and any lock that is not a Claude agent's are left alone, and each of those is
+named with the reason it was kept. `tools/shipped-worktrees.sh` reads locks the same way, through
+`payload/hooks/lib/agent-lock.sh`, so the two cleanups agree. Without `--remove` the check reports and changes nothing, locks
 included.
 
 ## Mods

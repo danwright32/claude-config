@@ -23,12 +23,13 @@
 #      (lib/agent-lock.sh, #1282). Claude Code locks a running agent's worktree and lifts the lock
 #      when the agent finishes, so an agent that never finished (the Mac going down) left a lock
 #      git refuses to remove past, and five landed worktrees were kept for ever on 2026-10-17. A
-#      lock naming a pid that is gone, a pid now held by a process started at another time, or a
-#      start before the last boot is lifted just before the removal. If git then refuses and
+#      lock naming a pid no process has, or an agent that started before the last boot, is lifted
+#      just before the removal. If git then refuses and
 #      leaves the worktree whole, the lock is put back; if git stops part way and leaves it part
-#      deleted, the lock stays off, so the next run can finish the removal. A live agent's lock,
-#      one whose agent cannot be read, and any lock that is not a Claude agent's are left exactly
-#      as they are.
+#      deleted, the lock stays off, so the next run can finish the removal. A live agent's lock, a
+#      pid now held by a process whose start does not match the lock, one whose agent cannot be
+#      read, and any lock that is not a Claude agent's are left exactly as they are. The same
+#      reading decides tools/shipped-worktrees.sh, so the two cleanups agree.
 # Its BRANCH is never deleted, so every commit can be had back with `git worktree add`. What goes
 # with the folder is only what git ignores (installed packages, a local settings file).
 #
@@ -256,7 +257,8 @@ for i in "${!paths[@]}"; do
     case "$lv" in
       live) echo "  keeping $name [$b]: a Claude agent that is still running holds its lock ($ldetail)"; continue ;;
       unreadable) echo "  keeping $name [$b]: it is locked by a Claude agent, and whether that agent is still running could not be read ($ldetail), so the lock is left alone"; continue ;;
-      dead|reused|preboot) stale_lock="$ldetail" ;;
+      reused) echo "  keeping $name [$b]: its lock names a pid now held by another process, which cannot prove its agent gone ($ldetail), so the lock is left alone"; continue ;;
+      dead|preboot) stale_lock="$ldetail" ;;
       *) echo "  keeping $name [$b]: git has it locked, and not by a Claude agent (${reason:-no reason given}), so the lock is left alone"; continue ;;
     esac
   fi
