@@ -121,8 +121,12 @@ def main(argv):
         mistyped = [(k, d[k]) for k in ("requirement", "noCode") if k in d and d[k] is not None and not isinstance(d[k], str)]
         if mistyped:
             for k, v in mistyped:
-                problems.append("MISTYPED %s: %s (its %s is %s, a %s; write it as text, \"%s\")"
-                                % (did, what, k, json.dumps(v), "boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float)) else "list" if isinstance(v, list) else "object", v))
+                # The value is shown as the JSON parser read it, and the fix is said in words rather
+                # than as a suggested string: a number has already lost any trailing zero by now.
+                kind = ("boolean" if isinstance(v, bool) else "number" if isinstance(v, (int, float))
+                        else "list" if isinstance(v, list) else "object")
+                problems.append("MISTYPED %s: %s (its %s was read as the %s %s; write it as text in quotes, "
+                                "exactly as the PRD numbers it)" % (did, what, k, kind, json.dumps(v)))
             continue
         req = text(d.get("requirement"))
         reason = text(d.get("noCode"))

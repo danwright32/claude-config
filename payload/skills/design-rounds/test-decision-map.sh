@@ -70,7 +70,7 @@ run "$T/unstated.html"
 # An owner given as a number is said to be mistyped, not reported as missing (lessons review).
 design "$T/numeric.html" '{"decisions": [{"id": "D1", "decision": "Dense rows", "requirement": 6.4}]}'
 run "$T/numeric.html"
-[ "$rc" -eq 1 ] && said '^MISTYPED D1: Dense rows (its requirement is 6.4, a number; write it as text, "6.4")$' \
+[ "$rc" -eq 1 ] && said '^MISTYPED D1: Dense rows (its requirement was read as the number 6.4; write it as text in quotes, exactly as the PRD numbers it)$' \
   && check "a requirement written as a number is named as mistyped" ok || check "a requirement written as a number is named as mistyped" "rc=$rc $out"
 said '^UNMAPPED' && check "and is not reported as unmapped" "$out" || check "and is not reported as unmapped" ok
 
