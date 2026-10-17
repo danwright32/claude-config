@@ -1700,7 +1700,7 @@ CF_A='App/Carry.swift:1: the carry line is vague (L11). Should be: precise. [sev
 FAKE_CLAUDE_OUT="$CF_A" prr start --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null
 wait_final "$C_A" || bad "#1280 the first review finished"
 out="$(prr check --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry)"
-read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p' | head -1)"
+read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p')"
 [ -n "$read_key" ] || bad "#1280 the first review's refusal carried a read key"
 PR_REVIEW_READ="$read_key" prr check --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null; rc=$?
 check_eq "#1280 the first review's findings were read" "0" "$rc"
@@ -1731,7 +1731,7 @@ prr start --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/n
 out="$(prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry)"; rc=$?
 check_eq "#1280 unread findings carried are still unread: refused" "1" "$rc"
 check "#1280 showing them" "$CF_A" "$out"
-read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p' | head -1)"
+read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p')"
 PR_REVIEW_READ="$read_key" prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null; rc=$?
 check_eq "#1280 and their key reads them" "0" "$rc"
 # Control: main changes a file the branch also changes (far from its lines, so it merges cleanly),
