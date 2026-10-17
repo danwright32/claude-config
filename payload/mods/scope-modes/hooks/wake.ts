@@ -134,8 +134,9 @@ const PICKERS =
 
 /**
  * Each live session's own morning, as one prompt (#1285): its summary if it worked, what it held,
- * its questions and held merges as pickers, and, only where `offers` is not false (the session that
- * ended sleep), the night's proposed issues and lessons. `unread` is why the notes could not be read.
+ * its questions and held merges as pickers, and, where `offers` is not false, the proposals it
+ * offers: its own repository's issues (#1286), and in the session that ended sleep the lessons and
+ * what names no repository too. `unread` is why the notes could not be read.
  */
 export const morningPrompt = (o: {
   worker: boolean
@@ -144,7 +145,7 @@ export const morningPrompt = (o: {
   bad?: number
   unread?: string
   held?: readonly HeldDelivery[]
-  /** Whether this session offers the night's proposed issues and lessons: the one that ended sleep does (#1285). */
+  /** Whether this session offers proposals: the one that ended sleep, or one that claimed its repository's (#1285, #1286). */
   offers?: boolean
   /** The questions this session noted overnight (#1285). */
   questions?: readonly NightQuestion[]

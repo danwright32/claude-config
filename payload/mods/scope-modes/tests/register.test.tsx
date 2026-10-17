@@ -2809,7 +2809,7 @@ test('a worker that did not wake sleep puts its own morning to Dan at its next m
   expect(m).toMatch(/^Dan is up: sleep mode is off\. Summarise for him in a few plain lines what this session did overnight/)
   expect(m).toContain('3.1 /repo: Keep the old export flag?')
   expect(m).not.toContain('Rename the parser?')
-  // The proposals are the session that ended sleep's to offer, so none is offered twice.
+  // Another session holds the claim on o/r's proposals (the seeded offered/g0/o_r), so none is offered twice (#1286).
   expect(m).not.toContain('1.1 ')
   expect(m).not.toContain('2.1 ')
   await clock.advance(3 * MIN)
@@ -2921,6 +2921,7 @@ test('a record naming no generation whose morning turn fails is still said as un
 const BIDSPOKE = proposal({ kind: 'issue', repo: 'Acme/Bidspoke', title: 'Bid totals round twice', priority: 'p2', labels: ['bug'], milestone: 'Ungrouped', text: 'Seen in totals.ts.' })
 const OFFERED = `${SLEEP}/offered`
 const IN_BIDSPOKE: Opts = { remote: 'git@github.com:acme/bidspoke.git' }
+const perNightRecord = (generation: string) => asleepRecord({ generation })
 
 test("the session that ends sleep offers only its own repository's proposed issues, and the lessons, never another repository's (#1286)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${BIDSPOKE}\n` } })
@@ -2967,10 +2968,32 @@ test('a repository with no live session at wake keeps its proposals for the next
   await clock.settle()
   const offered = w.prompts.filter(p => p.includes('Bid totals round twice'))
   expect(offered.length).toBe(1)
-  expect(offered[0]).toMatch(/^Proposals for acme\/bidspoke from an earlier night were never offered, since no session in it was open when that night ended: offer them now\./)
+  expect(offered[0]).toMatch(/^Proposals and questions for acme\/bidspoke from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now\./)
   expect(offered[0]).not.toContain('Date parse drops the zone')
   await clock.advance(3 * MIN)
   expect(w.prompts.filter(p => p.includes('Bid totals round twice')).length).toBe(1)
+})
+
+test("a session's own morning claim is never offered again by its backlog check (#1286 lessons review)", withDeps, async ($, on) => {
+  const NIGHT = `${SLEEP}/notes/${T0 - MIN}-s9.jsonl`
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: perNightRecord(`${T0 - MIN}-s9`), [NIGHT]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(3 * MIN)
+  await clock.settle()
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice')).length).toBe(1)
+})
+
+test("an earlier night's question from a session now closed is asked by the next session in its repository (#1286 lessons review)", withDeps, async ($, on) => {
+  const asked = JSON.stringify({ v: 1, generation: 'x', at: T0 - 2 * MIN, kind: 'question', by: 's5', repo: 'acme/bidspoke', questions: ['Round totals up or down?'] })
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `${asked}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Round totals up or down?'))
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 acme/bidspoke: Round totals up or down?')
 })
 
 test("a claim that cannot be written offers nothing rather than risk offering twice, and says why (#1286)", withDeps, async ($, on) => {

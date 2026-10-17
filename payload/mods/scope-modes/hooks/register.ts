@@ -1467,7 +1467,8 @@ type HeldItem = HeldDelivery & { why?: string }
 
 // Phase 9 (#837), every session since #1285: a session's own morning, from the night's notes: its
 // summary if it worked, what it held, the questions it noted and the merges the night held in it,
-// each a picker, and, in the session that ended sleep, the proposed issues and lessons. A read that
+// each a picker, and its own repository's proposed issues once claimed (#1286), with the lessons and
+// what names no repository in the session that ended sleep. A read that
 // fails is said in the prompt, never read as a night with nothing proposed (L215). `anything` is
 // whether there is anything to put to Dan at all, so a session with nothing of its own starts no turn.
 const morningOf = async ($: EngineInterface, night: Night, self: string, held: readonly HeldItem[]): Promise<{ prompt: string; anything: boolean }> => {
@@ -1525,7 +1526,9 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
 // of two sessions claiming at once exactly one wins (assume it runs twice). True once claimed here;
 // false when another holds it, or when the claim could not be written, which is logged: offering
 // nothing is the safe side, since the proposals stay in the report and unclaimed for a later session.
-const claimOffer = async ($: EngineInterface, generation: string, key: string): Promise<boolean> => {
+// `fresh` takes only a new claim: the backlog's, which must never offer again what this session's own
+// morning already offered (lessons review).
+const claimOffer = async ($: EngineInterface, generation: string, key: string, fresh = false): Promise<boolean> => {
   const dir = `${(await sleepPaths($)).dir}/offered/${generation.replace(/[^\w.-]/g, '_')}`
   const path = `${dir}/${keyFile(key)}`
   const tmp = `${dir}/.${keyFile(key)}.${Math.random().toString(36).slice(2, 10)}.tmp`
@@ -1535,7 +1538,7 @@ const claimOffer = async ($: EngineInterface, generation: string, key: string): 
     const ln = await run($, ['ln', tmp, path])
     if (ln.exitCode === 0) return true
     // This session's own earlier claim (a morning that did not go in, asked again) is still its own.
-    if (/File exists/i.test(ln.stderr)) return (await $.fs.read(path).catch(() => '')) === (await $.session.id())
+    if (/File exists/i.test(ln.stderr)) return !fresh && (await $.fs.read(path).catch(() => '')) === (await $.session.id())
     $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}), so they are left in the report for a later session`, { to: 'debug' })
     return false
   } catch (err) {
@@ -1563,6 +1566,14 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   if (ls.exitCode !== 0) return
   const now = await $.clock.now()
   const issues: ProposedIssue[] = []
+  const questions: NightQuestion[] = []
+  // A question is offered here only when its own session is no longer open to ask it (lessons review).
+  let open: Set<string> | null = null
+  try {
+    open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
+  } catch (err) {
+    $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so earlier nights' questions are left to them`, { to: 'debug' })
+  }
   for (const name of ls.stdout.split('\n').map(s => s.trim()).filter(s => s.endsWith('.jsonl'))) {
     const generation = name.slice(0, -'.jsonl'.length)
     const at = Number(/^(\d+)-/.exec(generation)?.[1])
@@ -1574,13 +1585,22 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
       $.ui.log(`scope-modes: an earlier night's notes could not be read (${msg(err)}), so any proposal for ${mine} in them waits in its report`, { to: 'debug' })
       continue
     }
-    const mineHere = proposalsIn(notes).issues.filter(i => repoKey(i.repo) === mine)
-    if (mineHere.length && (await claimOffer($, generation, mine))) issues.push(...mineHere)
+    const read = proposalsIn(notes)
+    const mineHere = read.issues.filter(i => repoKey(i.repo) === mine)
+    const asksHere: NightQuestion[] = []
+    for (const q of read.questions) {
+      if (!(q.by === null || (open !== null && !open.has(q.by)))) continue
+      if (repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) === mine) asksHere.push(q)
+    }
+    if ((mineHere.length || asksHere.length) && (await claimOffer($, generation, mine, true))) {
+      issues.push(...mineHere)
+      questions.push(...asksHere)
+    }
   }
-  if (!issues.length) return
-  const lead = `Proposals for ${mine} from an earlier night were never offered, since no session in it was open when that night ended: offer them now.`
+  if (!issues.length && !questions.length) return
+  const lead = `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
   try {
-    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: true, issues, lessons: [], lead }) })
+    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: issues.length > 0, issues, lessons: [], questions, lead }) })
   } catch (err) {
     $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }
