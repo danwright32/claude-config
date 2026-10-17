@@ -711,6 +711,9 @@ const textNow = async ($: EngineInterface, path: string): Promise<string | undef
 const undoOne = async ($: EngineInterface, w: Watched, after: string | undefined, file: string, keep: string | undefined): Promise<ShellOutcome> => {
   if (keep === undefined) return { file, unkept: "the session's scratchpad could not be found" }
   try {
+    // `$.fs.write` makes the folders it needs (the engine's contract: "creating it and its
+    // directories as needed"), so the scratchpad's design-round-guard folder is made here; and the
+    // copy is read back, so one that did not land stops the undo rather than going unnoticed.
     await $.fs.write(keep, after ?? '')
     if (String(await $.fs.read(keep)) !== (after ?? '')) return { file, unkept: `the copy at ${keep} read back different from what the command wrote` }
   } catch (err) {
