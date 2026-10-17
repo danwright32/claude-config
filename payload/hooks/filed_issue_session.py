@@ -54,15 +54,39 @@ ISSUE_URL = re.compile(r"^https://[^/\s]+/[^/\s]+/[^/\s]+/issues/(\d+)$")
 # tool call's own clock is not in the payload, so the window is wide.
 CREATED_WITHIN_S = 15 * 60
 GH_TIMEOUT_S = 15
+# The whole run's time, inside the 60 s settings.hooks.json gives this hook, so the hook is never
+# killed partway, between an edit and its read back (lessons review). Each gh call gets what is left,
+# at most GH_TIMEOUT_S; an issue there is too little left for is said as unchecked, and an edit is
+# started only with room left to read it back. FILED_ISSUE_BUDGET_S sets it for the tests.
+BUDGET_S = 45
+MIN_CALL_S = 3
 
 
-def _gh_issue(action, args, stdin=None):
+class Clock:
+    """What is left of the run's budget."""
+
+    def __init__(self, budget):
+        self.end = time.monotonic() + budget
+
+    def left(self):
+        return max(0.0, self.end - time.monotonic())
+
+
+def _budget():
+    try:
+        return float(os.environ.get("FILED_ISSUE_BUDGET_S", BUDGET_S))
+    except ValueError:
+        return BUDGET_S
+
+
+def _gh_issue(action, args, clock, stdin=None):
     """Run `gh issue <action> <args>`: (ok, stdout, the reason it failed). It runs gh, and reads no
     command, so it is no reading of a subcommand (lib/word-position-scan.py)."""
+    wait = min(GH_TIMEOUT_S, clock.left())
     try:
-        r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=GH_TIMEOUT_S)
+        r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=wait)
     except subprocess.TimeoutExpired:
-        return False, "", "gh did not answer within %d seconds" % GH_TIMEOUT_S
+        return False, "", "gh did not answer within %d seconds" % wait
     except OSError as e:
         return False, "", "gh could not be run (%s)" % e
     if r.returncode != 0:
@@ -71,9 +95,9 @@ def _gh_issue(action, args, stdin=None):
     return True, r.stdout, ""
 
 
-def _read(url):
+def _read(url, clock):
     """The issue's body and when it was created, or the reason it could not be read."""
-    ok, out, why = _gh_issue("view", [url, "--json", "body,createdAt"])
+    ok, out, why = _gh_issue("view", [url, "--json", "body,createdAt"], clock)
     if not ok:
         return None, None, why
     try:
@@ -85,10 +109,13 @@ def _read(url):
         return None, None, "gh gave an answer that could not be read (%s)" % e
 
 
-def check_issue(url, line, now):
+def check_issue(url, line, now, clock):
     """What to say about one issue the command printed, or None for nothing to say."""
     number = ISSUE_URL.match(url).group(1)
-    body, created, why = _read(url)
+    if clock.left() < MIN_CALL_S:
+        return ("there was no time left to read issue #%s (%s) back from GitHub, so whether it names this "
+                "session was not checked. Check it ends with the line:\n%s" % (number, url, line)), None
+    body, created, why = _read(url, clock)
     if body is None:
         return ("could not read issue #%s's body back from GitHub (%s), so whether it names this session was "
                 "not checked. Check %s ends with the line:\n%s" % (number, why, url, line)), None
@@ -97,11 +124,14 @@ def check_issue(url, line, now):
     if gate.SESSION_MARK in body:
         return None, None
     fixed = body.rstrip() + "\n\n" + line if body.strip() else line
-    ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], stdin=fixed)
+    if clock.left() < 2 * MIN_CALL_S:
+        return ("issue #%s (%s) was filed without the line naming this session, and there was no time left "
+                "to add it and read it back. Add it at the end of the body yourself:\n%s" % (number, url, line)), None
+    ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], clock, stdin=fixed)
     if not ok:
         return ("issue #%s (%s) was filed without the line naming this session, and could not add it on "
                 "GitHub (%s). Add it at the end of the body yourself:\n%s" % (number, url, why, line)), None
-    after, _, why = _read(url)
+    after, _, why = _read(url, clock)
     if after is None or line not in after:
         return ("issue #%s (%s) was filed without the line naming this session; the edit adding it was "
                 "accepted, but reading the body back %s, so it may not be there. Check it ends with:\n%s"
@@ -112,7 +142,7 @@ def check_issue(url, line, now):
             "issue's description on GitHub." % number)
 
 
-def evaluate(data, line, now):
+def evaluate(data, line, now, clock):
     """(what Claude is told, what Dan is told), each a list of sentences."""
     command = (data.get("tool_input") or {}).get("command") or ""
     try:
@@ -138,7 +168,7 @@ def evaluate(data, line, now):
                  "ends with the line:\n%s" % line)], []
     claude, dan = [], []
     for u in urls:
-        said, told = check_issue(u, line, now)
+        said, told = check_issue(u, line, now, clock)
         if said:
             claude.append(said)
         if told:
@@ -159,7 +189,7 @@ def main():
     line = gate.session_line()
     if not line:
         return 0
-    claude, dan = evaluate(data, line, time.time())
+    claude, dan = evaluate(data, line, time.time(), Clock(_budget()))
     if not claude and not dan:
         return 0
     context = "\n\n".join("Filed issue check: " + c for c in claude)

@@ -122,6 +122,18 @@ out="$(GH_EDIT_IGNORED=1 run "${shapes[1]}" "$URL")"
 case "$out" in *'did not find it'*"$LINE"*) check "#1272 an edit that did not land is said, from reading the body back" ok ;; *) check "#1272 an edit that did not land is said, from reading the body back" "$out" ;; esac
 case "$out" in *'added the line'*) check "#1272 an edit that did not land is never said as added" "$out" ;; *) check "#1272 an edit that did not land is never said as added" ok ;; esac
 
+# The hook's whole run fits inside its settings timeout, so it is never killed between an edit and
+# its read back (lessons review): an issue it has no time left for is said as unchecked, and an edit
+# it could not finish confirming is never started. FILED_ISSUE_BUDGET_S sets that time for the test.
+body 'no line'
+out="$(FILED_ISSUE_BUDGET_S=0 run "${shapes[1]}" "$URL")"
+[ "$(calls)" = 0 ] && check "#1272 with no time left, GitHub is asked nothing" ok || check "#1272 with no time left, GitHub is asked nothing" "$(cat "$TMP/gh.log")"
+case "$out" in *'no time left'*'#42'*"$LINE"*) check "#1272 an issue there was no time for is said as unchecked" ok ;; *) check "#1272 an issue there was no time for is said as unchecked" "$out" ;; esac
+# The settings timeout leaves room past the budget the hook works within.
+budget="$(GATE_DIR="$DIR" python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("f", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.BUDGET_S)' "$DIR/filed_issue_session.py" 2>&1)"
+limit="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["timeout"] for m in d["hooks"]["PostToolUse"] for h in m["hooks"] if "check-filed-issue-session.sh" in h["command"]][0])' "$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")" 2>&1)"
+[ "$budget" -lt "$((limit - 5))" ] 2>/dev/null && check "#1272 the hook's budget ($budget s) sits inside its timeout ($limit s)" ok || check "#1272 the hook's budget sits inside its timeout" "budget=$budget limit=$limit"
+
 # Output that names no issue: a create that failed says nothing; one that succeeded with its output
 # sent elsewhere is said as unchecked, never as checked.
 out="$(run "${shapes[1]}" "could not create issue: HTTP 422" 1)"
