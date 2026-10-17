@@ -323,14 +323,75 @@ def spool_parse_ts(ts):
     return t
 
 
-def unclaimed(ts):
-    """Has nobody claimed this for long enough that anybody may?"""
+# WHEN A SESSION HAS ENDED (claude-config#1291). A session that has ended never runs another review,
+# so a week of ownership left its findings unjudged for a week. It counts as ended when a SessionEnd
+# hook stamped it (`<spool root>/ended/<session id>`, written by `mark-ended`) and it has written
+# nothing since, which a resumed session would have; or when its transcript and every subagent
+# transcript under it have been idle past ENDED_IDLE. A session whose transcript cannot be found and
+# that carries no stamp stays owned: absence is not evidence it ended (L50).
+import glob as _sglob, re as _sre, time as _stime
+
+ENDED_IDLE = int(_sos.environ.get("CLAUDE_ISSUE_SPOOL_ENDED_IDLE") or 14400)
+ENDED_DIR = _sos.path.join(_sos.environ.get("CLAUDE_ISSUE_SPOOL_DIR") or _sos.path.expanduser("~/.claude-issue-spool"), "ended")
+TRANSCRIPT_ROOT = _sos.environ.get("CLAUDE_TRANSCRIPT_ROOT") or _sos.path.expanduser("~/.claude/projects")
+SAFE_SESSION = _sre.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+# A stamp written up to this long before the session last wrote still counts: the transcript gets its
+# last lines in the moments the session is closing, around the hook.
+ENDED_SLACK = 60
+_ended_cache = {}
+
+
+def session_last_active(session):
+    newest = None
+    for pattern in ("*/%s.jsonl" % session, "*/%s/subagents/*.jsonl" % session):
+        for path in _sglob.glob(_sos.path.join(TRANSCRIPT_ROOT, pattern)):
+            try:
+                m = _sos.stat(path).st_mtime
+            except OSError:
+                continue
+            if newest is None or m > newest:
+                newest = m
+    return newest
+
+
+def session_ended(session):
+    if not isinstance(session, str) or not SAFE_SESSION.match(session):
+        return False
+    if session in _ended_cache:
+        return _ended_cache[session]
+    last = session_last_active(session)
+    try:
+        stamped = _sos.stat(_sos.path.join(ENDED_DIR, session)).st_mtime
+    except OSError:
+        stamped = None
+    if stamped is not None and (last is None or last <= stamped + ENDED_SLACK):
+        ended = True
+    elif last is not None and _stime.time() - last >= ENDED_IDLE:
+        ended = True
+    else:
+        ended = False
+    _ended_cache[session] = ended
+    return ended
+
+
+def release_reason(ts, session=None):
+    """Why anybody may file a record now: "ended" when its session has ended, "expired" when nobody has
+    settled it within the week, or None while it still belongs to its session."""
+    if session_ended(session):
+        return "ended"
     t = spool_parse_ts(ts)
     if t is None:
         # An unreadable timestamp cannot be aged, so it stays owned. Erring the other way would
         # hand a record to a stranger on the strength of a field nothing could read (L50).
-        return False
-    return (_sdt.datetime.now(_sdt.timezone.utc) - t).total_seconds() >= CLAIM_AFTER
+        return None
+    if (_sdt.datetime.now(_sdt.timezone.utc) - t).total_seconds() >= CLAIM_AFTER:
+        return "expired"
+    return None
+
+
+def unclaimed(ts, session=None):
+    """Has nobody claimed this for long enough that anybody may, or has its session ended?"""
+    return release_reason(ts, session) is not None
 
 
 def load_seen_ledger(paths, reader):
@@ -356,7 +417,7 @@ def load_seen_ledger(paths, reader):
 
 
 def seen_here(line, rec, reader, ledger_ids):
-    if not reader or not isinstance(rec, dict) or unclaimed(rec.get("ts", "")):
+    if not reader or not isinstance(rec, dict) or unclaimed(rec.get("ts", ""), rec.get("session")):
         return False
     seen = rec.get("seen_by")
     if isinstance(seen, list) and reader in seen:
@@ -903,6 +964,41 @@ print(json.dumps({
   issue_spool_append "$dir" "$record" "$transcript"
 }
 
+# A SESSION THAT HAS ENDED (claude-config#1291). Run by the SessionEnd hook
+# (hooks/issue-spool-session-end.sh): one empty file per session under `<spool root>/ended/`, which
+# `session_ended` in ISSUE_SPOOL_SEEN_PY reads, so that session's findings go to the next review in
+# its project at once instead of after the week of ownership. The id becomes a file name, so it must
+# be a plain name. Stamps older than the ownership window are removed as each new one is written:
+# by then the week has released their records anyway.
+issue_spool_mark_ended() { # mark-ended <session id>
+  local sid="${1:-}" dir window
+  case "$sid" in
+    [A-Za-z0-9]*) ;;
+    *) echo "issue-spool: mark-ended needs a session id starting with a letter or digit; got '$sid'. Nothing was marked." >&2; return 2 ;;
+  esac
+  case "$sid" in
+    *[!A-Za-z0-9_-]*) echo "issue-spool: mark-ended needs a session id of letters, digits, _ and - only; got '$sid'. Nothing was marked." >&2; return 2 ;;
+  esac
+  if [ "${#sid}" -gt 128 ]; then
+    echo "issue-spool: mark-ended was given a session id longer than 128 characters. Nothing was marked." >&2
+    return 2
+  fi
+  # A test run never writes into the real spool, the rule issue_spool_append enforces (claude-config#278).
+  if [ -n "${CLAUDE_SUITE_RUN_ID:-}" ] && [ "$(issue_spool_root)" = "${HOME%/}/.claude-issue-spool" ]; then
+    echo "issue-spool: refusing to mark a session ended in the real spool at $(issue_spool_root): this is running under a test suite (CLAUDE_SUITE_RUN_ID=$CLAUDE_SUITE_RUN_ID)." >&2
+    return 3
+  fi
+  dir="$(issue_spool_root)/ended"
+  if ! mkdir -p "$dir" 2>/dev/null || ! touch "$dir/$sid" 2>/dev/null; then
+    echo "issue-spool: could not write $dir/$sid, so session $sid is not marked ended; its findings are released once its transcript has been idle for a few hours instead." >&2
+    return 1
+  fi
+  window="${CLAUDE_ISSUE_SPOOL_CLAIM_AFTER:-604800}"
+  find "$dir" -type f -mmin +"$(( window / 60 ))" -delete 2>/dev/null || true
+  echo "issue-spool: session $sid marked ended, so its findings go to the next review in its project."
+  return 0
+}
+
 # What a person should read. Records that looked and found nothing are kept in
 # the file (they are the evidence a harvest ran) but are not printed, because
 # there is nothing to act on. Everything else is printed and says which it is: a
@@ -1096,7 +1192,13 @@ for where, ts, f, sess in findings[:MAX_FINDINGS]:
     # has no context for judging one it did not cause: it will either file it badly or drop it. Its
     # own review will still be offered it, because a clear now files only its own session's.
     if READER_SESSION and sess and sess != READER_SESSION:
-        if unclaimed(ts):
+        why = release_reason(ts, sess)
+        if why == "ended":
+            # The session that owns it has ended (#1291), so it will never review again: this reader
+            # is told so while the finding is still current, with its age on the line already.
+            line += ("  [from another session in this project, which has ended without settling "
+                     "it, so it is yours to judge and yours to file]")
+        elif why:
             # The advice above would be wrong here: the session that owns it has had its window and
             # is not coming back, so telling this reader to leave it to that review names an event
             # that will not happen (L111).
@@ -1702,7 +1804,7 @@ with open(src, encoding="utf-8", errors="replace") as fh:
             # ever, because nothing can ever claim it and the reader already reports it (L11).
             s = None
             rec = None
-        if sid and s and s != sid and not unclaimed(rec.get("ts", "")):
+        if sid and s and s != sid and not unclaimed(rec.get("ts", ""), s):
             # MARKED AS SEEN BY THIS SESSION (claude-config#322), and nothing else about it is
             # touched: not filed, not moved, still owned by the session that produced it, still
             # offered to that session'"'"'s own review. What stops is being handed the same
@@ -1908,6 +2010,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     archive-path) issue_spool_archive_path "${1:-$PWD}" "${2:-}" ;;
     append)       issue_spool_append "${1:-$PWD}" "${2:-}" "${3:-}" ;;
     note)         issue_spool_note "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
+    mark-ended)   issue_spool_mark_ended "${1:-}" ;;
     raw)          f="$(issue_spool_collect "${1:-$PWD}" "${2:-}")"; [ -s "$f" ] && cat "$f"; issue_spool_collect_done "$f"; exit 0 ;;
     pending)      issue_spool_pending "${1:-$PWD}" "${2:-}" "${3:-}" "${4:-}" ;;
     has-findings) issue_spool_has_findings "${1:-$PWD}" "${2:-}" "${3:-}" ;;
