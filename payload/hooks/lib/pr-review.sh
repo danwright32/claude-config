@@ -674,7 +674,7 @@ history_text() { [ -n "${hist:-}" ] && printf '%s\n\n' "$hist"; }
 # Prints the earlier head it carried, and returns 0 when it wrote this head's review from it.
 carry_review() {   # $1 = this head's merge base with the base ref
   local mb="$1" rows best="" s rf ob d bestd="" p names
-  [ "$branch_known" = 1 ] || return 1
+  [ "$branch_known" = 1 ] && [ "${no_carry:-0}" != 1 ] || return 1
   local -a files=()
   for rf in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$rf" ] && [ "$rf" != "$final" ] && files+=("$rf"); done
   [ "${#files[@]}" -gt 0 ] || return 1
@@ -1218,7 +1218,8 @@ case "$verb" in
   # Every verdict names what the review did not read (#583); a review still running is said by
   # its start line, which named them already.
   check) do_check; rc=$?; [ "$rc" -eq 3 ] || { ar_left_out_note "$leftout" "$(meta_of "$final" status)"; pr_read_note; }; exit "$rc" ;;
-  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" "$prread"; rm -rf "$parts_root/$name".*; do_start ;;
+  # A restart is asked for a fresh reading, so it never carries an earlier review (#1280 lessons review).
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
   _groups) do_groups ;;
 esac
 exit 0

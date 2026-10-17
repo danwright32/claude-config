@@ -1676,7 +1676,7 @@ runners_done || bad "#1168 a runner was still going at the end"
 G checkout -q feat/sync
 
 # ===========================================================================================
-# 14. An update from main that changes nothing the review reads is not reviewed again (#1280). On
+# 16. An update from main that changes nothing the review reads is not reviewed again (#1280). On
 #     Bidspoke on 2026-10-16 PR #2305 took 73 minutes and 11 updates to land, and #2301 and #2304
 #     each stopped twice on a new wording point about lines the branch already had: every update
 #     drew a whole new review, whose answer differs from run to run though its input did not. So a
@@ -1723,6 +1723,12 @@ check_not "#1280 and none a new run would have raised" "A NEW WORDING POINT" "$(
 out="$(prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry)"; rc=$?
 check_eq "#1280 findings read on the earlier head stay read: the merge is not stopped again" "0" "$rc"
 check "#1280 and the verdict names the head whose review it carries" "carried from the review of ${C_A:0:7}" "$out"
+# A restart asks for a fresh reading, so it runs the reviewer and carries nothing (lessons review).
+before="$(calls)"
+FAKE_CLAUDE_OUT='No issues found.' prr restart --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_B" || bad "#1280 the restarted review finished"
+check_eq "#1280 a restart of a carried head runs the reviewer" "$((before + 1))" "$(calls)"
+check_not "#1280 and carries nothing" "carried=" "$(cat "$(final_of "$C_B")" 2>/dev/null)"
 # Unread findings are carried unread: refused, with a key of the new head's, which then reads them.
 reset_state
 FAKE_CLAUDE_OUT="$CF_A" prr start --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null
