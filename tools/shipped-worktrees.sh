@@ -34,8 +34,10 @@
 #                 check-stale-worktrees.sh uses too, so the two cleanups agree: a lock whose pid no
 #                 process has, or whose agent started before the last boot, keeps nothing, and is
 #                 lifted just before the removal (only if it is still that lock, and put back if
-#                 git then refuses). A live agent's lock, a pid now held by a process started at
-#                 another time, a lock whose agent cannot be read, and any other lock keep it.
+#                 git then refuses). An older lock with no start time, "claude agent <name> (pid
+#                 <pid>)", keeps nothing only when no process has its pid. A live agent's lock, a
+#                 pid now held by a process started at another time, an older lock whose pid is
+#                 running, a lock whose agent cannot be read, and any other lock keep it.
 #   unoccupied  no running process has its current directory in it. Another session's shell can
 #                 be standing there, and removing a directory out from under it is not safe.
 #
@@ -236,7 +238,8 @@ for ((n = 1; n <= i; n++)); do
       dead|preboot) wt_stalelock[n]="$ldetail" ;;
       live) reasons+=("a Claude agent that is still running holds its lock ($ldetail)") ;;
       reused) reasons+=("its lock names a pid now held by another process, which cannot prove its agent gone ($ldetail)") ;;
-      unreadable) reasons+=("it is locked by a Claude agent, and whether that agent is still running could not be read ($ldetail)") ;;
+      nostart) reasons+=("its lock names $ldetail (locked: ${wt_lockreason[n]})") ;;
+      unreadable) reasons+=("it is locked by a Claude agent, and whether that agent is still running could not be read ($ldetail; locked: ${wt_lockreason[n]})") ;;
       *) reasons+=("locked${wt_lockreason[n]:+: ${wt_lockreason[n]}}") ;;
     esac
   fi

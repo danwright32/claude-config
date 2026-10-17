@@ -15,13 +15,16 @@
 #   reused      a process has that pid but its start time does not match the lock's
 #   preboot     the lock says its agent started before this machine last booted, which no process
 #               survives, so ps is not even asked
+#   nostart     an older lock, "claude agent <name> (pid <pid>)", whose pid is running: with no
+#               start time recorded, a process that reused the pid cannot be ruled out
 #   unreadable  whether it is running could not be read, so nothing is claimed either way (L10)
 # Only dead and preboot say the lock is stale, because each is certain: no process has the pid, or
 # no process survives a boot. A pid alone proves nothing (pids are reused), so the start time is what
 # names a LIVE agent, but a start time that does not match is not proof the agent is gone: it is a
 # comparison of two strings, and a format or time zone the lock was written in that this reader does
 # not expect makes a live agent read as reused. So reused keeps the lock, the harmless direction
-# (L648), as the brief for #1282 asked.
+# (L648), as the brief for #1282 asked, and so does nostart, for the same reason. The older format
+# has no start time to place before the boot, so it is never preboot; only a pid nothing has frees it.
 #
 # THE START TIME IN THE REASON WAS UTC when measured on 2026-10-17: a lock reading "start Sat Oct 17
 # 14:06:12 2026" was held by a process ps gave as started 10:06:12 local time (EDT) and 14:06:12
@@ -79,7 +82,19 @@ agent_lock_ps_start(){ # <pid> <UTC|local>: prints its start time and returns 0 
 
 agent_lock_verdict(){ # <lock reason>
   local re='^claude agent [^ ]+ \(pid ([0-9]+) start ([^)]+)\)$'
+  local old='^claude agent [^ ]+ \(pid ([0-9]+)\)$'
   local pid start boot eu el now first='' rc tz
+  if [[ "$1" =~ $old ]]; then
+    # The older format records no start time, so only a pid nothing has can be called gone.
+    pid="${BASH_REMATCH[1]}"
+    now="$(agent_lock_ps_start "$pid" UTC)"; rc=$?
+    case "$rc" in
+      0) printf 'nostart\tpid %s, which is running, and records no start time to tell its agent from a process that reused the pid\n' "$pid" ;;
+      1) printf 'dead\tpid %s is no longer running\n' "$pid" ;;
+      *) printf 'unreadable\tpid %s, and ps said: %s\n' "$pid" "$now" ;;
+    esac
+    return 0
+  fi
   if ! [[ "$1" =~ $re ]]; then printf 'other\t\n'; return 0; fi
   pid="${BASH_REMATCH[1]}"; start="$(agent_lock_norm "${BASH_REMATCH[2]}")"
   if boot="$(agent_lock_boot_epoch)"; then

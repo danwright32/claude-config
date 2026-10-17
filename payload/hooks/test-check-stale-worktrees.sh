@@ -375,6 +375,12 @@ ladd agent-lrefused fix/606-refused 606 "$R_REFUSED"
 ladd agent-lrace fix/607-race 607 "$R_RACE"
 R_HALF="claude agent agent-lhalf (pid 4007 start Thu Oct 15 12:00:00 2026)"
 ladd agent-lhalf fix/610-half 610 "$R_HALF"
+# The older format, with no start time: a pid nothing has is gone, a running one cannot be told
+# from a reuse.
+R_OLDDEAD="claude agent agent-lolddead (pid 4008)"
+R_OLDLIVE="claude agent agent-loldlive (pid 4002)"
+ladd agent-lolddead fix/611-olddead 611 "$R_OLDDEAD"
+ladd agent-loldlive fix/612-oldlive 612 "$R_OLDLIVE"
 
 # REPORT: a stale agent lock is no reason to keep a landed worktree, so it is called stale with the
 # unlock in its commands; a live agent's lock keeps its worktree; and nothing is unlocked, since a
@@ -388,14 +394,17 @@ check_not "and the live one is never called stale" "STALE agent-llive" "$OUT"
 check_not "nor is one whose lock is not a Claude agent's, which --remove would not take" "STALE agent-lother" "$OUT"
 check "a reused pid's lock keeps its worktree, since a start that does not match cannot prove the agent gone" \
   "keeping agent-lreused [fix/603-reused]: its lock names a pid now held by another process" "$OUT"
-for n in ldead lreused lpreboot; do
+check "an older lock with no start time whose pid nothing has is called stale" "STALE agent-lolddead [fix/611-olddead]" "$OUT"
+check "an older lock whose pid is running keeps its worktree, since a reuse cannot be ruled out" \
+  "keeping agent-loldlive [fix/612-oldlive]: its lock names pid 4002, which is running, and records no start time" "$OUT"
+for n in ldead lreused lpreboot lolddead; do
   check_eq "report mode leaves the lock on agent-$n alone" "claude agent agent-$n" "$(lockof "agent-$n" | cut -d' ' -f1-3)"
 done
 
 # REMOVE with neither the processes nor the boot time readable: nothing can say a lock is stale,
 # so every agent lock is kept, and says why, rather than read as gone (L10, L11).
 PS_FAIL=1 BOOT=unknown lrun --remove
-for n in ldead lreused lpreboot llive; do
+for n in ldead lreused lpreboot llive lolddead; do
   check "an unreadable process list keeps agent-$n, saying so" "keeping agent-$n" "$OUT"
   check_eq "with agent-$n still there" no "$(gone "agent-$n")"
 done
@@ -432,7 +441,11 @@ LMARKS="$(cd "$LREPO" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/claud
 check_eq "and a refusal, nothing having been deleted, leaves no marker" no "$([ -e "$LMARKS/agent-lrefused" ] && echo yes || echo no)"
 check "a lock that changed hands while the run was looking is not lifted" "keeping agent-lrace [fix/607-race]: its lock changed while this run was looking at it" "$OUT"
 check_eq "and the new holder's lock is left in place" "claude agent agent-lrace (pid 4010 start Sat Oct 17 09:00:00 2026)" "$(lockof agent-lrace)"
-check "the summary counts the removals" "removed 1 of 7 agent worktree(s)" "$OUT"
+check "an older lock whose pid nothing has has its worktree removed" "removed agent-lolddead [fix/611-olddead]" "$OUT"
+check_eq "its folder is gone" yes "$(gone agent-lolddead)"
+check "an older lock whose pid is running keeps its worktree" "keeping agent-loldlive [fix/612-oldlive]" "$OUT"
+check_eq "and its lock is left exactly as it was" "$R_OLDLIVE" "$(lockof agent-loldlive)"
+check "the summary counts the removals" "removed 2 of 9 agent worktree(s)" "$OUT"
 # A removal that stops part way with the worktree still listed leaves it part deleted. Its marker
 # stays for the next run to finish, and that finish (one --force) is refused on a locked worktree,
 # so the dead agent's lock must NOT be put back there.

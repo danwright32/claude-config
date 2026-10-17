@@ -356,6 +356,10 @@ locked_agent lk-preboot 34 "$L_PREBOOT"
 locked_agent lk-other 35 "$L_OTHER"
 locked_agent lk-refused 36 "$L_REFUSED"
 locked_agent lk-race 37 "$L_RACE"
+L_OLDDEAD="claude agent lk-olddead (pid 5008)"
+L_OLDLIVE="claude agent lk-oldlive (pid 5002)"
+locked_agent lk-olddead 38 "$L_OLDDEAD"
+locked_agent lk-oldlive 39 "$L_OLDLIVE"
 
 out_l="$(bash "$TOOL" "$R" 2>&1)"
 says "a shipped worktree whose agent's pid is gone is removable" "#31" "$(row REMOVABLE lk-dead "$out_l")"
@@ -365,6 +369,8 @@ says "a live agent's lock keeps its worktree" "a Claude agent that is still runn
 says "a reused pid's lock keeps its worktree, since a start time that does not match cannot prove the agent gone" "pid 5003" "$(row KEEP lk-reused "$out_l")"
 says "any other lock keeps its worktree and is quoted" "locked: kept on an external disk" "$(row KEEP lk-other "$out_l")"
 if [ "$(lockof lk-dead)" = "$L_DEAD" ]; then ok; else bad "the report lifted a lock (lk-dead is now: $(lockof lk-dead))"; fi
+says "an older lock with no start time whose pid nothing has is removable" "#38" "$(row REMOVABLE lk-olddead "$out_l")"
+says "an older lock whose pid is running keeps its worktree, since a reuse cannot be ruled out" "pid 5002, which is running, and records no start time" "$(row KEEP lk-oldlive "$out_l")"
 
 out_u="$(PS_FAIL=1 bash "$TOOL" "$R" 2>&1)"
 says "with ps unreadable, a lock since the boot keeps its worktree, saying why" "could not be read" "$(row KEEP lk-dead "$out_u")"
@@ -381,6 +387,9 @@ done
 if [ "$(lockof lk-live)" = "$L_LIVE" ]; then ok; else bad "a live agent's lock was changed (now: $(lockof lk-live))"; fi
 if [ "$(lockof lk-reused)" = "$L_REUSED" ]; then ok; else bad "a reused pid's lock was changed (now: $(lockof lk-reused))"; fi
 if [ "$(lockof lk-other)" = "$L_OTHER" ]; then ok; else bad "a lock that is not an agent's was changed (now: $(lockof lk-other))"; fi
+says "--remove removes the worktree whose older lock names a pid nothing has" "#38" "$(row REMOVED lk-olddead "$out_r")"
+if exists "$WT/lk-oldlive"; then ok; else bad "--remove removed lk-oldlive, whose running pid should have kept it"; fi
+if [ "$(lockof lk-oldlive)" = "$L_OLDLIVE" ]; then ok; else bad "an older lock with a running pid was changed (now: $(lockof lk-oldlive))"; fi
 says "a removal git refuses after the lock is lifted is said" "simulated refusal" "$(row "NOT DONE" lk-refused "$out_r")"
 if [ "$(lockof lk-refused)" = "$L_REFUSED" ]; then ok; else bad "the refused worktree's lock was not put back (now: $(lockof lk-refused))"; fi
 says "a lock that changed hands during the run is not lifted" "its lock changed after it was judged" "$(row KEPT lk-race "$out_r")"
