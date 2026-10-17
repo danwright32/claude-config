@@ -891,7 +891,13 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       if (a === SKIP_QUESTION) return
       for (const issue of q.issues) {
         const p = await postAnswer($, dir, q.repo, issue, q.text, a)
-        if ('failed' in p) $.ui.toast(`Your late answer on ${q.repo}#${issue} ("${a}") could not be posted (${p.failed}); it is asked again next time.`)
+        if ('failed' in p) {
+          $.ui.toast(`Your late answer on ${q.repo}#${issue} ("${a}") could not be posted (${p.failed}); it is asked again next time.`)
+          continue
+        }
+        // Checked off in its issue's Open questions too, as an answer in time is (lessons review).
+        const off = q.inSection?.includes(issue) ? await checkOff($, q.repo, issue, q.text, a) : null
+        if (off) $.ui.toast(`Your late answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open.`)
       }
     })
     if ('unanswered' in asked) {

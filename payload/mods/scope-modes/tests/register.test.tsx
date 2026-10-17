@@ -4388,6 +4388,23 @@ test("the open questions in a goal issue's section are asked before the night, a
   expect(r.text).toMatch(asRegExp(' Before bed: 1 question answered and posted on o/r#7.'))
 })
 
+test("a goal issue's question answered after the ten minutes is posted and checked off too (#1279 lessons review)", withDeps, async ($, on) => {
+  let answer = (_: string) => undefined as void
+  const late = new Promise<string>(r => {
+    answer = r
+  })
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: SECTIONED }, issueAnswers: { 'o/r#7: Keep the old flag?': late } })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(10 * MIN)
+  await pending
+  expect(w.edits).toEqual([])
+  answer('Drop it')
+  await clock.settle()
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+})
+
 test('a goal number that is a pull request is not read as a goal issue (#1279 lessons review)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: 'The change, with no section.' }, pullNumbers: [7] })
   await start($ as never, clock)
