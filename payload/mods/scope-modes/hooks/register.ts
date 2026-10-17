@@ -1449,9 +1449,12 @@ type ManualStepsNoun = {
 }
 // The noun is called in place (the engine refuses one bound or passed), so its absence (the mod not
 // loaded) arrives as a TypeError naming the noun call itself, read by the one reader (#1281); any
-// other failure is said and tried again. A manual steps whose loaded copy lacks the member holds no
-// card this mod can reach either, so it is taken as absent, its message the skew's own sentence.
-const isAbsentNoun = (err: unknown) => missingOf(err)?.noun === 'manualSteps'
+// other failure is said and tried again, a manual steps whose loaded copy lacks the member among
+// them (the skew's own sentence), since its card may still hold the step (lessons review).
+const isAbsentNoun = (err: unknown) => {
+  const m = missingOf(err)
+  return m?.kind === 'noun' && m.noun === 'manualSteps'
+}
 const STEP_SAID = "The reminder to review the night's proposed issues"
 
 // The morning turn of the session that woke, and its pickers counted, while it runs.
@@ -1512,7 +1515,7 @@ const pinMorning = async ($: EngineInterface): Promise<string> => {
     // Shown, the card says it (L605); only a step that is not is said here.
     return shown.isShown ? '' : ` ${STEP_SAID} is kept on the manual steps card but not shown now: ${shown.reason ?? 'no reason given'}.`
   } catch (err) {
-    return ` ${STEP_SAID} could not be pinned: ${isAbsentNoun(err) && missingOf(err)?.kind === 'noun' ? 'the manual steps mod is not loaded' : msg(err)}.`
+    return ` ${STEP_SAID} could not be pinned: ${isAbsentNoun(err) ? 'the manual steps mod is not loaded' : msg(err)}.`
   }
 }
 
@@ -3493,6 +3496,9 @@ export const register: Register = on => {
     } catch (err) {
       const news = skewNews(err, MOD)
       if (news) $.ui.toast(news)
+      // Asleep, a skew met here stalls the night as one met in the merge check does, so the driver
+      // reads it at the next Stop too (lessons review).
+      if (asleep && missingOf(err)?.kind === 'member') skewMet = msg(err)
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
       verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }

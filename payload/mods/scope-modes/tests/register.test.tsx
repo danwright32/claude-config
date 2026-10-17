@@ -3086,6 +3086,17 @@ test('a rest whose touch fails still rests, and the night\'s notes say the mods 
   )
 })
 
+// Lessons review of #1281: a member the judge's own reads need (here the write reader) stalls the
+// night as the merge check's does, so it rests the worker too.
+const withOlderWrites = { plugins: [deps, isItLive, { name: 'kit-lacks-writes', register: (() => undefined) as Register }] }
+test("a skew met in the judge's own reads rests the worker at its Stop too (#1281 lessons review)", withOlderWrites, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo hi > notes.txt'))).toMatch(/scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no writes/)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ rested: true, restDue: true, stopped: null })
+})
+
 test('a worker that met no skew since its rest works on (#1281 control)', withOldKit, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
   await start($ as never, clock)
@@ -4628,6 +4639,27 @@ test('a step that could not be taken off is tried again at the next minute, and 
   expect(stepsCalls(w).length).toBe(2)
   await clock.advance(2 * MIN)
   expect(stepsCalls(w).length).toBe(2)
+})
+
+// Lessons review of #1281: a manual steps loaded before it had finish may still show the step, so
+// the step is not taken for off: it is said, the skew's sentence, and tried again.
+const olderStepsNoun: { name: string; register: Register } = {
+  name: 'manual-steps',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, manualSteps: { add: async () => ({ isShown: true }) } }
+    })
+  },
+}
+test('a manual steps whose loaded copy lacks finish leaves the step on, said as the skew, and tried again (#1281 lessons review)', { plugins: [deps, isItLive, olderStepsNoun] }, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'pickers-answered' } }]) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  const said = (l: string) => l.includes("could not be taken off this session's card (scope-modes and manual-steps are out of step in this session: the manual-steps loaded here has no finish")
+  expect(w.logs.filter(said).length).toBe(1)
+  await clock.advance(MIN)
+  expect(w.logs.filter(said).length).toBe(2)
 })
 
 test('/sleep waits on another session changing the record of the nights, then says so rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {
