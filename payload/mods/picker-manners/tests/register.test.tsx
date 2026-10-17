@@ -196,7 +196,7 @@ const kitWithRepo: { name: string; register: Register } = {
   },
 }
 type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; onlyAccount?: string; pulls?: number[]; settle: () => Promise<void> }
-const issueWorld = (on: On, answer: string | null, bodies: Record<number, string> = {}): IssueWorld => {
+const issueWorld = (on: On, answer: string | string[] | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
   const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
   on('tool.call', ($, e) => {
@@ -243,6 +243,14 @@ test('a question about an issue Dan answers is added to its Open questions, chec
   expect(r.result?.answers).toEqual({ 'For o/r#7, how long should the registry keep a record?': '7 days' })
   await w.settle()
   expect(w.edits).toEqual([{ issue: 7, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [x] For o/r#7, how long should the registry keep a record? (answered 1969-12-31 ET: 7 days)' }])
+})
+
+// Lessons review: a multi-select answer arrives as a list, and is an answer all the same.
+test('a question answered with several choices is checked off with all of them (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, ['Retention', 'Archive'], { 7: SECTION })
+  await askAbout($ as never, 'For o/r#7, which parts?')
+  await w.settle()
+  expect(w.edits.map(x => x.body)).toEqual(['The bug.\n\n## Open questions\n\n- [x] For o/r#7, which parts? (answered 1969-12-31 ET: Retention, Archive)'])
 })
 
 test("one he did not answer is added open, and issue #N is read in the session's repository (#1279)", { plugins: [kitWithRepo] }, async ($, on) => {

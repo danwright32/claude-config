@@ -105,8 +105,12 @@ export const register: Register = on => {
     // answered and off its path, so a slow GitHub never holds the answer back.
     const question = String(e.questions?.[0]?.question ?? '')
     const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
-    const answer = typeof answers?.[question] === 'string' ? (answers[question] as string) : null
-    if (!r.deny && question) $.clock.after(0, () => void recordOnIssues($, question, answer))
+    // A multi-select answer arrives as a list, and is an answer all the same (lessons review).
+    const given = answers?.[question]
+    const answer = typeof given === 'string' ? given : Array.isArray(given) && given.length ? given.map(String).join(', ') : null
+    // Whatever escapes the per issue catch is said, never left unhandled off the dialog's path.
+    if (!r.deny && question)
+      $.clock.after(0, () => void recordOnIssues($, question, answer).catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${err instanceof Error ? err.message : String(err)}), so /sleep will not see it there.`)))
     return r
   })
 
