@@ -984,9 +984,12 @@ export const register: Register = on => {
       if (agentId !== undefined) await stamp($, agentId, undefined)
     }
     // Any Bash result saying a job started: one run in the background, or a foreground command
-    // Claude Code moved there at its timeout (#706). A refusal started nothing.
+    // Claude Code moved there at its timeout (#706), so a message could reach Claude, by the user, or
+    // as its turn stopped (#1302). A refusal started nothing.
     if (e.tool === 'Bash' && result.deny === undefined) {
-      const started = startedJob(String(result.text ?? ''), { inBackground: input.run_in_background === true })
+      // The task Claude Code's own result says the call started, read beside the text (#1302).
+      const taskId = (result.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId
+      const started = startedJob(String(result.text ?? ''), { inBackground: input.run_in_background === true, ...(typeof taskId === 'string' ? { taskId } : {}) })
       // Recording has its own failure boundary: the job has started whatever happens here, so a
       // throw is said to Claude and never fails the call that started it (lessons review of #634).
       if (started) {
