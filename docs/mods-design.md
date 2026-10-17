@@ -2726,8 +2726,9 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
   any difference is a look change, however it is worded, so the #1263 divider, which names no
   drawing word, is held. Nothing else in the file is read, so a refusal Claude reads that names the
   card passes, unlike in a `.tsx` file, where the drawing words still decide.
-- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`): every hook file is read,
-  19 of the 67 `.ts` files hold anything that draws (most of those only a drawing call or a
+- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`, 2026-10-16, before #1296
+  followed locals and parameters, after which 30 of 69 draw): every hook file is read, then
+  19 of the 67 `.ts` files held anything that draws (most of those only a drawing call or a
   guard's name on its blocked card), the divider added to the real `cardLines` is
   held and `DROPPED_AFTER_MS` is not. A generic arrow written `<T>(`, which status bar and scope
   modes use, could not be read by the JSX reader, so a `.ts` file is now read with no JSX at all.
