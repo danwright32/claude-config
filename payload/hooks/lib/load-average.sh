@@ -40,6 +40,19 @@ load_average_cores(){   # -> a whole number, or nothing
   printf '%s' "$c"
 }
 
+# Whether the machine was busier than it has cores: exits 0 only when the figure, less any load the
+# caller names as its own, is more than the cores. The one place that is decided (claude-config#1259),
+# for the sentence below and for the sync suite's budgets, which report a run on such a machine as
+# unmeasured rather than failing it. Anything it cannot read is NOT busy, never a zero: busy excuses
+# a failure, so an unreadable figure must not be what excuses one (L90).
+load_average_busy(){   # load cores [own load] -> exit 0 when busy
+  local l="${1-}" c="${2-}" o="${3:-0}"
+  case "$l" in ''|*[!0-9.]*) return 1 ;; esac
+  case "$c" in ''|*[!0-9]*|0) return 1 ;; esac
+  case "$o" in *[!0-9.]*) return 1 ;; esac
+  awk -v l="$l" -v c="$c" -v o="$o" 'BEGIN { exit !(l - o > c + 0) }'
+}
+
 # The sentence a failure carries. It claims only what was measured (L11): the figure, the cores, and
 # whether the one exceeded the other. It never says the load CAUSED the failure, because nothing here
 # measured that; it says what to do to find out.
@@ -53,7 +66,7 @@ load_average_note(){   # [load] [cores] -> one sentence, always
     printf 'load average %s (the core count could not be read, so it is not judged against one)' "$l"
     return 0
   fi
-  if awk -v l="$l" -v c="$c" 'BEGIN { exit !(l + 0 > c + 0) }'; then
+  if load_average_busy "$l" "$c"; then
     printf 'load average %s on %s cores, more than this machine has cores, so a timing or load sensitive check may have measured the machine: run it again alone before treating it as broken' "$l" "$c"
   else
     printf 'load average %s on %s cores' "$l" "$c"
