@@ -283,12 +283,13 @@ const readGoalOf = async ($: EngineInterface, transcript: string, at: number) =>
     const g: ModKitGoal = await Promise.resolve()
       .then(() => $.modkit.goal({ transcript }))
       .catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
+    // Kept first, so nothing after it can make every draw read the transcript again.
+    goalRead.set(transcript, { goal: g, at })
     const said = `${transcript}\n${g.state === 'unreadable' ? g.why : ''}`
     if (g.state === 'unreadable' && !goalSaid.has(said)) {
       goalSaid.add(said)
-      $.ui.log(`goal-tracker: the /goal of the session in ${transcript} could not be read (${g.why}), so the goals pane shows the goal it last recorded`, { to: 'debug' })
+      debugLog($, `goal-tracker: the /goal of the session in ${transcript} could not be read (${g.why}), so the goals pane shows the goal it last recorded`)
     }
-    goalRead.set(transcript, { goal: g, at })
   } finally {
     goalReading.delete(transcript)
   }
@@ -296,7 +297,16 @@ const readGoalOf = async ($: EngineInterface, transcript: string, at: number) =>
   try {
     await $.ui.invalidate('ui.render')
   } catch (err) {
-    $.ui.log(`goal-tracker: could not draw the goals pane again after reading a /goal: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    debugLog($, `goal-tracker: could not draw the goals pane again after reading a /goal: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+// The read runs beside the draw, where nothing awaits it, so a debug line that cannot be written is
+// dropped rather than left as a rejection nobody handles (lessons review of #1252).
+const debugLog = ($: EngineInterface, text: string) => {
+  try {
+    void Promise.resolve($.ui.log(text, { to: 'debug' })).catch(() => undefined)
+  } catch {
+    // The debug log is the last place this could be said.
   }
 }
 const goalsNow = ($: EngineInterface, open: { sessionId: string; transcriptPath: string | null }[], now: number): Record<string, ModKitGoal> => {
