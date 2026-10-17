@@ -67,7 +67,7 @@ omits() { # omits <description> <needle> <command>
     fail=$((fail + 1)); echo "FAIL: $1 (message should NOT contain '$2')"; fi
 }
 
-# Satisfy two axes so the third is the only thing that can fire.
+# Satisfy the other rules so the one under test is the only thing that can fire.
 M='--milestone "Ungrouped"'
 P='--label priority-p2'
 C='--label bug'
@@ -79,7 +79,7 @@ None"'
 ALL="$M $P $C $Q"
 
 # ============================ a complete create passes ============================
-allows "all three present"            "gh issue create --title \"T\" --body \"B\" $ALL"
+allows "all four present"            "gh issue create --title \"T\" --body \"B\" $ALL"
 allows "several categories at once"   "gh issue create --title \"T\" $M $P --label accessibility --label tech-debt --label ux $Q"
 allows "one comma list carries all"   'gh issue create --title "T" --milestone "Ungrouped" --label "bug,priority-p1"'" $Q"
 allows "short flags throughout"       'gh issue create --title "T" -m "Ungrouped" -l priority-p2 -l bug'" $Q"
@@ -163,7 +163,7 @@ allows "category waived"              "SKIP_CATEGORY_CHECK=1 gh issue create --t
 # Each override waives ONE rule. Sharing them would let a single skip hide everything.
 denies "one override does not waive the rest" 'SKIP_MILESTONE_CHECK=1 gh issue create --title "T"'
 denies "the wrong override for the rule" "SKIP_CATEGORY_CHECK=1 gh issue create --title \"T\" $P $C"
-allows "all three waived together"    'SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 gh issue create --title "T"'" $Q"
+allows "the three field rules waived together"    'SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 gh issue create --title "T"'" $Q"
 denies "override named only in the body" "gh issue create --title \"T\" --body \"SKIP_PRIORITY_CHECK=1\" $M $C"
 # An override belongs to the ONE command it prefixes. Letting it cover the whole call
 # is how a second unmilestoned create slipped past on 2026-07-29.
