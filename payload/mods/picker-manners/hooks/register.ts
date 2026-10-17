@@ -88,6 +88,11 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
   }
 }
 
+// Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
+// back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
+export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =>
+  $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${err instanceof Error ? err.message : String(err)}), so /sleep will not see it there.`)))
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pickers', description: 'Turns next issue pickers back on for this session.', argumentHint: 'on' })
@@ -101,16 +106,13 @@ export const register: Register = on => {
     })
     if (why) return { deny: why }
     const r = await next(e)
-    // #1279: a question about an issue goes into that issue's Open questions, after the dialog has
-    // answered and off its path, so a slow GitHub never holds the answer back.
+    // #1279: a question about an issue goes into that issue's Open questions.
     const question = String(e.questions?.[0]?.question ?? '')
     const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
     // A multi-select answer arrives as a list, and is an answer all the same (lessons review).
     const given = answers?.[question]
     const answer = typeof given === 'string' ? given : Array.isArray(given) && given.length ? given.map(String).join(', ') : null
-    // Whatever escapes the per issue catch is said, never left unhandled off the dialog's path.
-    if (!r.deny && question)
-      $.clock.after(0, () => void recordOnIssues($, question, answer).catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${err instanceof Error ? err.message : String(err)}), so /sleep will not see it there.`)))
+    if (!r.deny && question) offTheDialog($, () => recordOnIssues($, question, answer))
     return r
   })
 

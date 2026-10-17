@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
+import { offTheDialog } from '../hooks/register.ts'
 
 // Picker manners (#615) leaves the asking to Claude Code's own dialog (#744, decided with Dan on
 // 2026-10-05): its band question waited for a press through the mod's own $ noun, which Claude Code
@@ -299,6 +300,16 @@ test('issue #N whose repository cannot be told is said, never dropped silently (
   await w.settle()
   expect(w.edits).toEqual([])
   expect(w.logs).toContain("Picker manners could not add this question to issue #12's Open questions (this session is in no repository GitHub knows), so /sleep will not see it there.")
+})
+
+test('whatever escapes the work done off the dialog is said, never left unhandled (#1279 lessons review)', async () => {
+  // Only the two nouns it uses: the scheduled work runs at once, and the first transcript line ends
+  // the wait, so a missing catch fails as an unhandled rejection rather than a timed guess.
+  let logged: (text: string) => void = () => {}
+  const line = new Promise<string>(r => (logged = r))
+  const stand = { clock: { after: (_ms: number, fn: () => void) => fn() }, ui: { log: (text: string) => logged(text) } }
+  offTheDialog(stand as never, () => Promise.reject(new Error('the body could not be built')))
+  expect(await line).toBe("Picker manners could not add this question to its issue's Open questions (the body could not be built), so /sleep will not see it there.")
 })
 
 test('an issue that cannot be read or written is said, and the answer still reaches Claude (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
