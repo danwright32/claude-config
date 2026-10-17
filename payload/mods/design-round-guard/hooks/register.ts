@@ -647,7 +647,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   }
   if (unsureFiles.length) return { unsure: unsureFiles, why }
   if (missing.length) return { missing: { files: missingFiles, subjects: missing, trees: missingTrees, unread } }
-  return { pass: true }
+  return passing()
 }
 
 // The grey card Dan sees, drawn by mod-kit as every guard's is. One that cannot be drawn does not

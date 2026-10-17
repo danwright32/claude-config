@@ -1593,6 +1593,18 @@ test('#1296 (lessons review): with one checkout whose issue cannot be told besid
   expect(w.files[KEYS]).toBe(KEYS_TEXT)
 })
 
+test('#1296 (lessons review): a shell write beside a look file whose issue Dan has answered is still read again once it ran', withKit, async ($, on) => {
+  const css = '/w/other/app/globals.css'
+  const w = world($, on, { files: { ...WITH_SCRATCH, [css]: 'a{}' } })
+  // Dan skips design rounds for the other project's issue.
+  const first = refusalOf(await call($, { tool: 'Edit', file_path: css, old_string: 'a{}', new_string: 'a{color:red}' }))
+  expect(refusalOf(await askSkip($, w, first, SKIP_YES))).toBe('')
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS, [css]: 'a{color:red}' }
+  const why = refusalOf(await call($, { tool: 'Bash', command: `sed -i '' 's/x/y/' ${KEYS} ${css}` }))
+  expect(why).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
 test('#1296: a check after the command that itself fails says so beside the result, and undoes nothing', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH } })
   w.ctl.shell = { [KEYS]: DRAWN_KEYS }
