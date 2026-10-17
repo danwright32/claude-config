@@ -643,11 +643,15 @@ type Span = readonly [number, number]
  * strings, template literals, regular expressions, comments and a generic arrow's type parameters
  * (`<T,>(`, `<E extends X>(`, mod-kit's drawCard) are skipped, and a `<` opens an element only where
  * an expression may start (after `(`, `,`, `=`, `=>`, `?`, `:`, `&&`, `return` and the like), so
- * `Promise<X>` and `a < b` are never read as one.
+ * `Promise<X>` and `a < b` are never read as one. `strings` is what each string, template literal
+ * part and regular expression holds, its quotes and the template's `${` and `}` aside (#1275). With
+ * `jsx` false, for a `.ts` file, which holds none, a `<` opens nothing, so a generic arrow may be
+ * written with no comma (`<T>(`, as status bar's and scope modes' hook files do).
  */
-export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | null => {
+export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments: Span[]; strings: Span[] } | null => {
   const jsx: Span[] = []
   const comments: Span[] = []
+  const strings: Span[] = []
   const n = text.length
   const unread = new Error('unread')
   const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
@@ -660,16 +664,25 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
     const q = text[i]
     for (let j = i + 1; j < n; j++) {
       if (text[j] === '\\') j++
-      else if (text[j] === q) return j + 1
-      else if (text[j] === '\n') throw unread
+      else if (text[j] === q) {
+        strings.push([i + 1, j])
+        return j + 1
+      } else if (text[j] === '\n') throw unread
     }
     throw unread
   }
   const template = (i: number): number => {
+    let from = i + 1
     for (let j = i + 1; j < n; j++) {
       if (text[j] === '\\') j++
-      else if (text[j] === '`') return j + 1
-      else if (text[j] === '$' && text[j + 1] === '{') j = code(j + 2, true)
+      else if (text[j] === '`') {
+        strings.push([from, j])
+        return j + 1
+      } else if (text[j] === '$' && text[j + 1] === '{') {
+        strings.push([from, j])
+        j = code(j + 2, true)
+        from = j + 1
+      }
     }
     throw unread
   }
@@ -682,6 +695,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
       else if (set) set = c !== ']'
       else if (c === '[') set = true
       else if (c === '/') {
+        strings.push([i + 1, j])
         j++
         while (j < n && /[a-z]/i.test(text[j] as string)) j++
         return j
@@ -723,6 +737,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
         if (stringQuote(c)) {
           const e = text.indexOf(c, k + 1)
           if (e < 0) throw unread
+          strings.push([k + 1, e])
           j = e + 1
         } else if (c === '{') j = code(k + 1, true) + 1
         else if (c === '<') j = element(k)
@@ -769,7 +784,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
       } else if (c === '/' && starts()) {
         i = regex(i)
         prev = ')'
-      } else if (c === '<' && starts() && /^<\s*[A-Za-z_$][\w$]*\s*(,|=|extends\b)/.test(text.slice(i, i + 200))) {
+      } else if (jsx_ && c === '<' && starts() && /^<\s*[A-Za-z_$][\w$]*\s*(,|=|extends\b)/.test(text.slice(i, i + 200))) {
         // A generic arrow's type parameters (`<T,>(`, `<E extends X>(`, `<T = X>(`), which no
         // element can open with: skipped to their closing `>`, nested ones counted.
         let depth = 0
@@ -782,7 +797,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
         i = j + 1
         prev = 'a'
         word = ''
-      } else if (c === '<' && starts() && /[A-Za-z>]/.test(text[i + 1] ?? '')) {
+      } else if (jsx_ && c === '<' && starts() && /[A-Za-z>]/.test(text[i + 1] ?? '')) {
         const s = i
         i = element(i)
         jsx.push([s, i])
@@ -812,7 +827,7 @@ export const sourceSpans = (text: string): { jsx: Span[]; comments: Span[] } | n
   }
   try {
     code(0, false)
-    return { jsx, comments }
+    return { jsx, comments, strings }
   } catch (err) {
     if (err === unread) return null
     throw err
@@ -884,6 +899,252 @@ export const modHookLogicOnly = (before: string, after: string): boolean => {
   return true
 }
 
+/**
+ * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files in
+ * plain TypeScript (`mods/<mod>/hooks/<file>.ts`, `.mts` or `.cts`, never a `.d.ts`), which
+ * drawsChange judges (#1275). As for isModHook, only a folder whose plugin.json makes it a mod counts.
+ */
+export const isModHookTs = (rel: string): boolean => /(^|\/)mods\/[^/]+\/hooks\/[^/]+\.(ts|mts|cts)$/i.test(rel) && !/\.d\.[mc]?ts$/i.test(rel)
+
+/** One of a mod's hook files, by its name in the mod's hooks folder, and its text. */
+export type ModFile = { name: string; text: string }
+
+// The keys that make an object one of mod-kit's text runs, beside `text` (ModKitRun, ModKitBandText).
+const RUN_LOOKS = new Set(['color', 'bold', 'dim', 'italic', 'underline', 'strikethrough', 'inverse', 'indent', 'wrap', 'whole', 'href', 'dimColor', 'backgroundColor'])
+// What draws a mod's lines, with what it is handed: mod-kit's band row, pane and boxed card, a blocked
+// action's grey card, and a pane's size and title as Claude Code opens it.
+const DRAW_CALL = /\$\s*\.\s*(?:modkit\s*\.\s*(?:bandRow|pane|card|blocked)|ui\s*\.\s*open)\s*\(/g
+const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(const|let|var|function\s*\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/
+const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
+
+type Statement = { from: number; to: number; name?: string; isType: boolean }
+type ModRead = {
+  name: string
+  // Each statement at the file's top level, and the files and names its imports from the mod name.
+  statements: Statement[]
+  imports: Map<string, { file: string; name: string }>
+  // What the file draws by itself: each drawing call, JSX element, and function building a text run.
+  units: Span[]
+  code: (s: Span) => string
+  refs: (s: Span) => string[]
+  isTop: (name: string) => boolean
+}
+
+// One mod hook file as drawsChange reads it, or null for one its reader cannot follow.
+const readMod = (f: ModFile): ModRead | null => {
+  const text = f.text
+  const spans = sourceSpans(text, /\.(tsx|jsx)$/i.test(f.name))
+  if (!spans) return null
+  const n = text.length
+  // 1 for a comment, 2 for what a string holds, so code is read with neither.
+  const mask = new Uint8Array(n)
+  for (const [a, b] of spans.comments) mask.fill(1, a, b)
+  for (const [a, b] of spans.strings) mask.fill(2, a, b)
+  let blank = ''
+  for (let i = 0; i < n; i++) blank += mask[i] ? (text[i] === '\n' ? '\n' : ' ') : text[i]
+  // Where each bracket closes, and each line's depth at its start, read with strings and comments blanked.
+  const close = new Map<number, number>()
+  const open: number[] = []
+  const starts: number[] = []
+  // The last character of code before here, so a line going on with an expression the line before
+  // left open (`export const X =` then `'warning'` at the left edge) is never a statement of its own.
+  // A `>` leaves one open only as an arrow's `=>`: one closing a generic (`Array<Row>`) ends the
+  // statement; nor does a non-null assertion's `!`, or `++` and `--` (lessons review).
+  let last = ''
+  for (let i = 0; i < n; i++) {
+    if ((i === 0 || blank[i - 1] === '\n') && open.length === 0 && /\S/.test(blank[i] ?? ''))
+      if (!/(?:[=,([{?:|&*/.]|=>|(?:^|[^+])\+|(?:^|[^-])-)$/.test(last) && !/^[?:.|&+\-*/,)\]}=]/.test(blank[i] ?? '')) starts.push(i)
+    const c = blank[i]
+    if (c !== undefined && /\S/.test(c)) last = last.slice(-1) + c
+    if (c === '(' || c === '[' || c === '{') open.push(i)
+    else if (c === ')' || c === ']' || c === '}') {
+      const o = open.pop()
+      if (o !== undefined) close.set(o, i)
+    }
+  }
+  if (open.length) return null
+  const statements: Statement[] = starts.map((from, k) => {
+    const to = starts[k + 1] ?? n
+    const m = DECL.exec(blank.slice(from, from + 300))
+    return m ? { from, to, name: m[2], isType: m[1] === 'type' || m[1] === 'interface' } : { from, to, isType: false }
+  })
+  const imports = new Map<string, { file: string; name: string }>()
+  for (const s of statements) {
+    const m = IMPORT.exec(text.slice(s.from, s.to))
+    if (!m || m[1]) continue
+    const file = m[3] as string
+    const clause = (m[2] as string).trim()
+    const ns = /\*\s*as\s+([A-Za-z_$][\w$]*)/.exec(clause)
+    if (ns) imports.set(ns[1] as string, { file, name: '*' })
+    const named = /\{([^}]*)\}/.exec(clause)
+    for (const part of named ? (named[1] as string).split(',') : []) {
+      const p = /^\s*([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(part)
+      if (p && p[1] !== 'type') imports.set((p[2] ?? p[1]) as string, { file, name: p[1] as string })
+    }
+  }
+  const statementAt = (i: number) => statements.find(s => s.from <= i && i < s.to)
+  // Every function body in braces: an arrow's (`=> {`) and a function's (`function f(...) {`).
+  const bodies: Span[] = []
+  for (const [o, c] of close) {
+    if (blank[o] !== '{') continue
+    if (/=>\s*$/.test(blank.slice(Math.max(0, o - 40), o))) bodies.push([o, c + 1])
+  }
+  for (const m of blank.matchAll(/\bfunction\b\s*\*?\s*[\w$]*\s*\(/g)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    const brace = end === undefined ? -1 : blank.indexOf('{', end)
+    const shut = close.get(brace)
+    if (shut !== undefined) bodies.push([brace, shut + 1])
+  }
+  // A text run (`text` with a look), a divider or a button: mod-kit's line data, wherever it is built.
+  const isRun = (o: number): boolean => {
+    const end = close.get(o) ?? o
+    const keys = new Set<string>()
+    let expectKey = true
+    for (let i = o + 1; i < end; ) {
+      const c = blank[i] as string
+      if (c === '(' || c === '[' || c === '{') {
+        i = (close.get(i) ?? i) + 1
+        expectKey = false
+      } else if (c === ',') {
+        expectKey = true
+        i++
+      } else if (/\s/.test(c)) i++
+      else if (expectKey && blank.startsWith('...', i)) {
+        expectKey = false
+        i += 3
+      } else {
+        const m = expectKey ? /^[A-Za-z_$][\w$]*/.exec(blank.slice(i, i + 64)) : null
+        if (m) {
+          let j = i + m[0].length
+          while (/\s/.test(blank[j] ?? '')) j++
+          if (blank[j] === ':' || blank[j] === ',' || j >= end) keys.add(m[0])
+          i += m[0].length
+        } else i++
+        expectKey = false
+      }
+    }
+    return (keys.has('text') && [...keys].some(k => RUN_LOOKS.has(k))) || keys.has('divider') || (keys.has('button') && keys.has('label'))
+  }
+  const units: Span[] = [...spans.jsx]
+  // What an element does when pressed or typed in (`onPress={...}`, `onSubmit`) is no part of how it
+  // looks, so the names an event handler uses are not followed from the element.
+  const handlers: Span[] = []
+  for (const [a, b] of spans.jsx)
+    for (const m of blank.slice(a, b).matchAll(/\bon[A-Z][\w$]*\s*=\s*\{/g)) {
+      const o = a + (m.index as number) + m[0].length - 1
+      const c = close.get(o)
+      if (c !== undefined) handlers.push([o, c + 1])
+    }
+  for (const m of blank.matchAll(DRAW_CALL)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    if (end !== undefined) units.push([m.index as number, end + 1])
+  }
+  // A run is drawn with the function that builds it: the innermost one around it, or its whole
+  // statement where that function is the statement's own (cardLines), so its name and helpers count.
+  for (const [o] of close) {
+    if (blank[o] !== '{' || !isRun(o)) continue
+    const s = statementAt(o)
+    if (!s || s.isType) continue
+    const around = bodies.filter(([a, b]) => a < o && o < b && s.from <= a && b <= s.to).sort((x, y) => y[0] - x[0])
+    const inner = around[0]
+    units.push(inner && around.length > 1 ? inner : [s.from, s.to])
+  }
+  const code = ([a, b]: Span): string => {
+    let out = ''
+    for (let i = a; i < b; i++) {
+      if (mask[i] === 1) continue
+      const c = text[i] as string
+      if (mask[i] !== 2 && /\s/.test(c)) {
+        if (out && !out.endsWith(' ')) out += ' '
+      } else out += c
+    }
+    return out.trim()
+  }
+  const refs = ([a, b]: Span): string[] => {
+    const out = new Set<string>()
+    for (const m of blank.slice(a, b).matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const at = a + (m.index as number)
+      const before = blank[at - 1] ?? ''
+      if (/[\w$]/.test(before) || (before === '.' && blank.slice(at - 3, at) !== '...')) continue
+      if (handlers.some(([x, y]) => x <= at && at < y)) continue
+      out.add(m[0])
+    }
+    return [...out]
+  }
+  const tops = new Set(statements.filter(s => s.name !== undefined && !s.isType).map(s => s.name as string))
+  return { name: f.name, statements, imports, units, code, refs, isTop: x => tops.has(x) }
+}
+
+/**
+ * What in the mod hook file `name` decides what its mod draws (#1275), each part as its code with
+ * comments taken out and spacing made one space (strings kept whole), or null where any of the mod's
+ * files cannot be read. The parts: each drawing call there (DRAW_CALL) and JSX element; each function
+ * building one of mod-kit's text runs, dividers or buttons (cardLines, finishedLine), whole where it
+ * is a top level one; and every top level declaration any part, in this file or another of the mod's,
+ * names, through the imports between them, and in turn what each of those names. A type draws nothing.
+ * The gap: a value reaching a drawing call through a local variable or a function's parameter (a
+ * guard's blocked card sentence handed to its drawCard) is not followed, unless it builds a run.
+ */
+export const drawnParts = (files: readonly ModFile[], name: string): string[] | null => {
+  const read = new Map<string, ModRead>()
+  for (const f of files) {
+    const r = readMod(f)
+    if (!r) return null
+    read.set(f.name, r)
+  }
+  const drawn = new Set<string>()
+  const queue: [string, string][] = []
+  const reach = (file: string, x: string) => {
+    const r = read.get(file)
+    if (!r) return
+    if (r.isTop(x)) {
+      const key = `${file}\n${x}`
+      if (!drawn.has(key)) {
+        drawn.add(key)
+        queue.push([file, x])
+      }
+      return
+    }
+    const via = r.imports.get(x)
+    // The file an import names, as TypeScript finds it: as written, then with `.js` read as `.ts`,
+    // then with `.ts` or `.tsx` added (lessons review).
+    const g = via ? [via.file, via.file.replace(/\.(m|c)?js$/, '.$1ts'), `${via.file}.ts`, `${via.file}.tsx`].map(x => read.get(x)).find(Boolean) : undefined
+    if (!via || !g) return
+    if (via.name !== '*') {
+      reach(g.name, via.name)
+      return
+    }
+    for (const s of g.statements) if (s.name !== undefined && !s.isType) reach(g.name, s.name)
+  }
+  for (const r of read.values()) for (const u of r.units) for (const x of r.refs(u)) reach(r.name, x)
+  while (queue.length) {
+    const [file, x] = queue.pop() as [string, string]
+    const r = read.get(file) as ModRead
+    for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
+  }
+  const r = read.get(name)
+  if (!r) return []
+  const parts = new Map(r.units.map(u => [`${u[0]}:${u[1]}`, u]))
+  for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
+  return [...parts.values()].map(u => r.code(u)).sort()
+}
+
+/**
+ * Whether changing the mod hook file `name` from `before` to `after` (undefined for a file not there)
+ * changes what its mod draws (#1275), read beside the mod's other hook files in `files`: whether
+ * drawnParts differ. A file any of them cannot be read in is held, never passed.
+ */
+export const drawsChange = (files: readonly ModFile[], name: string, before: string | undefined, after: string | undefined): boolean => {
+  const others = files.filter(f => f.name !== name)
+  const at = (text: string | undefined) => drawnParts(text === undefined ? others : [...others, { name, text }], name)
+  const was = at(before)
+  const now = at(after)
+  if (!was || !now) return true
+  return was.length !== now.length || was.some((p, i) => p !== now[i])
+}
+
 /** A call written out whole, in a fixed order: its tool, every key of its input, its folder and session. */
 export const callText = (tool: string, input: Record<string, unknown>, at: { cwd: string; session: string }): string => {
   const canon = (v: unknown): unknown =>
@@ -941,11 +1202,12 @@ const named = (subjects: readonly DesignRoundSubject[]) => listed(subjects.map(s
 
 // A refusal holds the change it refused, never the file (#1158): told "Do not change <file> any other
 // way", a session that had made an edit the guard let through could not undo it, so the edit stayed.
-// That an undo is judged by its lines is said only where it is: every file a React one (judgedByText);
-// a stylesheet is judged whole however it is put back (lessons review of #1158).
+// That an undo is judged by its lines is said only where it is: every file a React one (judgedByText)
+// or a mod's TypeScript hook file (isModHookTs, #1275); a stylesheet is judged whole however it is put
+// back (lessons review of #1158).
 const leaveIt = (files: readonly string[]) =>
   `Do not make this change to ${listed(files)} any other way` +
-  (files.every(judgedByText) ? '; undoing an earlier edit of your own is judged by the lines it changes, as an edit is.' : '.')
+  (files.every(f => judgedByText(f) || isModHookTs(f)) ? '; undoing an earlier edit of your own is judged by the lines it changes, as an edit is.' : '.')
 
 // What a refusal says of a git checkout or restore whose lines could not be measured (#1158), each
 // as unreadPutBack gives it, so the session is told why the whole file was judged.
