@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { SimplerOffer } from '../types/index.d.ts'
 import { REPORT_EVERY_MS, judge, pressAt, pressKey, replyHead, requestText, sameReply, weeklyLine } from './simpler.ts'
-import { errorText, missingOf } from './mod-kit/skew.ts'
+import { missingOf } from './mod-kit/skew.ts'
 
 // The Simpler button (claude-config#619, settled in docs/mods-design.md). After an answer over the
 // length threshold or heavy in technical terms, a Simpler button sits at the top of that answer,
@@ -16,7 +16,7 @@ const PROJECT = { plugin: 'simpler', key: 'project' } as const
 const REPORTED_AT = 'reportedAt'
 const DAY = 24 * 60 * 60 * 1000
 
-const why = (err: unknown): string => errorText(err, 'simpler').slice(0, 200)
+const why = (err: unknown): string => (err instanceof Error ? err.message : String(err)).slice(0, 200)
 const folderName = (path: string): string | null => path.replace(/\/+$/, '').split('/').pop() || null
 
 // Add-on notes (#620) owns the resume line that can open a reply ("+ add-on: ... and carrying on."):
