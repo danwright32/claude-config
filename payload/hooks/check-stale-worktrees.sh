@@ -331,8 +331,10 @@ for i in "${!paths[@]}"; do
     rm -f "$MARKS/$name"
   else
     echo "  keeping $name [$b]: git would not remove it: $(printf '%s' "$err" | tr '\n' ' ')"
-    # A refusal before anything is deleted (a lock, a change made since the check above) leaves the
-    # worktree listed, whole and as it was, so there is nothing to finish. A failure PART WAY does
+    # A refusal before anything is deleted (a change made since the check above, say) leaves the
+    # worktree listed, whole and as it was, so there is nothing to finish. A lock no longer gets
+    # this far: every lock but a stale agent's keeps the worktree before any removal is tried, and
+    # a stale one is lifted first. A failure PART WAY does
     # not: measured 2026-10-16 with one unwritable folder, git deleted the worktree's own files and
     # its registration and then stopped. The marker stays for anything but the first, so a later
     # run can say what is left.
