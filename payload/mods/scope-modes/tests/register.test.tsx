@@ -4177,7 +4177,8 @@ test("the open questions on the queue's issues are asked one at a time after the
   const placed = w.fileOps.findIndex(op => op[0] === 'ln' && op[2] === CURRENT)
   expect(listed).toBeGreaterThan(-1)
   expect(placed).toBeGreaterThan(listed)
-  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. 1 question left for the morning, so tonight the queue skips o/r#20.'))
+  // Each question left is named with why it was not asked or answered (#1279).
+  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. Left for the morning, so tonight the queue skips them: o/r#20 (you skipped it).'))
   // The one left is noted for the morning report as the same question, so it is asked again next time.
   expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text])).toEqual([['o/r', 20, 'Rename it?']])
   // Every answer posted is kept, one record per issue and question.
@@ -4210,7 +4211,7 @@ test('Go to sleep now asks nothing more: every question left is its issue skippe
   expect(w.comments).toEqual([])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
   expect(r.text).toMatch(/^Sleep mode is on until/)
-  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14 (you chose to go to sleep); o/r#20 (not asked: you chose to go to sleep first).'))
 })
 
 test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
@@ -4240,7 +4241,7 @@ test('the ten minutes are shared with the repository questions: once they run ou
   const r = await pending
   expect(w.asked).toEqual(['o/r#12 and #14: Keep the old flag?'])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
-  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14 (not answered in the 10 minutes); o/r#20 (not asked: the 10 minutes for bedtime questions ran out).'))
   // Dan answers after sleep began: the decision is posted, and the issue stays out of tonight's queue.
   answer('Drop it')
   await clock.settle()
@@ -4314,7 +4315,26 @@ test('a question dismissed or that could not be shown leaves its issue out, said
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.files[UNANSWERED]).toBe('o/r#20\n')
-  expect(r.text).toMatch(asRegExp(' 1 question left for the morning, so tonight the queue skips o/r#20. The question on o/r#20 was dismissed or could not be shown ('))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#20 (the question was dismissed or could not be shown: '))
+})
+
+// #1279, the night of 2026-10-16 as far as the stand in can play it: goal questions answered quickly
+// with no work for the other workers, then earlier nights' questions on this worker's repository.
+// They are asked, never left for the morning unasked. On that night they were left, said only as
+// "2 questions left for the morning"; this stand in does not reproduce it, so the cause lies in
+// something it does not model (the real dialog, or the record on the work MacBook), and every
+// question left now carries why, so the next night that happens says it.
+test('earlier questions are asked after goal questions answered quickly with no work (#1279, 2026-10-16)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({
+    goals: { s2: null },
+    files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/other', mergeDeploys: false }]), [NOTES_OLD]: OLD_NOTES },
+    issueAnswers: { [S2_GOAL_Q]: NO_GOAL, 'o/r#12 and #14: Keep the old flag?': 'Drop it', 'o/r#20: Rename it?': 'Yes', 'o/r#12: Which copy?': 'Short' },
+  }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([S2_GOAL_Q, 'o/r#12 and #14: Keep the old flag?', 'o/r#20: Rename it?', 'o/r#12: Which copy?'])
+  expect(w.files[UNANSWERED]).toBe('')
+  expect(r.text).not.toContain('Left for the morning')
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {
