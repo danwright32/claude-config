@@ -41,17 +41,22 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 // session's repository) is added to the issue's Open questions section, checked off with his answer
 // when he gave one, so /sleep asks one still open and never one he answered. Read and written whole
 // through gh; a failure is said, since /sleep would otherwise never see the question.
-const sessionRepo = async ($: EngineInterface): Promise<string | null> => {
+// The session's repository as GitHub names it, or why it cannot be told (said, never dropped, L11).
+const sessionRepo = async ($: EngineInterface): Promise<{ repo: string } | { why: string }> => {
   try {
     const here = await $.session.repo()
-    return here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
-  } catch {
-    return null
+    const github = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+    return github ? { repo: github } : { why: 'this session is in no repository GitHub knows' }
+  } catch (err) {
+    return { why: `this session's repository could not be read: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
 const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
-  const refs = issueRefsIn(question, /\bissue\s+#\d/i.test(question) ? await sessionRepo($) : null)
+  const bare = question.match(/\bissue\s+#\d+/gi) ?? []
+  const here = bare.length ? await sessionRepo($) : null
+  if (here && 'why' in here) for (const b of bare) $.ui.log(`Picker manners could not add this question to ${b.toLowerCase()}'s Open questions (${here.why}), so /sleep will not see it there.`)
+  const refs = issueRefsIn(question, here && 'repo' in here ? here.repo : null)
   const words = questionWords(question)
   for (const ref of refs) {
     const said = (why: string) => $.ui.log(`Picker manners could not add this question to ${ref.repo}#${ref.issue}'s Open questions (${why}), so /sleep will not see it there.`)

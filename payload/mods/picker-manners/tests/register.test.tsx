@@ -195,7 +195,7 @@ const kitWithRepo: { name: string; register: Register } = {
     })
   },
 }
-type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; settle: () => Promise<void> }
+type IssueWorld = { bodies: Record<number, string>; edits: { issue: number; repo: string; body: string }[]; logs: string[]; viewFails?: string; editFails?: string; noRepo?: boolean; settle: () => Promise<void> }
 const issueWorld = (on: On, answer: string | null, bodies: Record<number, string> = {}): IssueWorld => {
   const clock = mock.clock(on, { now: 0 })
   const w: IssueWorld = { bodies: { ...bodies }, edits: [], logs: [], settle: () => clock.settle() }
@@ -203,7 +203,7 @@ const issueWorld = (on: On, answer: string | null, bodies: Record<number, string
     const q = String((e as unknown as { questions: { question: string }[] }).questions[0]?.question)
     return { result: { questions: [], answers: answer === null ? {} : { [q]: answer } }, text: 'answered' } as never
   })
-  on('session.repo', () => ({ value: { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
+  on('session.repo', () => ({ value: w.noRepo ? null : { root: '/repo', remote: 'git@github.com:o/r.git', internal: false, name: null } }) as never)
   on('ui.log', ($, e) => {
     w.logs.push(String((e as { text?: string }).text))
     return { value: undefined } as never
@@ -254,6 +254,15 @@ test('a question naming no issue, or only a bare #N, touches no issue; one /slee
   await askAbout($ as never, 'o/r#7: Keep the old flag?')
   await w.settle()
   expect(w.edits.map(x => x.body)).toEqual(['B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 1969-12-31 ET: Yes)'])
+})
+
+test('issue #N whose repository cannot be told is said, never dropped silently (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
+  const w = issueWorld(on, 'Yes', { 12: SECTION })
+  w.noRepo = true
+  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  expect(w.logs).toContain("Picker manners could not add this question to issue #12's Open questions (this session is in no repository GitHub knows), so /sleep will not see it there.")
 })
 
 test('an issue that cannot be read or written is said, and the answer still reaches Claude (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
