@@ -1575,6 +1575,24 @@ test('#1296: a put back that fails, a file that cannot be taken away, and one un
   expect(w.cards.length).toBe(3)
 })
 
+test('#1296 (lessons review): with one checkout whose issue cannot be told beside one Dan has not answered for, the refusal says why', withKit, async ($, on) => {
+  const other = '/w/other/payload/mods/demo/hooks/keys.ts'
+  const w = world($, on, { files: { ...WITH_SCRATCH, [other]: KEYS_TEXT, '/w/other/payload/mods/demo/.claude-plugin/plugin.json': '{ "name": "demo" }' } })
+  w.branches['/w/other'] = 'UNREADABLE'
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS, [other]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { tool: 'Bash', command: `sed -i '' 's/x/y/' ${KEYS} ${other}` }))
+  expect(why).toContain('could not tell which issue or branch')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  expect(w.files[other]).toBe(KEYS_TEXT)
+  // A record of Dan's answers that cannot be read is said as such, and the change is still put back.
+  w.branches['/w/other'] = '55-other'
+  w.ctl.storeGetFails = true
+  const unread = refusalOf(await call($, SED))
+  expect(unread).toContain("record of Dan's answers could not be read")
+  expect(unread).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+})
+
 test('#1296: a check after the command that itself fails says so beside the result, and undoes nothing', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH } })
   w.ctl.shell = { [KEYS]: DRAWN_KEYS }

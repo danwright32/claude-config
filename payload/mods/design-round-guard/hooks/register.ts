@@ -765,16 +765,24 @@ const afterShell = async (
   const lacking: DesignRoundSubject[] = []
   const trees: string[] = []
   const held: typeof changed = []
-  const why: string[] = []
+  // As the judgement before it ran (judged): a checkout whose issue cannot be told, then a record
+  // that cannot be read, each said with its own reason, before any issue Dan has not answered for.
+  const unknown: { files: string[]; why: string[] } = { files: [], why: [] }
+  const unread: { files: string[]; subjects: DesignRoundSubject[]; why: string[] } = { files: [], subjects: [], why: [] }
   for (const c of changed) {
     const at = await subjectsIn($, c.w.tree)
+    const file = relTo(c.w.path, c.w.tree)
     let open: DesignRoundSubject[] = []
-    if ('why' in at) why.push(at.why)
-    else
+    if ('why' in at) {
+      unknown.files.push(file)
+      unknown.why.push(at.why)
+    } else
       try {
         for (const s of at.subjects) if (!recordOf(await $.store.get(s.key))) open.push(s)
       } catch (err) {
-        why.push(message(err))
+        unread.files.push(file)
+        unread.subjects.push(...at.subjects)
+        unread.why.push(message(err))
         open = at.subjects
       }
     if ('why' in at || open.length) {
@@ -795,9 +803,11 @@ const afterShell = async (
     else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`)))
   }
   const files = held.map(c => relTo(c.w.path, c.w.tree))
-  const v: Exclude<Verdict, { pass: true }> = lacking.length
-    ? { missing: { files, subjects: lacking, trees, unread: [] } }
-    : { unsure: files, why: why.join('; ') || 'the issue could not be told' }
+  const v: Exclude<Verdict, { pass: true }> = unknown.files.length
+    ? { unsure: unknown.files, why: unknown.why.join('; ') }
+    : unread.files.length
+      ? { unreadable: { files: unread.files, subjects: unread.subjects, why: unread.why.join('; ') } }
+      : { missing: { files, subjects: lacking, trees, unread: [] } }
   const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
   // What the command printed is never repeated here: only the tool's own result passes the secret
   // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).
