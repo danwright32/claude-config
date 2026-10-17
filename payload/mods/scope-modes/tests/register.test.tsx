@@ -2738,6 +2738,32 @@ test('a session that held nothing is asked nothing at wake, and a new sleep keep
   expect(heldAtWakeOf(w).length).toBe(1)
 })
 
+test('two deliveries held at once, as parallel calls or a subagent beside the main loop make them, are both kept (#1284 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await Promise.all([call($ as never, PUBLISH('p1', '/s/a.html')), call($ as never, PUBLISH('p2', '/s/b.html')), call($ as never, PUBLISH('p3', '/s/c.html'))])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)[0]).toMatch(/held 3 things it would have handed him: Publish a\.html; Publish b\.html; Publish c\.html\./)
+})
+
+test("Dan's own message going in before /wake's morning turn does not take what the morning turn carries (#1284 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await command($ as never, 'wake')
+  // Dan types before the morning turn is submitted, and then the morning turn fails to go in.
+  await say($ as never, 'morning')
+  w.o.promptFails = 1
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Kept, so the minute asks for it.
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
 test('a held delivery whose morning prompt cannot start is kept, and asked for again at the next minute (#1284)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)
