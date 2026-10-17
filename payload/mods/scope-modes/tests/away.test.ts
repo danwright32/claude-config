@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath } from '../hooks/away.ts'
+import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths } from '../hooks/away.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 
 // Each command with what it runs, read by mod-kit's own reader (a byte for byte copy under
@@ -76,6 +76,10 @@ describe('targetPath: the executable TARGET_APP names, as written', () => {
     expect(targetPath('TARGET_APP="/a b/Tool" cliclick c:1,1')).toBe('/a b/Tool')
     expect(targetPath("TARGET_APP='/a b/Tool' cliclick c:1,1")).toBe('/a b/Tool')
     expect(targetPath('cliclick c:1,1')).toBeUndefined()
+  })
+  test('every one a call carries, wherever it stands, for the rule that all of them must be test builds', () => {
+    expect(targetPaths('echo TARGET_APP=/a/Tool && TARGET_APP="/b c/Mail" osascript -e x')).toEqual(['/a/Tool', '/b c/Mail'])
+    expect(targetPaths('npm test')).toEqual([])
   })
 })
 

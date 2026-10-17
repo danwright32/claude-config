@@ -21,11 +21,16 @@ const isFlag = (w: string) => w.startsWith('-')
 // A link is named by where it goes, never by its query or fragment, which can carry a token (L741).
 const shown = (target: string) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(target) ? target.replace(/[?#].*$/, '') : base(target))
 
-/** The executable a keystroke guard action names: TARGET_APP=<executable path>, the guard's own rule, read from the command as written, since the reader drops assignments. */
-export const targetPath = (raw: string): string | undefined => {
-  const m = /\bTARGET_APP=("[^"]+"|'[^']+'|\S+)/.exec(raw)
-  return m ? (m[1] as string).replace(/^["']|["']$/g, '') : undefined
-}
+/**
+ * Every executable a keystroke guard action names: TARGET_APP=<executable path>, the guard's own
+ * rule, read from the command as written, since the reader drops assignments. Every one, wherever
+ * it stands (an echo, a second command), since a call is a test build's only when all of them are
+ * (lessons review of #1269); the guard itself proves the one it reads is in front before any input.
+ */
+export const targetPaths = (raw: string): string[] =>
+  [...raw.matchAll(/\bTARGET_APP=("[^"]+"|'[^']+'|\S+)/g)].map(m => (m[1] as string).replace(/^["']|["']$/g, ''))
+/** The first of them, which the keystroke guard reads and the held row names. */
+export const targetPath = (raw: string): string | undefined => targetPaths(raw)[0]
 // The app it names, for the held row.
 const targetApp = (raw: string): string | undefined => {
   const path = targetPath(raw)

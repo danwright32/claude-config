@@ -1933,7 +1933,10 @@ test('away types into a test build, from DerivedData or a checkout, and holds ty
   expect(await call($ as never, bash(`TARGET_APP=${DERIVED} cliclick c:10,10`, 't3'))).toBe('ran')
   expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 't4'))).toMatch(/^Held: Dan is away from the Mac, so "Type into Mail" waits/)
   expect(await call($ as never, bash('TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail cliclick c:10,10', 't5'))).toMatch(/"Click in Mail" waits/)
-  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5'])
+  // A call naming a test build anywhere and another app elsewhere (an echo, a second command) is
+  // held: every TARGET_APP it carries must be a test build (lessons review of #1269).
+  expect(await call($ as never, bash(`echo TARGET_APP=${DERIVED} && TARGET_APP=/Applications/Mail.app/Contents/MacOS/Mail osascript -e 'tell application "System Events" to keystroke "n"'`, 't6'))).toMatch(/"Type into .*" waits/)
+  expect(w.cards.map(c => c.toolUseId)).toEqual(['t4', 't5', 't6'])
 })
 
 // The keystroke guard (#707) asks this noun, naming its action, and is answered by the same rules.
