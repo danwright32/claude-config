@@ -1342,6 +1342,55 @@ fi
 SUITE_LOCK="${SUITE_LOCK:-${TMPDIR:-/tmp}/claude-sync-suite.lock}"
 SUITE_LOCK_HELD=""
 
+# ---- how long a run ASKED to wait for the lock waits (claude-config#1297) ----
+# The refusal below is what a run started by hand still does, at once: #32 rejected queueing
+# because a run that waits without saying so cannot be told from a stall. On 2026-10-17 that
+# refusal left four builders' full runs each reporting this suite as NOT RUN, so no full run on a
+# merged head ever reported every suite. run-all-tests.sh now asks a local run to wait, with
+# SUITE_LOCK_WAIT seconds, and a run that waits says so the moment it starts, writes how long it
+# has waited where its watchdog reads progress, and gives up at the bound with the same refusal.
+#
+# Read HERE, after the copy above has re-executed, and not handed on (`export -n`, as
+# SUITE_FILTERED is): every lock check in this suite starts a run of it, and one that inherited a
+# runner's wait would sit out each refusal it exists to measure.
+SUITE_LOCK_WAIT_GIVEN=0
+[ -n "${SUITE_LOCK_WAIT+set}" ] && SUITE_LOCK_WAIT_GIVEN=1
+SUITE_LOCK_WAIT="${SUITE_LOCK_WAIT:-0}"
+SUITE_LOCK_WAIT_POLL="${SUITE_LOCK_WAIT_POLL:-2}"
+export -n SUITE_LOCK_WAIT SUITE_LOCK_WAIT_POLL 2>/dev/null || true
+case "$SUITE_LOCK_WAIT" in
+  ''|*[!0-9]*)
+    echo "test suite: SUITE_LOCK_WAIT='$SUITE_LOCK_WAIT' is not a whole number of seconds to wait for the suite lock. Refusing rather than guessing: a guess could be no wait at all, which is the refusal it exists to avoid, or one with no end." >&2
+    exit 4 ;;
+esac
+case "$SUITE_LOCK_WAIT_POLL" in
+  ''|*[!0-9.]*|.|*.*.*|0|0.0|0.00)
+    echo "test suite: SUITE_LOCK_WAIT_POLL='$SUITE_LOCK_WAIT_POLL' is not a positive number of seconds. Refusing rather than spinning against the lock with no pause between looks." >&2
+    exit 4 ;;
+esac
+_lk_wait_start="$(date +%s)"
+_lk_waited=0
+_lk_wait_said=""
+# One look's worth of waiting for a lock somebody else holds: 0 after a pause, ready for the next
+# look; 1 once the wait is spent, or none was asked for, so the caller refuses as it always has.
+# The bound is read off the clock rather than counted in pauses, which a busy Mac stretches (#152).
+# The mark the watchdog reads is rewritten with the seconds waited, so a wait is progress to it and
+# the wait's own bound is what ends it; the mark is the run's to write until a section claims it.
+suite_lock_wait_more(){   # $1 = who holds it, as the refusal names them
+  [ "$SUITE_LOCK_WAIT" -gt 0 ] || return 1
+  _lk_waited=$(( $(date +%s) - _lk_wait_start ))
+  [ "$_lk_waited" -lt "$SUITE_LOCK_WAIT" ] || return 1
+  if [ -z "$_lk_wait_said" ]; then
+    _lk_wait_said="$1"
+    echo "test suite: another run holds the suite lock: $1. Waiting up to ${SUITE_LOCK_WAIT}s for it to finish rather than refusing, because SUITE_LOCK_WAIT asked for a wait (run-all-tests.sh asks on a local run)." >&2
+  fi
+  printf 'waiting for the suite lock, %ss so far, held by %s\n' "$_lk_waited" "$1" > "$SUITE_SECTION_MARK" 2>/dev/null
+  sleep "$SUITE_LOCK_WAIT_POLL"
+  return 0
+}
+# Said on the refusal of a run that did wait, so it cannot read as one that never tried.
+suite_lock_waited_words(){ [ -n "$_lk_wait_said" ] && printf ', after waiting %ss' "$_lk_waited"; return 0; }
+
 # The cleanup handler is installed BEFORE the lock is taken, not after, or a run that dies in the
 # gap between taking it and arming the handler leaves it standing. One cleanup, ADDED to rather
 # than replaced further down: #21 shipped a defect of exactly that shape here, an exit handler
@@ -1515,6 +1564,14 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
       export SUITE_RUN_REGISTRY
       printf '%s\n' "$$" > "$SUITE_RUN_REGISTRY"
       printf '%s\n' "$SUITE_RUN_REGISTRY" > "$SUITE_LOCK/registry"
+      # A run that waited says how long, twice: as a note the runner prints beside this suite's
+      # verdict, and as the number the runner takes off the time it records, which would otherwise
+      # put the wait into the measured cost of this suite and every launch order read from it (#1297).
+      if [ -n "$_lk_wait_said" ]; then
+        _lk_waited=$(( $(date +%s) - _lk_wait_start ))
+        printf 'SUITE-NOTE waited %ss for the suite lock, held by %s\n' "$_lk_waited" "$_lk_wait_said"
+        printf 'SUITE-LOCK-WAITED %s\n' "$_lk_waited"
+      fi
       break
     fi
     _lk_pid="$(cat "$SUITE_LOCK/pid" 2>/dev/null || true)"
@@ -1543,6 +1600,12 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         echo "test suite: took over a lock whose run is gone: every process it registered has exited, so the process id it recorded ($_lk_pid) is either something else now or is doing nothing on that run's behalf." >&2
         suite_clear_registered_strays "$SUITE_LOCK"
       elif [ -n "$_lk_pid" ] && kill -0 "$_lk_pid" 2>/dev/null; then
+        # A run asked to wait looks again after a pause, and the look is not one of the five turns
+        # below, which count lock removals rather than time (#1297).
+        if suite_lock_wait_more "process $_lk_pid on $_lk_host, started ${_lk_age}s ago"; then
+          _lk_try=$((_lk_try - 1))
+          continue
+        fi
         # What is holding it, how old it is, and the command that ends it (claude-config#163). A
         # pid on its own is not something anybody can act on: it has no visible connection to the
         # run they killed minutes ago, and a refusal naming only a number sent two separate
@@ -1552,7 +1615,7 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
         # The one line run-all-tests.sh reads, so this refusal is reported as NOT RUN with its
         # holder rather than as a failed suite (claude-config#1083). Only the two refusals for a
         # lock another run really holds say it; a lock this cannot read or take is a fault here.
-        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, started ${_lk_age}s ago"
+        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, started ${_lk_age}s ago$(suite_lock_waited_words)"
         exit 5
       else
         echo "test suite: took over a lock whose run is gone (process $_lk_pid is not running)." >&2
@@ -1561,12 +1624,16 @@ if [ "$SUITE_DEPTH" -eq 0 ] && [ -z "${SUITE_NO_LOCK:-}" ]; then
       fi
     else
       if [ "$_lk_age" -lt "${SUITE_LOCK_MAX_AGE:-1800}" ]; then
+        if suite_lock_wait_more "process $_lk_pid on $_lk_host, not this machine, started ${_lk_age}s ago"; then
+          _lk_try=$((_lk_try - 1))
+          continue
+        fi
         # Deliberately NOT the message above. That one hands over a command to kill the holder,
         # and the holder here is a process on a DIFFERENT machine: the number means nothing on this
         # one, and a kill aimed at it would land on an unrelated local process. Distinct causes,
         # distinct remedies (L11, L111).
         echo "test suite: another run is already going: a suite run on $_lk_host, which is not this machine, process $_lk_pid there, started ${_lk_age}s ago. Refusing rather than queueing behind it. Nothing here can end it, and its process id means nothing on this machine, so wait for it, clear $SUITE_LOCK yourself if that machine is gone, or run with SUITE_NO_LOCK=1 if you know it is finished." >&2
-        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, not this machine, started ${_lk_age}s ago"
+        printf 'SUITE-LOCK-REFUSED %s\n' "process $_lk_pid on $_lk_host, not this machine, started ${_lk_age}s ago$(suite_lock_waited_words)"
         exit 5
       fi
       # 30 minutes against a full run, which was measured at 123 seconds on 2026-08-17 and at 243
@@ -8043,6 +8110,65 @@ check "#32 and it is not deleted"                    "[ -f '$_notlock/important.
 _hp="$(_try_lock "$HOME")"; _hp_rc=$?
 check "#32 a lock path naming a real home directory is refused" "[ '$_hp_rc' -ne 0 ]"
 check "#32 and that home directory still exists"                "[ -d '$HOME' ]"
+
+# A BOUNDED WAIT, ASKED FOR AND SAID (claude-config#1297). Four builders each running the full
+# runner on 2026-10-17 got this suite back as NOT RUN, because another run held the lock, and no
+# full run on the merged head ever reported every suite. run-all-tests.sh now asks a local run to
+# wait for the lock with SUITE_LOCK_WAIT; the refusal above stays what a run started by hand does,
+# so a run that queues is one somebody asked to queue, and it says so as it starts waiting.
+_try_lock_waiting(){ # lockpath seconds
+  SUITE_LOCK="$1" SUITE_DEPTH=0 SUITE_LOCK_WAIT="$2" SUITE_LOCK_WAIT_POLL=0.1 SECTION_UNTIL=push bash "$SCRIPT_SELF" 2>&1
+}
+# The run that holds it finishes while this one waits: the lock is gone, and the waiting run takes
+# it, runs, and says how long it waited in the lines the runner reads. Its holder is a real live
+# process, so the wait is the only way through, and what ends it is the condition itself: the
+# lock going, never a fixed pause.
+sleep 300 &
+_lw_holder=$!
+_mklock "$_lockdir/waited" "$_lw_holder" "$_thishost" "$((_now - 30))"
+_lw_log="$WORK/lock-waited.log"
+_try_lock_waiting "$_lockdir/waited" 120 > "$_lw_log" &
+_lw_pid=$!
+_lw_n=0
+while ! grep -q 'Waiting up to 120s' "$_lw_log" 2>/dev/null && [ "$_lw_n" -lt 600 ]; do sleep 0.1; _lw_n=$((_lw_n + 1)); done
+check "#1297 a run asked to wait says it is waiting, and for how long at most" "grep -q 'Waiting up to 120s' '$_lw_log'"
+check "#1297 and it has not started while the lock is held" "! grep -q '^SUITE-LOCK-WAITED' '$_lw_log'"
+# The holder finishes the way a run does: its lock goes with it.
+rm -rf "$_lockdir/waited"
+kill "$_lw_holder" 2>/dev/null; wait "$_lw_holder" 2>/dev/null
+_lw_n=0
+while kill -0 "$_lw_pid" 2>/dev/null && [ "$_lw_n" -lt 1200 ]; do sleep 0.1; _lw_n=$((_lw_n + 1)); done
+wait "$_lw_pid"; _lw_rc=$?
+check "#1297 once the lock goes the waiting run takes it and runs (exit $_lw_rc)" "[ '$_lw_rc' -eq 0 ]"
+check "#1297 and it says how long it waited, in the line the runner subtracts from its time" \
+  "grep -qE '^SUITE-LOCK-WAITED [0-9]+$' '$_lw_log'"
+check "#1297 and in a note the runner prints beside its verdict" \
+  "grep -qE '^SUITE-NOTE waited [0-9]+s for the suite lock' '$_lw_log'"
+check "#1297 and it was never refused" "! grep -q '^SUITE-LOCK-REFUSED' '$_lw_log'"
+
+# The wait is BOUNDED: a holder that outlasts it is refused exactly as before, in the runner's line,
+# and the refusal says it waited, so it does not read as a run that never tried.
+_mklock "$_lockdir/outwaited" "$$" "$_thishost" "$((_now - 30))"
+_ow="$(_try_lock_waiting "$_lockdir/outwaited" 1)"; _ow_rc=$?
+check "#1297 a holder that outlasts the wait is still refused" "[ '$_ow_rc' -ne 0 ]"
+check "#1297 and in the line the runner reads, naming the holder" \
+  "grep -qE '^SUITE-LOCK-REFUSED process $$ on .*after waiting [0-9]+s' <<< \"\$_ow\""
+check "#1297 and it ran none of the checks" "! grep -q '^PASS=' <<< \"\$_ow\""
+
+# A wait that is not a whole number of seconds is refused rather than guessed at: guessing could
+# mean no wait at all, which is the refusal this exists to avoid, or one with no end (L50).
+_bw="$(_try_lock_waiting "$_lockdir/outwaited" soon)"; _bw_rc=$?
+check "#1297 a wait that is not a whole number of seconds is refused" "[ '$_bw_rc' -eq 4 ]"
+check "#1297 and the refusal names the setting" "grep -q 'SUITE_LOCK_WAIT=' <<< \"\$_bw\""
+
+# Read once and not handed on, as SUITE_SECTION_MARK_SHARED is: every lock check above starts a run
+# of this suite, and one that inherited a runner's twenty minutes would sit out each of them.
+# Judged only on a run that WAS given one, which every run under run-all-tests.sh is; on a run
+# started by hand there is nothing to hand on, and a pass there would be over nothing (L98).
+if [ "$SUITE_LOCK_WAIT_GIVEN" = 1 ]; then
+  check "#1297 a wait this run was given does not reach the runs it starts" \
+    "! env | grep -q '^SUITE_LOCK_WAIT'"
+fi
 
 section "== a run killed from outside cleans up after itself (#163) =="
 # needs: only one suite run at a time
