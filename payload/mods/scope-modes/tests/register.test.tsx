@@ -4890,6 +4890,33 @@ test('"I\'m up" makes its own turn the morning one, and a picker dismissed in it
   expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31' }])
 })
 
+test("a morning picker left unanswered is put to Dan again with his next message in that session, once; an answered morning adds nothing (#1285 lessons review)", withSteps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n` },
+    issueAnswers: { 'Keep the old export flag?': '__dismissed' },
+  })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  await turnStart($, 'm1', morningOf(w)[0])
+  await call($ as never, picker('Keep the old export flag?', 'q1')).catch(() => 'dismissed')
+  await turnEnd($, 'm1')
+  const again = ctxOf(await say($ as never, 'morning'))
+  expect(again).toMatch(/Some of this session's morning pickers came back unanswered/)
+  expect(ctxOf(await say($ as never, 'and then?'))).not.toMatch(/morning pickers came back unanswered/)
+})
+
+test('a morning whose pickers were all answered adds nothing to his next message (#1285 lessons review)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${myQuestion}\n` }, ask: 'Yes' })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  await turnStart($, 'm1', morningOf(w)[0])
+  await call($ as never, picker('Keep the old export flag?', 'q1'))
+  await turnEnd($, 'm1')
+  expect(ctxOf(await say($ as never, 'morning'))).not.toMatch(/morning pickers came back unanswered/)
+})
+
 test('a morning turn that was interrupted reviewed nothing, whatever it answered (#1107)', withSteps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED, [REVIEWS]: pendingG0 } })
   await start($ as never, clock)

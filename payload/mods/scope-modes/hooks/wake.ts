@@ -102,6 +102,13 @@ export const othersSaid = (t: { open: number; closed: number; unknown?: string }
   return parts.join(' ')
 }
 
+/**
+ * Carried by Dan's next message in a session whose morning turn left a picker unanswered (#1285): the
+ * item stays with the session that asked, so it is asked again here, by the mod, not left to memory.
+ */
+export const MORNING_UNANSWERED =
+  "Some of this session's morning pickers came back unanswered (dismissed, closed by itself, refused, or the morning turn ended first). Before anything else, put each unanswered one to Dan again, one AskUserQuestion picker at a time, from the morning turn above."
+
 /** Asked once a night per session, of a message from Dan in the daytime while asleep (#837, decision 9). */
 export const awakeAsk = (when: string) =>
   `Dan wrote while sleep mode is on, at ${when}. Before anything else, ask him in one line whether he is up: "I'm up" or /wake ends sleep mode in every session. Ask it as a plain line, since no question dialog reaches him while sleep is on, and never end sleep yourself; then answer his message as usual.`
