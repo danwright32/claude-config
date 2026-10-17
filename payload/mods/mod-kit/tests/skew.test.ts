@@ -28,6 +28,17 @@ test('a member the loaded copy of a mod lacks is read as a skew, naming the noun
   expect(missingOf(await thrown(() => $.scopeModes.hold({})))).toEqual({ kind: 'member', noun: 'scopeModes', member: 'hold', provider: 'scope-modes' })
 })
 
+test('a noun named apart from its mod names that mod', async () => {
+  const $ = { jobs: {}, sessions: {}, statusbar: {} } as unknown as {
+    jobs: { list: () => Promise<unknown> }
+    sessions: { list: () => Promise<unknown> }
+    statusbar: { setModes: () => Promise<unknown> }
+  }
+  expect(missingOf(await thrown(() => $.jobs.list()))?.provider).toBe('job-watcher')
+  expect(missingOf(await thrown(() => $.sessions.list()))?.provider).toBe('session-registry')
+  expect(missingOf(await thrown(() => $.statusbar.setModes()))?.provider).toBe('status-bar')
+})
+
 test('a noun no loaded mod provides is read as that mod being absent, never as a skew', async () => {
   expect(missingOf(await thrown(() => $.isItLive.verdict({})))).toEqual({ kind: 'noun', noun: 'isItLive', member: 'verdict', provider: 'is-it-live' })
 })

@@ -1,7 +1,6 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoundSubject } from '../types/index.d.ts'
-import { errorText } from './mod-kit/skew.ts'
 import {
   CONTRACT,
   GUARD,
@@ -30,6 +29,8 @@ import {
   forged,
   inScratchpad,
   isModHook,
+  isModHookTs,
+  drawsChange,
   isOwnRecord,
   isSwiftUI,
   joinedOnly,
@@ -56,6 +57,7 @@ import {
   ROUND_FILES,
   tempRoots,
   textsOf,
+  type ModFile,
   refusal,
   resolvePath,
   settledOptions,
@@ -106,6 +108,11 @@ import {
 //   (rules.ts modHookLogicOnly): an edit touching none of it passes unasked. Since #1248 the lines
 //   it touches end where it ends (rules.ts changedSpan), so the untouched line below a change is not
 //   read with it.
+// - Since #1275: a mod's plain TypeScript hook file (rules.ts isModHookTs) counts too, judged by what
+//   in it reaches what the mod draws (rules.ts drawsChange), read beside the mod's other hook files: a
+//   line builder making mod-kit's text runs, dividers or buttons (manual steps' cardLines, where the
+//   #1263 divider passed unasked), anything handed to a drawing call or used in JSX, and every name
+//   those use. Any other edit there passes, as does every edit to a .ts file that draws nothing.
 // - Since #1158: a git checkout or restore of such a file is judged by the lines it changes, against
 //   what git puts back, by the edit's own rule (nothingShown), so undoing an edit it let through
 //   passes; one git cannot read, or one beside any other command on the line (restoreAlone), is
@@ -124,9 +131,7 @@ const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
 // beneath, which cannot see which loop a call runs in, does not judge them again.
 const fromAgent = new Set<string>()
 
-// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
-// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
-const message = (err: unknown) => errorText(err, 'design-round-guard')
+const message = (err: unknown) => String((err as Error)?.message ?? err)
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -410,6 +415,37 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
   return runs.length > 1 && runs.every(([b, a]) => !shows(b, a))
 }
 
+// Whether a call's change to a mod's plain TypeScript hook file (rules.ts isModHookTs) changes what the
+// mod draws (#1275): 'held' when it does, or when the mod's hook files cannot be listed or read; the
+// reason, for a git checkout or restore whose lines could not be read, judged whole; 'pass' otherwise,
+// and for a folder no plugin.json makes a mod. What a call leaves: a Write's content, an Edit's or
+// MultiEdit's text applied to the file, what git puts back (#1158). One that cannot be read before it
+// runs (a shell write, an edit that would not apply, a call naming several files) is held where the
+// file draws now and passes where it does not: the gap, that a shell write making a file that drew
+// nothing draw, is not seen.
+const drawingChange = async ($: EngineInterface, t: Target & { path: string }, tree: string, tool: string, input: Record<string, unknown>, notAlone: string | undefined): Promise<'held' | 'pass' | { unread: string }> => {
+  if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
+  const dir = t.path.slice(0, t.path.lastIndexOf('/'))
+  const name = t.path.slice(dir.length + 1)
+  const files: ModFile[] = []
+  try {
+    for (const e of await $.fs.list(dir))
+      if (e.kind === 'file' && /\.(ts|tsx|mts|cts|jsx)$/i.test(e.name) && !/\.d\.[mc]?ts$/i.test(e.name)) files.push({ name: e.name, text: String(await $.fs.read(`${dir}/${e.name}`)) })
+  } catch {
+    return 'held'
+  }
+  const now = files.find(f => f.name === name)?.text
+  let after: string | undefined
+  if (t.from !== undefined) {
+    if (notAlone !== undefined) return { unread: notAlone }
+    const back = await putBack($, t.path, tree, t.from)
+    if ('why' in back) return { unread: back.why }
+    after = back.text
+  } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
+  if (after === undefined) return drawsChange(files, name, undefined, now) ? 'held' : 'pass'
+  return drawsChange(files, name, now, after) ? 'held' : 'pass'
+}
+
 type Verdict =
   | { pass: true }
   | { forged: string }
@@ -483,7 +519,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       continue
     }
     const kind = shapeKind(t.path ?? t.word)
-    if (kind === null) {
+    // A mod's plain TypeScript hook file may build what the mod draws (#1275), judged below by that.
+    const modTs = kind === null && t.path !== undefined && isModHookTs(t.path)
+    if (kind === null && !modTs) {
       // A destination the reader could not follow, spelled with no look changing name, may still be
       // one when the command names a look changing file anywhere: held, as ask before saving holds
       // lasting memory (lessons review of #991). A command naming none runs. Only a name the shell
@@ -513,16 +551,30 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (tree === null) continue
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
-    if (lookKindIn(t.path, tree) === null) continue
+    if (modTs ? isTestPath(relTo(t.path, tree)) || !isModHookTs(relTo(t.path, tree)) : lookKindIn(t.path, tree) === null) continue
     // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
     // (lessons review of #991).
     if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
+    if (t.from !== undefined && (judgedByText(t.path) || modTs) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+    if (modTs) {
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
+      if (drawn === 'pass') continue
+      if (drawn !== 'held') {
+        const notes = unreadIn.get(tree) ?? []
+        const said = unreadPutBack(relTo(t.path, tree), drawn.unread)
+        if (!notes.includes(said)) notes.push(said)
+        unreadIn.set(tree, notes)
+      }
+      const files = byTree.get(tree) ?? []
+      if (!files.includes(t.path)) files.push(t.path)
+      byTree.set(tree, files)
+      continue
+    }
     // An edit whose one change is a component's data prop changes nothing on screen (#1010), nor
     // does one to a mod's hook file that touches none of what it draws (#1138), nor a git checkout or
     // restore putting back only such lines (#1158). One whose lines git could not give is judged
     // whole, and the refusal says why.
-    // Asked once per call, and only of one that puts back a file judged by its lines.
-    if (t.from !== undefined && judgedByText(t.path) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+    // restoreAlone is asked above, once per call, and only of one that puts back a file judged by its lines.
     const change = await changeOf($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
     if (change && 'unread' in change) {
       const said = unreadPutBack(relTo(t.path, tree), change.unread)

@@ -1,7 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
-import { errorText, missingOf } from './mod-kit/skew.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -31,8 +30,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   } catch (err) {
     if (!toldNoReader) {
       toldNoReader = true
-      // A mod-kit loaded before it had the reader is the skew's own sentence, which names the remedy (#1281).
-      $.ui.log(missingOf(err)?.kind === 'member' ? `${errorText(err, 'picker-manners')} Until then picker manners reads your messages as not your own words.` : `Picker manners could not ask mod-kit whether your message was your own words (${errorText(err, 'picker-manners')}), so it read it as not yours. A new session loads mod-kit again.`)
+      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
     }
     return false
   }

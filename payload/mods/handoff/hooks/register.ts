@@ -2,7 +2,6 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { HandoffShown } from '../types/index.d.ts'
 import { ageOf, bandLines, changesOf, keyOf, namesIn, readingOf } from './handoff.ts'
 import type { Name, Reading } from './handoff.ts'
-import { errorText } from './mod-kit/skew.ts'
 
 // The handoff (#613), settled with Dan on 2026-10-03 and in the design rounds of 2026-10-04
 // (docs/mods-design.md, "Handoff (#613)").
@@ -125,9 +124,7 @@ const offer = async ($: EngineInterface) => {
   await $.state.set(shownRef, { key: p.key, savedAt: read.savedAt } satisfies HandoffShown)
 }
 
-// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
-// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
-const message = (err: unknown) => errorText(err, MOD)
+const message = (err: unknown) => String((err as Error)?.message ?? err)
 
 // Use and Dismiss each claim the handoff on the band by moving it into the archive. A claim that
 // finds nothing (another session took it) or a different handoff (one saved since replaced it)

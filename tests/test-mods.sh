@@ -1222,6 +1222,39 @@ printf 'export const x = 1\n' > "$M9K/clean-reads-missing/hooks/mod-kit/gone.ts"
 out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q "clean-reads-missing's hooks/mod-kit/gone.ts copies no file of mod-kit's hooks" \
   && check "#1281: a file under hooks/mod-kit that mod-kit's hooks do not have fails the run, named" ok || check "#1281: a file under hooks/mod-kit that mod-kit's hooks do not have fails the run, named" "exit=$code out=$out"
+# #1281: the reader names the mod a noun belongs to, its name in camel case but for the nouns its
+# PROVIDERS map names. Every noun a mod's own contract declares must come out as that mod's folder,
+# so a noun added under another name fails here rather than naming a mod that does not exist (L96).
+nouns_named_right(){   # $1 = mods dir -> prints each noun the reader would name wrongly
+  python3 - "$1" <<'PY'
+import re, sys, pathlib
+mods = pathlib.Path(sys.argv[1])
+src = (mods / 'mod-kit/hooks/skew.ts').read_text()
+m = re.search(r'PROVIDERS[^=]*=\s*\{([^}]*)\}', src)
+table = dict(re.findall(r"(\w+):\s*'([^']+)'", m.group(1))) if m else {}
+for t in sorted(mods.glob('*/types/index.d.ts')):
+    body = re.search(r'interface EngineInterface\s*\{([^}]*)\}', t.read_text())
+    if not body:
+        continue
+    for noun in re.findall(r'^\s*(\w+)\s*:', body.group(1), re.M):
+        named = table.get(noun) or re.sub(r'[A-Z]', lambda c: '-' + c.group(0).lower(), noun)
+        if named != t.parent.parent.name:
+            print(f'{noun} is {t.parent.parent.name}, read as {named}')
+PY
+}
+M9N="$TMPROOT/m9-nouns"
+mkdir -p "$M9N/mod-kit/hooks" "$M9N/job-watcher/types" "$M9N/odd-name/types"
+printf "export const PROVIDERS = { modkit: 'mod-kit', jobs: 'job-watcher' }\n" > "$M9N/mod-kit/hooks/skew.ts"
+printf 'declare module "claude-code" {\n  interface EngineInterface {\n    jobs: Jobs\n  }\n}\n' > "$M9N/job-watcher/types/index.d.ts"
+printf 'declare module "claude-code" {\n  interface EngineInterface {\n    renamed: Renamed\n  }\n}\n' > "$M9N/odd-name/types/index.d.ts"
+case "$(nouns_named_right "$M9N")" in
+  'renamed is odd-name, read as renamed') check "#1281: a noun the reader would name as no mod is caught, and a mapped one is not" ok ;;
+  *) check "#1281: a noun the reader would name as no mod is caught, and a mapped one is not" "$(nouns_named_right "$M9N")" ;;
+esac
+if [ -d "$ROOT/payload/mods" ]; then
+  wrong="$(nouns_named_right "$ROOT/payload/mods")"
+  [ -z "$wrong" ] && check "#1281: every noun a mod in payload/mods declares is read as that mod" ok || check "#1281: every noun a mod in payload/mods declares is read as that mod" "$wrong"
+fi
 # #732 (lessons review of #731): comments are taken out and what is left on the line is read, so
 # code after a block comment, or on a line starting with * as a continuation, is checked, and a
 # string holding // is code.

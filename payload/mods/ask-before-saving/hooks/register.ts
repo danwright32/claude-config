@@ -1,6 +1,5 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import { errorText } from './mod-kit/skew.ts'
 import type { AskBeforeSavingApproval, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -102,9 +101,7 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
 }
 
 let saves = 0
-// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
-// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
-const message = (err: unknown) => errorText(err, 'ask-before-saving')
+const message = (err: unknown) => String((err as Error)?.message ?? err)
 
 // Dan typed an answer instead of choosing one (#1145): nothing is recorded, and mod-kit's one
 // wording, shared with the design round guard, tells him so in a toast and tells Claude to say so,
@@ -569,7 +566,7 @@ export const register: Register = on => {
     }
     if (!files.length || r.deny !== undefined || r.isError) return r
     return { ...r, context: [...(r.context ?? []), `Saved to ${files.join(', ')} without asking, because Dan's message made it a standing rule. Now say in one line what you saved and where.`] }
-  }).catch(($, e, next) => ({ deny: cannotCheck({ message: message(next.error) }) }))
+  }).catch(($, e, next) => ({ deny: cannotCheck(next.error) }))
 
   // Refused at tool.check (#875), which the engine raises inside tool.call once every mod's tool.call
   // hook and the settings PreToolUse hooks have passed the call on, so Claude is told to ask only
@@ -623,7 +620,7 @@ export const register: Register = on => {
     const ask = askInstruction(id, files, targets.guessed)
     const late = lapsed ?? lesson.lapsed
     return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
-  }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck({ message: message(next.error) }) }))
+  }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(next.error) }))
 
   // Claude asks in Claude Code's own dialog (#777). A question tied to a waiting save is checked and
   // given the mod's own answers, and Dan's answer is read from the dialog's result.
