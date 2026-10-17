@@ -1691,11 +1691,17 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   // has gone in, and meanwhile out of the minute's own asking for it.
   const held = [...(await heldList($))]
   if (held.length) heldInMorning = held
-  const morning = await morningFor($, record, self, held)
-  // The reminder pinned at bedtime (#1107): off now when nothing was proposed, else once the pickers are answered.
-  const cleared = await morningAtWake($, record, morning.nothing)
-  if (cleared) s += ` ${cleared}`
-  return { said: s, morning: morning.prompt, off: true }
+  try {
+    const morning = await morningFor($, record, self, held)
+    // The reminder pinned at bedtime (#1107): off now when nothing was proposed, else once the pickers are answered.
+    const cleared = await morningAtWake($, record, morning.nothing)
+    if (cleared) s += ` ${cleared}`
+    return { said: s, morning: morning.prompt, off: true }
+  } catch (err) {
+    // No morning turn will carry it, so the minute asks for it instead (lessons review).
+    heldInMorning = null
+    throw err
+  }
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
@@ -3406,7 +3412,11 @@ export const register: Register = on => {
       if (carriesMorning) await heldMorningDone($, false)
       throw err
     }
-    if (carriesMorning) await heldMorningDone($, true)
+    // The prompt is in, so a clear that fails is logged, never thrown past a turn that started.
+    if (carriesMorning)
+      await heldMorningDone($, true).catch(err =>
+        $.ui.log(`scope-modes: what this session held overnight went out in the morning turn, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' }),
+      )
     if (asking !== undefined) askedUp = asking
     return entered
   })
@@ -3579,7 +3589,14 @@ export const register: Register = on => {
       const label = deliveryOf(tool, input)
       if (label) {
         const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
-        await keepForWake($, { label, call: `${tool} ${JSON.stringify(args)}` })
+        // Refused whatever the write does: a hook that throws is skipped, and the publish would run
+        // (L42). The list is changed in memory before it is written, so a failed write keeps it for
+        // this session's morning, losing it only to a reload (lessons review).
+        try {
+          await keepForWake($, { label, call: `${tool} ${JSON.stringify(args)}` })
+        } catch (err) {
+          $.ui.log(`scope-modes: a delivery held overnight could not be written to this session's state (${msg(err)}); it is kept in memory for the morning`, { to: 'debug' })
+        }
         const held = heldUntilWake(label)
         await $.modkit.blocked({ toolUseId, ...held.card })
         return { deny: held.deny }

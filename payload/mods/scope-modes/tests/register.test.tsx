@@ -1978,7 +1978,7 @@ test("the keystroke guard's actions through the noun: away, focus and a test bui
 })
 
 // Sleep mode gets the same (Dan, 2026-10-16 ET): it keeps every session quiet as away.
-test('asleep, the same: focus, files, browser automation and a test build run; a dialog, other typing and the Artifact open action are held (#1269)', withDeps, async ($, on) => {
+test('asleep, the same: focus, files, browser automation and a test build run; a dialog and other typing are held, and the Artifact open action is held until wake (#1269, #1284)',withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)
   expect(await call($ as never, bash('open -a Preview a.pdf', 's1'))).toBe('ran')
