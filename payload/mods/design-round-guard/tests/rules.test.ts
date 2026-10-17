@@ -949,4 +949,7 @@ test('#1296: which call a card attaches to, what a value is only tested for, and
   // The words themselves, either way the test goes, are still asked about.
   expect(one("'You are away.'", "'You are out.'")).toBe(true)
   expect(one('`Held ${named}.`', '`Holding ${named}.`')).toBe(true)
+  // Only the keys named for that are left out: any other key's value is followed (lessons review).
+  const keyed = ["const KIND = 'steps'", 'export const show = async ($: Engine) => {', '  const k = KIND', "  await $.modkit.bandRow({ mod: 'demo', id: 'x', slot: 's', key: k, lines: [] })", '}', ''].join('\n')
+  expect(drawsChange([{ name: 'b.ts', text: keyed }], 'b.ts', keyed, keyed.replace("'steps'", "'rows'"))).toBe(true)
 })

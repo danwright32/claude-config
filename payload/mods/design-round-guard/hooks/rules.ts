@@ -1448,7 +1448,7 @@ const readMod = (f: ModFile): ModRead | null => {
     // `toolUseId`, a band row's `mod`, `id` and `slot`, a pane's `id`): not followed.
     const shut = own === undefined ? undefined : close.get(own)
     if (own !== undefined && shut !== undefined)
-      for (const m of blank.slice(own, shut).matchAll(/([{,]\s*)(toolUseId|id|mod|slot|key)\b\s*(:?)/g)) {
+      for (const m of blank.slice(own, shut).matchAll(/([{,]\s*)(toolUseId|id|mod|slot)\b\s*(:?)/g)) {
         const at = own + (m.index as number) + (m[1] as string).length
         if (!m[3]) out.push([at - 1, at + (m[2] as string).length])
         else {
