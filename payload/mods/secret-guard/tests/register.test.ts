@@ -343,3 +343,85 @@ test('a tool result with no secret is kept as it was', withKit, async ($, on) =>
   expect(stored).toContain('all fine')
   expect(w.toasts.length).toBe(0)
 })
+
+// #1298: a check that throws inside the tool.call hook must refuse the call. Without a .catch the
+// engine skips a failed hook and runs the call with no screening at all (L42). An older mod-kit
+// loaded beside this mod (#1281) has no commands reader, so reading a Bash command throws; this
+// stand-in's reader throws the same way.
+const olderKit: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        modkit: {
+          blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
+          // Its error quotes the command it could not read, secret and all, as a parser's error may
+          // (lessons review of #1298), so the refusal must not carry the error's own words.
+          commands: async ({ command }: { command: string }) => { throw new Error(`could not read: ${command}`) },
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
+          gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+          mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
+          goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
+          ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
+          linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
+          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+          press: async () => ({ isAnswered: false }),
+          clickable: async () => true,
+          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+          pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+          login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+          account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
+        },
+      }
+    })
+  },
+}
+
+test('a tool call whose secret check throws is refused, never run unscreened (#1298, L42)', { plugins: [olderKit] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const r = await $.tool.call({ tool: 'Bash', command: `git commit -m "token ${KNOWN}"`, tool_use_id: 'f1' } as never)
+  const said = String((r as { text?: string }).text ?? (r as { deny?: string }).deny)
+  expect(w.reached).not.toContain('Bash')
+  expect(said).toStartWith('Blocked: the secret guard could not check this for secrets (')
+  expect(said).toEndWith('), so it did not run. Try it again; if it fails the same way, tell Dan.')
+  expect(said).not.toContain(KNOWN)
+  expect(said).not.toContain('could not read')
+})
+
+// The session.append hook fails open the same way: a scrub that throws is skipped and the row is
+// kept as it came, secret and all. Its .catch withholds the text instead.
+test('a tool result the guard cannot scrub is withheld rather than kept as it was (#1298, L42)', withKit, async ($, on) => {
+  let stored = ''
+  world(on)
+  on('session.append', ($, e, next) => {
+    stored = JSON.stringify(e.message.content)
+    return next(e)
+  })
+  const w = { stored: () => stored }
+  await start($)
+  // A block the scrub cannot read makes the scrub itself throw, and a second try throws the same way.
+  await appendRow($, {
+    door: 'tool-result',
+    origin: { kind: 'tool', tool: 'Bash' },
+    uuid: 'u4',
+    message: { type: 'user', role: 'user', content: [null, { type: 'tool_result', tool_use_id: 't4', content: `out: ${KNOWN}` }] },
+  })
+  expect(w.stored()).not.toContain(KNOWN)
+  expect(w.stored()).toContain('withheld: the secret guard could not check it for secrets')
+  expect(w.stored()).toContain('t4')
+})
