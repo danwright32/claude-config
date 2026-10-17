@@ -1675,6 +1675,96 @@ check "#1168 a refusal with findings says to answer them in a comment beginning 
 runners_done || bad "#1168 a runner was still going at the end"
 G checkout -q feat/sync
 
+# ===========================================================================================
+# 14. An update from main that changes nothing the review reads is not reviewed again (#1280). On
+#     Bidspoke on 2026-10-16 PR #2305 took 73 minutes and 11 updates to land, and #2301 and #2304
+#     each stopped twice on a new wording point about lines the branch already had: every update
+#     drew a whole new review, whose answer differs from run to run though its input did not. So a
+#     new head whose every changed file is byte for byte what the last reviewed head of the same
+#     pull request had, on both sides of the diff, carries that review, its findings and whether
+#     they were read. Anything the update changed in what the review reads (a changed file main
+#     also touched, a file added or gone) is reviewed whole, as before.
+# ===========================================================================================
+reset_state
+G checkout -q main
+seq 1 60 | sed 's/^/shared line /' > "$REPO/App/Shared.swift"
+G add App/Shared.swift
+G commit -q -m "main adds a shared file"
+G checkout -q -b feat/carry main
+awk 'NR == 2 { print "shared line 2 changed by the branch"; next } { print }' "$REPO/App/Shared.swift" > "$WORKDIR/sh.tmp" && mv "$WORKDIR/sh.tmp" "$REPO/App/Shared.swift"
+printf 'carry line\n' > "$REPO/App/Carry.swift"
+G add App/Carry.swift App/Shared.swift
+G commit -q -m "the branch's change"
+C_A="$(G rev-parse HEAD)"
+CF_A='App/Carry.swift:1: the carry line is vague (L11). Should be: precise. [severity: minor]'
+FAKE_CLAUDE_OUT="$CF_A" prr start --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_A" || bad "#1280 the first review finished"
+out="$(prr check --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry)"
+read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p' | head -1)"
+[ -n "$read_key" ] || bad "#1280 the first review's refusal carried a read key"
+PR_REVIEW_READ="$read_key" prr check --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null; rc=$?
+check_eq "#1280 the first review's findings were read" "0" "$rc"
+# main moves on a file the branch never touches, merged in as merge-when-ready's update does.
+G checkout -q main
+printf '# fixture moved on for carry\n' > "$REPO/README.md"
+G commit -q -am "main moves README again"
+G checkout -q feat/carry
+G merge -q --no-edit main
+C_B="$(G rev-parse HEAD)"
+before="$(calls)"
+FAKE_CLAUDE_OUT='App/Carry.swift:1: A NEW WORDING POINT (L21). Should be: other words. [severity: minor]' prr start --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null
+# Written at once, never left running: no pending marker, and a review file already there.
+[ -e "$(final_of "$C_B")" ] && [ ! -e "$(final_of "$C_B").pending" ] && ok || bad "#1280 its head has a review at once, with nothing left running"
+wait_final "$C_B" || bad "#1280 the carried review is there"
+check_eq "#1280 an update that changed nothing the review reads runs no reviewer" "$before" "$(calls)"
+check "#1280 the head's review is the earlier one, carried, saying so" "carried=$C_A" "$(cat "$(final_of "$C_B")" 2>/dev/null)"
+check "#1280 with the findings it raised" "$CF_A" "$(cat "$(final_of "$C_B")" 2>/dev/null)"
+check_not "#1280 and none a new run would have raised" "A NEW WORDING POINT" "$(cat "$(final_of "$C_B")" 2>/dev/null)"
+out="$(prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry)"; rc=$?
+check_eq "#1280 findings read on the earlier head stay read: the merge is not stopped again" "0" "$rc"
+check "#1280 and the verdict names the head whose review it carries" "carried from the review of ${C_A:0:7}" "$out"
+# Unread findings are carried unread: refused, with a key of the new head's, which then reads them.
+reset_state
+FAKE_CLAUDE_OUT="$CF_A" prr start --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_A" || bad "#1280 the first review finished again"
+prr start --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null
+out="$(prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry)"; rc=$?
+check_eq "#1280 unread findings carried are still unread: refused" "1" "$rc"
+check "#1280 showing them" "$CF_A" "$out"
+read_key="$(printf '%s\n' "$out" | sed -n 's/^ *PR_REVIEW_READ=\([0-9a-f]*\) .*/\1/p' | head -1)"
+PR_REVIEW_READ="$read_key" prr check --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null; rc=$?
+check_eq "#1280 and their key reads them" "0" "$rc"
+# Control: main changes a file the branch also changes (far from its lines, so it merges cleanly),
+# and the review reads that file's new text, so it is reviewed whole.
+G checkout -q main
+awk 'NR == 50 { print "shared line 50 changed on main"; next } { print }' "$REPO/App/Shared.swift" > "$WORKDIR/sh.tmp" && mv "$WORKDIR/sh.tmp" "$REPO/App/Shared.swift"
+G commit -q -am "main changes the shared file"
+G checkout -q feat/carry
+G merge -q --no-edit main
+C_C="$(G rev-parse HEAD)"
+before="$(calls)"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$C_C" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_C" || bad "#1280 the review of the head main changed finished"
+check_eq "#1280 an update that changed a file the review reads runs the reviewer" "$((before + 1))" "$(calls)"
+check_not "#1280 and carries nothing" "carried=" "$(cat "$(final_of "$C_C")" 2>/dev/null)"
+# Control: a commit of the branch's own after the review is reviewed whole.
+printf 'carry line two\n' >> "$REPO/App/Carry.swift"
+G commit -q -am "more of the branch"
+C_D="$(G rev-parse HEAD)"
+before="$(calls)"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$C_D" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_D" || bad "#1280 the review of the branch's new commit finished"
+check_eq "#1280 a new commit of the branch's own is reviewed" "$((before + 1))" "$(calls)"
+# Control: an empty commit of the branch's own (an answer in words) changes nothing the review reads,
+# but the base did not move, so it is no update: it is reviewed, its message read as an answer.
+G commit -q --allow-empty -m "Decline App/Carry.swift:1: the wording is intended"
+C_E="$(G rev-parse HEAD)"
+before="$(calls)"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$C_E" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_E" || bad "#1280 the review of the branch's empty commit finished"
+check_eq "#1280 an empty commit of the branch's own is reviewed, not carried" "$((before + 1))" "$(calls)"
+G checkout -q feat/sync
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

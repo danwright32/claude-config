@@ -659,6 +659,71 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
 
 history_text() { [ -n "${hist:-}" ] && printf '%s\n\n' "$hist"; }
 
+# AN UPDATE THAT CHANGED NOTHING THE REVIEW READS CARRIES THE LAST REVIEW (claude-config#1280). On
+# Bidspoke on 2026-10-16 PR #2305 took 73 minutes and 11 updates from main to land, and #2301 and
+# #2304 each stopped twice on a new wording point about lines the branch already had: each update
+# drew a whole new review, and a reviewer's answer differs from run to run though its input does not.
+# A review reads the branch's diff and the full text of every file it changes. So when the nearest
+# earlier head of the same pull request (a finished review labelled with this branch, of a head this
+# head descends from, as earlier_reviews finds them) changed exactly the same files, and each of
+# them is byte for byte the same blob at its base and at its head as here, the review would read
+# the same diff and the same files: this head carries that review, its findings, and whether they
+# were read. Only when the base moved in between, which is what an update brings: anything else is
+# reviewed whole, as before, whether a changed file main also touched, a file added or gone, or any
+# commit of the branch's own. Nothing is filtered from a review that does run.
+# Prints the earlier head it carried, and returns 0 when it wrote this head's review from it.
+carry_review() {   # $1 = this head's merge base with the base ref
+  local mb="$1" rows best="" s rf ob d bestd="" p names
+  [ "$branch_known" = 1 ] || return 1
+  local -a files=()
+  for rf in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$rf" ] && [ "$rf" != "$final" ] && files+=("$rf"); done
+  [ "${#files[@]}" -gt 0 ] || return 1
+  # One awk over every review's header, as earlier_reviews reads them: each finished review of this
+  # branch label that returned a review, with the head and the base it read.
+  rows="$(awk -v br="$branch" '
+    FNR == 1 { b = ""; s = ""; st = ""; bs = "" }
+    /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
+    /^status=/ { st = substr($0, 8) } /^base=/ { bs = substr($0, 6) }
+    /^$/ { if (b == br && st == "ok" && bs != "") printf "%s\t%s\t%s\n", s, bs, FILENAME; nextfile }' "${files[@]}" 2>/dev/null)"
+  while IFS=$'\t' read -r s ob rf; do
+    [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
+    git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null || continue
+    d="$(git rev-list --count "$s..$full_sha" 2>/dev/null)"
+    case "$d" in ''|*[!0-9]*) continue ;; esac
+    if [ -z "$bestd" ] || [ "$d" -lt "$bestd" ]; then bestd="$d"; best="$s"$'\t'"$ob"$'\t'"$rf"; fi
+  done <<ROWS
+$rows
+ROWS
+  [ -n "$best" ] || return 1
+  IFS=$'\t' read -r s ob rf <<<"$best"
+  # Only an update from the base: a head whose base has not moved since that review is the branch's
+  # own work, every commit of it reviewed, an empty one included (its message may answer a finding).
+  [ "$ob" != "$mb" ] || return 1
+  names="$(git -c core.quotepath=false diff --no-renames --name-only "$mb" "$full_sha" 2>/dev/null)" || return 1
+  [ -n "$names" ] || return 1
+  [ "$(git -c core.quotepath=false diff --no-renames --name-only "$ob" "$s" 2>/dev/null)" = "$names" ] || return 1
+  while IFS= read -r p; do
+    [ "$(git rev-parse -q --verify "$ob:$p" 2>/dev/null)" = "$(git rev-parse -q --verify "$mb:$p" 2>/dev/null)" ] || return 1
+    [ "$(git rev-parse -q --verify "$s:$p" 2>/dev/null)" = "$(git rev-parse -q --verify "$full_sha:$p" 2>/dev/null)" ] || return 1
+  done <<<"$names"
+  # The earlier review as this head's, its own start and finish kept, so whether its findings were
+  # read (an acknowledgement names the review by its finish) carries with it. This head's base, so
+  # check finds the range it is asked about covered. No ledger row: no reviewer ran.
+  awk -v sha="$full_sha" -v base="$mb" -v from="$s" '
+    !body && /^sha=/ { print "sha=" sha; next }
+    !body && /^base=/ { print "base=" base; next }
+    !body && /^carried=/ { next }
+    !body && /^$/ { print "carried=" from; body = 1 }
+    { print }' "$rf" > "$final.tmp" 2>/dev/null && mv -f "$final.tmp" "$final" || { rm -f "$final.tmp"; return 1; }
+  local fin
+  fin="$(meta_of "$final" finished)"
+  [ -n "$fin" ] && [ "$(cat "$rf.acknowledged" 2>/dev/null)" = "finished=$fin" ] && cp "$rf.acknowledged" "$acknowledged" 2>/dev/null
+  [ -n "$fin" ] && [ "$(cat "$rf.push-acknowledged" 2>/dev/null)" = "finished=$fin" ] && cp "$rf.push-acknowledged" "$push_acknowledged" 2>/dev/null
+  [ -s "$rf.leftout" ] && cp "$rf.leftout" "$leftout" 2>/dev/null
+  touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
+  printf '%s' "$s"
+}
+
 do_start() {
   if [ -e "$final" ] || [ -e "$pending" ]; then
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
@@ -696,6 +761,11 @@ do_start() {
   if [ "${total:-0}" -eq 0 ]; then
     record empty-diff "The head $short adds nothing to $ref (merge base $short_mb), so there is nothing to review." "$mb"
     echo "Nothing to review: $short adds nothing to $ref."; return 0
+  fi
+  local carried
+  if carried="$(carry_review "$mb")"; then
+    echo "The lessons review of $repo_label $branch at $short is the review of ${carried:0:7}, carried: the update changed nothing it reads (claude-config#1280)."
+    return 0
   fi
   # What earlier reviews of this pull request raised (#1063): after the file list in every input
   # this review is read from, single or in groups, and counted in each one's size.
@@ -1059,6 +1129,9 @@ do_check() {
   status="$(meta_of "$final" status)"
   findings="$(meta_of "$final" findings)"
   took="$(elapsed_text $(( $(meta_of "$final" finished || echo 0) - $(meta_of "$final" started || echo 0) )))"
+  local carried_from
+  carried_from="$(meta_of "$final" carried)"
+  [ -n "$carried_from" ] && echo "(This head's review is carried from the review of ${carried_from:0:7}: the update changed nothing it reads, so no reviewer ran again, claude-config#1280.)"
   case "$status" in
     ok)
       case "$findings" in ''|*[!0-9]*) findings="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")" ;; esac
