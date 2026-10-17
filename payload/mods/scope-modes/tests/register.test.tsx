@@ -6,7 +6,7 @@ import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
-import { SLEEP_START } from '../hooks/driver.ts'
+import { REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -54,9 +54,7 @@ const deps: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return r.stdout === '' ? undefined : JSON.parse(r.stdout)
       }
-      return {
-        ...built,
-        modkit: {
+      const modkit = {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
           pipeline: async (input: { command: string }) => kit('pipeline', input),
           writes: async (input: { command: string; cwd: string; home: string }) => kit('writes', input),
@@ -98,7 +96,17 @@ const deps: { name: string; register: Register } = {
           pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
           login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
           account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
-        },
+      }
+      // A mod-kit loaded before it had these members (#1281): a mod reloaded before the mod-kit it
+      // depends on keeps the older one, so each is not there at all, as in a session. Named by a
+      // plugin in the fold, kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
+      return {
+        ...built,
+        modkit,
         statusbar: {
           setModes: async ({ modes }: { modes: string[] }) => built.ui.log('MODES ' + JSON.stringify(modes)),
           setMode: async () => undefined,
@@ -158,6 +166,8 @@ const isItLive: { name: string; register: Register } = {
   },
 }
 const withDeps = { plugins: [deps, isItLive] }
+// #1281: the same, with a mod-kit loaded before it had mergeHelper.
+const withOldKit = { plugins: [deps, isItLive, { name: 'kit-lacks-merge-helper', register: (() => undefined) as Register }] }
 const withoutIsItLive = { plugins: [deps] }
 // The manual steps mod's noun (#1107), standing in as its own plugin: each call is logged (STEPS add,
 // STEPS finish) and answered as shown and finished; left out, it stands for the mod not being loaded.
@@ -310,6 +320,8 @@ type Opts = {
   linkReaderFails?: boolean
   /** mod-kit's reader of the merge helper fails (#1251). */
   mergeHelperReaderFails?: boolean
+  /** `touch` failing, with its stderr (#1281: the driver touches this mod's manifest to load it again). */
+  touchFails?: string
   /** mod-kit's reader of a transcript's /goal fails (#1252). */
   goalReaderFails?: boolean
   /** mod-kit's link reader fails only for a link holding this text (#961). */
@@ -601,6 +613,8 @@ const world = (on: On, o: Opts = {}) => {
       return ok()
     }
     w.runs.push(argv)
+    // A mod's own manifest touched so it loads again (#1281).
+    if (cmd === 'touch') return o.touchFails ? fail(1, o.touchFails) : ok()
     if (cmd === '__sessions') {
       if (o.unreadable?.includes('*')) return fail(1, 'the sessions folder could not be read')
       // A registry answer missing its lists, so enrolment throws reading it (#843).
@@ -3413,6 +3427,95 @@ test('asleep, a merge helper reading mod-kit cannot give refuses the call, where
   expect(await call($ as never, bash('cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash'))).toMatch(/^Blocked overnight: the merge and deploy check of this call failed \(mod-kit is not loaded\)/)
 })
 
+// #1281: since 8:50 PM ET on 2026-10-16 a Bidspoke session started before #1251 had every Bash call
+// refused all night ("Blocked overnight: the merge and deploy check of this call failed ($.modkit.
+// mergeHelper is not a function)"). Measured on 2.1.302 with two throwaway mods: a mod reloaded
+// before the mod-kit it depends on keeps the older mod-kit's members, mod-kit reloading afterwards
+// does not reach it, and a reload it is owed lands only once the session is idle, which a worker the
+// driver keeps blocking never is. Here the stand in mod-kit lacks mergeHelper the same way.
+const SKEW = 'scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no mergeHelper, which scope-modes needs, so a mod was updated after this session loaded it. A new session loads them together.'
+const NOTES_LOST = 'Until then scope modes cannot note the branches this session makes or the PRs it opens, so winding down may not finish them.'
+const SKEW_DENY = `Blocked overnight: ${SKEW} So no call can be checked for a merge or deploy, and none runs. End this turn now so this session can load its mods again; do not try this call another way.`
+
+test('asleep, a mod-kit older than this mod refuses each call as one it cannot check, naming the skew and its remedy, and tells Dan once (#1281)', withOldKit, async ($, on) => {
+  const { w, clock } = world(on, { ...night({ mayDeploy: [], mergeOnly: [{ repo: 'o/quiet', mergeDeploys: false }], closed: [] }), origins: { '/quiet': 'git@github.com:o/quiet.git' } })
+  await start($ as never, clock)
+  const before = w.reached.length
+  // Still fail closed: a merge it cannot read is refused, and so is every other call, since
+  // without the reader none can be told apart from one that runs the merge helper.
+  for (const c of ['echo hi', 'git status', 'cd /quiet && bash ~/.claude/hooks/lib/merge-when-ready.sh 5 --squash']) expect(await call($ as never, bash(c))).toBe(SKEW_DENY)
+  expect(w.reached.length).toBe(before)
+  // Dan hears it once, never once a call.
+  expect(w.toasts.filter(t => t.includes('out of step'))).toEqual([SKEW])
+})
+
+test('a worker whose mods are out of step rests at its Stop, touching its own manifest so it loads again, is started again, and stops for the night if the skew is still there (#1281)', withOldKit, async ($, on) => {
+  const claims = JSON.stringify({ repo: 'o/r', issue: 7, attempts: 1, entries: [{ kind: 'claim', session: 's1', at: T0 }] })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, claims })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo hi'))).toBe(SKEW_DENY)
+  // The Stop is not blocked: the session goes idle, which is when a reload lands.
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ rested: true, restDue: true, stopped: null, resumeAt: T0 + MIN })
+  const touched = w.runs.filter(r => r[0] === 'touch')
+  expect(touched.map(r => r.slice(0, 2))).toEqual([['touch', '-c']])
+  expect(String(touched[0]?.[2])).toMatch(/\/scope-modes\/\.claude-plugin\/plugin\.json$/)
+  expect(w.released).toEqual([])
+  expect(w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string }).filter(n => n.kind === 'finding').map(n => n.text)).toEqual([
+    `${SKEW} Every call was refused, since none could be checked for a merge or deploy, so this session rests a minute to load its mods again.`,
+  ])
+  await clock.advance(MIN)
+  expect(w.prompts).toEqual([REST_RESUME])
+  // The turn it starts meets the skew again: the rest did not mend it, so the night ends here.
+  expect(await call($ as never, bash('echo hi'))).toBe(SKEW_DENY)
+  expect((await stop($ as never)).block).toBeUndefined()
+  const why = `${SKEW} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
+  expect(JSON.parse(w.files[DRIVER] as string).stopped).toBe(why)
+  expect(w.released.map(r => r.slice(0, 5))).toEqual([['/repo', '7', 's1', 'parked', why]])
+  expect((await stop($ as never)).block).toBeUndefined()
+})
+
+test('a rest whose touch fails still rests, and the night\'s notes say the mods may not load again (#1281)', withOldKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, touchFails: 'touch: Operation not permitted' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo hi'))).toBe(SKEW_DENY)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ rested: true, resumeAt: T0 + MIN })
+  expect(w.appended.map(a => JSON.parse(a.line) as { kind: string; text: string }).filter(n => n.kind === 'finding').map(n => n.text)[1]).toBe(
+    "this session's own manifest could not be touched to load its mods again (touch: Operation not permitted)",
+  )
+})
+
+// Lessons review of #1281: a member the judge's own reads need (here the write reader) stalls the
+// night as the merge check's does, so it rests the worker too.
+const withOlderWrites = { plugins: [deps, isItLive, { name: 'kit-lacks-writes', register: (() => undefined) as Register }] }
+test("a skew met in the judge's own reads rests the worker at its Stop too (#1281 lessons review)", withOlderWrites, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo hi > notes.txt'))).toMatch(/scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no writes/)
+  expect((await stop($ as never)).block).toBeUndefined()
+  expect(JSON.parse(w.files[DRIVER] as string)).toMatchObject({ rested: true, restDue: true, stopped: null })
+})
+
+test('a worker that met no skew since its rest works on (#1281 control)', withOldKit, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('echo hi'))).toBe(SKEW_DENY)
+  expect((await stop($ as never)).block).toBeUndefined()
+  await clock.advance(MIN)
+  expect(w.prompts).toEqual([REST_RESUME])
+  // No call met the skew in the turn after the rest, so the next Stop blocks as any other.
+  expect((await stop($ as never)).block).toMatch(/^You hold no issue/)
+})
+
+test('awake, a mod-kit older than this mod is told once, never on every call that notes a branch (#1281)', withOldKit, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  for (let n = 0; n < 3; n++) await call($ as never, bash(`git commit -m "change ${n}"`))
+  // Said once with what it costs until then, since every later note is dropped (lessons review).
+  expect(w.toasts.filter(t => t.includes('out of step') || t.includes('mergeHelper'))).toEqual([`${SKEW} ${NOTES_LOST}`])
+})
+
 test('a package script whose body deploys is refused where deploying is not allowed; a push to main is refused everywhere', withDeps, async ($, on) => {
   const { clock } = world(on, {
     files: {
@@ -4974,6 +5077,27 @@ test('a step that could not be taken off is tried again at the next minute, and 
   expect(stepsCalls(w).length).toBe(2)
   await clock.advance(2 * MIN)
   expect(stepsCalls(w).length).toBe(2)
+})
+
+// Lessons review of #1281: a manual steps loaded before it had finish may still show the step, so
+// the step is not taken for off: it is said, the skew's sentence, and tried again.
+const olderStepsNoun: { name: string; register: Register } = {
+  name: 'manual-steps',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, manualSteps: { add: async () => ({ isShown: true }) } }
+    })
+  },
+}
+test('a manual steps whose loaded copy lacks finish leaves the step on, said as the skew, and tried again (#1281 lessons review)', { plugins: [deps, isItLive, olderStepsNoun] }, async ($, on) => {
+  const { w, clock } = world(on, { files: { [REVIEWS]: JSON.stringify([{ generation: 'g0', night: '1969-12-31', done: { at: 1, how: 'pickers-answered' } }]) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  const said = (l: string) => l.includes("could not be taken off this session's card (scope-modes and manual-steps are out of step in this session: the manual-steps loaded here has no finish")
+  expect(w.logs.filter(said).length).toBe(1)
+  await clock.advance(MIN)
+  expect(w.logs.filter(said).length).toBe(2)
 })
 
 test('/sleep waits on another session changing the record of the nights, then says so rather than writing over it (#1107 lessons review)', withSteps, async ($, on) => {

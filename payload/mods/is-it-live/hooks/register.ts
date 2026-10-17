@@ -2,6 +2,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
 import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
@@ -109,7 +110,9 @@ const pin = async ($: EngineInterface, c: IsItLiveCard): Promise<string | undefi
 const owedRef = { plugin: 'is-it-live', key: 'owed' } as const
 const interactiveRef = { plugin: 'is-it-live', key: 'interactive' } as const
 const refusedRef = { plugin: 'is-it-live', key: 'refused' } as const
-const msg = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words, a member mod-kit's loaded copy lacks said as the one sentence naming the skew
+// and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
+const msg = (err: unknown) => errorText(err, MOD)
 
 const owedOf = async ($: EngineInterface): Promise<IsItLiveOwed[]> => (await $.state.get(owedRef)).value ?? []
 
@@ -133,18 +136,26 @@ const repoOfLink = async ($: EngineInterface, url: string, named: string | undef
 // Each merge a Bash call made at once, read by mod-kit's command and gh readers: gh pr merge in any
 // spelling mod-kit reads (behind rtk, sudo, an assignment), and the merge helper, found and read as
 // the gh pr merge it runs by mod-kit alone (#1251).
-const mergesIn = async ($: EngineInterface, command: string): Promise<MergeCall[]> => {
+// A mod-kit whose loaded copy lacks the merge helper's reader (#1281) leaves the gh merges read by
+// the readers it has: whether a command ran the helper is the one thing not known, kept as `skew`.
+const mergesIn = async ($: EngineInterface, command: string): Promise<{ calls: MergeCall[]; skew?: unknown }> => {
   const out: MergeCall[] = []
+  let skew: unknown
   for (const c of await $.modkit.pipeline({ command })) {
     const direct = mergeCallOf(await $.modkit.gh({ words: c.words }))
     if (direct) {
       out.push(direct)
       continue
     }
-    const viaHelper = mergeCallOf(await $.modkit.mergeHelper(c))
-    if (viaHelper) out.push(viaHelper)
+    try {
+      const viaHelper = mergeCallOf(await $.modkit.mergeHelper(c))
+      if (viaHelper) out.push(viaHelper)
+    } catch (err) {
+      if (missingOf(err)?.kind !== 'member') throw err
+      skew = err
+    }
   }
-  return out
+  return { calls: out, ...(skew === undefined ? {} : { skew }) }
 }
 
 // What each merge in a finished Bash call owes, kept, and the line its result carries.
@@ -386,10 +397,18 @@ export const register: Register = on => {
     const done = await next(e)
     if (done.deny !== undefined) return done
     try {
-      const calls = await mergesIn($, command)
-      if (!calls.length) return done
+      const { calls, skew } = await mergesIn($, command)
+      // Said where Claude reads it on each such call, since a merge this missed would go unseen; Dan
+      // is told once (#1281).
+      const unread: string[] = []
+      if (skew !== undefined) {
+        const news = skewNews(skew, MOD)
+        if (news) $.ui.toast(news)
+        unread.push(`is it live could not tell whether this command also ran the merge helper (${msg(skew)}). If it merged a pull request, show Dan its is it live card: load the card tool with ToolSearch with the query "select:${TOOL}".`)
+      }
+      if (!calls.length) return unread.length ? { ...done, context: [...(done.context ?? []), ...unread] } : done
       const background = input.run_in_background === true || typeof (done.result as { backgroundTaskId?: unknown } | undefined)?.backgroundTaskId === 'string'
-      const lines = await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined })
+      const lines = [...(await afterMerges($, calls, at, { failed: done.isError === true, background, agent: e.agentId !== undefined })), ...unread]
       return lines.length ? { ...done, context: [...(done.context ?? []), ...lines] } : done
     } catch (err) {
       // Said where Claude reads it: a merge this missed would otherwise go unseen (fail loud).

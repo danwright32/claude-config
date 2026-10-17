@@ -400,3 +400,54 @@ describe('the readings', () => {
     expect(heldClaim('{oops', 's1').state).toBe('unknown')
   })
 })
+
+// #1281: a worker whose mods are out of step (a mod loaded before the mod-kit it depends on) has
+// every call refused, since none can be checked for a merge or deploy. Measured on 2.1.302, a mod
+// loads again only once its session is idle, and a worker whose Stops are blocked never is, so the
+// driver lets it rest a minute (its own reload can land), then starts it again; a skew still there
+// after that rest stops it for the night, saying what fixes it, rather than burn the night refused.
+describe('mods out of step', () => {
+  const SKEW = 'scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no mergeHelper, which scope-modes needs, so a mod was updated after this session loaded it. A new session loads them together.'
+  test('the first Stop after a skew rests the worker a minute, keeping its claim, noted, and the rest is a wait the breaker does not count', () => {
+    const d = decideStop(input({ driver: ok(after({ blocks: 2 })), claim: held(), skew: SKEW, now: T0 + 10 * MIN }))
+    expect(d.kind).toBe('rest')
+    if (d.kind !== 'rest') return
+    expect(d.record.resumeAt).toBe(T0 + 10 * MIN + LIMITS.skewRestMs)
+    expect(d.record.waits).toEqual([{ from: T0 + 10 * MIN, until: T0 + 10 * MIN + LIMITS.skewRestMs }])
+    expect(d.record.rested).toBe(true)
+    expect(d.record.restDue).toBe(true)
+    expect(d.record.stopped).toBeNull()
+    // Not a block: the counter of blocks is where it was.
+    expect(d.record.blocks).toBe(2)
+    expect(d.notes).toEqual([{ kind: 'finding', repo: 'o/r', issue: 7, text: `${SKEW} Every call was refused, since none could be checked for a merge or deploy, so this session rests a minute to load its mods again.` }])
+    expect(resumeDue(d.record, T0 + 10 * MIN + LIMITS.skewRestMs)).toBe(true)
+  })
+  test('a skew still there after the rest stops the worker for the night, its claim parked, naming the remedy', () => {
+    const rested = after({ rested: true, waits: [{ from: T0, until: T0 + LIMITS.skewRestMs }] })
+    const d = decideStop(input({ driver: ok(rested), claim: held(), skew: SKEW, now: T0 + 5 * MIN }))
+    expect(d.kind).toBe('stop')
+    if (d.kind !== 'stop') return
+    const why = `${SKEW} Loading its mods again did not mend it, so this session stops for the night: every call it makes is refused, since none can be checked for a merge or deploy.`
+    expect(d.why).toBe(why)
+    expect(d.release).toEqual({ issue: 7, state: 'parked', why })
+    expect(d.record?.stopped).toBe(why)
+  })
+  test('a Stop with no skew works on as before and clears the rest, so a later skew rests again', () => {
+    const d = decideStop(input({ driver: ok(after({ rested: true })), fingerprint: 'notes=1;refs=', now: T0 + MIN }))
+    expect(d.kind).toBe('block')
+    expect(d.record?.rested).toBe(false)
+    expect(decideStop(input({ driver: ok(d.record as DriverRecord), skew: SKEW, now: T0 + 2 * MIN })).kind).toBe('rest')
+  })
+  test('the weekly limit and no goal still come first', () => {
+    expect(decideStop(input({ skew: SKEW, weekly: LIMITS.weeklyStop })).kind).toBe('stop')
+    expect(decideStop(input({ skew: SKEW, goal: null })).kind).toBe('stop')
+  })
+  test('a counter holding the rest fields reads back, one from before them reads as no rest, and a damaged one is unreadable', () => {
+    const r = readDriver(JSON.stringify(after({ rested: true, restDue: false })), 'g1', 's1')
+    expect(r.state === 'ok' && r.record.rested).toBe(true)
+    const { rested: _r, restDue: _d, ...before1281 } = after()
+    const old = readDriver(JSON.stringify(before1281), 'g1', 's1')
+    expect(old.state === 'ok' && !old.record.rested && !old.record.restDue).toBe(true)
+    for (const o of [{ rested: 'yes' }, { restDue: 1 }]) expect(readDriver(JSON.stringify({ ...after(), ...o }), 'g1', 's1').state).toBe('unreadable')
+  })
+})

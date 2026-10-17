@@ -86,6 +86,12 @@
 #             a whole path part in any quotes: '/.claude.json', bar and the account room each read it their
 #             join(home, '.claude.json'); never a sentence      own way at start)
 #             that only names the file)
+#   missing-reader                                              missingOf(err), errorText(err, mod) and
+#             telling a call to another mod's noun that        skewNews(err, mod) from the copy of mod-kit's
+#             failed because the noun or member is not there   hooks/skew.ts every dependent keeps (#1281:
+#             by hand (instanceof TypeError anywhere)          five mods each read absence their own way,
+#                                                               and each took a member missing from an older
+#                                                               copy of the provider for the mod being absent)
 #   press    a hooks file with a ui.press hook that names      on('modkit.press', ...): a click and a typed
 #             mod-kit anywhere (any line, or a constant)        /press both raise it, so a button drawn as
 #                                                               "type: /press <mod> <button>" where a click
@@ -107,6 +113,14 @@
 # mod's tests/mod-kit, at the path it has in mod-kit. Every copy must match mod-kit's byte for byte,
 # or its tests read with a reader mod-kit no longer has (L422); one that differs, or copies nothing,
 # fails the run, naming the cp that brings it back.
+#
+# One part of mod-kit a mod must hold at RUN time, not ask for (#1281): hooks/skew.ts, the reader of
+# a call to another mod's noun that failed because the noun or member is not there. It cannot be a
+# member of mod-kit's noun, since it is needed exactly when the mod-kit loaded in the session is the
+# older copy. So a mod that reads such a failure keeps it at hooks/mod-kit/skew.ts and imports it,
+# and no mod reads a TypeError itself (the missing-reader part). Files under a mod's hooks/mod-kit
+# are copies of mod-kit's hooks, held byte for byte like the tests' copies, and are not scanned for
+# the parts above, since they ARE them; a copy no hooks file imports fails, since it reads nothing.
 #
 # And one shared part every mod must USE rather than must not copy (#707):
 #   screen    a mod that answers a tool call itself (returns     ask $.modkit.screen(e) first, and answer with
@@ -169,6 +183,7 @@ PARTS=(
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
   "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"
   "login-follower|command: *[\"'\`]login[\"'\`]|on('modkit.login', ...), which mod-kit raises with the account a /login landed on"
+  "missing-reader|instanceof TypeError|missingOf(err) (errorText, skewNews) from the copy of hooks/skew.ts kept at hooks/mod-kit/skew.ts"
 )
 
 n=0
@@ -182,7 +197,7 @@ for d in "$dir"/*/; do
   sd="$stripped/$name/"
   for part in "${PARTS[@]}"; do
     label="${part%%|*}"; rest="${part#*|}"; pattern="${rest%|*}"; remedy="${rest##*|}"
-    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' -- "$pattern" "$sd/hooks" 2>/dev/null)"
+    hits="$(grep -rnE --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --exclude-dir=mod-kit -- "$pattern" "$sd/hooks" 2>/dev/null)"
     [ -n "$hits" ] || continue
     failed=1
     while IFS= read -r h; do
@@ -203,6 +218,25 @@ for d in "$dir"/*/; do
         echo "check-mod-shared-parts: $name's tests/mod-kit/$rel differs from mod-kit's own, so its tests read with a reader mod-kit no longer has: cp \"$dir/mod-kit/$rel\" \"${d%/}/tests/mod-kit/$rel\""
       fi
     done <<< "$copied"
+  fi
+  # run time copies (#1281): each file under the mod's hooks/mod-kit is a copy of mod-kit's hooks.
+  if [ -d "$d/hooks/mod-kit" ]; then
+    copied="$(cd "$d/hooks/mod-kit" && find . -type f | sed 's#^\./##' | sort)"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      if [ ! -f "$dir/mod-kit/hooks/$rel" ]; then
+        failed=1
+        echo "check-mod-shared-parts: $name's hooks/mod-kit/$rel copies no file of mod-kit's hooks, so it stands in for nothing: delete it."
+      elif ! cmp -s "$d/hooks/mod-kit/$rel" "$dir/mod-kit/hooks/$rel"; then
+        failed=1
+        echo "check-mod-shared-parts: $name's hooks/mod-kit/$rel differs from mod-kit's own, so it reads with a reader mod-kit no longer has: cp \"$dir/mod-kit/hooks/$rel\" \"${d%/}/hooks/mod-kit/$rel\""
+      fi
+    done <<< "$copied"
+  fi
+  # The reader of a missing noun or member (#1281): a copy kept is a copy used.
+  if [ -f "$d/hooks/mod-kit/skew.ts" ] && ! grep -rqE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit "from [\"'\`]\./mod-kit/skew(\.ts)?[\"'\`]" "$sd/hooks" 2>/dev/null; then
+    failed=1
+    echo "check-mod-shared-parts: $name keeps hooks/mod-kit/skew.ts but no hooks file imports it, so it reads nothing: read a failed call to another mod's noun with its missingOf(err) or errorText(err, '$name'), or delete the copy."
   fi
   # press (#939): a file naming the ui.press event and mod-kit anywhere in its code, however the hook
   # is laid out: its call or its filter across lines, or the filter held in a constant (lessons review

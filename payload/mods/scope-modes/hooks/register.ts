@@ -61,10 +61,11 @@ import {
   type OpenQuestion,
 } from './bedtime.ts'
 import {
-  LIMITS, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, startPrompt, thenNext,
+  LIMITS, REST_RESUME, RESUME, SLEEP_START, activeMs, blockTold, decideFailure, decideStop, driverPath, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue, startPrompt, thenNext,
   type ClaimReading, type DriverReading, type DriverRecord, type Note, type Release,
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
+import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, MORNING_UNANSWERED, morningPrompt, openers, openLater, othersSaid, proposalsIn } from './wake.ts'
 import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
@@ -148,7 +149,15 @@ let checkingFresh = false
 // write (#1108), said once it finishes.
 type Checked = { left: string[]; kept: ScopeModesLeftAsIs[]; keptBranches: ScopeModesLeftBranch[]; notMine?: string[] }
 
-const msg = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words, a member another mod's loaded copy lacks said as the one sentence naming the
+// skew and its remedy (#1281, mod-kit's hooks/skew.ts, of which hooks/mod-kit/skew.ts is the copy).
+const msg = (err: unknown) => errorText(err, MOD)
+// A skew this load of the mod met in the overnight check (#1281): every call is refused while it
+// lasts, and the driver reads it at the next Stop. Kept in the module, so a reload, which is what
+// can mend it, starts it over.
+let skewMet: string | null = null
+// What a skew costs the notes winding down reads, said with it once (#1281 lessons review).
+const NOTES_LOST = 'Until then scope modes cannot note the branches this session makes or the PRs it opens, so winding down may not finish them.'
 // What isTestBuild asks of the Mac (#1269), for a tool call; the noun reads the same in place, since
 // the engine refuses handing `built` to a helper. A home that cannot be read is unknown, which
 // isTestBuild reads as any folder in /Users.
@@ -1637,10 +1646,13 @@ type ManualStepsNoun = {
   finish: (input: { title: string }) => Promise<{ isFinished: boolean }>
 }
 // The noun is called in place (the engine refuses one bound or passed), so its absence (the mod not
-// loaded) arrives as a TypeError, as manual steps reads this mod's own noun.
-// Only a TypeError naming the noun call itself ("evaluating '$.manualSteps.add'", or "reading 'add'"
-// of undefined) is the mod not loaded (lessons review): any other is a failure, said and tried again.
-const isAbsentNoun = (err: unknown) => err instanceof TypeError && /manualSteps|\(reading '(?:add|finish)'\)/.test(msg(err))
+// loaded) arrives as a TypeError naming the noun call itself, read by the one reader (#1281); any
+// other failure is said and tried again, a manual steps whose loaded copy lacks the member among
+// them (the skew's own sentence), since its card may still hold the step (lessons review).
+const isAbsentNoun = (err: unknown) => {
+  const m = missingOf(err)
+  return m?.kind === 'noun' && m.noun === 'manualSteps'
+}
 const STEP_SAID = "The reminder to review the night's proposed issues"
 
 // The morning turn of the session that woke, and its pickers counted, while it runs.
@@ -2073,12 +2085,15 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     const goal = goalOf(en.record, en.self)
     const d = decideStop({
       now: en.now, self: en.self, generation: en.record.generation, repo: where.slug, driver, fingerprint, notesText,
-      weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal),
+      weekly: u.weekly, claim, goal, rules: goal === null ? '' : overnightRules(en.self, where.root, goal), skew: skewMet,
     })
     if (d.kind === 'stop') stoppedHere.add(stopKey(en))
+    // A rest is for the skew met so far: one met after it, in the turn it starts, is met anew (#1281).
+    if (d.kind === 'rest') skewMet = null
     if (d.record) {
       const unsaved = await saveDriver($, en, d.record)
-      if (unsaved && d.kind === 'block') {
+      // A rest that was not recorded would never be resumed, so it is a stop like a block's (#1281).
+      if (unsaved && (d.kind === 'block' || d.kind === 'rest')) {
         stoppedHere.add(stopKey(en))
         const why = `the driver's counter could not be written (${unsaved}), so it stopped rather than block on a count it did not keep`
         // The claim in hand is ended too, never left held by a session that has stopped.
@@ -2092,6 +2107,16 @@ const driveStop = ($: EngineInterface): Promise<{ block: string } | null | 'not-
     await writeNotes($, en, notes, u.usage ? { usage: u.usage } : {})
     // Said from what the queue answered, never before it (#925); its answer reaches the block only as data (#922).
     if (d.kind === 'block') return { block: blockTold(d, ended, { root: where.root, self: en.self }) }
+    if (d.kind === 'rest') {
+      // #1281: this mod's own manifest touched, so it loads again once the session is idle, against
+      // the mod-kit loaded by then (measured on 2.1.302: a touch alone reloads a mod, at idle). The
+      // time alone changes, so the sync carries nothing. A touch that fails leaves only mod-kit's own
+      // pass to load it again, said in the night's notes.
+      const touched = await run($, ['touch', '-c', `${$.plugin.root}/.claude-plugin/plugin.json`])
+      if (touched.exitCode !== 0) await writeNotes($, en, [{ kind: 'finding', ...(where.slug ? { repo: where.slug } : {}), text: `this session's own manifest could not be touched to load its mods again (${touched.stderr.trim() || `touch exited ${touched.exitCode}`})` }])
+      $.ui.log(`scope-modes: the overnight driver let this session rest: ${d.why}`, { to: 'debug' })
+      return null
+    }
     $.ui.log(`scope-modes: the overnight driver let this session stop: ${d.why}`, { to: 'debug' })
     return null
   })
@@ -2129,32 +2154,33 @@ const driveFailure = ($: EngineInterface, error: string, message: string): Promi
 // time even mid turn (the watchdog), said at the next Stop. The session is started again outside
 // the one at a time queue, so the turn it starts can reach its own Stop.
 const driverTick = async ($: EngineInterface, seen: SleepReading) => {
-  const resume = await oneAtATime(async (): Promise<boolean> => {
+  // The words it is started again with: after an API error's wait, or after a rest (#1281).
+  const resume = await oneAtATime(async (): Promise<string | null> => {
     const en = await enrolledNow($, seen)
-    if (!en || stoppedHere.has(stopKey(en))) return false
+    if (!en || stoppedHere.has(stopKey(en))) return null
     const r = await loadDriver($, en)
-    if (r.state !== 'ok') return false
+    if (r.state !== 'ok') return null
     const d = { ...r.record }
     if (resumeDue(d, en.now)) {
       // Cleared and saved first, so a second tick never starts it twice.
       d.resumeAt = null
-      return (await saveDriver($, en, d)) === null
+      return (await saveDriver($, en, d)) === null ? (d.restDue ? REST_RESUME : RESUME) : null
     }
-    if (d.stopped || d.resumeAt !== null) return false
+    if (d.stopped || d.resumeAt !== null) return null
     const c = await claimNow($, en)
-    if (c.state !== 'held' || c.claim.since === null) return false
+    if (c.state !== 'held' || c.claim.since === null) return null
     const active = activeMs(d.waits, c.claim.since, en.now)
-    if (active < LIMITS.stuckMs) return false
+    if (active < LIMITS.stuckMs) return null
     const where = await repoOf($)
     const why = `${Math.round(active / MIN)} minutes of active work on it, past the ${LIMITS.stuckMs / MIN / 60} hours an issue gets`
     const rel: Release = { issue: c.claim.issue, state: 'parked', why }
     d.parked = releaseTold('watchdog', rel, await endClaim($, en, where.root, rel), { root: where.root, self: en.self })
     if (await saveDriver($, en, d)) parkedHere.set(stopKey(en), d.parked)
-    return false
+    return null
   })
   if (!resume) return
   try {
-    await $.prompt.submit({ text: RESUME })
+    await $.prompt.submit({ text: resume })
   } catch (err) {
     // Not started: due again at the next minute.
     await oneAtATime(async () => {
@@ -2294,8 +2320,11 @@ const readDeploy = async ($: EngineInterface, pr: { number: number; url?: string
     // A noun of $ may only be spelled at its call site (the engine refuses `in $` or reading
     // $.isItLive as a value), so absence is told by the call: a missing noun is a TypeError from
     // reading .verdict off undefined, while whatever the noun itself throws reaches here wrapped as
-    // the engine's HooksError (measured in the tests). Either way it is never live.
-    if (err instanceof TypeError) return { unmeasured: 'the is it live mod is not loaded' }
+    // the engine's HooksError (measured in the tests). Either way it is never live. A loaded is it
+    // live whose copy lacks verdict is said as the skew it is (#1281).
+    const missing = missingOf(err)
+    if (missing?.kind === 'noun') return { unmeasured: 'the is it live mod is not loaded' }
+    if (missing) return { unmeasured: msg(err) }
     return { unreadable: msg(err) }
   }
 }
@@ -2875,6 +2904,13 @@ const noteBranches = async ($: EngineInterface, raw: string, agentId: unknown) =
     }
     await addToList({ get: () => $.state.get(branchesRef), set: (l, v) => $.state.set(branchesRef, l, { ifVersion: v }) }, add, sameText)
   } catch (err) {
+    // A skew is said once, never on every call that notes a branch (#1281), with what it costs
+    // until then, since every later note is dropped too (lessons review).
+    if (missingOf(err)?.kind === 'member') {
+      const news = skewNews(err, MOD)
+      if (news) $.ui.toast(`${news} ${NOTES_LOST}`)
+      return
+    }
     $.ui.toast(`Scope modes could not note which branch this call made the session's own (${msg(err)}), so winding down may not finish it.`)
   }
 }
@@ -2904,6 +2940,11 @@ const noteOpened = async ($: EngineInterface, raw: string, result: { text?: stri
       (a, b) => a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number,
     )
   } catch (err) {
+    if (missingOf(err)?.kind === 'member') {
+      const news = skewNews(err, MOD)
+      if (news) $.ui.toast(`${news} ${NOTES_LOST}`)
+      return
+    }
     $.ui.toast(`Scope modes could not note the PR this call opened (${msg(err)}), so winding down will not know to finish it.`)
   }
 }
@@ -3712,7 +3753,16 @@ export const register: Register = on => {
       try {
         over = await mergeDeployRefusal($, sleeping.record.repos, await readCommands($, raw))
       } catch (err) {
-        over = { deny: `Blocked overnight: the merge and deploy check of this call failed (${msg(err)}), so it did not run. Leave it for the morning and note it.`, what: 'run a call the check could not judge', why: msg(err) }
+        // #1281: a member mod-kit's loaded copy lacks is no merge found, and no one call's fault:
+        // every call is refused alike (fail closed, none can be told from one that merges), Dan is
+        // told once, and Claude is told to end the turn, at whose Stop the driver lets the session
+        // rest so its mods can load again.
+        const news = skewNews(err, MOD)
+        if (news) $.ui.toast(news)
+        over = missingOf(err)?.kind === 'member'
+          ? { deny: `Blocked overnight: ${msg(err)} So no call can be checked for a merge or deploy, and none runs. End this turn now so this session can load its mods again; do not try this call another way.`, what: 'run a call the check could not judge', why: msg(err) }
+          : { deny: `Blocked overnight: the merge and deploy check of this call failed (${msg(err)}), so it did not run. Leave it for the morning and note it.`, what: 'run a call the check could not judge', why: msg(err) }
+        if (missingOf(err)?.kind === 'member') skewMet = msg(err)
       }
       if (over) {
         await noteFirstMet($, sleeping.record, over)
@@ -3766,6 +3816,11 @@ export const register: Register = on => {
     try {
       verdict = await judge($, { tool, input, toolUseId, scope, away, asleep })
     } catch (err) {
+      const news = skewNews(err, MOD)
+      if (news) $.ui.toast(news)
+      // Asleep, a skew met here stalls the night as one met in the merge check does, so the driver
+      // reads it at the next Stop too (lessons review).
+      if (asleep && missingOf(err)?.kind === 'member') skewMet = msg(err)
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
       verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
