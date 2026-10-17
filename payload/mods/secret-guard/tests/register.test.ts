@@ -346,13 +346,45 @@ test('a tool result with no secret is kept as it was', withKit, async ($, on) =>
 
 // #1298: a check that throws inside the tool.call hook must refuse the call. Without a .catch the
 // engine skips a failed hook and runs the call with no screening at all (L42). An older mod-kit
-// loaded beside this mod (#1281) has no commands reader, so reading a Bash command throws.
+// loaded beside this mod (#1281) has no commands reader, so reading a Bash command throws; this
+// stand-in's reader throws the same way.
 const olderKit: { name: string; register: Register } = {
   name: 'mod-kit',
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return { ...built, modkit: { blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)) } } as never
+      return {
+        ...built,
+        modkit: {
+          blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
+          commands: async () => { throw new Error('$.modkit.commands is not a function') },
+          // The kit's other members, which these tests never reach: each refuses by name if one ever is.
+          card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
+          writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
+          git: async () => { throw new Error("mod-kit's git is not stood in by these tests") },
+          pipeline: async () => { throw new Error("mod-kit's pipeline is not stood in by these tests") },
+          workingTree: async () => { throw new Error("mod-kit's workingTree is not stood in by these tests") },
+          repo: async () => { throw new Error("mod-kit's repo is not stood in by these tests") },
+          gh: async () => { throw new Error("mod-kit's gh is not stood in by these tests") },
+          mergeHelper: async () => { throw new Error("mod-kit's mergeHelper is not stood in by these tests") },
+          goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
+          ghRepo: async () => { throw new Error("mod-kit's ghRepo is not stood in by these tests") },
+          linkRepo: async () => { throw new Error("mod-kit's linkRepo is not stood in by these tests") },
+          branch: async () => { throw new Error("mod-kit's branch is not stood in by these tests") },
+          bandRow: async () => { throw new Error("mod-kit's bandRow is not stood in by these tests") },
+          clearBandRow: async () => { throw new Error("mod-kit's clearBandRow is not stood in by these tests") },
+          pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
+          clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
+          screen: async () => { throw new Error("mod-kit's screen is not stood in by these tests") },
+          press: async () => ({ isAnswered: false }),
+          clickable: async () => true,
+          isDans: async () => { throw new Error("mod-kit's isDans is not stood in by these tests") },
+          typedAnswer: async () => { throw new Error("mod-kit's typedAnswer is not stood in by these tests") },
+          pythonText: async () => { throw new Error("mod-kit's pythonText is not stood in by these tests") },
+          login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
+          account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
+        },
+      }
     })
   },
 }
