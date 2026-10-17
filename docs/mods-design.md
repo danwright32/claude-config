@@ -1625,6 +1625,12 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   step that uses what an earlier one makes says so first under its title, after a bold "Needs:"
   ("the password made in step 1"), from the steps tool's `needs`. The heading reads "waiting on
   you" while any unfinished step has not been sent.
+- **A divider between steps** (#1263). Dan, 2026-10-16, on the every step open card at his real
+  terminal size: "possible to add a div line between steps?". With every step open, one step's
+  last line and the next step's title ran together. So mod-kit's divider, a thin grey line, stands
+  between each step and the next, finished ones too, in the band and the pane alike; none under the
+  heading and none after the last step. Dan skipped the design round for it and saw a five step
+  rendering before merge.
 - **Done.** A step's Done sends "step N done" as Dan's own words and shows "sent" in place of
   the button until Claude answers (open: the words for that waiting state). Several steps can be
   sent at once, each with its own state. Claude records its
@@ -1798,8 +1804,10 @@ prompt, as Dan chose; the handoff card appears only at session start. A row may 
 `{ kind: 'box' }` draws it inside a rounded border (the held while away card), `{ kind: 'left-rule' }`
 a vertical rule down its left edge only (the steps card's amber rule), each in `color`, a theme key
 or raw colour, the terminal's grey when left out. A line may be `{ divider: true }` in place of its
-parts: a thin grey line the width of the band, cut at the edge of the frame it sits in, between the
-lines of a card. A part may carry `indent`, the blank columns drawn before it (on a line's
+parts: a thin grey line between the lines of a card, as wide as its frame leaves (the band's width,
+less two columns inside a left rule and four inside a box, #1263), drawn in a box one row high that
+clips it. It is never cut with truncate-end, which Claude Code ends with an ellipsis (2.1.301), so
+a divider in a frame no longer ends in one. A part may carry `indent`, the blank columns drawn before it (on a line's
 first part, where the line starts), so a description sits under its option. A frame kind mod-kit does not draw, a malformed divider or an indent that is not a
 whole number of columns is refused when the row is published, never drawn as something else.
 
@@ -2651,6 +2659,25 @@ with a space in it and a sentence read alike there, so the sentence read as two 
   longer reading as a cut. The two Ovation design round programs that wrote `f"{out}/screen.css"`
   into the scratchpad, held before only through a printed sentence, now pass as round files. The
   Ovation program patching three design pages is still held for all three.
+
+### What #1248 changed, 2026-10-16
+
+A subagent building #1245 had its Edit to manual steps' hook file refused (call
+toolu_013hHV3QP5RaaVGuwwQJvTXj). The Edit added a type and `tellDan`, a helper sending Dan a
+notification when a card is pinned, above `const left = (card: StepsCard) => {`; nothing in the file
+called it yet. Replayed against the file as it stood (5681b31a^), `modHookLogicOnly` said no for one
+reason only: the word `card` (the `card` parameter, `card.heading`, `StepsCard`), both in the added
+lines and in the untouched `const left` line below them, which the reading took in because its
+region ran to the end of the line after the change.
+
+- **The lines a change touches end where it ends.** A change that only adds lines, or only takes
+  them, is moved to the start of a line where it reads the same (`changedSpan`), and its region stops
+  at the last changed line, so a logic line added directly above a line that draws is judged alone.
+  Changing the drawing line itself is still asked about.
+- **No word is exempted (Dan, 2026-10-16: the line fix only).** A rule letting new code nothing runs
+  yet name what is drawn was built and offered, and declined. So the #1245 helper is still asked
+  about, for the card it reads, and so is the edit that calls it with the card; #1248's aim of
+  letting logic only edits through is met only as far as the line fix reaches.
 
 ## Picker manners (#615), built 2026-10-04
 

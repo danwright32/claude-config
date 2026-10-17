@@ -555,6 +555,100 @@ test('a mod hook edit is logic only when it touches no JSX line and names no dra
   expect(modHookLogicOnly(TSX, swapIn("const re = /<Box>'/g", "const re = /<Box>'/g\nconst open = <Box>"))).toBe(false)
 })
 
+// #1248: on 2026-10-16 a subagent's Edit for #1245 to manual steps' hook file was refused as a look
+// change (call toolu_013hHV3QP5RaaVGuwwQJvTXj). It only added a type and a helper that sends Dan a
+// notification when a card is pinned, which nothing in the file called yet; the helper reads the
+// steps card's heading, and `card` is a word a mod draws with; the untouched line below it, naming the
+// card too, was read with it. The file as it stood, cut to its
+// imports and the lines around the insertion (payload/mods/manual-steps/hooks/register.tsx at
+// 5681b31a^), with one drawing line added at its end, and the refused call's new_string, word for word.
+const STEPS_BEFORE = [
+  "import type { EngineInterface, Hook, Register } from 'claude-code'",
+  "import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'",
+  "import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, sent, VERDICTS } from './card.ts'",
+  "import type { DrawnAt, StepsVerdict } from './card.ts'",
+  "import { waitingPhrase } from './waiting.ts'",
+  '',
+  "/** The scope modes mod's noun (#621) as its contract has it; it may not be loaded at all. */",
+  'type ScopeModes = { hold: (input: { label: string; prompt: string }) => Promise<{ isHeld: boolean }> }',
+  '',
+  'const holdWhileAway = async ($: EngineInterface, card: StepsCard): Promise<boolean> => {',
+  '  try {',
+  '    const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.hold({',
+  '      label: card.heading,',
+  '      prompt: `Pin the manual steps for "${card.heading}" again with the manual-steps steps tool: check each against the current state first.`,',
+  '    })',
+  '    return r?.isHeld === true',
+  '  } catch (err) {',
+  '    const isAbsent = err instanceof TypeError && /undefined|not a function|null/.test(message(err))',
+  "    if (!isAbsent) $.ui.log(`Manual steps could not ask whether Dan is away, so the card is shown: ${message(err)}`)",
+  '    return false',
+  '  }',
+  '}',
+  '',
+  'const left = (card: StepsCard) => {',
+  '  const n = nextStep(card)',
+  "  return n === undefined ? 'every step is finished' : `step ${n + 1} of ${card.steps.length} is next`",
+  '}',
+  '',
+  'export const draw = (card: StepsCard) => <Text dimColor>{left(card)}</Text>',
+  '',
+].join('\n')
+const STEPS_OLD = 'const left = (card: StepsCard) => {'
+const STEPS_NEW = [
+  "/** The goal tracker's noun (#1245) as its contract has it; it may not be loaded at all. */",
+  'type GoalTracker = { waitingOnYou: (input: { message: string }) => Promise<{ isSent: boolean; reason?: string }> }',
+  '',
+  '// #1245: a card pinned while Dan is not looking at the terminal sat unseen, so a pin with a step he',
+  "// can do now tells him through the goal tracker's notifier, the one that pages him for a session",
+  '// waiting on him and stays silent while the Mac is asleep. Never on a card held while he is away or',
+  '// one already done, neither of which reaches here. Why it was not sent, said to Claude, who can then',
+  '// tell Dan in the reply; undefined once it was.',
+  'const tellDan = async ($: EngineInterface, card: StepsCard): Promise<string | undefined> => {',
+  '  const n = nextStep(card)',
+  '  const s = n === undefined ? undefined : card.steps[n]',
+  '  if (n === undefined || !s) return undefined',
+  '  const message = `"${card.heading}" is pinned. Next, step ${n + 1} of ${card.steps.length}: ${s.title}`',
+  '  try {',
+  '    const r = await ($ as unknown as { goalTracker: GoalTracker }).goalTracker.waitingOnYou({ message })',
+  "    return r?.isSent === true ? undefined : r?.reason || 'the goal tracker did not say why'",
+  '  } catch (err) {',
+  "    // The noun missing is a TypeError in this mod's own code; one that failed inside the goal",
+  '    // tracker reaches here rewrapped by the engine, and is said as it is.',
+  '    const isAbsent = err instanceof TypeError && /goalTracker|undefined|not a function|null/.test(message(err))',
+  "    return isAbsent ? 'the goal tracker mod, which sends the notifications, is not loaded' : message(err)",
+  '  }',
+  '}',
+  '',
+  STEPS_OLD,
+].join('\n')
+test("#1248: the refused helper is still asked about, by Dan's choice, for the card it reads; one naming no drawing word passes", () => {
+  if (STEPS_BEFORE.split(STEPS_OLD).length !== 2) throw new Error('the fixture holds the refused old_string other than once')
+  // Dan, 2026-10-16: the line fix only, no word exempted, so the helper reading the card is asked.
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, STEPS_NEW))).toBe(false)
+  // Added directly above the line naming the card, a helper naming no drawing word passes: the
+  // untouched line below it is no longer read.
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(STEPS_OLD, `const nextOf = (n: number) => n + 1\n\n${STEPS_OLD}`))).toBe(true)
+})
+
+// #1248: lines added directly above an unchanged line were judged with that line, so a logic line
+// added above one that draws (JSX, or a drawing word) was held for a line it never touched.
+test('#1248: lines added above, or removed from above, an unchanged line that draws are judged alone; changing that line is still asked', () => {
+  // Above a line holding JSX, at the top level.
+  expect(modHookLogicOnly(TSX, TSX.replace('export const draw', 'void n(1, 2)\nexport const draw'))).toBe(true)
+  // Above a line naming the card, inside a function: added whole, or added after a shared start of line.
+  const line = '  const n = nextStep(card)\n'
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(line, `  void nextStep\n${line}`))).toBe(true)
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(line, `  const m = 1\n${line}`))).toBe(true)
+  // The drawing line itself changed, or an added line naming a drawing word, is asked about.
+  expect(modHookLogicOnly(TSX, TSX.replace('<Text color="green">', '<Text color="green" bold>'))).toBe(false)
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(line, '  const n = nextStep(card) ?? 0\n'))).toBe(false)
+  expect(modHookLogicOnly(STEPS_BEFORE, STEPS_BEFORE.replace(line, `  void card\n${line}`))).toBe(false)
+  // A line taken from above one that draws, alike.
+  expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void nextStep\n${line}`), STEPS_BEFORE)).toBe(true)
+  expect(modHookLogicOnly(STEPS_BEFORE.replace(line, `  void card\n${line}`), STEPS_BEFORE)).toBe(false)
+})
+
 // #1158: a git checkout or restore puts back every edit since its source at once, each of which was
 // an edit of its own, so it is judged one run of changed lines at a time.
 test('changedRuns: each run of changed lines as its own step, the last step ending at the new text', () => {

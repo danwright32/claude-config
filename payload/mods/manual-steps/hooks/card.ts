@@ -280,6 +280,11 @@ export type CardText = { text: string; href?: string; color?: string; bold?: boo
  * Reporting is ticked, and a terminal's main screen. Required here, so no button can ship without it.
  */
 export type CardPart = CardText | { button: CardButton; label: string; instead: CardText[] }
+/**
+ * One line of the card: its parts, or mod-kit's divider in their place (#1263), which mod-kit draws
+ * as a thin grey line across the card, sized to the width it is drawn at.
+ */
+export type CardLine = CardPart[] | { divider: true }
 
 /** What a card button does. */
 export const BUTTONS = ['done', 'copy', 'copy-link', 'open-link'] as const
@@ -321,15 +326,19 @@ const typeDone = (i: number): CardText[] => [{ text: 'type: ', dim: true }, { te
  * default browser, #1215) and Copy link beside its label. Where a click may not land (Apple
  * Terminal, the main screen) mod-kit draws each button's instead text: Done the words to type,
  * Open, Copy link and Copy nothing, the link and the value wrapping whole beside them to be
- * selected (#939).
+ * selected (#939). A divider stands between each step and the next (#1263), so where one step's
+ * lines end and the next step's title starts reads at a glance now every step is open at once; none
+ * under the heading, none after the last step.
  */
-export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardPart[][] => {
+export const cardLines = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): CardLine[] => {
   // While any unfinished step is Dan's to do, the heading says it waits on him (#863), on the card's
   // own line rather than a row of its own beside the card, so the band and the pane state it once.
   // Every one sent, it waits on Claude, and each step line says so.
   const isDans = card.steps.some(s => !s.finished && !s.isSent)
-  const lines: CardPart[][] = [[{ text: card.heading, color: AMBER }, ...(isDans ? [{ text: '  waiting on you', dim: true }] : [])]]
+  const lines: CardLine[] = [[{ text: card.heading, color: AMBER }, ...(isDans ? [{ text: '  waiting on you', dim: true }] : [])]]
   card.steps.forEach((s, i) => {
+    // #1263: between this step and the one before it, finished or not.
+    if (i > 0) lines.push({ divider: true })
     const label = `${i + 1}. ${s.title}`
     if (s.finished) {
       lines.push(finishedLine(s, label, card.isCarried === true, drawn))
@@ -376,11 +385,12 @@ const RULE = 2
  * How wide the side pane asks to be while docked: its widest line, so a click path or an exact
  * location is not cut at the dock's edge (#708), up to MAX_PANE_COLUMNS. A link is not measured,
  * since it opens and copies whole however much of it shows; a button is its label in brackets, or
- * its instead text where that is wider (#939).
+ * its instead text where that is wider (#939). A divider is not measured either, since it fills
+ * whatever width the pane is drawn at (#1263).
  */
 export const paneColumns = (card: StepsCard, drawn: DrawnAt = { now: Date.now() }): number => {
-  const width = (l: CardPart[]) =>
-    l.reduce((sum, p) => sum + ('button' in p ? Math.max(p.label.length + 2, p.instead.reduce((w, r) => w + r.text.length, 0)) : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
+  const width = (l: CardLine) =>
+    !Array.isArray(l) ? 0 : l.reduce((sum, p) => sum + ('button' in p ? Math.max(p.label.length + 2, p.instead.reduce((w, r) => w + r.text.length, 0)) : p.href ? 0 : (p.indent ?? 0) + p.text.length), 0)
   return Math.min(MAX_PANE_COLUMNS, RULE + Math.max(...cardLines(card, drawn).map(width)))
 }
 
