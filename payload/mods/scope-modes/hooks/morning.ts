@@ -6,25 +6,40 @@
 // Never by time, and never by a wake that offered him nothing to answer (a phone wake whose pickers
 // he never saw).
 //
-// The step can sit in one session's card while Dan wakes in another, so whether the review happened
-// is kept on disk beside the sleep record (`morning-review.json`), and every session takes the step
-// off its own card once it reads that it did. Only the decisions live here; register.ts carries
-// them out.
+// #1283 reverses that. Dan, 2026-10-17: "manual step only comes up on the chat that I entered sleep
+// mode in. It should be on every session and it should be completed automatically when I exit sleep
+// mode", and "sleep mode ending shouhld be the review of the night automatically". Ending sleep, by
+// any route, is the review: every session then puts its own questions and approvals to him as
+// pickers (#1285). So the step says waking is the whole of it, is pinned in every live session while
+// asleep, and comes off everywhere once the night has ended, never gated on pickers answered.
+//
+// The step sits in every session's card, so whether the night has ended is kept on disk beside the
+// sleep record (`morning-review.json`), and every session takes the step off its own card once it
+// reads that it has. Only the decisions live here; register.ts carries them out.
 
 /** The heading of a card made for the step alone, when no card is pinned at bedtime. */
 export const MORNING_HEADING = 'The morning after sleep mode'
 
 /** The step, by its night (the ET date sleep began on), so each night's step is told apart by its title. */
 export const morningStep = (night: string) => ({
-  title: `When you are up: review the night's proposed issues (${night})`,
-  location: "This Mac, in the session where you say I'm up or type /wake",
-  clicks: ["Say I'm up, or type /wake", "Answer the pickers for the night's proposed issues and lessons"],
+  title: `When you are up, end sleep mode (${night})`,
+  location: 'Any Claude Code session on this Mac',
+  clicks: ["Say I'm up, or type /wake, in any session"],
 })
 
-/** How a night's morning review happened: nothing was proposed, or Dan answered the wake pickers. */
-export type ReviewHow = 'nothing-proposed' | 'pickers-answered'
+/** What is said once the step comes off at the end of a night (#1283). */
+export const ENDED_SAID = "Sleep mode is off, so the reminder to end it came off this session's manual steps card, and comes off every other session's within a minute."
+
+/**
+ * How a night's review happened: `sleep-ended` since #1283; `nothing-proposed` and
+ * `pickers-answered` were written before it. Any way written is read as done (L255).
+ */
+export type ReviewHow = string
 /** One night's morning review, by the sleep record's generation: pending until `done`. */
 export type MorningReview = { generation: string; night: string; done?: { at: number; how: ReviewHow } }
+
+/** The pending nights that have ended: every one but the night asleep now, however it ended (#1283). */
+export const stalePending = (all: readonly MorningReview[], asleep: string | null): MorningReview[] => all.filter(x => !x.done && x.generation !== asleep)
 
 /** How many nights are kept: a step older than two weeks still on a card is taken off by Done. */
 export const KEPT_NIGHTS = 14
@@ -42,7 +57,8 @@ export const reviewsIn = (text: string): MorningReview[] | { unreadable: string 
   for (const x of j) {
     const r = x as Partial<MorningReview> | null
     if (!r || typeof r.generation !== 'string' || typeof r.night !== 'string') return { unreadable: 'a night in it names no generation or night' }
-    const done = r.done && typeof r.done.at === 'number' && (r.done.how === 'nothing-proposed' || r.done.how === 'pickers-answered') ? { done: r.done } : {}
+    // Done any way written, an older way or a later one, so no reader turns a done night back into a pending step (L255).
+    const done = r.done && typeof r.done.at === 'number' && Number.isFinite(r.done.at) && typeof r.done.how === 'string' ? { done: { at: r.done.at, how: r.done.how } } : {}
     out.push({ generation: r.generation, night: r.night, ...done })
   }
   return out
@@ -59,16 +75,11 @@ export const withDone = (all: readonly MorningReview[], r: { generation: string;
     : [...all, { generation: r.generation, night: r.night, done }].slice(-KEPT_NIGHTS)
 
 /**
- * Whether the night left nothing to review: no issue or lesson proposed, every note read, and the
- * notes themselves read. Notes that could not be read may hide a proposal, so they are not nothing.
- */
-export const nothingProposed = (p: { issues: readonly unknown[]; lessons: readonly unknown[]; bad?: number; unread?: string }): boolean =>
-  p.unread === undefined && !p.bad && p.issues.length === 0 && p.lessons.length === 0
-
-/**
  * Whether a picker reached Dan and came back with his answer: not refused (a refusal never reached
  * him, and the picker is asked again), not failed, not closed by itself while he was away, and at
- * least one question answered. Undefined for a refused one, which counts neither way.
+ * least one question answered. Undefined for a refused one, which counts neither way. Since #1283 it
+ * no longer gates the reminder; a session's morning turn counts with it, so one left unanswered is
+ * asked again (#1285).
  */
 export const pickerAnswered = (r: { deny?: unknown; isError?: unknown; result?: unknown }): boolean | undefined => {
   if (r.deny !== undefined) return undefined
@@ -78,13 +89,3 @@ export const pickerAnswered = (r: { deny?: unknown; isError?: unknown; result?: 
   const answers = out.answers && typeof out.answers === 'object' ? Object.values(out.answers as Record<string, unknown>) : []
   return answers.some(a => (typeof a === 'string' && a.trim() !== '') || (Array.isArray(a) && a.length > 0))
 }
-
-/** The morning turn's pickers, counted: the review happened once it ended answered, with every picker answered. */
-export type MorningWatch = { generation: string; night: string; turnId?: string; answered: number; unanswered: number }
-export const reviewedAtEnd = (w: MorningWatch, reason: string): boolean => reason === 'answer' && w.answered > 0 && w.unanswered === 0
-
-/** What is said once the step comes off, by how the review happened. */
-export const clearedSaid = (how: ReviewHow): string =>
-  how === 'nothing-proposed'
-    ? 'Nothing was proposed overnight, so the reminder to review it came off the manual steps card.'
-    : "The night's proposals were reviewed, so the reminder to review them came off the manual steps card."
