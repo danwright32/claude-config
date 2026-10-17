@@ -2747,15 +2747,55 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
   any difference is a look change, however it is worded, so the #1263 divider, which names no
   drawing word, is held. Nothing else in the file is read, so a refusal Claude reads that names the
   card passes, unlike in a `.tsx` file, where the drawing words still decide.
-- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`): every hook file is read,
-  19 of the 67 `.ts` files hold anything that draws (most of those only a drawing call or a
+- **Measured on the real mods** (`tests/test-mod-line-builder-reader.sh`, 2026-10-16, before #1296
+  followed locals and parameters, after which 30 of 69 draw): every hook file is read, then
+  19 of the 67 `.ts` files held anything that draws (most of those only a drawing call or a
   guard's name on its blocked card), the divider added to the real `cardLines` is
   held and `DROPPED_AFTER_MS` is not. A generic arrow written `<T>(`, which status bar and scope
   modes use, could not be read by the JSX reader, so a `.ts` file is now read with no JSX at all.
-- **The gaps.** A value reaching a drawing call through a local variable or a function's parameter
-  is not followed unless it builds a run: a guard's blocked card sentence, handed to its own
-  `drawCard`, passes. A shell write whose result cannot be read is held where the file draws now,
-  so one making a file that drew nothing draw is not seen.
+- **The gaps, closed by #1296.** A value reaching a drawing call through a local variable or a
+  function's parameter was not followed unless it built a run, so a guard's blocked card sentence,
+  handed to its own `drawCard`, passed; and a shell write whose result cannot be read was held only
+  where the file drew already, so one making a file that drew nothing draw was not seen.
+
+### What #1296 changed, 2026-10-17
+
+- **Values followed through locals and parameters.** From what draws, a name that is a local is
+  followed to its declaration (and to each later assignment of a `let`), and a name that is a
+  function's parameter to the argument at each call of that function, in its file and in each of the
+  mod's files importing it. A callback's parameter (`ROWS.forEach(r => ...)`) is followed to what it
+  is called on. A function a followed value calls gives it what it returns, never its whole body, so
+  a refusal reader's matching is not drawn, only the words it returns. Each followed value is compared
+  with what it treats as data or a test taken out.
+- **What is not followed, measured first (L147).** Following every name ran into the guards' logic:
+  over the 420 real edits to mods' `.ts` hook files in this repository's history (rules.ts at the
+  parent of each commit, beside the mod's other hook files as they then stood), the first cut held
+  141 where the #1275 reader held 62, most of the new ones logic. Each cut below was read off the
+  edits it still held: what a call inside a followed value is handed (the files a card names are
+  data, not its look); a ternary's condition, the left of `&&`, a comparison, `!` and `typeof`; what
+  a method is called on (`args.find(...)`); a called function's own parameters and a line builder's,
+  which are what they are given to show; and which surface a drawing call names (a blocked card's
+  `toolUseId`, a band row's `mod`, `id` and `slot`). A local's type annotation stops at its line.
+- **Measured after.** 87 of the 420 real edits are held where 62 were, and none the #1275 reader held
+  is passed. Of the 25 newly held, about half change a sentence on a guard's grey card or add one
+  (scope modes' refusals, the collision guard's, the design round guard's own card), the class #1296
+  was about; the rest change which sentence a card picks or move its words into a constant. 30 of the
+  69 real `.ts` hook files now draw anything, where 19 did. `tests/test-mod-line-builder-reader.sh`
+  holds a real case each way: the design round guard's own blocked card sentence handed to its
+  `drawCard` is held, and the store key it keeps refused calls under is not.
+- **A shell write judged by what it leaves** (Dan, 2026-10-17: judge after, and undo). A shell write
+  to a mod's `.ts` hook file that draws nothing yet runs, and the guard reads the file again once it
+  ran (a `tool.call` hook around the `tool.check` judgement, and the subagent's own). One the command
+  made draw, on an issue Dan has not answered for and not his Not a look change for that call, is put
+  back: what the command wrote is written to the session's scratchpad
+  (`design-round-guard/<call id>-<file>`) and read back first; the file is put back only while it
+  still holds exactly what the command wrote; a file the command made is taken away with `rm`. The
+  call then waits on Dan as a refused edit does, its result withheld for the guard's words; what
+  the command printed is never repeated there, since only the tool's own result passes the secret
+  guard's scrub (lessons review). Once per file, however many of the command's words write it. A copy that cannot be kept, a file changed again since, a
+  put back that fails, or a file unreadable after the command each leaves the file as it is and says
+  why, never that it was undone. The command's other effects stand. Sent again after Dan answers, the
+  same command stands.
 
 ## Picker manners (#615), built 2026-10-04
 
