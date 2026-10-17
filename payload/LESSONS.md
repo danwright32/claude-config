@@ -7,6 +7,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L781. A generated file that a strict consumer accepts in several forms must be proven to give
+  ONE output for one input, across several cold-cache runs, before you pin it or guard it, because
+  a timing-dependent generator makes every regeneration a coin flip and a guard on it fails at
+  random.** (bidspoke#2363, 2026-10-17)
+  SHORT: Prove a generated file has ONE output across cold-cache runs before pinning or guarding it; a timing-dependent generator fails a guard at random.
+
 - **L779. A bar meant to hold every sample must be written as a maximum, never a percentile: over a few samples a p95 is the slowest one, and as the count grows it quietly becomes a lower rank, so the bar loosens with no change to its code.**
   (slate#3824, 2026-10-16)
   SHORT: A bar meant to hold every sample is a max, never a percentile: a p95 is the slowest only while samples are few.
