@@ -38,7 +38,10 @@ export const startedJob = (resultText: string, call: { inBackground: boolean; ta
   // The result names its task, so only the notice naming that task is its start; any other is a quote.
   if (call.taskId !== undefined) {
     for (const re of MOVED_ANYWHERE) for (const m of resultText.matchAll(re)) if (m[1] === call.taskId) return { id: m[1], outputPath: m[2] as string }
-    return undefined
+    // A call that asked for the background is read as it always was, by the looser start, so naming
+    // its task can only narrow which notice is believed, never lose a start (lessons review of #1302).
+    const started = call.inBackground ? job(STARTED.exec(resultText)) : undefined
+    return started?.id === call.taskId ? started : undefined
   }
   if (call.inBackground) return job(STARTED.exec(resultText))
   const opening = resultText.trimStart()

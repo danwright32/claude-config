@@ -57,6 +57,14 @@ describe('a background job, from what starting it said', () => {
     })
     expect(startedJob(`warning: something\n${MESSAGE_TEXT}`, { inBackground: false, taskId: 'other1' })).toBeUndefined()
   })
+  // Lessons review of #1302: a background call's start read by the looser pattern it always was
+  // read by stays a job when its result also names the task, and only as that task.
+  test('a background start the looser pattern reads is still a job when its result names the task', () => {
+    const loose = 'Running in background with ID: bl0se1. Output is being written to: /private/tmp/x/tasks/bl0se1.output.'
+    expect(startedJob(loose, { inBackground: true })).toEqual({ id: 'bl0se1', outputPath: '/private/tmp/x/tasks/bl0se1.output' })
+    expect(startedJob(loose, { inBackground: true, taskId: 'bl0se1' })).toEqual({ id: 'bl0se1', outputPath: '/private/tmp/x/tasks/bl0se1.output' })
+    expect(startedJob(loose, { inBackground: true, taskId: 'other1' })).toBeUndefined()
+  })
   // The cwd note Claude Code adds after a background start whose command changes directory, as the
   // merge helper's does (gh pr comment, then cd into a worktree), leaves the start readable.
   test('a background start followed by the note about its cd is still a job', () => {
