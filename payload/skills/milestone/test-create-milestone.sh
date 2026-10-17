@@ -564,6 +564,111 @@ check "and the rule" "LABEL-NOT-KEBAB" "$out"
 check_eq "no label is created, not even the well named one" "0" "$(grep -c '^label create' "$TMP/calls.log")"
 check_eq "and nothing is filed" "0" "$(issues_filed)"
 
+# --- a feature with a settled design (claude-config#1290) ------------------------
+# A plan naming its settled design is held to the design's decision map before anything is written:
+# every decision owned by a requirement or marked as having no code consequence, and every
+# requirement named by an issue. Then the milestone gets one more issue, the comparison of the built
+# screens against every design frame, so drift on the decisions that did have owners is found too.
+design_file() { # design_file <path> <decisions json>
+  printf '<!doctype html><html><body><main>screen</main>\n<script type="application/json" id="decision-map">{"decisions": %s}</script>\n</body></html>\n' "$2" >"$1"
+}
+design_file "$TMP/settled.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Heading reads Invoices", "noCode": "copy only"}]'
+design_file "$TMP/gap.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Empty state shows last month"}]'
+design_plan() { # design_plan <out> <design path> <phase 1 body>
+  cat >"$1" <<JSON
+{
+  "title": "Invoices screen",
+  "priority": "p2",
+  "labels": ["enhancement"],
+  "design": "$2",
+  "issues": [
+    { "title": "Phase 1: the list", "body": "$3" },
+    { "title": "Phase 2: the heading", "body": "Copy." }
+  ]
+}
+JSON
+}
+labels_are enhancement
+
+design_plan "$TMP/plan-gap.json" "$TMP/gap.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-gap.json")"; rc=$?
+check_eq "#1290 a design with an unowned decision exits 11" "11" "$rc"
+check "#1290 the refusal names the unowned decision" "UNMAPPED D2: Empty state shows last month" "$out"
+check_eq "#1290 and nothing is filed" "0" "$(issues_filed)"
+check_eq "#1290 and no milestone is written" "0" "$(milestone_writes)"
+
+design_plan "$TMP/plan-noissue.json" "$TMP/settled.html" "Builds the list."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-noissue.json")"; rc=$?
+check_eq "#1290 a requirement no issue names exits 11" "11" "$rc"
+check "#1290 the refusal names the requirement" "NO-ISSUE Requirement 6.4 (D1)" "$out"
+check_eq "#1290 and nothing is filed for it either" "0" "$(issues_filed)"
+
+design_plan "$TMP/plan-relative.json" "settled.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-relative.json")"; rc=$?
+check_eq "#1290 a design path that is not absolute exits 11" "11" "$rc"
+check "#1290 and says so" "absolute" "$out"
+
+design_plan "$TMP/plan-missing.json" "$TMP/not-there.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-missing.json")"; rc=$?
+check_eq "#1290 a design file that is not there exits 11" "11" "$rc"
+check "#1290 and says it could not be read" "DECISION-MAP UNREADABLE" "$out"
+
+design_plan "$TMP/plan-design.json" "$TMP/settled.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design.json")"; rc=$?
+check_eq "#1290 a design whose map holds files the plan" "0" "$rc"
+check_eq "#1290 with one more issue than the plan's phases" "3" "$(issues_filed)"
+# From the last create to the end of the log, since a body spanning lines spreads one call over several.
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 the last is the comparison against every design frame" "--title Compare the built screens against every frame of the settled design" "$last_create"
+check "#1290 which names the design file" "$TMP/settled.html" "$last_create"
+check "#1290 and carries the plan's priority and labels" "--label priority-p2 --label enhancement" "$last_create"
+# A plan that already ends with the comparison does not get it twice.
+jq '.issues += [{"title": "Compare the built screens against every frame of the settled design", "body": "own words"}]' "$TMP/plan-design.json" >"$TMP/plan-design-own.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-own.json")"; rc=$?
+check_eq "#1290 a plan carrying its own comparison files once" "3" "$(issues_filed)"
+
+# Lessons review of #1290: a plan whose phases each carry their own level and categories, with no
+# plan level default, is not refused over the comparison issue it never wrote; the issue takes the
+# last phase's.
+cat >"$TMP/plan-design-perissue.json" <<JSON
+{
+  "title": "Invoices screen",
+  "design": "$TMP/settled.html",
+  "issues": [
+    { "title": "Phase 1: the list", "body": "Builds Requirement 6.4.", "priority": "p1", "labels": ["enhancement"] },
+    { "title": "Phase 2: the heading", "body": "Copy.", "priority": "p3", "labels": ["ui-ux"] }
+  ]
+}
+JSON
+labels_are enhancement ui-ux
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-perissue.json")"; rc=$?
+check_eq "#1290 a plan with only per phase levels and labels still files" "0" "$rc"
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 and the comparison takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
+# An empty plan level default is no default, as labels_for reads it, so the last phase's still apply.
+jq '.labels = [] | .priority = ""' "$TMP/plan-design-perissue.json" >"$TMP/plan-design-emptydefaults.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-emptydefaults.json")"; rc=$?
+check_eq "#1290 empty plan level defaults still file" "0" "$rc"
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 with the last phase's level and labels on the comparison" "--label priority-p3 --label ui-ux" "$last_create"
+
+# And the comparison is not counted as a phase: a design plan of ONE phase gets the same answer from
+# the milestone helper as the same plan without a design, never a milestone it would refuse.
+cat >"$TMP/plan-one.json" <<'JSON'
+{ "title": "Invoices screen", "priority": "p2", "labels": ["enhancement"],
+  "issues": [ { "title": "Phase 1: the list", "body": "Builds Requirement 6.4." } ] }
+JSON
+jq --arg d "$TMP/settled.html" '.design = $d' "$TMP/plan-one.json" >"$TMP/plan-one-design.json"
+labels_are enhancement
+out_plain="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one.json")"; rc_plain=$?
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one-design.json")"; rc=$?
+check_eq "#1290 a one phase plan is refused without a design (the control)" "1" "$([ "$rc_plain" -ne 0 ] && echo 1 || echo 0)"
+check_eq "#1290 and with one, by the same refusal" "$rc_plain" "$rc"
+check "#1290 which is the single issue milestone refusal" "SINGLE-ISSUE-MILESTONE" "$out"
+check_eq "#1290 filing nothing" "0" "$(issues_filed)"
+# The design map's own refusal has a code of its own, never one the milestone helper uses (L11).
+check_eq "#1290 the decision map refusal's code is not the single issue one" "1" "$([ "$rc" -ne 11 ] && echo 1 || echo 0)"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

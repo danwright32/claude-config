@@ -50,7 +50,9 @@ switcher tool and the deliverable spec. Invoke it rather than restating it here.
 short: render before asking, one variable per round, one window in a switcher, colour
 last, and the settled design ships as one self contained committed file with its
 decision record inside it. Every decision with code consequences comes back here as
-numbered requirements, so the PRD stays the single alignment document.
+numbered requirements, so the PRD stays the single alignment document, and the settled
+file's decision map names the requirement that owns each decision; the planners refuse to
+file issues until it does (claude-config#1290).
 
 ## Red flags, stop and interview instead
 
