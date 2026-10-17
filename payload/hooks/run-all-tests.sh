@@ -38,6 +38,8 @@
 #   HOOK_TESTS_SLOTS          set BY this script FOR each suite: its share of that budget
 #   HOOK_TESTS_TIMINGS        where each suite's measured wall clock is kept between runs.
 #                             Empty turns the record off entirely: nothing is read, nothing written.
+#   HOOK_TESTS_LOCK_WAIT      seconds a suite may wait for a lock another run holds, handed to
+#                             each suite as SUITE_LOCK_WAIT (default 1200; always 0 under CI, #1297)
 #   CI                        "true" makes a suite refused its lock a FAIL rather than NOT RUN (#1083)
 #   LOAD_AVERAGE_CMD, LOAD_AVERAGE_CORES   the load average printed beside a failure, set for tests
 #                             (lib/load-average.sh)
@@ -45,6 +47,7 @@
 # Agreed lines a suite may print, each read exactly: `SUITE-RESULT passed=<n> failed=<n>` (its
 # score), `SUITE-NOT-RUN <reason>` (it cannot run in a copy with no repository),
 # `SUITE-LOCK-REFUSED <who holds it>` (another run of it holds its lock, reported as NOT RUN),
+# `SUITE-LOCK-WAITED <seconds>` (how long it waited for that lock, taken off its recorded time),
 # and `SUITE-UNMEASURED <why>` (it ran but could not read what it judges, reported as NOT RUN, #1146);
 # under CI=true either of the last two fails the suite. Any
 # line saying `command not found` fails the suite whatever else it printed (#1044).
@@ -86,6 +89,26 @@ export HOOK_TESTS_RUNNING=1
 # suite, unconditionally, so an inherited value cannot point it at a real one either; a suite
 # that is ABOUT the check sets its own stub per command.
 export SYNC_CLAUDE_BIN="/nonexistent/run-all-tests/no-claude-for-suites"
+
+# How long a suite may wait for a lock another run holds (claude-config#1297). The sync suite
+# refuses at once when started by hand, and reporting that refusal as NOT RUN is honest, but on
+# 2026-10-17 it was all four overlapping builders got: no full run on the merged head reported
+# every suite, so each was then run alone and nothing ran them together. Twenty minutes is about
+# three of that suite's runs as measured on this Mac (390s), so a run queued behind two or three
+# others still gets its turn. Under CI one job owns the runner and a refusal fails the suite
+# (#1083), so there is nothing to wait for. Set whatever was inherited, as SYNC_CLAUDE_BIN is: an
+# inherited value would decide a wait nobody chose.
+if [ "${CI:-}" = "true" ]; then
+  LOCK_WAIT=0
+else
+  LOCK_WAIT="${HOOK_TESTS_LOCK_WAIT:-1200}"
+fi
+case "$LOCK_WAIT" in
+  ''|*[!0-9]*)
+    echo "run-all-tests: HOOK_TESTS_LOCK_WAIT='$LOCK_WAIT' is not a whole number of seconds a suite may wait for a lock another run holds. Refusing rather than guessing, because a guess is either no wait, which reports the suite as not run, or one with no end." >&2
+    exit 1 ;;
+esac
+export SUITE_LOCK_WAIT="$LOCK_WAIT"
 
 # How many lines of a failing suite's own output to print. Enough to act on, bounded so one
 # broken suite cannot bury the other verdicts.
@@ -858,7 +881,17 @@ LIVECOPY
     # and 93 of 101 failed on 2026-10-13. Linux CI's bash never showed it.
     ( SECONDS=0
       HOOK_TESTS_SLOTS="${LANES[$lane]}" bash "$suite" > "$WORK/$idx.out" 2>&1; _src=$?
-      printf '%s' "$SECONDS" > "$WORK/$idx.sec"
+      # Less any time it said it spent waiting for a lock another run held (#1297): that is the
+      # other run's cost, and recorded as this suite's it would set launch order and the slowest
+      # list by how busy the machine was rather than by the suite (L323). Never below zero.
+      _spent="$SECONDS"
+      _waited="$(grep -E '^SUITE-LOCK-WAITED [0-9]+$' "$WORK/$idx.out" 2>/dev/null | tail -1)"
+      _waited="${_waited#SUITE-LOCK-WAITED }"
+      case "$_waited" in
+        ''|*[!0-9]*) ;;
+        *) if [ "$_waited" -ge "$_spent" ]; then _spent=0; else _spent=$(( _spent - _waited )); fi ;;
+      esac
+      printf '%s' "$_spent" > "$WORK/$idx.sec"
       # The load the moment it finished, read for every suite because a failure is only known once
       # its output is judged below, by which time the moment has passed (claude-config#1083).
       load_average_one_minute > "$WORK/$idx.load" 2>/dev/null
@@ -1216,7 +1249,9 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         # runner. Something after it keeps a real process in between.
         # Its output is kept, because a recheck is judged by the same rules as the first run, not
         # by its exit status alone (claude-config#1044).
-        ( HOOK_TESTS_FLAKE_RECHECK=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
+        # Asked to wait for no lock: the deadline above is set by what the suite measured, so a
+        # recheck queued behind another run would be called hung for waiting (#1297, L11).
+        ( HOOK_TESTS_FLAKE_RECHECK=0 SUITE_LOCK_WAIT=0 bash "$suite" > "$WORK/$((idx - 1)).recheck" 2>&1; _fl_rc=$?; exit "$_fl_rc" ) < /dev/null &
         _fl_pid=$!
         _fl_waited=0
         while kill -0 "$_fl_pid" 2>/dev/null && [ "$_fl_waited" -lt "$_fl_max" ]; do
