@@ -1569,6 +1569,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   const now = await $.clock.now()
   const issues: ProposedIssue[] = []
   const questions: NightQuestion[] = []
+  let bad = 0
   // A question is offered here only when its own session is no longer open to ask it (lessons review).
   let open: Set<string> | null = null
   try {
@@ -1588,6 +1589,12 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
       continue
     }
     const read = proposalsIn(notes)
+    // Lines that could not be read may hide one of this repository's, so they are counted and said
+    // with what is offered, and logged where nothing is (lessons review).
+    if (read.bad) {
+      bad += read.bad
+      $.ui.log(`scope-modes: ${read.bad} line(s) of an earlier night's notes could not be read, so a proposal for ${mine} may be missing; that night's report counts them`, { to: 'debug' })
+    }
     const mineHere = read.issues.filter(i => repoKey(i.repo) === mine)
     const asksHere: NightQuestion[] = []
     for (const q of read.questions) {
@@ -1602,7 +1609,7 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   if (!issues.length && !questions.length) return
   const lead = `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
   try {
-    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: issues.length > 0, issues, lessons: [], questions, lead }) })
+    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: issues.length > 0, issues, lessons: [], questions, lead, ...(bad ? { bad } : {}) }) })
   } catch (err) {
     $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }

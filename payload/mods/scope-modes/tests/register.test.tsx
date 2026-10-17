@@ -3006,6 +3006,15 @@ test("an earlier night's question from a session now closed is asked by the next
   expect(offered[0]).toContain('3.1 acme/bidspoke: Round totals up or down?')
 })
 
+test("an earlier night's notes with a line that cannot be read say so with what is offered (#1286 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `not json\n${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Bid totals round twice'))
+  expect(offered[0]).toMatch(/One line of the night's notes could not be read, so a proposal may be missing here/)
+})
+
 test("a claim that cannot be written offers nothing rather than risk offering twice, and says why (#1286)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...IN_BIDSPOKE, markerFails: 'Operation not permitted', files: { [EARLIER]: `${BIDSPOKE}\n` } })
   await start($ as never, clock)
