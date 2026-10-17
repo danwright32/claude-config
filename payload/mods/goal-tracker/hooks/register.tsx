@@ -274,7 +274,11 @@ const goalsNow = async ($: EngineInterface, open: { sessionId: string; transcrip
       .filter(r => r.transcriptPath)
       .map(async r => {
         const transcript = r.transcriptPath as string
-        const g: ModKitGoal = await $.modkit.goal({ transcript }).catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
+        // Asked inside the promise, so a mod-kit without the member (a TypeError thrown at the call,
+        // before any promise) is caught as a reading that failed, as a rejection is.
+        const g: ModKitGoal = await Promise.resolve()
+          .then(() => $.modkit.goal({ transcript }))
+          .catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
         const said = `${transcript}\n${g.state === 'unreadable' ? g.why : ''}`
         if (g.state === 'unreadable' && !goalSaid.has(said)) {
           goalSaid.add(said)

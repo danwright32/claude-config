@@ -49,6 +49,36 @@ const deps: { name: string; register: Register } = {
   },
 }
 const withDeps = { plugins: [deps] }
+// A mod-kit loaded before it had the /goal reader (a reload can leave one, README "Mods"): the kit
+// has no such member at all (lessons review of #1252). The stand-in above without it, the registry
+// as above.
+const depsWithoutGoal: { name: string; register: Register } = {
+  name: 'deps',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        modkit: {
+          isDans: async (input: { origin: unknown }) => {
+            const r = await built.process.run(['__modkit', 'isDans', JSON.stringify(input)])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout) as boolean
+          },
+        } as never,
+        sessions: {
+          list: async () => {
+            const r = await built.process.run(['__sessions'])
+            if (r.exitCode !== 0) throw new Error(r.stderr)
+            return JSON.parse(r.stdout)
+          },
+          noteEdit: async () => undefined,
+          setExtra: async () => undefined,
+        },
+      }
+    })
+  },
+}
 const MIN = 60_000
 
 type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfId: string } | 'throws'
@@ -238,6 +268,30 @@ test('a goal met without /goal clear is shown as ended, the session then showing
   // Each transcript the registry names is read once a draw; a session with none is not asked about.
   expect([...new Set(w.goalReads)].sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
 })
+
+{
+  test('a mod-kit with no /goal reader still draws the pane, each session keeping the goal it recorded (#1252)', { plugins: [depsWithoutGoal] }, async ($, on) => {
+    const now = 10 * MIN
+    mock.clock(on, { now })
+    const listing: Listing = {
+      open: [{ ...session('k', 'claude-config', { total: 2, done: 1, goal: 'all tests in test/auth pass', request: 'Fix the auth tests', current: 'Running', lastActivityAt: now }), transcriptPath: '/t/k.jsonl' }],
+      closed: [],
+      unreadable: [],
+      selfId: 'k',
+    }
+    world(on, { now: listing }, undefined, undefined, { '/t/k.jsonl': [SET('all tests in test/auth pass'), MET('all tests in test/auth pass')] })
+    const debug: string[] = []
+    on('ui.log', ($, e) => {
+      if (e.to === 'debug') debug.push(e.text)
+      return { value: undefined } as never
+    })
+    await start($)
+    await goals($)
+    const ui = await mount($)
+    expect((await rowsDrawn(ui)).map(r => r.top)).toEqual(['claude-config  all tests in test/auth pass'])
+    expect(debug.filter(t => t.includes('could not be read'))).toEqual([expect.stringMatching(/^goal-tracker: the \/goal of the session in \/t\/k\.jsonl could not be read \(.+\), so the goals pane shows the goal it last recorded$/)])
+  })
+}
 
 test('a session registry that cannot be read is said, never drawn as no sessions', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })

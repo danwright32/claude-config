@@ -632,11 +632,15 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[], ro
 // transcript by mod-kit's one reader of a /goal ($.modkit.goal, #1252, which the goal tracker reads
 // too), and a worker with none is asked for one first among the before bed questions, sharing their
 // ten minutes: what Dan types is its goal. Left without one, it does no work tonight, and /sleep and
-// the morning report say so. A reader that fails, mod-kit itself included, is said, as no goal.
+// the morning report say so. A reader that fails is said, as no goal, and so is a mod-kit loaded
+// before it had the reader: asked inside the promise, the TypeError thrown at the call is caught too.
 type GoalRead = { goal: string } | { none: string }
 const readGoal = async ($: EngineInterface, seat: Seat, who: string): Promise<GoalRead> => {
   if (!seat.transcript) return { none: `${who}'s transcript was not found` }
-  const g = await $.modkit.goal({ transcript: seat.transcript }).catch(err => ({ state: 'unreadable' as const, why: msg(err) }))
+  const transcript = seat.transcript
+  const g = await Promise.resolve()
+    .then(() => $.modkit.goal({ transcript }))
+    .catch(err => ({ state: 'unreadable' as const, why: msg(err) }))
   if (g.state === 'unreadable') return { none: `${who}'s /goal could not be read (${g.why})` }
   return g.state === 'set' ? { goal: g.condition } : { none: `${who} has no /goal set` }
 }
