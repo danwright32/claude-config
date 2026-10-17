@@ -358,10 +358,37 @@ test('a divider line is a thin grey line across the band, between the lines it s
   expect(texts).toHaveLength(3)
   expect(texts[0]).toBe('above')
   expect(texts[2]).toBe('below')
-  // Full width: as many columns as the band has, cut at the edge by the frame it sits in.
+  // Full width: as many columns as the band has, with no frame to take any.
   expect(texts[1]).toBe('\u2500'.repeat(100))
   const line = await ui.find({ type: 'Text', text: '\u2500' })
-  expect(line?.props).toMatchObject({ color: 'gray', wrap: 'truncate-end' })
+  expect(line?.props).toMatchObject({ color: 'gray' })
+  await ui.unmount()
+})
+
+// #1263: the steps card draws a divider between its steps inside its left rule. A divider as wide
+// as the site was cut at the frame's edge with wrap truncate-end, and Claude Code cuts a run with an
+// ellipsis (its text wrap, read from 2.1.301: the head of the run, then U+2026), so every divider in
+// a frame ended in one. It is as wide as the frame leaves (the left rule and its gap take two
+// columns, a box's border and padding four), and drawn in a box one row high that clips it, so a
+// width a terminal draws narrower than told hides the rest instead of wrapping or ending in "...".
+test('a divider is exactly as wide as its frame leaves, and clipped to one row, never cut with an ellipsis (#1263)', withPublisher, async ($, on) => {
+  engineBand(on)
+  const lines = [[{ text: 'above' }], { divider: true }, [{ text: 'below' }]]
+  await show($, { mod: 'publisher', id: 'bare', slot: 'needs-a-look', lines })
+  await show($, { mod: 'publisher', id: 'rule', slot: 'steps', frame: { kind: 'left-rule', color: 'warning' }, lines })
+  await show($, { mod: 'publisher', id: 'wrapping', slot: 'message', frame: { kind: 'left-rule' }, lines: [...lines, [{ text: 'a long run', wrap: true }]] })
+  await show($, { mod: 'publisher', id: 'boxed', slot: 'held', frame: { kind: 'box' }, lines })
+  const ui = await $.ui.mount(band())
+  const dividers = (await shown(ui)).filter(t => /^\u2500+$/.test(t)).map(t => t.length)
+  // In the band's order: no frame, the box (held), the left rule (steps), the wrapping left rule (message).
+  expect(dividers).toEqual([100, 96, 98, 98])
+  for (const id of ['bare', 'rule', 'wrapping', 'boxed']) {
+    const clip = await ui.find({ type: 'Box', key: `publisher/${id}:divider:1` })
+    expect(clip?.props).toMatchObject({ height: 1, overflow: 'hidden', flexShrink: 0 })
+    // The line inside it wraps, so what does not fit goes to a second row the clip hides.
+    const inside = (clip?.children ?? []) as { type?: string; props: { wrap?: string; color?: string } }[]
+    expect(inside.map(c => c.props)).toEqual([expect.objectContaining({ wrap: 'wrap', color: 'gray' })])
+  }
   await ui.unmount()
 })
 

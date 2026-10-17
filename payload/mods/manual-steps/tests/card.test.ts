@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { cardFrom, cardLines, carriedNote, finish, finishedWhen, fold, keepFinished, nextStep, paneColumns, sent } from '../hooks/card.ts'
+import { cardFrom, cardLines, carriedNote, type DrawnAt, finish, finishedWhen, fold, keepFinished, nextStep, paneColumns, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 
 const step = (over: Record<string, unknown> = {}) => ({ title: 'Turn on the WAF rule', url: 'https://dash.cloudflare.com/waf', checked: 'not-done', ...over })
@@ -200,8 +200,13 @@ describe('carriedNote', () => {
 
 describe('cardLines', () => {
   type P = { text?: string; button?: string; color?: string; bold?: boolean; dim?: boolean; strikethrough?: boolean; indent?: number }
-  const lines = (c: StepsCard) => cardLines(c) as P[][]
-  const textOf = (l: P[]) => l.map(p => p.text ?? `[${p.button}]`).join('')
+  type Line = P[] | { divider: true }
+  // Every line the card draws, the dividers between its steps included (#1263).
+  const all = (c: StepsCard, drawn?: DrawnAt) => cardLines(c, drawn) as Line[]
+  // The lines of words alone, the dividers between steps taken out, for the tests reading a step's
+  // own lines by where they fall; the dividers have tests of their own.
+  const lines = (c: StepsCard, drawn?: DrawnAt) => all(c, drawn).filter((l): l is P[] => Array.isArray(l))
+  const textOf = (l: Line) => (Array.isArray(l) ? l.map(p => p.text ?? `[${p.button}]`).join('') : '\u2500')
   // #872: the card draws each label itself, bold and whole, under the step's title.
   const WHERE = { text: 'Where: ', bold: true, whole: true, indent: 3 }
   const WHAT = { text: 'What to do: ', bold: true, whole: true, indent: 3 }
@@ -223,15 +228,18 @@ describe('cardLines', () => {
     // While a step is Dan's to do, the heading says so (#863), on the card's own line rather than a
     // second row beside it.
     expect(l[0]).toEqual([{ text: 'Cloudflare WAF', color: 'warning' }, { text: '  waiting on you', dim: true }])
-    expect(l.map(textOf)).toEqual([
+    expect(all(c).map(textOf)).toEqual([
       'Cloudflare WAF  waiting on you',
       '1. Create the API token  already done before this card',
+      '\u2500',
       '2. Turn on the rule  [done-2]',
       'Where: [open-link-2]  [copy-link-2]', 'https://dash.cloudflare.com/waf',
       'What to do: Security, WAF, Custom rules, Deploy',
       'ip.src eq 1.2.3.4  [copy-2]',
+      '\u2500',
       '3. Purge the cache  [done-3]',
       'Where: [open-link-3]  [copy-link-3]', 'https://dash.cloudflare.com/cache',
+      '\u2500',
       '4. Check the site  [done-4]',
       'Where: Safari, a new window',
       'What to do: ', '1. Open the site', '2. Reload twice',
@@ -242,6 +250,44 @@ describe('cardLines', () => {
       expect(l[at]?.[0]?.color).toBeUndefined()
     }
     expect(l.slice(3, 7).every(x => x[0]?.indent === 3)).toBe(true)
+  })
+
+  // #1263, Dan 2026-10-16, on the #1239 card at his real terminal size: "possible to add a div line
+  // between steps?". With every step open at once, one step's last line and the next step's title
+  // ran together. mod-kit's own divider (a whole line of { divider: true }, which it draws as a thin
+  // grey line the width of the card) stands between each step and the next, finished ones too, and
+  // never under the heading or after the last step.
+  test('a divider stands between each step and the next, never before the first or after the last (#1263)', () => {
+    let c = made({
+      heading: 'Five steps',
+      steps: [
+        step({ checked: 'already-done', title: 'A' }),
+        step({ title: 'B', clicks: ['One', 'Two'] }),
+        step({ title: 'C', url: undefined, location: 'Keychain Access, login', value: 'hunter2' }),
+        step({ title: 'D', needs: 'the password from step 3' }),
+        step({ title: 'E' }),
+      ],
+    })
+    c = sent(c, 3, true)
+    const l = all(c)
+    const dividers = l.flatMap((x, n) => (Array.isArray(x) ? [] : [n]))
+    expect(dividers).toHaveLength(4)
+    // Exactly the shape mod-kit draws, nothing of the card's own.
+    for (const n of dividers) expect(l[n]).toEqual({ divider: true })
+    // Each one sits right above a step's title, the second step's to the fifth's.
+    expect(dividers.map(n => textOf(l[n + 1] as Line).slice(0, 2))).toEqual(['2.', '3.', '4.', '5.'])
+    // None under the heading, and none closing the card.
+    expect(textOf(l[1] as Line)).toMatch(/^1\. A/)
+    expect(Array.isArray(l[l.length - 1])).toBe(true)
+    // A card of one step has no divider at all.
+    expect(all(made({ heading: 'x', steps: [step()] })).every(x => Array.isArray(x))).toBe(true)
+  })
+
+  // A divider fills whatever width it is drawn at, so it never asks the pane to be wider.
+  test('the pane asks for the width of its widest line of words, a divider adding nothing (#1263)', () => {
+    const one = made({ heading: 'x', steps: [step({ title: 'T'.repeat(20), url: undefined, location: 'here' })] })
+    const two = made({ heading: 'x', steps: [step({ title: 'T'.repeat(20), url: undefined, location: 'here' }), step({ title: 'U', url: undefined, location: 'there' })] })
+    expect(paneColumns(two)).toBe(paneColumns(one))
   })
 
   // #1239 point 4: steps 2 and 3 pasted the password made in step 1, which a card showing every step
@@ -340,7 +386,7 @@ describe('cardLines', () => {
     c = sent(c, 2, true)
     verdict(3, 'per-you')
     verdict(4, 'per-you')
-    const l = cardLines(c, { now: T + 60_000, timeZone: 'America/New_York' }) as P[][]
+    const l = lines(c, { now: T + 60_000, timeZone: 'America/New_York' })
     expect(l[1]).toEqual([{ text: '1. A', dim: true, strikethrough: true }, { text: '  already done before this card', dim: true }])
     expect(l[2]).toEqual([{ text: '2. B', strikethrough: true }, { text: '  checked on Oct 7 at 3:41 PM', color: 'success' }])
     expect(l[3]).toEqual([{ text: '3. C', strikethrough: true }, { text: '  done, you pressed Done on Oct 7 at 3:41 PM' }])
@@ -355,15 +401,15 @@ describe('cardLines', () => {
     const r = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn', T)
     if ('refusal' in r) throw new Error(r.refusal)
     const at = { now: T, timeZone: 'America/New_York' }
-    expect((cardLines(r.card, at) as P[][])[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off on Oct 7 at 3:41 PM, not done', dim: true }])
-    expect((cardLines({ ...r.card, isCarried: true }, { ...at, now: T + 3 * 86_400_000 }) as P[][])[1]?.[1]).toEqual({
+    expect(lines(r.card, at)[1]).toEqual([{ text: '1. A', dim: true }, { text: '  taken off on Oct 7 at 3:41 PM, not done', dim: true }])
+    expect(lines({ ...r.card, isCarried: true }, { ...at, now: T + 3 * 86_400_000 })[1]?.[1]).toEqual({
       text: '  taken off in an earlier session on Oct 7 at 3:41 PM, not done',
       dim: true,
     })
     // Kept before #886, with no time: the same words, without one.
     const untimed = finish(made({ heading: 'x', steps: [step({ title: 'A' }), step({ title: 'B' })] }), 1, 'withdrawn')
     if ('refusal' in untimed) throw new Error(untimed.refusal)
-    expect((cardLines({ ...untimed.card, isCarried: true }, at) as P[][])[1]?.[1]).toEqual({ text: '  taken off in an earlier session, not done', dim: true })
+    expect(lines({ ...untimed.card, isCarried: true }, at)[1]?.[1]).toEqual({ text: '  taken off in an earlier session, not done', dim: true })
   })
 
   // #886 review: a card nobody redraws keeps its text past midnight, so a time with no date would
@@ -390,14 +436,14 @@ describe('cardLines', () => {
         { title: 'Sign in again', url: 'https://d.example' },
       ],
     }
-    const l = cardLines(card, { now: T, timeZone: 'America/New_York' }) as P[][]
+    const l = lines(card, { now: T, timeZone: 'America/New_York' })
     expect(l[1]).toEqual([{ text: '1. Sign out', dim: true, strikethrough: true }, { text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true }])
     expect(l[2]).toEqual([{ text: '2. Clear cookies', dim: true, strikethrough: true }, { text: '  checked in an earlier session on Oct 7 at 2:41 PM', dim: true }])
     // Kept before #886, with no time: said to be earlier all the same.
     expect(l[3]).toEqual([{ text: '3. Old', dim: true, strikethrough: true }, { text: '  done, you pressed Done, in an earlier session', dim: true }])
     // A step pinned again from the held card keeps the same reading.
     const again = keepFinished(made({ heading: 'Chrome sign out', steps: [step({ title: 'Sign out', url: 'https://a.example', checked: 'already-done' }), step({ title: 'Sign in again', url: 'https://d.example' })] }), card)
-    expect((cardLines(again, { now: T, timeZone: 'America/New_York' }) as P[][])[1]?.[1]).toEqual({ text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true })
+    expect(lines(again, { now: T, timeZone: 'America/New_York' })[1]?.[1]).toEqual({ text: '  done, per you, in an earlier session on Oct 4 at 3:41 PM', dim: true })
   })
 
   // #872: withdrawn reads as removed, never as done: dimmed but not struck through, which is how a
