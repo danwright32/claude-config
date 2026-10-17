@@ -852,3 +852,101 @@ test('#1275: the reader follows a .ts file with no JSX in it, a generic arrow wi
   expect(sourceSpans(serial)).toBeNull()
   expect(sourceSpans(serial, false)?.jsx).toEqual([])
 })
+
+// #1296: a value reaching a drawing call through a local variable or a function's parameter is
+// followed too. The fixture is shaped after a guard: its blocked card sentences are handed to its own
+// drawCard, through a local holding a card's words and as literals at each call.
+const GUARD_TS = [
+  "import { judge } from './judge.ts'",
+  "const GUARD = 'Demo guard'",
+  "const BLOCKED = 'This would change the record.'",
+  "const unsureCard = (files: string[]) => ({ reason: `Could not tell ${files.join(', ')}.`, safeWay: 'Name the file.' })",
+  'const drawCard = async ($: Engine, id: string, reason: string, safeWay: string) => {',
+  '  try {',
+  '    await $.modkit.blocked({ toolUseId: id, guard: GUARD, reason, safeWay })',
+  '  } catch (err) {',
+  '    log(err)',
+  '  }',
+  '}',
+  'export const refuse = async ($: Engine, id: string, all: string[], forged: boolean) => {',
+  '  if (forged) {',
+  "    await drawCard($, id, BLOCKED, 'Only answers write it.')",
+  "    return 'forged'",
+  '  }',
+  '  const c = unsureCard(judge(all))',
+  '  await drawCard($, id, c.reason, c.safeWay)',
+  '  const note = `Held ${all.length} files.`',
+  "  await $.modkit.blocked({ toolUseId: id, guard: GUARD, reason: note, safeWay: 'Ask Dan.' })",
+  "  for (const title of TITLES) await $.ui.open({ id: 'p', title })",
+  "  ROWS.forEach(r => $.ui.open({ id: 'q', title: r }))",
+  "  return 'unsure'",
+  '}',
+  "const TITLES = ['Held']",
+  "const ROWS = ['Waiting']",
+  'export const ttl = (n: number) => n * 1000',
+  'const log = (err: unknown) => console.error(String(err))',
+  '',
+].join('\n')
+const JUDGE_TS = ["export const judge = (paths: string[]) => paths.filter(p => p.endsWith('.ts'))", ''].join('\n')
+const GUARD_FILES = [
+  { name: 'register.ts', text: GUARD_TS },
+  { name: 'judge.ts', text: JUDGE_TS },
+]
+const guardDraws = (name: string, from: string, to: string, files = GUARD_FILES): boolean => {
+  const was = files.find(f => f.name === name)?.text ?? ''
+  if (was.split(from).length !== 2) throw new Error(`${name} holds ${from} other than once`)
+  return drawsChange(files, name, was, was.replace(from, to))
+}
+
+test('#1296: a value reaching a drawing call through a parameter or a local is asked about', () => {
+  // A sentence handed to the guard's own drawCard, as a constant and as a literal at the call.
+  expect(guardDraws('register.ts', "BLOCKED = 'This would change the record.'", "BLOCKED = 'This changes the record.'")).toBe(true)
+  expect(guardDraws('register.ts', "'Only answers write it.'", "'Only his answers write it.'")).toBe(true)
+  // A card's words, reached through a local holding what a top level function builds.
+  expect(guardDraws('register.ts', '`Could not tell ${', '`Could not say ${')).toBe(true)
+  expect(guardDraws('register.ts', "safeWay: 'Name the file.'", "safeWay: 'Name it.'")).toBe(true)
+  // A local handed straight to a drawing call, and a pane title through a loop's binding and a callback's parameter.
+  expect(guardDraws('register.ts', '`Held ${all.length} files.`', '`Holding ${all.length} files.`')).toBe(true)
+  expect(guardDraws('register.ts', "TITLES = ['Held']", "TITLES = ['Holding']")).toBe(true)
+  expect(guardDraws('register.ts', "ROWS = ['Waiting']", "ROWS = ['Queued']")).toBe(true)
+})
+
+test('#1296: a drawing function called from another of the mod files is followed into that call', () => {
+  const card = GUARD_TS.replace('const drawCard =', 'export const drawCard =')
+  const other = ["import { drawCard } from './register.ts'", "export const warn = ($: Engine, id: string) => drawCard($, id, 'Careful.', 'Stop.')", 'export const wait = 30', ''].join('\n')
+  const files = [
+    { name: 'register.ts', text: card },
+    { name: 'judge.ts', text: JUDGE_TS },
+    { name: 'warn.ts', text: other },
+  ]
+  expect(guardDraws('warn.ts', "'Careful.'", "'Be careful.'", files)).toBe(true)
+  expect(guardDraws('warn.ts', 'wait = 30', 'wait = 60', files)).toBe(false)
+})
+
+test('#1296: following values into drawing calls still passes logic only edits', () => {
+  // What decides which files a card names is data handed to the function building its words, not its look.
+  expect(guardDraws('judge.ts', "p.endsWith('.ts')", "p.endsWith('.tsx')")).toBe(false)
+  // The guard's own conditions, what it returns, what it logs, and a value nothing draws.
+  expect(guardDraws('register.ts', '  if (forged) {', '  if (forged && id) {')).toBe(false)
+  expect(guardDraws('register.ts', "return 'unsure'", "return 'unsure!'")).toBe(false)
+  expect(guardDraws('register.ts', 'console.error(String(err))', 'console.warn(String(err))')).toBe(false)
+  expect(guardDraws('register.ts', 'n * 1000', 'n * 60_000')).toBe(false)
+})
+
+test('#1296: which call a card attaches to, what a value is only tested for, and data a method works on are not followed', () => {
+  const t = [
+    'export const show = async ($: Engine, raw: { id?: string }, files: string[], away: boolean) => {',
+    "  const id = raw.id ?? 'none'",
+    "  const named = files.filter(f => f.endsWith('.ts'))",
+    "  const note = away ? 'You are away.' : `Held ${named}.`",
+    "  await $.modkit.blocked({ toolUseId: id, guard: 'G', reason: note, safeWay: 'Ask.' })",
+    '}',
+    '',
+  ].join('\n')
+  const one = (from: string, to: string) => drawsChange([{ name: 'a.ts', text: t }], 'a.ts', t, t.replace(from, to))
+  expect(one("raw.id ?? 'none'", "raw.id ?? 'nobody'")).toBe(false)
+  expect(one("f.endsWith('.ts')", "f.endsWith('.tsx')")).toBe(false)
+  // The words themselves, either way the test goes, are still asked about.
+  expect(one("'You are away.'", "'You are out.'")).toBe(true)
+  expect(one('`Held ${named}.`', '`Holding ${named}.`')).toBe(true)
+})
