@@ -1515,8 +1515,20 @@ morning offers what the night proposed, filing nothing he has not picked.
   and `--front-window` (else `open -a BBEdit`, never a bare `open`), saying in the same reply that
   focus moved. Away, or woken from the phone, opening it waits in the held card; at the noon limit
   nothing opens. A report that is not there is said, never opened as an empty window.
-- That session asks each other worker still open for its own summary (`SUMMARY_ASK`); one that has
-  closed, or one the registry could not read, is said as such, never counted as asked (L215).
+- Ending sleep is the night's review in every live session (#1285; Dan, 2026-10-17: "it should
+  trigger the session to ask me any questions it's needs clarification on or get permission on
+  things. basically I shouldn't have to literally read the review because everything that is
+  relevant should show up in a picker"; design rounds: see the PR). `SUMMARY_ASK`, sent only to the
+  workers and offering no pickers, is gone. Each session's minute remembers the night while asleep
+  (`nightSeen` in its state: the generation, whether it worked, whether it offers the proposals) and,
+  once the record is gone, submits its own morning (`morningOf`, then `morningPrompt`): its summary
+  if it worked, what it held (#1284), each question it noted (`by` itself, read from the notes by
+  `proposalsIn`, numbered 3.n) and each merge, deploy or push the night's lists refused in it
+  (kept with its reason, 4.n), each an AskUserQuestion picker, and an unanswered picker kept for the
+  next time Dan writes there. The session that ended sleep, by a wake or its noon end, offers the
+  proposed issues and lessons; no other does, so none is offered twice. A session with nothing of
+  its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
+  reply says how many other sessions are open and which workers closed since (`othersSaid`).
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,
   started with `$.prompt.submit` once the command is done, or the turn "I'm up" starts: its summary,
   then the proposed issues in the end of turn issue review's multi select picker (each option ending
