@@ -71,9 +71,9 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
-import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
-import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
-import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldAtWake, heldUntilWake, type HeldDelivery } from './nightheld.ts'
+import { awakeAsk, BBEDIT, MORNING_UNANSWERED, morningPrompt, openers, openLater, othersSaid, proposalsIn } from './wake.ts'
+import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
+import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge } from './nightheld.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import {
@@ -136,6 +136,8 @@ const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
 const wakeHeldRef = { plugin: 'scope-modes', key: 'wakeHeld' } as const
+const nightSeenRef = { plugin: 'scope-modes', key: 'nightSeen' } as const
+const morningUnansweredRef = { plugin: 'scope-modes', key: 'morningUnanswered' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
@@ -1143,6 +1145,18 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
     return
   }
   await releaseAwake($, (await sleepPaths($)).dir)
+  // The session that ended the night offers its proposals in its morning, as a waking one does (#1285).
+  try {
+    await setNight($, endedNight(record, await $.session.id()))
+  } catch (err) {
+    $.ui.log(`scope-modes: the night that ended by itself could not be noted for this session's morning (${msg(err)}), so its proposals are only in the report`, { to: 'debug' })
+  }
+  // Ending by itself is the review too (#1283): the reminder comes off here, and everywhere at each minute.
+  try {
+    await endedAtWake($, record)
+  } catch (err) {
+    $.ui.log(`scope-modes: the reminder to end sleep mode could not be taken off at the noon end (${msg(err)}); each session's minute takes it off`, { to: 'debug' })
+  }
   const now = await $.clock.now()
   // Every session is put back first: the overnight check reads GitHub, which may be slow (#834 review).
   await restorePlace($, record)
@@ -1463,49 +1477,71 @@ const openReport = async ($: EngineInterface, path: string, fromPhone: boolean):
   return `It could not be opened in BBEdit (${why.join('; ')}).`
 }
 
-// Phase 9 (#837): each other session that worked overnight is asked for its own summary. One that
-// has closed since is said, never counted as asked, and one the registry could not read is not
-// called closed (L215).
-const askSummaries = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<string> => {
-  const others = (Array.isArray(record?.workers) ? record.workers : []).filter((w): w is string => typeof w === 'string' && w !== self)
-  if (!others.length) return ''
-  const told = { asked: 0, failed: [] as string[], closed: 0 }
-  // The record is already moved aside: anything that throws here is said in the reply, never
-  // allowed to take the wake's reply with it (lessons review of 7de29c2).
+// Phase 9 (#837), changed by #1285: no session is sent a summary request any more, since each puts
+// its own morning to Dan at its next minute. The wake reply says how many others are open and which
+// workers have closed since, whose night is then only in the report. A registry that cannot be read
+// is said, never read as no other session (L215), and never takes the wake's reply with it.
+const othersAtWake = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<string> => {
+  const workers = (Array.isArray(record?.workers) ? record.workers : []).filter((w): w is string => typeof w === 'string' && w !== self)
   try {
     const list = await $.sessions.list()
-    const open = new Set(list.open.map(o => o.sessionId))
-    for (const id of others) {
-      if (!open.has(id)) {
-        if (list.unreadable.length) told.failed.push(`whether it is still open is not known (the session registry could not read ${list.unreadable.join(', ')})`)
-        else told.closed++
-        continue
-      }
-      // mod-kit tries a refused send once more, so a refusal here is the second.
-      const sent = await $.session.send({ to: { sessionId: id }, text: SUMMARY_ASK })
-      if (sent.isDelivered) told.asked++
-      else told.failed.push(sent.reason)
-    }
+    const ids = new Set(list.open.map(o => o.sessionId))
+    const unknown = list.unreadable.length ? `the session registry could not read ${list.unreadable.join(', ')}` : undefined
+    // One the registry could not read may be open, so none is called closed then.
+    const closed = unknown ? 0 : workers.filter(w => !ids.has(w)).length
+    return othersSaid({ open: list.open.filter(o => o.sessionId !== self).length, closed, ...(unknown ? { unknown } : {}) })
   } catch (err) {
-    return summariesSaid({ ...told, unknown: msg(err) })
+    return othersSaid({ open: 0, closed: 0, unknown: `the session registry's answer could not be read (${msg(err)})` })
   }
-  return summariesSaid(told)
 }
 
-// Phase 9 (#837): what the waking session is asked to do, from the night's notes: its own summary,
-// then the proposed issues and lessons in the pickers that already exist. A read that fails is said
-// in the prompt, never read as a night with nothing proposed (L215).
-// `nothing` is whether the night left nothing to review (#1107), judged from the same reading.
-const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: string, held: readonly HeldDelivery[] = []): Promise<{ prompt: string; nothing: boolean }> => {
-  const worker = Array.isArray(record?.workers) && record.workers.includes(self)
-  const of = (p: Omit<Parameters<typeof morningPrompt>[0], 'worker' | 'held'>) => ({ prompt: morningPrompt({ worker, held, ...p }), nothing: nothingProposed(p) })
-  if (typeof record?.generation !== 'string') return of({ issues: [], lessons: [], unread: 'the sleep record names no generation' })
-  try {
-    const path = notesOf((await sleepPaths($)).home, record.generation)
-    if (!(await $.fs.exists(path))) return of({ issues: [], lessons: [] })
-    return of(proposalsIn(await $.fs.read(path)))
-  } catch (err) {
-    return of({ issues: [], lessons: [], unread: msg(err) })
+/** The night a session's morning is about: its generation (null when not known), whether it worked, and whether it offers the proposals. */
+type Night = { generation: string | null; worker: boolean; offers: boolean; unread?: string }
+// The night as the session that ended it notes it, by a wake or its noon end alike: one naming no
+// generation is said as unread, never read as a night with nothing in it (lessons review).
+const endedNight = (record: SleepRecord | null, self: string): Night => ({
+  generation: typeof record?.generation === 'string' ? record.generation : null,
+  worker: Array.isArray(record?.workers) && record.workers.includes(self),
+  offers: true,
+  ...(typeof record?.generation === 'string' ? {} : { unread: 'the sleep record names no generation' }),
+})
+type HeldItem = HeldDelivery & { why?: string }
+
+// Phase 9 (#837), every session since #1285: a session's own morning, from the night's notes: its
+// summary if it worked, what it held, the questions it noted and the merges the night held in it,
+// each a picker, and, in the session that ended sleep, the proposed issues and lessons. A read that
+// fails is said in the prompt, never read as a night with nothing proposed (L215). `anything` is
+// whether there is anything to put to Dan at all, so a session with nothing of its own starts no turn.
+const morningOf = async ($: EngineInterface, night: Night, self: string, held: readonly HeldItem[]): Promise<{ prompt: string; anything: boolean }> => {
+  const deliveries = held.filter(h => h.why === undefined)
+  const merges = held.filter((h): h is HeldMerge => h.why !== undefined)
+  let read: ReturnType<typeof proposalsIn> | { unread: string }
+  if (night.unread !== undefined) read = { unread: night.unread }
+  else if (night.generation === null) read = { issues: [], lessons: [], questions: [], bad: 0 }
+  else {
+    try {
+      const path = notesOf((await sleepPaths($)).home, night.generation)
+      read = (await $.fs.exists(path)) ? proposalsIn(await $.fs.read(path)) : { issues: [], lessons: [], questions: [], bad: 0 }
+    } catch (err) {
+      read = { unread: msg(err) }
+    }
+  }
+  const p = 'unread' in read ? { issues: [], lessons: [], unread: read.unread } : { issues: read.issues, lessons: read.lessons, bad: read.bad }
+  // Its own questions, and, in the session that offers the proposals, every question no open session
+  // will ask: one naming no session, or one whose session has closed (lessons review). A registry
+  // that cannot be read leaves only the ones naming no session, and that is logged.
+  let open: Set<string> | null = null
+  if (night.offers && !('unread' in read) && read.questions.some(q => q.by !== null && q.by !== self)) {
+    try {
+      open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
+    } catch (err) {
+      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions from other sessions are left to them`, { to: 'debug' })
+    }
+  }
+  const questions = 'unread' in read ? [] : read.questions.filter(q => q.by === self || (night.offers && (q.by === null || (open !== null && !open.has(q.by)))))
+  return {
+    prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions, ...p }),
+    anything: night.worker || night.offers || held.length > 0 || questions.length > 0 || 'unread' in read,
   }
 }
 
@@ -1513,20 +1549,39 @@ const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: 
 
 const wakeHeldOf = async ($: EngineInterface): Promise<HeldDelivery[]> => (await $.state.get(wakeHeldRef)).value ?? []
 // What the waking session's own morning turn carries, while it has not gone in, so the minute does
-// not ask for it too and only what it carried is cleared once it does.
-let heldInMorning: HeldDelivery[] | null = null
+// not put the morning to Dan too and only what it carried is cleared once it does.
+let morningInFlight: HeldItem[] | null = null
 // One asking at a time: a minute's prompt that has not gone in yet is not asked again beside it.
-let askingHeld = false
+let askingMorning = false
+// This session's morning turn, its pickers counted while it runs (#1285): one left unanswered, or a
+// turn that ended other than by answering, has the unanswered ones asked again with Dan's next
+// message here, by this mod (lessons review: a rule only in the prompt is a hope, L27).
+let morningPickers: { turnId?: string; answered: number; unanswered: number; asks: boolean } | undefined
+// Kept in $.state too, so a reload between the morning turn and his next message still asks again
+// (lessons review); undefined until read from there.
+let morningLeftUnanswered: boolean | undefined
+// `prompt` is the morning's text: only one that asks something can leave a picker unanswered.
+const watchMorningPickers = (prompt: string) => {
+  morningPickers = { answered: 0, unanswered: 0, asks: prompt.includes('AskUserQuestion') }
+}
+const leftUnanswered = async ($: EngineInterface): Promise<boolean> => {
+  if (morningLeftUnanswered === undefined) morningLeftUnanswered = (await $.state.get(morningUnansweredRef)).value ?? false
+  return morningLeftUnanswered
+}
+const setLeftUnanswered = async ($: EngineInterface, v: boolean) => {
+  morningLeftUnanswered = v
+  await $.state.set({ plugin: 'scope-modes', key: 'morningUnanswered' }, v)
+}
 // The list as this session holds it, in memory, read from $.state once (a reload keeps it there),
 // then changed here and written whole: two calls held at once (parallel calls, a subagent beside the
 // main loop) each saw the same list through their own hook's $.state, and the second write dropped
 // the first (lessons review, reproduced with three at once).
-let heldNow: HeldDelivery[] | undefined
+let heldNow: HeldItem[] | undefined
 let heldLoaded = false
 // One read, shared by calls that arrive together before it answers. A read that fails is not kept,
 // so the next call reads again; what was held meanwhile stays in memory and is merged in once a
 // read answers, never written over a list that could not be read (lessons review).
-let heldLoad: Promise<HeldDelivery[]> | undefined
+let heldLoad: Promise<HeldItem[]> | undefined
 const loadHeld = async ($: EngineInterface) => {
   if (heldLoaded) return
   try {
@@ -1540,7 +1595,7 @@ const loadHeld = async ($: EngineInterface) => {
   }
 }
 // The list as far as it is known: one that could not be read is what this session held since.
-const heldList = async ($: EngineInterface): Promise<HeldDelivery[]> => {
+const heldList = async ($: EngineInterface): Promise<HeldItem[]> => {
   try {
     await loadHeld($)
   } catch (err) {
@@ -1548,7 +1603,7 @@ const heldList = async ($: EngineInterface): Promise<HeldDelivery[]> => {
   }
   return heldNow ?? []
 }
-const changeHeld = async ($: EngineInterface, fn: (held: HeldDelivery[]) => HeldDelivery[]): Promise<void> => {
+const changeHeld = async ($: EngineInterface, fn: (held: HeldItem[]) => HeldItem[]): Promise<void> => {
   let unread: unknown
   try {
     await loadHeld($)
@@ -1562,45 +1617,85 @@ const changeHeld = async ($: EngineInterface, fn: (held: HeldDelivery[]) => Held
   // through the const, though it reads the others (measured on this branch, #1284).
   await $.state.set({ plugin: 'scope-modes', key: 'wakeHeld' }, heldNow)
 }
-const without = (held: HeldDelivery[], gone: readonly HeldDelivery[]) => held.filter(x => !gone.some(g => g.call === x.call))
+const without = (held: HeldItem[], gone: readonly HeldItem[]) => held.filter(x => !gone.some(g => g.call === x.call))
 // Kept once each, in the order held: the same call held twice is delivered once.
-const keepForWake = ($: EngineInterface, h: HeldDelivery) =>
-  changeHeld($, held => (held.some(x => x.call === h.call) ? held : [...held, { label: h.label, call: h.call }]))
-// The waking session's morning turn went in (or did not): what it carried is delivered, or kept for
-// the minute. A write that fails keeps it too, so it is asked for again rather than lost.
-const heldMorningDone = async ($: EngineInterface, entered: boolean) => {
-  const carried = heldInMorning
+const keepForWake = ($: EngineInterface, h: HeldItem) =>
+  changeHeld($, held => (held.some(x => x.call === h.call) ? held : [...held, { label: h.label, call: h.call, ...(h.why !== undefined ? { why: h.why } : {}) }]))
+
+// The night this session last saw asleep (#1285), in memory and in $.state for a reload: written by
+// this session alone (its minute, its wake, its noon end), so it needs no merging.
+let nightSeen: Night | null | undefined
+const nightNow = async ($: EngineInterface): Promise<Night | null> => {
+  if (nightSeen === undefined) nightSeen = (await $.state.get(nightSeenRef)).value ?? null
+  return nightSeen
+}
+const setNight = async ($: EngineInterface, n: Night | null) => {
+  nightSeen = n
+  // Whole, `unread` included, so a reload never turns notes that could not be read into none (lessons review).
+  await $.state.set({ plugin: 'scope-modes', key: 'nightSeen' }, n ? { generation: n.generation, worker: n.worker, offers: n.offers, ...(n.unread !== undefined ? { unread: n.unread } : {}) } : null)
+}
+// A morning that went in: the night and what it carried are done, each written on its own, so one
+// write that fails never keeps the other from being done (lessons review). Throws the first failure.
+const markMorning = async ($: EngineInterface, carried: readonly HeldItem[]) => {
+  const failed: unknown[] = []
+  await setNight($, null).catch(err => failed.push(err))
+  await changeHeld($, held => without(held, carried)).catch(err => failed.push(err))
+  if (failed.length) throw failed[0]
+}
+// The waking session's morning turn went in (or did not): the night and what it carried are done,
+// or kept for the minute. Memory is what this session reads, so a state write that fails after it
+// went in still marks them done here; only a reload, reading the older state, would put them to Dan
+// again, which repeats a morning rather than losing one.
+const morningDone = async ($: EngineInterface, entered: boolean) => {
+  const carried = morningInFlight
   if (!carried) return
   try {
-    if (entered) await changeHeld($, held => without(held, carried))
+    if (entered) await markMorning($, carried)
   } finally {
-    heldInMorning = null
+    morningInFlight = null
   }
 }
-// Each minute, in a session that did not wake sleep: once the record is gone (moved aside by a wake
-// or by its noon end anywhere), what it held is asked for in a turn of its own. Only no record is a
-// wake: one that cannot be read may still be asleep, and a new night keeps it for that night's
-// morning. A prompt that does not go in keeps it, asked again at the next minute.
-const askHeldAtWake = async ($: EngineInterface, reading: SleepReading) => {
-  if (reading.state !== 'none' || heldInMorning || askingHeld) return
-  // Taken before the first wait, so two minutes overlapping never both ask (lessons review).
-  askingHeld = true
+// Each minute, in every session (#1285): asleep, the night is remembered; once the record is gone
+// (moved aside by a wake or its noon end, in any session), this session puts its own morning to Dan
+// in a turn of its own, unless it has nothing to put. Only no record is a wake: one that cannot be
+// read may still be asleep, and a new night replaces the one remembered, keeping what was held for
+// its own morning. A prompt that does not go in keeps it all, put to Dan again at the next minute.
+const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
+  if (morningInFlight || askingMorning) return
+  // Taken before the first wait, so two minutes overlapping never both ask (lessons review of #1284).
+  askingMorning = true
   try {
+    const self = await $.session.id()
+    if (reading.state === 'asleep') {
+      const g = reading.record.generation
+      const seen = await nightNow($)
+      if (typeof g === 'string' && seen?.generation !== g) await setNight($, { generation: g, worker: Array.isArray(reading.record.workers) && reading.record.workers.includes(self), offers: false })
+      return
+    }
+    if (reading.state !== 'none') return
+    const seen = await nightNow($)
     const held = [...(await heldList($))]
-    if (!held.length) return
+    if (!seen && !held.length) return
+    const m = await morningOf($, seen ?? { generation: null, worker: false, offers: false }, self, held)
+    if (!m.anything) {
+      await setNight($, null)
+      return
+    }
+    watchMorningPickers(m.prompt)
     try {
-      await $.prompt.submit({ text: `Dan is up: sleep mode is off. ${heldAtWake(held)}` })
+      await $.prompt.submit({ text: m.prompt })
     } catch (err) {
-      $.ui.log(`scope-modes: what this session held overnight could not be asked for (${msg(err)}), so it is asked again at the next minute`, { to: 'debug' })
+      morningPickers = undefined
+      $.ui.log(`scope-modes: this session's morning could not be put to Dan (${msg(err)}), so it is tried again at the next minute`, { to: 'debug' })
       return
     }
     try {
-      await changeHeld($, now => without(now, held))
+      await markMorning($, held)
     } catch (err) {
-      $.ui.log(`scope-modes: what this session held overnight was asked for, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' })
+      $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' })
     }
   } finally {
-    askingHeld = false
+    askingMorning = false
   }
 }
 
@@ -1619,11 +1714,10 @@ const isAbsentNoun = (err: unknown) => {
   const m = missingOf(err)
   return m?.kind === 'noun' && m.noun === 'manualSteps'
 }
-const STEP_SAID = "The reminder to review the night's proposed issues"
+const STEP_SAID = 'The reminder to end sleep mode'
 
-// The morning turn of the session that woke, and its pickers counted, while it runs.
-let morningWatch: MorningWatch | undefined
-// The nights whose step this session has taken off its card, or tried to: once each.
+// The nights whose step this session has pinned on its card (#1283), and taken off, or tried to: once each.
+const pinnedHere = new Set<string>()
 const takenOff = new Set<string>()
 
 const reviewsPath = async ($: EngineInterface) => `${(await sleepPaths($)).dir}/morning-review.json`
@@ -1665,8 +1759,16 @@ const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => M
   }
 }
 
+// The step on this session's card, once a night; the noun's throw is the caller's to read.
+const pinStep = async ($: EngineInterface, night: { generation: string; night: string }) => {
+  const shown = await ($ as unknown as { manualSteps: ManualStepsNoun }).manualSteps.add({ heading: MORNING_HEADING, step: morningStep(night.night) })
+  pinnedHere.add(night.generation)
+  return shown
+}
+
 // /sleep that began a night pins the step (#1107), in a session with somebody at its prompt, once the
-// night is noted as waiting on its review, so the step never stands where nothing could take it off.
+// night is noted as waiting on it, so the step never stands where nothing could take it off. Every
+// other live session pins it at its next minute (#1283, reminderMinute).
 const pinMorning = async ($: EngineInterface): Promise<string> => {
   if (!interactive) return ''
   const r = await sleepNow($)
@@ -1675,10 +1777,11 @@ const pinMorning = async ($: EngineInterface): Promise<string> => {
   const failed = await changeReviews($, all => withPending(all, night))
   if (failed) return ` ${STEP_SAID} was not pinned: the night could not be noted as waiting on it (${failed}).`
   try {
-    const shown = await ($ as unknown as { manualSteps: ManualStepsNoun }).manualSteps.add({ heading: MORNING_HEADING, step: morningStep(night.night) })
+    const shown = await pinStep($, night)
     // Shown, the card says it (L605); only a step that is not is said here.
     return shown.isShown ? '' : ` ${STEP_SAID} is kept on the manual steps card but not shown now: ${shown.reason ?? 'no reason given'}.`
   } catch (err) {
+    if (isAbsentNoun(err)) pinnedHere.add(night.generation)
     return ` ${STEP_SAID} could not be pinned: ${isAbsentNoun(err) ? 'the manual steps mod is not loaded' : msg(err)}.`
   }
 }
@@ -1696,18 +1799,10 @@ const takeOff = async ($: EngineInterface, r: { generation: string; night: strin
   return undefined
 }
 
-// The night's review happened: noted on disk for every session's card, taken off this one's, and said.
-const reviewed = async ($: EngineInterface, r: { generation: string; night: string }, how: ReviewHow): Promise<string> => {
-  const at = await $.clock.now()
-  const failed = await changeReviews($, all => withDone(all, r, { at, how }))
-  const off = await takeOff($, r)
-  return `${clearedSaid(how)}${failed ? ` Other sessions could not be told (${failed}), so a card in another session keeps it until its Done is pressed.` : ''}${off ? ` It could not be taken off this session's card (${off}).` : ''}`
-}
-
-// At wake, by the one session that woke (#1107): a night that pinned the step and proposed nothing is
-// reviewed now; one that proposed something waits on the morning turn's pickers. A night that pinned
-// no step says nothing of one.
-const morningAtWake = async ($: EngineInterface, record: SleepRecord | null, nothing: boolean): Promise<string> => {
+// At the end of a night, by the session that ended it, by a wake or its noon end (#1283): ending sleep
+// is the review, so the night is noted ended on disk for every session's card, taken off this one's,
+// and said, never gated on pickers answered. A night that pinned no step says nothing of one.
+const endedAtWake = async ($: EngineInterface, record: SleepRecord | null): Promise<string> => {
   if (typeof record?.generation !== 'string') return ''
   let all: MorningReview[] | { unreadable: string }
   try {
@@ -1716,27 +1811,61 @@ const morningAtWake = async ($: EngineInterface, record: SleepRecord | null, not
     all = { unreadable: msg(err) }
   }
   if (!Array.isArray(all)) {
-    $.ui.log(`scope-modes: the record of the morning reviews could not be read (${all.unreadable}), so the reminder stays where it is`, { to: 'debug' })
+    $.ui.log(`scope-modes: the record of the morning reviews could not be read (${all.unreadable}), so the reminder is left to each session's minute`, { to: 'debug' })
     return ''
   }
   const r = all.find(x => x.generation === record.generation)
   if (!r || r.done) return ''
-  if (nothing) return reviewed($, r, 'nothing-proposed')
-  morningWatch = { generation: r.generation, night: r.night, answered: 0, unanswered: 0 }
-  return ''
+  const at = await $.clock.now()
+  const failed = await changeReviews($, a => withDone(a, r, { at, how: 'sleep-ended' }))
+  const off = await takeOff($, r)
+  return `${ENDED_SAID}${failed ? ` The other sessions could not be told (${failed}), so each takes it off at its next minute once the night reads ended.` : ''}${off ? ` It could not be taken off this session's card (${off}).` : ''}`
 }
 
-// Each minute, in every session: a night reviewed elsewhere has its step taken off this session's card.
-const takeOffReviewed = async ($: EngineInterface) => {
-  const all = await readReviews($)
+// Each minute, in every session (#1283). Asleep, the night's step is pinned on this session's card
+// once, the night noted as waiting first so something always takes it off. Every pending night but
+// the one asleep now has ended, however it ended (a session that died mid wake included), so it is
+// noted ended; a sleep record that cannot be read may still be asleep, so then nothing is. And a
+// night ended anywhere has its step taken off here. A record of the nights that cannot be read
+// changes nothing on a guess (L215).
+const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
+  let all = await readReviews($)
   if (!Array.isArray(all)) {
     $.ui.log(`scope-modes: the record of the morning reviews could not be read (${all.unreadable})`, { to: 'debug' })
     return
   }
+  const asleep = reading.state === 'asleep' && typeof reading.record.generation === 'string' ? { generation: reading.record.generation, night: reading.record.night } : null
+  // A record asleep that names no generation cannot say which night is current, so it closes nothing either (lessons review).
+  if (reading.state !== 'unreadable' && !(reading.state === 'asleep' && !asleep)) {
+    const stale = stalePending(all, asleep?.generation ?? null)
+    if (stale.length) {
+      const at = await $.clock.now()
+      const close = (a: MorningReview[]) => stale.reduce((x, r) => withDone(x, r, { at, how: 'sleep-ended' }), a)
+      const failed = await changeReviews($, close)
+      if (failed) $.ui.log(`scope-modes: nights that have ended could not be noted ended (${failed}), so they are tried again at the next minute`, { to: 'debug' })
+      else all = close(all)
+    }
+  }
+  if (interactive && asleep && typeof asleep.night === 'string' && !pinnedHere.has(asleep.generation)) {
+    const night = { generation: asleep.generation, night: asleep.night }
+    const known = all.find(x => x.generation === night.generation)
+    const failed = known ? null : await changeReviews($, a => withPending(a, night))
+    if (failed) $.ui.log(`scope-modes: the reminder to end sleep mode was not pinned here: the night could not be noted as waiting on it (${failed}); tried again at the next minute`, { to: 'debug' })
+    else if (!known?.done) {
+      try {
+        const shown = await pinStep($, night)
+        if (!shown.isShown) $.ui.log(`scope-modes: the reminder to end sleep mode is kept on this session's card but not shown now: ${shown.reason ?? 'no reason given'}`, { to: 'debug' })
+      } catch (err) {
+        // The mod not loaded holds no card, so there is nothing to pin; anything else is tried again.
+        if (isAbsentNoun(err)) pinnedHere.add(night.generation)
+        else $.ui.log(`scope-modes: the reminder to end sleep mode could not be pinned here (${msg(err)}); tried again at the next minute`, { to: 'debug' })
+      }
+    }
+  }
   for (const r of all) {
     if (!r.done || takenOff.has(r.generation)) continue
     const off = await takeOff($, r)
-    if (off) $.ui.log(`scope-modes: the reminder to review the night's proposed issues could not be taken off this session's card (${off})`, { to: 'debug' })
+    if (off) $.ui.log(`scope-modes: the reminder to end sleep mode could not be taken off this session's card (${off})`, { to: 'debug' })
   }
 }
 
@@ -1779,21 +1908,24 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
     // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
     s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
   }
-  const asked = await askSummaries($, record, self)
-  if (asked) s += ` ${asked}`
-  // What this session held overnight rides in its own morning turn (#1284), kept until that turn
-  // has gone in, and meanwhile out of the minute's own asking for it.
+  const others = await othersAtWake($, record, self)
+  if (others) s += ` ${others}`
+  // This session's own morning (#1285), the night's proposals with it since it ended sleep, and what
+  // it held overnight (#1284), kept until that turn has gone in and meanwhile out of the minute's
+  // own asking. Noted as offering first, so a turn that never goes in leaves the minute to offer them.
+  const night = endedNight(record, self)
   const held = [...(await heldList($))]
-  if (held.length) heldInMorning = held
+  morningInFlight = held
   try {
-    const morning = await morningFor($, record, self, held)
-    // The reminder pinned at bedtime (#1107): off now when nothing was proposed, else once the pickers are answered.
-    const cleared = await morningAtWake($, record, morning.nothing)
+    await setNight($, night)
+    const morning = await morningOf($, night, self, held)
+    // The reminder (#1107): ending sleep is the review, so it comes off now in every session (#1283).
+    const cleared = await endedAtWake($, record)
     if (cleared) s += ` ${cleared}`
     return { said: s, morning: morning.prompt, off: true }
   } catch (err) {
-    // No morning turn will carry it, so the minute asks for it instead (lessons review).
-    heldInMorning = null
+    // No morning turn will carry it, so the minute puts it to Dan instead (lessons review of #1284).
+    morningInFlight = null
     throw err
   }
 }
@@ -3345,15 +3477,17 @@ export const register: Register = on => {
         } catch (err) {
           $.ui.log(`scope-modes: the overnight driver's minute failed: ${msg(err)}`, { to: 'debug' })
         }
-        // Sleep over, what this session held overnight is asked for (#1284).
+        // The night remembered while asleep, and this session's own morning put to Dan once it is
+        // over (#1285), with what it held overnight (#1284).
         try {
-          await askHeldAtWake($, seen)
+          await morningAtMinute($, seen)
         } catch (err) {
-          $.ui.log(`scope-modes: the minute's check for what was held overnight failed: ${msg(err)}`, { to: 'debug' })
+          $.ui.log(`scope-modes: the minute's check for this session's morning failed: ${msg(err)}`, { to: 'debug' })
         }
-        // A night's review done in another session takes its reminder off this one's card (#1107).
+        // The reminder to end sleep mode (#1107, #1283): pinned here while asleep, and taken off once
+        // the night has ended, wherever and however it ended.
         try {
-          await takeOffReviewed($)
+          await reminderMinute($, seen)
         } catch (err) {
           $.ui.log(`scope-modes: the morning reminder's minute failed: ${msg(err)}`, { to: 'debug' })
         }
@@ -3395,22 +3529,24 @@ export const register: Register = on => {
     // The morning turn starts once the command is done: from inside command.run the prompt would
     // wait on the turn this hook holds (as /handoff found).
     const morning = woke.morning
-    // What this session held overnight rides in it (#1284): delivered once it goes in, else kept for the minute.
-    // Whether it went in is told apart from clearing what it carried, so a clear that fails is never
-    // said as a morning turn that could not start (lessons review).
+    // This session's morning (#1285) and what it held overnight (#1284) ride in it: done once it goes
+    // in, else kept for the minute. Whether it went in is told apart from marking it done, so a mark
+    // that fails is never said as a morning turn that could not start (lessons review of #1284).
     if (morning)
-      $.clock.after(0, () =>
+      $.clock.after(0, () => {
+        watchMorningPickers(morning)
         void $.prompt
           .submit({ text: morning })
           .then(
-            () => heldMorningDone($, true),
+            () => morningDone($, true),
             async err => {
-              await heldMorningDone($, false)
-              $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}`)
+              morningPickers = undefined
+              await morningDone($, false)
+              $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}. They are tried again within a minute.`)
             },
           )
-          .catch(err => $.ui.log(`scope-modes: what this session held overnight went out in the morning turn, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' })),
-      )
+          .catch(err => $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' }))
+      })
     return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
   on('command.run', { command: 'away' }, async $ => {
@@ -3481,6 +3617,7 @@ export const register: Register = on => {
           if (woke?.morning) {
             notes.push(woke.morning)
             carriesMorning = true
+            watchMorningPickers(woke.morning)
           }
           // Waking is acknowledged as any other switch is (#1086), right after waking's own line.
           if (woke?.off) acks.push(ackOnSaid('wake'))
@@ -3506,6 +3643,10 @@ export const register: Register = on => {
       if (e.turnId !== undefined)
         $.ui.log(`scope-modes: a message from Dan sent mid turn reached the mod: switched ${switched}, still on note ${askedOff ? 'added' : 'not added'}`, { to: 'debug' })
     }
+    // A morning picker left unanswered is asked again with his next message here (#1285), counted
+    // as asked once the prompt carrying it went in.
+    const askAgain = isDans && (await leftUnanswered($))
+    if (askAgain) notes.push(MORNING_UNANSWERED)
     const scope = await scopeOf($)
     if (scope) notes.push(SCOPE_NOTE[scope])
     let asking: string | undefined
@@ -3531,36 +3672,44 @@ export const register: Register = on => {
     try {
       entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
     } catch (err) {
-      // "I'm up" carried what this session held (#1284): a turn that did not go in keeps it for the
-      // minute. Only this turn's own morning settles it, never another prompt (lessons review).
-      if (carriesMorning) await heldMorningDone($, false)
+      // "I'm up" carried this session's morning (#1285) and what it held (#1284): a turn that did not
+      // go in keeps them for the minute. Only this turn's own morning settles it, never another
+      // prompt (lessons review of #1284).
+      if (carriesMorning) {
+        // No morning turn started, so no picker is watched for it (lessons review).
+        morningPickers = undefined
+        await morningDone($, false)
+      }
       throw err
     }
-    // The prompt is in, so a clear that fails is logged, never thrown past a turn that started.
+    // The prompt is in, so a mark that fails is logged, never thrown past a turn that started.
     if (carriesMorning)
-      await heldMorningDone($, true).catch(err =>
-        $.ui.log(`scope-modes: what this session held overnight went out in the morning turn, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' }),
+      await morningDone($, true).catch(err =>
+        $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' }),
       )
     if (asking !== undefined) askedUp = asking
+    if (askAgain) await setLeftUnanswered($, false)
     return entered
   })
 
-  // The first main turn after waking is the morning one (#1107): /wake's own prompt, or the turn "I'm
-  // up" started. Only the main loop raises turn.start.
+  // The first main turn after a morning prompt is the morning one (#1285): /wake's own prompt, the
+  // turn "I'm up" started, or the one the minute submitted. Only the main loop raises turn.start.
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
-    if (morningWatch && morningWatch.turnId === undefined) morningWatch.turnId = e.turnId
+    if (morningPickers && morningPickers.turnId === undefined) morningPickers.turnId = e.turnId
     return r
   })
 
   // A message from the phone while home: one line at the end of the reply (picker, 2026-10-04).
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    // The morning turn's end (#1107): the night was reviewed only if it ended answered with every picker answered.
-    const w = morningWatch
-    if (w && e.agentId === undefined && w.turnId === e.turnId) {
-      morningWatch = undefined
-      if (reviewedAtEnd(w, e.reason)) $.ui.toast(await reviewed($, w, 'pickers-answered'))
+    // This session's morning turn (#1285): a picker unanswered, or a turn ended other than by
+    // answering while it had pickers to ask, leaves them to be asked again with his next message.
+    const mp = morningPickers
+    if (mp && e.agentId === undefined && mp.turnId === e.turnId) {
+      morningPickers = undefined
+      // Only a morning that asked something can leave a picker unanswered (lessons review).
+      if (mp.asks && (mp.unanswered > 0 || e.reason !== 'answer')) await setLeftUnanswered($, true)
     }
     if (e.agentId !== undefined || e.reason !== 'answer') return r
     if (lastOrigin === 'bridge' && (await placeOf($)) === 'home') return { ...r, text: PHONE_LINE }
@@ -3655,8 +3804,9 @@ export const register: Register = on => {
     const mayOpen = /\bgh\b/.test(raw) && /\bpr\b/.test(raw) && /\bcreate\b/.test(raw)
     const mayBranch = /\bgit\b/.test(raw) && /\b(checkout|switch|branch|worktree|push|commit)\b/.test(raw)
     const mayWrite = tool === 'Bash' || EDITORS.has(tool)
-    // A picker in the morning turn (#1107), counted answered or not; a refused one never reached Dan.
-    const morningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningWatch?.turnId !== undefined ? morningWatch : undefined
+    // A picker in this session's own morning turn (#1285), counted answered or not, so one left
+    // unanswered is asked again; a refused one never reached Dan and counts neither way.
+    const ownMorningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningPickers?.turnId !== undefined ? morningPickers : undefined
     const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
       // A stash a pop takes back is gone once it runs, so what it holds is read first (#1123).
       const stashed = raw ? await stashedFiles($, raw) : []
@@ -3664,11 +3814,11 @@ export const register: Register = on => {
       try {
         r = await next(e)
       } catch (err) {
-        if (morningPicker) morningPicker.unanswered++
+        if (ownMorningPicker) ownMorningPicker.unanswered++
         throw err
       }
-      const answered = morningPicker ? pickerAnswered(r) : undefined
-      if (morningPicker && answered !== undefined) morningPicker[answered ? 'answered' : 'unanswered']++
+      const answered = ownMorningPicker ? pickerAnswered(r) : undefined
+      if (ownMorningPicker && answered !== undefined) ownMorningPicker[answered ? 'answered' : 'unanswered']++
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
@@ -3701,6 +3851,12 @@ export const register: Register = on => {
       }
       if (over) {
         await noteFirstMet($, sleeping.record, over)
+        // Kept for this session's morning, where Dan is asked whether to do it now (#1285).
+        try {
+          await keepForWake($, { label: over.what, call: raw, why: over.why })
+        } catch (err) {
+          $.ui.log(`scope-modes: a merge held overnight could not be written to this session's state (${msg(err)}); it is kept in memory for the morning`, { to: 'debug' })
+        }
         await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: `Asleep, so this would not ${over.what}: ${over.why}.`, safeWay: 'Claude leaves it for the morning report.' })
         return { deny: over.deny }
       }
@@ -3891,12 +4047,16 @@ export const register: Register = on => {
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])
     writeNoteSaid = false
-    morningWatch = undefined
-    // What was held overnight is this session's (#1284), so a new session starts with none.
+    // What was held overnight, and the night seen, are this session's (#1284, #1285), so a new session starts with none.
     heldNow = []
     heldLoaded = true
-    heldInMorning = null
+    morningInFlight = null
+    nightSeen = null
+    morningPickers = undefined
+    morningLeftUnanswered = false
     await $.state.set(wakeHeldRef, [] as HeldDelivery[])
+    await $.state.set(nightSeenRef, null)
+    await $.state.set(morningUnansweredRef, false)
     prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)

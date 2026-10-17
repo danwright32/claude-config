@@ -1182,7 +1182,10 @@ Three other outcomes are told apart rather than folded into pass or fail. A suit
 that does not exist adds no pass and no fail, so it otherwise reads as one that passed (#1044). A
 suite refused its lock because another run of it holds it prints `SUITE-LOCK-REFUSED <holder>` and
 is reported as NOT RUN with that holder, not as FAIL; under CI, where nothing else should hold it,
-it fails (#1083). A suite that ran but could not read what it judges (the secret scan, when it
+it fails (#1083). A local run first asks each suite to wait for that lock, up to
+`HOOK_TESTS_LOCK_WAIT` seconds handed on as `SUITE_LOCK_WAIT`, so overlapping full runs each get
+the sync suite's verdict rather than NOT RUN; a suite that waited says so in a note beside its
+verdict and prints `SUITE-LOCK-WAITED <seconds>`, which is taken off its recorded time (#1297). A suite that ran but could not read what it judges (the secret scan, when it
 cannot list or copy the tree) prints `SUITE-UNMEASURED <why>` and is reported the same way, NOT RUN
 with that reason here and a failure under CI, unless its own score counts failures, which then
 decide (#1146). And every failure carries the load average when the suite finished, saying when
@@ -1321,6 +1324,7 @@ is told its share, and the product is printed at the top of every run.
 | `HOOK_TESTS_BUDGET` | CPUs, capped at 8 | How many processes the whole run may have in flight. Everything else is derived from it. A value that is not a positive whole number is refused rather than guessed at. |
 | `HOOK_TESTS_JOBS` | half the budget, but never fewer than 2 and never more than the budget | How many suites run at once. The floor of 2 is for the small machine: the CI runner has two cores, half of two is one, and every suite would have run strictly one after another while a second slot sat reserved. `1` runs them one at a time, which is what to reach for when a suite only fails alongside others. A value that is not a positive whole number is refused rather than guessed at, because it decides how many processes start. |
 | `HOOK_TESTS_TIMINGS` | `~/.cache/claude-config/suite-timings` | Where each suite's measured wall clock is kept between runs, one small file per suite, keyed on the suite's path inside the repo. It is what the launch order is built from. Set it to empty to turn the record off, so a run reads nothing and writes nothing. Deliberately outside the config directory: a duration measured on this machine is not configuration, and mirroring it would make the other Mac order its runs by numbers from hardware it does not have. |
+| `HOOK_TESTS_LOCK_WAIT` | `1200` locally, always `0` under CI | How many seconds a suite may wait for a lock another run holds, handed to every suite as `SUITE_LOCK_WAIT` whatever was inherited. Twenty minutes is about three runs of the sync suite on this Mac, so a run queued behind two or three overlapping ones still reports it rather than NOT RUN (#1297). A flake recheck is asked to wait for nothing, since its deadline is set by what the suite measured. A value that is not a whole number is refused. |
 | `HOOK_TESTS_SLOTS` | set BY the runner | Each suite's share of the budget, which is the budget divided by how many suites are running at once. A suite that splits itself, which today is `test-claude-sync.sh`, reads it as how many of its own processes it may start. Point the runner at one directory holding one suite and that suite is handed the whole budget, so running the long suite on its own is as fast as it ever was. |
 
 What the budget costs, measured on this Mac on 2026-08-21 as one pair of runs back to back: 124 seconds against
@@ -1525,7 +1529,9 @@ One run at a time, and none of them open ended:
 | --- | --- | --- |
 | `SUITE_TIMEOUT` | `3600` | Seconds of wall clock before a run is killed however well it is going. Since #152 this is only an absolute ceiling for a runaway, not what catches a hang: `SUITE_STALL_TIMEOUT` does that. Generous on purpose, because a full single process run measured 348 seconds idle and 1943 at load 160 to 188 on 2026-08-22, so a tighter one kills a healthy run on a busy Mac. It also has a floor of twice `SUITE_STALL_TIMEOUT`, checked by the suite: a ceiling that expires first means the stall bound can never fire, and every real hang is then reported as a run that simply went on too long. At the end of a full run the suite says whether the ceiling still has room over the wall clock that run took, and uses the run's own processor time to tell a suite that has grown from a machine that was busy. `0` disables it. |
 | `SUITE_STALL_TIMEOUT` | `1200` | Seconds a run may go without reaching a new section before it is killed as hung and told which section it stopped in. This is what actually catches a hang, and a machine that is merely slow keeps moving between sections and is left alone. Re-measured 2026-08-22 across four loads: the slowest single section was 44 seconds idle, 88 under three competing full runs, and 208 once, so this is at least 5.7x the worst observed. It was 600, which at a 3x floor left no room at all once the suite had grown, and a busy afternoon turned the run red with nothing wrong. The suite checks that ratio against the sections the run really took rather than against this sentence, and prints the margin it achieved on every run so a shrinking one is visible before it fails. `0` disables it. Both this and `SUITE_TIMEOUT` at `0` is refused, since that is a run with no bound at all. |
-| `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing. |
+| `SUITE_LOCK` | `$TMPDIR/claude-sync-suite.lock` | Where the one run at a time lock lives. A second run REFUSES, naming the process that holds it and how long it has been going, rather than queueing, unless it was asked to wait with `SUITE_LOCK_WAIT`. |
+| `SUITE_LOCK_WAIT` | `0` (run-all-tests.sh sets it, `1200` locally) | Seconds to wait for a lock another run holds before refusing. A run that waits says so as it starts, writes how long it has waited where its watchdog reads progress, prints `SUITE-NOTE waited <n>s ...` and `SUITE-LOCK-WAITED <n>` once it gets the lock, and at the bound refuses as before, adding how long it waited. Read once and not handed on, so the lock checks this suite runs on itself are never asked to wait (#1297). |
+| `SUITE_LOCK_WAIT_POLL` | `2` | Seconds between looks at the lock while waiting. A test seam: the bound itself is read off the clock. |
 | `SUITE_NO_LOCK` | unset | Run without taking the lock. For when you know the run it names has finished. |
 | `SUITE_LOCK_MAX_AGE` | `1800` | Seconds after which a lock from ANOTHER machine is broken. A lock from this machine is judged by whether its process is alive, never by the clock, so a clock jump cannot break a live one. |
 | `SUITE_MAX_DEPTH` | `1` | How deeply a run may be nested inside another. The suite runs itself as a subprocess in many places, every one of them one level down, and past this it refuses to start rather than multiplying. |
@@ -1885,8 +1891,18 @@ BBEdit (focus moves there), unless you are away or woke it from your phone, when
 for you in the held card. That session then summarises its own night and offers what the overnight
 sessions proposed: new issues in one multi select picker, with the priority, labels and milestone
 each was proposed with so you can correct them, and new lessons one at a time. Nothing is filed and
-no lesson is added until you pick it. Every other session that worked overnight is asked for its
-own short summary.
+no lesson is added until you pick it. Ending sleep is the night's review (#1285), so it never needs
+the report read: every live session, worker or not, puts its own morning to you, the one you woke
+it in at once and every other at its next minute (the same when sleep ends by itself at noon, when
+the session that ended it offers the proposals). Each summarises its night if it worked, delivers
+what it held, and asks as pickers, one at a time, every question it noted overnight and every merge
+or deploy the night's lists held in it, so nothing you have to answer, decide or approve exists only
+in the report. A session with nothing of its own starts no turn. A picker left unanswered is not
+dropped: that session asks it again the next time you write to it. While sleep is on, every live
+session with somebody at its prompt, in every project, shows one step on its manual steps card,
+"When you are up, end sleep mode", and ending sleep, by any route, takes it off every card (the
+session that ended it at once, every other at its next minute), since ending sleep is the night's
+review (#1283).
 
 **What it does overnight.** Each enrolled session works only toward its goal, never any other open
 issue. Sessions with a goal that are sitting idle at their prompt are told to start as sleep begins. A goal that names issues or a milestone is worked one of its issues at a time, each in a

@@ -1515,8 +1515,20 @@ morning offers what the night proposed, filing nothing he has not picked.
   and `--front-window` (else `open -a BBEdit`, never a bare `open`), saying in the same reply that
   focus moved. Away, or woken from the phone, opening it waits in the held card; at the noon limit
   nothing opens. A report that is not there is said, never opened as an empty window.
-- That session asks each other worker still open for its own summary (`SUMMARY_ASK`); one that has
-  closed, or one the registry could not read, is said as such, never counted as asked (L215).
+- Ending sleep is the night's review in every live session (#1285; Dan, 2026-10-17: "it should
+  trigger the session to ask me any questions it's needs clarification on or get permission on
+  things. basically I shouldn't have to literally read the review because everything that is
+  relevant should show up in a picker"; design rounds: see the PR). `SUMMARY_ASK`, sent only to the
+  workers and offering no pickers, is gone. Each session's minute remembers the night while asleep
+  (`nightSeen` in its state: the generation, whether it worked, whether it offers the proposals) and,
+  once the record is gone, submits its own morning (`morningOf`, then `morningPrompt`): its summary
+  if it worked, what it held (#1284), each question it noted (`by` itself, read from the notes by
+  `proposalsIn`, numbered 3.n) and each merge, deploy or push the night's lists refused in it
+  (kept with its reason, 4.n), each an AskUserQuestion picker, and an unanswered picker kept for the
+  next time Dan writes there. The session that ended sleep, by a wake or its noon end, offers the
+  proposed issues and lessons; no other does, so none is offered twice. A session with nothing of
+  its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
+  reply says how many other sessions are open and which workers closed since (`othersSaid`).
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,
   started with `$.prompt.submit` once the command is done, or the turn "I'm up" starts: its summary,
   then the proposed issues in the end of turn issue review's multi select picker (each option ending
@@ -1528,20 +1540,28 @@ morning offers what the night proposed, filing nothing he has not picked.
 - The morning reminder (#1107; Dan, 2026-10-12 and 13: "Basically I want a way to remember in the
   morning to review the issues"; design rounds skipped on his word, 2026-10-13). A /sleep that began
   a night, in a session with somebody at its prompt, pins one step on the manual steps card through
-  `$.manualSteps.add`: "When you are up: review the night's proposed issues (<night>)", at the end of
+  `$.manualSteps.add` (every other live session pins it too since #1283, below, and its words are
+  now "When you are up, end sleep mode (<night>)"), at the end of
   any card already pinned, or a card of its own headed "The morning after sleep mode". It is shown
   at once, though Dan cannot do it until morning, because he asked for it to pop up then. The night
   is first noted as waiting on its review in `~/.claude/state/sleep/morning-review.json` (the latest
   14 nights, changed under its own lock; one that cannot be read is moved aside, never written
   over), so the step never stands
-  where nothing could take it off. It comes off by the review
-  having happened, never by time: at wake, by the session that woke, when the night proposed nothing
-  and every note was read (said in the wake reply, a phone wake included); otherwise once the morning
-  turn (the first main turn after waking) ends answered with at least one picker answered and none
-  dismissed, failed or closed by itself (a picker another guard refused counts neither way). A
-  phone wake whose pickers were never answered leaves it. The night is then noted reviewed, and
-  every session's minute check takes the step off its own card, so a card in another session, or one
-  carried into the next session, follows; one that fails is tried again the next minute. Dan's Done on the step still works as on any other.
+  where nothing could take it off. Dan's Done on the step still works as on any other.
+- Ending sleep is the night's review (#1283), which reverses #1107's rule that the step came off only
+  once the wake pickers were answered (Dan, 2026-10-17: "manual step only comes up on the chat that I
+  entered sleep mode in. It should be on every session and it should be completed automatically when
+  I exit sleep mode", and "sleep mode ending shouhld be the review of the night automatically";
+  design rounds: see the PR). The step now reads "When you are up, end sleep mode (<night>)" at
+  "Any Claude Code session on this Mac". Every live session with somebody at its prompt pins it on
+  its own card at its minute while asleep (noting the night as waiting first when /sleep did not),
+  once a night. The session that ends the night, by a wake (a phone wake included) or its noon end,
+  notes it ended (`sleep-ended`) and takes the step off its own card at once, saying so in the wake
+  reply; every other session's minute takes it off its card. Every pending night but the one asleep
+  now is noted ended by any session's minute, so a night whose ending wrote nothing (a session that
+  died mid wake) still comes off; a sleep record that cannot be read closes nothing. A night written
+  done any way (the older `nothing-proposed` and `pickers-answered` included) reads done. An
+  unanswered picker is not lost: it stays with the session that asked (#1285).
 
 ### Sleep mode phase 10: the night run by the real engine (#838), built
 

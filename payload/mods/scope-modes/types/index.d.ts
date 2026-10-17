@@ -116,8 +116,17 @@ declare module 'claude-code' {
       /**
        * What this session would have handed Dan while asleep (#1284): each call held, delivered when
        * sleep mode ends, its row and the call as made. Cleared once the session is asked to deliver them.
+       * One with `why` is a merge, deploy or push the night's lists refused (#1285), put to Dan as a picker.
        */
-      wakeHeld: { label: string; call: string }[]
+      wakeHeld: { label: string; call: string; why?: string }[]
+      /**
+       * The night this session last saw asleep (#1285), so its minute puts its own morning to Dan
+       * once the record is gone: whether it worked that night, and whether it offers the night's
+       * proposals (the session that ended sleep does). Null once its morning went in.
+       */
+      nightSeen: { generation: string | null; worker: boolean; offers: boolean; unread?: string } | null
+      /** Whether this session's morning turn left a picker unanswered, asked again with Dan's next message (#1285). */
+      morningUnanswered: boolean
     }
   }
 }
