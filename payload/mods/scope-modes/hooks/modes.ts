@@ -60,8 +60,9 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
   // lists allow.
   sleep: {
     name: 'Sleep mode',
-    will: "keep every session on this Mac quiet as when you are away, note every question for your morning report, and have the enrolled sessions work the overnight queue",
-    willNot: "ask you anything, do on the Mac what waits for you there, or merge or deploy beyond what the night's lists allow",
+    // Every result held until wake in every session (#1284), where away delivers a page at once.
+    will: "keep every session on this Mac quiet, hold every result for when you wake, note every question for your morning report, and have the enrolled sessions work the overnight queue",
+    willNot: "ask you anything, hand you anything before you wake, do on the Mac what waits for you there, or merge or deploy beyond what the night's lists allow",
     ends: 'It ends by itself at noon ET, and /wake or "I\'m up" ends it sooner.',
   },
   wake: {

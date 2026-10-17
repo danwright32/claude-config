@@ -1493,6 +1493,18 @@ is still asked once at bedtime and closed if unanswered.
   `$.scopeModes.sleepNote`.
 - Findings reach the report through the overnight rules' `sleep_note`, not the reflection hooks,
   which stand down on `stop_hook_active` and would run once a night (H5).
+- Nothing is handed to Dan overnight (#1284; Dan, 2026-10-17: "some sessions give me something to
+  do immediately ... and some wait until the morning"; design rounds skipped on his word the same
+  day). Each prompt used to say "deliver as when he is away", a page at once, and only the Artifact
+  open action was held, so a session whose turn ended overnight published there and then. Now every
+  prompt says to hand him nothing (`ASLEEP_DELIVERY` in `hooks/nightheld.ts`), and in every session,
+  a subagent's call included, an Artifact publish or open, or a Claude doc made or changed, is
+  refused with the grey Asleep card and kept in that session's state (`wakeHeld`). When sleep mode
+  ends the session that woke it carries what it held in its morning turn, and every other session
+  asks for it in a turn of its own at its next minute once the record is gone (an unreadable record
+  is not a wake, and a new night keeps it for its own morning; a prompt that does not go in keeps it
+  for the next minute). What needs Dan at the Mac while asleep is refused without away's "publish a
+  page instead" (`heldAsleep`).
 
 ### Sleep mode phase 9: waking (#837), built
 

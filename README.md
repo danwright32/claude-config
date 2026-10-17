@@ -1861,7 +1861,11 @@ end and the report says why.
 answer for; push straight to a default branch; force push or delete branches; switch branches in
 your main checkout; write to a database (Supabase, psql); use claude.ai, Chrome or PostHog tools that
 write; run `claude-sync` pull or install; retry anything Claude Code's own safety check refused; or
-work an issue someone else opened. No sound, notification or end of turn review reaches you. At
+work an issue someone else opened. Nor does any session hand you a result while you sleep, a
+worker or not: a page published or opened for you (the Artifact tool) or a Claude doc is held in
+that session, and when sleep mode ends, by any route, the noon end included, every session that
+held something is asked to deliver it where you are then, so every session reports at the same
+moment rather than one popping up minutes after `/sleep` (#1284). No sound, notification or end of turn review reaches you. At
 wake it checks GitHub and the disk for anything outward that happened anyway (issues created,
 milestones touched, LESSONS.md changed, deploys) and puts it at the top of the report.
 

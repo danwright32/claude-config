@@ -113,6 +113,11 @@ declare module 'claude-code' {
       written: string[]
       /** Set on coming home, cleared once Claude has been told on the next prompt. */
       justHome: boolean
+      /**
+       * What this session would have handed Dan while asleep (#1284): each call held, delivered when
+       * sleep mode ends, its row and the call as made. Cleared once the session is asked to deliver them.
+       */
+      wakeHeld: { label: string; call: string }[]
     }
   }
 }
