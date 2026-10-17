@@ -34,7 +34,8 @@
 #                 check-stale-worktrees.sh uses too, so the two cleanups agree: a lock whose pid no
 #                 process has, or whose agent started before the last boot, keeps nothing, and is
 #                 lifted just before the removal (only if it is still that lock, and put back if
-#                 git then refuses). An older lock with no start time, "claude agent <name> (pid
+#                 git then refuses and leaves the worktree whole; one left part deleted stays
+#                 unlocked so a single --force can finish it). An older lock with no start time, "claude agent <name> (pid
 #                 <pid>)", keeps nothing only when no process has its pid. A live agent's lock, a
 #                 pid now held by a process started at another time, an older lock whose pid is
 #                 running, a lock whose agent cannot be read, and any other lock keep it.
@@ -310,14 +311,21 @@ else
     fi
     if ! err="$(git -C "$primary" worktree remove "$real" 2>&1)"; then
       printf '  %-9s  %-46s %s: git refused: %s\n' "NOT DONE" "$rel" "$branch" "$err"
-      # Put a lifted lock back on a worktree git left in place, so a removal that did not happen
-      # leaves it as it was found.
+      # Put a lifted lock back on a worktree git left whole, so a removal that did not happen leaves
+      # it as it was found. One git left part deleted (still listed, files gone) stays unlocked, the
+      # same rule as check-stale-worktrees.sh: finishing it takes one --force, which git refuses on
+      # a locked worktree, and the agent the lock names is gone.
       if [ -n "$stale" ] && [ -d "$real" ]; then
         still="$(git -C "$primary" worktree list --porcelain 2>/dev/null)"
         case $'\n'"$still"$'\n' in
           *$'\n'"worktree ${wt_path[n]}"$'\n'*)
-            git -C "$primary" worktree lock --reason "${wt_lockreason[n]}" "${wt_path[n]}" >/dev/null 2>&1 \
-              || printf '             and its lock, lifted for the removal, could not be put back\n' ;;
+            gone_files="$(git -C "$real" status --porcelain 2>/dev/null | grep -c '^ D ' || true)"
+            if [ "${gone_files:-0}" -gt 0 ]; then
+              printf '             its lock, left by a Claude agent that is gone, is not put back, so it can be finished with: git -C %s worktree remove --force %s\n' "$primary" "$real"
+            else
+              git -C "$primary" worktree lock --reason "${wt_lockreason[n]}" "${wt_path[n]}" >/dev/null 2>&1 \
+                || printf '             and its lock, lifted for the removal, could not be put back\n'
+            fi ;;
         esac
       fi
       failed=$((failed + 1)); continue

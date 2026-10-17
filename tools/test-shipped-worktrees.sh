@@ -320,6 +320,8 @@ mkdir -p "$WORK/lshim"
 cat > "$WORK/lshim/git" <<SHIM
 #!/usr/bin/env bash
 case " \$* " in
+  *" worktree remove "*lk-half*)
+    if [ -n "\${SHIM_HALF:-}" ]; then rm -f "$WT/lk-half/f.txt"; echo "fatal: simulated stop part way" >&2; exit 128; fi ;;
   *" worktree remove "*lk-refused*)
     if [ -n "\${SHIM_REFUSE:-}" ]; then echo "fatal: simulated refusal" >&2; exit 128; fi ;;
   *lk-race" status "*)
@@ -360,6 +362,8 @@ L_OLDDEAD="claude agent lk-olddead (pid 5008)"
 L_OLDLIVE="claude agent lk-oldlive (pid 5002)"
 locked_agent lk-olddead 38 "$L_OLDDEAD"
 locked_agent lk-oldlive 39 "$L_OLDLIVE"
+L_HALF="claude agent lk-half (pid 5007 start Thu Oct 15 12:00:00 2026)"
+locked_agent lk-half 40 "$L_HALF"
 
 out_l="$(bash "$TOOL" "$R" 2>&1)"
 says "a shipped worktree whose agent's pid is gone is removable" "#31" "$(row REMOVABLE lk-dead "$out_l")"
@@ -376,7 +380,7 @@ out_u="$(PS_FAIL=1 bash "$TOOL" "$R" 2>&1)"
 says "with ps unreadable, a lock since the boot keeps its worktree, saying why" "could not be read" "$(row KEEP lk-dead "$out_u")"
 says "while one from before the boot needs no ps and is still removable" "#34" "$(row REMOVABLE lk-preboot "$out_u")"
 
-out_r="$(PATH="$WORK/lshim:$PATH" SHIM_REFUSE=1 SHIM_RACE=1 bash "$TOOL" --remove "$R" 2>&1)"
+out_r="$(PATH="$WORK/lshim:$PATH" SHIM_REFUSE=1 SHIM_RACE=1 SHIM_HALF=1 bash "$TOOL" --remove "$R" 2>&1)"
 says "--remove removes the worktree whose agent's pid is gone" "#31" "$(row REMOVED lk-dead "$out_r")"
 if exists "$WT/lk-dead"; then bad "lk-dead is still there after --remove"; else ok; fi
 says "and the one whose agent started before the boot" "#34" "$(row REMOVED lk-preboot "$out_r")"
@@ -392,6 +396,12 @@ if exists "$WT/lk-oldlive"; then ok; else bad "--remove removed lk-oldlive, whos
 if [ "$(lockof lk-oldlive)" = "$L_OLDLIVE" ]; then ok; else bad "an older lock with a running pid was changed (now: $(lockof lk-oldlive))"; fi
 says "a removal git refuses after the lock is lifted is said" "simulated refusal" "$(row "NOT DONE" lk-refused "$out_r")"
 if [ "$(lockof lk-refused)" = "$L_REFUSED" ]; then ok; else bad "the refused worktree's lock was not put back (now: $(lockof lk-refused))"; fi
+# Git stopping part way leaves the worktree listed and part deleted. Its dead agent's lock is not put
+# back, the same rule as check-stale-worktrees.sh: a person finishing it by hand with one --force
+# would otherwise be refused by a lock nobody holds.
+says "a removal git stops part way is said" "simulated stop part way" "$(row "NOT DONE" lk-half "$out_r")"
+if [ "$(lockof lk-half)" = UNLOCKED ]; then ok; else bad "a part deleted worktree had its dead agent's lock put back (now: $(lockof lk-half))"; fi
+says "and says the lock is left off" "is not put back" "$out_r"
 says "a lock that changed hands during the run is not lifted" "its lock changed after it was judged" "$(row KEPT lk-race "$out_r")"
 if [ "$(lockof lk-race)" = "claude agent lk-race (pid 5010 start Sat Oct 17 09:00:00 2026)" ]; then ok
 else bad "the new holder's lock on lk-race was not left in place (now: $(lockof lk-race))"; fi
