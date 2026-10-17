@@ -1977,7 +1977,8 @@ test("the keystroke guard's actions through the noun: away, focus and a test bui
   expect(await ask({ kind: 'input' }, 'g5')).toEqual({ isHeld: true })
 })
 
-// Sleep mode gets the same (Dan, 2026-10-16 ET): it keeps every session quiet as away.
+// Sleep mode holds what away holds on the Mac (Dan, 2026-10-16 ET), and every result until wake
+// besides, where away delivers a page at once (#1284).
 test('asleep, the same: focus, files, browser automation and a test build run; a dialog and other typing are held, and the Artifact open action is held until wake (#1269, #1284)',withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)

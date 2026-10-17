@@ -1730,7 +1730,8 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
-// is read live, and while it holds away is not said again: asleep keeps every session quiet as away.
+// is read live, and while it holds away is not said again: asleep holds what away holds on the Mac,
+// and every result until wake besides (#1284).
 const showModes = async ($: EngineInterface) => {
   const scope = await scopeOf($)
   const asleep = await isAsleep($)
@@ -3098,7 +3099,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
-    // Asleep (#840) keeps every session quiet as away, whatever its own place. The engine refuses
+    // Asleep (#840) holds what away holds on the Mac, whatever a session's own place. The engine refuses
     // handing `built` to a helper, so the record is read here with its own calls, through the same
     // readSleep every other decision asks; a read that fails is awake, as readSleep's unreadable is.
     const nounReading = async (): Promise<{ home: string; reading: SleepReading } | null> => {
@@ -3579,7 +3580,7 @@ export const register: Register = on => {
     }
 
     const scope = await scopeOf($)
-    // Asleep (#840), read live at each call, keeps every session quiet as away.
+    // Asleep (#840), read live at each call, holds what away holds on the Mac, and every result until wake (#1284).
     const sleeping = await sleepNow($)
     // Asleep, a merge, a deploy or a push to a default branch is judged against the night's lists
     // (#843), first, before any other mode's route or early return, so nothing reaches a merge
