@@ -1534,9 +1534,12 @@ morning offers what the night proposed, filing nothing he has not picked.
   `~/.claude/state/sleep/offered/<generation>/<key>` (`claimOffer`), so of two sessions exactly one
   offers it, and a session's own earlier claim is still its own when its morning is asked again; a
   claim that cannot be written offers nothing and is logged. A repository with no session open when
-  the night ends keeps its proposals: once a session, awake, a session reads the notes of the last
-  14 days' nights (by the time in their generation) and offers its repository's unclaimed issues in
-  a turn of its own (`offerBacklog`). A session with nothing of
+  the night ends keeps its proposals: a session started there reads, once while awake, the notes of
+  the last 14 days' nights (by the time in their generation) and offers its repository's unclaimed
+  issues, and the questions of closed sessions there, in a turn of its own (`offerBacklog`). It takes
+  only a fresh claim, so it never repeats what this session's own morning offered. The session that
+  ended sleep says nothing was proposed only where nothing was, never where another session holds
+  the claim. A session with nothing of
   its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
   reply says how many other sessions are open and which workers closed since (`othersSaid`).
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,

@@ -1515,7 +1515,9 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   const issues = read.issues.filter(i => claimed.has(repoKey(i.repo)))
   const lessons = claimed.has(LESSONS_KEY) ? read.lessons : []
   const questions = [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)]
-  const offers = night.offers || issues.length > 0 || lessons.length > 0
+  // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
+  // offer, and this session says nothing of them (lessons review).
+  const offers = issues.length > 0 || lessons.length > 0 || (night.offers && ![...keys].some(has))
   return {
     prompt: morningPrompt({ worker: night.worker, offers, held: deliveries, merges, questions, issues, lessons, bad: read.bad, ...(mine ? { forRepo: mine } : {}) }),
     anything: night.worker || offers || held.length > 0 || questions.length > 0,

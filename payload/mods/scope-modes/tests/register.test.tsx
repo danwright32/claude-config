@@ -2950,6 +2950,16 @@ test("a live session in the other repository offers that repository's proposals 
   expect(w.files[`${OFFERED}/g0/acme_bidspoke`]).toBeDefined()
 })
 
+test('the session that ends sleep never says nothing was proposed when another session holds its repository\'s claim (#1286 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}`, [`${OFFERED}/g0/o_r`]: 's7', [`${OFFERED}/g0/_lessons`]: 's7' } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).not.toMatch(/No issue or lesson was proposed/)
+  expect(m).not.toContain('Date parse drops the zone')
+})
+
 test('a repository whose proposals another live session there already claimed is offered nowhere else (#1286)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${BIDSPOKE}\n`, [`${OFFERED}/g0/acme_bidspoke`]: 's7' } })
   await start($ as never, clock)
