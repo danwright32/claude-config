@@ -2667,6 +2667,56 @@ lw_got="$(cat "$LWF/wait.seen" 2>/dev/null | tr '\n' ' ')"
   && check "#1297 a failed suite's recheck is asked to wait for nothing" ok \
   || check "#1297 a failed suite's recheck is asked to wait for nothing" "the runs saw '$lw_got'"
 
+# Asked to wait for nothing, a recheck meeting a lock another run holds is refused, and refused is
+# not reproduced (claude-config#1312, L11). A suite that fails, then finds its lock held when it is
+# run again, says on its FAIL line that the recheck could not run and who holds the lock, is never
+# called FLAKY, and still leaves the run red, since the first failure stands.
+# mk_recheck_locked <dir> <name> <marker> <scored>: fails on its first run; on the next, finds its lock
+# held, and with <scored> 1 also prints a score, as a suite that ran despite claiming the refusal.
+mk_recheck_locked() {
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [ -e "%s" ]; then\n' "$3"
+    printf '  echo "test suite: another run is already going" >&2\n'
+    printf '  printf "%%s\\n" "%s process 4343 on b-mac, started 12s ago"\n' "$LOCK_MARK"
+    [ "$4" = 1 ] && printf '  printf "%%s\\n" "%s passed=0 failed=2"\n' "$MARK"
+    printf '  exit 5\n'
+    printf 'fi\n'
+    printf 'touch "%s"\n' "$3"
+    printf 'echo "FAIL: it failed, and its lock will be held when it is run again"\n'
+    printf 'printf "%%s\\n" "%s passed=0 failed=1"\n' "$MARK"
+    printf 'exit 1\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+RLK="$TMPROOT/dir-recheck-locked"
+RLK_MARKER="$TMPROOT/recheck-locked-marker"
+mk_recheck_locked "$RLK" recheck-locked "$RLK_MARKER" 0
+rm -f "$RLK_MARKER"
+out_rlk="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 bash "$RUNNER" "$RLK" 2>&1)"; code_rlk=$?
+rm -f "$RLK_MARKER"
+printf '%s\n' "$out_rlk" | grep -E '^ +FAIL +test-recheck-locked\.sh.*recheck could not run.*suite lock.*process 4343 on b-mac, started 12s ago' > /dev/null \
+  && check "#1312 a recheck refused its lock says so on the FAIL line, naming who holds it" ok \
+  || check "#1312 a recheck refused its lock says so on the FAIL line, naming who holds it" "out=$out_rlk"
+case "$out_rlk" in
+  *FLAKY*) check "#1312 and it is not called FLAKY" "out=$out_rlk" ;;
+  *) check "#1312 and it is not called FLAKY" ok ;;
+esac
+[ "$code_rlk" -ne 0 ] \
+  && check "#1312 and the run is still red, because the first failure stands" ok \
+  || check "#1312 and the run is still red, because the first failure stands" "exit=$code_rlk"
+# A recheck that printed the refusal AND a score ran, and is judged by the score, as the first run is.
+RLK2="$TMPROOT/dir-recheck-locked-scored"
+mk_recheck_locked "$RLK2" recheck-scored "$RLK_MARKER-2" 1
+rm -f "$RLK_MARKER-2"
+out_rlk2="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_FLAKE_RECHECK_POLL=0.05 bash "$RUNNER" "$RLK2" 2>&1)"
+rm -f "$RLK_MARKER-2"
+case "$out_rlk2" in
+  *"recheck could not run"*) check "#1312 a recheck that claims the refusal and prints a score is not called unrun" "out=$out_rlk2" ;;
+  *) check "#1312 a recheck that claims the refusal and prints a score is not called unrun" ok ;;
+esac
+
 # The wait is not the suite's cost. Two suites doing the same second of work, one of which also
 # says it waited far longer than it ran: its record is clamped to zero rather than going negative,
 # which can only happen if the wait was taken off, and the other keeps its real second (L323).
