@@ -6,8 +6,24 @@
 // Output is being written to: Y.", seen in a session on 2026-10-04; #706). A command's own output can
 // quote either text (a cat of a test file, a grep of this mod), so a start is read only where it is
 // Claude Code's own: a call that asked for the background, or a result that opens with those words.
+//
+// #1302: Claude Code moves a foreground call to the background in four ways, not one, each in words
+// of its own, read from the function that writes them in the 2.1.302 build (2026-10-17): at its
+// timeout; so a message that arrived can reach Claude; by the user; and, in the background start's
+// own words, when its turn is stopped. The watcher read only the timeout, so a merge helper run in
+// the foreground while builders' messages arrived was never recorded and keep_job said none was
+// running. All four are read the same way: opening the result, or, where the result itself names
+// the task it started (backgroundTaskId), wherever the notice naming that task stands.
 const STARTED = /background with ID: (\S+?)\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
-const MOVED = /^Command did not complete within its \S+ timeout and was moved to the background \(ID: ([^\s)]+)\)\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)/
+const OUTPUT = String.raw`\.?\s+Output is being written to: (\S+?)\.?(?:\s|$)`
+const MOVES = [
+  String.raw`Command running in background with ID: (\S+?)`,
+  String.raw`Command was manually backgrounded by user with ID: (\S+?)`,
+  String.raw`Command did not complete within its \S+ timeout and was moved to the background \(ID: ([^\s)]+)\)`,
+  String.raw`Command was moved to the background \(ID: ([^\s)]+)\) so that a message that arrived while it was running can reach you; it was not interrupted`,
+]
+const MOVED_OPENING = MOVES.map(m => new RegExp(`^${m}${OUTPUT}`))
+const MOVED_ANYWHERE = MOVES.map(m => new RegExp(`${m}${OUTPUT}`, 'g'))
 // The same lines this many times running, at the end of the output, are a job repeating itself.
 const REPEAT_MIN = 20
 // A pass of up to this many lines, repeated: a loop printing its error and then "retrying" on every
@@ -16,9 +32,21 @@ const CYCLE_MAX = 4
 // No new output for this long is a job gone silent (the spec's ten minutes).
 const SILENT_MS = 10 * 60_000
 
-export const startedJob = (resultText: string, call: { inBackground: boolean }): { id: string; outputPath: string } | undefined => {
-  const m = call.inBackground ? STARTED.exec(resultText) : MOVED.exec(resultText.trimStart())
-  return m ? { id: m[1] as string, outputPath: m[2] as string } : undefined
+// taskId: the task Claude Code's result says the call started (backgroundTaskId), when it says one.
+export const startedJob = (resultText: string, call: { inBackground: boolean; taskId?: string }): { id: string; outputPath: string } | undefined => {
+  const job = (m: RegExpExecArray | null | undefined) => (m ? { id: m[1] as string, outputPath: m[2] as string } : undefined)
+  // The result names its task, so only the notice naming that task is its start; any other is a quote.
+  if (call.taskId !== undefined) {
+    for (const re of MOVED_ANYWHERE) for (const m of resultText.matchAll(re)) if (m[1] === call.taskId) return { id: m[1], outputPath: m[2] as string }
+    return undefined
+  }
+  if (call.inBackground) return job(STARTED.exec(resultText))
+  const opening = resultText.trimStart()
+  for (const re of MOVED_OPENING) {
+    const found = job(re.exec(opening))
+    if (found) return found
+  }
+  return undefined
 }
 
 // The jobs a notice from Claude Code reports on, by id: "<task-id>X</task-id>" (seen in a session on

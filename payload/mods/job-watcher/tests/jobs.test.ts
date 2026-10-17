@@ -26,6 +26,43 @@ describe('a background job, from what starting it said', () => {
     expect(startedJob(`line 1\n${STARTED_TEXT}\n`, { inBackground: false })).toBeUndefined()
     expect(startedJob(`line 1\n${MOVED_TEXT}\n`, { inBackground: false })).toBeUndefined()
   })
+  // #1302: Claude Code moves a foreground call to the background in three more ways than its
+  // timeout, each in words of its own, read from the function that writes them in the 2.1.302
+  // build (2026-10-17). A merge helper run in the foreground while builders' messages arrive is the
+  // second, and the watcher read none of them, so keep_job said no job was running.
+  const USER_TEXT = 'Command was manually backgrounded by user with ID: bu4kq01a. Output is being written to: /private/tmp/x/tasks/bu4kq01a.output.'
+  const MESSAGE_TEXT =
+    'Command was moved to the background (ID: bm9z2c7d) so that a message that arrived while it was running can reach you; it was not interrupted. Output is being written to: /private/tmp/x/tasks/bm9z2c7d.output. You will be notified when it completes.'
+  test('a command the user sent to the background is a job', () => {
+    expect(startedJob(USER_TEXT, { inBackground: false })).toEqual({ id: 'bu4kq01a', outputPath: '/private/tmp/x/tasks/bu4kq01a.output' })
+  })
+  test('a command moved to the background so a message could reach Claude is a job', () => {
+    expect(startedJob(MESSAGE_TEXT, { inBackground: false })).toEqual({ id: 'bm9z2c7d', outputPath: '/private/tmp/x/tasks/bm9z2c7d.output' })
+  })
+  // A turn stopped while a foreground command runs leaves it going, said in the background start's words.
+  test('a foreground command left running when its turn stopped is a job', () => {
+    expect(startedJob(STARTED_TEXT, { inBackground: false })).toEqual({ id: 'btv0drbh3', outputPath: '/private/tmp/x/tasks/btv0drbh3.output' })
+  })
+  test("each of those quoted by a foreground command's own output still started nothing", () => {
+    expect(startedJob(`line 1\n${USER_TEXT}\n`, { inBackground: false })).toBeUndefined()
+    expect(startedJob(`line 1\n${MESSAGE_TEXT}\n`, { inBackground: false })).toBeUndefined()
+  })
+  // Claude Code's result also names the task it started (backgroundTaskId), which is its own word
+  // that the call started one whatever the text says. With it, the notice naming that task is read
+  // wherever it stands; one naming any other task is still a quote.
+  test('a result naming the task it started is read by that task, wherever its notice stands', () => {
+    expect(startedJob(`warning: something\n${MESSAGE_TEXT}`, { inBackground: false, taskId: 'bm9z2c7d' })).toEqual({
+      id: 'bm9z2c7d',
+      outputPath: '/private/tmp/x/tasks/bm9z2c7d.output',
+    })
+    expect(startedJob(`warning: something\n${MESSAGE_TEXT}`, { inBackground: false, taskId: 'other1' })).toBeUndefined()
+  })
+  // The cwd note Claude Code adds after a background start whose command changes directory, as the
+  // merge helper's does (gh pr comment, then cd into a worktree), leaves the start readable.
+  test('a background start followed by the note about its cd is still a job', () => {
+    const hinted = `${STARTED_TEXT}\nSession cwd remains /repo; directory changes made by the backgrounded command do not apply to subsequent commands.`
+    expect(startedJob(hinted, { inBackground: true })).toEqual({ id: 'btv0drbh3', outputPath: '/private/tmp/x/tasks/btv0drbh3.output' })
+  })
 })
 
 // #706: Claude Code's notice that a background job ended names it by id (seen in a session,
