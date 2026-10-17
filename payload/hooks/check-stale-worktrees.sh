@@ -167,8 +167,13 @@ in_use(){   # $1 = a worktree's resolved path
 }
 
 # The lock git holds on one worktree now, as the whole "locked ..." line, or nothing.
-lock_now(){ git -C "$top" worktree list --porcelain 2>/dev/null | awk -v p="worktree $1" '
-  $0 == p { f = 1; next } /^worktree / { f = 0 } f && /^locked/ { print; exit }'; }
+# Read whole into a variable first: awk stopping at the first match would cut git off mid write,
+# and under pipefail that fails the read.
+lock_now(){
+  local all; all="$(git -C "$top" worktree list --porcelain 2>/dev/null)"
+  printf '%s\n' "$all" | awk -v p="worktree $1" '
+    $0 == p { f = 1; next } /^worktree / { f = 0 } f && /^locked/ && !done { print; done = 1 }'
+}
 
 # Put back a lock this run lifted for a removal that then did not happen, so the worktree is left
 # as it was found. Reads the loop's own $stale_lock, $reason and $p.

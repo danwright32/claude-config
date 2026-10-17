@@ -445,7 +445,7 @@ if [ -n "$LIVE_START" ]; then
 else
   echo "UNMEASURED: ps here gave no start time for a process this suite started, so the real lookup cannot be tested"
 fi
-kill "$LIVE" 2>/dev/null
+kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
 
 kill "$BUSY" 2>/dev/null
 echo
