@@ -75,6 +75,7 @@ const modKit: { name: string; register: Register } = {
           if (r.exitCode !== 0) throw new Error(r.stderr)
           return r.stdout === '' ? undefined : JSON.parse(r.stdout)
         },
+        goal: async () => { throw new Error("mod-kit's goal is not stood in by these tests") },
         pipeline: async (input: { command: string }) => {
           const r = await built.process.run(['__modkit', 'pipeline', JSON.stringify(input)])
           if (r.exitCode !== 0) throw new Error(r.stderr)

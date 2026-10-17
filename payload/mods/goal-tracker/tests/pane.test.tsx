@@ -54,6 +54,7 @@ const MIN = 60_000
 type Listing = { open: unknown[]; closed: unknown[]; unreadable: string[]; selfId: string } | 'throws'
 /** Each transcript's goal records, as the shell would find them, by path; a string is a read that fails with it. */
 type Transcripts = Record<string, string[] | string>
+const KIT_FAILS = 'the kit itself fails'
 const world = (on: On, listing: { now: Listing }, openReason?: string, closeThrows?: boolean, transcripts: Transcripts = {}) => {
   const w = { opened: [] as unknown[], closed: [] as string[], commands: [] as string[], invalidated: 0, goalReads: [] as string[] }
   on('process.run', async ($, e) => {
@@ -65,6 +66,8 @@ const world = (on: On, listing: { now: Listing }, openReason?: string, closeThro
     // mod-kit's goal reader (#1252), its own copy, its shell answered from the test's transcripts.
     if (e.argv[0] === '__modkit' && e.argv[1] === 'goal') {
       const { transcript } = JSON.parse(String(e.argv[2])) as { transcript: string }
+      // A mod-kit that cannot answer at all (one loaded before it had the reader).
+      if (transcripts[transcript] === KIT_FAILS) return { value: { exitCode: 1, stdout: '', stderr: '$.modkit.goal is not a function', isStdoutTruncated: false, isStderrTruncated: false } }
       const read = await goalAt(transcript, async argv => {
         if (argv[0] !== 'bash' || argv[4] !== GOAL_MARK) throw new Error(`not the goal read: ${argv.join(' ')}`)
         const path = argv[5] as string
@@ -204,6 +207,7 @@ test('a goal met without /goal clear is shown as ended, the session then showing
       withTranscript(session('d', 'Downbeat', { total: 2, done: 1, request: 'Release notes', current: 'Writing', lastActivityAt: now }), '/t/d.jsonl'),
       withTranscript(session('o', 'Overture', { total: 2, done: 1, goal: 'Gmail send fix', current: 'Sending', lastActivityAt: now }), '/t/o.jsonl'),
       session('p', 'PostRoll', { total: 2, done: 1, goal: 'Caption retry', current: 'Retrying', lastActivityAt: now }),
+      withTranscript(session('v', 'Ovation', { total: 2, done: 1, goal: 'Invoice export', current: 'Exporting', lastActivityAt: now }), '/t/v.jsonl'),
     ],
     closed: [],
     unreadable: [],
@@ -213,14 +217,26 @@ test('a goal met without /goal clear is shown as ended, the session then showing
     '/t/k.jsonl': [SET('all tests in test/auth pass'), MET('all tests in test/auth pass')],
     '/t/d.jsonl': [SET('ship the v2 release notes')],
     '/t/o.jsonl': 'grep: /t/o.jsonl: Permission denied',
+    '/t/v.jsonl': KIT_FAILS,
+  })
+  const debug: string[] = []
+  on('ui.log', ($, e) => {
+    if (e.to === 'debug') debug.push(e.text)
+    return { value: undefined } as never
   })
   await start($)
   await goals($)
   const ui = await mount($)
   const tops = (await rowsDrawn(ui)).map(r => r.top)
-  expect(tops).toEqual(['claude-config  Fix the auth tests', 'Downbeat  ship the v2 release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry'])
+  expect(tops).toEqual(['claude-config  Fix the auth tests', 'Downbeat  ship the v2 release notes', 'Overture  Gmail send fix', 'PostRoll  Caption retry', 'Ovation  Invoice export'])
+  // Each read that fails is said in the debug log once, however often the pane draws.
+  await ui.redraw()
+  expect(debug.filter(t => t.includes('could not be read')).sort()).toEqual([
+    'goal-tracker: the /goal of the session in /t/o.jsonl could not be read (grep: /t/o.jsonl: Permission denied), so the goals pane shows the goal it last recorded',
+    'goal-tracker: the /goal of the session in /t/v.jsonl could not be read ($.modkit.goal is not a function), so the goals pane shows the goal it last recorded',
+  ])
   // Each transcript the registry names is read once a draw; a session with none is not asked about.
-  expect(w.goalReads.sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
+  expect([...new Set(w.goalReads)].sort()).toEqual(['/t/d.jsonl', '/t/k.jsonl', '/t/o.jsonl'])
 })
 
 test('a session registry that cannot be read is said, never drawn as no sessions', withDeps, async ($, on) => {

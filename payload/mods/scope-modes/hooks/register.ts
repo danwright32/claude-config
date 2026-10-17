@@ -48,9 +48,7 @@ import {
   BEDTIME_HEADER,
   decisionComment,
   GO_TO_SLEEP,
-  GOAL_MARK,
   goalAnswer,
-  goalIn,
   goalOptions,
   goalQuestion,
   groupQuestions,
@@ -631,21 +629,15 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[], ro
 // ---- Each worker's goal (#1242) ----
 // Dan, 2026-10-16: "it should just work with the built in /goal ... If there's no goal set, prompt me
 // to set one and then only work the goal. No random issues." Each worker's goal is read from its
-// transcript (bedtime.ts says how), and a worker with none is asked for one first among the before
-// bed questions, sharing their ten minutes: what Dan types is its goal. Left without one, it does no
-// work tonight, and /sleep and the morning report say so.
-
-// What the shell runs to find a transcript's goal records: the newest 50 lines holding the mark,
-// so a goal judged a thousand times is still a small answer. grep exits 1 when there are none.
-const GOAL_READ = 'set -o pipefail; grep -F -e "$1" -- "$2" | tail -n 50'
-
+// transcript by mod-kit's one reader of a /goal ($.modkit.goal, #1252, which the goal tracker reads
+// too), and a worker with none is asked for one first among the before bed questions, sharing their
+// ten minutes: what Dan types is its goal. Left without one, it does no work tonight, and /sleep and
+// the morning report say so. A reader that fails, mod-kit itself included, is said, as no goal.
 type GoalRead = { goal: string } | { none: string }
 const readGoal = async ($: EngineInterface, seat: Seat, who: string): Promise<GoalRead> => {
   if (!seat.transcript) return { none: `${who}'s transcript was not found` }
-  const r = await run($, ['bash', '-c', GOAL_READ, 'goal', GOAL_MARK, seat.transcript])
-  if (r.exitCode === 1 && !r.stderr.trim()) return { none: `${who} has no /goal set` }
-  if (r.exitCode !== 0) return { none: `${who}'s /goal could not be read (${r.stderr.trim() || `grep exited ${r.exitCode}`})` }
-  const g = goalIn(r.stdout)
+  const g = await $.modkit.goal({ transcript: seat.transcript }).catch(err => ({ state: 'unreadable' as const, why: msg(err) }))
+  if (g.state === 'unreadable') return { none: `${who}'s /goal could not be read (${g.why})` }
   return g.state === 'set' ? { goal: g.condition } : { none: `${who} has no /goal set` }
 }
 

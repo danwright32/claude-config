@@ -112,6 +112,13 @@ export type ModKit = {
    */
   mergeHelper: (command: ModKitCommand) => Promise<ModKitGh | undefined>
   /**
+   * The goal a session has set with Claude Code's own /goal, read from the transcript at this path
+   * (#1252, moved here from scope-modes so sleep mode and the goal tracker read it one way): the
+   * newest goal_status record decides, so a goal met with no /goal clear is none. `set` with its
+   * condition, `none`, or `unreadable` with why (no transcript, a read that failed), never none.
+   */
+  goal: (input: { transcript: string }) => Promise<ModKitGoal>
+  /**
    * A repository as gh reads one (-R, GH_REPO, a `gh repo` positional), as owner/name in lower
    * case; null when it is none (another host, more or less than owner and name). Here owner/name
    * alone IS a repository, where to git it is a local path, so a git remote is read by `repo`,
@@ -340,6 +347,9 @@ export type ModKitPythonText = { kind: 'comment' | 'string' | 'formatted'; from:
 export type ModKitCodeVerdict = { does: 'run a process' | 'write files' | 'unreadable'; seen: string }
 
 export type ModKitGit = { sub: string | undefined; args: string[]; dir: string | undefined }
+
+/** The goal a session's transcript says is set now, as `goal` reads it. */
+export type ModKitGoal = { state: 'set'; condition: string } | { state: 'none' } | { state: 'unreadable'; why: string }
 
 /**
  * A gh command as `gh` reads it: its subcommand (`pr`, `api`) and action (`merge`), each empty

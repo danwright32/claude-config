@@ -63,7 +63,11 @@
 #             (merge-when-ready\.sh in a pattern, or the        reads it (#1251: scope-modes and is it live
 #             name ending a string); never a sentence that      each matched the name themselves, and took
 #             only names it                                     reading the file for running it)
-#   typed-answer                                                use $.modkit.typedAnswer({ guard, typed, still,
+#   goal-reader                                                 use $.modkit.goal({ transcript }), the one
+#             reading a transcript's /goal records by hand      reader of a session's /goal (#1252: scope
+#             (naming the goal_status record type as a          modes read it and the goal tracker did not,
+#             string); never a sentence that only names it      so the goals pane kept a goal that ended)
+#   typed-answer                                               use $.modkit.typedAnswer({ guard, typed, still,
 #             telling Dan or Claude that an answer he typed     again }) (#1145: the design round guard and
 #             was not recorded (the phrase "typed answer was    ask before saving said it two ways, and only
 #             not recorded")                                    one told Dan at all)
@@ -160,6 +164,7 @@ PARTS=(
   "link-reader|github\\\\\\.com\\\\/[([]|\$.modkit.linkRepo({ link })"
   "dans-words|[\"'\`]composer[\"'\`]|\$.modkit.isDans({ origin })"
   "merge-helper|merge-when-ready\\\\\\.sh|[\"'\`/]merge-when-ready\\.sh[\"'\`/)]|\$.modkit.mergeHelper(command)"
+  "goal-reader|[\"'\`]goal_status[\"'\`]|\$.modkit.goal({ transcript })"
   "typed-answer|typed answer was not recorded|\$.modkit.typedAnswer({ guard, typed, still, again })"
   "python-text|\\.repeat\\(3\\)|'\"\"\"'|\"'''\"|\\[fFtT\\]|\$.modkit.pythonText({ code })"
   "login-file|[\"'\`/]\\.claude\\.json[\"'\`]|\$.modkit.account()"

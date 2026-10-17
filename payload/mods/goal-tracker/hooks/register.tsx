@@ -1,4 +1,5 @@
 import type { EngineInterface, Hook, Register } from 'claude-code'
+import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalTracker } from '../types/index.d.ts'
 import { baseName, firstWords, permissionFor, projectOf, rowsOf, type StateWord } from './goals.ts'
 import { empty, FAIL_STREAK, fromTodos, isStepStatus, taskCreated, taskUpdated, type Progress, type StepStatus } from './progress.ts'
@@ -261,6 +262,30 @@ const open = async ($: EngineInterface): Promise<string | undefined> => {
   return r.isPlaced ? undefined : `The goals pane is open but not shown: ${r.reason}.`
 }
 
+// What each open session's transcript says its /goal is now (#1252), read at each draw through
+// mod-kit's one reader, since a /goal can end with no /goal clear (met, or paused in Dan's words) and
+// the tracker sees only the command. A session whose registry record names no transcript is not
+// asked about; a reading that fails keeps the goal the tracker recorded, and is said once in the
+// debug log for each transcript and reason, never at every draw.
+const goalSaid = new Set<string>()
+const goalsNow = async ($: EngineInterface, open: { sessionId: string; transcriptPath: string | null }[]): Promise<Record<string, ModKitGoal>> => {
+  const read = await Promise.all(
+    open
+      .filter(r => r.transcriptPath)
+      .map(async r => {
+        const transcript = r.transcriptPath as string
+        const g: ModKitGoal = await $.modkit.goal({ transcript }).catch(err => ({ state: 'unreadable' as const, why: err instanceof Error ? err.message : String(err) }))
+        const said = `${transcript}\n${g.state === 'unreadable' ? g.why : ''}`
+        if (g.state === 'unreadable' && !goalSaid.has(said)) {
+          goalSaid.add(said)
+          $.ui.log(`goal-tracker: the /goal of the session in ${transcript} could not be read (${g.why}), so the goals pane shows the goal it last recorded`, { to: 'debug' })
+        }
+        return [r.sessionId, g] as const
+      }),
+  )
+  return Object.fromEntries(read)
+}
+
 // The module has one session.start and one prompt.submit hook (in register below), which call these.
 const paneStart = async ($: EngineInterface) => {
   stopFollowing()
@@ -478,7 +503,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const rows = rowsOf(list.open, now)
+    const rows = rowsOf(list.open, now, await goalsNow($, list.open))
     const unreadable = list.unreadable.length
     return (
       <Box flexDirection="column">
