@@ -156,3 +156,16 @@ describe('openers: the BBEdit helper with its front window flag, then open -a BB
     expect(BBEDIT).toBe('/Applications/BBEdit.app/Contents/Helpers/bbedit_tool')
   })
 })
+
+describe('morningPrompt carries what the session held overnight (#1284)', () => {
+  test('right after its summary, before any picker, and with no proposals too', () => {
+    const p = morningPrompt({ worker: false, issues: [], lessons: [], held: [{ label: 'Publish status.html', call: 'Artifact {"file_path":"/s/status.html"}' }] })
+    expect(p.split('\n')[1]).toBe(
+      'While Dan slept, this session held one thing it would have handed him: Publish status.html. Deliver each now, where he is now (at home on the Mac as CLAUDE.md says, away as a private claude.ai page), making again the call held, as the block below gives it; anything since replaced by a newer copy is delivered once, as the newer copy.',
+    )
+    expect(p).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
+  })
+  test('nothing held adds nothing', () => {
+    expect(morningPrompt({ worker: false, issues: [], lessons: [], held: [] })).toBe(morningPrompt({ worker: false, issues: [], lessons: [] }))
+  })
+})

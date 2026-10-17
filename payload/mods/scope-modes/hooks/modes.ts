@@ -55,13 +55,13 @@ export const MODE_DEF: Record<Mode, ModeDef> = {
     will: 'deliver results on the Mac as CLAUDE.md says (HTML in Chrome, drafts in BBEdit, images and PDFs in Preview)',
     willNot: 'run anything held while away until its button in the held card is pressed',
   },
-  // What sleep mode does in every session (#840 to #844): quiet as away, questions noted for the
-  // morning, the enrolled sessions working the night's queue, merges and deploys only as the night's
-  // lists allow.
+  // What sleep mode does in every session (#840 to #844): quiet, every result held until wake where
+  // away delivers a page at once (#1284), questions noted for the morning, the enrolled sessions
+  // working the night's queue, merges and deploys only as the night's lists allow.
   sleep: {
     name: 'Sleep mode',
-    will: "keep every session on this Mac quiet as when you are away, note every question for your morning report, and have the enrolled sessions work the overnight queue",
-    willNot: "ask you anything, do on the Mac what waits for you there, or merge or deploy beyond what the night's lists allow",
+    will: "keep every session on this Mac quiet, hold every result for when you wake, note every question for your morning report, and have the enrolled sessions work the overnight queue",
+    willNot: "ask you anything, hand you anything before you wake, do on the Mac what waits for you there, or merge or deploy beyond what the night's lists allow",
     ends: 'It ends by itself at noon ET, and /wake or "I\'m up" ends it sooner.',
   },
   wake: {

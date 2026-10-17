@@ -1977,8 +1977,9 @@ test("the keystroke guard's actions through the noun: away, focus and a test bui
   expect(await ask({ kind: 'input' }, 'g5')).toEqual({ isHeld: true })
 })
 
-// Sleep mode gets the same (Dan, 2026-10-16 ET): it keeps every session quiet as away.
-test('asleep, the same: focus, files, browser automation and a test build run; a dialog, other typing and the Artifact open action are held (#1269)', withDeps, async ($, on) => {
+// Sleep mode holds what away holds on the Mac (Dan, 2026-10-16 ET), and every result until wake
+// besides, where away delivers a page at once (#1284).
+test('asleep, the same: focus, files, browser automation and a test build run; a dialog and other typing are held, and the Artifact open action is held until wake (#1269, #1284)',withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)
   expect(await call($ as never, bash('open -a Preview a.pdf', 's1'))).toBe('ran')
@@ -1986,7 +1987,8 @@ test('asleep, the same: focus, files, browser automation and a test build run; a
   expect(await call($ as never, bash(TYPE(DERIVED), 's3'))).toBe('ran')
   expect(await call($ as never, bash(DIALOG, 's4'))).toMatch(/^Held: /)
   expect(await call($ as never, bash(TYPE('/Applications/Mail.app/Contents/MacOS/Mail'), 's5'))).toMatch(/"Type into Mail" waits/)
-  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 's6' } as never)).toMatch(/^Held: /)
+  // Asleep, the open action is held until wake and delivered then, as a publish is (#1284).
+  expect(await call($ as never, { tool: 'Artifact', action: 'open', url: 'https://claude.ai/artifact/abc', tool_use_id: 's6' } as never)).toMatch(/^Held until Dan wakes: /)
   expect(w.cards.map(c => c.toolUseId)).toEqual(['s4', 's5', 's6'])
 })
 test("asleep, the keystroke guard's test build is not held through the noun either, though place is home (#1269)", { plugins: [deps, isItLive, guardStandIn] }, async ($, on) => {
@@ -2634,6 +2636,160 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   await command($ as never, 'wake')
   await clock.settle()
   expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
+})
+
+// #1284: while asleep nothing is handed to Dan in any session, and what was held is delivered at wake.
+const PUBLISH = (id: string, file = '/s/sleep-wake/status.html') => ({ tool: 'Artifact', file_path: file, tool_use_id: id }) as never
+const heldAtWakeOf = (w: { prompts: string[] }) => w.prompts.filter(p => p.includes('While Dan slept, this session held'))
+
+test('asleep, a session that is not a worker publishes no page: the call is held for the morning, never reaching the tool (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const said = await call($ as never, PUBLISH('p1'))
+  expect(said).toMatch(/^Held until Dan wakes: sleep mode is on, so nothing is published or opened for him tonight, and "Publish status\.html" did not run\./)
+  expect(w.reached).toEqual([])
+  expect(w.cards).toEqual([{ toolUseId: 'p1', guard: 'Asleep', reason: 'Held for the morning: Publish status.html.', safeWay: 'Claude delivers it when you wake.' }])
+  // A Claude doc is a delivery too, and an Artifact read is not.
+  expect(await call($ as never, { tool: 'mcp__claude_ai_Claude_Docs__batch', container: { kind: 'project', create: { name: 'Bidspoke morning status' } }, tool_use_id: 'p2' } as never)).toMatch(/^Held until Dan wakes/)
+  expect(await call($ as never, { tool: 'Artifact', action: 'read', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p3' } as never)).toBe('ran')
+  // A subagent's publish is held as well: it would hand Dan the same page.
+  expect(await call($ as never, { tool: 'Artifact', file_path: '/s/b.html', agentId: 'a1', tool_use_id: 'p4' } as never)).toMatch(/^Held until Dan wakes/)
+})
+
+test('asleep, every prompt says to hand Dan nothing tonight, never to deliver as when he is away (#1284)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const ctx = (await say($ as never, 'how is it going')).context?.join('\n') ?? ''
+  expect(ctx).toMatch(/Dan is asleep, so hand him nothing tonight: publish no page and open nothing for him to read\./)
+  expect(ctx).not.toMatch(/deliver as when he is away|deliver results as a private claude\.ai page/)
+})
+
+test("asleep, a dialog held for the morning is never answered with publishing a page instead (#1284)", withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  const said = await call($ as never, bash(DIALOG, 'd1'))
+  expect(said).toMatch(/^Held: Dan is asleep, so "Show a dialog on the Mac" waits in the held card for the morning\./)
+  expect(said).not.toMatch(/private claude\.ai page/)
+})
+
+test('the session that wakes sleep is asked, in its morning turn, to deliver what it held, once (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('While Dan slept, this session held one thing it would have handed him: Publish status.html.')
+  expect(m).toContain('<untrusted-overnight-text>\nArtifact {"file_path":"/s/sleep-wake/status.html"}\n</untrusted-overnight-text>')
+  // Its own minute does not ask again.
+  await clock.advance(2 * MIN)
+  expect(heldAtWakeOf(w).length).toBe(1)
+  // Awake now, a publish runs.
+  expect(await call($ as never, PUBLISH('p2'))).toBe('ran')
+})
+
+test('a session that did not wake sleep delivers what it held at its next minute once the record is gone, once (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await clock.advance(MIN)
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Woken in another session: the record moved aside there.
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+  expect(heldAtWakeOf(w)[0]).toMatch(/^Dan is up: sleep mode is off\. While Dan slept, this session held one thing it would have handed him: Publish status\.html\. Deliver each now, where he is now/)
+  await clock.advance(3 * MIN)
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a record that cannot be read is not a wake: nothing held is delivered until the record is really gone (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  w.files[CURRENT] = 'not json'
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a session that held nothing is asked nothing at wake, and a new sleep keeps what was held for its own morning (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  delete w.files[CURRENT]
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Held under one night, then that night is replaced by a new one before any minute saw it end.
+  w.files[CURRENT] = asleepRecord()
+  await clock.advance(MIN)
+  await call($ as never, PUBLISH('p1'))
+  w.files[CURRENT] = asleepRecord({ generation: 'g1' })
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('two deliveries held at once, as parallel calls or a subagent beside the main loop make them, are both kept (#1284 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await Promise.all([call($ as never, PUBLISH('p1', '/s/a.html')), call($ as never, PUBLISH('p2', '/s/b.html')), call($ as never, PUBLISH('p3', '/s/c.html'))])
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)[0]).toMatch(/held 3 things it would have handed him: Publish a\.html; Publish b\.html; Publish c\.html\./)
+})
+
+test("Dan's own message going in before /wake's morning turn does not take what the morning turn carries (#1284 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  await command($ as never, 'wake')
+  // Dan types before the morning turn is submitted, and then the morning turn fails to go in.
+  await say($ as never, 'morning')
+  w.o.promptFails = 1
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  // Kept, so the minute asks for it.
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('a held delivery whose morning prompt cannot start is kept, and asked for again at the next minute (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await call($ as never, PUBLISH('p1'))
+  delete w.files[CURRENT]
+  w.o.promptFails = 1
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w)).toEqual([])
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
+})
+
+test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await call($ as never, PUBLISH('p1'))
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  expect(w.files[CURRENT]).toBeUndefined()
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(heldAtWakeOf(w).length).toBe(1)
 })
 
 // A session started a minute before the moment a test is about, never at T0 (#1016). Once started,

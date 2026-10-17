@@ -51,6 +51,11 @@ describe('the acknowledgement of a mode switch (#1055)', () => {
     expect(after).toBe(`Right after the line saying what waking did, add one short acknowledgement of the switch, in these words: "${ackOnSaid('NO BUILD')}"`)
   })
 
+  test('sleep says it holds every result until you wake, never that it delivers as away does (#1284)', () => {
+    expect(modeDoes('sleep')).toContain('hold every result for when you wake')
+    expect(modeDoes('sleep')).toContain('hand you anything before you wake')
+    expect(modeDoes('sleep')).not.toMatch(/quiet as when you are away/)
+  })
   test('sleep says how it ends, and waking opens with sleep mode being off (#1086)', () => {
     expect(ackOn('sleep')).toContain('Sleep mode is on. I will ')
     expect(ackOn('sleep')).toContain('It ends by itself at noon ET, and /wake or "I\'m up" ends it sooner.')
