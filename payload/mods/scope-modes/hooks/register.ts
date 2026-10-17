@@ -68,6 +68,7 @@ import { overnightData } from './overnightdata.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import { awakeAsk, BBEDIT, morningPrompt, openers, openLater, proposalsIn, SUMMARY_ASK, summariesSaid } from './wake.ts'
 import { clearedSaid, MORNING_HEADING, morningStep, nothingProposed, pickerAnswered, reviewedAtEnd, reviewsIn, withDone, withPending, type MorningReview, type MorningWatch, type ReviewHow } from './morning.ts'
+import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldAtWake, heldUntilWake, type HeldDelivery } from './nightheld.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import {
@@ -129,6 +130,7 @@ const branchesRef = { plugin: 'scope-modes', key: 'branches' } as const
 const leftBranchRef = { plugin: 'scope-modes', key: 'leftBranch' } as const
 const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
+const wakeHeldRef = { plugin: 'scope-modes', key: 'wakeHeld' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
 let lastOrigin: string | undefined
@@ -1428,9 +1430,9 @@ const askSummaries = async ($: EngineInterface, record: SleepRecord | null, self
 // then the proposed issues and lessons in the pickers that already exist. A read that fails is said
 // in the prompt, never read as a night with nothing proposed (L215).
 // `nothing` is whether the night left nothing to review (#1107), judged from the same reading.
-const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: string): Promise<{ prompt: string; nothing: boolean }> => {
+const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: string, held: readonly HeldDelivery[] = []): Promise<{ prompt: string; nothing: boolean }> => {
   const worker = Array.isArray(record?.workers) && record.workers.includes(self)
-  const of = (p: Omit<Parameters<typeof morningPrompt>[0], 'worker'>) => ({ prompt: morningPrompt({ worker, ...p }), nothing: nothingProposed(p) })
+  const of = (p: Omit<Parameters<typeof morningPrompt>[0], 'worker' | 'held'>) => ({ prompt: morningPrompt({ worker, held, ...p }), nothing: nothingProposed(p) })
   if (typeof record?.generation !== 'string') return of({ issues: [], lessons: [], unread: 'the sleep record names no generation' })
   try {
     const path = notesOf((await sleepPaths($)).home, record.generation)
@@ -1438,6 +1440,101 @@ const morningFor = async ($: EngineInterface, record: SleepRecord | null, self: 
     return of(proposalsIn(await $.fs.read(path)))
   } catch (err) {
     return of({ issues: [], lessons: [], unread: msg(err) })
+  }
+}
+
+// ---- What a session held while asleep (#1284): its decisions are in hooks/nightheld.ts ----
+
+const wakeHeldOf = async ($: EngineInterface): Promise<HeldDelivery[]> => (await $.state.get(wakeHeldRef)).value ?? []
+// What the waking session's own morning turn carries, while it has not gone in, so the minute does
+// not ask for it too and only what it carried is cleared once it does.
+let heldInMorning: HeldDelivery[] | null = null
+// One asking at a time: a minute's prompt that has not gone in yet is not asked again beside it.
+let askingHeld = false
+// The list as this session holds it, in memory, read from $.state once (a reload keeps it there),
+// then changed here and written whole: two calls held at once (parallel calls, a subagent beside the
+// main loop) each saw the same list through their own hook's $.state, and the second write dropped
+// the first (lessons review, reproduced with three at once).
+let heldNow: HeldDelivery[] | undefined
+let heldLoaded = false
+// One read, shared by calls that arrive together before it answers. A read that fails is not kept,
+// so the next call reads again; what was held meanwhile stays in memory and is merged in once a
+// read answers, never written over a list that could not be read (lessons review).
+let heldLoad: Promise<HeldDelivery[]> | undefined
+const loadHeld = async ($: EngineInterface) => {
+  if (heldLoaded) return
+  try {
+    const loaded = await (heldLoad ??= wakeHeldOf($))
+    if (heldLoaded) return
+    heldNow = [...loaded, ...without(heldNow ?? [], loaded)]
+    heldLoaded = true
+  } catch (err) {
+    heldLoad = undefined
+    throw err
+  }
+}
+// The list as far as it is known: one that could not be read is what this session held since.
+const heldList = async ($: EngineInterface): Promise<HeldDelivery[]> => {
+  try {
+    await loadHeld($)
+  } catch (err) {
+    $.ui.log(`scope-modes: what this session held overnight could not be read from its state (${msg(err)}), so only what it held since is known`, { to: 'debug' })
+  }
+  return heldNow ?? []
+}
+const changeHeld = async ($: EngineInterface, fn: (held: HeldDelivery[]) => HeldDelivery[]): Promise<void> => {
+  let unread: unknown
+  try {
+    await loadHeld($)
+  } catch (err) {
+    unread = err
+  }
+  // Changed from the list as it stands after the read, never from a copy taken before another change.
+  heldNow = fn(heldNow ?? [])
+  if (unread !== undefined) throw unread
+  // The reference written at the call: the engine's reader of state references refused this write
+  // through the const, though it reads the others (measured on this branch, #1284).
+  await $.state.set({ plugin: 'scope-modes', key: 'wakeHeld' }, heldNow)
+}
+const without = (held: HeldDelivery[], gone: readonly HeldDelivery[]) => held.filter(x => !gone.some(g => g.call === x.call))
+// Kept once each, in the order held: the same call held twice is delivered once.
+const keepForWake = ($: EngineInterface, h: HeldDelivery) =>
+  changeHeld($, held => (held.some(x => x.call === h.call) ? held : [...held, { label: h.label, call: h.call }]))
+// The waking session's morning turn went in (or did not): what it carried is delivered, or kept for
+// the minute. A write that fails keeps it too, so it is asked for again rather than lost.
+const heldMorningDone = async ($: EngineInterface, entered: boolean) => {
+  const carried = heldInMorning
+  if (!carried) return
+  try {
+    if (entered) await changeHeld($, held => without(held, carried))
+  } finally {
+    heldInMorning = null
+  }
+}
+// Each minute, in a session that did not wake sleep: once the record is gone (moved aside by a wake
+// or by its noon end anywhere), what it held is asked for in a turn of its own. Only no record is a
+// wake: one that cannot be read may still be asleep, and a new night keeps it for that night's
+// morning. A prompt that does not go in keeps it, asked again at the next minute.
+const askHeldAtWake = async ($: EngineInterface, reading: SleepReading) => {
+  if (reading.state !== 'none' || heldInMorning || askingHeld) return
+  // Taken before the first wait, so two minutes overlapping never both ask (lessons review).
+  askingHeld = true
+  try {
+    const held = [...(await heldList($))]
+    if (!held.length) return
+    try {
+      await $.prompt.submit({ text: `Dan is up: sleep mode is off. ${heldAtWake(held)}` })
+    } catch (err) {
+      $.ui.log(`scope-modes: what this session held overnight could not be asked for (${msg(err)}), so it is asked again at the next minute`, { to: 'debug' })
+      return
+    }
+    try {
+      await changeHeld($, now => without(now, held))
+    } catch (err) {
+      $.ui.log(`scope-modes: what this session held overnight was asked for, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' })
+    }
+  } finally {
+    askingHeld = false
   }
 }
 
@@ -1615,15 +1712,26 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   }
   const asked = await askSummaries($, record, self)
   if (asked) s += ` ${asked}`
-  const morning = await morningFor($, record, self)
-  // The reminder pinned at bedtime (#1107): off now when nothing was proposed, else once the pickers are answered.
-  const cleared = await morningAtWake($, record, morning.nothing)
-  if (cleared) s += ` ${cleared}`
-  return { said: s, morning: morning.prompt, off: true }
+  // What this session held overnight rides in its own morning turn (#1284), kept until that turn
+  // has gone in, and meanwhile out of the minute's own asking for it.
+  const held = [...(await heldList($))]
+  if (held.length) heldInMorning = held
+  try {
+    const morning = await morningFor($, record, self, held)
+    // The reminder pinned at bedtime (#1107): off now when nothing was proposed, else once the pickers are answered.
+    const cleared = await morningAtWake($, record, morning.nothing)
+    if (cleared) s += ` ${cleared}`
+    return { said: s, morning: morning.prompt, off: true }
+  } catch (err) {
+    // No morning turn will carry it, so the minute asks for it instead (lessons review).
+    heldInMorning = null
+    throw err
+  }
 }
 
 // The band's amber line, through the status bar: asleep first, then the scope, then away. Asleep
-// is read live, and while it holds away is not said again: asleep keeps every session quiet as away.
+// is read live, and while it holds away is not said again: asleep holds what away holds on the Mac,
+// and every result until wake besides (#1284).
 const showModes = async ($: EngineInterface) => {
   const scope = await scopeOf($)
   const asleep = await isAsleep($)
@@ -2913,7 +3021,8 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
     if (label) {
       const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
       await hold($, label, `Do it now. What was held: ${raw || `${tool} ${JSON.stringify(args)}`}`)
-      const held = heldRefusal(label)
+      // Asleep, nothing is handed to Dan in its place (#1284): away's refusal says to publish a page.
+      const held = asleep ? heldAsleep(label) : heldRefusal(label)
       await $.modkit.blocked({ toolUseId, ...held.card })
       return { deny: held.deny }
     }
@@ -2964,7 +3073,7 @@ const SCOPE_NOTE: Record<ScopeModesScope, string> = {
 const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (the Artifact tool). Do not ${MODE_DEF.away.willNot}.`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
 const sleepPromptNote = (r: SleepRecord, self: string) =>
-  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} Dan is asleep, so deliver as when he is away: ${AWAY_NOTE}`
+  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
   "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
@@ -2990,7 +3099,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
-    // Asleep (#840) keeps every session quiet as away, whatever its own place. The engine refuses
+    // Asleep (#840) holds what away holds on the Mac, whatever a session's own place. The engine refuses
     // handing `built` to a helper, so the record is read here with its own calls, through the same
     // readSleep every other decision asks; a read that fails is awake, as readSleep's unreadable is.
     const nounReading = async (): Promise<{ home: string; reading: SleepReading } | null> => {
@@ -3029,7 +3138,8 @@ export const register: Register = on => {
           await built.state.set(heldSeqRef, seq)
           await built.state.set(heldRef, [...held, { id: String(seq), label, prompt }])
         }
-        return { isHeld: true, ...heldRefusal(label) }
+        // Asleep, the refusal never tells Claude to publish a page in its place (#1284).
+        return { isHeld: true, ...((await nounSeesAsleep()) ? heldAsleep(label) : heldRefusal(label)) }
       },
       isAsleep: nounSeesAsleep,
       sleepNote: async note => {
@@ -3137,6 +3247,12 @@ export const register: Register = on => {
         } catch (err) {
           $.ui.log(`scope-modes: the overnight driver's minute failed: ${msg(err)}`, { to: 'debug' })
         }
+        // Sleep over, what this session held overnight is asked for (#1284).
+        try {
+          await askHeldAtWake($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the minute's check for what was held overnight failed: ${msg(err)}`, { to: 'debug' })
+        }
         // A night's review done in another session takes its reminder off this one's card (#1107).
         try {
           await takeOffReviewed($)
@@ -3181,7 +3297,22 @@ export const register: Register = on => {
     // The morning turn starts once the command is done: from inside command.run the prompt would
     // wait on the turn this hook holds (as /handoff found).
     const morning = woke.morning
-    if (morning) $.clock.after(0, () => void $.prompt.submit({ text: morning }).catch(err => $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}`)))
+    // What this session held overnight rides in it (#1284): delivered once it goes in, else kept for the minute.
+    // Whether it went in is told apart from clearing what it carried, so a clear that fails is never
+    // said as a morning turn that could not start (lessons review).
+    if (morning)
+      $.clock.after(0, () =>
+        void $.prompt
+          .submit({ text: morning })
+          .then(
+            () => heldMorningDone($, true),
+            async err => {
+              await heldMorningDone($, false)
+              $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}`)
+            },
+          )
+          .catch(err => $.ui.log(`scope-modes: what this session held overnight went out in the morning turn, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' })),
+      )
     return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
   on('command.run', { command: 'away' }, async $ => {
@@ -3212,6 +3343,8 @@ export const register: Register = on => {
     // Mac or from his phone. Nothing else may (a peer session, a plugin, a handoff's opening prompt, a
     // notification), so a message from elsewhere saying "go ahead and build" cannot lift no build.
     const isDans = await dansWords($, e.origin)
+    // Whether this turn is the morning one, carrying what this session held overnight (#1284).
+    let carriesMorning = false
     if (isDans) {
       const triggers = triggersIn(e.text) as Trigger[]
       // What each switch says it now does (#1055), opened with once for them all, so a message that
@@ -3247,7 +3380,10 @@ export const register: Register = on => {
               `Dan's message woke sleep mode. Say so in one line first, saying what the block below says.\n${overnightData({ holds: 'what waking sleep mode did and found, which can quote titles of issues, milestones and commits made overnight', offer: 'said to Dan in that one line; it is offered to him through no picker', lines: [woke.said] })}`,
             )
           // This turn is the morning one (#837): its summary and pickers ride along.
-          if (woke?.morning) notes.push(woke.morning)
+          if (woke?.morning) {
+            notes.push(woke.morning)
+            carriesMorning = true
+          }
           // Waking is acknowledged as any other switch is (#1086), right after waking's own line.
           if (woke?.off) acks.push(ackOnSaid('wake'))
         } else {
@@ -3293,7 +3429,20 @@ export const register: Register = on => {
       notes.push(HOME_NOTE)
       await $.state.set(justHomeRef, false)
     }
-    const entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
+    let entered: Awaited<ReturnType<typeof next>>
+    try {
+      entered = await next(notes.length ? { ...e, context: [...(e.context ?? []), ...notes] } : e)
+    } catch (err) {
+      // "I'm up" carried what this session held (#1284): a turn that did not go in keeps it for the
+      // minute. Only this turn's own morning settles it, never another prompt (lessons review).
+      if (carriesMorning) await heldMorningDone($, false)
+      throw err
+    }
+    // The prompt is in, so a clear that fails is logged, never thrown past a turn that started.
+    if (carriesMorning)
+      await heldMorningDone($, true).catch(err =>
+        $.ui.log(`scope-modes: what this session held overnight went out in the morning turn, but could not be cleared (${msg(err)}), so it may be asked for again`, { to: 'debug' }),
+      )
     if (asking !== undefined) askedUp = asking
     return entered
   })
@@ -3431,7 +3580,7 @@ export const register: Register = on => {
     }
 
     const scope = await scopeOf($)
-    // Asleep (#840), read live at each call, keeps every session quiet as away.
+    // Asleep (#840), read live at each call, holds what away holds on the Mac, and every result until wake (#1284).
     const sleeping = await sleepNow($)
     // Asleep, a merge, a deploy or a push to a default branch is judged against the night's lists
     // (#843), first, before any other mode's route or early return, so nothing reaches a merge
@@ -3458,6 +3607,26 @@ export const register: Register = on => {
       const failed = await noteQuestion($, qs)
       await $.modkit.blocked({ toolUseId, guard: 'Asleep', reason: 'Dan is asleep, so this question waits for his morning report.', safeWay: 'Claude carries on with work that does not need him.' })
       return { deny: askedAsleep(failed) }
+    }
+    // And hands him nothing (#1284): a page published or opened for him, or a Claude doc, in any
+    // session and from any of its agents, is held, kept in this session and asked for when sleep
+    // mode ends, so every session reports at the same moment.
+    if (sleeping.state === 'asleep') {
+      const label = deliveryOf(tool, input)
+      if (label) {
+        const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+        // Refused whatever the write does: a hook that throws is skipped, and the publish would run
+        // (L42). The list is changed in memory before it is written, so a failed write keeps it for
+        // this session's morning, losing it only to a reload (lessons review).
+        try {
+          await keepForWake($, { label, call: `${tool} ${JSON.stringify(args)}` })
+        } catch (err) {
+          $.ui.log(`scope-modes: a delivery held overnight could not be written to this session's state (${msg(err)}); it is kept in memory for the morning`, { to: 'debug' })
+        }
+        const held = heldUntilWake(label)
+        await $.modkit.blocked({ toolUseId, ...held.card })
+        return { deny: held.deny }
+      }
     }
     const asleep = sleeping.state === 'asleep'
     const away = (await placeOf($)) === 'away' || asleep
@@ -3611,6 +3780,11 @@ export const register: Register = on => {
     await $.state.set(writtenRef, [] as string[])
     writeNoteSaid = false
     morningWatch = undefined
+    // What was held overnight is this session's (#1284), so a new session starts with none.
+    heldNow = []
+    heldLoaded = true
+    heldInMorning = null
+    await $.state.set(wakeHeldRef, [] as HeldDelivery[])
     prSeen.clear()
     await $.state.set(placeRef, 'home')
     await $.state.set(justHomeRef, false)
