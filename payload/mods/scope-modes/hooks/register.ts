@@ -1778,7 +1778,8 @@ const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
     return
   }
   const asleep = reading.state === 'asleep' && typeof reading.record.generation === 'string' ? { generation: reading.record.generation, night: reading.record.night } : null
-  if (reading.state !== 'unreadable') {
+  // A record asleep that names no generation cannot say which night is current, so it closes nothing either (lessons review).
+  if (reading.state !== 'unreadable' && !(reading.state === 'asleep' && !asleep)) {
     const stale = stalePending(all, asleep?.generation ?? null)
     if (stale.length) {
       const at = await $.clock.now()

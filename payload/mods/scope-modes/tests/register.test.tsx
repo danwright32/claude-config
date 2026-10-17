@@ -5027,6 +5027,14 @@ test('a night still asleep keeps its reminder, while an older pending one comes 
   expect(stepsCalls(w)).not.toContain(`finish ${JSON.stringify({ title: 'When you are up, end sleep mode (1970-01-01)' })}`)
 })
 
+test('a record asleep that names no generation closes no pending night (#1283 lessons review)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: JSON.stringify({ ...JSON.parse(asleepRecord()), generation: undefined }), [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  await clock.advance(2 * MIN)
+  expect(reviewsOf(w)).toEqual([{ generation: 'g0', night: '1969-12-31' }])
+  expect(stepsCalls(w)).toEqual([])
+})
+
 test('a night that pinned no reminder says nothing of one at wake (#1107)', withSteps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
   await start($ as never, clock)
