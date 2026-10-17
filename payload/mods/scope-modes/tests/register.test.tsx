@@ -4567,7 +4567,27 @@ test("a goal issue with no section, or whose section cannot be read or checked o
   w.o.issueAnswers = { 'o/r#7: Keep the old flag?': 'Drop it' }
   r = await command($ as never, 'sleep')
   expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
-  expect(r.text).toContain('Your answer on o/r#7 is posted, but it could not be checked off in its Open questions (HTTP 403), so the issue still shows it open; it is not asked again.')
+  expect(r.text).toContain('Your answer on o/r#7 is posted, but it could not be checked off in its Open questions (HTTP 403), so the issue still shows it open; it is not asked again, and /sleep checks it off when it next reads that issue.')
+})
+
+test("an answered item a failed check off left open is checked off on a later night, never asked again or dropped silently (#1279 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: SECTIONED }, editFails: 'HTTP 403', issueAnswers: { 'o/r#7: Keep the old flag?': 'Drop it' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  await command($ as never, 'wake')
+  expect(w.edits).toEqual([])
+  // Still failing the next night: said again, with the answer already given, and not asked.
+  let r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(r.text).toContain('Your answer on o/r#7, "Keep the old flag?" ("Drop it"), is posted but its Open questions still shows it open, and checking it off failed again (HTTP 403); it is not asked again.')
+  await command($ as never, 'wake')
+  // Once the edit can land, the item is checked off with the answer on record.
+  w.o.editFails = undefined
+  r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+  expect(r.text).not.toContain('still shows it open')
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {

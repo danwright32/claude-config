@@ -112,7 +112,10 @@ def has_session_line(args, command):
 # The body's Open questions section (claude-config#1279, Dan 2026-10-17): a heading, at any level,
 # at a line's start or right after the quote that opens the body. The words in a sentence ("no open
 # questions") are not a section.
-OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"'])[ \t]*#{1,6}[ \t]*Open questions\b")
+# The whole heading, at a line's start, a quote's or an escaped newline's in a $'...' body, and
+# ending there too, so "## Open questions about the API" is another section, as the shared reader
+# (mods/mod-kit/hooks/openquestions.ts) and create-milestone.sh read it (lessons review).
+OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
 
 
 def has_open_questions(args, command):

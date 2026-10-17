@@ -329,6 +329,11 @@ allows "#1279 a section listing questions passes, at any heading level" "gh issu
 
 ### Open questions
 - [ ] Keep the old flag?\" $M $P $C"
+denies "#1279 a heading that only starts with the words is another section (lessons review)" "gh issue create --title t --body \"b
+
+## Open questions about the API
+- [ ] Keep it?\" $M $P $C"
+allows "#1279 the heading written in an ANSI quoted body passes" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone' $M $P $C"
 denies "#1279 the words in a sentence are not a section" "gh issue create --title t --body \"b, with no open questions.\" $M $P $C"
 allows "#1279 the section in a heredoc body passes" "gh issue create --title t $M $P $C --body \"\$(cat <<'EOF'
 b

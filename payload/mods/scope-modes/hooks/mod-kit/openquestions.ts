@@ -13,7 +13,9 @@
 //   - [x] Rename it? (answered 2026-10-16 ET: Yes)
 // An unchecked box or a plain bullet is open; a checked box is answered; None means none.
 
-const HEADING = /^#{1,6}[ \t]*Open questions\b/i
+// The whole heading, so "## Open questions about the API" is another section (lessons review); the
+// filing gate and create-milestone.sh match it the same way.
+const HEADING = /^#{1,6}[ \t]*Open questions[ \t]*$/i
 const ANY_HEADING = /^#{1,6}[ \t]/
 const BULLET = /^[ \t]*[-*][ \t]+(?:\[([ xX])\][ \t]+)?(.*)$/
 const SESSION = /^Claude-Session:/
@@ -39,13 +41,27 @@ const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
  * The issues a question to Dan is about: `owner/name#N` anywhere, or `issue #N` in the session's
  * repository. A bare `#N` names nothing, since it may as well be a pull request.
  */
+const REFS = /\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)\b|\bissue\s+#(\d+)\b/gi
 export const issueRefsIn = (question: string, sessionRepo: string | null): { repo: string; issue: number }[] => {
   const out: { repo: string; issue: number }[] = []
-  for (const m of question.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)\b|\bissue\s+#(\d+)\b/gi)) {
+  for (const m of question.matchAll(REFS)) {
     const repo = m[1] ?? (m[3] !== undefined ? sessionRepo : null)
     const issue = Number(m[2] ?? m[3])
     if (!repo || !REPO.test(repo) || !Number.isInteger(issue) || issue <= 0) continue
     if (!out.some(x => x.repo.toLowerCase() === repo.toLowerCase() && x.issue === issue)) out.push({ repo, issue })
+  }
+  return out
+}
+
+/**
+ * The `issue #N` numbers a question names whatever the repository, read by the same rule as
+ * issueRefsIn, so a caller that cannot tell the session's repository says exactly the ones dropped.
+ */
+export const bareIssuesIn = (question: string): number[] => {
+  const out: number[] = []
+  for (const m of question.matchAll(REFS)) {
+    const issue = m[3] !== undefined ? Number(m[3]) : 0
+    if (issue > 0 && !out.includes(issue)) out.push(issue)
   }
   return out
 }

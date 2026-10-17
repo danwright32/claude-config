@@ -43,7 +43,9 @@ export const goalIssues = (goal: string, repo: string | null): { repo: string; i
   const out: { repo: string; issue: number }[] = []
   for (const m of goal.matchAll(/(?:\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)\b/g)) {
     // A number named as a pull request is not an issue (lessons review): it has no section to read.
-    // "PR #31", "PRs #31 and #32", "pull requests #3, #4": every number in such a list.
+    // "PR #31", "PRs #31 and #32", "pull requests #3, #4": every number in such a list. The words
+    // only save a read: one they miss ("PR #31 (and also #32)") is read through gh, whose link names
+    // a pull, and register.ts's openQuestions skips it there, so no pull is ever asked from.
     if (/\b(?:PRs?|pull requests?|pulls?)(?:\s*(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+\s*(?:,|and)?)*\s*$/i.test(goal.slice(0, m.index))) continue
     const r = m[1] ?? repo
     const n = Number(m[2])

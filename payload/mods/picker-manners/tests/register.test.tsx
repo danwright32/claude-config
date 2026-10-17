@@ -300,6 +300,11 @@ test('issue #N whose repository cannot be told is said, never dropped silently (
   await w.settle()
   expect(w.edits).toEqual([])
   expect(w.logs).toContain("Picker manners could not add this question to issue #12's Open questions (this session is in no repository GitHub knows), so /sleep will not see it there.")
+  // Said by the same rule that reads the references, so what is not an issue number is not said.
+  w.logs.length = 0
+  await askAbout($ as never, 'Is issue #34abc still wanted?')
+  await w.settle()
+  expect(w.logs).toEqual([])
 })
 
 test('whatever escapes the work done off the dialog is said, never left unhandled (#1279 lessons review)', async () => {

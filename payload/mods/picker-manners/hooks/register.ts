@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
-import { etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
+import { bareIssuesIn, etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
@@ -57,9 +57,10 @@ const notFound = (r: GhRun) => /Could not resolve to a Repository/i.test(r.stder
 // What a failure says: the first one that is not another account's not found, as /sleep says it.
 const saidOf = (failures: GhRun[]) => ghLine(failures.find(f => !notFound(f)) ?? (failures[0] as GhRun))
 const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
-  const bare = question.match(/\bissue\s+#\d+/gi) ?? []
+  // The bare issue #N references by the shared reader's own rule, so what is said matches what is dropped.
+  const bare = bareIssuesIn(question)
   const here = bare.length ? await sessionRepo($) : null
-  if (here && 'why' in here) for (const b of bare) $.ui.log(`Picker manners could not add this question to ${b.toLowerCase()}'s Open questions (${here.why}), so /sleep will not see it there.`)
+  if (here && 'why' in here) for (const n of bare) $.ui.log(`Picker manners could not add this question to issue #${n}'s Open questions (${here.why}), so /sleep will not see it there.`)
   const refs = issueRefsIn(question, here && 'repo' in here ? here.repo : null)
   const words = questionWords(question)
   for (const ref of refs) {

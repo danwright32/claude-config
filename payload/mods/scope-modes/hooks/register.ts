@@ -837,7 +837,27 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[], g
     for (const text of section.open) found.push({ repo: g.repo, issue: g.issue, text: oneSpaced(text), options: [], at: 0, inSection: [g.issue] })
   }
   const open: IssueQuestion[] = []
-  for (const q of found) if (!(await $.fs.exists(answeredPath(dir, q.repo, q.issue, q.text)))) open.push(q)
+  for (const q of found) {
+    const path = answeredPath(dir, q.repo, q.issue, q.text)
+    if (!(await $.fs.exists(path))) {
+      open.push(q)
+      continue
+    }
+    // Answered on the issue, yet still open in its section: an earlier check off failed. Its answer
+    // is on record, so it is checked off now rather than asked again or passed over (lessons review).
+    if (!q.inSection?.length) continue
+    let answer: string
+    try {
+      const rec = JSON.parse(await $.fs.read(path)) as { answer?: unknown }
+      if (typeof rec.answer !== 'string') throw new Error('it holds no answer')
+      answer = rec.answer
+    } catch (err) {
+      problems.push(`${q.repo}#${q.issue}'s Open questions still shows "${q.text}" open, though it was answered, and the record of the answer could not be read (${msg(err)}); it is not asked again.`)
+      continue
+    }
+    const off = await checkOff($, q.repo, q.issue, q.text, answer)
+    if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
+  }
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
   // asked about, ranked last, since dropping its question would hide it (L215).
   const rank = new Map<string, number>()
@@ -899,7 +919,7 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
         }
         // Checked off in its issue's Open questions too, as an answer in time is (lessons review).
         const off = q.inSection?.includes(issue) ? await checkOff($, q.repo, issue, q.text, a) : null
-        if (off) $.ui.toast(`Your late answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open.`)
+        if (off) $.ui.toast(`Your late answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open until /sleep next reads that issue and checks it off.`)
       }
     })
     if ('unanswered' in asked) {
@@ -935,7 +955,7 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       // afresh and written whole, so an item already checked off by another /sleep stays as it is.
       if (q.inSection?.includes(issue)) {
         const off = await checkOff($, q.repo, issue, q.text, asked.answer)
-        if (off) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open; it is not asked again.`)
+        if (off) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open; it is not asked again, and /sleep checks it off when it next reads that issue.`)
       }
       if (p.unkept) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but the record that it was could not be kept (${p.unkept}), so it may be asked again.`)
     }

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { etDateOf, issueRefsIn, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
+import { bareIssuesIn, etDateOf, issueRefsIn, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
 
 // #1279, Dan 2026-10-17: every issue's body holds an "Open questions" section (the filing gate
 // refuses one without it), listing what only Dan can decide, or None. /sleep asks every open item in
@@ -18,6 +18,9 @@ test('the open items of a section: unchecked boxes and plain bullets, never a ch
 test('a body with no section, or the words only in a sentence, has none found', () => {
   expect(openQuestionsIn('Just the bug, no open questions here.')).toEqual({ found: false, open: [] })
   expect(openQuestionsIn('')).toEqual({ found: false, open: [] })
+  // A heading that only starts with the words is another heading (lessons review).
+  expect(openQuestionsIn('B\n\n## Open questions about the API\n\n- [ ] Keep it?')).toEqual({ found: false, open: [] })
+  expect(openQuestionsIn('B\n\n## Open questions  \n\n- [ ] Keep it?')).toEqual({ found: true, open: ['Keep it?'] })
 })
 
 test('a question is added as an open item, in place of None, before what follows the section', () => {
@@ -60,6 +63,12 @@ test('the issues a question to Dan is about: owner/name#N, or issue #N in the se
   // A bare #N may be a pull request, so it names nothing; nor does issue #N with no repository known.
   expect(issueRefsIn('Merge PR #31?', 'o/r')).toEqual([])
   expect(issueRefsIn('Skip design rounds for issue #1279?', null)).toEqual([])
+})
+
+test('the issue #N a question names, whatever the repository, by the same rule as issueRefsIn (lessons review)', () => {
+  expect(bareIssuesIn('For Issue #12 and o/other#3, which first?')).toEqual([12])
+  expect(bareIssuesIn('Is issue #12abc the same as issue #12?')).toEqual([12])
+  expect(bareIssuesIn('Merge PR #31?')).toEqual([])
 })
 
 test("a question's words, without the issues /sleep puts in front of them", () => {

@@ -383,7 +383,7 @@ while [[ "$i" -lt "$n" ]]; do
     # This script calls gh itself, so the gate that asks for the line never sees these creates.
     # Every issue carries an Open questions section (claude-config#1279), None when the plan gave the
     # phase none, as the gate this script's creates never pass through asks of every other create.
-    grep -qiE '^[[:space:]]*#{1,6}[[:space:]]*Open questions' <<<"$ib" || ib="$ib"$'\n\n## Open questions\n\nNone'
+    grep -qiE '^[[:space:]]*#{1,6}[[:space:]]*Open questions[[:space:]]*$' <<<"$ib" || ib="$ib"$'\n\n## Open questions\n\nNone'
     sess_line="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" 2>/dev/null && pwd)/claude-session-line.sh" 2>/dev/null)" || sess_line=""
     [[ -n "$sess_line" ]] && ib="$ib"$'\n\n'"$sess_line"
     iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" "${label_args[@]}" 2>&1)"
