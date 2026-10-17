@@ -39,6 +39,8 @@ case "$1 $2" in
     ;;
   "issue edit")
     [ -n "${GH_EDIT_FAILS:-}" ] && { echo "HTTP 403: Resource not accessible by integration" >&2; exit 1; }
+    # GH_EDIT_HANGS: GitHub never answers the edit (exec, so the timeout's kill ends the wait itself).
+    [ -n "${GH_EDIT_HANGS:-}" ] && exec sleep 60
     # GH_EDIT_IGNORED: gh says the edit went through, and the body on GitHub is unchanged.
     case " $* " in *" --body-file - "*) if [ -n "${GH_EDIT_IGNORED:-}" ]; then cat >/dev/null; else cat >"$GH_BODY"; fi ;; *) echo "unexpected edit: $*" >&2; exit 2 ;; esac
     echo "$3"
@@ -129,6 +131,20 @@ body 'no line'
 out="$(FILED_ISSUE_BUDGET_S=0 run "${shapes[1]}" "$URL")"
 [ "$(calls)" = 0 ] && check "#1272 with no time left, GitHub is asked nothing" ok || check "#1272 with no time left, GitHub is asked nothing" "$(cat "$TMP/gh.log")"
 case "$out" in *'no time left'*'#42'*"$LINE"*) check "#1272 an issue there was no time for is said as unchecked" ok ;; *) check "#1272 an issue there was no time for is said as unchecked" "$out" ;; esac
+# An edit GitHub does not answer in time has an outcome nobody knows, so it is read back with the
+# time kept for that, and never said as refused (lessons review). Here it did not land.
+body 'no line'
+out="$(GH_EDIT_HANGS=1 FILED_ISSUE_BUDGET_S=6.5 run "${shapes[1]}" "$URL")"
+case "$out" in *'did not answer in time'*'read the body'*"$LINE"*) check "#1272 an edit that timed out is said as unknown, from the read back" ok ;; *) check "#1272 an edit that timed out is said as unknown, from the read back" "$out" ;; esac
+case "$out" in *'could not add it'*) check "#1272 an edit that timed out is never said as refused" "$out" ;; *) check "#1272 an edit that timed out is never said as refused" ok ;; esac
+[ "$(grep -c '^issue view' "$TMP/gh.log")" = 2 ] && check "#1272 the timed out edit was read back" ok || check "#1272 the timed out edit was read back" "$(cat "$TMP/gh.log")"
+
+# A create carrying the session line's own override (SKIP_SESSION_LINE_CHECK=1) waived the line on
+# purpose, so the check after it waives it too: nothing is read, edited or said.
+body 'no line'
+out="$(run "SKIP_SESSION_LINE_CHECK=1 gh issue create --title t --body-file body.md $FIELDS" "$URL")"
+[ -z "$out" ] && [ "$(calls)" = 0 ] && check "#1272 the session line's override is honoured after the create too" ok || check "#1272 the session line's override is honoured after the create too" "$out $(cat "$TMP/gh.log")"
+
 # The settings timeout leaves room past the budget the hook works within.
 budget="$(GATE_DIR="$DIR" python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("f", sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.BUDGET_S)' "$DIR/filed_issue_session.py" 2>&1)"
 limit="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([h["timeout"] for m in d["hooks"]["PostToolUse"] for h in m["hooks"] if "check-filed-issue-session.sh" in h["command"]][0])' "$(. "$DIR/lib/settings-file.sh"; hook_settings_file "$DIR/..")" 2>&1)"

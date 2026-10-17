@@ -57,9 +57,15 @@ GH_TIMEOUT_S = 15
 # The whole run's time, inside the 60 s settings.hooks.json gives this hook, so the hook is never
 # killed partway, between an edit and its read back (lessons review). Each gh call gets what is left,
 # at most GH_TIMEOUT_S; an issue there is too little left for is said as unchecked, and an edit is
-# started only with room left to read it back. FILED_ISSUE_BUDGET_S sets it for the tests.
+# started only with room left to read it back: it may use all but READ_BACK_S of what is left, which
+# is kept for the read back, since an edit that timed out may still have landed and only reading the
+# body tells. FILED_ISSUE_BUDGET_S sets the budget for the tests.
 BUDGET_S = 45
 MIN_CALL_S = 3
+READ_BACK_S = 3
+# The override the issue field gate gives the session line (issue_field_gate.session_rule): a create
+# that waives the line before it runs waives it here too.
+OVERRIDE = "SKIP_SESSION_LINE_CHECK=1"
 
 
 class Clock:
@@ -79,14 +85,19 @@ def _budget():
         return BUDGET_S
 
 
-def _gh_issue(action, args, clock, stdin=None):
-    """Run `gh issue <action> <args>`: (ok, stdout, the reason it failed). It runs gh, and reads no
-    command, so it is no reading of a subcommand (lib/word-position-scan.py)."""
-    wait = min(GH_TIMEOUT_S, clock.left())
+class TimedOut(Exception):
+    """gh did not answer in time, so what it did is not known."""
+
+
+def _gh_issue(action, args, clock, stdin=None, keep=0.0):
+    """Run `gh issue <action> <args>`: (ok, stdout, the reason it failed), leaving `keep` seconds of
+    the budget unused. It runs gh, and reads no command, so it is no reading of a subcommand
+    (lib/word-position-scan.py). Raises TimedOut when gh does not answer in the time it is given."""
+    wait = max(0.1, min(GH_TIMEOUT_S, clock.left() - keep))
     try:
         r = subprocess.run(["gh", "issue", action] + args, input=stdin, capture_output=True, text=True, timeout=wait)
     except subprocess.TimeoutExpired:
-        return False, "", "gh did not answer within %d seconds" % wait
+        raise TimedOut("gh did not answer within %.0f seconds" % wait)
     except OSError as e:
         return False, "", "gh could not be run (%s)" % e
     if r.returncode != 0:
@@ -97,7 +108,10 @@ def _gh_issue(action, args, clock, stdin=None):
 
 def _read(url, clock):
     """The issue's body and when it was created, or the reason it could not be read."""
-    ok, out, why = _gh_issue("view", [url, "--json", "body,createdAt"], clock)
+    try:
+        ok, out, why = _gh_issue("view", [url, "--json", "body,createdAt"], clock)
+    except TimedOut as e:
+        return None, None, str(e)
     if not ok:
         return None, None, why
     try:
@@ -124,14 +138,25 @@ def check_issue(url, line, now, clock):
     if gate.SESSION_MARK in body:
         return None, None
     fixed = body.rstrip() + "\n\n" + line if body.strip() else line
-    if clock.left() < 2 * MIN_CALL_S:
+    if clock.left() < MIN_CALL_S + READ_BACK_S:
         return ("issue #%s (%s) was filed without the line naming this session, and there was no time left "
                 "to add it and read it back. Add it at the end of the body yourself:\n%s" % (number, url, line)), None
-    ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], clock, stdin=fixed)
-    if not ok:
-        return ("issue #%s (%s) was filed without the line naming this session, and could not add it on "
-                "GitHub (%s). Add it at the end of the body yourself:\n%s" % (number, url, why, line)), None
+    timed_out = None
+    try:
+        ok, _, why = _gh_issue("edit", [url, "--body-file", "-"], clock, stdin=fixed, keep=READ_BACK_S)
+    except TimedOut as e:
+        timed_out = str(e)
+    else:
+        if not ok:
+            return ("issue #%s (%s) was filed without the line naming this session, and could not add it on "
+                    "GitHub (%s). Add it at the end of the body yourself:\n%s" % (number, url, why, line)), None
     after, _, why = _read(url, clock)
+    if timed_out and (after is None or line not in after):
+        # It may still land, so a second add could put the line in twice.
+        return ("issue #%s (%s) was filed without the line naming this session; the edit adding it did not "
+                "answer in time (%s) and the body read back %s, so it may or may not land. Before adding it, "
+                "read the body and add only if it does not end with:\n%s"
+                % (number, url, timed_out, "failed (%s)" % why if after is None else "does not carry it yet", line)), None
     if after is None or line not in after:
         return ("issue #%s (%s) was filed without the line naming this session; the edit adding it was "
                 "accepted, but reading the body back %s, so it may not be there. Check it ends with:\n%s"
@@ -149,7 +174,7 @@ def evaluate(data, line, now, clock):
         creates = scan.scan_creates(command)
     except scan.Unreadable:
         creates = []
-    if not creates:
+    if not creates or any(OVERRIDE in envs for _, envs in creates):
         return [], []
     resp = data.get("tool_response")
     resp = resp if isinstance(resp, dict) else {}
