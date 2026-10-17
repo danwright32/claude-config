@@ -1988,8 +1988,9 @@ suite_load_unmeasured(){   # $1 = what was not judged, in words
 }
 # What the end of a full run says about the deadline's headroom, and whether that fails the run.
 #
-# A FUNCTION rather than a block at the end of the fan-out (claude-config#167). It has three things
-# it can say and a silence, and while it sat inline the only way to reach any of them was a full
+# A FUNCTION rather than a block at the end of the fan-out (claude-config#167). It has four things
+# it can say and a silence (the fourth, since #1259, is UNMEASURED: the run that would fail, on a
+# machine busier than its cores beyond the suite's own shards), and while it sat inline the only way to reach any of them was a full
 # unfiltered run on a machine in the right state, so the arm that FAILS a run had never run at all.
 # A guard is only real once it has been watched failing (L1), and this is the one that decides
 # whether the suite has outgrown its own deadline.
@@ -16504,7 +16505,8 @@ check "#492 and the section count it reports is real" \
 section "== the end-of-run headroom report, watched saying each thing it can say (#167) =="
 # #161 changed what the end of a full run judges: the ceiling bounds WALL CLOCK, so that is what
 # decides whether there is anything to say, and the processor time decides WHICH of two things is
-# happening. It has three outcomes and a silence, and only the silence was ever produced, because
+# happening. It had three outcomes and a silence (four since #1259, which adds UNMEASURED for a
+# run that would fail on a machine busier than its cores), and only the silence was ever produced, because
 # the code sat inline at the end of a fan-out and the only way to reach it was a full run on a
 # machine that was already fine. A guard is real once it has been watched failing (L1), and the arm
 # that FAILS a run is the one that had never run at all.
