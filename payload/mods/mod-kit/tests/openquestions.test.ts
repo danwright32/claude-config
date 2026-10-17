@@ -59,6 +59,16 @@ test('an answer holding brackets of its own still leaves the item the same quest
   expect(withQuestion(answered, 'Keep the old flag?')).toBe(answered)
 })
 
+test('a body GitHub saved with CRLF line endings is read, and written back with its own endings (lessons review)', () => {
+  // A body edited on GitHub's web page comes back with CRLF endings.
+  const body = 'B\r\n\r\n## Open questions\r\n\r\n- [ ] Keep the old flag?\r\n- [ ] Other?'
+  expect(openQuestionsIn(body)).toEqual({ found: true, open: ['Keep the old flag?', 'Other?'] })
+  // Written back with its own endings, so the rest of the body is untouched.
+  expect(withQuestion(body, 'Keep the old flag?', { answer: 'Drop it', date: '2026-10-17' })).toBe('B\r\n\r\n## Open questions\r\n\r\n- [x] Keep the old flag? (answered 2026-10-17 ET: Drop it)\r\n- [ ] Other?')
+  expect(withQuestion(body, 'Other?')).toBe(body)
+  expect(withQuestion(body, 'New one?')).toBe(`${body}\r\n- [ ] New one?`)
+})
+
 test('a question asked and answered at once is added already checked off', () => {
   expect(withQuestion('B\n\n## Open questions\n\nNone', 'Ship it?', { answer: 'Yes', date: '2026-10-17' })).toBe('B\n\n## Open questions\n\n- [x] Ship it? (answered 2026-10-17 ET: Yes)')
 })

@@ -77,7 +77,7 @@ export const etDateOf = (ms: number): string => ET_DATE.format(ms)
 
 /** Whether the body has the section, and its open items' words, in order. */
 export const openQuestionsIn = (body: string): { found: boolean; open: string[] } => {
-  const lines = body.split('\n')
+  const lines = body.split(/\r?\n/)
   const s = sectionOf(lines)
   if (!s) return { found: false, open: [] }
   const open: string[] = []
@@ -101,32 +101,34 @@ export const openQuestionsIn = (body: string): { found: boolean; open: string[] 
 export const withQuestion = (body: string, question: string, answered?: { answer: string; date: string }): string => {
   const q = oneLine(question)
   const item = answered ? `- [x] ${q} (answered ${answered.date} ET: ${oneLine(answered.answer)})` : `- [ ] ${q}`
-  const lines = body.split('\n')
+  // A body edited on GitHub's web page has CRLF endings: read either, and written back with its own.
+  const eol = body.includes('\r\n') ? '\r\n' : '\n'
+  const lines = body.split(/\r?\n/)
   const s = sectionOf(lines)
   if (!s) {
     const at = lines.findIndex(l => SESSION.test(l))
     const block = ['## Open questions', '', item]
-    if (at < 0) return [...lines, '', ...block].join('\n').replace(/^\n+/, '')
+    if (at < 0) return [...lines, '', ...block].join(eol).replace(/^(?:\r?\n)+/, '')
     const before = lines.slice(0, at)
     while (before.length && (before[before.length - 1] as string).trim() === '') before.pop()
-    return [...before, '', ...block, '', ...lines.slice(at)].join('\n')
+    return [...before, '', ...block, '', ...lines.slice(at)].join(eol)
   }
   for (let i = s.head + 1; i < s.end; i++) {
     const m = BULLET.exec(lines[i] as string)
     if (!m || wordsOf(m[2] ?? '') !== q) continue
     const isOpen = m[1] !== 'x' && m[1] !== 'X'
     if (answered && isOpen) lines[i] = item
-    return lines.join('\n')
+    return lines.join(eol)
   }
   // Placed after the section's last item, or in place of None, or right under the heading.
   const none = lines.findIndex((l, i) => i > s.head && i < s.end && /^none\.?$/i.test(l.trim()))
   if (none >= 0) {
     lines[none] = item
-    return lines.join('\n')
+    return lines.join(eol)
   }
   let last = -1
   for (let i = s.head + 1; i < s.end; i++) if (BULLET.test(lines[i] as string)) last = i
   if (last >= 0) lines.splice(last + 1, 0, item)
   else lines.splice(s.head + 1, 0, '', item)
-  return lines.join('\n')
+  return lines.join(eol)
 }
