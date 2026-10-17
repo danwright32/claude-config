@@ -1056,9 +1056,11 @@ mkmodsrc "$M9B" branch-show-current 'const b = await run($, ["git", "-C", cwd, "
 mkmodsrc "$M9B" branch-origin-head 'const head = await run($, ["git", "-C", dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])'
 mkmodsrc "$M9B" branch-abbrev-ref 'const r = await run($, ["git", "rev-parse", "--abbrev-ref", "HEAD"])'
 mkmodsrc "$M9B" branch-issues 'export const issuesOfBranch = b => [...b.matchAll(/(?:^|[^0-9])(\d{2,6})(?=$|[^0-9])/g)].map(m => Number(m[1]))'
+# #1306: a copy of the reading as it now stands, by the parts of the branch name, fails the same way.
+mkmodsrc "$M9B" branch-issue-parts 'export const issuesOfBranch = b => b.split(/[/_.-]+/).map(p => /^(\d{2,6})[a-z]?$/i.exec(p)?.[1]).filter(Boolean).map(Number)'
 out="$(bash "$SHARED" "$M9B" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a hand rolled reading of where a checkout stands fails the run" ok || check "a hand rolled reading of where a checkout stands fails the run" "exit=$code out=$out"
-for m in branch-show-current branch-origin-head branch-abbrev-ref branch-issues; do
+for m in branch-show-current branch-origin-head branch-abbrev-ref branch-issues branch-issue-parts; do
   printf '%s\n' "$out" | grep "$m keeps its own branch-reader" | grep -q 'modkit.branch(' && check "and names $m, pointing it at modkit.branch" ok \
     || check "and names $m, pointing it at modkit.branch" "$out"
 done
