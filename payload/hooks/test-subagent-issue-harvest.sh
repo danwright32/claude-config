@@ -46,6 +46,10 @@ export CLAUDE_ISSUE_SPOOL_DIR="$TMPROOT/spool"
 # assertion about filing would depend on who typed the command (L504). Every case that means
 # something by a session names it.
 unset CLAUDE_CODE_SESSION_ID
+# Where the readers look for a session's transcript to tell whether it has ended (claude-config#1291):
+# this suite's own folder, never ~/.claude/projects, so no verdict depends on which sessions this Mac
+# happens to have (L411).
+export CLAUDE_TRANSCRIPT_ROOT="$TMPROOT/transcripts"
 # The hook under test writes the records it could not spool to a fixed name in the shared temp
 # directory, and this suite used to read and remove that exact path. Two runs at once therefore
 # destroyed each other's file, which is the same fault claude-config#180 was written for, in a
@@ -2102,6 +2106,99 @@ case "$arch_old" in
     check "#326 and the one inside the window is still left for its own session" "it was filed by the wrong session" ;;
   *) check "#326 and the one inside the window is still left for its own session" ok ;;
 esac
+
+# ---------------------------------------------------------------------------
+# A session that has ENDED releases its findings within hours, not a week (claude-config#1291).
+# ---------------------------------------------------------------------------
+# #326 released a record once its owner had not settled it for a week, because a session that has
+# ended never runs another review. Measured on Bidspoke on 2026-10-17: 135 of 233 pending records
+# belonged to a session whose transcript had not been written for 16 hours, and each review in
+# between showed them once, marked as another session's, to be left alone. Now a session counts as
+# ended, and its records as anybody's, when a SessionEnd hook stamped it ended (and it has not
+# written since), or when its transcript, and every subagent transcript under it, has been idle past
+# CLAUDE_ISSUE_SPOOL_ENDED_IDLE. The week stays as the backstop for neither.
+#
+# Every record here is inside the week and already marked seen by the reader, so without the release
+# none of them would be shown or filed. Each owner is a different case, and three of them are the
+# controls that must stay owned (L159): a live session, a stamped session that wrote afterwards (a
+# resume), and a session whose main transcript is idle while its subagents are still writing.
+reset_spool
+mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR"
+END_A="$TMPROOT/end-a.jsonl"; : > "$END_A"
+PROJ_T="$CLAUDE_TRANSCRIPT_ROOT/-proj"
+mkdir -p "$PROJ_T/end-f/subagents"
+IDLE_WINDOW="${CLAUDE_ISSUE_SPOOL_ENDED_IDLE:-14400}"
+# touch -t takes local time, so the stamps are built from the local clock; the ages are derived from
+# the window rather than written as literals (L401).
+local_ago() { python3 -c 'import sys,datetime; print((datetime.datetime.now() - datetime.timedelta(seconds=int(sys.argv[1]))).strftime("%Y%m%d%H%M.%S"))' "$1"; }
+: > "$PROJ_T/end-c.jsonl"; touch -t "$(local_ago $((IDLE_WINDOW + 3600)))" "$PROJ_T/end-c.jsonl"
+: > "$PROJ_T/end-d.jsonl"
+: > "$PROJ_T/end-e.jsonl"
+: > "$PROJ_T/end-f.jsonl"; touch -t "$(local_ago $((IDLE_WINDOW + 3600)))" "$PROJ_T/end-f.jsonl"
+: > "$PROJ_T/end-f/subagents/agent-x.jsonl"
+mark_b="$(bash "$SPOOL_LIB" mark-ended end-b 2>&1)"; mark_b_rc=$?
+bash "$SPOOL_LIB" mark-ended end-e >/dev/null 2>&1
+# end-e wrote after its stamp: the stamp is aged an hour, its transcript is fresh.
+touch -t "$(local_ago 3600)" "$CLAUDE_ISSUE_SPOOL_DIR/ended/end-e"
+[ "$mark_b_rc" -eq 0 ] && [ -f "$CLAUDE_ISSUE_SPOOL_DIR/ended/end-b" ] && check "#1291 mark-ended stamps the session ended" ok \
+  || check "#1291 mark-ended stamps the session ended" "rc=$mark_b_rc out=$mark_b"
+now_ts="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+SPOOL_FILE="$(bash "$SPOOL_LIB" path "$REPO" "$END_A")"
+for who in b c d e f; do
+  printf '{"ts":"%s","status":"found","agent":"tester","cwd":"%s","findings":["finding from session end-%s"],"session":"end-%s","seen_by":["end-a"]}\n' "$now_ts" "$REPO" "$who" "$who"
+done > "$SPOOL_FILE"
+pend_end="$(bash "$SPOOL_LIB" pending "$REPO" "$END_A" 2>/dev/null)"
+case "$pend_end" in
+  *"finding from session end-b"*) check "#1291 a session stamped ended has its findings shown at once" ok ;;
+  *) check "#1291 a session stamped ended has its findings shown at once" "pending=${pend_end:0:600}" ;;
+esac
+case "$pend_end" in
+  *"finding from session end-c"*) check "#1291 so does a session whose transcript is idle past the window" ok ;;
+  *) check "#1291 so does a session whose transcript is idle past the window" "pending=${pend_end:0:600}" ;;
+esac
+case "$pend_end" in
+  *"finding from session end-b"*"has ended"*"yours to judge and yours to file"*) check "#1291 marked as from a session that has ended, the reader's to file" ok ;;
+  *) check "#1291 marked as from a session that has ended, the reader's to file" "pending=${pend_end:0:600}" ;;
+esac
+for who in d e f; do
+  case "$pend_end" in
+    *"finding from session end-$who"*) check "#1291 control: session end-$who still owns its finding" "it was shown: ${pend_end:0:600}" ;;
+    *) check "#1291 control: session end-$who still owns its finding" ok ;;
+  esac
+done
+bash "$SPOOL_LIB" clear "$REPO" "$END_A" >/dev/null 2>&1
+arch_end="$(bash "$SPOOL_LIB" archive "$REPO" "$END_A" 2>/dev/null)"
+case "$arch_end" in
+  *"finding from session end-b"*"finding from session end-c"*|*"finding from session end-c"*"finding from session end-b"*)
+    check "#1291 and a clear from another session files both" ok ;;
+  *) check "#1291 and a clear from another session files both" "archive=${arch_end:0:600}" ;;
+esac
+case "$arch_end" in
+  *"end-d"*|*"end-e"*|*"end-f"*) check "#1291 while the owned ones stay pending for their sessions" "archive=${arch_end:0:600}" ;;
+  *) check "#1291 while the owned ones stay pending for their sessions" ok ;;
+esac
+
+# A session id is a file name here, so one that could leave the folder is refused, and writes nothing.
+bad_mark="$(bash "$SPOOL_LIB" mark-ended '../escape' 2>&1)"; bad_rc=$?
+[ "$bad_rc" -ne 0 ] && [ ! -e "$CLAUDE_ISSUE_SPOOL_DIR/escape" ] && check "#1291 mark-ended refuses an id that is not a plain name" ok \
+  || check "#1291 mark-ended refuses an id that is not a plain name" "rc=$bad_rc out=$bad_mark"
+# And, like every writer, it never writes into the real spool from a test run (claude-config#278).
+real_mark="$(HOME="$TMPROOT/fakehome" CLAUDE_ISSUE_SPOOL_DIR="" CLAUDE_SUITE_RUN_ID=suite-x bash "$SPOOL_LIB" mark-ended end-z 2>&1)"; real_rc=$?
+[ "$real_rc" -ne 0 ] && [ ! -e "$TMPROOT/fakehome/.claude-issue-spool/ended/end-z" ] && check "#1291 mark-ended refuses the real spool under a test run" ok \
+  || check "#1291 mark-ended refuses the real spool under a test run" "rc=$real_rc out=$real_mark"
+
+# The SessionEnd hook stamps the session its payload names, and says so when it names none.
+SESSION_END_HOOK="$DIR/issue-spool-session-end.sh"
+printf '{"session_id":"end-g","hook_event_name":"SessionEnd","reason":"prompt_input_exit"}' | bash "$SESSION_END_HOOK" >/dev/null 2>&1; hook_rc=$?
+[ "$hook_rc" -eq 0 ] && [ -f "$CLAUDE_ISSUE_SPOOL_DIR/ended/end-g" ] && check "#1291 the SessionEnd hook stamps its session ended" ok \
+  || check "#1291 the SessionEnd hook stamps its session ended" "rc=$hook_rc"
+hook_err="$(printf '{"hook_event_name":"SessionEnd"}' | bash "$SESSION_END_HOOK" 2>&1 >/dev/null)"; hook_rc=$?
+case "$hook_rc:$hook_err" in
+  0:*"no session_id"*) check "#1291 a payload with no session says so and never blocks" ok ;;
+  *) check "#1291 a payload with no session says so and never blocks" "rc=$hook_rc err=$hook_err" ;;
+esac
+grep -q 'issue-spool-session-end.sh' "$DIR/../settings.hooks.json" && check "#1291 the SessionEnd hook is registered" ok \
+  || check "#1291 the SessionEnd hook is registered" "not in settings.hooks.json"
 
 # A record with NO session cannot be claimed by anybody, so it is filed by whoever clears first,
 # which is what every record did before this existed. Leaving it pending for ever would be a worse

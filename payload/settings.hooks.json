@@ -366,6 +366,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/issue-spool-session-end.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
