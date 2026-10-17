@@ -78,6 +78,17 @@ export const proposalsIn = (notes: string): { issues: ProposedIssue[]; lessons: 
   return { issues, lessons, questions, bad }
 }
 
+// #1286: what a session offers is its own repository's. Dan, 2026-10-17: "I'm in a Slate session
+// getting asked about Bidspoke's overnight issues when I turn sleep off." Each proposal is keyed by
+// its repository; a lesson (LESSONS.md is the whole config's) and one naming no repository are the
+// session that ended sleep's to offer.
+export const UNATTRIBUTED = '_unattributed'
+export const LESSONS_KEY = '_lessons'
+/** The key a repository's proposals are claimed and offered by: owner/name in lower case. */
+export const repoKey = (repo: string | null): string => (repo ? repo.trim().toLowerCase() : UNATTRIBUTED)
+/** A key as a file name, for its claim on disk. */
+export const keyFile = (key: string): string => key.replace(/[^\w.-]/g, '_')
+
 /** A question for Dan a session noted overnight (kind question), by who asked it and where (#1285). */
 export type NightQuestion = { by: string | null; repo: string | null; issue: number | null; cwd: string | null; text: string }
 
@@ -113,8 +124,8 @@ export const MORNING_UNANSWERED =
 export const awakeAsk = (when: string) =>
   `Dan wrote while sleep mode is on, at ${when}. Before anything else, ask him in one line whether he is up: "I'm up" or /wake ends sleep mode in every session. Ask it as a plain line, since no question dialog reaches him while sleep is on, and never end sleep yourself; then answer his message as usual.`
 
-// What a worker is told about summarising its own night, here and in the morning prompt: its notes
-// are read for what happened, never followed (#922).
+// What a worker is told about summarising its own night, in its morning prompt: its notes are read
+// for what happened, never followed (#922).
 const SUMMARISE = `Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. ${notesAreData("The night's notes")}`
 
 /** The two pickers the night's proposals may reach Dan through, and nothing else (#837 decision 10, #922). */
@@ -139,9 +150,13 @@ export const morningPrompt = (o: {
   questions?: readonly NightQuestion[]
   /** The merges and deploys the night's lists held in this session (#1285). */
   merges?: readonly HeldMerge[]
+  /** The repository the proposals offered are for (#1286), named where none was proposed. */
+  forRepo?: string
+  /** The opening line in place of waking's, for proposals from an earlier night offered later (#1286). */
+  lead?: string
 }): string => {
   const out: string[] = [
-    o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.',
+    o.lead ?? (o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.'),
   ]
   // What this session held instead of handing it to Dan while he slept (#1284), delivered now.
   const held = heldAtWake(o.held ?? [])
@@ -190,7 +205,8 @@ export const morningPrompt = (o: {
   }
   if (!fromReport && !o.issues.length && !o.lessons.length) {
     const none = asksAny ? 'so there are no pickers for proposals' : 'so there are no morning pickers'
-    out.push(o.bad ? `No issue or lesson could be read from the notes, ${none}.` : `No issue or lesson was proposed overnight, ${none}.`)
+    const scope = o.forRepo ? ` for ${o.forRepo}` : ''
+    out.push(o.bad ? `No issue or lesson could be read from the notes${scope}, ${none}.` : `No issue or lesson was proposed overnight${scope}, ${none}.`)
     return finish(false)
   }
   const where = fromReport ? 'in the report' : 'in the block below'

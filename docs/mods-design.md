@@ -1525,8 +1525,18 @@ morning offers what the night proposed, filing nothing he has not picked.
   if it worked, what it held (#1284), each question it noted (`by` itself, read from the notes by
   `proposalsIn`, numbered 3.n) and each merge, deploy or push the night's lists refused in it
   (kept with its reason, 4.n), each an AskUserQuestion picker, and an unanswered picker kept for the
-  next time Dan writes there. The session that ended sleep, by a wake or its noon end, offers the
-  proposed issues and lessons; no other does, so none is offered twice. A session with nothing of
+  next time Dan writes there. Since #1286 (Dan, 2026-10-17: "I'm in a Slate session getting asked
+  about Bidspoke's overnight issues when I turn sleep off") each session offers only its own
+  repository's proposed issues and the questions of closed sessions there, keyed by `repoKey` (owner/name
+  in lower case; a question's `repo`, else its folder's repository); the session that ended sleep,
+  by a wake or its noon end, also offers the lessons (`_lessons`) and what names no repository
+  (`_unattributed`). Each key is claimed for the night by linking a file at
+  `~/.claude/state/sleep/offered/<generation>/<key>` (`claimOffer`), so of two sessions exactly one
+  offers it, and a session's own earlier claim is still its own when its morning is asked again; a
+  claim that cannot be written offers nothing and is logged. A repository with no session open when
+  the night ends keeps its proposals: once a session, awake, a session reads the notes of the last
+  14 days' nights (by the time in their generation) and offers its repository's unclaimed issues in
+  a turn of its own (`offerBacklog`). A session with nothing of
   its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
   reply says how many other sessions are open and which workers closed since (`othersSaid`).
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,

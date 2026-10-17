@@ -2646,7 +2646,7 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   await start($ as never, clock)
   await command($ as never, 'wake')
   await clock.settle()
-  expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
+  expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight for o\/r, so there are no morning pickers\.$/)
 })
 
 // #1284: while asleep nothing is handed to Dan in any session, and what was held is delivered at wake.
@@ -2796,7 +2796,7 @@ const theirQuestion = proposal({ kind: 'question', by: 's2', cwd: '/other', ques
 const CLOSED_NIGHT = { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'o/r waits overnight' }] }
 
 test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, never the proposals (#1285)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n` } })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
   // Woken in another session.
@@ -2817,7 +2817,7 @@ test('a worker that did not wake sleep puts its own morning to Dan at its next m
 })
 
 test('a session with nothing of its own from the night starts no turn at wake (#1285)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${theirQuestion}\n` } })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
   delete w.files[CURRENT]
@@ -2914,6 +2914,72 @@ test('a record naming no generation whose morning turn fails is still said as un
   await clock.advance(MIN)
   await clock.settle()
   expect(morningOf(w)[0]).toMatch(/could not be read \(the sleep record names no generation\)/)
+})
+
+// #1286: each session offers only its own repository's overnight proposals; another repository's go
+// to a live session there, or wait for the next session started there.
+const BIDSPOKE = proposal({ kind: 'issue', repo: 'Acme/Bidspoke', title: 'Bid totals round twice', priority: 'p2', labels: ['bug'], milestone: 'Ungrouped', text: 'Seen in totals.ts.' })
+const OFFERED = `${SLEEP}/offered`
+const IN_BIDSPOKE: Opts = { remote: 'git@github.com:acme/bidspoke.git' }
+
+test("the session that ends sleep offers only its own repository's proposed issues, and the lessons, never another repository's (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('1.1 o/r: Date parse drops the zone')
+  expect(m).toContain('2.1 Parse a date with its zone.')
+  expect(m).not.toContain('Bid totals round twice')
+  // Claimed for this night by repository, so no other session offers them again; Bidspoke's is left.
+  expect(Object.keys(w.files).filter(f => f.startsWith(`${OFFERED}/g0/`)).sort()).toEqual([`${OFFERED}/g0/_lessons`, `${OFFERED}/g0/o_r`])
+})
+
+test("a live session in the other repository offers that repository's proposals in its own morning, and none of the first's (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('1.1 Acme/Bidspoke: Bid totals round twice')
+  expect(m).not.toContain('Date parse drops the zone')
+  expect(m).not.toContain('Parse a date with its zone.')
+  expect(w.files[`${OFFERED}/g0/acme_bidspoke`]).toBeDefined()
+})
+
+test('a repository whose proposals another live session there already claimed is offered nowhere else (#1286)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${BIDSPOKE}\n`, [`${OFFERED}/g0/acme_bidspoke`]: 's7' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+})
+
+const EARLIER = `${SLEEP}/notes/${T0 - MIN}-s9.jsonl`
+test('a repository with no live session at wake keeps its proposals for the next session started there, offered once (#1286)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `${BIDSPOKE}\n${PROPOSED}` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Bid totals round twice'))
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toMatch(/^Proposals for acme\/bidspoke from an earlier night were never offered, since no session in it was open when that night ended: offer them now\./)
+  expect(offered[0]).not.toContain('Date parse drops the zone')
+  await clock.advance(3 * MIN)
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice')).length).toBe(1)
+})
+
+test("a claim that cannot be written offers nothing rather than risk offering twice, and says why (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, markerFails: 'Operation not permitted', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice'))).toEqual([])
+  expect(w.logs.some(l => l.includes('could not be claimed') && l.includes('Operation not permitted'))).toBe(true)
 })
 
 test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
