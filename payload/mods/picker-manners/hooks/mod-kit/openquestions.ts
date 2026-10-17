@@ -28,8 +28,10 @@ const sectionOf = (lines: string[]): { head: number; end: number } | null => {
 }
 
 // An answered item's own words, without what was added when it was answered.
-const wordsOf = (text: string) => text.replace(/ \(answered [^)]*\)$/, '').trim()
-const oneLine = (q: string) => q.split(/\s*\n\s*/).join(' ').trim()
+const oneLine = (q: string) => q.split(/\s+/).filter(Boolean).join(' ')
+// An item's own words, without what was added when it was answered, its spacing collapsed so an item
+// written by hand with other spacing is still the same question (lessons review).
+const wordsOf = (text: string) => oneLine(text.replace(/ \(answered [^)]*\)$/, ''))
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 

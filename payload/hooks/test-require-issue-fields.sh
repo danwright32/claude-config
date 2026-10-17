@@ -269,7 +269,8 @@ if [[ "$nsc_err" == *"ISSUE FIELD GATE DID NOT RUN"* ]]; then pass=$((pass + 1))
   fail=$((fail + 1)); echo "FAIL: a missing scanner should announce itself, got: ${nsc_err:-<silence>}"; fi
 
 # ============================ the table is the extension point ============================
-# The point of the refactor: a fourth rule is one entry, not a fourth copy of the hook.
+# The point of the refactor: a new rule is one entry, not another copy of the hook. The Open
+# questions section (#1279) is the fourth, in the table like the rest.
 rules_n="$(python3 -c "
 import importlib.util, os
 s = importlib.util.spec_from_file_location('g', '$DIR/issue_field_gate.py')
@@ -277,8 +278,8 @@ m = importlib.util.module_from_spec(s); os.environ['GATE_DIR'] = '$DIR'; s.loade
 print(len(m.RULES))
 print(all(set(r) >= {'name','check','fix','override'} for r in m.RULES))
 ")"
-if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "3" ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: expected 3 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
+if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "4" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: expected 4 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
 if [[ "$(printf '%s' "$rules_n" | tail -1)" = "True" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: every rule needs a name, check, fix and override"; fi
 

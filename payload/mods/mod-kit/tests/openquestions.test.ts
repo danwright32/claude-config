@@ -43,6 +43,12 @@ test('an answer checks the item off, saying the answer and its date; asked again
   expect(withQuestion(body, 'Other?')).toBe(body)
 })
 
+test('an item written with other spacing is the same question, so it is checked off, never added twice (lessons review)', () => {
+  const body = 'B\n\n## Open questions\n\n- [ ] Keep  the old   flag?'
+  expect(withQuestion(body, 'Keep the old flag?', { answer: 'Drop it', date: '2026-10-17' })).toBe('B\n\n## Open questions\n\n- [x] Keep the old flag? (answered 2026-10-17 ET: Drop it)')
+  expect(withQuestion(body, 'Keep the old flag?')).toBe(body)
+})
+
 test('a question asked and answered at once is added already checked off', () => {
   expect(withQuestion('B\n\n## Open questions\n\nNone', 'Ship it?', { answer: 'Yes', date: '2026-10-17' })).toBe('B\n\n## Open questions\n\n- [x] Ship it? (answered 2026-10-17 ET: Yes)')
 })

@@ -338,7 +338,7 @@ override is good for that one command, never standing permission.
 
 One gate carries these rules, in a table in `~/.claude/hooks/issue_field_gate.py`.
 A create missing two things says so once, and each rule keeps its own override so
-waiving one never waives another. Adding a fourth rule is one entry in that table.
+waiving one never waives another. Adding another rule is one entry in that table.
 
 Tests: `test-ensure-milestone.sh`, `test-ensure-priority-labels.sh`,
 `test-create-milestone.sh` in this directory, and `test-require-issue-fields.sh` in

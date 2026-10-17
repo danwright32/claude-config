@@ -1,8 +1,9 @@
 """The `gh issue create` completeness gate: one rule table, one process.
 
-Every issue Dan tracks carries three things, so the backlog can be read three ways:
-a milestone (which feature it ships with), a priority (how urgent), and at least one
-category label (what it is about). The full model is in
+Every issue Dan tracks carries four things, so the backlog can be read three ways and
+/sleep can ask what only Dan can decide: a milestone (which feature it ships with), a
+priority (how urgent), at least one category label (what it is about), and an Open
+questions section in its body (claude-config#1279). The full model is in
 ~/.claude/skills/milestone/NAMING.md, which is the source of truth; this file only
 enforces presence.
 
@@ -205,15 +206,6 @@ CATEGORY_FIX = (
     "   Never apply claude-suggested or any label attributing the issue to Claude or AI."
 )
 
-# The table. A new rule is one entry: what it is called, how to detect it, what to say,
-# and its own override. Order is the order the fixes are listed in.
-RULES = [
-    {"name": "a milestone", "check": has_milestone, "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
-    {"name": "a priority label", "check": has_priority, "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
-    {"name": "a category label", "check": has_category, "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
-]
-
-
 # Judged on the body, so it reads the command as the session line does (claude-config#1279).
 OPEN_QUESTIONS_RULE = {
     "name": "an Open questions section",
@@ -227,6 +219,17 @@ OPEN_QUESTIONS_RULE = {
             "   It goes in --body or the --body-file, before the session line."),
     "override": "SKIP_OPEN_QUESTIONS_CHECK=1",
 }
+
+
+# The table. A new rule is one entry: what it is called, how to detect it from the create's
+# arguments and the whole command, what to say, and its own override. Order is the order the
+# fixes are listed in.
+RULES = [
+    {"name": "a milestone", "check": lambda args, command: has_milestone(args), "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
+    {"name": "a priority label", "check": lambda args, command: has_priority(args), "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
+    {"name": "a category label", "check": lambda args, command: has_category(args), "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
+    OPEN_QUESTIONS_RULE,
+]
 
 
 def session_rule(line):
@@ -249,8 +252,7 @@ def evaluate(command):
     the message can say "1 issue" or "3 issues" correctly.
     """
     creates = scan.scan_creates(command)
-    rules = [dict(r, check=(lambda args, command, f=r["check"]: f(args))) for r in RULES]
-    rules.append(OPEN_QUESTIONS_RULE)
+    rules = list(RULES)
     line = session_line() if creates else None
     if line:
         rules.append(session_rule(line))
@@ -270,9 +272,9 @@ def evaluate(command):
 def build_reason(offenders, failing):
     names = ", ".join(r["name"] for r in failing)
     lines = [
-        "This command would file %s missing %s. Every issue carries a milestone, a priority and at least "
-        "one category, so the backlog can be read by feature, by urgency and by area, and one filed from a "
-        "Claude session names that session.\n"
+        "This command would file %s missing %s. Every issue carries a milestone, a priority, at least one "
+        "category and an Open questions section, so the backlog can be read by feature, by urgency and by "
+        "area, and /sleep can ask what only Dan can decide; one filed from a Claude session names that session.\n"
         % (scan.plural_issues(offenders), names),
         "Fix each one, then re-run the command:\n",
     ]
