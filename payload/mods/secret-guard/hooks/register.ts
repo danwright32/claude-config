@@ -152,7 +152,9 @@ export const register: Register = on => {
     // A hook that fails is skipped and the call runs unscreened, so a check that throws (an older
     // mod-kit with no commands reader, #1281) refuses (#1298, L42). Once next was called the call
     // was judged and passed on, and what it settled to stands.
-    next.called ? next(e) : { deny: cannotCheck(next.error?.message ?? next.error?.kind) },
+    // Said by the failure's kind only, never the error's own words, which can quote the very input
+    // the check could not read, secret and all (lessons review of #1298).
+    next.called ? next(e) : { deny: cannotCheck(next.error?.kind === 'timeout' ? 'it ran out of time' : 'it failed') },
   )
 
   on('session.append', async ($, e, next) => {

@@ -357,7 +357,9 @@ const olderKit: { name: string; register: Register } = {
         ...built,
         modkit: {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
-          commands: async () => { throw new Error('$.modkit.commands is not a function') },
+          // Its error quotes the command it could not read, secret and all, as a parser's error may
+          // (lessons review of #1298), so the refusal must not carry the error's own words.
+          commands: async ({ command }: { command: string }) => { throw new Error(`could not read: ${command}`) },
           // The kit's other members, which these tests never reach: each refuses by name if one ever is.
           card: async () => { throw new Error("mod-kit's card is not stood in by these tests") },
           writes: async () => { throw new Error("mod-kit's writes is not stood in by these tests") },
@@ -397,6 +399,8 @@ test('a tool call whose secret check throws is refused, never run unscreened (#1
   expect(w.reached).not.toContain('Bash')
   expect(said).toStartWith('Blocked: the secret guard could not check this for secrets (')
   expect(said).toEndWith('), so it did not run. Try it again; if it fails the same way, tell Dan.')
+  expect(said).not.toContain(KNOWN)
+  expect(said).not.toContain('could not read')
 })
 
 // The session.append hook fails open the same way: a scrub that throws is skipped and the row is
