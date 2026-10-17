@@ -1769,6 +1769,20 @@ before="$(calls)"
 FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$C_E" --base-ref main --branch feat/carry >/dev/null
 wait_final "$C_E" || bad "#1280 the review of the branch's empty commit finished"
 check_eq "#1280 an empty commit of the branch's own is reviewed, not carried" "$((before + 1))" "$(calls)"
+# Control (lessons review): an empty commit of the branch's own AND an update from main since the
+# last review: the base moved and every file matches, but the branch's own commit is new, so it is
+# reviewed, its message read as an answer.
+G commit -q --allow-empty -m "Decline it again, in words"
+G checkout -q main
+printf '# fixture moved on once more\n' > "$REPO/README.md"
+G commit -q -am "main moves README once more"
+G checkout -q feat/carry
+G merge -q --no-edit main
+C_F="$(G rev-parse HEAD)"
+before="$(calls)"
+FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$C_F" --base-ref main --branch feat/carry >/dev/null
+wait_final "$C_F" || bad "#1280 the review of an update carrying the branch's own empty commit finished"
+check_eq "#1280 an update that also brings a commit of the branch's own is reviewed, not carried" "$((before + 1))" "$(calls)"
 G checkout -q feat/sync
 
 echo

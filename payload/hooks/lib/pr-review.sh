@@ -699,6 +699,12 @@ ROWS
   # Only an update from the base: a head whose base has not moved since that review is the branch's
   # own work, every commit of it reviewed, an empty one included (its message may answer a finding).
   [ "$ob" != "$mb" ] || return 1
+  # And only the update: any commit since that review that is the branch's own (not a merge, not
+  # the base's) may say something a review reads, so it is reviewed, an empty one included (lessons
+  # review of #1295). A list that cannot be read carries nothing.
+  local own
+  own="$(git rev-list --no-merges "$s..$full_sha" "^$mb" 2>/dev/null)" || return 1
+  [ -z "$own" ] || return 1
   names="$(git -c core.quotepath=false diff --no-renames --name-only "$mb" "$full_sha" 2>/dev/null)" || return 1
   [ -n "$names" ] || return 1
   [ "$(git -c core.quotepath=false diff --no-renames --name-only "$ob" "$s" 2>/dev/null)" = "$names" ] || return 1
