@@ -11,7 +11,7 @@ import type {
   ScopeModesScope,
   ScopeModesTarget,
 } from '../types/index.d.ts'
-import { awayAllows, heldCard, heldRefusal, heldTool, isTestBuild, needsTheMac, targetPaths, type TestBuildFs } from './away.ts'
+import { awayAllows, heldCard, heldRefusal, heldTool, isTestBuild, needsTheMac, typedTargets, type TestBuildFs } from './away.ts'
 import { EDITORS, ghWords, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
@@ -2910,9 +2910,9 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   }
   if (away) {
     // A Bash call by what its commands do on the Mac; another tool by what it opens (#702). Typing
-    // or clicking into a test build runs (#1269), so every app a TARGET_APP names is looked up
-    // first, and the call counts as a test build's only when all of them are.
-    const targets = raw ? targetPaths(raw) : []
+    // or clicking into a test build runs (#1269), so the app each typing command names is looked up
+    // first, and the call counts as a test build's only when every one of them is.
+    const targets = raw ? (typedTargets(raw, commands) ?? []) : []
     let testBuild = targets.length > 0
     if (testBuild) {
       const tfs = await testBuildFs($)

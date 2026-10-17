@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths } from '../hooks/away.ts'
+import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths, typedTargets } from '../hooks/away.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 
 // Each command with what it runs, read by mod-kit's own reader (a byte for byte copy under
@@ -76,6 +76,19 @@ describe('targetPath: the executable TARGET_APP names, as written', () => {
     expect(targetPath('TARGET_APP="/a b/Tool" cliclick c:1,1')).toBe('/a b/Tool')
     expect(targetPath("TARGET_APP='/a b/Tool' cliclick c:1,1")).toBe('/a b/Tool')
     expect(targetPath('cliclick c:1,1')).toBeUndefined()
+  })
+  // Lessons review of #1269: a marker in an echo, or one command's marker standing for another's,
+  // must not make a call a test build's. Each typing or clicking command carries its own marker,
+  // written right before it, and there is no other marker.
+  test('typedTargets: the target of each typing or clicking command, only when each names its own', () => {
+    const KS = `osascript -e 'tell application "System Events" to keystroke "n"'`
+    const t = (raw: string) => typedTargets(raw, pipeline(raw))
+    expect(t(`TARGET_APP=/a/Tool ${KS}`)).toEqual(['/a/Tool'])
+    expect(t(`open -a Simulator && TARGET_APP="/b c/Tool" ${KS}`)).toEqual(['/b c/Tool'])
+    expect(t('TARGET_APP=/a/Tool cliclick c:1,1')).toEqual(['/a/Tool'])
+    expect(t(`echo TARGET_APP=/a/Tool && ${KS}`)).toBeUndefined()
+    expect(t(`TARGET_APP=/a/Tool ${KS}; ${KS}`)).toBeUndefined()
+    expect(t(KS)).toBeUndefined()
   })
   test('every one a call carries, wherever it stands, for the rule that all of them must be test builds', () => {
     expect(targetPaths('echo TARGET_APP=/a/Tool && TARGET_APP="/b c/Mail" osascript -e x')).toEqual(['/a/Tool', '/b c/Mail'])

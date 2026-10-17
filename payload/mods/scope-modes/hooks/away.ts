@@ -91,10 +91,33 @@ const SCRIPT_DIALOG = /\b(?:display (?:dialog|alert)|choose (?:file|folder|from 
  * `testBuild` says whether the app TARGET_APP names is a test build (isTestBuild, asked by the
  * caller, since it reads the file system).
  */
+// The text of an osascript command's script, as the reader gave it.
+const scriptOf = ({ words, program }: ModKitCommand): string =>
+  [...words.slice(1).filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
+// A command that types or clicks: an AppleScript keystroke, key code or click, cliclick, Peekaboo.
+const typesOrClicks = (c: ModKitCommand): boolean => {
+  const cmd = base(c.words[0] ?? '')
+  return cmd === 'cliclick' || cmd === 'peekaboo' || (cmd === 'osascript' && SCRIPT_TYPES.test(scriptOf(c)))
+}
+// A marker written right before the command it names, as the keystroke guard's rule writes it.
+const ATTACHED = /\bTARGET_APP=("[^"]+"|'[^']+'|\S+)\s+(?:\S*\/)?(?:osascript|cliclick|peekaboo)\b/g
+/**
+ * The executable each typing or clicking command in a call names, or undefined when that cannot be
+ * told (lessons review of #1269): every one carries its own TARGET_APP written right before it, and
+ * the call carries no other, so a marker in an echo, or one command's standing for another's, never
+ * makes a call a test build's. The keystroke guard then proves the one it names is in front.
+ */
+export const typedTargets = (raw: string, commands: ModKitCommand[]): string[] | undefined => {
+  const attached = [...raw.matchAll(ATTACHED)].map(m => (m[1] as string).replace(/^["']|["']$/g, ''))
+  const inputs = commands.filter(typesOrClicks).length
+  if (!attached.length || attached.length !== targetPaths(raw).length || attached.length !== inputs) return undefined
+  return attached
+}
+
 export const needsTheMac = (call: { raw: string; commands: ModKitCommand[]; testBuild?: boolean }): string | undefined => {
-  for (const { words, program, script: file, verdict } of call.commands) {
+  for (const command of call.commands) {
+    const { words, program, script: file, verdict } = command
     const cmd = base(words[0] ?? '')
-    const args = words.slice(1)
     if (cmd === 'osascript') {
       // A script whose text the reader never saw may do anything on the Mac: one piped in from what
       // cannot be read, a script file (#724: `osascript notify.scpt` ran while away; #730: one cat
@@ -102,7 +125,7 @@ export const needsTheMac = (call: { raw: string; commands: ModKitCommand[]; test
       if (program && 'unreadable' in program) return 'Run an AppleScript on the Mac'
       if (file) return 'Run an AppleScript on the Mac'
       if (verdict?.does === 'unreadable') return 'Run an AppleScript on the Mac'
-      const script = [...args.filter(a => !isFlag(a) && !a.startsWith('<')), ...(program && 'text' in program ? [program.text] : [])].join(' ')
+      const script = scriptOf(command)
       if (SCRIPT_DIALOG.test(script)) return 'Show a dialog on the Mac'
       // Bringing an app forward runs (#1269); typing or clicking only into a test build.
       if (!SCRIPT_TYPES.test(script) || call.testBuild) continue
