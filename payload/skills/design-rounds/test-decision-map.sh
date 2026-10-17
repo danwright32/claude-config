@@ -62,6 +62,11 @@ design "$T/dup.html" '{"decisions": [{"id": "D1", "decision": "A", "requirement"
 run "$T/dup.html"
 [ "$rc" -eq 1 ] && said '^DUPLICATE D1' && check "a repeated decision id is refused" ok || check "a repeated decision id is refused" "rc=$rc $out"
 
+# A decision with no words cannot be checked against what was built, owner or not.
+design "$T/unstated.html" '{"decisions": [{"id": "D1", "decision": " ", "requirement": "6.1"}]}'
+run "$T/unstated.html"
+[ "$rc" -eq 1 ] && said '^UNSTATED D1' && check "a decision with no text is refused" ok || check "a decision with no text is refused" "rc=$rc $out"
+
 # 4. A map that cannot be read is exit 2, never a pass (L98, L11).
 printf '<html><body>no map here</body></html>\n' > "$T/nomap.html"
 run "$T/nomap.html"

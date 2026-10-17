@@ -592,25 +592,25 @@ labels_are enhancement
 
 design_plan "$TMP/plan-gap.json" "$TMP/gap.html" "Builds Requirement 6.4."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-gap.json")"; rc=$?
-check_eq "#1290 a design with an unowned decision exits 10" "10" "$rc"
+check_eq "#1290 a design with an unowned decision exits 11" "11" "$rc"
 check "#1290 the refusal names the unowned decision" "UNMAPPED D2: Empty state shows last month" "$out"
 check_eq "#1290 and nothing is filed" "0" "$(issues_filed)"
 check_eq "#1290 and no milestone is written" "0" "$(milestone_writes)"
 
 design_plan "$TMP/plan-noissue.json" "$TMP/settled.html" "Builds the list."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-noissue.json")"; rc=$?
-check_eq "#1290 a requirement no issue names exits 10" "10" "$rc"
+check_eq "#1290 a requirement no issue names exits 11" "11" "$rc"
 check "#1290 the refusal names the requirement" "NO-ISSUE Requirement 6.4 (D1)" "$out"
 check_eq "#1290 and nothing is filed for it either" "0" "$(issues_filed)"
 
 design_plan "$TMP/plan-relative.json" "settled.html" "Builds Requirement 6.4."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-relative.json")"; rc=$?
-check_eq "#1290 a design path that is not absolute exits 10" "10" "$rc"
+check_eq "#1290 a design path that is not absolute exits 11" "11" "$rc"
 check "#1290 and says so" "absolute" "$out"
 
 design_plan "$TMP/plan-missing.json" "$TMP/not-there.html" "Builds Requirement 6.4."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-missing.json")"; rc=$?
-check_eq "#1290 a design file that is not there exits 10" "10" "$rc"
+check_eq "#1290 a design file that is not there exits 11" "11" "$rc"
 check "#1290 and says it could not be read" "DECISION-MAP UNREADABLE" "$out"
 
 design_plan "$TMP/plan-design.json" "$TMP/settled.html" "Builds Requirement 6.4."
@@ -626,6 +626,42 @@ check "#1290 and carries the plan's priority and labels" "--label priority-p2 --
 jq '.issues += [{"title": "Compare the built screens against every frame of the settled design", "body": "own words"}]' "$TMP/plan-design.json" >"$TMP/plan-design-own.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-own.json")"; rc=$?
 check_eq "#1290 a plan carrying its own comparison files once" "3" "$(issues_filed)"
+
+# Lessons review of #1290: a plan whose phases each carry their own level and categories, with no
+# plan level default, is not refused over the comparison issue it never wrote; the issue takes the
+# last phase's.
+cat >"$TMP/plan-design-perissue.json" <<JSON
+{
+  "title": "Invoices screen",
+  "design": "$TMP/settled.html",
+  "issues": [
+    { "title": "Phase 1: the list", "body": "Builds Requirement 6.4.", "priority": "p1", "labels": ["enhancement"] },
+    { "title": "Phase 2: the heading", "body": "Copy.", "priority": "p3", "labels": ["ui-ux"] }
+  ]
+}
+JSON
+labels_are enhancement ui-ux
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-perissue.json")"; rc=$?
+check_eq "#1290 a plan with only per phase levels and labels still files" "0" "$rc"
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1290 and the comparison takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
+
+# And the comparison is not counted as a phase: a design plan of ONE phase gets the same answer from
+# the milestone helper as the same plan without a design, never a milestone it would refuse.
+cat >"$TMP/plan-one.json" <<'JSON'
+{ "title": "Invoices screen", "priority": "p2", "labels": ["enhancement"],
+  "issues": [ { "title": "Phase 1: the list", "body": "Builds Requirement 6.4." } ] }
+JSON
+jq --arg d "$TMP/settled.html" '.design = $d' "$TMP/plan-one.json" >"$TMP/plan-one-design.json"
+labels_are enhancement
+out_plain="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one.json")"; rc_plain=$?
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one-design.json")"; rc=$?
+check_eq "#1290 a one phase plan is refused without a design (the control)" "1" "$([ "$rc_plain" -ne 0 ] && echo 1 || echo 0)"
+check_eq "#1290 and with one, by the same refusal" "$rc_plain" "$rc"
+check "#1290 which is the single issue milestone refusal" "SINGLE-ISSUE-MILESTONE" "$out"
+check_eq "#1290 filing nothing" "0" "$(issues_filed)"
+# The design map's own refusal has a code of its own, never one the milestone helper uses (L11).
+check_eq "#1290 the decision map refusal's code is not the single issue one" "1" "$([ "$rc" -ne 11 ] && echo 1 || echo 0)"
 
 echo
 echo "passed: $pass, failed: $fail"

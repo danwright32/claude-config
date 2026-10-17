@@ -26,7 +26,7 @@
 # With "design", the settled design file's decision map is checked first by
 # design-rounds/check-decision-map.py: a decision no requirement owns (and not marked as having no
 # code consequence), or a requirement no issue names as "Requirement <number>", files nothing at all
-# (exit 10), and neither does a design path that is not absolute or a file that cannot be read. A
+# (exit 11), and neither does a design path that is not absolute or a file that cannot be read. A
 # plan that passes gets one more issue at its end, "Compare the built screens against every frame of
 # the settled design", unless it already carries one by that title (claude-config#1290).
 #
@@ -96,11 +96,12 @@ fi
 # design frame, which finds drift on the decisions that did have owners. Checked before the plan's
 # other refusals, and before anything is written, so a refused plan creates nothing.
 design="$(jq -r '.design // empty' "$plan")"
+compare_added=0
 if [[ -n "$design" ]]; then
   if [[ "$design" != /* ]]; then
     echo "DESIGN-NOT-ABSOLUTE the plan's \"design\" is $design, and it must be the settled design file's absolute path, so it names the same file wherever this runs." >&2
     echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
-    exit 10
+    exit 11
   fi
   map_check="${DECISION_MAP_CHECK:-$HERE/../design-rounds/check-decision-map.py}"
   map_out="$(python3 "$map_check" "$design" "$plan" 2>&1)"
@@ -108,18 +109,25 @@ if [[ -n "$design" ]]; then
   printf '%s\n' "$map_out"
   if [[ "$map_rc" -ne 0 ]]; then
     echo "ABORTED: no issues were filed, and the milestone was not touched, because the settled design's decision map does not hold (the design rounds skill's deliverable says how to write it)." >&2
-    exit 10
+    exit 11
   fi
   compare_title="Compare the built screens against every frame of the settled design"
   if [[ "$(jq --arg t "$compare_title" '[(.issues // [])[] | select(.title == $t)] | length' "$plan")" -eq 0 ]]; then
     compare_body="The last step of this milestone, before it is closed (claude-config#1290). Open the settled design, $design, and screenshot the built page against every frame in it, each at that frame's own width. List every difference here, then fix each one or settle it with Dan as a decision. Drift on a decision that had an owner is found here, since every requirement can ship and close while the screen still differs from the design."
     with_compare="$(mktemp)"
-    if ! jq --arg t "$compare_title" --arg b "$compare_body" '.issues = ((.issues // []) + [{title: $t, body: $b}])' "$plan" >"$with_compare"; then
+    # Its level and categories are the plan's defaults, else the last phase's own, so a plan whose
+    # phases each carry theirs is not refused over an issue it never wrote (lessons review of #1290).
+    if ! jq --arg t "$compare_title" --arg b "$compare_body" '
+        (.issues // []) as $is | ($is | last) as $l
+        | .issues = $is + [{title: $t, body: $b}
+            + (if .priority then {} elif $l.priority then {priority: $l.priority} else {} end)
+            + (if .labels then {} elif $l.labels then {labels: $l.labels} else {} end)]' "$plan" >"$with_compare"; then
       echo "ABORTED: the comparison issue could not be added to the plan, so nothing was filed." >&2
       rm -f "$with_compare"
-      exit 10
+      exit 11
     fi
     plan="$with_compare"
+    compare_added=1
     trap 'rm -f "$with_compare"' EXIT
   fi
 fi
@@ -253,7 +261,9 @@ fi
 # is enforced on this path too rather than only on the ad hoc filing paths. A plan
 # with a single phase is a label with extra steps just as much as a single ad hoc
 # issue is, so it gets the same refusal and the same visible override.
-ensure_args=("$repo" "$title" --create-approved --for-issues "$n_issues" --description "$description")
+# The comparison issue a settled design adds is not one of the plan's phases, so it is not counted:
+# a plan of one phase is refused here as it would be with no design (lessons review of #1290).
+ensure_args=("$repo" "$title" --create-approved --for-issues "$((n_issues - compare_added))" --description "$description")
 [[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")
 
 # The labels below must not be made for a plan the milestone step then refuses (a
