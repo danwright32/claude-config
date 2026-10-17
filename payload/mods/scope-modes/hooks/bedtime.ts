@@ -4,12 +4,15 @@
 // issues and asks them one at a time in Claude Code's own dialog, the ones that unblock the most
 // work first, each with "Go to sleep now"; answers are posted on the issue as dated decisions.
 //
-// Where the questions come from: the night's notes. An overnight session that meets a decision
-// only Dan can make writes it with sleep_note as a `question` naming its repository, issue and
-// text (the overnight rules tell it to), and the morning report lists it. Those notes are the one
-// structured record of a question about an issue; GitHub comments carry no marker a reader could
-// rely on. A question stays open until an answer to it has been posted on its issue, which is
-// recorded beside the notes (answerKey), so it is asked again each night until then.
+// Where the questions come from: the night's notes, and since #1279 the Open questions section of
+// each issue a worker's goal names. An overnight session that meets a decision only Dan can make
+// writes it with sleep_note as a `question` naming its repository, issue and text (the overnight
+// rules tell it to), and the morning report lists it. Every issue's body also carries an Open
+// questions section (the filing gate refuses one without it, and picker manners adds a question
+// Dan is asked about an issue), whose open items are asked beside the notes, each once, and checked
+// off there when answered (`inSection`). GitHub comments carry no marker a reader could rely on. A
+// question stays open until an answer to it has been posted on its issue, which is recorded beside
+// the notes (answerKey), so it is asked again each night until then.
 //
 // register.ts reads the notes, asks GitHub which issues are still open and how urgent, asks Dan,
 // posts each answer and writes ~/.claude/state/sleep/unanswered/<generation>, which

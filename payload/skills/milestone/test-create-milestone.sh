@@ -390,13 +390,16 @@ check_eq "and outside a session no line is invented" "0" "$n_marked"
 # this script calls gh itself and the filing gate never sees its creates.
 n_sections="$(grep -c '^## Open questions' "$TMP/calls.log")"
 check_eq "#1279 every issue filed carries an Open questions section" "3" "$n_sections"
-check_eq "#1279 None under each, since the plan gave them none" "3" "$(grep -c '^None\b' "$TMP/calls.log")"
+# Counted as the heading with None right under it, so None anywhere else, or a heading with
+# something else under it, does not count (lessons review).
+under(){ python3 -c 'import sys; print(open(sys.argv[1]).read().count(sys.argv[2]))' "$TMP/calls.log" "$1"; }
+check_eq "#1279 None right under each heading, since the plan gave them none" "3" "$(under $'## Open questions\n\nNone')"
 # A phase whose plan already carries the section keeps its own, never a second one.
 jq '.issues[0].body = "Design empty states.\n\n## Open questions\n\n- [ ] Which illustration style?"' "$TMP/plan.json" > "$TMP/plan-q.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"
 check_eq "#1279 a plan's own section is kept, and none added beside it" "3" "$(grep -c '^## Open questions' "$TMP/calls.log")"
-check_eq "#1279 with its question in it" "1" "$(grep -c '^- \[ \] Which illustration style?' "$TMP/calls.log")"
-check_eq "#1279 and None only under the other two" "2" "$(grep -c '^None\b' "$TMP/calls.log")"
+check_eq "#1279 with its question right under its heading" "1" "$(under $'## Open questions\n\n- [ ] Which illustration style?')"
+check_eq "#1279 and None right under only the other two" "2" "$(under $'## Open questions\n\nNone')"
 
 # --- a category label new to the repo is created before anything is filed (claude-config#1034) ---
 # gh refuses an issue carrying a label the repo does not have ("could not add label: X not found"),
