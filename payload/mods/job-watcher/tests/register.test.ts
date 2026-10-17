@@ -190,8 +190,12 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     sleepNotes: [] as Record<string, unknown>[],
     /** Answers the stops held open ('held'), in order, as Claude Code would: ok, or a refusal. */
     answerStops: (_how: 'ok' | 'refused') => undefined as void,
+    /** Settles once the world holds the next call that never returns (#1297): see sendHanging. */
+    nextHang: () => Promise.resolve() as Promise<void>,
   }
   const heldStops: ((how: 'ok' | 'refused') => void)[] = []
+  const hangWaiters: (() => void)[] = []
+  w.nextHang = () => new Promise<void>(resolve => { hangWaiters.push(resolve) })
   w.answerStops = how => {
     for (const answer of heldStops.splice(0)) answer(how)
   }
@@ -358,7 +362,10 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     }
     if (e.tool === 'Bash' && input.command === 'false') return { result: 'exit 1', text: 'Exit code 1', isError: true } as never
     // A commit reading a message from a stdin nobody writes: it never returns (#759).
-    if (e.tool === 'Bash' && String(input.command).startsWith('git commit')) return new Promise<never>(() => undefined)
+    if (e.tool === 'Bash' && String(input.command).startsWith('git commit')) {
+      for (const held of hangWaiters.splice(0)) held()
+      return new Promise<never>(() => undefined)
+    }
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
@@ -1832,6 +1839,18 @@ test('a job listed by two closed records is judged once', withDeps, async ($, on
 // recorded with it, listed under its task's name, and reminded and reported to that agent alone.
 const AGENT: Agent = { id: 'a1', description: 'fix CI', type: 'general-purpose', status: 'running' }
 const asAgent = (input: Record<string, unknown>, agentId = 'a1') => ({ ...input, agentId }) as never
+// A background agent's call that never returns (the world's git commit), sent and then waited on
+// until the world holds it (#1297). Sent and left with a bare `void`, the test could end while the
+// call was still on its way through the hooks beneath the watcher: on a loaded Mac it arrived after
+// the test's own hooks were gone, and its "no implementation for tool.call" rejection, which nothing
+// handled, failed the whole file. Waiting on the world holding it is the condition itself, never a
+// fixed time (L290), and a call that returns or is refused instead fails here, by name.
+const sendHanging = async ($: { tool: { call: (e: never) => Promise<unknown> } }, w: { nextHang: () => Promise<void> }) => {
+  const held = w.nextHang()
+  const call = $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  const how = await Promise.race([held.then(() => 'held'), call.then(() => 'returned', (err: unknown) => `refused: ${String(err)}`)])
+  expect(how).toBe('held')
+}
 
 test("a job a background agent started is recorded and listed as that agent's (#784)", withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
@@ -1948,11 +1967,11 @@ test('a running background agent quiet for twenty minutes is said to this sessio
 
 test('an agent whose last tool call never returned is said to be waiting on it (#759)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
-  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
   await turnStarts($)
   // A call that never returns (the world's git commit): the commit waiting on a heredoc of 2026-10-05.
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
   expect(said).toContain('Bash (git commit -q -F /dev/stdin), started 20 minutes ago and has not finished')
@@ -2036,7 +2055,7 @@ test('an agent whose tool call never returns wakes this idle conversation exactl
   // The conversation sends its builder off and its turn ends: idle, waiting on the builder.
   await turnStarts($)
   await turnEnds($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(19 * MIN)
   expect(quietSaid(w)).toEqual([])
   await clock.advance(MIN + 1)
@@ -2063,7 +2082,7 @@ test("a subagent's own turn starting leaves the idle conversation idle, so it is
   await turnStarts($)
   await turnEnds($)
   await ($ as Turns).turn.start({ text: 'fix CI', turnId: 'a1-t1', agentId: 'a1' })
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(20 * MIN + 1)
   expect(quietSaid(w).length).toBe(1)
 })
@@ -2073,7 +2092,7 @@ test('a conversation busy in a turn is told on its next tool call and never woke
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
   await turnStarts($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w)).toEqual([])
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
@@ -2087,7 +2106,7 @@ test('a notice left unread when the busy turn ends wakes the conversation then, 
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
   await start($)
   await turnStarts($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w)).toEqual([])
   // The turn ends with no tool call after the notice: nothing else would carry it.
@@ -2127,7 +2146,7 @@ test('a wake that is dropped is said once and carried on the next tool call inst
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submit: 'drop' })
   await start($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
   expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('held while Dan is away')])
@@ -2141,7 +2160,7 @@ test('a wake that throws is said once and carried on the next tool call instead 
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submit: 'throws' })
   await start($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   // The engine skips a hook that throws and says nothing beneath answered, so the line carries its words.
   expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('Claude is told on its next tool call instead')])
@@ -2157,7 +2176,7 @@ test('a turn whose end fails beneath the watcher still leaves the conversation i
   await start($)
   await turnStarts($)
   await turnEnds($).catch(() => undefined)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
   expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
@@ -2171,7 +2190,7 @@ test("a wake that fails after a new session has started never carries the old se
   const failed = new Promise<void>(r => { fail = r })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], submitFailsAfter: failed })
   await start($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
   await start($)
@@ -2192,7 +2211,7 @@ test("a wake whose session ends while it waits on the sleep check is never submi
   const answered = new Promise<void>(r => { answer = r })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleepAfter: answered })
   await start($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w)).toEqual([])
   await start($)
@@ -2226,7 +2245,7 @@ test('asleep, the idle conversation is still woken and the quiet agent is noted 
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT], asleep: true })
   await start($)
-  void $.tool.call(asAgent({ tool: 'Bash', command: 'git commit -q -F /dev/stdin' }))
+  await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
   expect(w.sleepNotes.length).toBe(1)

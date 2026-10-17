@@ -2610,6 +2610,96 @@ printf '%s\n' "$out_lk3" | grep -E '^ +FAIL +test-locked\.sh.*suite lock' > /dev
   || check "#1083 and says it was the lock" "out=$out_lk3"
 
 # ---------------------------------------------------------------------------
+# A LOCAL RUN ASKS EACH SUITE TO WAIT A BOUNDED TIME FOR ITS LOCK (claude-config#1297).
+#
+# NOT RUN is honest, and on 2026-10-17 it was all four overlapping builders got for the sync suite:
+# no full run on the merged head ever reported every suite. So a local run hands every suite
+# SUITE_LOCK_WAIT, the sync suite waits that long for a lock another run holds and says so, and the
+# time it waited is taken off what is recorded for it, or the wait would read as its cost.
+# ---------------------------------------------------------------------------
+LW="$TMPROOT/dir-lock-wait"
+mkdir -p "$LW"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "%%s\\n" "${SUITE_LOCK_WAIT-<unset>}" >> "$(dirname "$0")/wait.seen"\n'
+  printf 'printf "%s passed=1 failed=0\\n"\n' "$MARK"
+} > "$LW/test-waits.sh"
+chmod +x "$LW/test-waits.sh"
+lw_seen() { cat "$LW/wait.seen" 2>/dev/null; rm -f "$LW/wait.seen"; }
+# Whatever the run inherited, as SYNC_CLAUDE_BIN is set whatever it inherited: an inherited value
+# would otherwise decide a wait nobody chose.
+env -u CI -u HOOK_TESTS_LOCK_WAIT SUITE_LOCK_WAIT=5 HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LW" > /dev/null 2>&1
+lw_got="$(lw_seen)"
+[ "$lw_got" = 1200 ] \
+  && check "#1297 a local run asks each suite to wait up to twenty minutes for a lock, whatever it inherited" ok \
+  || check "#1297 a local run asks each suite to wait up to twenty minutes for a lock, whatever it inherited" "the suite saw '$lw_got'"
+env -u CI HOOK_TESTS_LOCK_WAIT=7 HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LW" > /dev/null 2>&1
+lw_got="$(lw_seen)"
+[ "$lw_got" = 7 ] \
+  && check "#1297 and HOOK_TESTS_LOCK_WAIT sets how long" ok \
+  || check "#1297 and HOOK_TESTS_LOCK_WAIT sets how long" "the suite saw '$lw_got'"
+# Under CI one job owns the runner and a refusal fails the suite, so there is nothing to wait for.
+CI=true HOOK_TESTS_LOCK_WAIT=7 HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LW" > /dev/null 2>&1
+lw_got="$(lw_seen)"
+[ "$lw_got" = 0 ] \
+  && check "#1297 under CI a suite is asked to wait for nothing" ok \
+  || check "#1297 under CI a suite is asked to wait for nothing" "the suite saw '$lw_got'"
+out_lwb="$(env -u CI HOOK_TESTS_LOCK_WAIT=soon HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LW" 2>&1)"; code_lwb=$?
+lw_got="$(lw_seen)"
+[ "$code_lwb" -ne 0 ] && [ -z "$lw_got" ] && case "$out_lwb" in *"HOOK_TESTS_LOCK_WAIT='soon'"*) true ;; *) false ;; esac \
+  && check "#1297 a wait that is not a whole number of seconds is refused by name, and nothing runs" ok \
+  || check "#1297 a wait that is not a whole number of seconds is refused by name, and nothing runs" "exit=$code_lwb seen='$lw_got' out=$out_lwb"
+
+# The flake recheck is not asked to wait. Its deadline is set by what the suite measured, so a
+# recheck queued behind a lock would be called hung for waiting, which is a different fault (L11).
+LWF="$TMPROOT/dir-lock-wait-recheck"
+mkdir -p "$LWF"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'printf "%%s\\n" "${SUITE_LOCK_WAIT-<unset>}" >> "$(dirname "$0")/wait.seen"\n'
+  printf 'printf "%s passed=0 failed=1\\n"\n' "$MARK"
+  printf 'exit 1\n'
+} > "$LWF/test-waits-red.sh"
+chmod +x "$LWF/test-waits-red.sh"
+env -u CI HOOK_TESTS_LOCK_WAIT=7 HOOK_TESTS_FLAKE_RECHECK=1 HOOK_TESTS_TIMINGS= bash "$RUNNER" "$LWF" > /dev/null 2>&1
+lw_got="$(cat "$LWF/wait.seen" 2>/dev/null | tr '\n' ' ')"
+[ "$lw_got" = "7 0 " ] \
+  && check "#1297 a failed suite's recheck is asked to wait for nothing" ok \
+  || check "#1297 a failed suite's recheck is asked to wait for nothing" "the runs saw '$lw_got'"
+
+# The wait is not the suite's cost. Two suites doing the same second of work, one of which also
+# says it waited far longer than it ran: its record is clamped to zero rather than going negative,
+# which can only happen if the wait was taken off, and the other keeps its real second (L323).
+LT="$TMPROOT/lock-waited-time"
+LTSTORE="$TMPROOT/lock-waited-store"
+mkdir -p "$LT/suites" "$LTSTORE"
+for lt_n in waited plain; do
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'sleep 1\n'
+    if [ "$lt_n" = waited ]; then
+      printf 'printf "SUITE-NOTE waited 1000s for the suite lock, held by process 4242\\n"\n'
+      printf 'printf "SUITE-LOCK-WAITED 1000\\n"\n'
+    fi
+    printf 'printf "%s passed=1 failed=0\\n"\n' "$MARK"
+  } > "$LT/suites/test-$lt_n.sh"
+  chmod +x "$LT/suites/test-$lt_n.sh"
+done
+out_lt="$(env -u CI HOOK_TESTS_ROOT="$LT" HOOK_TESTS_TIMINGS="$LTSTORE" HOOK_TESTS_BUDGET=4 bash "$RUNNER" "$LT/suites" 2>&1)"; code_lt=$?
+lt_waited="$(awk 'NR == 1 { print $1 }' "$LTSTORE/suites%2Ftest-waited.sh" 2>/dev/null)"
+lt_plain="$(awk 'NR == 1 { print $1 }' "$LTSTORE/suites%2Ftest-plain.sh" 2>/dev/null)"
+[ "$code_lt" -eq 0 ] && [ "$lt_waited" = 0 ] \
+  && check "#1297 the time a suite waited for its lock is taken off the time recorded for it" ok \
+  || check "#1297 the time a suite waited for its lock is taken off the time recorded for it" "exit=$code_lt waited='$lt_waited' store=$(ls "$LTSTORE" | tr '\n' ' ') out=$out_lt"
+case "$lt_plain" in
+  ''|*[!0-9]*|0) check "#1297 and a suite that did not wait keeps its measured time" "plain='$lt_plain'" ;;
+  *) check "#1297 and a suite that did not wait keeps its measured time" ok ;;
+esac
+case "$out_lt" in *'note: waited 1000s for the suite lock'*) true ;; *) false ;; esac \
+  && check "#1297 and the wait is said beside that suite's verdict" ok \
+  || check "#1297 and the wait is said beside that suite's verdict" "out=$out_lt"
+
+# ---------------------------------------------------------------------------
 # A SUITE THAT RAN BUT COULD NOT MEASURE judged nothing, and did not fail (claude-config#1146).
 #
 # The secret scan once could not copy the tree it scans and reported a failing scan over "(0
