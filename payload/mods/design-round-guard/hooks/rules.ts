@@ -918,6 +918,13 @@ const DECL = /^(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:as
 const IMPORT = /^import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]\.\/([^'"/]+)['"]/
 
 type Statement = { from: number; to: number; name?: string; isType: boolean }
+// A function in a mod hook file (#1296): where it is, its parameters' names by position (a
+// destructured one holding several), the name it is bound to, and for one with no name, what it is
+// handed to: the callback a method of `xs` calls (`xs.map(x => ...)`) takes its values from `xs`.
+type Fn = { from: number; to: number; body: number; params: string[][]; name?: string; receiver?: { at: number; name: string } | Span; returns?: Span[] }
+// A local binding (`const c = ...`, a loop's `const t of ts`), its whole declaration, and the
+// function it belongs to (an index into fns).
+type Local = { name: string; span: Span; owner: number }
 type ModRead = {
   name: string
   // Each statement at the file's top level, and the files and names its imports from the mod name.
@@ -928,6 +935,18 @@ type ModRead = {
   code: (s: Span) => string
   refs: (s: Span) => string[]
   isTop: (name: string) => boolean
+  // #1296: each name used in a part with where it is, those inside a call the part makes aside when
+  // `cut` (the part's own drawing call's parenthesis, `own`, excepted); the functions and locals;
+  // where each name is called; and a call's arguments by position.
+  refsAt: (s: Span, cut: boolean, own?: number) => { name: string; at: number; call: boolean }[]
+  fns: Fn[]
+  locals: Local[]
+  calls: Map<string, number[]>
+  args: (at: number) => Span[] | null
+  ownParen: (u: Span) => number | undefined
+  // What function k returns: its expression body, or each of its own `return`s' values.
+  returns: (k: number) => Span[]
+  cutCode: (s: Span) => string
 }
 
 // One mod hook file as drawsChange reads it, or null for one its reader cannot follow.
@@ -1074,7 +1093,428 @@ const readMod = (f: ModFile): ModRead | null => {
     return [...out]
   }
   const tops = new Set(statements.filter(s => s.name !== undefined && !s.isType).map(s => s.name as string))
-  return { name: f.name, statements, imports, units, code, refs, isTop: x => tops.has(x) }
+
+  // #1296: what follows a value through a function's parameters and its local bindings.
+  const openAt = new Map<number, number>()
+  for (const [o, c] of close) openAt.set(c, o)
+  const pairs = [...close].sort((x, y) => x[0] - y[0])
+  const isSpace = (i: number) => /\s/.test(blank[i] ?? '')
+  const isWord = (i: number) => /[\w$]/.test(blank[i] ?? '')
+  const skipBack = (i: number) => {
+    while (i >= 0 && isSpace(i)) i--
+    return i
+  }
+  const skipOn = (i: number) => {
+    while (i < n && isSpace(i)) i++
+    return i
+  }
+  // The word ending at i, inclusive.
+  const wordBack = (i: number) => {
+    let k = i
+    while (k >= 0 && isWord(k)) k--
+    return blank.slice(k + 1, i + 1)
+  }
+  // Where an expression from i ends: at a `,`, `;` or closing bracket of its own depth, or a line end
+  // the code does not go on past, by the rule the file's statements are cut by.
+  const exprEnd = (i: number): number => {
+    for (let j = i; j < n; j++) {
+      if (mask[j]) continue
+      const c = blank[j] as string
+      if (c === '(' || c === '[' || c === '{') j = close.get(j) ?? n
+      else if (c === ')' || c === ']' || c === '}' || c === ',' || c === ';') return j
+      else if (c === '\n') {
+        const p = skipBack(j - 1)
+        const q = skipOn(j)
+        if (p < i || q >= n) return j
+        if (/(?:[=,([{?:|&*/.]|=>|(?:^|[^+])\+|(?:^|[^-])-)$/.test(blank.slice(Math.max(i, p - 1), p + 1)) || /^[?:.|&+\-*/,)\]}=]/.test(blank[q] as string)) continue
+        return j
+      }
+    }
+    return n
+  }
+  // The names each parameter or pattern in [a, b) binds, by position: one for a plain name, every name
+  // a destructured one binds, its type and default aside.
+  const namesIn = (a: number, b: number): string[][] => {
+    const out: string[][] = []
+    const one = (x: number, y: number) => {
+      let s = skipOn(x)
+      if (blank.startsWith('...', s)) s += 3
+      if (blank[s] === '{' || blank[s] === '[') {
+        const names: string[] = []
+        for (const m of blank.slice(s + 1, close.get(s) ?? s).matchAll(/([A-Za-z_$][\w$]*)\s*(:?)/g)) if (!m[2]) names.push(m[1] as string)
+        out.push(names)
+        return
+      }
+      const m = /^[A-Za-z_$][\w$]*/.exec(blank.slice(s, y))
+      out.push(m ? [m[0]] : [])
+    }
+    let from = a
+    let angle = 0
+    for (let j = a; j < b; j++) {
+      const c = blank[j]
+      if (c === '(' || c === '[' || c === '{') j = close.get(j) ?? j
+      else if (c === '<') angle++
+      else if (c === '>' && angle > 0 && blank[j - 1] !== '=') angle--
+      else if (c === ',' && angle === 0) {
+        one(from, j)
+        from = j + 1
+      }
+    }
+    if (blank.slice(from, b).trim()) one(from, b)
+    return out
+  }
+  // The `)` closing an arrow's parameters, back over a return type (`): Promise<X> =>`).
+  const returnTypeParen = (arrow: number): number | undefined => {
+    let depth = 0
+    for (let k = arrow - 1; k >= 0 && arrow - k < 300; k--) {
+      const c = blank[k] as string
+      if (c === ')' || c === ']' || c === '}') k = openAt.get(k) ?? k
+      else if (c === '>' && blank[k - 1] !== '=') depth++
+      else if (c === '<') depth--
+      else if (depth === 0 && c === ':') {
+        const p = skipBack(k - 1)
+        return blank[p] === ')' ? p : undefined
+      } else if (depth === 0 && /[=(,{;]/.test(c)) return undefined
+    }
+    return undefined
+  }
+  // The name a function is bound to (`const drawCard = async (`), from where its parameters start.
+  const nameBefore = (i: number): string | undefined =>
+    /(?:^|[^\w$.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]*)?=\s*(?:async\s*)?(?:function\b\s*\*?\s*)?(?:<[^()]*>\s*)?$/.exec(blank.slice(Math.max(0, i - 300), i))?.[1]
+  // What a function with no name is handed to: the `xs` of `xs.map(` or `[...].map(`, or the function
+  // a callback is handed to, which decides its values.
+  const receiverOf = (start: number): Fn['receiver'] => {
+    const p = skipBack(start - 1)
+    if (blank[p] !== '(' && blank[p] !== ',') return undefined
+    let o: number | undefined
+    for (const [x, c] of pairs) {
+      if (x >= start) break
+      if (c >= start && blank[x] === '(') o = x
+    }
+    if (o === undefined) return undefined
+    const q = skipBack(o - 1)
+    const before = blank.slice(Math.max(0, q - 300), q + 1)
+    const chain = /([A-Za-z_$][\w$]*)((?:\s*\??\.\s*[A-Za-z_$][\w$]*)*)$/.exec(before)
+    if (chain) {
+      const at = q + 1 - chain[0].length
+      if (!isWord(at - 1) && blank[at - 1] !== '.') return { at, name: chain[1] as string }
+    }
+    const bracket = /[\])]((?:\s*\??\.\s*[A-Za-z_$][\w$]*)+)$/.exec(before)
+    if (bracket) {
+      const c = q - bracket[0].length + 1
+      const x = openAt.get(c)
+      if (x !== undefined) return [x, c + 1]
+    }
+    return undefined
+  }
+  const fns: Fn[] = []
+  for (const m of blank.matchAll(/=>/g)) {
+    const arrow = m.index as number
+    let j: number | undefined = skipBack(arrow - 1)
+    let params: string[][] | undefined
+    let start = j
+    if (blank[j] !== ')' && isWord(j)) {
+      const id = wordBack(j)
+      const before = skipBack(j - id.length)
+      // A lone parameter (`x =>`, `async x =>`), never the end of a return type (`): A | B =>`).
+      if (before < 0 || /[(,=[{;?]/.test(blank[before] as string) || ['async', 'return'].includes(wordBack(before))) {
+        params = [[id]]
+        start = j - id.length + 1
+      } else j = returnTypeParen(arrow)
+    } else if (blank[j] !== ')') j = returnTypeParen(arrow)
+    if (params === undefined) {
+      const o = j === undefined ? undefined : openAt.get(j)
+      if (j === undefined || o === undefined) continue
+      params = namesIn(o + 1, j)
+      start = o
+    }
+    let head = start
+    const p = skipBack(head - 1)
+    if (wordBack(p) === 'async') head = p - 4
+    const b = skipOn(arrow + 2)
+    const to = blank[b] === '{' ? (close.get(b) ?? n - 1) + 1 : exprEnd(b)
+    const name = nameBefore(start)
+    fns.push({ from: start, to, body: b, params, ...(name ? { name } : { receiver: receiverOf(head) }) })
+  }
+  for (const m of blank.matchAll(/\bfunction\b\s*\*?\s*([\w$]*)\s*\(/g)) {
+    const paren = (m.index as number) + m[0].length - 1
+    const end = close.get(paren)
+    const brace = end === undefined ? -1 : blank.indexOf('{', end)
+    const shut = close.get(brace)
+    if (end === undefined || shut === undefined) continue
+    const name = m[1] || nameBefore(m.index as number)
+    fns.push({ from: m.index as number, to: shut + 1, body: brace, params: namesIn(paren + 1, end), ...(name ? { name } : { receiver: receiverOf(m.index as number) }) })
+  }
+  // The innermost function holding i, as an index into fns, or -1 at the top level; `not` excepted.
+  const fnAt = (i: number, not = -1): number => {
+    let best = -1
+    fns.forEach((g, k) => {
+      if (k !== not && g.from <= i && i < g.to && (best < 0 || g.from >= (fns[best] as Fn).from)) best = k
+    })
+    return best
+  }
+  const locals: Local[] = []
+  for (const m of blank.matchAll(/(?:^|[^\w$.])(const|let|var)\s+/g)) {
+    const kw = (m.index as number) + m[0].indexOf(m[1] as string)
+    const owner = fnAt(kw)
+    if (owner < 0) continue
+    let p = kw + (m[0].length - m[0].indexOf(m[1] as string))
+    let names: string[]
+    if (blank[p] === '{' || blank[p] === '[') {
+      const c = close.get(p) ?? p
+      names = namesIn(p, c + 1)[0] ?? []
+      p = c + 1
+    } else {
+      const id = /^[A-Za-z_$][\w$]*/.exec(blank.slice(p, p + 100))
+      if (!id) continue
+      names = [id[0]]
+      p += id[0].length
+    }
+    // Its value: after `=`, `of` or `in`, past a type on the same line, never the next line's `=`.
+    const v = /^[ \t]*(?::[^=;\n]*?)?[ \t]*(=(?![=>])|\bof\b|\bin\b)/.exec(blank.slice(p, p + 300))
+    const end = exprEnd(v ? p + v[0].length : p)
+    for (const name of names) locals.push({ name, span: [kw, end], owner })
+    // A `let` assigned again later in its function is followed to each value it is given.
+    if (m[1] !== 'let') continue
+    const f = fns[owner] as Fn
+    for (const name of names)
+      for (const a of blank.slice(f.from, f.to).matchAll(new RegExp(`(?:^|[^\\w$.])(${name.replace(/\$/g, '\\$')})\\s*[-+*/|&?]*=(?![=>])`, 'g'))) {
+        const at = f.from + (a.index as number) + a[0].indexOf(name)
+        if (at > end) locals.push({ name, span: [at, exprEnd(f.from + (a.index as number) + a[0].length)], owner })
+      }
+  }
+  // A function declared by name inside another is one of that function's locals.
+  fns.forEach((g, k) => {
+    if (!g.name || !/^function\b/.test(blank.slice(g.from, g.from + 8))) return
+    const owner = fnAt(g.from, k)
+    if (owner >= 0) locals.push({ name: g.name, span: [g.from, g.to], owner })
+  })
+  const NOT_CALLS = new Set(['if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'await', 'yield', 'in', 'of', 'case', 'do', 'else', 'void', 'delete', 'throw', 'function', 'async'])
+  // Whether a `(` opens a call's arguments, not a grouping, a condition or a function's parameters.
+  const isCall = (o: number): boolean => {
+    const p = skipBack(o - 1)
+    const c = blank[p] ?? ''
+    if (c === ')' || c === ']') return true
+    if (c === '.') return blank[p - 1] === '?'
+    if (c === '>') return blank[p - 1] !== '='
+    return isWord(p) && !NOT_CALLS.has(wordBack(p))
+  }
+  // Where each name is called: its offset and its call's `(`. A function's own declaration is no call.
+  const calls = new Map<string, number[]>()
+  for (const m of blank.matchAll(/[A-Za-z_$][\w$]*/g)) {
+    const at = m.index as number
+    if (isWord(at - 1) || (blank[at - 1] === '.' && blank.slice(at - 3, at) !== '...')) continue
+    const o = skipOn(at + m[0].length)
+    if (blank[o] !== '(' || wordBack(skipBack(at - 1)) === 'function') continue
+    calls.set(m[0], [...(calls.get(m[0]) ?? []), o])
+  }
+  // A call's arguments, by position, from its `(`.
+  const args = (o: number): Span[] | null => {
+    const c = close.get(o)
+    if (c === undefined) return null
+    const out: Span[] = []
+    let from = o + 1
+    for (let j = o + 1; j <= c; j++) {
+      const ch = blank[j]
+      if (j < c && (ch === '(' || ch === '[' || ch === '{')) j = close.get(j) ?? j
+      else if (ch === ',' || j === c) {
+        const a = skipOn(from)
+        let e = j
+        while (e > a && isSpace(e - 1)) e--
+        if (e > a) out.push([a, e])
+        from = j + 1
+      }
+    }
+    return out
+  }
+  const drawParen = new RegExp(DRAW_CALL.source, 'y')
+  const ownParen = (u: Span): number | undefined => {
+    drawParen.lastIndex = u[0]
+    const m = drawParen.exec(blank)
+    return m ? u[0] + m[0].length - 1 : undefined
+  }
+  // Where in [a, b) a value is only tested, never itself the value: a ternary's condition, each
+  // operand of `&&` but the last, an operand holding a comparison or led by `!` or `typeof` (#1296).
+  // A test decides which value is drawn, as logic does, so what it names is not followed.
+  const testsIn = (a: number, b: number, own?: number): Span[] => {
+    const out: Span[] = []
+    // The depth-0 places in [x, y) where `at(j)` holds, a group's inside skipped.
+    const scan = (x: number, y: number, at: (j: number) => number): [number, number][] => {
+      const hits: [number, number][] = []
+      for (let j = x; j < y; j++) {
+        if (mask[j]) continue
+        const c = blank[j]
+        if (c === '(' || c === '[' || c === '{') {
+          j = close.get(j) ?? j
+          continue
+        }
+        const len = at(j)
+        if (len > 0) {
+          hits.push([j, len])
+          j += len - 1
+        }
+      }
+      return hits
+    }
+    const op = (s: string) => (j: number) => (blank.startsWith(s, j) ? s.length : 0)
+    const ternary = (j: number) => (blank[j] === '?' && blank[j + 1] !== '.' && blank[j + 1] !== '?' && blank[j - 1] !== '?' ? 1 : 0)
+    const COMPARE = /^(?:===|!==|==|!=|<=|>=|instanceof\b|in\b)/
+    const compares = (j: number) => {
+      const m = COMPARE.exec(blank.slice(j, j + 12))
+      if (m && (/[\w$]/.test(m[0]) ? !isWord(j - 1) : true)) return m[0].length
+      const c = blank[j]
+      // A lone `<` or `>`, not an arrow's `=>`, a shift, or a generic's bracket after a name.
+      if ((c === '<' || c === '>') && blank[j - 1] !== '=' && blank[j + 1] !== c && blank[j - 1] !== c && blank[j + 1] !== '=' && /\s/.test(blank[j - 1] ?? '') && /\s/.test(blank[j + 1] ?? '')) return 1
+      return 0
+    }
+    const groups = (x: number, y: number) => {
+      for (let j = x; j < y; j++) {
+        if (mask[j]) continue
+        const c = blank[j]
+        if (c === '(' || c === '[' || c === '{') {
+          const e = close.get(j) ?? j
+          if (c !== '(' || !isCall(j) || j === own) level(j + 1, e, c === '{')
+          j = e
+        }
+      }
+    }
+    const operand = (x: number, y: number) => {
+      const lead = blank.slice(x, y).trimStart()
+      if (lead.startsWith('!') || /^typeof\b/.test(lead) || scan(x, y, compares).length) out.push([x, y])
+      else groups(x, y)
+    }
+    const ands = (x: number, y: number) => {
+      let s = x
+      for (const [j, len] of scan(x, y, op('&&'))) {
+        out.push([s, j])
+        s = j + len
+      }
+      operand(s, y)
+    }
+    const value = (x: number, y: number) => {
+      let s = x
+      for (const [j, len] of scan(x, y, k => op('||')(k) || op('??')(k))) {
+        ands(s, j)
+        s = j + len
+      }
+      ands(s, y)
+    }
+    const segment = (x0: number, y: number, braces: boolean) => {
+      let x = x0
+      // An object's key is no part of its value.
+      const key = braces ? /^\s*(?:[A-Za-z_$][\w$]*|\[[^\]]*\])\s*:(?!:)/.exec(blank.slice(x, y)) : null
+      if (key) x += key[0].length
+      const q = scan(x, y, ternary)[0]
+      if (!q) {
+        value(x, y)
+        return
+      }
+      // Its `:`, nested ternaries counted.
+      let depth = 0
+      let colon = -1
+      for (const [j] of scan(q[0] + 1, y, k => ternary(k) || (blank[k] === ':' ? 1 : 0))) {
+        if (blank[j] === '?') depth++
+        else if (depth === 0) {
+          colon = j
+          break
+        } else depth--
+      }
+      out.push([x, q[0]])
+      if (colon < 0) {
+        value(q[0] + 1, y)
+        return
+      }
+      segment(q[0] + 1, colon, false)
+      segment(colon + 1, y, false)
+    }
+    const level = (x: number, y: number, braces: boolean) => {
+      let s = x
+      for (const [j] of scan(x, y, k => (blank[k] === ',' || blank[k] === ';' ? 1 : 0))) {
+        segment(s, j, braces)
+        s = j + 1
+      }
+      segment(s, y, braces)
+    }
+    level(a, b, false)
+    return out
+  }
+  // What a followed value treats as data or a test, each region's inside: a call's arguments (the
+  // part's own drawing call's aside) and every test position.
+  const cutIn = (a: number, b: number, own?: number): Span[] => {
+    const out: Span[] = []
+    for (const [o, c] of pairs) if (o >= a && o < b && o !== own && blank[o] === '(' && isCall(o)) out.push([o, c])
+    out.push(...testsIn(a, b, own).map(([x, y]): Span => [x - 1, y]))
+    // What a drawing call is handed to say which surface it draws, never how (a blocked card's
+    // `toolUseId`, a band row's `mod`, `id` and `slot`, a pane's `id`): not followed.
+    const shut = own === undefined ? undefined : close.get(own)
+    if (own !== undefined && shut !== undefined)
+      for (const m of blank.slice(own, shut).matchAll(/([{,]\s*)(toolUseId|id|mod|slot|key)\b\s*(:?)/g)) {
+        const at = own + (m.index as number) + (m[1] as string).length
+        if (!m[3]) out.push([at - 1, at + (m[2] as string).length])
+        else {
+          const v = at + m[0].length - (m[1] as string).length
+          out.push([v - 1, exprEnd(v)])
+        }
+      }
+    return out
+  }
+  // A followed value's code with what it treats as data or a test taken out, as `<cut>`, so a change to
+  // which data a value is made from is no change to what is drawn (#1296).
+  const cutCode = ([a, b]: Span): string => {
+    const regions = cutIn(a, b).sort((x, y) => x[0] - y[0])
+    let out = ''
+    let i = a
+    for (const [x, y] of regions) {
+      if (y <= i || x + 1 >= y) continue
+      if (x + 1 > i) out += code([i, x + 1])
+      out += '<cut>'
+      i = y
+    }
+    return out + (i < b ? code([i, b]) : '')
+  }
+  const refsAt = ([a, b]: Span, cut: boolean, own?: number): { name: string; at: number; call: boolean }[] => {
+    const inCalls: Span[] = cut ? cutIn(a, b, own) : []
+    const out: { name: string; at: number; call: boolean }[] = []
+    for (const m of blank.slice(a, b).matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const at = a + (m.index as number)
+      const before = blank[at - 1] ?? ''
+      if (/[\w$]/.test(before) || (before === '.' && blank.slice(at - 3, at) !== '...')) continue
+      if (handlers.some(([x, y]) => x <= at && at < y)) continue
+      if (inCalls.some(([x, y]) => x < at && at < y)) continue
+      // An object's key (`{ title: r }`) names no binding.
+      const after = skipOn(at + m[0].length)
+      if (blank[after] === ':' && blank[after + 1] !== ':' && /[{,]/.test(blank[skipBack(at - 1)] ?? '')) continue
+      // In a followed value, what a method is called on (`args.find(...)`, `words.slice(1)`) is data
+      // being worked on, which file or command a sentence names, not its look (#1296).
+      // A name only typeof reads (in a type, or a test) is never the value.
+      if (cut && wordBack(skipBack(at - 1)) === 'typeof') continue
+      if (cut) {
+        const chain = /^(?:\s*\??\.\s*[A-Za-z_$][\w$]*)+\s*(?:\?\.\s*)?\(/.exec(blank.slice(at + m[0].length, at + m[0].length + 200))
+        if (chain) continue
+      }
+      out.push({ name: m[0], at, call: blank[after] === "(" })
+    }
+    return out
+  }
+  const returns = (k: number): Span[] => {
+    const g = fns[k] as Fn
+    if (g.returns) return g.returns
+    if (blank[g.body] !== '{') g.returns = [[g.body, g.to]]
+    else {
+      g.returns = []
+      for (const m of blank.slice(g.body, g.to).matchAll(/(?:^|[^\w$.])return\b/g)) {
+        const at = g.body + (m.index as number) + m[0].length
+        if (fnAt(at) !== k) continue
+        // A bare `return` gives nothing; its value starts on the same line.
+        const v = at + (/^[ \t]*/.exec(blank.slice(at, at + 200)) as RegExpExecArray)[0].length
+        if (blank[v] === '\n' || blank[v] === ';' || blank[v] === '}') continue
+        const end = exprEnd(v)
+        if (end > v) g.returns.push([v, end])
+      }
+    }
+    return g.returns
+  }
+  return { name: f.name, statements, imports, units, code, refs, isTop: x => tops.has(x), refsAt, fns, locals, calls, args, ownParen, returns, cutCode }
 }
 
 /**
@@ -1084,8 +1524,13 @@ const readMod = (f: ModFile): ModRead | null => {
  * building one of mod-kit's text runs, dividers or buttons (cardLines, finishedLine), whole where it
  * is a top level one; and every top level declaration any part, in this file or another of the mod's,
  * names, through the imports between them, and in turn what each of those names. A type draws nothing.
- * The gap: a value reaching a drawing call through a local variable or a function's parameter (a
- * guard's blocked card sentence handed to its drawCard) is not followed, unless it builds a run.
+ * Since #1296 a value reaching a part through a local or a parameter is followed too: a local's
+ * declaration, a parameter's argument at each call of its function in the mod's files (a guard's
+ * blocked card sentence handed to its drawCard), the values a function returns where a followed value
+ * calls it, and the `xs` a callback's `xs.map(x => ...)` takes its values from; each compared with
+ * what it treats as data or a test taken out (cutCode). Not followed, as no part of the look: what a
+ * call it makes is handed, what a value is only tested for, what a method is called on, a called
+ * function's or line builder's own parameters, and which surface a drawing call names (toolUseId).
  */
 export const drawnParts = (files: readonly ModFile[], name: string): string[] | null => {
   const read = new Map<string, ModRead>()
@@ -1096,6 +1541,9 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
   }
   const drawn = new Set<string>()
   const queue: [string, string][] = []
+  // The file an import names, as TypeScript finds it: as written, then with `.js` read as `.ts`,
+  // then with `.ts` or `.tsx` added (lessons review).
+  const fileOf = (spec: string): ModRead | undefined => [spec, spec.replace(/\.(m|c)?js$/, '.$1ts'), `${spec}.ts`, `${spec}.tsx`].map(x => read.get(x)).find(Boolean)
   const reach = (file: string, x: string) => {
     const r = read.get(file)
     if (!r) return
@@ -1108,9 +1556,7 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
       return
     }
     const via = r.imports.get(x)
-    // The file an import names, as TypeScript finds it: as written, then with `.js` read as `.ts`,
-    // then with `.ts` or `.tsx` added (lessons review).
-    const g = via ? [via.file, via.file.replace(/\.(m|c)?js$/, '.$1ts'), `${via.file}.ts`, `${via.file}.tsx`].map(x => read.get(x)).find(Boolean) : undefined
+    const g = via ? fileOf(via.file) : undefined
     if (!via || !g) return
     if (via.name !== '*') {
       reach(g.name, via.name)
@@ -1118,8 +1564,139 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
     }
     for (const s of g.statements) if (s.name !== undefined && !s.isType) reach(g.name, s.name)
   }
-  for (const r of read.values()) for (const u of r.units) for (const x of r.refs(u)) reach(r.name, x)
-  while (queue.length) {
+  // #1296: a value reaching what draws through a local or a parameter. A local's whole declaration is
+  // drawn, and a parameter's argument at each call of its function, in the mod's files; what those
+  // name is followed in turn, where it is not handed into a call they make (the call's function is
+  // followed, its arguments are data: the files a card names are not its look).
+  const extra = new Map<string, Map<string, Span>>()
+  // Each followed value, and for one a called function returns (`inputs`), that function: its own
+  // parameters are its inputs, data its callers hand it, so they are not followed back to them.
+  const spans: [string, Span, number | undefined][] = []
+  const queued = new Set<string>()
+  const addSpan = (file: string, s: Span, inputs?: number) => {
+    const m = extra.get(file) ?? new Map<string, Span>()
+    m.set(`${s[0]}:${s[1]}`, s)
+    extra.set(file, m)
+    const key = `${file}\n${s[0]}:${s[1]}\n${inputs ?? ''}`
+    if (queued.has(key)) return
+    queued.add(key)
+    spans.push([file, s, inputs])
+  }
+  const flowed = new Set<string>()
+  const flow = (file: string, k: number, i: number) => {
+    const key = `${file}\n${k}\n${i}`
+    if (flowed.has(key)) return
+    flowed.add(key)
+    const r = read.get(file) as ModRead
+    const f = r.fns[k] as Fn
+    if (f.receiver) {
+      if (Array.isArray(f.receiver)) addSpan(file, f.receiver as Span)
+      else {
+        const { name: x, at } = f.receiver as { at: number; name: string }
+        reach(file, x)
+        bind(file, x, at)
+      }
+      return
+    }
+    if (!f.name) return
+    // Its calls: inside the function holding it, or, for one at the top level, anywhere in its file
+    // and in each of the mod's files importing it.
+    let outer = -1
+    r.fns.forEach((g, j) => {
+      if (j !== k && g.from <= f.from && f.to <= g.to && (outer < 0 || g.from >= (r.fns[outer] as Fn).from)) outer = j
+    })
+    const o = r.fns[outer]
+    const sites: [ModRead, number][] = (r.calls.get(f.name) ?? []).filter(p => !o || (o.from <= p && p < o.to)).map(p => [r, p])
+    if (!o)
+      for (const g of read.values())
+        for (const [alias, via] of g.imports) if (via.name === f.name && fileOf(via.file) === r) for (const p of g.calls.get(alias) ?? []) sites.push([g, p])
+    for (const [g, p] of sites) {
+      const a = g.args(p) ?? []
+      const spread = a.findIndex(s => g.code(s).startsWith('...'))
+      a.forEach((s, j) => {
+        if (j === i || (spread >= 0 && spread <= i && j >= spread)) addSpan(g.name, s)
+      })
+    }
+  }
+  // The functions around offset `at`, innermost first.
+  const around = (r: ModRead, at: number) =>
+    r.fns
+      .map((f, k) => [f, k] as const)
+      .filter(([f]) => f.from <= at && at < f.to)
+      .sort((a, b) => b[0].from - a[0].from)
+  const returned = new Set<string>()
+  const returnsOf = (file: string, k: number) => {
+    const key = `${file}\n${k}`
+    if (returned.has(key)) return
+    returned.add(key)
+    for (const s of (read.get(file) as ModRead).returns(k)) addSpan(file, s, k)
+  }
+  // A function a followed value calls gives it what it returns, not its whole body: a refusal's
+  // reader (`blockedCommand`) gives the words it returns, never the matching that chose them. True
+  // where `x` called at `at` is such a function, a local one, one at the top level, or one imported.
+  const callee = (file: string, x: string, at: number): boolean => {
+    const r = read.get(file) as ModRead
+    for (const [f, k] of around(r, at)) {
+      const own = r.locals.filter(l => l.owner === k && l.name === x)
+      if (own.length) {
+        const g = r.fns.findIndex(h => h.name === x && own.some(l => l.span[0] <= h.from && h.to <= l.span[1]))
+        if (g < 0) return false
+        returnsOf(file, g)
+        return true
+      }
+      if (f.params.some(p => p.includes(x))) return false
+    }
+    const top = (g: ModRead, name: string): boolean => {
+      const s = g.statements.find(s => s.name === name && !s.isType)
+      const k = s ? g.fns.findIndex(h => h.name === name && s.from <= h.from && h.to <= s.to) : -1
+      if (k < 0) return false
+      returnsOf(g.name, k)
+      return true
+    }
+    if (r.isTop(x)) return top(r, x)
+    const via = r.imports.get(x)
+    const g = via && via.name !== '*' ? fileOf(via.file) : undefined
+    return via !== undefined && g !== undefined && top(g, via.name)
+  }
+  const bind = (file: string, x: string, at: number, inputs?: number) => {
+    if (x === '$') return
+    const r = read.get(file) as ModRead
+    const within = inputs === undefined ? undefined : r.fns[inputs]
+    for (const [f, k] of around(r, at)) {
+      const own = r.locals.filter(l => l.owner === k && l.name === x)
+      if (own.length) {
+        // A local of the called function carries on as one of its values.
+        for (const l of own) addSpan(file, l.span, within && within.from <= l.span[0] && l.span[1] <= within.to ? inputs : undefined)
+        return
+      }
+      const i = f.params.findIndex(p => p.includes(x))
+      if (i >= 0) {
+        if (k !== inputs) flow(file, k, i)
+        return
+      }
+    }
+  }
+  for (const r of read.values())
+    for (const u of r.units) {
+      for (const x of r.refs(u)) reach(r.name, x)
+      const own = r.ownParen(u)
+      // A line builder (a unit that is a function, whole) is drawn with its own words; what it is
+      // handed is the data it shows, so its parameters are its inputs, as a called function's are.
+      const builder = own === undefined && !r.code(u).startsWith('<') ? r.fns.findIndex(f => (u[0] <= f.from && f.to <= u[1]) || f.body === u[0]) : -1
+      for (const { name: x, at } of r.refsAt(u, true, own)) bind(r.name, x, at, builder < 0 ? undefined : builder)
+    }
+  while (queue.length || spans.length) {
+    const next = spans.pop()
+    if (next) {
+      const [file, s, inputs] = next
+      const r = read.get(file) as ModRead
+      for (const { name: x, at, call } of r.refsAt(s, true)) {
+        if (call && callee(file, x, at)) continue
+        reach(file, x)
+        bind(file, x, at, inputs)
+      }
+      continue
+    }
     const [file, x] = queue.pop() as [string, string]
     const r = read.get(file) as ModRead
     for (const s of r.statements) if (s.name === x && !s.isType) for (const y of r.refs([s.from, s.to])) reach(file, y)
@@ -1128,7 +1705,9 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
   if (!r) return []
   const parts = new Map(r.units.map(u => [`${u[0]}:${u[1]}`, u]))
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
-  return [...parts.values()].map(u => r.code(u)).sort()
+  const followed = new Map(extra.get(name) ?? [])
+  for (const key of parts.keys()) followed.delete(key)
+  return [...[...parts.values()].map(u => r.code(u)), ...[...followed.values()].map(s => r.cutCode(s))].sort()
 }
 
 /**
@@ -1296,6 +1875,31 @@ export const forged = (path: string): string =>
   `To go on, start /design-rounds, or ask Dan "${SKIP_QUESTION}" as the guard says when it refuses a look changing edit.`
 
 export const cannotCheck = (why: string): string => `Blocked: the design round guard could not check this call (${why}), so it was stopped. Try again; if it keeps failing, tell Dan.`
+
+/**
+ * What became of a shell write the guard judged once it ran (#1296): a change to a mod's .ts hook file
+ * that made it draw, put back with what the command wrote kept first (`undone`, where it is kept), or
+ * not put back, and why: no copy could be kept (`unkept`), the file changed again after the command
+ * wrote it (`changed`, where the copy is), putting it back failed (`failed`), or the file could not be
+ * read after the command (`unread`). Only `undone` ever says the change was undone.
+ */
+export type ShellOutcome =
+  | { file: string; undone: string }
+  | { file: string; unkept: string }
+  | { file: string; changed: string }
+  | { file: string; failed: string; kept: string }
+  | { file: string; unread: string }
+export const shellOutcome = (o: ShellOutcome): string => {
+  const notUndone = `The command ran and changed what the mod draws in ${o.file}, and that change was NOT undone:`
+  if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: it changed what the mod draws on screen. What the command wrote there is kept at ${o.undone}.`
+  if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
+  if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`
+  if ('failed' in o) return `${notUndone} putting the earlier text back failed (${o.failed}). The file still holds what the command wrote, also kept at ${o.kept}.`
+  return `The command ran, and the design round guard could not read ${o.file} after it (${o.unread}), so whether it changed what the mod draws is unknown; the file was left as the command left it.`
+}
+/** A check after a shell write that itself failed (#1296): the command ran, and nothing was undone. */
+export const shellUnchecked = (why: string): string =>
+  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws (${why}), so nothing was undone. Check the mod's hook files the command wrote, and tell Dan.`
 
 /** What the skip question's `onScreen` asks for, as the refusal shows Claude it (#1138). */
 export const ON_SCREEN_HINT = '<one plain sentence for Dan: what on screen this edit changes, which control or area on which screen, or that nothing visible changes>'

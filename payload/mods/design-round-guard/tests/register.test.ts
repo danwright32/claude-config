@@ -104,7 +104,29 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
   const files: Record<string, string> = { ...(init.files ?? {}) }
   const branches: Record<string, string> = { '/w/slate': '978-design-round-guard', '/w/slate-wt': '978-design-round-guard', '/w/other': '55-other', '/w/tests/shop': '77-shop' }
   const store: Record<string, unknown> = {}
-  const ctl: { storeGetFails: boolean; storeSetFails: boolean; settingsRefuse: boolean; existsFails?: boolean; listFails?: boolean; storeSetFailKey?: string; hold?: Promise<void>; reached?: () => void; gitBlob?: 'throws' | 'truncated' } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  // `shell`: what a Bash command writes when it runs, by path (#1296); `writeFails`: the paths
+  // $.fs.write refuses; `afterWrite`: run once a write lands (another writer arriving, say);
+  // `rmFails`: rm reports failure; `readFailsAfterRun`: a path that cannot be read once a command ran.
+  const ctl: {
+    storeGetFails: boolean
+    storeSetFails: boolean
+    settingsRefuse: boolean
+    existsFails?: boolean
+    listFails?: boolean
+    storeSetFailKey?: string
+    hold?: Promise<void>
+    reached?: () => void
+    gitBlob?: 'throws' | 'truncated'
+    shell?: Record<string, string>
+    writeFails?: (path: string) => boolean
+    afterWrite?: (path: string) => void
+    rmFails?: boolean
+    readFailsAfterRun?: string
+    unreadable?: string
+    branchFails?: boolean
+  } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  const writes: string[] = []
+  const removed: string[] = []
   const blobs: Record<string, string> = { ...(init.blobs ?? {}) }
   const ran: { tool: string; input: Record<string, unknown> }[] = []
   const asked: Asked[] = []
@@ -159,6 +181,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     }
     // mod-kit's branch reader, read here with its copy, over the checkouts the stand-in's walk finds.
     if (cmd === '__modkit' && args[0] === 'branch') {
+      if (ctl.branchFails) return { value: { exitCode: 1, stdout: '', stderr: 'mod-kit: the branch reader failed', isStdoutTruncated: false, isStderrTruncated: false } } as never
       const { path } = JSON.parse(String(args[1])) as { path: string }
       const root = ['/w/slate-wt', '/w/slate', '/w/other', '/w/tests/shop'].find(r => path === r || path.startsWith(r + '/'))
       return ok(JSON.stringify(root === undefined ? null : await readBranch(root, git)))
@@ -167,7 +190,21 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       const input = JSON.parse(String(args[1])) as { root?: string | null; remote: string | null }
       return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }))
     }
+    // Taking away a file a shell write made (#1296): `rm -f -- <path>`.
+    if (cmd === 'rm' && args[0] === '-f' && args[1] === '--' && args.length === 3) {
+      if (ctl.rmFails) return { value: { exitCode: 1, stdout: '', stderr: `rm: ${args[2]}: Operation not permitted\n`, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      removed.push(String(args[2]))
+      delete files[String(args[2])]
+      return ok('')
+    }
     throw new Error(`unexpected command: ${e.argv.join(' ')}`)
+  })
+  on('fs.write', ($, e) => {
+    if (ctl.writeFails?.(e.path)) throw new Error(`EACCES: ${e.path}`)
+    files[e.path] = e.text
+    writes.push(e.path)
+    ctl.afterWrite?.(e.path)
+    return { value: undefined } as never
   })
   // A file is there when the test put it there, and a folder when a file the test put is under it.
   on('fs.exists', ($, e) => {
@@ -179,10 +216,18 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (ctl.listFails) throw new Error(`EACCES: ${e.path}`)
     const dir = `${e.path.replace(/\/$/, '')}/`
     const names = Object.keys(files).filter(f => f.startsWith(dir) && !f.slice(dir.length).includes('/'))
-    return { value: names.map(f => ({ name: f.slice(dir.length), kind: 'file' as const, size: 1, mtimeMs: T0, isLink: false })) } as never
+    // And each folder a file the test put is under (the session's scratchpad's parents, #1296).
+    const dirs = [...new Set(Object.keys(files).filter(f => f.startsWith(dir) && f.slice(dir.length).includes('/')).map(f => f.slice(dir.length).split('/')[0] as string))]
+    return {
+      value: [
+        ...names.map(f => ({ name: f.slice(dir.length), kind: 'file' as const, size: 1, mtimeMs: T0, isLink: false })),
+        ...dirs.map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: T0, isLink: false })),
+      ],
+    } as never
   })
   on('fs.read', ($, e) => {
     reads.push(e.path)
+    if (ctl.unreadable === e.path) throw new Error(`EIO: ${e.path}`)
     const t = files[e.path]
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     // A file that exists and cannot be read.
@@ -231,9 +276,11 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
       await ctl.hold
     }
     ran.push({ tool: String(tool), input })
+    if (tool === 'Bash') for (const [path, text] of Object.entries(ctl.shell ?? {})) files[path] = text
+    if (tool === 'Bash' && ctl.readFailsAfterRun) ctl.unreadable = ctl.readFailsAfterRun
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed }
 }
 type W = ReturnType<typeof world>
 
@@ -1402,6 +1449,150 @@ test('#1275: undoing a logic edit to a line builder file with git restore passes
   // One git cannot read is judged whole, and the refusal says why.
   expect(refusalOf(await call($, { tool: 'Bash', command: `git restore --source=gone ${rel}` }))).toContain('could not read what git puts back')
   expect(w.ran.length).toBe(1)
+})
+
+// #1296: what a shell write leaves cannot be read before it runs, so one to a mod's .ts hook file that
+// draws nothing yet runs, and the file is read again after it (Dan, 2026-10-17: judge after, and
+// undo). One the command made draw, on an issue Dan has not answered for, is put back as it was, with
+// what the command wrote kept in the session's scratchpad first, and waits on Dan as a refused edit does.
+const SCRATCH = '/tmp/claude-501/-w-slate/s1/scratchpad'
+const KEPT = (id: string, name: string) => `${SCRATCH}/design-round-guard/${id}-${name}`
+const KEYS = `${DEMO}/keys.ts`
+const ROW = "export const row = (t: string) => [{ text: t, color: 'warning' }]\n"
+const DRAWN_KEYS = KEYS_TEXT + ROW
+const SED = { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/keys.ts" }
+const WITH_SCRATCH = { ...DEMO_FILES, [`${SCRATCH}/.keep`]: '' }
+
+test('#1296: a shell write making a .ts file that drew nothing draw is undone and held, its text kept; once Dan answers, the same command stands', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, SED))
+  expect(why).toContain('was undone')
+  BOTH_WAYS(why)
+  expect(why).toContain('payload/mods/demo/hooks/keys.ts')
+  const id = idIn(why) as string
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  expect(w.files[KEPT(id, 'keys.ts')]).toBe(DRAWN_KEYS)
+  expect(why).toContain(KEPT(id, 'keys.ts'))
+  expect(w.cards.length).toBe(1)
+  // Dan answers Skip them, and the same command, sent again, stands.
+  expect(refusalOf(await askSkip($, w, why, SKIP_YES))).toBe('')
+  expect(refusalOf(await call($, SED))).toBe('')
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+})
+
+test('#1296 (lessons review): a command writing one file twice is undone once, and what it printed is never repeated in the refusal', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/keys.ts && truncate -s 0 payload/mods/demo/hooks/keys.ts" }))
+  expect(why).toContain('was undone')
+  expect(why).not.toContain('NOT undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  // The command's own output could hold a secret, and only its result passes the secret guard's scrub.
+  expect(why).not.toContain('written')
+})
+
+test('#1296: a shell write leaving a .ts file drawing nothing stands untouched, and a new file it makes draw is taken away, its text kept', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: KEYS_TEXT.replace('steps:', 's:') }
+  expect(refusalOf(await call($, SED))).toBe('')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT.replace('steps:', 's:'))
+  expect(w.writes).toEqual([])
+  const row = `${DEMO}/row.ts`
+  w.ctl.shell = { [row]: ROW }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "cat > payload/mods/demo/hooks/row.ts <<'EOF'\nx\nEOF" }))
+  expect(why).toContain('was undone')
+  expect(w.removed).toEqual([row])
+  expect(w.files[row]).toBeUndefined()
+  expect(w.files[KEPT(idIn(why) as string, 'row.ts')]).toBe(ROW)
+})
+
+test('#1296: when its text cannot be kept, the change is left in place and said so, never called undone', withKit, async ($, on) => {
+  // The copy cannot be written.
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  w.ctl.writeFails = p => p.startsWith(SCRATCH)
+  const why = refusalOf(await call($, SED))
+  expect(why).toContain('NOT undone')
+  expect(why).not.toContain('was undone')
+  expect(why).toContain('could not keep a copy')
+  BOTH_WAYS(why)
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+  expect(w.cards.length).toBe(1)
+  // No scratchpad to keep it in.
+  delete w.files[`${SCRATCH}/.keep`]
+  w.ctl.writeFails = undefined
+  w.files[KEYS] = KEYS_TEXT
+  const none = refusalOf(await call($, SED))
+  expect(none).toContain('NOT undone')
+  expect(none).toContain('could not keep a copy')
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+})
+
+test('#1296: a file changed again after the command wrote it is not put back, and the reason is said', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const other = 'export const other = 1\n'
+  w.ctl.afterWrite = p => {
+    if (p.startsWith(SCRATCH)) w.files[KEYS] = other
+  }
+  const why = refusalOf(await call($, SED))
+  expect(why).toContain('NOT undone')
+  expect(why).not.toContain('was undone')
+  expect(why).toContain('changed again')
+  expect(w.files[KEYS]).toBe(other)
+  expect(w.files[KEPT(idIn(why) as string, 'keys.ts')]).toBe(DRAWN_KEYS)
+  expect(w.cards.length).toBe(1)
+})
+
+test('#1296: a put back that fails, a file that cannot be taken away, and one unreadable after the command are said loudly, never called undone', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  w.ctl.writeFails = p => p === KEYS
+  const why = refusalOf(await call($, SED))
+  expect(why).toContain('NOT undone')
+  expect(why).not.toContain('was undone')
+  // A failing hook is skipped by the engine, so the reason given is that nothing could write it.
+  expect(why).toContain('putting the earlier text back failed (no implementation for fs.write)')
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+  // A new file rm cannot take away.
+  w.ctl.writeFails = undefined
+  w.ctl.rmFails = true
+  w.ctl.shell = { [`${DEMO}/row.ts`]: ROW }
+  const kept = refusalOf(await call($, { tool: 'Bash', command: "cat > payload/mods/demo/hooks/row.ts <<'EOF'\nx\nEOF" }))
+  expect(kept).toContain('NOT undone')
+  expect(kept).toContain('Operation not permitted')
+  expect(w.files[`${DEMO}/row.ts`]).toBe(ROW)
+  // A file that cannot be read once the command ran.
+  w.ctl.rmFails = false
+  w.files[KEYS] = KEYS_TEXT
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  w.ctl.readFailsAfterRun = KEYS
+  const unread = refusalOf(await call($, SED))
+  expect(unread).toContain('could not read')
+  expect(unread).not.toContain('was undone')
+  BOTH_WAYS(unread)
+  expect(w.cards.length).toBe(3)
+})
+
+test('#1296: a check after the command that itself fails says so beside the result, and undoes nothing', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  w.ctl.branchFails = true
+  const r = await call($, SED)
+  expect(refusalOf(r)).toBe('')
+  expect(contextOf(r)).toContain('could not check afterwards')
+  expect(contextOf(r)).toContain('nothing was undone')
+  expect(w.files[KEYS]).toBe(DRAWN_KEYS)
+})
+
+test("#1296: a subagent's shell write is undone alike, and it is told to stop and report", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH }, agents: ['a1'] })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { ...SED, agentId: 'a1' }))
+  expect(why).toContain('was undone')
+  expect(why).toContain('A subagent never asks Dan')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
 })
 
 // #1158: on 2026-10-13 the guard let a subagent's logic Edit to account room's hook file through,

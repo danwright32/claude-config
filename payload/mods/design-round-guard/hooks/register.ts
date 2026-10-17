@@ -60,6 +60,9 @@ import {
   type ModFile,
   refusal,
   resolvePath,
+  shellOutcome,
+  shellUnchecked,
+  type ShellOutcome,
   settledOptions,
   settledQuestion,
   skipOptions,
@@ -123,6 +126,11 @@ import {
 //   there, not in the project, when the command names that scratchpad and the project has nothing
 //   of that name (guessAt). Every refusal of a look changing edit says where a round's files go, so
 //   a held round is never sent back to /design-rounds.
+// - Since #1296: a value reaching a drawing call through a local or a parameter is followed (rules.ts
+//   drawnParts), and a shell write to a mod's .ts hook file that draws nothing yet, whose result
+//   cannot be read before it runs, is judged by the file it leaves (Dan, 2026-10-17: judge after, and
+//   undo): one the command made draw, on an issue he has not answered for, is put back as it was,
+//   with what the command wrote kept in the session's scratchpad first (afterShell).
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -130,6 +138,14 @@ const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
 // A subagent's calls the tool.call hook judged and let through, by tool_use_id: the tool.check hook
 // beneath, which cannot see which loop a call runs in, does not judge them again.
 const fromAgent = new Set<string>()
+
+// #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
+// checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
+type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[] }
+// The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
+// by the tool.check hook, which judges them, and taken by the tool.call hook around them.
+const watching = new Map<string, Watched[]>()
+const WATCH_MAX = 64
 
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
@@ -421,9 +437,17 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 // and for a folder no plugin.json makes a mod. What a call leaves: a Write's content, an Edit's or
 // MultiEdit's text applied to the file, what git puts back (#1158). One that cannot be read before it
 // runs (a shell write, an edit that would not apply, a call naming several files) is held where the
-// file draws now and passes where it does not: the gap, that a shell write making a file that drew
-// nothing draw, is not seen.
-const drawingChange = async ($: EngineInterface, t: Target & { path: string }, tree: string, tool: string, input: Record<string, unknown>, notAlone: string | undefined): Promise<'held' | 'pass' | { unread: string }> => {
+// file draws now and passes where it does not; a shell write passing so goes into `watch`, to be
+// judged by the file it leaves once it ran (afterShell, #1296).
+const drawingChange = async (
+  $: EngineInterface,
+  t: Target & { path: string },
+  tree: string,
+  tool: string,
+  input: Record<string, unknown>,
+  notAlone: string | undefined,
+  watch: Watched[],
+): Promise<'held' | 'pass' | { unread: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
   const name = t.path.slice(dir.length + 1)
@@ -442,12 +466,17 @@ const drawingChange = async ($: EngineInterface, t: Target & { path: string }, t
     if ('why' in back) return { unread: back.why }
     after = back.text
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
-  if (after === undefined) return drawsChange(files, name, undefined, now) ? 'held' : 'pass'
+  if (after === undefined) {
+    if (drawsChange(files, name, undefined, now)) return 'held'
+    // Once per file, however many of the command's words write it (lessons review).
+    if (tool === 'Bash' && !watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
+    return 'pass'
+  }
   return drawsChange(files, name, now, after) ? 'held' : 'pass'
 }
 
 type Verdict =
-  | { pass: true }
+  | { pass: true; watch?: Watched[] }
   | { forged: string }
   | { unsure: string[]; why: string }
   | { unreadable: { files: string[]; subjects: DesignRoundSubject[]; why: string } }
@@ -479,6 +508,9 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
   // restoreAlone's answer for this call once asked; null until then.
   let notAlone: string | undefined | null = null
   const unsureFiles: string[] = []
+  // The mod .ts hook files a shell write passing now may change, read again once it ran (#1296).
+  const watch: Watched[] = []
+  const passing = (): Verdict => (watch.length ? { pass: true, watch } : { pass: true })
   let why = ''
   for (const t of targets) {
     // A name the shell expands as a pattern (#1015) is judged by every name it may expand to, and in
@@ -557,7 +589,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
     if (t.from !== undefined && (judgedByText(t.path) || modTs) && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
     if (modTs) {
-      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined)
+      const drawn = await drawingChange($, { ...t, path: t.path }, tree, tool, input, notAlone ?? undefined, watch)
       if (drawn === 'pass') continue
       if (drawn !== 'held') {
         const notes = unreadIn.get(tree) ?? []
@@ -586,7 +618,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)
   }
-  if (!byTree.size && !unsureFiles.length) return { pass: true }
+  if (!byTree.size && !unsureFiles.length) return passing()
 
   const missingFiles: string[] = []
   const missing: DesignRoundSubject[] = []
@@ -651,6 +683,125 @@ const refuse = async ($: EngineInterface, v: Exclude<Verdict, { pass: true }>, c
   const c = card(files, subjects)
   await drawCard($, call.id, c.reason, c.safeWay)
   return call.agent ? agentRefusal(files, subjects, call.id, unread) : refusal(call.id, files, subjects, unread)
+}
+
+// The session's scratchpad on the disk (#1296): `<temp>/claude-<uid>/<project>/<session id>/scratchpad`,
+// found under each temp folder Claude Code may use, or undefined where it is in none.
+const scratchpadOf = async ($: EngineInterface, at: Where): Promise<string | undefined> => {
+  for (const root of at.temps) {
+    const tops = await $.fs.list(root).catch(() => [])
+    for (const c of tops) {
+      if (c.kind !== 'dir' || !/^claude-\d+$/.test(c.name)) continue
+      for (const p of await $.fs.list(`${root}/${c.name}`).catch(() => [])) {
+        const dir = `${root}/${c.name}/${p.name}/${at.session}/scratchpad`
+        if (p.kind === 'dir' && (await $.fs.exists(dir).catch(() => false))) return dir
+      }
+    }
+  }
+  return undefined
+}
+
+// A file's text as it stands, undefined for one not there.
+const textNow = async ($: EngineInterface, path: string): Promise<string | undefined> => ((await $.fs.exists(path)) ? String(await $.fs.read(path)) : undefined)
+
+// Puts back one mod hook file a shell write made draw (#1296, Dan, 2026-10-17: judge after, and undo),
+// keeping what the command wrote first: written to the session's scratchpad and read back before
+// anything is overwritten; put back only while the file still holds exactly what the command wrote;
+// and a put back that fails is said, never called undone. A file the command made is taken away.
+const undoOne = async ($: EngineInterface, w: Watched, after: string | undefined, file: string, keep: string | undefined): Promise<ShellOutcome> => {
+  if (keep === undefined) return { file, unkept: "the session's scratchpad could not be found" }
+  try {
+    await $.fs.write(keep, after ?? '')
+    if (String(await $.fs.read(keep)) !== (after ?? '')) return { file, unkept: `the copy at ${keep} read back different from what the command wrote` }
+  } catch (err) {
+    return { file, unkept: message(err) }
+  }
+  let now: string | undefined
+  try {
+    now = await textNow($, w.path)
+  } catch (err) {
+    return { file, failed: `it could not be read again before putting it back: ${message(err)}`, kept: keep }
+  }
+  if (now !== after) return { file, changed: keep }
+  try {
+    if (w.before === undefined) {
+      const rm = await $.process.run(['rm', '-f', '--', w.path])
+      if (rm.exitCode !== 0) return { file, failed: rm.stderr.trim() || `rm exited ${rm.exitCode}`, kept: keep }
+      if (await $.fs.exists(w.path)) return { file, failed: 'it is still there after rm', kept: keep }
+    } else {
+      await $.fs.write(w.path, w.before)
+      if ((await textNow($, w.path)) !== w.before) return { file, failed: 'it read back different from its earlier text', kept: keep }
+    }
+  } catch (err) {
+    return { file, failed: message(err), kept: keep }
+  }
+  return { file, undone: keep }
+}
+
+// After a shell call the guard let through (#1296): each mod .ts hook file it may have changed, read
+// again. One it made draw, in a checkout whose issue Dan has not answered for (and not his Not a look
+// change for this very call), is put back (undoOne) and the call waits on him as a refused edit does,
+// its result withheld for the guard's words; one that cannot be read is said and waits alike.
+const afterShell = async (
+  $: EngineInterface,
+  r: Awaited<ReturnType<EngineInterface['tool']['call']>>,
+  watch: readonly Watched[],
+  call: { id: string; tool: string; agent: boolean; input: Record<string, unknown> },
+): Promise<typeof r> => {
+  if (r.deny !== undefined) return r
+  const changed: { w: Watched; after?: string; unread?: string }[] = []
+  for (const w of watch) {
+    let after: string | undefined
+    try {
+      after = await textNow($, w.path)
+    } catch (err) {
+      changed.push({ w, unread: message(err) })
+      continue
+    }
+    if (after !== w.before && drawsChange(w.files, w.name, w.before, after)) changed.push({ w, after })
+  }
+  if (!changed.length) return r
+  // What each waits on: its checkout's issue, unless Dan has answered for it.
+  const lacking: DesignRoundSubject[] = []
+  const trees: string[] = []
+  const held: typeof changed = []
+  const why: string[] = []
+  for (const c of changed) {
+    const at = await subjectsIn($, c.w.tree)
+    let open: DesignRoundSubject[] = []
+    if ('why' in at) why.push(at.why)
+    else
+      try {
+        for (const s of at.subjects) if (!recordOf(await $.store.get(s.key))) open.push(s)
+      } catch (err) {
+        why.push(message(err))
+        open = at.subjects
+      }
+    if ('why' in at || open.length) {
+      held.push(c)
+      if (!trees.includes(c.w.tree)) trees.push(c.w.tree)
+      for (const s of open) if (!lacking.some(x => x.key === s.key)) lacking.push(s)
+    }
+  }
+  if (!held.length) return r
+  const called = await keyOf($, call.tool, call.input)
+  if (await passed($, called)) return r
+  const at = await whereOf($)
+  const scratch = await scratchpadOf($, at)
+  const said: string[] = []
+  for (const c of held) {
+    const file = relTo(c.w.path, c.w.tree)
+    if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }))
+    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`)))
+  }
+  const files = held.map(c => relTo(c.w.path, c.w.tree))
+  const v: Exclude<Verdict, { pass: true }> = lacking.length
+    ? { missing: { files, subjects: lacking, trees, unread: [] } }
+    : { unsure: files, why: why.join('; ') || 'the issue could not be told' }
+  const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
+  // What the command printed is never repeated here: only the tool's own result passes the secret
+  // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).
+  return { deny: `${said.join(' ')} ${refused} What the command printed is withheld with this refusal.` }
 }
 
 // What a check with no call id is told: the refusal the call would meet, with no id to ask Dan under.
@@ -800,12 +951,42 @@ export const register: Register = on => {
     // judgement (lessons review of #991). Such a call is judged again beneath, the same way.
     if (!id) return next(e)
     fromAgent.add(id)
+    let r: Awaited<ReturnType<typeof next>>
     try {
-      return await next(e)
+      r = await next(e)
     } finally {
       fromAgent.delete(id)
     }
+    // A shell write that may have made a mod's .ts hook file draw, judged by what it left (#1296).
+    if (!v.watch) return r
+    try {
+      return await afterShell($, r, v.watch, { id, tool: e.tool, agent: true, input })
+    } catch (err) {
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
+    }
   }).catch(($, e, next) => ({ deny: cannotCheck(message(next.error)) }))
+
+  // The main session's shell call, around the tool.check judgement beneath: one that passed with mod
+  // .ts hook files to read again (watching) is judged by what it left once it ran (#1296). The check
+  // having run, a failure here never says the call was stopped: it ran.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const id = String((e as unknown as Record<string, unknown>).tool_use_id ?? '')
+    let r: Awaited<ReturnType<typeof next>>
+    let watch: Watched[] | undefined
+    try {
+      r = await next(e)
+    } finally {
+      watch = id ? watching.get(id) : undefined
+      if (id) watching.delete(id)
+    }
+    if (!watch) return r
+    try {
+      return await afterShell($, r, watch, { id, tool: e.tool, agent: false, input: argsOf(e as unknown as Record<string, unknown>) })
+    } catch (err) {
+      return r.deny !== undefined ? r : { ...r, context: [...(r.context ?? []), shellUnchecked(message(err))] }
+    }
+  })
 
   // The main session's call, judged beneath every mod's tool.call hook. A call that passes goes on
   // untouched; one that is refused goes to the settings hooks first, so a call one of them refuses is
@@ -814,7 +995,17 @@ export const register: Register = on => {
     if (e.tool_use_id !== undefined && fromAgent.has(e.tool_use_id)) return next(e)
     const input = (e.input ?? {}) as Record<string, unknown>
     const v = await judge($, e.tool, input)
-    if ('pass' in v) return next(e)
+    if ('pass' in v) {
+      const decided = await next(e)
+      // Read again once it ran, by the tool.call hook around this one (#1296): only a call the checks
+      // beneath let run, and never more than WATCH_MAX at once, since a check asked with an id that
+      // no call follows ($.tool.check) is never taken (lessons review).
+      if (v.watch && e.tool_use_id && decided.decision !== 'deny') {
+        watching.set(e.tool_use_id, v.watch)
+        while (watching.size > WATCH_MAX) watching.delete(watching.keys().next().value as string)
+      }
+      return decided
+    }
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
     // A check asked with no call id ($.tool.check) runs nothing: it is answered as the call would be,
