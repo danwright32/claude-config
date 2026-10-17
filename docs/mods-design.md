@@ -2756,8 +2756,9 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
   back: what the command wrote is written to the session's scratchpad
   (`design-round-guard/<call id>-<file>`) and read back first; the file is put back only while it
   still holds exactly what the command wrote; a file the command made is taken away with `rm`. The
-  call then waits on Dan as a refused edit does, its result withheld for the guard's words and the
-  first part of what the command printed. A copy that cannot be kept, a file changed again since, a
+  call then waits on Dan as a refused edit does, its result withheld for the guard's words; what
+  the command printed is never repeated there, since only the tool's own result passes the secret
+  guard's scrub (lessons review). Once per file, however many of the command's words write it. A copy that cannot be kept, a file changed again since, a
   put back that fails, or a file unreadable after the command each leaves the file as it is and says
   why, never that it was undone. The command's other effects stand. Sent again after Dan answers, the
   same command stands.

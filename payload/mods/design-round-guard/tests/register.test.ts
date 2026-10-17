@@ -1481,6 +1481,17 @@ test('#1296: a shell write making a .ts file that drew nothing draw is undone an
   expect(w.files[KEYS]).toBe(DRAWN_KEYS)
 })
 
+test('#1296 (lessons review): a command writing one file twice is undone once, and what it printed is never repeated in the refusal', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/keys.ts && truncate -s 0 payload/mods/demo/hooks/keys.ts" }))
+  expect(why).toContain('was undone')
+  expect(why).not.toContain('NOT undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  // The command's own output could hold a secret, and only its result passes the secret guard's scrub.
+  expect(why).not.toContain('written')
+})
+
 test('#1296: a shell write leaving a .ts file drawing nothing stands untouched, and a new file it makes draw is taken away, its text kept', withKit, async ($, on) => {
   const w = world($, on, { files: { ...WITH_SCRATCH } })
   w.ctl.shell = { [KEYS]: KEYS_TEXT.replace('steps:', 's:') }

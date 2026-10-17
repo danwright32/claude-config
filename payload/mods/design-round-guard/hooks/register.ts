@@ -145,6 +145,7 @@ type Watched = { path: string; tree: string; name: string; before: string | unde
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
 // by the tool.check hook, which judges them, and taken by the tool.call hook around them.
 const watching = new Map<string, Watched[]>()
+const WATCH_MAX = 64
 
 const message = (err: unknown) => String((err as Error)?.message ?? err)
 
@@ -467,7 +468,8 @@ const drawingChange = async (
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
     if (drawsChange(files, name, undefined, now)) return 'held'
-    if (tool === 'Bash') watch.push({ path: t.path, tree, name, before: now, files })
+    // Once per file, however many of the command's words write it (lessons review).
+    if (tool === 'Bash' && !watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
     return 'pass'
   }
   return drawsChange(files, name, now, after) ? 'held' : 'pass'
@@ -797,8 +799,9 @@ const afterShell = async (
     ? { missing: { files, subjects: lacking, trees, unread: [] } }
     : { unsure: files, why: why.join('; ') || 'the issue could not be told' }
   const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
-  const printed = typeof r.text === 'string' && r.text.trim() ? ` What the command printed: ${r.text.slice(0, 2000)}` : ''
-  return { deny: `${said.join(' ')} ${refused}${printed}` }
+  // What the command printed is never repeated here: only the tool's own result passes the secret
+  // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).
+  return { deny: `${said.join(' ')} ${refused} What the command printed is withheld with this refusal.` }
 }
 
 // What a check with no call id is told: the refusal the call would meet, with no id to ask Dan under.
@@ -993,9 +996,15 @@ export const register: Register = on => {
     const input = (e.input ?? {}) as Record<string, unknown>
     const v = await judge($, e.tool, input)
     if ('pass' in v) {
-      // Read again once it ran, by the tool.call hook around this one (#1296).
-      if (v.watch && e.tool_use_id) watching.set(e.tool_use_id, v.watch)
-      return next(e)
+      const decided = await next(e)
+      // Read again once it ran, by the tool.call hook around this one (#1296): only a call the checks
+      // beneath let run, and never more than WATCH_MAX at once, since a check asked with an id that
+      // no call follows ($.tool.check) is never taken (lessons review).
+      if (v.watch && e.tool_use_id && decided.decision !== 'deny') {
+        watching.set(e.tool_use_id, v.watch)
+        while (watching.size > WATCH_MAX) watching.delete(watching.keys().next().value as string)
+      }
+      return decided
     }
     const decided = await next(e)
     if (decided.decision === 'deny') return decided
