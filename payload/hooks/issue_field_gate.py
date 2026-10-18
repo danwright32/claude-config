@@ -336,9 +336,11 @@ def build_reason(offenders, failing):
 
 def main():
     # Asked by create-milestone.sh, whose creates this gate never sees, whether a body already has
-    # the section, so the two read it by one rule (claude-config#1320): exit 0 yes, 1 no.
+    # the section, so the two read it by one rule (claude-config#1320). The answer is printed, yes
+    # or no, never an exit code, since a crash exits 1 too and would read as no (lessons review).
     if sys.argv[1:] == ["--holds-open-questions"]:
-        return 0 if holds_open_questions(sys.stdin.read()) else 1
+        print("yes" if holds_open_questions(sys.stdin.read()) else "no")
+        return 0
     try:
         data = json.loads(sys.stdin.read())
         command = (data.get("tool_input") or {}).get("command") or ""

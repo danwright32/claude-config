@@ -416,6 +416,16 @@ check_eq "#1320 a fenced example of the heading still gets the section" "3" "$(u
 out="$(OPEN_QUESTIONS_GATE="$TMP/no-such-gate.py" run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"
 check_eq "#1320 a reader that cannot run still leaves every issue a section" "3" "$(under $'## Open questions\n\nNone')"
 check "#1320 and says it could not ask" "OPEN-QUESTIONS-UNREAD" "$out"
+# A reader that crashes exits 1, as a plain no once did, so only its printed answer counts and a
+# crash is said, never read as no (lessons review).
+printf 'raise SystemExit(1)\n' > "$TMP/crashing-gate.py"
+out="$(OPEN_QUESTIONS_GATE="$TMP/crashing-gate.py" run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"
+check_eq "#1320 a reader that crashes still leaves every issue a section" "3" "$(under $'## Open questions\n\nNone')"
+check "#1320 and the crash is said, not read as no" "OPEN-QUESTIONS-UNREAD" "$out"
+# The real reader's no adds the section without a word, so the notice means only what it says.
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan.json")"
+check_eq "#1320 a plain no from the real reader is not reported as unread" "0" "$(printf '%s\n' "$out" | grep -c 'OPEN-QUESTIONS-UNREAD')"
+check_eq "#1320 and it did add the three sections" "3" "$(under $'## Open questions\n\nNone')"
 
 # --- a category label new to the repo is created before anything is filed (claude-config#1034) ---
 # gh refuses an issue carrying a label the repo does not have ("could not add label: X not found"),

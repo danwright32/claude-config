@@ -389,12 +389,16 @@ while [[ "$i" -lt "$n" ]]; do
     # heading is not taken for it and the two never read it differently (claude-config#1320). A
     # reader that cannot answer is said and the section added: a second None section is untidy, a
     # missing one is what the gate exists to stop.
-    python3 "$OQ_GATE" --holds-open-questions <<<"$ib" 2>/dev/null
-    oq=$?
-    if [[ $oq -ne 0 ]]; then
-      [[ $oq -ne 1 ]] && echo "OPEN-QUESTIONS-UNREAD title=$it: could not ask $OQ_GATE whether the body has an Open questions section (exit $oq), so one saying None was added." >&2
-      ib="$ib"$'\n\n## Open questions\n\nNone'
+    # Only its printed yes or no is an answer: a crash exits 1 as plainly as a no would (lessons review).
+    oq_err="$(mktemp)"
+    oq="$(python3 "$OQ_GATE" --holds-open-questions <<<"$ib" 2>"$oq_err")"
+    oq_rc=$?
+    if [[ $oq_rc -ne 0 || ( "$oq" != yes && "$oq" != no ) ]]; then
+      echo "OPEN-QUESTIONS-UNREAD title=$it: could not ask $OQ_GATE whether the body has an Open questions section (exit $oq_rc, answer '${oq}', $(tail -1 "$oq_err" 2>/dev/null)), so one saying None was added." >&2
+      oq=no
     fi
+    rm -f "$oq_err"
+    [[ "$oq" == no ]] && ib="$ib"$'\n\n## Open questions\n\nNone'
     sess_line="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" 2>/dev/null && pwd)/claude-session-line.sh" 2>/dev/null)" || sess_line=""
     [[ -n "$sess_line" ]] && ib="$ib"$'\n\n'"$sess_line"
     iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" "${label_args[@]}" 2>&1)"
