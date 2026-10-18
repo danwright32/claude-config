@@ -411,6 +411,11 @@ check_eq "#1279 a heading that only starts with the words still gets the section
 jq '.issues[0].body = "Design empty states.\n\n```md\n## Open questions\n- [ ] an example\n```"' "$TMP/plan.json" > "$TMP/plan-q3.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q3.json")"
 check_eq "#1320 a fenced example of the heading still gets the section" "3" "$(under $'## Open questions\n\nNone')"
+# A plan body is markdown, not a shell spelling: an escaped fence there is text, so the plan's own
+# section after it is kept and no second one added (lessons review).
+jq '.issues[0].body = "Design empty states.\n\n\\`\\`\\`\n## Open questions\n\n- [ ] Which illustration style?"' "$TMP/plan.json" > "$TMP/plan-q4.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q4.json")"
+check_eq "#1320 an escaped fence in a plan body hides nothing, so None goes only on the other two" "2" "$(under $'## Open questions\n\nNone')"
 # A reader that cannot answer is said, and the section added rather than left out, since a missing
 # section is what the gate exists to stop and a second None one is only untidy.
 out="$(OPEN_QUESTIONS_GATE="$TMP/no-such-gate.py" run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"

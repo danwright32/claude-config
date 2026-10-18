@@ -27,5 +27,7 @@ export const FENCE_FIXTURES = [
   { "name": "a tilde fence is not closed by backticks", "body": "B\n\n~~~\n```\n## Open questions\n~~~\n\n## Open questions\n- [ ] After?", "found": true, "open": ["After?"] },
   { "name": "an indented fence in a list item", "body": "- item\n\n    ```\n    ## Open questions\n    - [ ] Keep it?\n    ```\n", "found": false, "open": [] },
   { "name": "line endings GitHub saved as CRLF", "body": "B\r\n\r\n```\r\n## Open questions\r\n```\r\n", "found": false, "open": [] },
-  { "name": "a fenced session line does not end the section", "body": "B\n\n## Open questions\n\n```\nClaude-Session: https://claude.ai/code/session_x\n```\n- [ ] Still open?", "found": true, "open": ["Still open?"] }
+  { "name": "a fenced session line does not end the section", "body": "B\n\n## Open questions\n\n```\nClaude-Session: https://claude.ai/code/session_x\n```\n- [ ] Still open?", "found": true, "open": ["Still open?"] },
+  { "name": "a backslash escaped fence in a body is text, not a fence", "body": "B\n\n\\`\\`\\`\n## Open questions\n- [ ] Keep it?", "found": true, "open": ["Keep it?"] },
+  { "name": "a written backslash n in a body is two characters, not a line break that opens a fence", "body": "B, as in a\\n~~~ written out\n\n## Open questions\n- [ ] Keep it?", "found": true, "open": ["Keep it?"] }
 ]
