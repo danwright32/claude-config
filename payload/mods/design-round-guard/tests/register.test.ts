@@ -70,6 +70,13 @@ const modKit: { name: string; register: Register } = {
           return said.text
         },
       }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
       return { ...built, modkit }
     })
   },
@@ -84,6 +91,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit] }
+// #1299: the same, with a mod-kit loaded before it had typedAnswer.
+const withOldKit = { plugins: [secDefault, modKit, { name: 'kit-lacks-typed-answer', register: (() => undefined) as Register }] }
 
 const HOME = '/Users/dan'
 // The moment every test's clock starts at.
@@ -1299,6 +1308,18 @@ test('#1138: a typed answer is not recorded, Dan is told so, and Claude is told 
   // Asked again and answered by choosing, it is recorded.
   await askSkip($, w, why, SKIP_YES)
   expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+// #1299: a typed answer with a mod-kit older than the guard, which has no typedAnswer: Claude is told
+// the two mods are out of step, in the one sentence, never the raw TypeError.
+test('#1299: a mod-kit with no typedAnswer is said as out of step, never as a TypeError', withOldKit, async ($, on) => {
+  const w = world($, on)
+  const why = refusalOf(await call($, PAGE))
+  const unsaid = contextOf(await askSkip($, w, why, 'looks fine to me'))
+  expect(unsaid).toContain('nothing is recorded')
+  expect(unsaid).toContain('design-round-guard and mod-kit are out of step in this session: the mod-kit loaded here has no typedAnswer')
+  expect(unsaid).not.toContain('is not a function')
+  expect(Object.keys(w.store)).toEqual([])
 })
 
 // #1138: a mod's own hook files draw Claude Code's panels through JSX (Box, Text, Button) and through

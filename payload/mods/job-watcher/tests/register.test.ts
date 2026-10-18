@@ -10,7 +10,7 @@ const deps: { name: string; register: Register } = {
   register: on => {
     on('engine.create', async ($, e, next) => {
       const built = await next(e)
-      return {
+      const made = {
         ...built,
         // mod-kit's screen (#707), standing in: refuses a call carrying SCREEN-REFUSES, as the secret
         // guard refuses a token; mod-kit's own tests prove the real one asks the secret guard.
@@ -73,6 +73,16 @@ const deps: { name: string; register: Register } = {
           },
         },
       }
+      // #1299: a provider loaded before it had a member, named by a plugin in the fold,
+      // <kit or sessions>-lacks-<member in kebab case>, since this plugin runs apart from the test's
+      // module; the call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const m = /^(kit|sessions)-lacks-([a-z-]+)$/.exec(p)
+        if (!m) continue
+        const member = (m[2] as string).replace(/-([a-z])/g, (_x: string, c: string) => c.toUpperCase())
+        delete (made as unknown as Record<string, Record<string, unknown>>)[m[1] === 'kit' ? 'modkit' : 'sessions']?.[member]
+      }
+      return made
     })
     // The status bar's read of the job list, as another mod makes it: the noun called in place.
     on('tool.call', { tool: '__jobs' as never }, async $ => {
@@ -93,6 +103,8 @@ const deps: { name: string; register: Register } = {
   },
 }
 const withDeps = { plugins: [deps] }
+// #1299: the same, with a session registry loaded before it had setExtra.
+const withOldRegistry = { plugins: [deps, { name: 'sessions-lacks-set-extra', register: (() => undefined) as Register }] }
 
 const MIN = 60_000
 const outOf = (id: string) => `/tmp/tasks/${id}.output`
@@ -531,6 +543,19 @@ test('a look that fails part way is said to Claude, not lost', withDeps, async (
   await clock.advance(MIN + 1)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).toContain("The background job watcher could not record this session's jobs: registry write failed")
+})
+
+// #1299: a session registry older than the job watcher, with no setExtra, is said as the two mods
+// out of step, never as the raw TypeError.
+test('a registry with no setExtra is said as out of step, never as a TypeError (#1299)', withOldRegistry, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'line\n', size: 5 })
+  await start($)
+  const first = contextOf(await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never))
+  await clock.advance(MIN + 1)
+  const said = `${first}\n${contextOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))}`
+  expect(said).toContain("The background job watcher could not record this session's jobs: job-watcher and session-registry are out of step in this session: the session-registry loaded here has no setExtra")
+  expect(said).not.toContain('is not a function')
 })
 
 test('an output file that shrank (truncated or rotated) counts as new output', withDeps, async ($, on) => {

@@ -99,6 +99,13 @@ const modKit: { name: string; register: Register } = {
           return said.text
         },
       }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
       return { ...built, modkit }
     })
   },
@@ -138,6 +145,8 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withKit = { plugins: [secDefault, modKit, guard] }
+// #1299: the same, with a mod-kit loaded before it had isDans.
+const withOldKit = { plugins: [secDefault, modKit, guard, { name: 'kit-lacks-is-dans', register: (() => undefined) as Register }] }
 const notesOf = (w: { notes: string[] }) => w.notes.join('\n')
 // A note the session refused, as the toast carrying it shows Dan.
 const unsaidOf = (w: { toasts: string[] }) =>
@@ -923,6 +932,16 @@ test("a reader mod-kit cannot answer reads permanent words as not Dan's, so the 
   expect(refusalOf(r)).toContain(ASKS)
   expect(w.ran).toEqual([])
   expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
+
+// #1299: a mod-kit older than ask before saving, with no isDans: the note says the two mods are out of
+// step, in the one sentence, never the raw TypeError.
+test('a mod-kit with no isDans is said as out of step, never as a TypeError (#1299)', withOldKit, async ($, on) => {
+  const w = world($, on)
+  await dan($, 'From now on, ask before you merge anything.', 'composer')
+  const note = w.logs.find(l => l.includes('could not ask mod-kit whether your message was your own words')) ?? ''
+  expect(note).toContain('ask-before-saving and mod-kit are out of step in this session: the mod-kit loaded here has no isDans')
+  expect(note).not.toContain('is not a function')
 })
 
 // Dan's answer is read only from his dialog: a question that hides the file, one about no waiting

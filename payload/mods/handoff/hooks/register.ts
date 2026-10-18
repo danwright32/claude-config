@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type { HandoffShown } from '../types/index.d.ts'
 import { ageOf, bandLines, changesOf, keyOf, namesIn, readingOf } from './handoff.ts'
 import type { Name, Reading } from './handoff.ts'
@@ -46,7 +47,7 @@ const parse = (text: string, repo: string): Saved | string => {
   try {
     j = JSON.parse(text) as Partial<Saved>
   } catch (err) {
-    return `not JSON (${String((err as Error).message ?? err)})`
+    return `not JSON (${message(err)})`
   }
   if (j.v !== 1 || typeof j.savedAt !== 'number' || typeof j.title !== 'string' || typeof j.prompt !== 'string' || !Array.isArray(j.baseline) || !j.baseline.every(isReading)) return 'not a handoff this mod wrote'
   if (j.repo !== repo) return `written for ${String(j.repo)}, not ${repo}`
@@ -79,7 +80,7 @@ const readAll = async ($: EngineInterface, root: string, names: readonly Name[])
         if (r.exitCode !== 0) return { ...n, error: firstLine(r.stderr) || `gh exited ${r.exitCode}` }
         return readingOf(n, JSON.parse(r.stdout))
       } catch (err) {
-        return { ...n, error: firstLine(String((err as Error).message ?? err)) || 'gh could not be run' }
+        return { ...n, error: firstLine(message(err)) || 'gh could not be run' }
       }
     }),
   )
@@ -112,7 +113,7 @@ const offer = async ($: EngineInterface) => {
   if (!(await $.fs.exists(p.current))) return
   const read = await $.fs.read(p.current).then(
     t => parse(t, p.root),
-    err => `unreadable (${String((err as Error).message ?? err)})`,
+    err => `unreadable (${message(err)})`,
   )
   if (typeof read === 'string') {
     $.ui.log(`The saved handoff could not be read (${p.current}): ${read}.`)
@@ -124,7 +125,9 @@ const offer = async ($: EngineInterface) => {
   await $.state.set(shownRef, { key: p.key, savedAt: read.savedAt } satisfies HandoffShown)
 }
 
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
+// said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
+const message = (err: unknown) => errorText(err, MOD)
 
 // Use and Dismiss each claim the handoff on the band by moving it into the archive. A claim that
 // finds nothing (another session took it) or a different handoff (one saved since replaced it)

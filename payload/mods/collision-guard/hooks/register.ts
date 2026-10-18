@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import { editedUnder, insideRoot, isScratch, judgedWrites, latestRequest, othersEditing, othersInRepo, parseVerdict, quoteNames, wantedFiles, watchedGit, type Rec, type ShellWrite, type Verdict } from './collide.ts'
 
 // Collision guard (claude-config#605): two sessions in one checkout must not edit the same file or
@@ -284,7 +285,7 @@ export const register: Register = on => {
     // A hook that fails is skipped and the verdict beneath stands, which would let the edit through
     // unjudged, so a failure here refuses (L42, lessons review of #878). Nothing has run yet.
     decision: 'deny' as const,
-    reason: `Blocked: the collision guard could not check this call against the other sessions (${next.error?.message ?? next.error?.kind ?? 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
+    reason: `Blocked: the collision guard could not check this call against the other sessions (${next.error ? errorText(next.error, 'collision-guard') : 'unknown failure'}), so it did not run. Try it again; if it fails the same way, tell Dan.`,
   }))
 
   on('tool.call', async ($, e, next) => {
@@ -311,11 +312,11 @@ export const register: Register = on => {
         try {
           await $.sessions.noteEdit({ path })
         } catch (err) {
-          unnoted ??= `The collision guard could not record that this session edited ${path}: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change it.`
+          unnoted ??= `The collision guard could not record that this session edited ${path}: ${errorText(err, 'collision-guard')}. Other sessions will not be warned before they change it.`
         }
       }
     } catch (err) {
-      unnoted ??= `The collision guard could not record this session's edits: ${err instanceof Error ? err.message : String(err)}. Other sessions will not be warned before they change them.`
+      unnoted ??= `The collision guard could not record this session's edits: ${errorText(err, 'collision-guard')}. Other sessions will not be warned before they change them.`
     }
     // Rearmed only by a call whose every note landed: one that lands beside one that fails is the
     // same trouble, and said once (lessons review of PR 794).
