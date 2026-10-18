@@ -29,5 +29,7 @@ export const FENCE_FIXTURES = [
   { "name": "line endings GitHub saved as CRLF", "body": "B\r\n\r\n```\r\n## Open questions\r\n```\r\n", "found": false, "open": [] },
   { "name": "a fenced session line does not end the section", "body": "B\n\n## Open questions\n\n```\nClaude-Session: https://claude.ai/code/session_x\n```\n- [ ] Still open?", "found": true, "open": ["Still open?"] },
   { "name": "a backslash escaped fence in a body is text, not a fence", "body": "B\n\n\\`\\`\\`\n## Open questions\n- [ ] Keep it?", "found": true, "open": ["Keep it?"] },
-  { "name": "a written backslash n in a body is two characters, not a line break that opens a fence", "body": "B, as in a\\n~~~ written out\n\n## Open questions\n- [ ] Keep it?", "found": true, "open": ["Keep it?"] }
+  { "name": "a written backslash n in a body is two characters, not a line break that opens a fence", "body": "B, as in a\\n~~~ written out\n\n## Open questions\n- [ ] Keep it?", "found": true, "open": ["Keep it?"] },
+  { "name": "the heading quoted in a sentence is not the section", "body": "B. Use \"## Open questions\" here\n- [ ] Keep it?", "found": false, "open": [] },
+  { "name": "a line opening with a quote before the heading is not the section", "body": "B\n\n\"## Open questions\"\n- [ ] Keep it?", "found": false, "open": [] }
 ]

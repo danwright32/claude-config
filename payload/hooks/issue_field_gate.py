@@ -116,6 +116,10 @@ def has_session_line(args, command):
 # ending there too, so "## Open questions about the API" is another section, as the shared reader
 # (mods/mod-kit/hooks/openquestions.ts) and create-milestone.sh read it (lessons review).
 OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
+# The same heading in a body that is markdown (a --body-file, a plan body): a whole line, after any
+# indentation, as mod-kit's reader takes it; a quote before or after it is the command's spelling,
+# so in markdown it makes the line a sentence (claude-config#1320, lessons review).
+HEADING_LINE = re.compile(r"(?im)^[ \t]*#{1,6}[ \t]*Open questions[ \t]*\r?$")
 
 
 # A fenced code block (claude-config#1320), by the rule mod-kit's reader follows
@@ -164,7 +168,7 @@ def holds_open_questions(text, spelled=False):
     """
     lines = (SPELLED_LINE_BREAK if spelled else LINE_BREAK).split(text)
     code = fenced_lines(lines, spelled)
-    return OPEN_QUESTIONS.search("\n".join("" if c else l for l, c in zip(lines, code))) is not None
+    return (OPEN_QUESTIONS if spelled else HEADING_LINE).search("\n".join("" if c else l for l, c in zip(lines, code))) is not None
 
 
 def has_open_questions(args, command):
