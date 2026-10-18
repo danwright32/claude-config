@@ -67,6 +67,8 @@ let toldSave = false
 // Whether a main turn is running: from its first request to its end. Every request it makes keeps
 // the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
 let turnRunning = false
+// A Compact pressed while a turn ran, to run when it ends (#1278); cleared by Cancel or by running.
+let compactQueued = false
 // The session has ended (not a /clear, after which it carries on): nothing writes its facts again.
 let ended = false
 let chain: Promise<unknown> = Promise.resolve()
@@ -264,9 +266,13 @@ const publish = () =>
     const cache = await io.cache()
     const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
     const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
-    const compact = due
-      ? [...(context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]), { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }]
-      : []
+    const ctx = context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]
+    // A press while a turn runs is queued (#1278): the row says so and offers Cancel until it runs.
+    const compact = compactQueued
+      ? [...ctx, { text: 'Compact queued, runs when this reply ends ' }, { button: 'compact-cancel', label: 'Cancel', instead: [{ text: 'type: ', dim: true }, { text: '/press status-bar compact-cancel' }] }]
+      : due
+        ? [...ctx, { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }]
+        : []
     try {
       const lookKey = JSON.stringify(look)
       if (lookKey !== shownLook) {
@@ -445,6 +451,13 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (interactive && e.agentId === undefined) {
       turnRunning = false
+      // A Compact queued during the turn runs now, from this later event, as Claude Code asks (#1278).
+      if (compactQueued) {
+        compactQueued = false
+        $.clock.after(0, () => {
+          void compactNow($).catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
+        })
+      }
       // The turn's end makes no request, so the cache clock stays where its last request put it;
       // only the band changes, since a cache warning waits for the turn to end.
       await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
@@ -475,7 +488,19 @@ export const register: Register = on => {
 
   // Compact, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   on('modkit.press', ($, e, next) => {
+    if (e.element === 'status-bar:compact-cancel') {
+      compactQueued = false
+      void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+      return { value: { isAnswered: true } }
+    }
     if (e.element !== 'status-bar:compact') return next(e)
+    // #1278: Claude Code refuses a compaction while a turn runs, so a press then is queued, shown on
+    // the row, and run when the turn ends.
+    if (turnRunning) {
+      compactQueued = true
+      void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+      return { value: { isAnswered: true } }
+    }
     // Taken at once and done just after: a noun's call is cut off at 10 s (#744), and compacting
     // runs a model call that takes longer.
     $.clock.after(0, () => {
@@ -492,11 +517,17 @@ export const register: Register = on => {
       await $.process.run(['rm', '-f', `${dirOf(home)}/${e.sessionId}.json`]).catch(() => undefined)
       if (writtenId === e.sessionId) writtenId = undefined
     }
-    // A /clear starts a new conversation, whose cache starts cold, and ends any turn.
+    // A /clear starts a new conversation, whose cache starts cold, and ends any turn. A Compact queued
+    // for the conversation it ended is dropped with it (#1278).
     if (e.reason === 'clear') {
       await $.state.set(cacheRef, null)
       toastedFor = null
       turnRunning = false
+      if (compactQueued) {
+        compactQueued = false
+        // Taken off the band now, not at the next tick, so it never claims a compact that will not run.
+        await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+      }
     }
     return next(e)
   })

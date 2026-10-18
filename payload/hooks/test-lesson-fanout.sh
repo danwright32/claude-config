@@ -70,7 +70,7 @@ case "$1 $2" in
     done
     [ -f "$FAKE/createfail-$(key "$repo")" ] && { echo "gh: simulated create failure" >&2; exit 1; }
     printf '%s\n' "$*" >>"$FAKE/created"
-    [ -n "$body" ] && cat "$body" >>"$FAKE/bodies"
+    [ -n "$body" ] && cat "$body" >>"$FAKE/bodies" && cp "$body" "$FAKE/body-$(key "$repo")"
     echo "https://github.com/$repo/issues/77"; exit 0 ;;
   "label create")
     exit 0 ;;
@@ -205,6 +205,19 @@ check "happy: body carries the rule sentence, whitespace collapsed" \
 check "happy: body carries the stable id marker" "<!-- lesson-id: abc1234567 -->" "$bodies"
 check_not "happy: body never carries the evidence (public repos)" "SECRET-EVIDENCE" "$bodies"
 check_not "happy: body never names the source repo (public repos)" "bidspoke" "$bodies"
+# Every issue carries an Open questions section (claude-config#1279), and the filing gate never sees
+# this script's body file (claude-config#1321), so each body sent is judged here by the gate's own
+# reader rather than a copy of its rule. The count first, so a loop over no bodies cannot pass.
+check "happy: body carries an Open questions section saying None" $'\n## Open questions\nNone\n' "$bodies"
+body_files=("$FAKE"/body-*)
+check_eq "happy: one body judged per issue created" "2" "${#body_files[@]}"
+for b in "${body_files[@]}"; do
+  check_eq "happy: the filing gate's own reader finds the section in ${b##*/}" "True" \
+    "$(python3 -c 'import importlib.util, sys
+s = importlib.util.spec_from_file_location("gate", sys.argv[1] + "/issue_field_gate.py")
+g = importlib.util.module_from_spec(s); s.loader.exec_module(g)
+print(g.has_open_questions(["--body-file", sys.argv[2]], "gh issue create --body-file " + sys.argv[2]))' "$DIR" "$b" 2>&1)"
+done
 check "happy: ledger records the lesson as fanned out" "L900 abc1234567" "$(cat "$CLAUDE_HOME/state/lesson-fanout.done" 2>/dev/null)"
 
 # ---- 2. without a short form the rule is the title ----

@@ -336,6 +336,12 @@ type Opts = {
   issueAnswers?: Record<string, string | null | Promise<string>>
   /** Each issue's labels as gh reads them (#836). */
   issueLabels?: Record<number, string[]>
+  /** Each issue's body as gh issue view gives it (#1279: its Open questions section), by number. */
+  issueBodies?: Record<number, string>
+  /** Numbers that are pull requests, which gh issue view answers for too, with a pull link (#1279). */
+  pullNumbers?: number[]
+  /** gh issue edit failing, with its stderr (#1279: checking an answered question off). */
+  editFails?: string
   /** gh issue view failing, with its stderr (#836). */
   issueViewFails?: string
   /** gh issue comment failing on an issue, with its stderr (#836). */
@@ -391,6 +397,7 @@ const world = (on: On, o: Opts = {}) => {
     askedOptions: [] as string[][],
     /** Every comment posted on an issue (#836). */
     comments: [] as { repo: string; issue: string; body: string }[],
+    edits: [] as { repo: string; issue: number; body: string }[],
     tools: [] as string[],
     logs: [] as string[],
     files: { ...o.files } as Record<string, string>,
@@ -462,6 +469,13 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'sysctl' && ops[0] === 'kern.bootsessionuuid') return o.session === null ? fail(1, 'sysctl: unknown oid') : ok(`${o.session ?? SESSION}\n`)
     if (cmd === 'mkdir') return ok()
+    // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
+    if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
+      const file = a[3] as string
+      if (!(file in w.files)) return fail(2, `grep: ${file}: No such file or directory`)
+      const found = (w.files[file] as string).match(new RegExp(a[2] as string, 'g'))
+      return found ? ok(`${found.join('\n')}\n`) : fail(1)
+    }
     // A folder's names, from the files beneath it (#836).
     if (cmd === 'ls') {
       const dir = String(ops[ops.length - 1]).replace(/\/+$/, '')
@@ -687,7 +701,15 @@ const world = (on: On, o: Opts = {}) => {
       }
       if (a[0] === 'issue' && a[1] === 'view' && (gh as { garbled?: boolean }).garbled) return ok('<html>rate limited</html>')
       if (a[0] === 'issue' && a[1] === 'view' && o.issueViewFails) return fail(1, o.issueViewFails)
-      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })) }))
+      if (a[0] === 'issue' && a[1] === 'view') return ok(JSON.stringify({ state: gh.issues[Number(a[2])] ?? 'OPEN', labels: (o.issueLabels?.[Number(a[2])] ?? []).map(name => ({ name })), body: o.issueBodies?.[Number(a[2])] ?? 'The issue.\n\n## Open questions\n\nNone', url: `https://github.com/o/r/${o.pullNumbers?.includes(Number(a[2])) ? 'pull' : 'issues'}/${a[2]}` }))
+      // An issue's body written whole (#1279), from standard input.
+      if (a[0] === 'issue' && a[1] === 'edit') {
+        if (o.editFails) return fail(1, o.editFails)
+        const body = String(e.init?.stdin ?? '')
+        w.edits.push({ repo: a[a.indexOf('--repo') + 1] as string, issue: Number(a[2]), body })
+        o.issueBodies = { ...(o.issueBodies ?? {}), [Number(a[2])]: body }
+        return ok(`https://github.com/o/r/issues/${a[2]}\n`)
+      }
       // A decision posted on an issue (#836): gh prints the new comment's link.
       if (a[0] === 'issue' && a[1] === 'comment') {
         const repo = a[a.indexOf('--repo') + 1] as string
@@ -2168,7 +2190,7 @@ const CURRENT = `${SLEEP}/current.json`
 // The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
 // night's unanswered list (#836).
 const recordWrites = (w: { fsWrites: string[] }) =>
-  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('/morning-review.') && !f.includes('/.morning-review.'))
+  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('/morning-review.') && !f.includes('/.morning-review.') && !f.includes('/reports/'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -2197,7 +2219,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     night: '1969-12-31',
     bootTime: BOOT,
     bootSession: SESSION,
-    report: '/Users/x/Downloads/Sleep report 1969-12-31.md',
+    report: '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md',
+    reportsPerSession: true,
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
     // Each worker's goal, read from its transcript, where Claude Code's /goal records it (#1242).
@@ -2210,10 +2233,10 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   // The record, the night's list of issues whose before bed question went unanswered (#836): none
   // tonight, and the night waiting on its morning review (#1107), whose reminder the card says, not this text.
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`].sort())
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`].sort())
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.`)
+  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
   // A goal already set is asked about by nobody: no question, and every worker's transcript read.
   expect(w.asked).toEqual([])
   expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl', '/Users/x/.claude/projects/-repo/s2.jsonl'])
@@ -2335,6 +2358,21 @@ test('a goal reader mod-kit cannot give is said and asked about, never read as a
   expect(r.text).toMatch(/this session's \/goal could not be read \(mod-kit is not loaded\)/)
 })
 
+// #1252's fallback, with no test of its own until now: a mod-kit loaded before it had the goal reader
+// (a mod reloaded before the one it depends on keeps the older copy, #1281) has no $.modkit.goal at
+// all. The TypeError is thrown at the call itself, so it is caught only because the call is made
+// inside the promise; the goal is then said as unreadable, naming the skew, and Dan is asked for one.
+const withNoGoalReader = { plugins: [deps, isItLive, { name: 'kit-lacks-goal', register: (() => undefined) as Register }] }
+test('a mod-kit with no goal reader at all is said, naming the skew, and the goal is asked for (#1252)', withNoGoalReader, async ($, on) => {
+  const { w, clock } = world(on, { issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(recordOf(w).goals).toEqual({})
+  expect(r.text).toContain("this session's /goal could not be read (scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no goal")
+})
+
 test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {
   // A session that is not interactive enrols no worker of its own and can ask nothing.
   const { w, clock } = world(on, withOther({ goals: { s2: null } }))
@@ -2440,8 +2478,9 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   // The other finds the first one's record, or its preparing marker while it is still settling the night.
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
-  // The record, the one night's unanswered list beside it (#836), and the one night waiting on its morning review (#1107).
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`])
+  // The record, the one night's unanswered list beside it (#836), the one night waiting on its morning
+  // review (#1107), and the one session's report name (#1287).
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`])
   expect(JSON.parse(w.files[`${SLEEP}/morning-review.json`] as string)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
   // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
@@ -2646,7 +2685,7 @@ test('a night with no proposals still starts the summary turn, and offers no pic
   await start($ as never, clock)
   await command($ as never, 'wake')
   await clock.settle()
-  expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight, so there are no morning pickers\.$/)
+  expect(morningOf(w)[0]).toMatch(/No issue or lesson was proposed overnight for o\/r, so there are no morning pickers\.$/)
 })
 
 // #1284: while asleep nothing is handed to Dan in any session, and what was held is delivered at wake.
@@ -2795,8 +2834,8 @@ const myQuestion = proposal({ kind: 'question', by: 's1', cwd: '/repo', question
 const theirQuestion = proposal({ kind: 'question', by: 's2', cwd: '/other', questions: ['Rename the parser?'] })
 const CLOSED_NIGHT = { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'o/r waits overnight' }] }
 
-test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, never the proposals (#1285)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n` } })
+test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, leaving the proposals of its repository to the session that claimed them (#1285, #1286)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
   // Woken in another session.
@@ -2809,7 +2848,7 @@ test('a worker that did not wake sleep puts its own morning to Dan at its next m
   expect(m).toMatch(/^Dan is up: sleep mode is off\. Summarise for him in a few plain lines what this session did overnight/)
   expect(m).toContain('3.1 /repo: Keep the old export flag?')
   expect(m).not.toContain('Rename the parser?')
-  // The proposals are the session that ended sleep's to offer, so none is offered twice.
+  // Another session holds the claim on o/r's proposals (the seeded offered/g0/o_r), so none is offered twice (#1286).
   expect(m).not.toContain('1.1 ')
   expect(m).not.toContain('2.1 ')
   await clock.advance(3 * MIN)
@@ -2817,7 +2856,7 @@ test('a worker that did not wake sleep puts its own morning to Dan at its next m
 })
 
 test('a session with nothing of its own from the night starts no turn at wake (#1285)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${theirQuestion}\n` } })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
   delete w.files[CURRENT]
@@ -2914,6 +2953,232 @@ test('a record naming no generation whose morning turn fails is still said as un
   await clock.advance(MIN)
   await clock.settle()
   expect(morningOf(w)[0]).toMatch(/could not be read \(the sleep record names no generation\)/)
+})
+
+// #1286: each session offers only its own repository's overnight proposals; another repository's go
+// to a live session there, or wait for the next session started there.
+const BIDSPOKE = proposal({ kind: 'issue', repo: 'Acme/Bidspoke', title: 'Bid totals round twice', priority: 'p2', labels: ['bug'], milestone: 'Ungrouped', text: 'Seen in totals.ts.' })
+const OFFERED = `${SLEEP}/offered`
+const IN_BIDSPOKE: Opts = { remote: 'git@github.com:acme/bidspoke.git' }
+const perNightRecord = (generation: string) => asleepRecord({ generation })
+
+test("the session that ends sleep offers only its own repository's proposed issues, and the lessons, never another repository's (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('1.1 o/r: Date parse drops the zone')
+  expect(m).toContain('2.1 Parse a date with its zone.')
+  expect(m).not.toContain('Bid totals round twice')
+  // Claimed for this night by repository, so no other session offers them again; Bidspoke's is left.
+  expect(Object.keys(w.files).filter(f => f.startsWith(`${OFFERED}/g0/`)).sort()).toEqual([`${OFFERED}/g0/_lessons`, `${OFFERED}/g0/o_r`])
+})
+
+test("a live session in the other repository offers that repository's proposals in its own morning, and none of the first's (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${PROPOSED}${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('1.1 Acme/Bidspoke: Bid totals round twice')
+  expect(m).not.toContain('Date parse drops the zone')
+  expect(m).not.toContain('Parse a date with its zone.')
+  expect(w.files[`${OFFERED}/g0/acme_bidspoke`]).toBeDefined()
+})
+
+test('the session that ends sleep never says nothing was proposed when another session holds its repository\'s claim (#1286 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}`, [`${OFFERED}/g0/o_r`]: 's7', [`${OFFERED}/g0/_lessons`]: 's7' } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).not.toMatch(/No issue or lesson was proposed/)
+  expect(m).not.toContain('Date parse drops the zone')
+})
+
+test('a repository whose proposals another live session there already claimed is offered nowhere else (#1286)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: asleepRecord(), [PROPOSED_AT]: `${BIDSPOKE}\n`, [`${OFFERED}/g0/acme_bidspoke`]: 's7' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(2 * MIN)
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+})
+
+const EARLIER = `${SLEEP}/notes/${T0 - MIN}-s9.jsonl`
+test('a repository with no live session at wake keeps its proposals for the next session started there, offered once (#1286)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `${BIDSPOKE}\n${PROPOSED}` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Bid totals round twice'))
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toMatch(/^Proposals and questions for acme\/bidspoke from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now\./)
+  expect(offered[0]).not.toContain('Date parse drops the zone')
+  await clock.advance(3 * MIN)
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice')).length).toBe(1)
+})
+
+test("a session's own morning claim is never offered again by its backlog check (#1286 lessons review)", withDeps, async ($, on) => {
+  const NIGHT = `${SLEEP}/notes/${T0 - MIN}-s9.jsonl`
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [CURRENT]: perNightRecord(`${T0 - MIN}-s9`), [NIGHT]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(3 * MIN)
+  await clock.settle()
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice')).length).toBe(1)
+})
+
+test("an earlier night's question from a session now closed is asked by the next session in its repository (#1286 lessons review)", withDeps, async ($, on) => {
+  const asked = JSON.stringify({ v: 1, generation: 'x', at: T0 - 2 * MIN, kind: 'question', by: 's5', repo: 'acme/bidspoke', questions: ['Round totals up or down?'] })
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `${asked}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Round totals up or down?'))
+  expect(offered.length).toBe(1)
+  expect(offered[0]).toContain('3.1 acme/bidspoke: Round totals up or down?')
+})
+
+test("an earlier night's notes with a line that cannot be read say so with what is offered (#1286 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, files: { [EARLIER]: `not json\n${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  const offered = w.prompts.filter(p => p.includes('Bid totals round twice'))
+  expect(offered[0]).toMatch(/One line of the night's notes could not be read, so a proposal may be missing here/)
+})
+
+test("a claim that cannot be written offers nothing rather than risk offering twice, and says why (#1286)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, markerFails: 'Operation not permitted', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(w.prompts.filter(p => p.includes('Bid totals round twice'))).toEqual([])
+  expect(w.logs.some(l => l.includes('could not be claimed') && l.includes('Operation not permitted'))).toBe(true)
+})
+
+// #1287: one report per session with news, named night first, then the project, then the session.
+const REPORTS_G0 = `${SLEEP}/reports/g0`
+const perSession = (extra: Record<string, unknown> = {}) => asleepRecord({ reportsPerSession: true, ...extra })
+const OWN = '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md'
+
+test('/sleep names its own report by night, project and session, marks the record as per session, and says where it is (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  const rec = recordOf(w)
+  expect(rec.reportsPerSession).toBe(true)
+  expect(rec.report).toBe(OWN)
+  expect(w.files[`${SLEEP}/reports/${rec.generation}/s1.path`]).toBe(OWN)
+  expect(r.text).toContain(` The night's report is at ${OWN}.`)
+})
+
+test("a session's title, as its transcript records it, names its report, auto naming's prefix dropped and the latest /rename winning (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const lines = [
+    '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Old name","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Fix the \\"parser\\"","sessionId":"s1"}',
+  ].join('\n')
+  const { w, clock } = world(on, { files: { [T]: lines } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Fix the "parser" sleep report.md')
+})
+
+test("with no /rename, Claude Code's own title names the report (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const { w, clock } = world(on, { files: { [T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+})
+
+test('a transcript that cannot be read names the report by id, and says why in the log (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe(OWN)
+  expect(w.logs.some(l => l.includes("this session's title could not be read (grep: /Users/x/.claude/projects/-repo/s1.jsonl: No such file or directory)"))).toBe(true)
+})
+
+test('a second sleep the same night gets its own name, never writing over the first night\'s report (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [OWN]: '# Sleep report, the first night' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+  expect(w.files[OWN]).toBe('# Sleep report, the first night')
+})
+
+test('a /sleep whose report cannot be named does not start, and leaves no unanswered list behind (#1287 lessons review)', withDeps, async ($, on) => {
+  const taken: Record<string, string> = { [OWN]: 'x' }
+  for (let n = 2; n <= 50; n++) taken[OWN.replace('.md', ` (${n}).md`)] = 'x'
+  const { w, clock } = world(on, { files: taken })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('Sleep mode did not start: its report could not be named (fifty names for it were all taken).')
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(Object.keys(w.files).filter(f => f.includes('/unanswered/'))).toEqual([])
+})
+
+test('a worker that did not run /sleep names its own report at its first minute asleep, and renders it (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1', 's9'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+  expect(w.reports.some(x => x.op === 'render')).toBe(true)
+  // Once: the next minute names nothing new.
+  const renders = w.reports.length
+  await clock.advance(2 * MIN)
+  expect(w.reports.length).toBe(renders)
+})
+
+test("a worker names its report as its first prompt asleep goes in, before any note and any minute (#1287 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await say($ as never, 'start the night')
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+})
+
+test('a session that is not a worker gets a report only once it has noted something overnight (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession() } })
+  await start($ as never, clock)
+  await clock.advance(2 * MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBeUndefined()
+  w.files[PROPOSED_AT] = `${myQuestion}\n`
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+})
+
+test('two sessions with the same name tonight get two files: a name another session holds is not taken (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }), [`${REPORTS_G0}/s0.path`]: OWN } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+})
+
+test("at wake a per session night opens this session's own report, and its morning names the page after it (#1287)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }), [`${REPORTS_G0}/s1.path`]: OWN, [OWN]: '# report' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toContain(` The night's report is at ${OWN}.`)
+  expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', OWN]])
+  await clock.settle()
+  expect(morningOf(w)[0]).toContain('If you publish a page of the night\'s results for Dan, title it "1969-12-31 repo s1 sleep report", the name of this session\'s report.')
+})
+
+test('at wake a session with no report of its own says so and opens nothing (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession() } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toContain(" This session noted nothing overnight, so it has no report of its own; each session with news has one in Downloads, named by night, project and session.")
+  expect(w.opened).toEqual([])
 })
 
 test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {
@@ -4300,9 +4565,10 @@ test("the open questions on the queue's issues are asked one at a time after the
   const placed = w.fileOps.findIndex(op => op[0] === 'ln' && op[2] === CURRENT)
   expect(listed).toBeGreaterThan(-1)
   expect(placed).toBeGreaterThan(listed)
-  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. 1 question left for the morning, so tonight the queue skips o/r#20.'))
+  // Each question left is named with why it was not asked or answered (#1279).
+  expect(r.text).toMatch(asRegExp(' Before bed: 2 questions answered and posted on o/r#12 and o/r#14. Left for the morning, so tonight the queue skips them: o/r#20, "Rename it?" (you skipped it).'))
   // The one left is noted for the morning report as the same question, so it is asked again next time.
-  expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text])).toEqual([['o/r', 20, 'Rename it?']])
+  expect(morningQuestions(w).map(n => [n.repo, n.issue, n.text, n.why])).toEqual([['o/r', 20, 'Rename it?', 'you skipped it']])
   // Every answer posted is kept, one record per issue and question.
   expect(answeredRecords(w).length).toBe(3)
 })
@@ -4333,7 +4599,7 @@ test('Go to sleep now asks nothing more: every question left is its issue skippe
   expect(w.comments).toEqual([])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
   expect(r.text).toMatch(/^Sleep mode is on until/)
-  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (you chose to go to sleep); o/r#20, "Rename it?" (not asked: you chose to go to sleep first); o/r#12, "Which copy?" (not asked: you chose to go to sleep first).'))
 })
 
 test('Go to sleep now on the repository question asks no issue question either, and closes that repository tonight', withDeps, async ($, on) => {
@@ -4363,7 +4629,7 @@ test('the ten minutes are shared with the repository questions: once they run ou
   const r = await pending
   expect(w.asked).toEqual(['o/r#12 and #14: Keep the old flag?'])
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
-  expect(r.text).toMatch(asRegExp(' 3 questions left for the morning, so tonight the queue skips o/r#12, o/r#14 and o/r#20.'))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#12 and o/r#14, "Keep the old flag?" (not answered in the 10 minutes); o/r#20, "Rename it?" (not asked: the 10 minutes for bedtime questions ran out); o/r#12, "Which copy?" (not asked: the 10 minutes for bedtime questions ran out).'))
   // Dan answers after sleep began: the decision is posted, and the issue stays out of tonight's queue.
   answer('Drop it')
   await clock.settle()
@@ -4437,7 +4703,126 @@ test('a question dismissed or that could not be shown leaves its issue out, said
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.files[UNANSWERED]).toBe('o/r#20\n')
-  expect(r.text).toMatch(asRegExp(' 1 question left for the morning, so tonight the queue skips o/r#20. The question on o/r#20 was dismissed or could not be shown ('))
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#20, "Rename it?" (the question was dismissed or could not be shown: '))
+})
+
+// #1279, the night of 2026-10-16 as far as the stand in can play it: goal questions answered quickly
+// with no work for the other workers, then earlier nights' questions on this worker's repository.
+// They are asked, never left for the morning unasked. On that night they were left, said only as
+// "2 questions left for the morning"; this stand in does not reproduce it, so the cause lies in
+// something it does not model (the real dialog, or the record on the work MacBook), and every
+// question left now carries why, so the next night that happens says it.
+test('earlier questions are asked after goal questions answered quickly with no work (#1279, 2026-10-16)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, withOther({
+    goals: { s2: null },
+    files: { [LISTS_PATH]: listsFile([{ repo: 'o/r', mergeDeploys: false }, { repo: 'o/other', mergeDeploys: false }]), [NOTES_OLD]: OLD_NOTES },
+    issueAnswers: { [S2_GOAL_Q]: NO_GOAL, 'o/r#12 and #14: Keep the old flag?': 'Drop it', 'o/r#20: Rename it?': 'Yes', 'o/r#12: Which copy?': 'Short' },
+  }))
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([S2_GOAL_Q, 'o/r#12 and #14: Keep the old flag?', 'o/r#20: Rename it?', 'o/r#12: Which copy?'])
+  expect(w.files[UNANSWERED]).toBe('')
+  expect(r.text).not.toContain('Left for the morning')
+})
+
+// #1279, Dan 2026-10-17: /sleep asks every open item in the Open questions section of each goal's
+// issues before the night begins, as well as the questions earlier nights noted, each once, and
+// checks an answered one off in the section, so it is never asked again and the issue shows it.
+const SECTIONED = ['The bug.', '', '## Open questions', '', '- [ ] Keep the old flag?', '- [x] Rename it? (answered 2026-10-15 ET: Yes)', '', 'Claude-Session: https://claude.ai/code/session_01AbCdEf'].join('\n')
+test("the open questions in a goal issue's section are asked before the night, answered, posted and checked off (#1279)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED() },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: SECTIONED },
+    issueAnswers: { 'o/r#7: Keep the old flag?': 'Drop it' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  // The goal is "Close #7": its one open item is asked, the answered one is not.
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits).toEqual([{ repo: 'o/r', issue: 7, body: SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)') }])
+  expect(w.files[UNANSWERED]).toBe('')
+  expect(r.text).toMatch(asRegExp(' Before bed: 1 question answered and posted on o/r#7.'))
+})
+
+test("a goal issue's question answered after the ten minutes is posted and checked off too (#1279 lessons review)", withDeps, async ($, on) => {
+  let answer = (_: string) => undefined as void
+  const late = new Promise<string>(r => {
+    answer = r
+  })
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: SECTIONED }, issueAnswers: { 'o/r#7: Keep the old flag?': late } })
+  await start($ as never, clock)
+  const pending = command($ as never, 'sleep')
+  await clock.advance(10 * MIN)
+  await pending
+  expect(w.edits).toEqual([])
+  answer('Drop it')
+  await clock.settle()
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+})
+
+test('a goal number that is a pull request is not read as a goal issue (#1279 lessons review)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: 'The change, with no section.' }, pullNumbers: [7] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).not.toContain('Open questions')
+})
+
+test('a question in both a goal issue\'s section and an earlier night\'s notes is asked once (#1279)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, {
+    files: { [LISTS_PATH]: LISTED(), [NOTES_OLD]: noted({ kind: 'question', repo: 'o/r', issue: 7, text: 'Keep the old flag?' }) },
+    githubRepos: { default: ['o/r'] },
+    issueBodies: { 7: SECTIONED },
+    issueAnswers: { 'o/r#7: Keep the old flag?': 'Skip this one' },
+  })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.edits).toEqual([])
+  expect(r.text).toMatch(asRegExp(' Left for the morning, so tonight the queue skips them: o/r#7, "Keep the old flag?" (you skipped it).'))
+})
+
+test("a goal issue with no section, or whose section cannot be read or checked off, is said, never passed over silently (#1279)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: 'The bug, from before sections.' } })
+  await start($ as never, clock)
+  let r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([])
+  expect(r.text).toContain('o/r#7 has no Open questions section, so nothing in it was asked.')
+  await command($ as never, 'wake')
+  w.o.issueViewFails = 'HTTP 502'
+  r = await command($ as never, 'sleep')
+  expect(r.text).toContain("The Open questions of o/r#7 could not be read (HTTP 502), so none of them was asked.")
+  await command($ as never, 'wake')
+  w.o.issueViewFails = undefined
+  w.o.issueBodies = { 7: SECTIONED }
+  w.o.editFails = 'HTTP 403'
+  w.o.issueAnswers = { 'o/r#7: Keep the old flag?': 'Drop it' }
+  r = await command($ as never, 'sleep')
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(r.text).toContain('Your answer on o/r#7 is posted, but it could not be checked off in its Open questions (HTTP 403), so the issue still shows it open; it is not asked again, and /sleep checks it off when it next reads that issue.')
+})
+
+test("an answered item a failed check off left open is checked off on a later night, never asked again or dropped silently (#1279 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: LISTED() }, githubRepos: { default: ['o/r'] }, issueBodies: { 7: SECTIONED }, editFails: 'HTTP 403', issueAnswers: { 'o/r#7: Keep the old flag?': 'Drop it' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  await command($ as never, 'wake')
+  expect(w.edits).toEqual([])
+  // Still failing the next night: said again, with the answer already given, and not asked.
+  let r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(r.text).toContain('Your answer on o/r#7, "Keep the old flag?" ("Drop it"), is posted but its Open questions still shows it open, and checking it off failed again (HTTP 403); it is not asked again.')
+  await command($ as never, 'wake')
+  // Once the edit can land, the item is checked off with the answer on record.
+  w.o.editFails = undefined
+  r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual(['o/r#7: Keep the old flag?'])
+  expect(w.comments.map(c => `${c.repo}#${c.issue}`)).toEqual(['o/r#7'])
+  expect(w.edits.map(x => x.body)).toEqual([SECTIONED.replace('- [ ] Keep the old flag?', '- [x] Keep the old flag? (answered 1969-12-31 ET: Drop it)')])
+  expect(r.text).not.toContain('still shows it open')
 })
 
 test('notes that cannot be read are said, and the questions in the rest are still asked (L215)', withDeps, async ($, on) => {

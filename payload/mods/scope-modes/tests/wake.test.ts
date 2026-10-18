@@ -228,6 +228,10 @@ describe('morningPrompt in every session: its own questions and approvals as pic
     expect(u).toMatch(/so any question this session noted for Dan is not listed here/)
     expect(u).toMatch(/The night's proposed issues and lessons could not be read \(EACCES\)/)
   })
+  test("proposals read from the report are only this session's repository's and the lessons, where it names its repository (#1286 lessons review)", () => {
+    const u = morningPrompt({ worker: true, issues: [], lessons: [], unread: 'EACCES', forRepo: 'acme/slate' })
+    expect(u).toMatch(/offer from there only the issues for acme\/slate, and the lessons/)
+  })
   test("notes it could not read are said, sending it to the report for its own questions, never read as none", () => {
     const u = morningPrompt({ worker: false, offers: false, issues: [], lessons: [], unread: 'EACCES' })
     expect(u).toMatch(/The night's notes could not be read \(EACCES\), so any question this session noted for Dan is not listed here: put to him, each in its own AskUserQuestion picker, those the night's report lists under Questions for you as asked in this session's folder\./)

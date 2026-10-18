@@ -1055,7 +1055,7 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
 - Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
   so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
   `report` path in the record (`~/Downloads/Sleep report <night>.md`, the name Dan asked for in
-  decision 4), is derived from the record
+  decision 4, superseded by #1287 below), is derived from the record
   and the notes and replaced whole after each note, best effort: a note whose render fails is still
   written, the failure said on stderr, and the call exits 0 so nobody writes it twice. Renders take
   turns under a per night flock (`notes/<generation>.render.lock`, a 15 second deadline, then the
@@ -1100,6 +1100,26 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   heartbeats and the end note; "not measurable" only when no note carried one. The 5 hour, weekly
   and spend limits show their highest reading. Each `wait` note (#844: every rate limit wait) is a
   line under Limits and usage.
+- One report per session with news (#1287; Dan, 2026-10-17: "One file per session. Even if multiple
+  sessions are working on the same project", and on the three questions that followed: the whole
+  Mac's sections repeated in every report, every worker and any session that noted something gets
+  one, and the name night first). A record carrying `reportsPerSession` has each session name its
+  own file in `reports/<generation>/<session>.path`, linked into place so the first namer keeps it:
+  the session itself at `/sleep` or its first minute asleep with news (`reportBase` in
+  `hooks/reportname.ts`: `<night> <project folder> <title or first 8 of the id> sleep report`, auto
+  naming's `(project)` prefix dropped, ` (n)` past a name already on the disk or held by another
+  session tonight; the title is the last `custom-title` line in the session's own transcript, what
+  /rename and auto naming set, else its last `ai-title`, read with grep rather than through the
+  classic hooks carrying `session_title`, which Claude Code's security default sends past a mod
+  (#875), so no bypass entry is needed), else the report script for a session with news that never named one (its
+  id and the folder its notes give), which waits `NAMING_GRACE_MS` (two minutes) after that session's
+  first note, and names a worker with no note only at the end of the night, so a session's own name
+  by its title is never beaten; a worker also names its report as its first prompt asleep goes in. Every render writes each: that session's own notes with
+  `MAC_WIDE` (start, end, the overnight check, limits and usage), and the sessions gone quiet read
+  from every note; GitHub's done lines are kept for the repositories that session noted. The record's
+  `report` is the /sleep session's own name, kept for older readers. At wake a session opens its own
+  report, or says it has none, and its morning names a page of the night's results after it. An
+  older record keeps the one report.
 
 ### Sleep mode phase 5: the overnight queue and per issue claims (#842), built
 
@@ -1520,13 +1540,26 @@ morning offers what the night proposed, filing nothing he has not picked.
   things. basically I shouldn't have to literally read the review because everything that is
   relevant should show up in a picker"; design rounds: see the PR). `SUMMARY_ASK`, sent only to the
   workers and offering no pickers, is gone. Each session's minute remembers the night while asleep
-  (`nightSeen` in its state: the generation, whether it worked, whether it offers the proposals) and,
+  (`nightSeen` in its state: the generation, whether it worked, whether it ended sleep and so offers the lessons too) and,
   once the record is gone, submits its own morning (`morningOf`, then `morningPrompt`): its summary
   if it worked, what it held (#1284), each question it noted (`by` itself, read from the notes by
   `proposalsIn`, numbered 3.n) and each merge, deploy or push the night's lists refused in it
   (kept with its reason, 4.n), each an AskUserQuestion picker, and an unanswered picker kept for the
-  next time Dan writes there. The session that ended sleep, by a wake or its noon end, offers the
-  proposed issues and lessons; no other does, so none is offered twice. A session with nothing of
+  next time Dan writes there. Since #1286 (Dan, 2026-10-17: "I'm in a Slate session getting asked
+  about Bidspoke's overnight issues when I turn sleep off") each session offers only its own
+  repository's proposed issues and the questions of closed sessions there, keyed by `repoKey` (owner/name
+  in lower case; a question's `repo`, else its folder's repository); the session that ended sleep,
+  by a wake or its noon end, also offers the lessons (`_lessons`) and what names no repository
+  (`_unattributed`). Each key is claimed for the night by linking a file at
+  `~/.claude/state/sleep/offered/<generation>/<key>` (`claimOffer`), so of two sessions exactly one
+  offers it, and a session's own earlier claim is still its own when its morning is asked again; a
+  claim that cannot be written offers nothing and is logged. A repository with no session open when
+  the night ends keeps its proposals: a session started there reads, once while awake, the notes of
+  the last 14 days' nights (by the time in their generation) and offers its repository's unclaimed
+  issues, and the questions of closed sessions there, in a turn of its own (`offerBacklog`). It takes
+  only a fresh claim, so it never repeats what this session's own morning offered. The session that
+  ended sleep says nothing was proposed only where nothing was, never where another session holds
+  the claim. A session with nothing of
   its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
   reply says how many other sessions are open and which workers closed since (`othersSaid`).
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,

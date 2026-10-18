@@ -4634,6 +4634,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## State and identity
 
+- **L782. A freshness margin enforced on a cached value must also be enforced on whatever refills
+  it, because a shared cache tier can hand back a copy just as close to expiry, which then reads as
+  fresh and expires before it is used.** (slate#3892, 2026-10-17)
+  SHORT: A freshness margin on a cached value must also apply to whatever refills it; a shared tier can hand back a copy just as near expiry.
+
 - **L1024. A record REPLACED under a new id leaves every copy of the old id already handed outside
   the system (a link in another app, an emailed URL, an export) pointing at nothing, so whatever
   resolves an inbound id must follow the replacement to its successor, or the replacement must keep
