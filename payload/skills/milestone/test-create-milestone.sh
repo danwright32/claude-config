@@ -406,6 +406,16 @@ check_eq "#1279 and None right under only the other two" "2" "$(under $'## Open 
 jq '.issues[0].body = "Design empty states.\n\n## Open questions about the API\n\nWhich version first."' "$TMP/plan.json" > "$TMP/plan-q2.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q2.json")"
 check_eq "#1279 a heading that only starts with the words still gets the section (lessons review)" "3" "$(under $'## Open questions\n\nNone')"
+# #1320: a fenced example of the heading is code, not the section, so the issue still gets its own.
+# Read by the filing gate's own reader, so the two never disagree on what counts.
+jq '.issues[0].body = "Design empty states.\n\n```md\n## Open questions\n- [ ] an example\n```"' "$TMP/plan.json" > "$TMP/plan-q3.json"
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-q3.json")"
+check_eq "#1320 a fenced example of the heading still gets the section" "3" "$(under $'## Open questions\n\nNone')"
+# A reader that cannot answer is said, and the section added rather than left out, since a missing
+# section is what the gate exists to stop and a second None one is only untidy.
+out="$(OPEN_QUESTIONS_GATE="$TMP/no-such-gate.py" run "$TMP/none.json" "acme/widgets" "$TMP/plan-q.json")"
+check_eq "#1320 a reader that cannot run still leaves every issue a section" "3" "$(under $'## Open questions\n\nNone')"
+check "#1320 and says it could not ask" "OPEN-QUESTIONS-UNREAD" "$out"
 
 # --- a category label new to the repo is created before anything is filed (claude-config#1034) ---
 # gh refuses an issue carrying a label the repo does not have ("could not add label: X not found"),

@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { bareIssuesIn, etDateOf, issueRefsIn, openQuestionsIn, questionWords, withQuestion } from '../hooks/openquestions.ts'
+import { FENCE_FIXTURES } from './openquestions-fixtures.ts'
 
 // #1279, Dan 2026-10-17: every issue's body holds an "Open questions" section (the filing gate
 // refuses one without it), listing what only Dan can decide, or None. /sleep asks every open item in
@@ -102,4 +103,27 @@ test('the date an answer is given, in ET', () => {
 
 test('a question on several lines is kept on one, so it stays one item', () => {
   expect(openQuestionsIn(withQuestion('B', 'First line\nsecond line?')).open).toEqual(['First line second line?'])
+})
+
+// #1320: a line inside a fenced code block is code, never the heading, an item, or a heading that
+// ends the section. The cases are the one set the filing gate is held to as well (L26).
+test('fenced code blocks, on the cases the filing gate is held to too', () => {
+  expect(FENCE_FIXTURES.length).toBeGreaterThanOrEqual(12)
+  for (const f of FENCE_FIXTURES) expect({ name: f.name, ...openQuestionsIn(f.body) }).toEqual({ name: f.name, found: f.found, open: f.open })
+})
+
+test('a question is never written into, or matched against, a fenced block (#1320)', () => {
+  // A fenced example of the heading is not the section: a real one is added after it.
+  const example = ['B', '', '```md', '## Open questions', 'None', '```'].join('\n')
+  expect(withQuestion(example, 'Keep it?')).toBe(`${example}\n\n## Open questions\n\n- [ ] Keep it?`)
+  // None or an item of the same words inside a fence under the heading is code: left as it is.
+  const fencedNone = ['B', '', '## Open questions', '', '```', 'None', '- [ ] Keep it?', '```'].join('\n')
+  expect(withQuestion(fencedNone, 'Keep it?')).toBe(['B', '', '## Open questions', '', '- [ ] Keep it?', '', '```', 'None', '- [ ] Keep it?', '```'].join('\n'))
+  // A body ending inside a block never closed has it closed first, so the item is read back, and
+  // asking again adds nothing.
+  const unclosed = 'B\n\n````\ncode'
+  const added = withQuestion(unclosed, 'Keep it?')
+  expect(added).toBe('B\n\n````\ncode\n````\n\n## Open questions\n\n- [ ] Keep it?')
+  expect(openQuestionsIn(added)).toEqual({ found: true, open: ['Keep it?'] })
+  expect(withQuestion(added, 'Keep it?')).toBe(added)
 })

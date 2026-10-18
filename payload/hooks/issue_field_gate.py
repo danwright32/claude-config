@@ -118,9 +118,50 @@ def has_session_line(args, command):
 OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
 
 
+# A fenced code block (claude-config#1320), by the rule mod-kit's reader follows
+# (mods/mod-kit/hooks/openquestions.ts), both held to one set of cases
+# (mods/mod-kit/tests/openquestions-fixtures.ts): a line of three or more backticks or tildes, after
+# any indentation, opens one, unless a backtick line has another backtick after its fence (inline
+# code); a line of the same character, at least as long, with nothing but spaces after it, closes
+# it; one never closed runs to the end. A line inside, the fences included, is code, so a fenced
+# example of the heading is not the section.
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+# A body in the command text is read as the command spells it: a line may end in a written \n (an
+# ANSI quoted $'...' body, as OPEN_QUESTIONS reads one), and a backtick may be written \` (a double
+# quoted body, where a bare one would run a command). A body GitHub holds has neither, so the two
+# readers agree on every body the shared cases hold.
+LINE_BREAK = re.compile(r"\r?\n|\\r\\n|\\n")
+
+
+def fenced_lines(lines):
+    """For each line, whether it sits in a fenced code block, its fences included."""
+    out = []
+    fence_open = None
+    for line in lines:
+        m = FENCE.match(line.replace("\\`", "`"))
+        fence, rest = (m.group(1), m.group(2)) if m else ("", "")
+        if fence_open is None:
+            opens = m is not None and not (fence[0] == "`" and "`" in rest)
+            if opens:
+                fence_open = fence
+            out.append(opens)
+            continue
+        out.append(True)
+        if m and fence[0] == fence_open[0] and len(fence) >= len(fence_open) and not rest.strip():
+            fence_open = None
+    return out
+
+
+def holds_open_questions(text):
+    """Whether a text holds the section's heading outside every fenced code block."""
+    lines = LINE_BREAK.split(text)
+    code = fenced_lines(lines)
+    return OPEN_QUESTIONS.search("\n".join("" if c else l for l, c in zip(lines, code))) is not None
+
+
 def has_open_questions(args, command):
     """The body holds an Open questions section, listing what only Dan can decide, or None."""
-    return body_carries(args, command, lambda text: OPEN_QUESTIONS.search(text) is not None)
+    return body_carries(args, command, holds_open_questions)
 
 
 def body_carries(args, command, found):
@@ -294,6 +335,10 @@ def build_reason(offenders, failing):
 
 
 def main():
+    # Asked by create-milestone.sh, whose creates this gate never sees, whether a body already has
+    # the section, so the two read it by one rule (claude-config#1320): exit 0 yes, 1 no.
+    if sys.argv[1:] == ["--holds-open-questions"]:
+        return 0 if holds_open_questions(sys.stdin.read()) else 1
     try:
         data = json.loads(sys.stdin.read())
         command = (data.get("tool_input") or {}).get("command") or ""
