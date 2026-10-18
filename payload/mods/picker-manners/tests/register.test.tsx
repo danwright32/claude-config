@@ -281,6 +281,27 @@ test("one he did not answer is added open, and issue #N is read in the session's
   expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] Skip design rounds for issue #12?' }])
 })
 
+// #1299 (lessons review): a mod-kit loaded before it had repo cannot say the session's repository; the
+// note says the two mods are out of step, never the raw TypeError.
+const kitWithoutRepo: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { isDans: async () => false } as never }
+    })
+  },
+}
+test("a mod-kit with no repo is said as out of step when issue #N's Open questions cannot be found (#1299)", { plugins: [kitWithoutRepo] }, async ($, on) => {
+  const w = issueWorld(on, null, { 12: SECTION })
+  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  const note = w.logs.find(l => l.includes("issue #12's Open questions")) ?? ''
+  expect(note).toContain("this session's repository could not be read: picker-manners and mod-kit are out of step in this session: the mod-kit loaded here has no repo")
+  expect(note).not.toContain('is not a function')
+})
+
 test('a question naming no issue, or only a bare #N, touches no issue; one /sleep asked is recorded by its own words (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {
   const w = issueWorld(on, 'Yes', { 7: 'B\n\n## Open questions\n\n- [ ] Keep the old flag?' })
   await askAbout($ as never, 'Merge PR #31?')
