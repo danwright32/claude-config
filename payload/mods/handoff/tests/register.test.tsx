@@ -373,6 +373,14 @@ test('a saved handoff that cannot be read is named in one dim line, never offere
   expect(await lines(ui)).toEqual(['engine band'])
   expect(w.logs).toHaveLength(1)
   expect(w.logs[0]).toMatch(/^The saved handoff could not be read \(\/Users\/x\/\.claude\/state\/handoff\/repo\/current\.json\): \S/)
+  // #1299: built with errorText, which keeps an error that is no skew word for word.
+  let parsed = ''
+  try {
+    JSON.parse('{"v":1,')
+  } catch (err) {
+    parsed = (err as Error).message
+  }
+  expect(w.logs[0]).toContain(`: not JSON (${parsed}).`)
   await ui.unmount()
 })
 
