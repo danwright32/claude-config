@@ -52,6 +52,12 @@ export type DesignRoundRecord = {
   at: number
   /** The subject as the question he answered named it. */
   label: string
+  /**
+   * The branch reading the answer was kept by (rules.ts ISSUE_READING, #1322). An answer under an
+   * issue counts only from 2 on, since before #1306 an agent branch's digits were read as issues;
+   * absent on every answer kept before it.
+   */
+  reading?: number
 }
 
 declare module 'claude-code' {

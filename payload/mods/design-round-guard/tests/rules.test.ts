@@ -1,5 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import {
+  ISSUE_READING,
+  answerCounts,
   HEADER,
   NOT_LOOK,
   SETTLED_NO,
@@ -952,4 +954,19 @@ test('#1296: which call a card attaches to, what a value is only tested for, and
   // Only the keys named for that are left out: any other key's value is followed (lessons review).
   const keyed = ["const KIND = 'steps'", 'export const show = async ($: Engine) => {', '  const k = KIND', "  await $.modkit.bandRow({ mod: 'demo', id: 'x', slot: 's', key: k, lines: [] })", '}', ''].join('\n')
   expect(drawsChange([{ name: 'b.ts', text: keyed }], 'b.ts', keyed, keyed.replace("'steps'", "'rows'"))).toBe(true)
+})
+
+// #1322: an answer under an issue counts only from the fixed branch reading on; one under a branch or
+// a session counts whatever it carries.
+test('which kept answers count, by the branch reading they were written with (#1322)', () => {
+  const issue = 'record:/w/slate|issue:84'
+  expect(answerCounts(issue, undefined)).toBe(false)
+  expect(answerCounts(issue, 1)).toBe(false)
+  expect(answerCounts(issue, '2')).toBe(false)
+  expect(answerCounts(issue, ISSUE_READING)).toBe(true)
+  expect(answerCounts(issue, ISSUE_READING + 1)).toBe(true)
+  expect(answerCounts('record:/w/slate|branch:worktree-agent-ad4e7831d26de84f8', undefined)).toBe(true)
+  expect(answerCounts('record:/w/slate|branch:main|session:s1', undefined)).toBe(true)
+  // A branch whose name holds an issue: key text, not a subject keyed by issue.
+  expect(answerCounts('record:/w/slate|branch:issue:84', undefined)).toBe(true)
 })

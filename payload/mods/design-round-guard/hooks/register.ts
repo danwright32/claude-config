@@ -4,6 +4,8 @@ import type { DesignRoundPass, DesignRoundPending, DesignRoundRecord, DesignRoun
 import {
   CONTRACT,
   GUARD,
+  ISSUE_READING,
+  answerCounts,
   HEADER,
   NOT_LOOK,
   SETTLED_NO,
@@ -132,6 +134,10 @@ import { errorText } from './mod-kit/skew.ts'
 //   cannot be read before it runs, is judged by the file it leaves (Dan, 2026-10-17: judge after, and
 //   undo): one the command made draw, on an issue he has not answered for, is put back as it was,
 //   with what the command wrote kept in the session's scratchpad first (afterShell).
+// - Since #1322: an answer kept under an issue counts only when it carries the branch reading it was
+//   kept by (rules.ts ISSUE_READING and answerCounts), since one kept before #1306 may sit under an
+//   issue an agent branch's digits spelled. Such an answer is read as none and its issue asked again;
+//   nothing in the store is deleted, and answers under a branch or a session still count.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -325,9 +331,12 @@ const subjectsIn = async ($: EngineInterface, tree: string, issue?: number): Pro
   return { subjects: subjectsOf({ ...place, session: await $.session.id() }) }
 }
 
-const recordOf = (v: unknown): DesignRoundRecord | undefined => {
+// Dan's answer kept under `key`, when it is one and still counts: one kept under an issue counts only
+// from the fixed branch reading on (rules.ts answerCounts, #1322), so an answer an agent branch's
+// digits misfiled before #1306 is read as none, and nothing is deleted to get there.
+const recordOf = (v: unknown, key: string): DesignRoundRecord | undefined => {
   const r = v as Partial<DesignRoundRecord> | undefined
-  return r && (r.kind === 'settled' || r.kind === 'skipped') && typeof r.label === 'string' ? (r as DesignRoundRecord) : undefined
+  return r && (r.kind === 'settled' || r.kind === 'skipped') && typeof r.label === 'string' && answerCounts(key, r.reading) ? (r as DesignRoundRecord) : undefined
 }
 
 // Dan's Not a look change for this very call (#1010). A store that cannot be read here is read again
@@ -638,7 +647,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     const { subjects } = at
     const lacking: DesignRoundSubject[] = []
     try {
-      for (const s of subjects) if (!recordOf(await $.store.get(s.key))) lacking.push(s)
+      for (const s of subjects) if (!recordOf(await $.store.get(s.key), s.key)) lacking.push(s)
     } catch (err) {
       return { unreadable: { files: shown, subjects, why: message(err) } }
     }
@@ -784,7 +793,7 @@ const afterShell = async (
       unknown.why.push(at.why)
     } else
       try {
-        for (const s of at.subjects) if (!recordOf(await $.store.get(s.key))) open.push(s)
+        for (const s of at.subjects) if (!recordOf(await $.store.get(s.key), s.key)) open.push(s)
       } catch (err) {
         unread.files.push(file)
         unread.subjects.push(...at.subjects)
@@ -854,7 +863,7 @@ const unanswered = async ($: EngineInterface): Promise<DesignRoundPending[]> => 
   const open: DesignRoundPending[] = []
   for (const w of await waitingAll($)) {
     let lacking = false
-    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key))) lacking = true
+    for (const x of w.subjects) if (!recordOf(await $.store.get(x.key), x.key)) lacking = true
     if (lacking) open.push(w)
   }
   return open
@@ -1060,7 +1069,7 @@ export const register: Register = on => {
       try {
         const now = await $.clock.now()
         for (const s of subjects) {
-          await $.store.set(s.key, { kind, at: now, label: s.label } satisfies DesignRoundRecord)
+          await $.store.set(s.key, { kind, at: now, label: s.label, reading: ISSUE_READING } satisfies DesignRoundRecord)
           done.push(s)
         }
         return { done, left: [] }
@@ -1121,7 +1130,7 @@ export const register: Register = on => {
         // settled keeps its settlement, never overwritten by a skip (lessons review of #991).
         // What the refused call waits on, as the settled question naming it reads it (#1046).
         const open: DesignRoundSubject[] = []
-        for (const x of waitsOn(waiting)) if (!recordOf(await $.store.get(x.key))) open.push(x)
+        for (const x of waitsOn(waiting)) if (!recordOf(await $.store.get(x.key), x.key)) open.push(x)
         if (!open.length) {
           await update($, pendingRef, p => (p ?? []).filter(x => x.id !== id))
           return { deny: `Nothing to ask: ${listed(waiting.subjects.map(x => x.label))} already has his answer, so the edit goes through. Make it again.` }

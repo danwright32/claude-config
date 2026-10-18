@@ -1776,6 +1776,20 @@ export const subjectsOf = (at: { main: string; repo: string; session: string } &
   return [{ key: `record:${at.main}|branch:${at.branch}`, label: `branch ${at.branch} in ${at.repo}` }]
 }
 
+// The branch reading an answer kept under an issue was written by (#1322). Before #1306 an agent
+// worktree's branch read as the issues its random id spelled, and Dan's Skip them there was kept
+// under #7831, #26 and #84 on 2026-10-17, where a real branch for #26 or #84 would inherit it. Which
+// branch an old answer came from was never kept, so an answer under an issue counts only when it
+// carries this reading or a newer one (a minimum, never an exact match, so a later bump strands
+// nothing, L255); any other reads as no answer and its issue is asked again, once. An answer under a
+// branch or a session was never read from digits and counts whatever it carries. Nothing is deleted:
+// an old answer is only no longer read, and the guard's store stays its own to write.
+export const ISSUE_READING = 2
+
+/** Whether an answer kept under `key` counts, by the reading it was written with (#1322). */
+export const answerCounts = (key: string, reading: unknown): boolean =>
+  !/\|issue:\d+$/.test(key) || (typeof reading === 'number' && reading >= ISSUE_READING)
+
 export const listed = (xs: readonly string[]): string => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 const named = (subjects: readonly DesignRoundSubject[]) => listed(subjects.map(s => s.label))
 
