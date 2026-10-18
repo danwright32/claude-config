@@ -523,7 +523,11 @@ export const register: Register = on => {
       await $.state.set(cacheRef, null)
       toastedFor = null
       turnRunning = false
-      compactQueued = false
+      if (compactQueued) {
+        compactQueued = false
+        // Taken off the band now, not at the next tick, so it never claims a compact that will not run.
+        await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
+      }
     }
     return next(e)
   })

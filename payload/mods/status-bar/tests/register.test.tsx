@@ -500,7 +500,11 @@ test('a /clear drops a queued Compact: the conversation it was for is gone (#127
   await step($, clock)
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
   await clock.settle()
+  expect(await shown(ui as never)).toContain('Compact queued')
   await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await clock.settle()
+  // Taken off the band at once, never left claiming a compact that will not run (lessons review).
+  expect(await shown(ui as never)).not.toContain('Compact queued')
   await turn($)
   await clock.settle()
   expect(compacts).toHaveLength(0)
