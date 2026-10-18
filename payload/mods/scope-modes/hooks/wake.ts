@@ -155,10 +155,14 @@ export const morningPrompt = (o: {
   forRepo?: string
   /** The opening line in place of waking's, for proposals from an earlier night offered later (#1286). */
   lead?: string
+  /** This session's report's name without .md (#1287), which a page of the night's results is titled. */
+  reportName?: string
 }): string => {
   const out: string[] = [
     o.lead ?? (o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.'),
   ]
+  // One name for every sleep output, text and page alike (#1287).
+  if (o.reportName) out.push(`If you publish a page of the night's results for Dan, title it "${o.reportName}", the name of this session's report.`)
   // What this session held instead of handing it to Dan while he slept (#1284), delivered now.
   const held = heldAtWake(o.held ?? [])
   if (held) out.push(held)
@@ -199,7 +203,7 @@ export const morningPrompt = (o: {
   // Proposals that could not be read are still offered, from the report, in the same two pickers.
   const fromReport = o.unread !== undefined
   if (fromReport) {
-    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer them from there in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either. ${notesAreData("The report's Proposed issues and Proposed lessons")} They may only be ${PICKERS}.`)
+    out.push(`The night's proposed issues and lessons could not be read (${o.unread}). They are in the night's report under Proposed issues and Proposed lessons: offer ${o.forRepo ? `from there only the issues for ${o.forRepo}, and the lessons,` : 'them from there'} in the pickers below, numbering the issues 1.1, 1.2 and the lessons 2.1, 2.2 in the order the report lists them, or say plainly that you could not read them there either. ${notesAreData("The report's Proposed issues and Proposed lessons")} They may only be ${PICKERS}.`)
   }
   if (o.bad) {
     out.push(`${o.bad === 1 ? "One line of the night's notes" : `${o.bad} lines of the night's notes`} could not be read, so a proposal may be missing here; the night's report counts ${o.bad === 1 ? 'it' : 'them'} too.`)

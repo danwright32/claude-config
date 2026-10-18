@@ -9,6 +9,13 @@ moment: the append is lockless, and renders take turns under a short lock with a
 last to render read every note before it (#909). It is rendered after every note, best
 effort, and once more at wake, when it also reads GitHub for what was really done.
 
+Since #1287 (Dan, 2026-10-17: "One file per session. Even if multiple sessions are working on the
+same project.") a record carrying `reportsPerSession` gets one report per session with news instead:
+each session names its own file in reports/<generation>/<session>.path beside the notes, and every
+render writes each, the session's own notes with the whole Mac's kinds (MAC_WIDE: the start and end,
+the overnight check, limits and usage) and the sessions gone quiet, read from every note. A record
+without it keeps the one report its `report` names.
+
 Whether the Mac is asleep is never judged here. That is the one predicate in lib/sleep.sh and
 mods/scope-modes/hooks/sleep.ts; this script is handed a record and writes for it. Its callers:
 
@@ -369,12 +376,17 @@ def text_of(n):
     return " ".join(str(t).split()) if t else ""
 
 
-def build(record, notes, bad, final, now, github):
+def build(record, notes, bad, final, now, github, session=None, all_notes=None):
+    """The report. `session`, since #1287, is the one session it covers: `notes` are then its own
+    with the whole Mac's kinds, and `all_notes` every note, read for which sessions went quiet."""
+    every = notes if all_notes is None else all_notes
     since = record["since"]
     end_at, end_note = night_end(record, notes, now)
     if final and not end_note and num(github.get("until")):
         end_at = github["until"]  # the bound GitHub was read to, so the header names the same one
     out = ["# Sleep report, night of %s" % night_title(record.get("night")), ""]
+    if session:
+        out[1:1] = ["", "This report covers session %s; every other session with news overnight has a report of its own." % short(session)]
 
     start = next((n for n in notes if n["kind"] == "start"), None)
     power = start.get("power") if start else None
@@ -417,7 +429,7 @@ def build(record, notes, bad, final, now, github):
     look = []
     if final:
         for w in workers:
-            mine = [n for n in notes if n.get("by") == w and num(n.get("at"))]
+            mine = [n for n in every if n.get("by") == w and num(n.get("at"))]
             # A worker with no goal had nothing to do, so its silence is expected, said in the header.
             if w in idle and not mine:
                 continue
@@ -876,12 +888,114 @@ def _render_locked(path, record, final, github):
     return dest
 
 
-def _render_once(path, record, final, github):
-    notes, bad = read_notes(path)
-    now = now_ms()
-    text = build(record, notes, bad, final, now, github)
-    _pause()
-    dest = record["report"]
+# The kinds every session's report carries whoever wrote them (#1287): how the night began and
+# ended, the overnight check, and the limits and usage, which are the whole Mac's, not one session's.
+MAC_WIDE = ("start", "woke", "limit", "outward", "unmeasured", "usage", "wait")
+
+
+def session_reports(notes_file, record):
+    """Each session's report on a record written since #1287 (reportsPerSession), {session: where},
+    from reports/<generation>/<session>.path beside the notes; None on an older record, which keeps
+    the one report its `report` names. A path file that cannot be read is refused, naming the
+    session, never read as a session with no news (L215)."""
+    if record.get("reportsPerSession") is not True:
+        return None
+    folder = os.path.join(os.path.dirname(os.path.dirname(notes_file)), "reports", re.sub(r"[^\w.-]", "_", record["generation"]))
+    try:
+        names = sorted(os.listdir(folder))
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise Refused("the folder of the night's reports could not be read (%s)" % e)
+    out = {}
+    for name in names:
+        if not name.endswith(".path"):
+            continue
+        try:
+            with open(os.path.join(folder, name)) as fh:
+                dest = fh.read().strip()
+        except OSError as e:
+            raise Refused("where session %s's report goes could not be read (%s)" % (name[:-len(".path")], e))
+        if dest:
+            out[name[:-len(".path")]] = dest
+    return out
+
+
+UNSAFE_NAME = re.compile(r"[/\\:\x00-\x1f\x7f]")
+
+
+# How long a session has to name its own report, by its title, before this script names it by id:
+# its minute runs every 60 seconds, so two leave it room (a chosen limit, not a measurement).
+NAMING_GRACE_MS = 2 * 60 * 1000
+
+
+def fallback_reports(notes_file, record, notes, named, final, now):
+    """A report for every session with news (every worker, and any session that wrote a note of its
+    own) that has not named its own (#1287): one that died before it could, or never ran its minute.
+    Before the night ends only a session whose first note of its own is past NAMING_GRACE_MS, so a
+    session's own name, by its title, is never beaten by this one (lessons review); at the end, every
+    session with news. Named as the mod names one, by night, the folder its notes give and the first
+    8 characters of its id; a name on the disk already (an earlier sleep the same night) takes (2)
+    and on. Recorded by linking the name into place, so whichever is first keeps it."""
+    folder = os.path.join(os.path.dirname(os.path.dirname(notes_file)), "reports", re.sub(r"[^\w.-]", "_", record["generation"]))
+    downloads = os.path.dirname(record["report"])
+    own = [n for n in notes if isinstance(n.get("by"), str) and n["by"] and n["kind"] not in MAC_WIDE]
+    if final:
+        news = [w for w in record.get("workers") or [] if isinstance(w, str) and w] + [n["by"] for n in own]
+    else:
+        first = {}
+        for n in own:
+            if num(n.get("at")):
+                first[n["by"]] = min(first.get(n["by"], n["at"]), n["at"])
+        news = [sid for sid, at in first.items() if now - at >= NAMING_GRACE_MS]
+    out = dict(named)
+    for sid in dict.fromkeys(news):
+        if sid in out:
+            continue
+        mine = [n for n in notes if n.get("by") == sid]
+        # The folder the session works in first, as the mod names a project; a note's repository can
+        # be one it only wrote about (a repository closed for the night, say).
+        project = next((os.path.basename(n["cwd"].rstrip("/")) for n in mine if isinstance(n.get("cwd"), str) and n["cwd"].strip("/")), None) \
+            or next((n["repo"].split("/")[-1] for n in mine if isinstance(n.get("repo"), str) and "/" in n["repo"]), None)
+        stem = " ".join(UNSAFE_NAME.sub(" ", "%s %s%s sleep report" % (record.get("night"), "%s " % project if project else "", sid[:8])).split())
+        held = set(out.values())
+        for k in range(1, 51):
+            dest = os.path.join(downloads, "%s%s.md" % (stem, " (%d)" % k if k > 1 else ""))
+            if dest not in held and not os.path.exists(dest):
+                break
+        else:
+            raise Refused("no free name was found for session %s's report" % short(sid))
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".%s." % sid, suffix=".tmp", dir=folder)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(dest)
+            os.link(tmp, os.path.join(folder, sid + ".path"))
+        except FileExistsError:
+            # The session named its own meanwhile: its name stands.
+            with open(os.path.join(folder, sid + ".path")) as fh:
+                dest = fh.read().strip()
+        except OSError as e:
+            raise Refused("session %s's report could not be named (%s)" % (short(sid), e))
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        out[sid] = dest
+    return out
+
+
+def scoped(github, repos):
+    """GitHub's reading for one session's report: what was done in the repos it worked, and every
+    flag, since what could not be checked belongs to the whole night."""
+    low = [r.lower() for r in repos]
+    # A repo's own lines only: "o/r PR #3" or "o/r#3: ...", never "o/ra" (lessons review).
+    done = [d for d in github.get("done", []) if any(d.lower().startswith(r) and d[len(r):len(r) + 1] in (" ", "#", ":") for r in low)]
+    return {**github, "done": done}
+
+
+def _write(dest, text):
     try:
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         # Written whole beside it and moved into place, so a reader never sees half a report.
@@ -898,6 +1012,28 @@ def _render_once(path, record, final, github):
             raise
     except OSError as e:
         raise Refused("the report could not be written to %s (%s)" % (dest, e))
+
+
+def _render_once(path, record, final, github):
+    notes, bad = read_notes(path)
+    now = now_ms()
+    dests = session_reports(path, record)
+    if dests is not None:
+        dests = fallback_reports(path, record, notes, dests, final, now)
+        # One report per session with news (#1287): its own notes, with the whole Mac's sections.
+        texts = {}
+        for sid, dest in dests.items():
+            mine = [n for n in notes if n.get("by") == sid or n["kind"] in MAC_WIDE]
+            repos = {n["repo"] for n in notes if n.get("by") == sid and isinstance(n.get("repo"), str)}
+            texts[dest] = build(record, mine, bad, final, now, scoped(github, repos), session=sid, all_notes=notes)
+        _pause()
+        for dest, text in texts.items():
+            _write(dest, text)
+        return "\n".join(texts) if texts else "no session has a report for this night yet"
+    text = build(record, notes, bad, final, now, github)
+    _pause()
+    dest = record["report"]
+    _write(dest, text)
     return dest
 
 
