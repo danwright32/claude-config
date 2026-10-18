@@ -10124,6 +10124,12 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
 
 ## Pipeline speed
 
+- **L784. A gate that decides what to run from the files a branch changed must diff from the
+  branch's merge base, never from its upstream's tip, because once main moves a two dot diff names
+  every file main changed since and blames them on the branch.**
+  (bidspoke#2412, 2026-10-18)
+  SHORT: A gate choosing work from a branch's changed files diffs from the merge base, never the upstream tip, or main's changes are blamed on the branch.
+
 - **L759. Keep every repository checkout and its worktrees outside a cloud synced folder such as
   iCloud Desktop & Documents, because each install, build and worktree becomes sync churn that
   saturates the machine's file watching and makes local gates fail for reasons unrelated to the
