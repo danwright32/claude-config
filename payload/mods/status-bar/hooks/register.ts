@@ -490,7 +490,7 @@ export const register: Register = on => {
   on('modkit.press', ($, e, next) => {
     if (e.element === 'status-bar:compact-cancel') {
       compactQueued = false
-      void publish()
+      void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       return { value: { isAnswered: true } }
     }
     if (e.element !== 'status-bar:compact') return next(e)
@@ -498,7 +498,7 @@ export const register: Register = on => {
     // the row, and run when the turn ends.
     if (turnRunning) {
       compactQueued = true
-      void publish()
+      void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       return { value: { isAnswered: true } }
     }
     // Taken at once and done just after: a noun's call is cut off at 10 s (#744), and compacting

@@ -438,6 +438,33 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   await ui.unmount()
 })
 
+test('a band that cannot be redrawn after a Compact press or its Cancel is logged, never left unhandled (#1278 lessons review)', withKit, async ($, on) => {
+  const { clock, debug, w } = world(on)
+  let unreadable = false
+  on('state.get', ($, e, next) => (unreadable ? ({ deny: 'the state store is unreadable' } as never) : next(e)))
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  busy(w)
+  const said = () => debug.filter(l => l.startsWith('status-bar: the band could not be updated: '))
+  // The band's own state cannot be read, so drawing the queued row fails.
+  unreadable = true
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(said()).toHaveLength(1)
+  // Drawn once it can be read, then its Cancel fails to redraw the same way.
+  unreadable = false
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  unreadable = true
+  await press({ key: 'status-bar:compact-cancel' })
+  await clock.settle()
+  expect(said()).toHaveLength(2)
+  await ui.unmount()
+})
+
 test('a queued Compact that fails once the turn ends says so; one cancelled does not run (#1278)', withKit, async ($, on) => {
   const { clock, compacts, toasts, w } = world(on)
   await start($, clock)
