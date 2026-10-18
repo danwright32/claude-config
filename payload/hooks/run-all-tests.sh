@@ -30,7 +30,10 @@
 #   HOOK_TESTS_ROOT           read this repo instead of the one above this script
 #   HOOK_TESTS_LIST_ONLY=1    print the directories it would read, run nothing
 #   HOOK_TESTS_FAIL_DETAIL_MAX  lines of a failing suite's output to print
-#   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1)
+#   HOOK_TESTS_FLAKE_RECHECK  0 turns off the second run of a suite that failed (default 1). With it
+#                             on, the failed suite's FAIL line says FLAKY, recheck timed out, or
+#                             recheck could not run because another run holds the suite lock,
+#                             naming who (#1312)
 #   HOOK_TESTS_FLAKE_RECHECK_MAX   seconds a recheck may take before it is called hung (default 60)
 #   HOOK_TESTS_FLAKE_RECHECK_POLL  how long each wait for it lasts (default 1)
 #   HOOK_TESTS_JOBS           how many suites run at once
@@ -418,6 +421,17 @@ suite_output_clean(){   # suite_output_clean <a suite's output> -> 0 when clean
   [ -n "$r" ] || return 0
   f="${r#*failed=}"
   [ "$f" -eq 0 ]
+}
+
+# Who holds the lock a run was refused, or nothing when it was not refused (claude-config#1083,
+# #1312). Refused is the `SUITE-LOCK-REFUSED <who holds it>` line with no missing command, which
+# outranks it, and no result line, since a run that printed a score ran and is judged by the score
+# (L70). One reading for the first run and the flake recheck, which ask the same question (L342).
+suite_lock_holder(){   # suite_lock_holder <a suite's output> -> who holds the lock, or nothing
+  local l
+  l="$(printf '%s\n' "$1" | grep -E '^SUITE-LOCK-REFUSED ' | tail -1)"
+  [ -n "$l" ] && [ -z "$(suite_missing_commands "$1")" ] && [ -z "$(suite_result_line "$1")" ] || return 0
+  printf '%s\n' "${l#SUITE-LOCK-REFUSED }"
 }
 
 # How many checks that line reports: passed PLUS failed, which is how many checks RAN. Passed alone
@@ -1076,9 +1090,8 @@ run-all-tests: this suite left no exit status, so it was killed or never started
     # score ran, and is judged by the score. And under CI, where one job owns the runner and nothing
     # else should be holding the lock, a refusal means the suite never ran on the run that decides
     # the merge, so it fails there.
-    lock_line="$(printf '%s\n' "$out" | grep -E '^SUITE-LOCK-REFUSED ' | tail -1)"
-    if [ -n "$lock_line" ] && [ -z "$cnf_lines" ] && [ -z "$(suite_result_line "$out")" ]; then
-      lock_holder="${lock_line#SUITE-LOCK-REFUSED }"
+    lock_holder="$(suite_lock_holder "$out")"
+    if [ -n "$lock_holder" ]; then
       if [ "${CI:-}" = "true" ]; then
         failed=$((failed + 1))
         failed_names="$failed_names $name"
@@ -1265,10 +1278,20 @@ run-all-tests: this suite left no exit status, so it was killed or never started
           runner_kill_tree "$_fl_pid" 2>/dev/null || true
           kill -9 "$_fl_pid" 2>/dev/null || true
           _flake=" (recheck timed out after ${_fl_max}s)"
-        elif wait "$_fl_pid" && suite_output_clean "$(cat "$WORK/$((idx - 1)).recheck" 2>/dev/null)"; then
-          _flake=" FLAKY"
-          flaky=$((flaky + 1))
-          flaky_names="$flaky_names $name"
+        else
+          wait "$_fl_pid"; _fl_rc=$?
+          _fl_out="$(cat "$WORK/$((idx - 1)).recheck" 2>/dev/null)"
+          _fl_holder="$(suite_lock_holder "$_fl_out")"
+          if [ "$_fl_rc" -eq 0 ] && suite_output_clean "$_fl_out"; then
+            _flake=" FLAKY"
+            flaky=$((flaky + 1))
+            flaky_names="$flaky_names $name"
+          elif [ -n "$_fl_holder" ]; then
+            # Refused its lock, so it never ran and reproduced nothing (#1312). Asked to wait for
+            # none, it meets any other run of the suite this way, and a bare FAIL read as a failure
+            # seen twice (L11). The first failure still stands, so the suite stays failed.
+            _flake=" (recheck could not run: the suite lock is held by $_fl_holder)"
+          fi
         fi
       fi
       printf '  FAIL  %-38s %-26s %s%s\n' "$name" "$summary" "$dur" "$_flake"

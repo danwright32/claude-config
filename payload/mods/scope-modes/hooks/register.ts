@@ -50,8 +50,10 @@ import {
   GO_TO_SLEEP,
   goalAnswer,
   goalOptions,
+  goalIssues,
   goalQuestion,
   groupQuestions,
+  sameText as oneSpaced,
   orderQuestions,
   priorityRank,
   questionsIn,
@@ -66,10 +68,28 @@ import {
 } from './driver.ts'
 import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
+import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
-import { awakeAsk, BBEDIT, MORNING_UNANSWERED, morningPrompt, openers, openLater, othersSaid, proposalsIn } from './wake.ts'
+import {
+  awakeAsk,
+  BBEDIT,
+  keyFile,
+  LESSONS_KEY,
+  MORNING_UNANSWERED,
+  morningPrompt,
+  openers,
+  openLater,
+  othersSaid,
+  proposalsIn,
+  repoKey,
+  UNATTRIBUTED,
+  type NightQuestion,
+  type ProposedIssue,
+} from './wake.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge } from './nightheld.ts'
+import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
 import {
@@ -354,22 +374,9 @@ const ghSaid = (r: { stderr: string; exitCode: number }) => r.stderr.trim().spli
 // the call (never gh auth switch, which other sessions share) and never printed. `tryNext` says
 // which failures are worth asking the next account about; a write passes only GitHub's own not
 // found, so a write that may have landed is never sent again as another account (assume it runs twice).
-const ghAnyAccount = async ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true): Promise<{ stdout: string } | { failures: GhRun[] }> => {
-  const first = await run($, ['gh', ...args])
-  if (first.exitCode === 0) return { stdout: first.stdout }
-  const failures: GhRun[] = [first]
-  if (!tryNext(first)) return { failures }
-  const status = await run($, ['gh', 'auth', 'status'])
-  for (const a of new Set([...`${status.stdout}\n${status.stderr}`.matchAll(/account (\S+)/g)].map(m => m[1] as string))) {
-    const tok = await run($, ['gh', 'auth', 'token', '-u', a])
-    if (tok.exitCode !== 0 || !tok.stdout.trim()) continue
-    const r = await run($, ['gh', ...args], RUN_MS, { GH_TOKEN: tok.stdout.trim() })
-    if (r.exitCode === 0) return { stdout: r.stdout }
-    failures.push(r)
-    if (!tryNext(r)) break
-  }
-  return { failures }
-}
+// The one helper, mod-kit's hooks/ghaccounts.ts, copied here (#1279 lessons review).
+const ghAnyAccount = ($: EngineInterface, args: string[], tryNext: (r: GhRun) => boolean = () => true, stdin?: string): Promise<{ stdout: string } | { failures: GhRun[] }> =>
+  askAnyAccount((argv, env, input) => run($, argv, RUN_MS, env, input), args, tryNext, stdin)
 
 // Whether GitHub knows a repository under any account gh is logged in to.
 const resolves = async ($: EngineInterface, repo: string): Promise<string | null> => {
@@ -727,7 +734,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
 // Which questions, in what order, and what is posted are bedtime.ts's; here they are read, asked,
 // posted and written down.
 
-type Left = { repo: string; issue: number; text: string }
+type Left = { repo: string; issue: number; text: string; why: string }
 type IssueRound = {
   /** Every issue whose question went unanswered tonight, for sleep-queue.sh to leave out. */
   left: Left[]
@@ -772,22 +779,38 @@ const postAnswer = async ($: EngineInterface, dir: string, repo: string, issue: 
   return kept ? { posted: true, unkept: kept } : { posted: true }
 }
 
-// The questions earlier nights noted about the workers' repositories, still open: not yet answered
-// on their issue, and their issue not closed. Each failure to read is said, never read as no
-// questions (L215).
-const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): Promise<{ questions: OpenQuestion[]; rank: Map<string, number>; problems: string[] }> => {
+// An answered question checked off in its issue's Open questions section (#1279): the body read and
+// written whole through gh, the item marked with the answer and its date. Null once it is; else why.
+const checkOff = async ($: EngineInterface, repo: string, issue: number, text: string, answer: string): Promise<string | null> => {
+  const r = await ghAnyAccount($, ['issue', 'view', String(issue), '--repo', repo, '--json', 'body'])
+  if (!('stdout' in r)) return ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun))
+  let body: string
+  try {
+    const j = JSON.parse(r.stdout) as { body?: unknown }
+    body = typeof j.body === 'string' ? j.body : ''
+  } catch {
+    return "GitHub's answer was not JSON"
+  }
+  const next = withQuestion(body, text, { answer, date: etDate(await $.clock.now()) })
+  if (next === body) return null
+  const w = await ghAnyAccount($, ['issue', 'edit', String(issue), '--repo', repo, '--body-file', '-'], notFoundOnGitHub, next)
+  return 'stdout' in w ? null : ghSaid(w.failures.find(f => !notFoundOnGitHub(f)) ?? (w.failures[0] as GhRun))
+}
+
+// The questions earlier nights noted about the workers' repositories, and the open items in the Open
+// questions section of each goal's issues (#1279), still open: not yet answered on their issue, and
+// their issue not closed. Each failure to read is said, never read as no questions (L215).
+type GoalIssue = { repo: string; issue: number }
+const openQuestions = async ($: EngineInterface, dir: string, repos: string[], goalIssueList: GoalIssue[] = []): Promise<{ questions: OpenQuestion[]; rank: Map<string, number>; problems: string[] }> => {
   const problems: string[] = []
+  const found: IssueQuestion[] = []
   const notesDir = `${dir}/notes`
   const ls = await run($, ['ls', '-1', notesDir])
-  if (ls.exitCode !== 0) {
-    if (/No such file/i.test(ls.stderr)) return { questions: [], rank: new Map(), problems }
-    return { questions: [], rank: new Map(), problems: [`Questions from earlier nights could not be read (${ls.stderr.trim() || `ls exited ${ls.exitCode}`}), so none were asked.`] }
-  }
+  if (ls.exitCode !== 0 && !/No such file/i.test(ls.stderr)) problems.push(`Questions from earlier nights could not be read (${ls.stderr.trim() || `ls exited ${ls.exitCode}`}), so none were asked.`)
   const wanted = new Set(repos.map(r => r.toLowerCase()))
-  const found: IssueQuestion[] = []
   let bad = 0
   const unread: string[] = []
-  for (const name of ls.stdout.split('\n').filter(n => n.endsWith('.jsonl'))) {
+  for (const name of ls.exitCode === 0 ? ls.stdout.split('\n').filter(n => n.endsWith('.jsonl')) : []) {
     let text: string
     try {
       text = await $.fs.read(`${notesDir}/${name}`)
@@ -801,15 +824,64 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): 
   }
   if (unread.length) problems.push(`Earlier notes could not be read (${unread.join('; ')}), so a question in them may not have been asked.`)
   if (bad) problems.push(`${plural(bad, 'line')} of earlier notes could not be read, so a question in ${bad === 1 ? 'it' : 'them'} may not have been asked.`)
+  // Each goal issue's section, read once (#1279). Its state and labels come with it, kept for the
+  // reading of every issue below.
+  const viewed = new Map<string, string>()
+  for (const g of goalIssueList) {
+    const k = `${g.repo.toLowerCase()}#${g.issue}`
+    const r = await ghAnyAccount($, ['issue', 'view', String(g.issue), '--repo', g.repo, '--json', 'state,labels,body,url'])
+    if (!('stdout' in r)) {
+      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (${ghSaid(r.failures.find(f => !notFoundOnGitHub(f)) ?? (r.failures[0] as GhRun))}), so none of them was asked.`)
+      continue
+    }
+    let body: string
+    try {
+      const j = JSON.parse(r.stdout) as { state?: unknown; body?: unknown; url?: unknown }
+      // A pull request's number reads as an issue in gh issue view: it has no section to ask.
+      if (String(j.state).toUpperCase() === 'CLOSED' || /\/pull\/\d+/.test(String(j.url ?? ''))) continue
+      body = typeof j.body === 'string' ? j.body : ''
+    } catch {
+      problems.push(`The Open questions of ${g.repo}#${g.issue} could not be read (GitHub's answer was not JSON), so none of them was asked.`)
+      continue
+    }
+    viewed.set(k, r.stdout)
+    const section = openQuestionsIn(body)
+    if (!section.found) {
+      problems.push(`${g.repo}#${g.issue} has no Open questions section, so nothing in it was asked.`)
+      continue
+    }
+    for (const text of section.open) found.push({ repo: g.repo, issue: g.issue, text: oneSpaced(text), options: [], at: 0, inSection: [g.issue] })
+  }
   const open: IssueQuestion[] = []
-  for (const q of found) if (!(await $.fs.exists(answeredPath(dir, q.repo, q.issue, q.text)))) open.push(q)
+  for (const q of found) {
+    const path = answeredPath(dir, q.repo, q.issue, q.text)
+    if (!(await $.fs.exists(path))) {
+      open.push(q)
+      continue
+    }
+    // Answered on the issue, yet still open in its section: an earlier check off failed. Its answer
+    // is on record, so it is checked off now rather than asked again or passed over (lessons review).
+    if (!q.inSection?.length) continue
+    let answer: string
+    try {
+      const rec = JSON.parse(await $.fs.read(path)) as { answer?: unknown }
+      if (typeof rec.answer !== 'string') throw new Error('it holds no answer')
+      answer = rec.answer
+    } catch (err) {
+      problems.push(`${q.repo}#${q.issue}'s Open questions still shows "${q.text}" open, though it was answered, and the record of the answer could not be read (${msg(err)}); it is not asked again.`)
+      continue
+    }
+    const off = await checkOff($, q.repo, q.issue, q.text, answer)
+    if (off) problems.push(`Your answer on ${q.repo}#${q.issue}, "${q.text}" ("${answer}"), is posted but its Open questions still shows it open, and checking it off failed again (${off}); it is not asked again.`)
+  }
   // Each issue read once: a closed one is no longer in any queue. One that cannot be read is still
   // asked about, ranked last, since dropping its question would hide it (L215).
   const rank = new Map<string, number>()
   const closed = new Set<string>()
   for (const k of new Set(open.map(q => `${q.repo.toLowerCase()}#${q.issue}`))) {
     const q = open.find(x => `${x.repo.toLowerCase()}#${x.issue}` === k) as IssueQuestion
-    const r = await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'])
+    const seen = viewed.get(k)
+    const r = seen !== undefined ? { stdout: seen } : await ghAnyAccount($, ['issue', 'view', String(q.issue), '--repo', q.repo, '--json', 'state,labels'])
     if (!('stdout' in r)) {
       rank.set(k, 5)
       continue
@@ -830,20 +902,26 @@ const openQuestions = async ($: EngineInterface, dir: string, repos: string[]): 
 // repository's answer is kept for every night and covers all its issues, while an issue's covers
 // one), sharing their round. Every issue a question was left on goes into the night's unanswered
 // list; each answer is posted on its issue as Dan's dated decision.
-const askIssues = async ($: EngineInterface, dir: string, repos: string[], round: Round): Promise<IssueRound> => {
-  const { questions, rank, problems } = await openQuestions($, dir, repos)
+const askIssues = async ($: EngineInterface, dir: string, repos: string[], round: Round, goalIssueList: GoalIssue[] = []): Promise<IssueRound> => {
+  const { questions, rank, problems } = await openQuestions($, dir, repos, goalIssueList)
   const ordered = orderQuestions(questions, (repo, n) => rank.get(`${repo.toLowerCase()}#${n}`) ?? 5)
   const left: Left[] = []
   const notes: Record<string, unknown>[] = []
   const posted: string[] = []
   let answered = 0
-  const dismissed: string[] = []
   const unposted: string[] = []
-  const leave = (q: OpenQuestion, issues = q.issues) => left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text })))
+  // Every question left is said with why it was not asked or answered (#1279): on 2026-10-16 two
+  // were left as "2 questions left for the morning" with no reason, and nothing could tell which
+  // way they went.
+  const leftSaid: string[] = []
+  const leave = (q: OpenQuestion, why: string, issues = q.issues) => {
+    left.push(...issues.map(issue => ({ repo: q.repo, issue, text: q.text, why })))
+    leftSaid.push(`${issues.map(issue => `${q.repo}#${issue}`).join(' and ')}, "${q.text}" (${why})`)
+  }
   for (const q of ordered) {
     const waitMs = round.until - (await $.clock.now())
     if (!interactive || round.slept || waitMs <= 0) {
-      leave(q)
+      leave(q, !interactive ? 'not asked: nobody was at this session to ask' : round.slept ? 'not asked: you chose to go to sleep first' : 'not asked: the 10 minutes for bedtime questions ran out')
       continue
     }
     const asked = await askOne($, askText(q), askOptions(q), BEDTIME_HEADER, waitMs, async a => {
@@ -851,21 +929,30 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
       if (a === SKIP_QUESTION) return
       for (const issue of q.issues) {
         const p = await postAnswer($, dir, q.repo, issue, q.text, a)
-        if ('failed' in p) $.ui.toast(`Your late answer on ${q.repo}#${issue} ("${a}") could not be posted (${p.failed}); it is asked again next time.`)
+        if ('failed' in p) {
+          $.ui.toast(`Your late answer on ${q.repo}#${issue} ("${a}") could not be posted (${p.failed}); it is asked again next time.`)
+          continue
+        }
+        // Checked off in its issue's Open questions too, as an answer in time is (lessons review).
+        const off = q.inSection?.includes(issue) ? await checkOff($, q.repo, issue, q.text, a) : null
+        if (off) $.ui.toast(`Your late answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open until /sleep next reads that issue and checks it off.`)
       }
     })
-    if ('unanswered' in asked || ('answer' in asked && asked.answer === SKIP_QUESTION)) {
-      leave(q)
+    if ('unanswered' in asked) {
+      leave(q, 'not answered in the 10 minutes')
       continue
     }
     if ('failed' in asked) {
-      dismissed.push(`The question on ${q.repo}#${q.issues.join(' and #')} was dismissed or could not be shown (${asked.failed}).`)
-      leave(q)
+      leave(q, `the question was dismissed or could not be shown: ${asked.failed}`)
+      continue
+    }
+    if (asked.answer === SKIP_QUESTION) {
+      leave(q, 'you skipped it')
       continue
     }
     if (asked.answer === GO_TO_SLEEP) {
       round.slept = true
-      leave(q)
+      leave(q, 'you chose to go to sleep')
       continue
     }
     let landed = false
@@ -875,23 +962,27 @@ const askIssues = async ($: EngineInterface, dir: string, repos: string[], round
         const why = `Your answer on ${q.repo}#${issue} ("${asked.answer}") could not be posted (${p.failed}), so the issue is skipped tonight and the question is asked again next time.`
         unposted.push(why)
         notes.push({ kind: 'finding', repo: q.repo, issue, text: why })
-        leave(q, [issue])
+        leave(q, 'its answer could not be posted', [issue])
         continue
       }
       posted.push(`${q.repo}#${issue}`)
       landed = true
+      // Checked off in the issue's Open questions too, when it was asked from there (#1279). Read
+      // afresh and written whole, so an item already checked off by another /sleep stays as it is.
+      if (q.inSection?.includes(issue)) {
+        const off = await checkOff($, q.repo, issue, q.text, asked.answer)
+        if (off) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but it could not be checked off in its Open questions (${off}), so the issue still shows it open; it is not asked again, and /sleep checks it off when it next reads that issue.`)
+      }
       if (p.unkept) unposted.push(`Your answer on ${q.repo}#${issue} is posted, but the record that it was could not be kept (${p.unkept}), so it may be asked again.`)
     }
     if (landed) answered++
   }
   // The questions left are noted for the morning report as the same words, so they are asked again.
-  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text })
-  const skipped = [...new Set(left.map(l => `${l.repo}#${l.issue}`))]
-  const leftQuestions = new Set(left.map(l => `${l.repo.toLowerCase()}\n${l.text}`)).size
+  for (const l of left) notes.push({ kind: 'question', repo: l.repo, issue: l.issue, text: l.text, why: l.why })
   let said = ''
   if (answered) said += ` Before bed: ${plural(answered, 'question')} answered and posted on ${andList([...new Set(posted)])}.`
-  if (skipped.length) said += ` ${plural(leftQuestions, 'question')} left for the morning, so tonight the queue skips ${andList(skipped)}.`
-  for (const s of [...dismissed, ...unposted, ...problems]) said += ` ${s}`
+  if (leftSaid.length) said += ` Left for the morning, so tonight the queue skips them: ${leftSaid.join('; ')}.`
+  for (const s of [...unposted, ...problems]) said += ` ${s}`
   return { left, notes, said }
 }
 
@@ -1256,7 +1347,9 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
     // a question for each worker's repository on neither list, every entry checked with GitHub.
     repos = await settleNight($, p.home, worked, round)
-    issues = await askIssues($, p.dir, worked, round)
+    // The issues each worker's goal names, whose Open questions are asked too (#1279).
+    const goalIssueList = Object.entries(goals.goals).flatMap(([id, g]) => goalIssues(g, bySeat.get(id) ?? null))
+    issues = await askIssues($, p.dir, worked, round, goalIssueList)
     // Read before the list is written, so nothing between the list and the record can throw and
     // leave a list for a night that never began.
     startedIn = await $.session.cwd()
@@ -1273,6 +1366,15 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     await releaseMarker($, p.preparing, claim.claimed)
     throw err
   }
+  let ownReportPath: string
+  try {
+    ownReportPath = await chooseReport($, night, generation)
+  } catch (err) {
+    // The night never began, so its unanswered list goes with it (lessons review).
+    await run($, ['rm', '-f', `${p.dir}/unanswered/${generation}`])
+    await releaseMarker($, p.preparing, claim.claimed)
+    return `Sleep mode did not start: its report could not be named (${msg(err)}).`
+  }
   const record: SleepRecord = {
     v: 1,
     generation,
@@ -1281,8 +1383,10 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     night,
     bootTime: startedBoot,
     ...(b.boot.session !== null ? { bootSession: b.boot.session } : {}),
-    // Named as Dan asked (decision 4, 2026-10-06): "Sleep report <night>.md", the night's ET date.
-    report: `${p.home}/Downloads/Sleep report ${night}.md`,
+    // One report per session with news (#1287, superseding decision 4 of 2026-10-06): this
+    // session's own, named by night, project and session; every other session names its own.
+    report: ownReportPath,
+    reportsPerSession: true,
     startedBy: { sessionId: self, cwd: startedIn },
     workers: e.workers,
     goals: goals.goals,
@@ -1384,9 +1488,16 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
   s += goals.said + startSaid + closedSentence(repos) + issues.said + unnoted + tookOver
-  // The report exists from the first minute, header first, so a night that ends badly still has one (#835, L10).
+  // This session's report, when it works tonight (#1287), is named before the start renders it, so
+  // it exists from the first minute, header first, and a night that ends badly still has one (#835, L10).
+  const works = e.workers.includes(self)
+  const named = works ? await recordReport($, generation, record.report) : null
+  if (works && !named) reportNamed.add(generation)
   const started = await report($, ['start', '--record', p.current, '--by', self])
-  s += started ? ` The night's report could not be started: ${started}.` : ` The night's report is at ${record.report}.`
+  const problem = named ? `its name could not be recorded (${named}), so it is tried again at the next minute` : started
+  // Said as recorded, read back, since whichever namer is first keeps the name (lessons review).
+  const recorded = works && !problem ? ((await ownReport($, generation).catch(() => null)) ?? record.report) : record.report
+  s += problem ? ` The night's report could not be started: ${problem}.` : works ? ` The night's report is at ${recorded}.` : ''
   if (awake) s += ` The Mac may sleep tonight: ${awake}.`
   return s
 }
@@ -1438,7 +1549,11 @@ const othersAtWake = async ($: EngineInterface, record: SleepRecord | null, self
   }
 }
 
-/** The night a session's morning is about: its generation (null when not known), whether it worked, and whether it offers the proposals. */
+/**
+ * The night a session's morning is about: its generation (null when not known), whether it worked,
+ * and `offers`, whether it ended sleep and so also offers the lessons and what names no repository
+ * (every session offers its own repository's proposals once claimed, #1286).
+ */
 type Night = { generation: string | null; worker: boolean; offers: boolean; unread?: string }
 // The night as the session that ended it notes it, by a wake or its noon end alike: one naming no
 // generation is said as unread, never read as a night with nothing in it (lessons review).
@@ -1452,7 +1567,8 @@ type HeldItem = HeldDelivery & { why?: string }
 
 // Phase 9 (#837), every session since #1285: a session's own morning, from the night's notes: its
 // summary if it worked, what it held, the questions it noted and the merges the night held in it,
-// each a picker, and, in the session that ended sleep, the proposed issues and lessons. A read that
+// each a picker, and its own repository's proposed issues once claimed (#1286), with the lessons and
+// what names no repository in the session that ended sleep. A read that
 // fails is said in the prompt, never read as a night with nothing proposed (L215). `anything` is
 // whether there is anything to put to Dan at all, so a session with nothing of its own starts no turn.
 const morningOf = async ($: EngineInterface, night: Night, self: string, held: readonly HeldItem[]): Promise<{ prompt: string; anything: boolean }> => {
@@ -1469,22 +1585,146 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
       read = { unread: msg(err) }
     }
   }
-  const p = 'unread' in read ? { issues: [], lessons: [], unread: read.unread } : { issues: read.issues, lessons: read.lessons, bad: read.bad }
-  // Its own questions, and, in the session that offers the proposals, every question no open session
-  // will ask: one naming no session, or one whose session has closed (lessons review). A registry
-  // that cannot be read leaves only the ones naming no session, and that is logged.
+  // A page of the night's results is named as this session's report is (#1287); a report that cannot
+  // be found only leaves the page's name to Claude, so a failed read is logged, not said.
+  let reportName: string | undefined
+  if (night.generation !== null) {
+    const own = await ownReport($, night.generation).catch((err: unknown) => {
+      $.ui.log(`scope-modes: where this session's report is could not be read (${msg(err)})`, { to: 'debug' })
+      return null
+    })
+    if (own) reportName = (own.split('/').pop() ?? own).replace(/\.md$/, '')
+  }
+  if ('unread' in read) {
+    // Notes that cannot be read send the session that ended sleep to the report, for its own
+    // repository's proposals and the lessons only (lessons review of #1315).
+    const p = { issues: [], lessons: [], unread: read.unread }
+    const own = night.offers ? (await repoOf($)).slug : null
+    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }), anything: true }
+  }
+  // What this session offers is its own repository's (#1286): the proposed issues and the questions
+  // no open session will ask (one naming no session, or one whose session has closed), each keyed by
+  // repository, and, in the session that ended sleep, the lessons and what names no repository. Each
+  // key is claimed for the night first, so no two sessions offer one; a key another session holds,
+  // or whose claim cannot be written, is left (and the latter logged), never offered twice.
+  const mine = (await repoOf($)).slug
+  const keys = new Set<string>([...(mine ? [mine] : []), ...(night.offers ? [UNATTRIBUTED, LESSONS_KEY] : [])])
   let open: Set<string> | null = null
-  if (night.offers && !('unread' in read) && read.questions.some(q => q.by !== null && q.by !== self)) {
+  if (read.questions.some(q => q.by !== null && q.by !== self)) {
     try {
       open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
     } catch (err) {
       $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions from other sessions are left to them`, { to: 'debug' })
     }
   }
-  const questions = 'unread' in read ? [] : read.questions.filter(q => q.by === self || (night.offers && (q.by === null || (open !== null && !open.has(q.by)))))
+  const orphans: { q: NightQuestion; key: string }[] = []
+  for (const q of read.questions) {
+    if (q.by === self || !(q.by === null || (open !== null && !open.has(q.by)))) continue
+    orphans.push({ q, key: repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) })
+  }
+  const has = (key: string) => (key === LESSONS_KEY ? read.lessons.length > 0 : read.issues.some(i => repoKey(i.repo) === key) || orphans.some(o => o.key === key))
+  const claimed = new Set<string>()
+  if (night.generation !== null) for (const key of keys) if (has(key) && (await claimOffer($, night.generation, key))) claimed.add(key)
+  const issues = read.issues.filter(i => claimed.has(repoKey(i.repo)))
+  const lessons = claimed.has(LESSONS_KEY) ? read.lessons : []
+  const questions = [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)]
+  // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
+  // offer, and this session says nothing of them (lessons review).
+  const offers = issues.length > 0 || lessons.length > 0 || (night.offers && ![...keys].some(has))
   return {
-    prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions, ...p }),
-    anything: night.worker || night.offers || held.length > 0 || questions.length > 0 || 'unread' in read,
+    prompt: morningPrompt({ worker: night.worker, offers, held: deliveries, merges, questions, issues, lessons, bad: read.bad, ...(mine ? { forRepo: mine } : {}), ...(reportName ? { reportName } : {}) }),
+    anything: night.worker || offers || held.length > 0 || questions.length > 0,
+  }
+}
+
+// One key of a night's proposals claimed for this session (#1286), by linking a file into place, so
+// of two sessions claiming at once exactly one wins (assume it runs twice). True once claimed here;
+// false when another holds it, or when the claim could not be written, which is logged: offering
+// nothing is the safe side, since the proposals stay in the report and unclaimed for a later session.
+// `fresh` takes only a new claim: the backlog's, which must never offer again what this session's own
+// morning already offered (lessons review).
+const claimOffer = async ($: EngineInterface, generation: string, key: string, fresh = false): Promise<boolean> => {
+  const dir = `${(await sleepPaths($)).dir}/offered/${generation.replace(/[^\w.-]/g, '_')}`
+  const path = `${dir}/${keyFile(key)}`
+  const tmp = `${dir}/.${keyFile(key)}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    await run($, ['mkdir', '-p', dir])
+    await $.fs.write(tmp, await $.session.id())
+    const ln = await run($, ['ln', tmp, path])
+    if (ln.exitCode === 0) return true
+    // This session's own earlier claim (a morning that did not go in, asked again) is still its own.
+    if (/File exists/i.test(ln.stderr)) return !fresh && (await $.fs.read(path).catch(() => '')) === (await $.session.id())
+    $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}), so they are left in the report for a later session`, { to: 'debug' })
+    return false
+  } catch (err) {
+    $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${msg(err)}), so they are left in the report for a later session`, { to: 'debug' })
+    return false
+  } finally {
+    await run($, ['rm', '-f', tmp])
+  }
+}
+
+// How far back a session started later looks for its repository's proposals no session offered
+// (#1286): the nights the record of the morning reviews keeps, a chosen limit.
+const BACKLOG_MS = 14 * 24 * 60 * MIN
+// Once a session, while awake: its repository's proposals from an earlier night that no session in
+// it was open to offer, claimed and offered in a turn of their own. A night still asleep is skipped,
+// and a notes file named by no time is left alone.
+let backlogChecked = false
+const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
+  if (backlogChecked || reading.state === 'asleep' || reading.state === 'unreadable') return
+  backlogChecked = true
+  const mine = (await repoOf($)).slug
+  if (!mine) return
+  const p = await sleepPaths($)
+  const ls = await run($, ['ls', p.notes])
+  if (ls.exitCode !== 0) return
+  const now = await $.clock.now()
+  const issues: ProposedIssue[] = []
+  const questions: NightQuestion[] = []
+  let bad = 0
+  // A question is offered here only when its own session is no longer open to ask it (lessons review).
+  let open: Set<string> | null = null
+  try {
+    open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
+  } catch (err) {
+    $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so earlier nights' questions are left to them`, { to: 'debug' })
+  }
+  for (const name of ls.stdout.split('\n').map(s => s.trim()).filter(s => s.endsWith('.jsonl'))) {
+    const generation = name.slice(0, -'.jsonl'.length)
+    const at = Number(/^(\d+)-/.exec(generation)?.[1])
+    if (!Number.isFinite(at) || now - at > BACKLOG_MS) continue
+    let notes: string
+    try {
+      notes = await $.fs.read(`${p.notes}/${name}`)
+    } catch (err) {
+      $.ui.log(`scope-modes: an earlier night's notes could not be read (${msg(err)}), so any proposal for ${mine} in them waits in its report`, { to: 'debug' })
+      continue
+    }
+    const read = proposalsIn(notes)
+    // Lines that could not be read may hide one of this repository's, so they are counted and said
+    // with what is offered, and logged where nothing is (lessons review).
+    if (read.bad) {
+      bad += read.bad
+      $.ui.log(`scope-modes: ${read.bad} line(s) of an earlier night's notes could not be read, so a proposal for ${mine} may be missing; that night's report counts them`, { to: 'debug' })
+    }
+    const mineHere = read.issues.filter(i => repoKey(i.repo) === mine)
+    const asksHere: NightQuestion[] = []
+    for (const q of read.questions) {
+      if (!(q.by === null || (open !== null && !open.has(q.by)))) continue
+      if (repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) === mine) asksHere.push(q)
+    }
+    if ((mineHere.length || asksHere.length) && (await claimOffer($, generation, mine, true))) {
+      issues.push(...mineHere)
+      questions.push(...asksHere)
+    }
+  }
+  if (!issues.length && !questions.length) return
+  const lead = `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
+  try {
+    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: issues.length > 0, issues, lessons: [], questions, lead, ...(bad ? { bad } : {}) }) })
+  } catch (err) {
+    $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }
 }
 
@@ -1640,6 +1880,148 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
   } finally {
     askingMorning = false
   }
+}
+
+// ---- One report per session with news (#1287): its name is decided in hooks/reportname.ts ----
+
+// This session's title, as its own transcript records it: the last `custom-title` line (what /rename
+// and auto naming set), else the last `ai-title`. Read from the transcript rather than the classic
+// hooks that carry `session_title`, which Claude Code's security default sends past a mod (#875),
+// so no bypass entry is needed. Null when there is none yet, or it cannot be read, which is logged.
+const TITLE_LINE = /"(customTitle|aiTitle)":"((?:\\.|[^"\\])*)"/g
+const titleNow = async ($: EngineInterface): Promise<string | null> => {
+  let path: string | null = null
+  try {
+    const self = await $.session.id()
+    path = (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+  } catch (err) {
+    $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
+    return null
+  }
+  if (!path) return null
+  const r = await run($, ['grep', '-o', '-E', '"(customTitle|aiTitle)":"([^"\\\\]|\\\\.)*"', path])
+  // grep exits 1 when nothing matches: no title yet, which is no failure.
+  if (r.exitCode !== 0) {
+    if (r.exitCode !== 1) $.ui.log(`scope-modes: this session's title could not be read (${r.stderr.trim() || `grep exited ${r.exitCode}`}), so its report is named by its id`, { to: 'debug' })
+    return null
+  }
+  let custom: string | null = null
+  let ai: string | null = null
+  for (const m of r.stdout.matchAll(TITLE_LINE)) {
+    let v: unknown
+    try {
+      v = JSON.parse(`"${m[2]}"`)
+    } catch {
+      continue
+    }
+    if (typeof v !== 'string') continue
+    if (m[1] === 'customTitle') custom = v
+    else ai = v
+  }
+  return custom ?? ai
+}
+const reportsDirOf = async ($: EngineInterface, generation: string) => `${(await sleepPaths($)).dir}/reports/${generation.replace(/[^\w.-]/g, '_')}`
+// This session's report on a night, as recorded, or null when it has none.
+const ownReport = async ($: EngineInterface, generation: string): Promise<string | null> => {
+  const f = `${await reportsDirOf($, generation)}/${await $.session.id()}.path`
+  if (!(await $.fs.exists(f))) return null
+  return (await $.fs.read(f)).trim() || null
+}
+// The paths every other session holds tonight.
+const othersReports = async ($: EngineInterface, generation: string, self: string): Promise<Set<string>> => {
+  const dir = await reportsDirOf($, generation)
+  const ls = await run($, ['ls', dir])
+  const out = new Set<string>()
+  if (ls.exitCode !== 0) return out
+  for (const name of ls.stdout.split('\n').map(s => s.trim())) {
+    if (!name.endsWith('.path') || name === `${self}.path`) continue
+    out.add((await $.fs.read(`${dir}/${name}`)).trim())
+  }
+  return out
+}
+// The project a report is named by: its checkout's folder, as Dan names his projects, else the session's.
+const projectName = async ($: EngineInterface): Promise<string> => {
+  let root: string | null = null
+  try {
+    root = (await $.session.repo())?.root ?? null
+  } catch {
+    root = null
+  }
+  const dir = (root ?? (await $.session.cwd())).replace(/\/+$/, '')
+  return dir.split('/').pop() || dir
+}
+// This session's report for a night: the first name neither on the disk (an earlier sleep's, the
+// same night) nor held by another session tonight.
+const chooseReport = async ($: EngineInterface, night: string, generation: string): Promise<string> => {
+  const home = (await sleepPaths($)).home
+  const self = await $.session.id()
+  const taken = await othersReports($, generation, self)
+  const project = await projectName($)
+  const title = reportTitle(await titleNow($))
+  for (let n = 1; n <= 50; n++) {
+    const path = `${home}/Downloads/${reportBase({ night, project, title, sessionId: self, n })}.md`
+    if (!taken.has(path) && !(await $.fs.exists(path))) return path
+  }
+  throw new Error('fifty names for it were all taken')
+}
+// Records where this session's report goes, so the render writes it from then on: linked into place,
+// so whichever of this session and the report script (which names a report for a session with news
+// that has not named its own) is first keeps the name, fixed from then on. Null once recorded, by
+// either; otherwise why not.
+const recordReport = async ($: EngineInterface, generation: string, path: string): Promise<string | null> => {
+  const dir = await reportsDirOf($, generation)
+  const self = await $.session.id()
+  const tmp = `${dir}/.${self}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    const mk = await run($, ['mkdir', '-p', dir])
+    if (mk.exitCode !== 0) return mk.stderr.trim() || `mkdir exited ${mk.exitCode}`
+    await $.fs.write(tmp, path)
+    const ln = await run($, ['ln', tmp, `${dir}/${self}.path`])
+    if (ln.exitCode === 0 || /File exists/i.test(ln.stderr)) return null
+    return ln.stderr.trim() || `ln exited ${ln.exitCode}`
+  } catch (err) {
+    return msg(err)
+  } finally {
+    await run($, ['rm', '-f', tmp])
+  }
+}
+
+// The nights whose report this session has named, or found named: once each.
+const reportNamed = new Set<string>()
+// Each minute while asleep on a per session night: a session with news, a worker or one that noted
+// something, names its report once and renders it, so it exists from that minute. A failure is
+// logged and tried again at the next minute.
+const reportMinute = async ($: EngineInterface, reading: SleepReading) => {
+  if (reading.state !== 'asleep' || reading.record.reportsPerSession !== true) return
+  const { generation, night } = reading.record
+  if (typeof generation !== 'string' || typeof night !== 'string' || reportNamed.has(generation)) return
+  if (await ownReport($, generation)) {
+    reportNamed.add(generation)
+    return
+  }
+  const self = await $.session.id()
+  const worker = Array.isArray(reading.record.workers) && reading.record.workers.includes(self)
+  if (!worker) {
+    const p = await sleepPaths($)
+    const path = notesOf(p.home, generation)
+    const notes = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+    const mine = notes.split('\n').some(l => {
+      try {
+        return (JSON.parse(l) as { by?: unknown }).by === self
+      } catch {
+        return false
+      }
+    })
+    if (!mine) return
+  }
+  const failed = await recordReport($, generation, await chooseReport($, night, generation))
+  if (failed) {
+    $.ui.log(`scope-modes: this session's sleep report could not be named (${failed}); tried again at the next minute`, { to: 'debug' })
+    return
+  }
+  reportNamed.add(generation)
+  const unrendered = await report($, ['render', '--record', (await sleepPaths($)).current])
+  if (unrendered) $.ui.log(`scope-modes: this session's sleep report was named but could not be rendered yet (${unrendered})`, { to: 'debug' })
 }
 
 // ---- The morning reminder (#1107): its decisions are in hooks/morning.ts ----
@@ -1845,8 +2227,21 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   // The report once more, checked against GitHub, by the one session that woke it (#835).
   if (record?.report) {
     const problems = await finishReport($, moved.to, { kind: 'woke' })
-    s += problems.length ? ` The night's report at ${record.report} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${record.report}.`
-    s += ` ${await openReport($, record.report, fromPhone)}`
+    // A per session night (#1287) opens this session's own report; an older record its one report.
+    let own: string | null | { unread: string } = record.report
+    if (record.reportsPerSession === true && typeof record.generation === 'string') {
+      const g = record.generation
+      own = await ownReport($, g).catch((err: unknown) => ({ unread: msg(err) }))
+    }
+    if (own !== null && typeof own === 'object') {
+      s += ` Where this session's report is could not be read (${own.unread}); each session's report is in Downloads, named by night, project and session.`
+    } else if (own) {
+      s += problems.length ? ` The night's report at ${own} is not complete: ${problems.join('; ')}.` : ` The night's report is at ${own}.`
+      s += ` ${await openReport($, own, fromPhone)}`
+    } else {
+      s += ' This session noted nothing overnight, so it has no report of its own; each session with news has one in Downloads, named by night, project and session.'
+      if (problems.length) s += ` The night's reports are not complete: ${problems.join('; ')}.`
+    }
   } else {
     // Read as sound a moment ago, unreadable once moved: said, never a silent missing report.
     s += ` The night's report was not finished: the record moved aside to ${moved.to} could not be read${record ? ' for where its report is' : ''}.`
@@ -1942,9 +2337,9 @@ const readWrites = async ($: EngineInterface, raw: string) =>
   $.modkit.writes({ command: raw, cwd: await $.session.cwd(), home: (await $.env.get('HOME')) ?? '' })
 const NO_WRITES = { files: [], changes: [], unnamed: [] }
 
-const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS, env?: Record<string, string>) => {
+const run = async ($: EngineInterface, argv: string[], timeoutMs = RUN_MS, env?: Record<string, string>, stdin?: string) => {
   try {
-    return await $.process.run(argv, { timeoutMs, ...(env ? { env } : {}) })
+    return await $.process.run(argv, { timeoutMs, ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
   } catch (err) {
     return { exitCode: -1, stdout: '', stderr: msg(err), isStdoutTruncated: false, isStderrTruncated: false }
   }
@@ -3427,6 +3822,18 @@ export const register: Register = on => {
         } catch (err) {
           $.ui.log(`scope-modes: the minute's check for this session's morning failed: ${msg(err)}`, { to: 'debug' })
         }
+        // Asleep, this session's own report named once it has news (#1287).
+        try {
+          await reportMinute($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the minute's check for this session's sleep report failed: ${msg(err)}`, { to: 'debug' })
+        }
+        // Once a session, awake: its repository's proposals no session was open to offer (#1286).
+        try {
+          await offerBacklog($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the check for earlier nights' proposals failed: ${msg(err)}`, { to: 'debug' })
+        }
         // The reminder to end sleep mode (#1107, #1283): pinned here while asleep, and taken off once
         // the night has ended, wherever and however it ended.
         try {
@@ -3596,6 +4003,13 @@ export const register: Register = on => {
     const sleeping = await sleepNow($)
     if (sleeping.state === 'asleep') {
       notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
+      // A worker names its report as its first prompt asleep goes in (#1287), before any note it
+      // writes, so its own name by its title is the one kept, not the report script's by its id.
+      try {
+        await reportMinute($, sleeping)
+      } catch (err) {
+        $.ui.log(`scope-modes: this session's sleep report could not be named on this prompt (${msg(err)}); tried again at the next minute`, { to: 'debug' })
+      }
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
       // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
       // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.

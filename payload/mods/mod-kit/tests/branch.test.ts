@@ -47,12 +47,25 @@ test('a walk that finds no checkout, as undefined or as null, answers null and a
   expect(g.asked.length).toBe(3)
 })
 
-test('the issues a branch names: every run of 2 to 6 digits on its own', () => {
+test('the issues a branch names: each part of it that is 2 to 6 digits, with at most one letter after', () => {
   expect(issuesOfBranch('978-design-round-guard')).toEqual([978])
   expect(issuesOfBranch('fix/issue-41-and-52')).toEqual([41, 52])
+  expect(issuesOfBranch('fix/1282-stale-agent-locks')).toEqual([1282])
+  expect(issuesOfBranch('feat/1279-ask-before-sleep')).toEqual([1279])
+  expect(issuesOfBranch('issue-1282')).toEqual([1282])
+  expect(issuesOfBranch('sleep/1015')).toEqual([1015])
+  expect(issuesOfBranch('fix_1282.stale')).toEqual([1282])
+  // A part of an issue split across branches, as 961a to 961d were for #961.
+  expect(issuesOfBranch('961a-mod-kit-gh-reader')).toEqual([961])
   expect(issuesOfBranch('polish-header')).toEqual([])
   expect(issuesOfBranch('v2-header')).toEqual([])
   expect(issuesOfBranch('claude/issue-1234567')).toEqual([])
+  // #1306: digits inside a word are not an issue. An agent worktree's random hex id named #7831, #26
+  // and #84, and Dan's answers were kept under them for every later agent whose id held them too.
+  expect(issuesOfBranch('worktree-agent-ad4e7831d26de84f8')).toEqual([])
+  expect(issuesOfBranch('worktree-agent-a2551c61a359a761d')).toEqual([])
+  expect(issuesOfBranch('fix/ab12cd-x')).toEqual([])
+  expect(issuesOfBranch('fix/12ab-x')).toEqual([])
 })
 
 test('the main working tree is the first git lists', () => {

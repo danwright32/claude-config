@@ -10,11 +10,19 @@ import type { ModKitBranch } from '../types/index.d.ts'
 export type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
 /**
- * The issues a branch names: every run of 2 to 6 digits standing on its own, `978-guard`,
- * `fix/issue-41-and-52`. One digit is too often a version or a count to read as an issue. The
- * reading winding down has used since #702.
+ * The issues a branch names: each part of it, between a `/`, `-`, `_` or `.`, that is 2 to 6 digits
+ * with at most one letter after them, `978-guard`, `fix/issue-41-and-52`, `961a-gh-reader` (a part of
+ * #961). One digit is too often a version or a count to read as an issue. Digits inside a word are
+ * not one (#1306): an agent worktree's branch, `worktree-agent-ad4e7831d26de84f8`, named #7831, #26
+ * and #84 from its random hex id, so Dan's answers were kept under issues it never named, for every
+ * later agent whose id held the same digits. A branch naming none is keyed by its own name.
  */
-export const issuesOfBranch = (branch: string): number[] => [...branch.matchAll(/(?:^|[^0-9])(\d{2,6})(?=$|[^0-9])/g)].map(m => Number(m[1]))
+export const issuesOfBranch = (branch: string): number[] =>
+  branch
+    .split(/[/_.-]+/)
+    .map(part => /^(\d{2,6})[a-z]?$/i.exec(part)?.[1])
+    .filter((n): n is string => n !== undefined)
+    .map(Number)
 
 /** The main working tree `git worktree list --porcelain` names first; null when it names none. */
 export const mainOf = (porcelain: string): string | null => /^worktree (.+)$/m.exec(porcelain)?.[1]?.trim() || null

@@ -4,12 +4,15 @@
 // issues and asks them one at a time in Claude Code's own dialog, the ones that unblock the most
 // work first, each with "Go to sleep now"; answers are posted on the issue as dated decisions.
 //
-// Where the questions come from: the night's notes. An overnight session that meets a decision
-// only Dan can make writes it with sleep_note as a `question` naming its repository, issue and
-// text (the overnight rules tell it to), and the morning report lists it. Those notes are the one
-// structured record of a question about an issue; GitHub comments carry no marker a reader could
-// rely on. A question stays open until an answer to it has been posted on its issue, which is
-// recorded beside the notes (answerKey), so it is asked again each night until then.
+// Where the questions come from: the night's notes, and since #1279 the Open questions section of
+// each issue a worker's goal names. An overnight session that meets a decision only Dan can make
+// writes it with sleep_note as a `question` naming its repository, issue and text (the overnight
+// rules tell it to), and the morning report lists it. Every issue's body also carries an Open
+// questions section (the filing gate refuses one without it, and picker manners adds a question
+// Dan is asked about an issue), whose open items are asked beside the notes, each once, and checked
+// off there when answered (`inSection`). GitHub comments carry no marker a reader could rely on. A
+// question stays open until an answer to it has been posted on its issue, which is recorded beside
+// the notes (answerKey), so it is asked again each night until then.
 //
 // register.ts reads the notes, asks GitHub which issues are still open and how urgent, asks Dan,
 // posts each answer and writes ~/.claude/state/sleep/unanswered/<generation>, which
@@ -24,10 +27,33 @@ const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 // The dialog carries four choices at most: two a session suggested, then skip and go to sleep.
 const SUGGESTED_MAX = 2
 
-/** A question one note asked about one issue. */
-export type IssueQuestion = { repo: string; issue: number; text: string; options: string[]; at: number }
-/** One question as Dan is asked it: every issue that is waiting on the same words. */
-export type OpenQuestion = { repo: string; text: string; issues: number[]; options: string[]; at: number }
+/**
+ * A question one note asked about one issue, or one open item in the issue's Open questions section
+ * (#1279), which `inSection` marks, so its answer is checked off there too.
+ */
+export type IssueQuestion = { repo: string; issue: number; text: string; options: string[]; at: number; inSection?: number[] }
+/** One question as Dan is asked it: every issue that is waiting on the same words, and those whose section holds it. */
+export type OpenQuestion = { repo: string; text: string; issues: number[]; options: string[]; at: number; inSection?: number[] }
+
+/**
+ * The issues a goal names (#1279), so their Open questions are asked before the night: `#N` in the
+ * worker's repository, or `owner/name#N` anywhere. A goal naming a milestone names no issue here.
+ */
+export const goalIssues = (goal: string, repo: string | null): { repo: string; issue: number }[] => {
+  const out: { repo: string; issue: number }[] = []
+  for (const m of goal.matchAll(/(?:\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d+)\b/g)) {
+    // A number named as a pull request is not an issue (lessons review): it has no section to read.
+    // "PR #31", "PRs #31 and #32", "pull requests #3, #4": every number in such a list. The words
+    // only save a read: one they miss ("PR #31 (and also #32)") is read through gh, whose link names
+    // a pull, and register.ts's openQuestions skips it there, so no pull is ever asked from.
+    if (/\b(?:PRs?|pull requests?|pulls?)(?:\s*(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?#\d+\s*(?:,|and)?)*\s*$/i.test(goal.slice(0, m.index))) continue
+    const r = m[1] ?? repo
+    const n = Number(m[2])
+    if (!r || !REPO.test(r) || !Number.isInteger(n) || n <= 0) continue
+    if (!out.some(x => x.repo.toLowerCase() === r.toLowerCase() && x.issue === n)) out.push({ repo: r, issue: n })
+  }
+  return out
+}
 
 /** Whitespace collapsed, so the same words noted on two nights are one question. */
 export const sameText = (s: string) => s.split(/\s+/).filter(Boolean).join(' ')
@@ -78,10 +104,11 @@ export const groupQuestions = (qs: IssueQuestion[]): OpenQuestion[] => {
     const k = `${q.repo.toLowerCase()}\n${sameText(q.text)}`
     const had = out.get(k)
     if (!had) {
-      out.set(k, { repo: q.repo, text: sameText(q.text), issues: [q.issue], options: [...q.options], at: q.at })
+      out.set(k, { repo: q.repo, text: sameText(q.text), issues: [q.issue], options: [...q.options], at: q.at, ...(q.inSection ? { inSection: [...q.inSection] } : {}) })
       continue
     }
     if (!had.issues.includes(q.issue)) had.issues.push(q.issue)
+    for (const n of q.inSection ?? []) if (!(had.inSection ??= []).includes(n)) had.inSection.push(n)
     if (!had.options.length && q.options.length) had.options = [...q.options]
   }
   for (const q of out.values()) q.issues.sort((a, b) => a - b)

@@ -26,8 +26,13 @@ export type SleepRecord = {
   bootTime: number
   /** This boot's session (sysctl kern.bootsessionuuid), which only a restart changes: absent on a record written before it was kept, or when it could not be read. */
   bootSession?: string
-  /** Where the night's report goes (written by phase 4, #835). */
+  /** Where the night's report goes (written by phase 4, #835); since #1287 the /sleep session's own. */
   report: string
+  /**
+   * One report per session with news (#1287): each names its own in reports/<generation>/<session>.path,
+   * and the report script writes each. Absent on an older record, which keeps the one `report`.
+   */
+  reportsPerSession?: boolean
   /** Where sleep was started: the session and its folder. */
   startedBy: { sessionId: string; cwd: string }
   /** The sessions that work overnight; every other session is only kept quiet. */
