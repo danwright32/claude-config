@@ -113,17 +113,73 @@ def has_session_line(args, command):
 # at a line's start or right after the quote that opens the body. The words in a sentence ("no open
 # questions") are not a section.
 # The whole heading, at a line's start, a quote's or an escaped newline's in a $'...' body, and
-# ending there too, so "## Open questions about the API" is another section, as the shared reader
-# (mods/mod-kit/hooks/openquestions.ts) and create-milestone.sh read it (lessons review).
+# ending there too, so "## Open questions about the API" is another section (lessons review). The
+# quote and written newline are a command's spelling, so this reads only the command text and its
+# arguments (holds_open_questions with spelled=True); a markdown body, a --body-file or the plan body
+# create-milestone.sh asks about through --holds-open-questions, is read by HEADING_LINE below, as
+# mods/mod-kit/hooks/openquestions.ts reads one (claude-config#1320).
 OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
+# The same heading in a body that is markdown (a --body-file, a plan body): a whole line, after any
+# indentation, as mod-kit's reader takes it; a quote before or after it is the command's spelling,
+# so in markdown it makes the line a sentence (claude-config#1320, lessons review).
+HEADING_LINE = re.compile(r"(?im)^[ \t]*#{1,6}[ \t]*Open questions[ \t]*\r?$")
+
+
+# A fenced code block (claude-config#1320), by the rule mod-kit's reader follows
+# (mods/mod-kit/hooks/openquestions.ts), both held to one set of cases
+# (mods/mod-kit/tests/openquestions-fixtures.ts): a line of three or more backticks or tildes, after
+# any indentation, opens one, unless a backtick line has another backtick after its fence (inline
+# code); a line of the same character, at least as long, with nothing but spaces after it, closes
+# it; one never closed runs to the end. A line inside, the fences included, is code, so a fenced
+# example of the heading is not the section.
+FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})(.*)$")
+# A body in the command text, or in an argument parsed from it, is read as the command spells it: a
+# line may end in a written \n (an ANSI quoted $'...' body, as OPEN_QUESTIONS reads one), and a
+# backtick may be written \` (a double quoted body, where a bare one would run a command). A body
+# that is markdown (a --body-file, or create-milestone.sh's plan body) is read as markdown, where
+# those are text, exactly as mod-kit reads one (lessons review).
+LINE_BREAK = re.compile(r"\r?\n")
+SPELLED_LINE_BREAK = re.compile(r"\r?\n|\\r\\n|\\n")
+
+
+def fenced_lines(lines, spelled=False):
+    """For each line, whether it sits in a fenced code block, its fences included.
+
+    `spelled`: the lines are a shell command's spelling of a body, where \\` is a backtick.
+    """
+    out = []
+    fence_open = None
+    for line in lines:
+        m = FENCE.match(line.replace("\\`", "`") if spelled else line)
+        fence, rest = (m.group(1), m.group(2)) if m else ("", "")
+        if fence_open is None:
+            opens = m is not None and not (fence[0] == "`" and "`" in rest)
+            if opens:
+                fence_open = fence
+            out.append(opens)
+            continue
+        out.append(True)
+        if m and fence[0] == fence_open[0] and len(fence) >= len(fence_open) and not rest.strip():
+            fence_open = None
+    return out
+
+
+def holds_open_questions(text, spelled=False):
+    """Whether a text holds the section's heading outside every fenced code block.
+
+    `spelled`: the text is a shell command, or an argument parsed from one, read as it spells a body.
+    """
+    lines = (SPELLED_LINE_BREAK if spelled else LINE_BREAK).split(text)
+    code = fenced_lines(lines, spelled)
+    return (OPEN_QUESTIONS if spelled else HEADING_LINE).search("\n".join("" if c else l for l, c in zip(lines, code))) is not None
 
 
 def has_open_questions(args, command):
     """The body holds an Open questions section, listing what only Dan can decide, or None."""
-    return body_carries(args, command, lambda text: OPEN_QUESTIONS.search(text) is not None)
+    return body_carries(args, command, holds_open_questions, lambda text: holds_open_questions(text, spelled=True))
 
 
-def body_carries(args, command, found):
+def body_carries(args, command, found, found_in_command=None):
     """Whether the body of a create holds what `found` looks for in a text.
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
@@ -136,8 +192,12 @@ def body_carries(args, command, found):
     written is text the command shows, and the line is nowhere in the command, the line is not in
     the file either. Written by anything else (a script, an expansion), or not written here and not
     readable, it is not held against the create: this gate fails open on what it cannot read.
+
+    `found_in_command`, when given, reads the command text and its arguments, as the command spells
+    a body; `found` alone reads a body file, which is the body itself.
     """
-    if found(command) or any(found(a) for a in args):
+    spelled = found_in_command or found
+    if spelled(command) or any(spelled(a) for a in args):
         return True
     paths = scan.flag_values(args, "--body-file", "-F")
     try:
@@ -294,6 +354,12 @@ def build_reason(offenders, failing):
 
 
 def main():
+    # Asked by create-milestone.sh, whose creates this gate never sees, whether a body already has
+    # the section, so the two read it by one rule (claude-config#1320). The answer is printed, yes
+    # or no, never an exit code, since a crash exits 1 too and would read as no (lessons review).
+    if sys.argv[1:] == ["--holds-open-questions"]:
+        print("yes" if holds_open_questions(sys.stdin.read()) else "no")
+        return 0
     try:
         data = json.loads(sys.stdin.read())
         command = (data.get("tool_input") or {}).get("command") or ""

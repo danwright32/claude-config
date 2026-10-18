@@ -351,6 +351,86 @@ denies "#1279 a body file without it is refused" "gh issue create --title t --bo
 allows "#1279 the section has its own visible override" "SKIP_OPEN_QUESTIONS_CHECK=1 gh issue create --title t --body b $M $P $C"
 denies "#1279 and that override waives nothing else" "SKIP_OPEN_QUESTIONS_CHECK=1 gh issue create --title t --body b $M $C"
 
+# #1320: a line inside a fenced code block is code, never the section's heading. Judged first on the
+# one committed set of cases mod-kit's reader is held to as well (mods/mod-kit/tests/
+# openquestions-fixtures.ts, L26), each body as a body file through the gate's own reader, then end to
+# end on the ways a body is spelled in a command. The count first, so a set read as empty cannot pass.
+FENCE_FIXTURES="$DIR/../mods/mod-kit/tests/openquestions-fixtures.ts"
+fence_out="$(sed -n '/^export const FENCE_FIXTURES = /,$p' "$FENCE_FIXTURES" | sed '1s/^export const FENCE_FIXTURES = //' |
+  GATE="$DIR/issue_field_gate.py" WORK="$TMP_DIR" python3 -c '
+import importlib.util, json, os, sys
+s = importlib.util.spec_from_file_location("gate", os.environ["GATE"])
+g = importlib.util.module_from_spec(s)
+s.loader.exec_module(g)
+cases = json.load(sys.stdin)
+print("COUNT %d" % len(cases))
+for i, c in enumerate(cases):
+    p = os.path.join(os.environ["WORK"], "fence%d.md" % i)
+    with open(p, "w", newline="") as f:
+        f.write(c["body"])
+    got = g.has_open_questions(["--body-file", p], "gh issue create --body-file " + p)
+    print("%s %s (found %s, expected %s)" % ("ok" if got == c["found"] else "BAD", c["name"], got, c["found"]))
+' 2>&1)"
+fence_count="$(printf '%s\n' "$fence_out" | sed -n 's/^COUNT //p')"
+# Every case the file holds, counted from its text by a second route, so a read that drops some
+# cannot pass (lessons review); and never none, so an empty file cannot either.
+fence_cases="$(grep -c '"name":' "$FENCE_FIXTURES")"
+if [[ "${fence_cases:-0}" -gt 0 && "${fence_count:-}" == "$fence_cases" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #1320 all ${fence_cases:-0} shared fence cases were read (got ${fence_count:-none}: $fence_out)"; fi
+while IFS= read -r line; do
+  case "$line" in
+    ok\ *) pass=$((pass + 1)) ;;
+    BAD\ *) fail=$((fail + 1)); echo "FAIL: #1320 shared case: ${line#BAD }" ;;
+  esac
+done <<<"$fence_out"
+
+denies "#1320 a heredoc body whose only heading is fenced is refused" "gh issue create --title t $M $P $C --body \"\$(cat <<'EOF'
+b
+
+\`\`\`md
+## Open questions
+None
+\`\`\`
+EOF
+)\""
+allows "#1320 a heredoc body with a fenced example and the real section passes" "gh issue create --title t $M $P $C --body \"\$(cat <<'EOF'
+b
+
+\`\`\`md
+## Open questions
+\`\`\`
+
+## Open questions
+
+None
+EOF
+)\""
+denies "#1320 an ANSI quoted body whose only heading is fenced is refused" "gh issue create --title t --body \$'b\\n\\n\`\`\`\\n## Open questions\\nNone\\n\`\`\`' $M $P $C"
+denies "#1320 a double quoted body with escaped backtick fences is refused" "gh issue create --title t --body \"b
+
+\\\`\\\`\\\`
+## Open questions
+None
+\\\`\\\`\\\`\" $M $P $C"
+# Lessons review: a body's last fenced line carries the closing quote (```' or ```"), so in the
+# command text that fence never closes. Only what follows the body's closing quote is then read as
+# code, which is no part of the body, and the other rules read the parsed arguments, so the verdict
+# is unchanged: a real section before the closing fence still passes, and the other fields still count.
+allows "#1320 an ANSI quoted body ending in a fenced block, its section before it, passes" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone\\n\\n\`\`\`\\nx\\n\`\`\`' $M $P $C"
+allows "#1320 a double quoted body ending in a fenced block, its section before it, passes" "gh issue create --title t --body \"b
+
+## Open questions
+
+None
+
+\\\`\\\`\\\`
+x
+\\\`\\\`\\\`\" $M $P $C"
+denies "#1320 and a body ending in a fence still needs its milestone" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone\\n\\n\`\`\`\\nx\\n\`\`\`' $P $C"
+allows "#1320 a section in a later argument, after a body ending in a fence, is still found in the parsed arguments" "gh issue create --title t --body \$'b\\n\`\`\`\\nx\\n\`\`\`' --body \"## Open questions
+
+None\" $M $P $C"
+
 # ---------------------------------------------------------------------------
 # The session that filed it (claude-config#536). Three sessions worked one repo on 2026-09-21 and
 # one sent a warning to the wrong session, because nothing on a filed issue says who filed it.

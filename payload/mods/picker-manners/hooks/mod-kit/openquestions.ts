@@ -14,18 +14,50 @@
 // An unchecked box or a plain bullet is open; a checked box is answered; None means none.
 
 // The whole heading, so "## Open questions about the API" is another section (lessons review); the
-// filing gate and create-milestone.sh match it the same way.
+// filing gate reads a markdown body by the same whole line (HEADING_LINE), and create-milestone.sh
+// asks the gate's reader (issue_field_gate.py --holds-open-questions) rather than matching it itself.
 const HEADING = /^#{1,6}[ \t]*Open questions[ \t]*$/i
 const ANY_HEADING = /^#{1,6}[ \t]/
 const BULLET = /^[ \t]*[-*][ \t]+(?:\[([ xX])\][ \t]+)?(.*)$/
 const SESSION = /^Claude-Session:/
 
+// A fenced code block (#1320), by CommonMark's rule as GitHub renders it: a line of three or more
+// backticks or tildes, after any indentation, opens one, unless a backtick line has another backtick
+// after its fence (inline code); a line of the same character, at least as long, with nothing but
+// spaces after it, closes it; one never closed runs to the end. A line inside, the fences included,
+// is code: never the heading, never a heading or session line that ends the section, never an item.
+// The filing gate (hooks/issue_field_gate.py, fenced_lines) follows the same rule, and both are held
+// to one set of cases (tests/openquestions-fixtures.ts).
+const FENCE = /^[ \t]*(`{3,}|~{3,})(.*)$/
+
+// For each line, whether it sits in a fenced code block, its fences included; and the fence still
+// open at the end of the body (null when none is), so a section added after a block never closed is
+// not written inside it.
+const fencesOf = (lines: readonly string[]): { code: boolean[]; open: string | null } => {
+  const out: boolean[] = []
+  let open: string | null = null
+  for (const l of lines) {
+    const m = FENCE.exec(l)
+    const fence = m?.[1] ?? ''
+    const rest = m?.[2] ?? ''
+    if (open === null) {
+      const opens = m !== null && !(fence[0] === '`' && rest.includes('`'))
+      if (opens) open = fence
+      out.push(opens)
+      continue
+    }
+    out.push(true)
+    if (m !== null && fence[0] === open[0] && fence.length >= open.length && rest.trim() === '') open = null
+  }
+  return { code: out, open }
+}
+
 /** The section's lines, as indices into `lines`: the heading and the end (exclusive); null when absent. */
-const sectionOf = (lines: string[]): { head: number; end: number } | null => {
-  const head = lines.findIndex(l => HEADING.test(l.trim()))
+const sectionOf = (lines: string[], code: readonly boolean[]): { head: number; end: number } | null => {
+  const head = lines.findIndex((l, i) => !code[i] && HEADING.test(l.trim()))
   if (head < 0) return null
   let end = head + 1
-  while (end < lines.length && !ANY_HEADING.test(lines[end] as string) && !SESSION.test(lines[end] as string)) end++
+  while (end < lines.length && (code[end] || (!ANY_HEADING.test(lines[end] as string) && !SESSION.test(lines[end] as string)))) end++
   return { head, end }
 }
 
@@ -78,11 +110,13 @@ export const etDateOf = (ms: number): string => ET_DATE.format(ms)
 /** Whether the body has the section, and its open items' words, in order. */
 export const openQuestionsIn = (body: string): { found: boolean; open: string[] } => {
   const lines = body.split(/\r?\n/)
-  const s = sectionOf(lines)
+  const code = fencesOf(lines).code
+  const s = sectionOf(lines, code)
   if (!s) return { found: false, open: [] }
   const open: string[] = []
-  for (const l of lines.slice(s.head + 1, s.end)) {
-    const m = BULLET.exec(l)
+  for (let i = s.head + 1; i < s.end; i++) {
+    if (code[i]) continue
+    const m = BULLET.exec(lines[i] as string)
     if (!m) continue
     const box = m[1]
     if (box === 'x' || box === 'X') continue
@@ -104,30 +138,33 @@ export const withQuestion = (body: string, question: string, answered?: { answer
   // A body edited on GitHub's web page has CRLF endings: read either, and written back with its own.
   const eol = body.includes('\r\n') ? '\r\n' : '\n'
   const lines = body.split(/\r?\n/)
-  const s = sectionOf(lines)
+  const { code, open } = fencesOf(lines)
+  const s = sectionOf(lines, code)
   if (!s) {
-    const at = lines.findIndex(l => SESSION.test(l))
+    const at = lines.findIndex((l, i) => !code[i] && SESSION.test(l))
     const block = ['## Open questions', '', item]
-    if (at < 0) return [...lines, '', ...block].join(eol).replace(/^(?:\r?\n)+/, '')
+    // A body ending inside a block never closed has it closed first, or the section added would be
+    // code, never read back, and added again at every question (#1320).
+    if (at < 0) return [...lines, ...(open === null ? [] : [open]), '', ...block].join(eol).replace(/^(?:\r?\n)+/, '')
     const before = lines.slice(0, at)
     while (before.length && (before[before.length - 1] as string).trim() === '') before.pop()
     return [...before, '', ...block, '', ...lines.slice(at)].join(eol)
   }
   for (let i = s.head + 1; i < s.end; i++) {
-    const m = BULLET.exec(lines[i] as string)
+    const m = code[i] ? null : BULLET.exec(lines[i] as string)
     if (!m || wordsOf(m[2] ?? '') !== q) continue
     const isOpen = m[1] !== 'x' && m[1] !== 'X'
     if (answered && isOpen) lines[i] = item
     return lines.join(eol)
   }
   // Placed after the section's last item, or in place of None, or right under the heading.
-  const none = lines.findIndex((l, i) => i > s.head && i < s.end && /^none\.?$/i.test(l.trim()))
+  const none = lines.findIndex((l, i) => i > s.head && i < s.end && !code[i] && /^none\.?$/i.test(l.trim()))
   if (none >= 0) {
     lines[none] = item
     return lines.join(eol)
   }
   let last = -1
-  for (let i = s.head + 1; i < s.end; i++) if (BULLET.test(lines[i] as string)) last = i
+  for (let i = s.head + 1; i < s.end; i++) if (!code[i] && BULLET.test(lines[i] as string)) last = i
   if (last >= 0) lines.splice(last + 1, 0, item)
   else lines.splice(s.head + 1, 0, '', item)
   return lines.join(eol)

@@ -58,6 +58,8 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENSURE="${ENSURE_MILESTONE_SH:-$HERE/ensure-milestone.sh}"
+# The filing gate, whose reader says whether a body already has its Open questions section (#1320).
+OQ_GATE="${OPEN_QUESTIONS_GATE:-$HERE/../../hooks/issue_field_gate.py}"
 # shellcheck source=labels-lib.sh
 . "$HERE/labels-lib.sh" || {
   echo "labels-lib.sh is missing beside create-milestone.sh, so the plan's labels cannot be checked. Nothing was filed." >&2
@@ -383,7 +385,20 @@ while [[ "$i" -lt "$n" ]]; do
     # This script calls gh itself, so the gate that asks for the line never sees these creates.
     # Every issue carries an Open questions section (claude-config#1279), None when the plan gave the
     # phase none, as the gate this script's creates never pass through asks of every other create.
-    grep -qiE '^[[:space:]]*#{1,6}[[:space:]]*Open questions[[:space:]]*$' <<<"$ib" || ib="$ib"$'\n\n## Open questions\n\nNone'
+    # Whether the body has one is asked of the filing gate's own reader, so a fenced example of the
+    # heading is not taken for it and the two never read it differently (claude-config#1320). A
+    # reader that cannot answer is said and the section added: a second None section is untidy, a
+    # missing one is what the gate exists to stop.
+    # Only its printed yes or no is an answer: a crash exits 1 as plainly as a no would (lessons review).
+    oq_err="$(mktemp)"
+    oq="$(python3 "$OQ_GATE" --holds-open-questions <<<"$ib" 2>"$oq_err")"
+    oq_rc=$?
+    if [[ $oq_rc -ne 0 || ( "$oq" != yes && "$oq" != no ) ]]; then
+      echo "OPEN-QUESTIONS-UNREAD title=$it: could not ask $OQ_GATE whether the body has an Open questions section (exit $oq_rc, answer '${oq}', $(tail -1 "$oq_err" 2>/dev/null)), so one saying None was added." >&2
+      oq=no
+    fi
+    rm -f "$oq_err"
+    [[ "$oq" == no ]] && ib="$ib"$'\n\n## Open questions\n\nNone'
     sess_line="$(bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../hooks/lib" 2>/dev/null && pwd)/claude-session-line.sh" 2>/dev/null)" || sess_line=""
     [[ -n "$sess_line" ]] && ib="$ib"$'\n\n'"$sess_line"
     iss_url="$(gh issue create --repo "$repo" --title "$it" --body "$ib" --milestone "$ms_ref" "${label_args[@]}" 2>&1)"
