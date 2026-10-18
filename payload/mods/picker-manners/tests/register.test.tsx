@@ -36,11 +36,21 @@ const modKit: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout) as boolean
       }
-      return { ...built, modkit: { isDans } as never }
+      const modkit: Record<string, unknown> = { isDans }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
+      return { ...built, modkit: modkit as never }
     })
   },
 }
 const KIT = { plugins: [modKit] }
+// #1299: the same, with a mod-kit loaded before it had isDans.
+const OLD_KIT = { plugins: [modKit, { name: 'kit-lacks-is-dans', register: (() => undefined) as Register }] }
 
 // Claude Code beneath the mod: its own question dialog, the transcript's dim lines, the memory
 // section of the system prompt, and the commands registered.
@@ -160,6 +170,16 @@ test("a reader mod-kit cannot answer reads the message as not Dan's, said once, 
   expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
 })
 
+// #1299: a mod-kit older than picker manners, with no isDans: the note says the two mods are out of
+// step, in the one sentence, never the raw TypeError.
+test('a mod-kit with no isDans is said as out of step, never as a TypeError (#1299)', OLD_KIT, async ($, on) => {
+  const w = world(on)
+  expect(((await type($ as never, 'no next issue', { kind: 'composer' })) as { text?: string }).text).toBe('no next issue')
+  const note = w.logs.find(l => l.includes('could not ask mod-kit whether your message was your own words')) ?? ''
+  expect(note).toContain('picker-manners and mod-kit are out of step in this session: the mod-kit loaded here has no isDans')
+  expect(note).not.toContain('is not a function')
+})
+
 test('/pickers with anything but on changes nothing and says what it understands', KIT, async ($, on) => {
   world(on)
   await type($ as never, 'no next issue')
@@ -259,6 +279,27 @@ test("one he did not answer is added open, and issue #N is read in the session's
   await askAbout($ as never, 'Skip design rounds for issue #12?')
   await w.settle()
   expect(w.edits).toEqual([{ issue: 12, repo: 'o/r', body: 'The bug.\n\n## Open questions\n\n- [ ] Skip design rounds for issue #12?' }])
+})
+
+// #1299 (lessons review): a mod-kit loaded before it had repo cannot say the session's repository; the
+// note says the two mods are out of step, never the raw TypeError.
+const kitWithoutRepo: { name: string; register: Register } = {
+  name: 'mod-kit',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return { ...built, modkit: { isDans: async () => false } as never }
+    })
+  },
+}
+test("a mod-kit with no repo is said as out of step when issue #N's Open questions cannot be found (#1299)", { plugins: [kitWithoutRepo] }, async ($, on) => {
+  const w = issueWorld(on, null, { 12: SECTION })
+  await askAbout($ as never, 'Skip design rounds for issue #12?')
+  await w.settle()
+  expect(w.edits).toEqual([])
+  const note = w.logs.find(l => l.includes("issue #12's Open questions")) ?? ''
+  expect(note).toContain("this session's repository could not be read: picker-manners and mod-kit are out of step in this session: the mod-kit loaded here has no repo")
+  expect(note).not.toContain('is not a function')
 })
 
 test('a question naming no issue, or only a bare #N, touches no issue; one /sleep asked is recorded by its own words (#1279)', { plugins: [kitWithRepo] }, async ($, on) => {

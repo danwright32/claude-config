@@ -1,5 +1,6 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type { AskBeforeSavingApproval, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
@@ -101,7 +102,9 @@ const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
 }
 
 let saves = 0
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
+// said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
+const message = (err: unknown) => errorText(err, 'ask-before-saving')
 
 // Dan typed an answer instead of choosing one (#1145): nothing is recorded, and mod-kit's one
 // wording, shared with the design round guard, tells him so in a toast and tells Claude to say so,
@@ -424,7 +427,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   } catch (err) {
     if (!toldNoReader) {
       toldNoReader = true
-      $.ui.log(`Ask before saving could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+      $.ui.log(`Ask before saving could not ask mod-kit whether your message was your own words (${message(err)}), so it read it as not yours. A new session loads mod-kit again.`)
     }
     return false
   }
@@ -441,7 +444,7 @@ export const register: Register = on => {
       try {
         await $.state.set(promptRef, e.text)
       } catch (err) {
-        $.ui.log(`Ask before saving could not note your message (${err instanceof Error ? err.message : String(err)}), so words in it that make a rule permanent will not skip the question.`)
+        $.ui.log(`Ask before saving could not note your message (${message(err)}), so words in it that make a rule permanent will not skip the question.`)
       }
     }
     return next(e)

@@ -76,6 +76,7 @@ import {
   unsureCard,
   unsure,
 } from './rules.ts'
+import { errorText } from './mod-kit/skew.ts'
 
 // Design round guard (claude-config#978). Dan, 2026-10-08: "claude should never design something
 // without my input. If we can make this something that can't be ignored rather than just a memory,
@@ -147,7 +148,9 @@ type Watched = { path: string; tree: string; name: string; before: string | unde
 const watching = new Map<string, Watched[]>()
 const WATCH_MAX = 64
 
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words, a call to another mod's noun that failed for a member its loaded copy lacks said
+// as the two mods out of step, never as the raw TypeError (#1299, mod-kit's one reader, hooks/skew.ts).
+const message = (err: unknown) => errorText(err, 'design-round-guard')
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {

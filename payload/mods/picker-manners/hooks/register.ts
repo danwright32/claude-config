@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 import { bareIssuesIn, etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
@@ -32,7 +33,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   } catch (err) {
     if (!toldNoReader) {
       toldNoReader = true
-      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${errorText(err, 'picker-manners')}), so it read it as not yours. A new session loads mod-kit again.`)
     }
     return false
   }
@@ -49,7 +50,7 @@ const sessionRepo = async ($: EngineInterface): Promise<{ repo: string } | { why
     const github = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
     return github ? { repo: github } : { why: 'this session is in no repository GitHub knows' }
   } catch (err) {
-    return { why: `this session's repository could not be read: ${err instanceof Error ? err.message : String(err)}` }
+    return { why: `this session's repository could not be read: ${errorText(err, 'picker-manners')}` }
   }
 }
 const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
@@ -84,7 +85,7 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
       const edit = await askAnyAccount(gh, ['issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], notFound, next)
       if (!('stdout' in edit)) said(saidOf(edit.failures))
     } catch (err) {
-      said(err instanceof Error ? err.message : String(err))
+      said(errorText(err, 'picker-manners'))
     }
   }
 }
@@ -92,7 +93,7 @@ const recordOnIssues = async ($: EngineInterface, question: string, answer: stri
 // Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
 // back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
 export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =>
-  $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${err instanceof Error ? err.message : String(err)}), so /sleep will not see it there.`)))
+  $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${errorText(err, 'picker-manners')}), so /sleep will not see it there.`)))
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
