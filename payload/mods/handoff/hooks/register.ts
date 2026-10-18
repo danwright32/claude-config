@@ -47,7 +47,7 @@ const parse = (text: string, repo: string): Saved | string => {
   try {
     j = JSON.parse(text) as Partial<Saved>
   } catch (err) {
-    return `not JSON (${String((err as Error).message ?? err)})`
+    return `not JSON (${message(err)})`
   }
   if (j.v !== 1 || typeof j.savedAt !== 'number' || typeof j.title !== 'string' || typeof j.prompt !== 'string' || !Array.isArray(j.baseline) || !j.baseline.every(isReading)) return 'not a handoff this mod wrote'
   if (j.repo !== repo) return `written for ${String(j.repo)}, not ${repo}`
@@ -80,7 +80,7 @@ const readAll = async ($: EngineInterface, root: string, names: readonly Name[])
         if (r.exitCode !== 0) return { ...n, error: firstLine(r.stderr) || `gh exited ${r.exitCode}` }
         return readingOf(n, JSON.parse(r.stdout))
       } catch (err) {
-        return { ...n, error: firstLine(String((err as Error).message ?? err)) || 'gh could not be run' }
+        return { ...n, error: firstLine(message(err)) || 'gh could not be run' }
       }
     }),
   )
@@ -113,7 +113,7 @@ const offer = async ($: EngineInterface) => {
   if (!(await $.fs.exists(p.current))) return
   const read = await $.fs.read(p.current).then(
     t => parse(t, p.root),
-    err => `unreadable (${String((err as Error).message ?? err)})`,
+    err => `unreadable (${message(err)})`,
   )
   if (typeof read === 'string') {
     $.ui.log(`The saved handoff could not be read (${p.current}): ${read}.`)
