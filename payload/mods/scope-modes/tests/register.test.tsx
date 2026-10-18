@@ -469,6 +469,13 @@ const world = (on: On, o: Opts = {}) => {
     if (cmd === 'sysctl' && ops[0] === 'kern.boottime') return o.boot === null ? fail(1, 'sysctl: unknown oid') : ok(`{ sec = ${o.boot ?? BOOT}, usec = 5 } Tue Oct  6 09:00:00 2026\n`)
     if (cmd === 'sysctl' && ops[0] === 'kern.bootsessionuuid') return o.session === null ? fail(1, 'sysctl: unknown oid') : ok(`${o.session ?? SESSION}\n`)
     if (cmd === 'mkdir') return ok()
+    // grep -o -E <pattern> <file> over the world's files (#1287: a session's title from its transcript).
+    if (cmd === 'grep' && a[0] === '-o' && a[1] === '-E') {
+      const file = a[3] as string
+      if (!(file in w.files)) return fail(2, `grep: ${file}: No such file or directory`)
+      const found = (w.files[file] as string).match(new RegExp(a[2] as string, 'g'))
+      return found ? ok(`${found.join('\n')}\n`) : fail(1)
+    }
     // A folder's names, from the files beneath it (#836).
     if (cmd === 'ls') {
       const dir = String(ops[ops.length - 1]).replace(/\/+$/, '')
@@ -2183,7 +2190,7 @@ const CURRENT = `${SLEEP}/current.json`
 // The writes of the record itself, leaving out the caffeinate hold's process number (#844) and the
 // night's unanswered list (#836).
 const recordWrites = (w: { fsWrites: string[] }) =>
-  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('/morning-review.') && !f.includes('/.morning-review.'))
+  w.fsWrites.filter(f => !f.endsWith('/caffeinate.pid') && !f.includes('/preparing') && !f.includes('/unanswered/') && !f.includes('/morning-review.') && !f.includes('/.morning-review.') && !f.includes('/reports/'))
 // T0 is 7:16 PM ET on Wed Dec 31 1969, so the night is Dec 31 and sleep ends at noon ET on Jan 1,
 // 17:00 UTC (EST).
 const UNTIL = Date.UTC(1970, 0, 1, 17)
@@ -2212,7 +2219,8 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
     night: '1969-12-31',
     bootTime: BOOT,
     bootSession: SESSION,
-    report: '/Users/x/Downloads/Sleep report 1969-12-31.md',
+    report: '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md',
+    reportsPerSession: true,
     startedBy: { sessionId: 's1', cwd: '/repo' },
     workers: ['s1', 's2'],
     // Each worker's goal, read from its transcript, where Claude Code's /goal records it (#1242).
@@ -2225,10 +2233,10 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   // The record, the night's list of issues whose before bed question went unanswered (#836): none
   // tonight, and the night waiting on its morning review (#1107), whose reminder the card says, not this text.
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`].sort())
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`].sort())
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/Sleep report 1969-12-31.md.`)
+  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
   // A goal already set is asked about by nobody: no question, and every worker's transcript read.
   expect(w.asked).toEqual([])
   expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl', '/Users/x/.claude/projects/-repo/s2.jsonl'])
@@ -2470,8 +2478,9 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => t?.startsWith('Sleep mode is on until')).length).toBe(1)
   // The other finds the first one's record, or its preparing marker while it is still settling the night.
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
-  // The record, the one night's unanswered list beside it (#836), and the one night waiting on its morning review (#1107).
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/unanswered/${T0}-s1`])
+  // The record, the one night's unanswered list beside it (#836), the one night waiting on its morning
+  // review (#1107), and the one session's report name (#1287).
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`])
   expect(JSON.parse(w.files[`${SLEEP}/morning-review.json`] as string)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
   // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
@@ -2825,7 +2834,7 @@ const myQuestion = proposal({ kind: 'question', by: 's1', cwd: '/repo', question
 const theirQuestion = proposal({ kind: 'question', by: 's2', cwd: '/other', questions: ['Rename the parser?'] })
 const CLOSED_NIGHT = { mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'o/r waits overnight' }] }
 
-test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, never the proposals (#1285)', withDeps, async ($, on) => {
+test('a worker that did not wake sleep puts its own morning to Dan at its next minute: its summary and its own questions, leaving the proposals of its repository to the session that claimed them (#1285, #1286)', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n${theirQuestion}\n`, [`${SLEEP}/offered/g0/o_r`]: 's9' } })
   await start($ as never, clock)
   await clock.advance(MIN)
@@ -3052,6 +3061,124 @@ test("a claim that cannot be written offers nothing rather than risk offering tw
   await clock.settle()
   expect(w.prompts.filter(p => p.includes('Bid totals round twice'))).toEqual([])
   expect(w.logs.some(l => l.includes('could not be claimed') && l.includes('Operation not permitted'))).toBe(true)
+})
+
+// #1287: one report per session with news, named night first, then the project, then the session.
+const REPORTS_G0 = `${SLEEP}/reports/g0`
+const perSession = (extra: Record<string, unknown> = {}) => asleepRecord({ reportsPerSession: true, ...extra })
+const OWN = '/Users/x/Downloads/1969-12-31 repo s1 sleep report.md'
+
+test('/sleep names its own report by night, project and session, marks the record as per session, and says where it is (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  const rec = recordOf(w)
+  expect(rec.reportsPerSession).toBe(true)
+  expect(rec.report).toBe(OWN)
+  expect(w.files[`${SLEEP}/reports/${rec.generation}/s1.path`]).toBe(OWN)
+  expect(r.text).toContain(` The night's report is at ${OWN}.`)
+})
+
+test("a session's title, as its transcript records it, names its report, auto naming's prefix dropped and the latest /rename winning (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const lines = [
+    '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Old name","sessionId":"s1"}',
+    '{"type":"custom-title","customTitle":"(repo) Fix the \\"parser\\"","sessionId":"s1"}',
+  ].join('\n')
+  const { w, clock } = world(on, { files: { [T]: lines } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Fix the "parser" sleep report.md')
+})
+
+test("with no /rename, Claude Code's own title names the report (#1287)", withDeps, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+  const { w, clock } = world(on, { files: { [T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+})
+
+test('a transcript that cannot be read names the report by id, and says why in the log (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe(OWN)
+  expect(w.logs.some(l => l.includes("this session's title could not be read (grep: /Users/x/.claude/projects/-repo/s1.jsonl: No such file or directory)"))).toBe(true)
+})
+
+test('a second sleep the same night gets its own name, never writing over the first night\'s report (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [OWN]: '# Sleep report, the first night' } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+  expect(w.files[OWN]).toBe('# Sleep report, the first night')
+})
+
+test('a /sleep whose report cannot be named does not start, and leaves no unanswered list behind (#1287 lessons review)', withDeps, async ($, on) => {
+  const taken: Record<string, string> = { [OWN]: 'x' }
+  for (let n = 2; n <= 50; n++) taken[OWN.replace('.md', ` (${n}).md`)] = 'x'
+  const { w, clock } = world(on, { files: taken })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('Sleep mode did not start: its report could not be named (fifty names for it were all taken).')
+  expect(w.files[CURRENT]).toBeUndefined()
+  expect(Object.keys(w.files).filter(f => f.includes('/unanswered/'))).toEqual([])
+})
+
+test('a worker that did not run /sleep names its own report at its first minute asleep, and renders it (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1', 's9'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+  expect(w.reports.some(x => x.op === 'render')).toBe(true)
+  // Once: the next minute names nothing new.
+  const renders = w.reports.length
+  await clock.advance(2 * MIN)
+  expect(w.reports.length).toBe(renders)
+})
+
+test("a worker names its report as its first prompt asleep goes in, before any note and any minute (#1287 lessons review)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await say($ as never, 'start the night')
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+})
+
+test('a session that is not a worker gets a report only once it has noted something overnight (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession() } })
+  await start($ as never, clock)
+  await clock.advance(2 * MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBeUndefined()
+  w.files[PROPOSED_AT] = `${myQuestion}\n`
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe(OWN)
+})
+
+test('two sessions with the same name tonight get two files: a name another session holds is not taken (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }), [`${REPORTS_G0}/s0.path`]: OWN } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.files[`${REPORTS_G0}/s1.path`]).toBe('/Users/x/Downloads/1969-12-31 repo s1 sleep report (2).md')
+})
+
+test("at wake a per session night opens this session's own report, and its morning names the page after it (#1287)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession({ workers: ['s1'] }), [`${REPORTS_G0}/s1.path`]: OWN, [OWN]: '# report' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toContain(` The night's report is at ${OWN}.`)
+  expect(w.opened).toEqual([[BBEDIT_TOOL, '--front-window', OWN]])
+  await clock.settle()
+  expect(morningOf(w)[0]).toContain('If you publish a page of the night\'s results for Dan, title it "1969-12-31 repo s1 sleep report", the name of this session\'s report.')
+})
+
+test('at wake a session with no report of its own says so and opens nothing (#1287)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: perSession() } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'wake')
+  expect(r.text).toContain(" This session noted nothing overnight, so it has no report of its own; each session with news has one in Downloads, named by night, project and session.")
+  expect(w.opened).toEqual([])
 })
 
 test('sleep ending by itself at noon has the session that ended it deliver what it held too (#1284)', withDeps, async ($, on) => {

@@ -608,6 +608,81 @@ lacks "never under Other notes" "progress from bbbb2222" "$r"
 # A record from before goals were kept says nothing about goals at all.
 lacks "an older record without goals names no worker as without one" "No goal was set" "$(report_of g6)"
 
+# ---- one report per session with news (#1287) ----
+# Dan, 2026-10-17: "One file per session. Even if multiple sessions are working on the same project."
+# A record written since #1287 says so (reportsPerSession); each session with news names its own file
+# in reports/<generation>/<session>.path, and the render writes each, its own notes with the sections
+# that belong to the whole Mac (the overnight check, limits and usage, sessions gone quiet) repeated.
+DL2="$WORK/hm/per-session"; mkdir -p "$DL2"
+per_record(){   # $1 = generation, $2 = workers, $3 = where
+  printf '{"v":1,"generation":"%s","since":%s,"until":%s,"night":"2026-10-07","bootTime":1759800000,"report":"%s/unused %s.md","reportsPerSession":true,"startedBy":{"sessionId":"aaaa1111","cwd":"/r/repo/%s"},"workers":%s,"placeBefore":"home"}' \
+    "$1" "$SINCE" "$((SINCE + 86400000))" "$DL2" "$1" "$STAMP" "$2" > "$3"
+}
+per_record g20 '["aaaa1111","bbbb2222","cccc3333"]' "$SLEEPDIR/ended/g20.json"
+mkdir -p "$SLEEPDIR/reports/g20"
+printf '%s' "$DL2/2026-10-07 Bidspoke Fix the parser sleep report.md" > "$SLEEPDIR/reports/g20/aaaa1111.path"
+printf '%s' "$DL2/2026-10-07 Slate bbbb2222 sleep report.md" > "$SLEEPDIR/reports/g20/bbbb2222.path"
+{
+  echo '{"v":1,"kind":"question","at":1791431000000,"by":"aaaa1111","repo":"acme/bidspoke","issue":4,"text":"Round totals up or down?","generation":"g20"}'
+  echo '{"v":1,"kind":"issue","at":1791431100000,"by":"bbbb2222","repo":"acme/slate","title":"Tidy the slate list","generation":"g20"}'
+  echo '{"v":1,"kind":"outward","at":1791431200000,"by":"aaaa1111","text":"an issue was created in acme/slate","generation":"g20"}'
+  echo '{"v":1,"kind":"wait","at":1791431300000,"by":"bbbb2222","minutes":5,"error":"rate_limit","generation":"g20"}'
+  echo '{"v":1,"kind":"usage","at":1791431350000,"by":"eeee5555","usage":{"rateLimits":[]},"generation":"g20"}'
+  echo '{"v":1,"kind":"question","at":1791431400000,"by":"ffff6666","cwd":"/w/slate","questions":["Rename the list?"],"generation":"g20"}'
+  echo '{"v":1,"kind":"woke","at":'"$WOKE"',"by":"aaaa1111","generation":"g20"}'
+} > "$SLEEPDIR/notes/g20.jsonl"
+out="$(NOW=$WOKE py render --record "$SLEEPDIR/ended/g20.json" --final 2>&1)"; rc=$?
+check_eq "a per session render succeeds" 0 "$rc"
+ra="$(cat "$DL2/2026-10-07 Bidspoke Fix the parser sleep report.md" 2>/dev/null)"
+rb="$(cat "$DL2/2026-10-07 Slate bbbb2222 sleep report.md" 2>/dev/null)"
+has "each session's report says whose it is" "This report covers session aaaa1111" "$ra"
+has "and the other's says its own" "This report covers session bbbb2222" "$rb"
+has "a session's own question is in its report" "Round totals up or down?" "$ra"
+lacks "and not in another session's" "Round totals up or down?" "$rb"
+has "a session's own proposal is in its report" "Tidy the slate list" "$rb"
+lacks "and not in another session's" "Tidy the slate list" "$ra"
+has "the overnight check is repeated in every report" "Done overnight, check it: an issue was created in acme/slate" "$rb"
+has "and in the session that noted it" "Done overnight, check it: an issue was created in acme/slate" "$ra"
+has "the limits and waits are repeated in every report" "## Limits and usage" "$ra"
+has "a session gone quiet is said in every report, read from every note" "Session cccc3333 ended unexpectedly: it never wrote a note." "$ra"
+lacks "a session that wrote notes is never called quiet in another's report" "Session bbbb2222 ended unexpectedly: it never wrote a note" "$ra"
+# A session with news that never named its own report (a worker that wrote nothing, a session that
+# noted a question and closed) still gets one, named by its id and the project its notes give, its
+# name recorded so the session itself keeps it; one with only the whole Mac's kinds has no news.
+check_eq "every session with news gets a file, one with none gets none, and the record's old single report is not written" \
+  "2026-10-07 Bidspoke Fix the parser sleep report.md|2026-10-07 Slate bbbb2222 sleep report.md|2026-10-07 cccc3333 sleep report.md|2026-10-07 slate ffff6666 sleep report.md" \
+  "$(ls "$DL2" | LC_ALL=C sort | tr '\n' '|' | sed 's/|$//')"
+check_eq "the name given is recorded for that session" "$DL2/2026-10-07 slate ffff6666 sleep report.md" "$(cat "$SLEEPDIR/reports/g20/ffff6666.path" 2>/dev/null)"
+check_eq "and none for the session with no news" "" "$(cat "$SLEEPDIR/reports/g20/eeee5555.path" 2>/dev/null)"
+has "the named one holds its own question" "Rename the list?" "$(cat "$DL2/2026-10-07 slate ffff6666 sleep report.md" 2>/dev/null)"
+# A name already on the disk from an earlier sleep the same night is never written over: (2).
+per_record g23 '["gggg7777"]' "$SLEEPDIR/ended/g23.json"
+: > "$DL2/2026-10-07 gggg7777 sleep report.md"
+py render --record "$SLEEPDIR/ended/g23.json" --final >/dev/null 2>&1
+check_eq "a second sleep the same night gets (2), the first night's file untouched" "|$DL2/2026-10-07 gggg7777 sleep report (2).md" \
+  "$(cat "$DL2/2026-10-07 gggg7777 sleep report.md")|$(cat "$SLEEPDIR/reports/g23/gggg7777.path" 2>/dev/null)"
+rm -f "$DL2/2026-10-07 gggg7777 sleep report.md" "$DL2/2026-10-07 gggg7777 sleep report (2).md"
+# Before the night ends a session gets two minutes to name its own report by its title: a fresh note
+# names nothing yet, and a worker with no note is named only at the end (lessons review).
+per_record g24 '["hhhh8888"]' "$SLEEPDIR/ended/g24.json"
+echo '{"v":1,"kind":"question","at":'"$SINCE"',"by":"iiii9999","cwd":"/w/slate","questions":["Keep it?"],"generation":"g24"}' > "$SLEEPDIR/notes/g24.jsonl"
+NOW=$((SINCE + 60000)) py render --record "$SLEEPDIR/ended/g24.json" >/dev/null 2>&1
+check_eq "within its two minutes, and for a worker with no note, no name is given for them" "" "$(ls "$SLEEPDIR/reports/g24" 2>/dev/null | tr '\n' ' ')"
+NOW=$((SINCE + 120000)) py render --record "$SLEEPDIR/ended/g24.json" >/dev/null 2>&1
+check_eq "past its two minutes the session that noted is named; the worker with no note still waits for the end" "iiii9999.path " "$(ls "$SLEEPDIR/reports/g24" 2>/dev/null | tr '\n' ' ')"
+rm -f "$DL2"/*iiii9999*
+# A night where no session has named a report yet writes nothing, and says so rather than failing.
+per_record g21 '[]' "$SLEEPDIR/ended/g21.json"
+out="$(py render --record "$SLEEPDIR/ended/g21.json" 2>&1)"; rc=$?
+check_eq "a per session night with no report named yet renders nothing, successfully" 0 "$rc"
+has "and says no session has a report yet" "no session has a report for this night yet" "$out"
+# A path file that cannot be read is said, never read as a session with no news (L215).
+per_record g22 '["aaaa1111"]' "$SLEEPDIR/ended/g22.json"
+mkdir -p "$SLEEPDIR/reports/g22/aaaa1111.path"
+out="$(py render --record "$SLEEPDIR/ended/g22.json" 2>&1)"; rc=$?
+check_eq "a report path that cannot be read fails the render" 1 "$rc"
+has "naming the session" "aaaa1111" "$out"
+
 # ---- where the writes landed ----
 # The stamp is proved present in what this suite wrote before its absence from the real Downloads is
 # read as evidence (L375): a stamp that had stopped reaching the report would pass the check below.
