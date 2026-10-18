@@ -23,6 +23,9 @@
 #
 # WHAT THE ISSUE CARRIES is the rule sentence and the lesson's id, never the evidence paragraph or
 # the repo it came from: four of the digest repos are public, and evidence names private systems.
+# It also carries the "## Open questions" section every issue must have (claude-config#1279), with
+# None, because a sweep leaves nothing for Dan to decide. The filing gate never sees the body file
+# this script writes, so nothing else would add it (claude-config#1321).
 #
 # THE LEDGER ($CLAUDE_HOME/state/lesson-fanout.done, one "Lnnn id" line per lesson) is written only
 # once every target repo has the issue, so a lesson that failed anywhere is offered again by the
@@ -186,6 +189,9 @@ A new lesson was recorded in another project. Check whether this project has the
 **$num.** $rule
 
 What to do: look for code in this project that matches the situation the rule describes, fix any instance found, and close this issue saying where you looked. If nothing here can hit it, close it with that reason. The full lesson, with its evidence, is \`claude-sync lesson $id\` on Dan's Macs.
+
+## Open questions
+None
 
 <!-- lesson-id: $id -->
 BODY
