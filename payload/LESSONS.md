@@ -4632,6 +4632,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#3655, 2026-10-13)
   SHORT: A check against a bounded cache or mirror judges only the range it is defined to hold; a missing row beyond it is unmeasured, not absent.
 
+- **L783. A detector that baselines on its own history and refuses to store an anomalous
+  reading, so a fault cannot become normal, can then never accept a deliberate change either, so
+  give it a rebaseline path tied to the change (a version or a config edit) when it is built.**
+  (bidspoke#2391, 2026-10-18)
+  SHORT: A self baselined detector that never stores an anomaly can never accept a deliberate change; build a rebaseline path tied to the change.
+
 ## State and identity
 
 - **L782. A freshness margin enforced on a cached value must also be enforced on whatever refills
