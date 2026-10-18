@@ -409,6 +409,24 @@ denies "#1320 a double quoted body with escaped backtick fences is refused" "gh 
 ## Open questions
 None
 \\\`\\\`\\\`\" $M $P $C"
+# Lessons review: a body's last fenced line carries the closing quote (```' or ```"), so in the
+# command text that fence never closes. Only what follows the body's closing quote is then read as
+# code, which is no part of the body, and the other rules read the parsed arguments, so the verdict
+# is unchanged: a real section before the closing fence still passes, and the other fields still count.
+allows "#1320 an ANSI quoted body ending in a fenced block, its section before it, passes" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone\\n\\n\`\`\`\\nx\\n\`\`\`' $M $P $C"
+allows "#1320 a double quoted body ending in a fenced block, its section before it, passes" "gh issue create --title t --body \"b
+
+## Open questions
+
+None
+
+\\\`\\\`\\\`
+x
+\\\`\\\`\\\`\" $M $P $C"
+denies "#1320 and a body ending in a fence still needs its milestone" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone\\n\\n\`\`\`\\nx\\n\`\`\`' $P $C"
+allows "#1320 a section in a later argument, after a body ending in a fence, is still found in the parsed arguments" "gh issue create --title t --body \$'b\\n\`\`\`\\nx\\n\`\`\`' --body \"## Open questions
+
+None\" $M $P $C"
 
 # ---------------------------------------------------------------------------
 # The session that filed it (claude-config#536). Three sessions worked one repo on 2026-09-21 and
