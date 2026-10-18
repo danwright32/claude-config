@@ -35,7 +35,7 @@ const deps: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return r.stdout === '' ? undefined : JSON.parse(r.stdout)
       }
-      return {
+      const made = {
         ...built,
         modkit: {
           blocked: async (b: unknown) => built.ui.log('CARD ' + JSON.stringify(b)),
@@ -89,6 +89,16 @@ const deps: { name: string; register: Register } = {
           setExtra: async () => undefined,
         },
       }
+      // #1299: a provider loaded before it had a member, named by a plugin in the fold,
+      // <kit or sessions>-lacks-<member in kebab case>, since this plugin runs apart from the test's
+      // module; the call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const m = /^(kit|sessions)-lacks-([a-z-]+)$/.exec(p)
+        if (!m) continue
+        const member = (m[2] as string).replace(/-([a-z])/g, (_x: string, c: string) => c.toUpperCase())
+        delete (made as unknown as Record<string, Record<string, unknown>>)[m[1] === 'kit' ? 'modkit' : 'sessions']?.[member]
+      }
+      return made
     })
   },
 }
@@ -106,6 +116,9 @@ const secDefault: { name: string; tier: 'prepend'; register: Register } = {
   },
 }
 const withDeps = { plugins: [secDefault, deps] }
+// #1299: the same, with a session registry loaded before it had list, or noteEdit.
+const withOldList = { plugins: [secDefault, deps, { name: 'sessions-lacks-list', register: (() => undefined) as Register }] }
+const withOldNote = { plugins: [secDefault, deps, { name: 'sessions-lacks-note-edit', register: (() => undefined) as Register }] }
 
 const rec = (id: string, over: Record<string, unknown> = {}) => ({
   v: 1,
@@ -1160,6 +1173,24 @@ test('a check that fails refuses the call rather than let it through unjudged', 
   expect(refusal(r)).toContain('Blocked: the collision guard could not check this call against the other sessions')
   expect(w.reached).toEqual([])
   expect(w.edits).toEqual([])
+})
+
+// #1299: a call to the session registry's noun that fails for a member an older loaded copy lacks is
+// said as the two mods out of step, in the refusal and in the note, never as the raw TypeError.
+test('a session registry older than the collision guard is said as out of step, never as a TypeError (#1299)', withOldList, async ($, on) => {
+  const w = world($, on)
+  const r = await $.tool.call(edit('/repo/src/InvoiceTable.tsx', 'k1'))
+  expect(refusal(r)).toContain('collision-guard and session-registry are out of step in this session: the session-registry loaded here has no list')
+  expect(refusal(r)).not.toContain('is not a function')
+  expect(w.edits).toEqual([])
+})
+
+test('a note an older session registry cannot take is said as out of step, never as a TypeError (#1299)', withOldNote, async ($, on) => {
+  const v = world($, on)
+  const noted = (((await $.tool.call(edit('/repo/src/skewed.ts', 'k2'))) as { context?: string[] }).context ?? []).join(' ')
+  expect(noted).toContain('could not record that this session edited /repo/src/skewed.ts: collision-guard and session-registry are out of step in this session: the session-registry loaded here has no noteEdit')
+  expect(noted).not.toContain('is not a function')
+  expect(v.edits).toEqual([])
 })
 
 // The plan is handed from the tool.check hook to the tool.call hook by the call's id. A call raised

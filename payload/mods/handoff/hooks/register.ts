@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type { HandoffShown } from '../types/index.d.ts'
 import { ageOf, bandLines, changesOf, keyOf, namesIn, readingOf } from './handoff.ts'
 import type { Name, Reading } from './handoff.ts'
@@ -124,7 +125,9 @@ const offer = async ($: EngineInterface) => {
   await $.state.set(shownRef, { key: p.key, savedAt: read.savedAt } satisfies HandoffShown)
 }
 
-const message = (err: unknown) => String((err as Error)?.message ?? err)
+// An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
+// said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
+const message = (err: unknown) => errorText(err, MOD)
 
 // Use and Dismiss each claim the handoff on the band by moving it into the archive. A claim that
 // finds nothing (another session took it) or a different handoff (one saved since replaced it)

@@ -64,11 +64,20 @@ const modKit: { name: string; register: Register } = {
         login: async () => { throw new Error("mod-kit's login is not stood in by these tests") },
         account: async () => { throw new Error("mod-kit's account is not stood in by these tests") },
       }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
       return { ...built, modkit }
     })
   },
 }
 const withKit = { plugins: [modKit] }
+// #1299: the same, with a mod-kit loaded before it had isDans.
+const withOldKit = { plugins: [modKit, { name: 'kit-lacks-is-dans', register: (() => undefined) as Register }] }
 
 const exchange = (): Msg[] => [
   { role: 'user', text: 'Build the auto session name mod from issue 635', toolUses: [] },
@@ -378,6 +387,17 @@ test("a reader mod-kit cannot answer reads a message as not Dan's words, so it o
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
   expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
+
+// #1299: a mod-kit older than auto session name, with no isDans: the note says the two mods are out of
+// step, in the one sentence, never the raw TypeError.
+test('a mod-kit with no isDans is said as out of step, never as a TypeError (#1299)', withOldKit, async ($, on) => {
+  const w = world(on, { messages: [], replies: ['Gmail send fix'] })
+  await start($, w)
+  await sends($, w, 'Carry on with the Gmail send fix', { kind: 'composer' } as never)
+  const note = w.logs.find(l => l.includes('could not ask mod-kit whether your message was your own words')) ?? ''
+  expect(note).toContain('auto-session-name and mod-kit are out of step in this session: the mod-kit loaded here has no isDans')
+  expect(note).not.toContain('is not a function')
 })
 
 // Dan, 2026-10-13 (#1135): a slash command he typed WITH arguments is his words for naming. Measured

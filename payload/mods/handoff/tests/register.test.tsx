@@ -52,6 +52,13 @@ const modKit: { name: string; register: Register } = {
         pane: async () => { throw new Error("mod-kit's pane is not stood in by these tests") },
         clearPane: async () => { throw new Error("mod-kit's clearPane is not stood in by these tests") },
       }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
       return { ...built, modkit }
     })
     on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -81,6 +88,8 @@ const modKit: { name: string; register: Register } = {
   },
 }
 const withKit = { plugins: [modKit] }
+// #1299: the same, with a mod-kit loaded before it had clearBandRow.
+const withOldKit = { plugins: [modKit, { name: 'kit-lacks-clear-band-row', register: (() => undefined) as Register }] }
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -327,6 +336,19 @@ test('a Use that cannot send puts the handoff back and says why', withKit, async
   expect(w.toasts).toHaveLength(1)
   expect(w.toasts[0]).toMatch(/^Use did not send the handoff: \S/)
   expect((await lines(ui))[0]).toBe('Handoff saved 3h ago: Continue milestone 18 design rounds')
+  await ui.unmount()
+})
+
+// #1299: a mod-kit older than handoff, with no clearBandRow, is said as the two mods out of step.
+test('a mod-kit with no clearBandRow is said as out of step when Dismiss cannot take the band down, never as a TypeError (#1299)', withOldKit, async ($, on) => {
+  const w = world(on, { files: { [CURRENT]: saved() }, gh: { ...M18, 'repos/{owner}/{repo}/issues/615': issue('open', 'a') } })
+  await start($, w.clock)
+  const ui = await mount($)
+  await ui.press({ key: 'handoff:dismiss' })
+  await w.clock.settle()
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toContain('The handoff button did not finish: handoff and mod-kit are out of step in this session: the mod-kit loaded here has no clearBandRow')
+  expect(w.toasts[0]).not.toContain('is not a function')
   await ui.unmount()
 })
 

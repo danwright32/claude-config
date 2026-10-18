@@ -35,11 +35,21 @@ const modKit: { name: string; register: Register } = {
         if (r.exitCode !== 0) throw new Error(r.stderr)
         return JSON.parse(r.stdout) as boolean
       }
-      return { ...built, modkit: { isDans } as never }
+      const modkit: Record<string, unknown> = { isDans }
+      // #1299: a mod-kit loaded before it had a member, named by a plugin in the fold,
+      // kit-lacks-<member in kebab case>, since this plugin runs apart from the test's module; the
+      // call site then throws in the mod itself, as the runtime words it.
+      for (const p of e.plugins) {
+        const lacks = /^kit-lacks-([a-z-]+)$/.exec(p)?.[1]?.replace(/-([a-z])/g, (_m: string, c: string) => c.toUpperCase())
+        if (lacks) delete (modkit as Record<string, unknown>)[lacks]
+      }
+      return { ...built, modkit: modkit as never }
     })
   },
 }
 const KIT = { plugins: [modKit] }
+// #1299: the same, with a mod-kit loaded before it had isDans.
+const OLD_KIT = { plugins: [modKit, { name: 'kit-lacks-is-dans', register: (() => undefined) as Register }] }
 
 // Claude Code beneath the mod: its own question dialog, the transcript's dim lines, the memory
 // section of the system prompt, and the commands registered.
@@ -157,6 +167,16 @@ test("a reader mod-kit cannot answer reads the message as not Dan's, said once, 
   for (let i = 0; i < 2; i++) expect(((await type($ as never, 'no next issue', { kind: 'composer', breaks: true })) as { text?: string }).text).toBe('no next issue')
   expect((await ask($ as never, QUESTION, { metadata: { source: 'next-issue' } })).result?.answers).toEqual({ engine: 'picker' })
   expect(w.logs.filter(l => l.includes('could not ask mod-kit whether your message was your own words')).length).toBe(1)
+})
+
+// #1299: a mod-kit older than picker manners, with no isDans: the note says the two mods are out of
+// step, in the one sentence, never the raw TypeError.
+test('a mod-kit with no isDans is said as out of step, never as a TypeError (#1299)', OLD_KIT, async ($, on) => {
+  const w = world(on)
+  expect(((await type($ as never, 'no next issue', { kind: 'composer' })) as { text?: string }).text).toBe('no next issue')
+  const note = w.logs.find(l => l.includes('could not ask mod-kit whether your message was your own words')) ?? ''
+  expect(note).toContain('picker-manners and mod-kit are out of step in this session: the mod-kit loaded here has no isDans')
+  expect(note).not.toContain('is not a function')
 })
 
 test('/pickers with anything but on changes nothing and says what it understands', KIT, async ($, on) => {

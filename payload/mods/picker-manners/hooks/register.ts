@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
 
@@ -30,7 +31,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   } catch (err) {
     if (!toldNoReader) {
       toldNoReader = true
-      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+      $.ui.log(`Picker manners could not ask mod-kit whether your message was your own words (${errorText(err, 'picker-manners')}), so it read it as not yours. A new session loads mod-kit again.`)
     }
     return false
   }

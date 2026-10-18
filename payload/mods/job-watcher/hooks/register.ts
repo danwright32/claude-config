@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type { Jobs, JobsEntry } from '../types/index.d.ts'
 import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, type Outcome, type Verdict } from './jobs.ts'
 
@@ -44,7 +45,9 @@ type Watch = {
 const MOD = 'job-watcher'
 const TICK_MS = 60_000
 const REARM_MS = 5 * 60_000
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
+// An error as words: a call to another mod's noun that failed for a member its loaded copy lacks is
+// said as the two mods out of step, never as the raw TypeError (#1299, mod-kit's hooks/skew.ts).
+const message = (err: unknown) => errorText(err, MOD)
 const KEEP_TOOL = 'keep_job'
 const KEEP_CALL = 'mcp__job-watcher__keep_job'
 const KEEP_SPEC = {
@@ -162,7 +165,7 @@ const publishSafely = async ($: EngineInterface) => {
   } catch (err) {
     if (!toldUnpublished) {
       toldUnpublished = true
-      say(undefined, `The background job watcher could not record this session's jobs: ${err instanceof Error ? err.message : String(err)}. The status bar and later sessions will not see them.`)
+      say(undefined, `The background job watcher could not record this session's jobs: ${message(err)}. The status bar and later sessions will not see them.`)
     }
   }
 }
@@ -227,7 +230,7 @@ const stop = async ($: EngineInterface, id: string): Promise<string | undefined>
     if (r.isError) return String(r.text ?? 'it reported an error')
     return undefined
   } catch (err) {
-    return err instanceof Error ? err.message : String(err)
+    return message(err)
   }
 }
 
@@ -806,7 +809,7 @@ const judgeClaimed = async ($: EngineInterface, job: Leftover, group: number, no
   try {
     killed = await $.process.run(['/bin/kill', '-TERM', `-${group}`], { timeoutMs: 10_000 })
   } catch (err) {
-    return { kind: 'stopFailed', name: v.name, why: err instanceof Error ? err.message : String(err), session: job.session }
+    return { kind: 'stopFailed', name: v.name, why: message(err), session: job.session }
   }
   if (killed.exitCode !== 0) return { kind: 'stopFailed', name: v.name, why: killed.stderr.trim() || `kill exited ${killed.exitCode}`, session: job.session }
   await $.clock.sleep(STOP_SETTLE_MS)
@@ -828,7 +831,7 @@ const judgeLeftovers = async ($: EngineInterface) => {
     list = await $.sessions.list()
   } catch (err) {
     // The registry's own reason goes to the debug log; Dan's line is the bare fact.
-    $.ui.log(`job-watcher: could not ask the session registry for its sessions: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    $.ui.log(`job-watcher: could not ask the session registry for its sessions: ${message(err)}`, { to: 'debug' })
     if (retriedLeftovers) {
       $.ui.log('The session list could not be asked again; leftover jobs from closed sessions were not checked this session.')
       return
@@ -931,7 +934,7 @@ export const register: Register = on => {
     await $.tool.register(KEEP_SPEC)
     // Judged off the start's own path, so model calls never hold up the session.
     $.clock.after(0, () => {
-      judgeLeftovers($).catch(err => $.ui.log(`Background job watcher could not check leftover jobs from closed sessions: ${err instanceof Error ? err.message : String(err)}.`))
+      judgeLeftovers($).catch(err => $.ui.log(`Background job watcher could not check leftover jobs from closed sessions: ${message(err)}.`))
     })
     return next(e)
   })
@@ -1005,7 +1008,7 @@ export const register: Register = on => {
           })
           await publishSafely($)
         } catch (err) {
-          say(e.agentId, `The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${err instanceof Error ? err.message : String(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
+          say(e.agentId, `The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${message(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
         }
       }
     }

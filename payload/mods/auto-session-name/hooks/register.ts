@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import { errorText } from './mod-kit/skew.ts'
 import type { AutoSessionNameRecord as Rec } from '../types/index.d.ts'
 import { cleanName, hasExchange, namePrompt, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from './name.ts'
 
@@ -22,7 +23,9 @@ const RENEW_MS = CLAIM_MS / 3
 const WHO = 'Auto session name'
 
 // An engine refusal arrives led by '<plugin>: $.noun.verb: '; the reason is what follows.
-const errText = (err: unknown) => (err instanceof Error ? err.message : String(err)).replace(/^[\w-]+: \$\.[\w.]+: /, '')
+// A skew (a member an older loaded mod lacks) is said as the two mods out of step, never as the raw
+// TypeError (#1299, mod-kit's hooks/skew.ts).
+const errText = (err: unknown) => errorText(err, MOD).replace(/^[\w-]+: \$\.[\w.]+: /, '')
 
 // The one reader and the one writer of the record. A record about another session id (a /clear
 // started a new one) reads as none. Writes are compare and set on the version, retried, so two
@@ -214,7 +217,7 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   } catch (err) {
     if (!toldNoReader) {
       toldNoReader = true
-      $.ui.log(`Auto session name could not ask mod-kit whether your message was your own words (${err instanceof Error ? err.message : String(err)}), so it read it as not yours. A new session loads mod-kit again.`)
+      $.ui.log(`Auto session name could not ask mod-kit whether your message was your own words (${errText(err)}), so it read it as not yours. A new session loads mod-kit again.`)
     }
     return false
   }
