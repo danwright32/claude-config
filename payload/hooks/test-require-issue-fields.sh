@@ -372,8 +372,11 @@ for i, c in enumerate(cases):
     print("%s %s (found %s, expected %s)" % ("ok" if got == c["found"] else "BAD", c["name"], got, c["found"]))
 ' 2>&1)"
 fence_count="$(printf '%s\n' "$fence_out" | sed -n 's/^COUNT //p')"
-if [[ "${fence_count:-0}" -ge 12 ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: #1320 the shared fence cases were read (got ${fence_count:-none}: $fence_out)"; fi
+# Every case the file holds, counted from its text by a second route, so a read that drops some
+# cannot pass (lessons review); and never none, so an empty file cannot either.
+fence_cases="$(grep -c '"name":' "$FENCE_FIXTURES")"
+if [[ "${fence_cases:-0}" -gt 0 && "${fence_count:-}" == "$fence_cases" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: #1320 all ${fence_cases:-0} shared fence cases were read (got ${fence_count:-none}: $fence_out)"; fi
 while IFS= read -r line; do
   case "$line" in
     ok\ *) pass=$((pass + 1)) ;;
