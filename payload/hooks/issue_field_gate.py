@@ -113,8 +113,11 @@ def has_session_line(args, command):
 # at a line's start or right after the quote that opens the body. The words in a sentence ("no open
 # questions") are not a section.
 # The whole heading, at a line's start, a quote's or an escaped newline's in a $'...' body, and
-# ending there too, so "## Open questions about the API" is another section, as the shared reader
-# (mods/mod-kit/hooks/openquestions.ts) and create-milestone.sh read it (lessons review).
+# ending there too, so "## Open questions about the API" is another section (lessons review). The
+# quote and written newline are a command's spelling, so this reads only the command text and its
+# arguments (holds_open_questions with spelled=True); a markdown body, a --body-file or the plan body
+# create-milestone.sh asks about through --holds-open-questions, is read by HEADING_LINE below, as
+# mods/mod-kit/hooks/openquestions.ts reads one (claude-config#1320).
 OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
 # The same heading in a body that is markdown (a --body-file, a plan body): a whole line, after any
 # indentation, as mod-kit's reader takes it; a quote before or after it is the command's spelling,

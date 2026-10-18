@@ -14,7 +14,8 @@
 // An unchecked box or a plain bullet is open; a checked box is answered; None means none.
 
 // The whole heading, so "## Open questions about the API" is another section (lessons review); the
-// filing gate and create-milestone.sh match it the same way.
+// filing gate reads a markdown body by the same whole line (HEADING_LINE), and create-milestone.sh
+// asks the gate's reader (issue_field_gate.py --holds-open-questions) rather than matching it itself.
 const HEADING = /^#{1,6}[ \t]*Open questions[ \t]*$/i
 const ANY_HEADING = /^#{1,6}[ \t]/
 const BULLET = /^[ \t]*[-*][ \t]+(?:\[([ xX])\][ \t]+)?(.*)$/
