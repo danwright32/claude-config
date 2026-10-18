@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L782. A freshness margin on a cached value must also apply to whatever refills it; a shared tier can hand back a copy just as near expiry.
 - L1024. A record replaced under a new id strands every copy of the old id held outside, so resolving an inbound id must follow the replacement chain.
 - L483. A merge keeping an entry one side lacks must reinsert it under the scope it was declared in, never the first container, where it applies to others.
 - L339. A generator seeding from system entropy when given no seed differs on every run, so any comparison measures the seed and any cache keyed on it is wrong.
