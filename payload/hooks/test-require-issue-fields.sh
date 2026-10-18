@@ -67,19 +67,24 @@ omits() { # omits <description> <needle> <command>
     fail=$((fail + 1)); echo "FAIL: $1 (message should NOT contain '$2')"; fi
 }
 
-# Satisfy two axes so the third is the only thing that can fire.
+# Satisfy the other rules so the one under test is the only thing that can fire.
 M='--milestone "Ungrouped"'
 P='--label priority-p2'
 C='--label bug'
-ALL="$M $P $C"
+# The body's Open questions section (#1279), a body of its own: gh takes the last --body, and the
+# gate reads the whole command, so every case below that is not about the section carries one.
+Q='--body "## Open questions
+
+None"'
+ALL="$M $P $C $Q"
 
 # ============================ a complete create passes ============================
-allows "all three present"            "gh issue create --title \"T\" --body \"B\" $ALL"
-allows "several categories at once"   "gh issue create --title \"T\" $M $P --label accessibility --label tech-debt --label ux"
-allows "one comma list carries all"   'gh issue create --title "T" --milestone "Ungrouped" --label "bug,priority-p1"'
-allows "short flags throughout"       'gh issue create --title "T" -m "Ungrouped" -l priority-p2 -l bug'
-allows "attached short flag value"    'gh issue create --title "T" -m "Ungrouped" -lpriority-p2 -lbug'
-allows "equals forms"                 'gh issue create --title "T" --milestone=Ungrouped --label=priority-p2 --label=bug'
+allows "all four present"            "gh issue create --title \"T\" --body \"B\" $ALL"
+allows "several categories at once"   "gh issue create --title \"T\" $M $P --label accessibility --label tech-debt --label ux $Q"
+allows "one comma list carries all"   'gh issue create --title "T" --milestone "Ungrouped" --label "bug,priority-p1"'" $Q"
+allows "short flags throughout"       'gh issue create --title "T" -m "Ungrouped" -l priority-p2 -l bug'" $Q"
+allows "attached short flag value"    'gh issue create --title "T" -m "Ungrouped" -lpriority-p2 -lbug'" $Q"
+allows "equals forms"                 'gh issue create --title "T" --milestone=Ungrouped --label=priority-p2 --label=bug'" $Q"
 allows "flags before the title"       "gh issue create $ALL --title \"T\""
 
 # ============================ RULE: milestone ============================
@@ -96,7 +101,7 @@ allows "#1188 its --help files nothing"         "gh -R o/x issue create --help"
 denies "empty milestone value"        "gh issue create --title \"T\" --milestone \"\" $P $C"
 denies "milestone flag with no value" "gh issue create --title \"T\" $P $C --milestone"
 denies "milestone followed by a flag" "gh issue create --title \"T\" --milestone $P $C"
-allows "milestone by number"          "gh issue create --title \"T\" --milestone 4 $P $C"
+allows "milestone by number"          "gh issue create --title \"T\" --milestone 4 $P $C $Q"
 denies "milestone in a later segment" "gh issue create --title \"T\" $P $C && echo --milestone Foo"
 says   "names the milestone rule"     "a milestone" "gh issue create --title \"T\" $P $C"
 says   "milestone fix names Ungrouped" "Ungrouped" "gh issue create --title \"T\" $P $C"
@@ -107,11 +112,11 @@ omits  "no priority advice when priority is fine" "priority-p3   nice to have" "
 # ============================ RULE: priority ============================
 denies "no priority"                  "gh issue create --title \"T\" $M $C"
 denies "other labels only"            "gh issue create --title \"T\" $M --label bug --label frontend"
-allows "p0"                           "gh issue create --title \"T\" $M $C --label priority-p0"
-allows "p1"                           "gh issue create --title \"T\" $M $C --label priority-p1"
-allows "p3"                           "gh issue create --title \"T\" $M $C --label priority-p3"
-allows "p4"                           "gh issue create --title \"T\" $M $C --label priority-p4"
-allows "uppercase level"              "gh issue create --title \"T\" $M $C --label PRIORITY-P2"
+allows "p0"                           "gh issue create --title \"T\" $M $C --label priority-p0 $Q"
+allows "p1"                           "gh issue create --title \"T\" $M $C --label priority-p1 $Q"
+allows "p3"                           "gh issue create --title \"T\" $M $C --label priority-p3 $Q"
+allows "p4"                           "gh issue create --title \"T\" $M $C --label priority-p4 $Q"
+allows "uppercase level"              "gh issue create --title \"T\" $M $C --label PRIORITY-P2 $Q"
 denies "p5 is off the scale"          "gh issue create --title \"T\" $M $C --label priority-p5"
 denies "double digit level"           "gh issue create --title \"T\" $M $C --label priority-p10"
 denies "the bare word priority"       "gh issue create --title \"T\" $M --label priority"
@@ -130,10 +135,10 @@ denies "priority only, equals form"   "gh issue create --title \"T\" $M --label=
 denies "priority only, short flag"    "gh issue create --title \"T\" $M -l priority-p0"
 denies "empty label value"            "gh issue create --title \"T\" $M $P --label \"\""
 # The vocabulary is open, so the gate must accept a name it has never seen.
-allows "a label nobody has used"      "gh issue create --title \"T\" $M $P --label wobbly-gizmo-behaviour"
-allows "a label starting like a level" "gh issue create --title \"T\" $M $P --label priority-review"
-allows "an off-scale level is a category" "gh issue create --title \"T\" $M --label priority-p2 --label priority-p9"
-allows "a label containing a space"   'gh issue create --title "T" --milestone "Ungrouped" --label priority-p2 --label "help wanted"'
+allows "a label nobody has used"      "gh issue create --title \"T\" $M $P --label wobbly-gizmo-behaviour $Q"
+allows "a label starting like a level" "gh issue create --title \"T\" $M $P --label priority-review $Q"
+allows "an off-scale level is a category" "gh issue create --title \"T\" $M --label priority-p2 --label priority-p9 $Q"
+allows "a label containing a space"   'gh issue create --title "T" --milestone "Ungrouped" --label priority-p2 --label "help wanted"'" $Q"
 says   "names the category rule"      "a category label" "gh issue create --title \"T\" $M $P"
 says   "category fix says read first" "gh label list" "gh issue create --title \"T\" $M $P"
 says   "category fix says create one" "gh label create" "gh issue create --title \"T\" $M $P"
@@ -142,23 +147,23 @@ says   "category fix says not fixed"  "not a fixed list" "gh issue create --titl
 
 # ============================ the combined message ============================
 # The old design ran three gates, so a create missing everything reported whichever
-# one happened to be seen first. One gate says it all at once.
-says   "all three named together"     "a milestone, a priority label, a category label" 'gh issue create --title "T"'
+# one happened to be seen first. One gate says all four rules at once.
+says   "all four named together"      "a milestone, a priority label, a category label, an Open questions section" 'gh issue create --title "T"'
 says   "counts one issue"             "file 1 issue" 'gh issue create --title "T"'
 says   "counts two issues"            "file 2 issues" 'gh issue create --title "A" && gh issue create --title "B"'
-says   "lists all three overrides"    "SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1" 'gh issue create --title "T"'
+says   "lists all four overrides"     "SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1 / SKIP_OPEN_QUESTIONS_CHECK=1 <the same command>" 'gh issue create --title "T"'
 says   "points at the shared rule"    "NAMING.md" 'gh issue create --title "T"'
-says   "only the failing override"    "SKIP_CATEGORY_CHECK=1 <the same command>" "gh issue create --title \"T\" $M $P"
+says   "only the failing override"    "SKIP_CATEGORY_CHECK=1 <the same command>" "gh issue create --title \"T\" $M $P $Q"
 omits  "no milestone advice when fine" "ensure-milestone.sh" "gh issue create --title \"T\" $M $P"
 
 # ============================ overrides ============================
-allows "milestone waived"             "SKIP_MILESTONE_CHECK=1 gh issue create --title \"T\" $P $C"
-allows "priority waived"              "SKIP_PRIORITY_CHECK=1 gh issue create --title \"T\" $M $C"
-allows "category waived"              "SKIP_CATEGORY_CHECK=1 gh issue create --title \"T\" $M $P"
+allows "milestone waived"             "SKIP_MILESTONE_CHECK=1 gh issue create --title \"T\" $P $C $Q"
+allows "priority waived"              "SKIP_PRIORITY_CHECK=1 gh issue create --title \"T\" $M $C $Q"
+allows "category waived"              "SKIP_CATEGORY_CHECK=1 gh issue create --title \"T\" $M $P $Q"
 # Each override waives ONE rule. Sharing them would let a single skip hide everything.
 denies "one override does not waive the rest" 'SKIP_MILESTONE_CHECK=1 gh issue create --title "T"'
 denies "the wrong override for the rule" "SKIP_CATEGORY_CHECK=1 gh issue create --title \"T\" $P $C"
-allows "all three waived together"    'SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 gh issue create --title "T"'
+allows "the three field rules waived together"    'SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 gh issue create --title "T"'" $Q"
 denies "override named only in the body" "gh issue create --title \"T\" --body \"SKIP_PRIORITY_CHECK=1\" $M $C"
 # An override belongs to the ONE command it prefixes. Letting it cover the whole call
 # is how a second unmilestoned create slipped past on 2026-07-29.
@@ -208,12 +213,12 @@ echo checking
 gh issue create --title \"T\" $P $C"
 allows "backslash continuation, complete" 'gh issue create --title "T" \
   --milestone "Ungrouped" \
-  --label priority-p2 --label bug'
+  --label priority-p2 --label bug'" $Q"
 denies "backslash continuation, incomplete" 'gh issue create --title "T" \
   --label priority-p2 \
   --label bug'
 allows "quoted multi-line body, complete" 'gh issue create --title "T" --body "line one
-line two" --milestone "Ungrouped" --label priority-p2 --label bug'
+line two" --milestone "Ungrouped" --label priority-p2 --label bug'" $Q"
 denies "quoted multi-line body, incomplete" 'gh issue create --title "T" --body "line one
 line two"'
 denies "real create after a heredoc mentioning one" "cat > notes.md <<EOF
@@ -264,7 +269,8 @@ if [[ "$nsc_err" == *"ISSUE FIELD GATE DID NOT RUN"* ]]; then pass=$((pass + 1))
   fail=$((fail + 1)); echo "FAIL: a missing scanner should announce itself, got: ${nsc_err:-<silence>}"; fi
 
 # ============================ the table is the extension point ============================
-# The point of the refactor: a fourth rule is one entry, not a fourth copy of the hook.
+# The point of the refactor: a new rule is one entry, not another copy of the hook. The Open
+# questions section (#1279) is the fourth, in the table like the rest.
 rules_n="$(python3 -c "
 import importlib.util, os
 s = importlib.util.spec_from_file_location('g', '$DIR/issue_field_gate.py')
@@ -272,8 +278,8 @@ m = importlib.util.module_from_spec(s); os.environ['GATE_DIR'] = '$DIR'; s.loade
 print(len(m.RULES))
 print(all(set(r) >= {'name','check','fix','override'} for r in m.RULES))
 ")"
-if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "3" ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: expected 3 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
+if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "4" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: expected 4 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
 if [[ "$(printf '%s' "$rules_n" | tail -1)" = "True" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: every rule needs a name, check, fix and override"; fi
 
@@ -306,12 +312,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The Open questions section (#1279, Dan 2026-10-17): every issue's body holds one, listing what only
+# Dan can decide, or None, so /sleep can ask each before the night begins. A heading is what counts:
+# the words in a sentence are not a section.
+# ---------------------------------------------------------------------------
+denies "#1279 a body with no Open questions section is refused" "gh issue create --title t --body b $M $P $C"
+says "#1279 naming what is missing" "an Open questions section" "gh issue create --title t --body b $M $P $C"
+says "#1279 and saying None is enough" "write None under it" "gh issue create --title t --body b $M $P $C"
+denies "#1279 a create with no body at all is refused" "gh issue create --title t $M $P $C"
+allows "#1279 the section with None passes" "gh issue create --title t --body \"b
+
+## Open questions
+
+None\" $M $P $C"
+allows "#1279 a section listing questions passes, at any heading level" "gh issue create --title t --body \"b
+
+### Open questions
+- [ ] Keep the old flag?\" $M $P $C"
+denies "#1279 a heading that only starts with the words is another section (lessons review)" "gh issue create --title t --body \"b
+
+## Open questions about the API
+- [ ] Keep it?\" $M $P $C"
+allows "#1279 the heading written in an ANSI quoted body passes" "gh issue create --title t --body \$'b\\n\\n## Open questions\\n\\nNone' $M $P $C"
+denies "#1279 the words in a sentence are not a section" "gh issue create --title t --body \"b, with no open questions.\" $M $P $C"
+allows "#1279 the section in a heredoc body passes" "gh issue create --title t $M $P $C --body \"\$(cat <<'EOF'
+b
+
+## Open questions
+
+None
+EOF
+)\""
+QF="$TMP_DIR/q-body.md"
+printf 'b\n\n## Open questions\n\nNone\n' > "$QF"
+allows "#1279 a body file holding the section passes" "gh issue create --title t --body-file $QF $M $P $C"
+printf 'b\n' > "$QF"
+denies "#1279 a body file without it is refused" "gh issue create --title t --body-file $QF $M $P $C"
+allows "#1279 the section has its own visible override" "SKIP_OPEN_QUESTIONS_CHECK=1 gh issue create --title t --body b $M $P $C"
+denies "#1279 and that override waives nothing else" "SKIP_OPEN_QUESTIONS_CHECK=1 gh issue create --title t --body b $M $C"
+
+# ---------------------------------------------------------------------------
 # The session that filed it (claude-config#536). Three sessions worked one repo on 2026-09-21 and
 # one sent a warning to the wrong session, because nothing on a filed issue says who filed it.
 # Commits and pull requests already carry a Claude-Session line; a create now has to as well, and
 # the refusal names the exact line, read from the environment Claude Code gives every hook.
 # ---------------------------------------------------------------------------
-ALL="$M $P $C"
+ALL="$M $P $C $Q"
 SESSION_ENV="CLAUDE_CODE_BRIDGE_SESSION_ID=session_01AbCdEf CLAUDE_CODE_SESSION_ID=11111111-2222-3333-4444-555555555555"
 denies "#536 a create with no session line is refused inside a session" "gh issue create --title t --body b $ALL"
 says "#536 and the refusal names the exact line, as a link" "Claude-Session: https://claude.ai/code/session_01AbCdEf" "gh issue create --title t --body b $ALL"

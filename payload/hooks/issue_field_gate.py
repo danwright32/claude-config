@@ -1,8 +1,9 @@
 """The `gh issue create` completeness gate: one rule table, one process.
 
-Every issue Dan tracks carries three things, so the backlog can be read three ways:
-a milestone (which feature it ships with), a priority (how urgent), and at least one
-category label (what it is about). The full model is in
+Every issue Dan tracks carries four things, so the backlog can be read three ways and
+/sleep can ask what only Dan can decide: a milestone (which feature it ships with), a
+priority (how urgent), at least one category label (what it is about), and an Open
+questions section in its body (claude-config#1279). The full model is in
 ~/.claude/skills/milestone/NAMING.md, which is the source of truth; this file only
 enforces presence.
 
@@ -104,7 +105,26 @@ def _same_path(a, b):
 
 
 def has_session_line(args, command):
-    """The body names the session that filed it (claude-config#536).
+    """The body names the session that filed it (claude-config#536). See body_carries."""
+    return body_carries(args, command, lambda text: SESSION_MARK in text)
+
+
+# The body's Open questions section (claude-config#1279, Dan 2026-10-17): a heading, at any level,
+# at a line's start or right after the quote that opens the body. The words in a sentence ("no open
+# questions") are not a section.
+# The whole heading, at a line's start, a quote's or an escaped newline's in a $'...' body, and
+# ending there too, so "## Open questions about the API" is another section, as the shared reader
+# (mods/mod-kit/hooks/openquestions.ts) and create-milestone.sh read it (lessons review).
+OPEN_QUESTIONS = re.compile(r"(?im)(?:^|[\"']|\\n)[ \t]*#{1,6}[ \t]*Open questions[ \t]*(?=\r?$|[\"']|\\[nr])")
+
+
+def has_open_questions(args, command):
+    """The body holds an Open questions section, listing what only Dan can decide, or None."""
+    return body_carries(args, command, lambda text: OPEN_QUESTIONS.search(text) is not None)
+
+
+def body_carries(args, command, found):
+    """Whether the body of a create holds what `found` looks for in a text.
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
     as a heredoc inside a command substitution is only ever present as text, and in a --body-file
@@ -117,7 +137,7 @@ def has_session_line(args, command):
     the file either. Written by anything else (a script, an expansion), or not written here and not
     readable, it is not held against the create: this gate fails open on what it cannot read.
     """
-    if SESSION_MARK in command or any(SESSION_MARK in a for a in args):
+    if found(command) or any(found(a) for a in args):
         return True
     paths = scan.flag_values(args, "--body-file", "-F")
     try:
@@ -134,7 +154,7 @@ def has_session_line(args, command):
             continue  # written whole from shown text, which does not carry the line
         try:
             with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as f:
-                if SESSION_MARK in f.read():
+                if found(f.read()):
                     return True
         except OSError:
             if not written:
@@ -189,12 +209,29 @@ CATEGORY_FIX = (
     "   Never apply claude-suggested or any label attributing the issue to Claude or AI."
 )
 
-# The table. A new rule is one entry: what it is called, how to detect it, what to say,
-# and its own override. Order is the order the fixes are listed in.
+# Judged on the body, so it reads the command as the session line does (claude-config#1279).
+OPEN_QUESTIONS_RULE = {
+    "name": "an Open questions section",
+    "check": lambda args, command: has_open_questions(args, command),
+    "fix": ("OPEN QUESTIONS. The body ends its prose with a section listing what only Dan can decide about "
+            "this issue, so /sleep asks each before the night begins instead of a worker finding it "
+            "overnight. One unchecked item a question; if there are none, write None under it:\n"
+            "   ## Open questions\n"
+            "   - [ ] <a decision only Dan can make>\n"
+            "   (or: None)\n"
+            "   It goes in --body or the --body-file, before the session line."),
+    "override": "SKIP_OPEN_QUESTIONS_CHECK=1",
+}
+
+
+# The table. A new rule is one entry: what it is called, how to detect it from the create's
+# arguments and the whole command, what to say, and its own override. Order is the order the
+# fixes are listed in.
 RULES = [
-    {"name": "a milestone", "check": has_milestone, "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
-    {"name": "a priority label", "check": has_priority, "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
-    {"name": "a category label", "check": has_category, "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
+    {"name": "a milestone", "check": lambda args, command: has_milestone(args), "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
+    {"name": "a priority label", "check": lambda args, command: has_priority(args), "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
+    {"name": "a category label", "check": lambda args, command: has_category(args), "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
+    OPEN_QUESTIONS_RULE,
 ]
 
 
@@ -218,7 +255,7 @@ def evaluate(command):
     the message can say "1 issue" or "3 issues" correctly.
     """
     creates = scan.scan_creates(command)
-    rules = [dict(r, check=(lambda args, command, f=r["check"]: f(args))) for r in RULES]
+    rules = list(RULES)
     line = session_line() if creates else None
     if line:
         rules.append(session_rule(line))
@@ -238,9 +275,9 @@ def evaluate(command):
 def build_reason(offenders, failing):
     names = ", ".join(r["name"] for r in failing)
     lines = [
-        "This command would file %s missing %s. Every issue carries a milestone, a priority and at least "
-        "one category, so the backlog can be read by feature, by urgency and by area, and one filed from a "
-        "Claude session names that session.\n"
+        "This command would file %s missing %s. Every issue carries a milestone, a priority, at least one "
+        "category and an Open questions section, so the backlog can be read by feature, by urgency and by "
+        "area, and /sleep can ask what only Dan can decide; one filed from a Claude session names that session.\n"
         % (scan.plural_issues(offenders), names),
         "Fix each one, then re-run the command:\n",
     ]

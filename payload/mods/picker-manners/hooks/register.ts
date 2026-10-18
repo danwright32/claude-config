@@ -1,6 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { asksQuiet, refusal } from './pickers.ts'
+import { bareIssuesIn, etDateOf, issueRefsIn, questionWords, withQuestion } from './mod-kit/openquestions.ts'
+import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 
 // Picker manners (#615), agreed with Dan on 2026-10-03 (docs/mods-design.md, "Picker manners (#615)").
 //
@@ -36,6 +38,62 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
   }
 }
 
+// #1279, Dan 2026-10-17: a question Dan is asked about an issue (owner/name#N, or issue #N in this
+// session's repository) is added to the issue's Open questions section, checked off with his answer
+// when he gave one, so /sleep asks one still open and never one he answered. Read and written whole
+// through gh; a failure is said, since /sleep would otherwise never see the question.
+// The session's repository as GitHub names it, or why it cannot be told (said, never dropped, L11).
+const sessionRepo = async ($: EngineInterface): Promise<{ repo: string } | { why: string }> => {
+  try {
+    const here = await $.session.repo()
+    const github = here ? (await $.modkit.repo({ root: here.root, remote: here.remote })).github : null
+    return github ? { repo: github } : { why: 'this session is in no repository GitHub knows' }
+  } catch (err) {
+    return { why: `this session's repository could not be read: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+const ghLine = (r: { stderr: string; exitCode: number }) => r.stderr.trim().split('\n')[0] || `gh exited ${r.exitCode}`
+const notFound = (r: GhRun) => /Could not resolve to a Repository/i.test(r.stderr)
+// What a failure says: the first one that is not another account's not found, as /sleep says it.
+const saidOf = (failures: GhRun[]) => ghLine(failures.find(f => !notFound(f)) ?? (failures[0] as GhRun))
+const recordOnIssues = async ($: EngineInterface, question: string, answer: string | null) => {
+  // The bare issue #N references by the shared reader's own rule, so what is said matches what is dropped.
+  const bare = bareIssuesIn(question)
+  const here = bare.length ? await sessionRepo($) : null
+  if (here && 'why' in here) for (const n of bare) $.ui.log(`Picker manners could not add this question to issue #${n}'s Open questions (${here.why}), so /sleep will not see it there.`)
+  const refs = issueRefsIn(question, here && 'repo' in here ? here.repo : null)
+  const words = questionWords(question)
+  for (const ref of refs) {
+    const said = (why: string) => $.ui.log(`Picker manners could not add this question to ${ref.repo}#${ref.issue}'s Open questions (${why}), so /sleep will not see it there.`)
+    try {
+      // As each account gh is logged in to, as /sleep asks: Dan's work repositories are visible only to
+      // his work account (lessons review), through mod-kit's one helper.
+      const gh = (argv: string[], env?: Record<string, string>, stdin?: string) =>
+        $.process.run(argv, { timeoutMs: 20_000, ...(env ? { env } : {}), ...(stdin !== undefined ? { stdin } : {}) })
+      const view = await askAnyAccount(gh, ['issue', 'view', String(ref.issue), '--repo', ref.repo, '--json', 'state,body,url'])
+      if (!('stdout' in view)) {
+        said(saidOf(view.failures))
+        continue
+      }
+      const j = JSON.parse(view.stdout) as { state?: unknown; body?: unknown; url?: unknown }
+      // gh issue view answers for a pull request's number too: its description is left alone.
+      if (String(j.state).toUpperCase() === 'CLOSED' || /\/pull\/\d+/.test(String(j.url ?? ''))) continue
+      const body = typeof j.body === 'string' ? j.body : ''
+      const next = withQuestion(body, words, answer === null ? undefined : { answer, date: etDateOf(await $.clock.now()) })
+      if (next === body) continue
+      const edit = await askAnyAccount(gh, ['issue', 'edit', String(ref.issue), '--repo', ref.repo, '--body-file', '-'], notFound, next)
+      if (!('stdout' in edit)) said(saidOf(edit.failures))
+    } catch (err) {
+      said(err instanceof Error ? err.message : String(err))
+    }
+  }
+}
+
+// Work done after the dialog has answered and off its path, so a slow GitHub never holds the answer
+// back. Whatever escapes it is said, never left as an unhandled rejection nobody reads (lessons review).
+export const offTheDialog = ($: EngineInterface, work: () => Promise<unknown>) =>
+  $.clock.after(0, () => void work().catch(err => $.ui.log(`Picker manners could not add this question to its issue's Open questions (${err instanceof Error ? err.message : String(err)}), so /sleep will not see it there.`)))
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'pickers', description: 'Turns next issue pickers back on for this session.', argumentHint: 'on' })
@@ -47,7 +105,16 @@ export const register: Register = on => {
       quiet: (await $.state.get(quietRef)).value ?? false,
       source: (e.metadata as { source?: string } | undefined)?.source,
     })
-    return why ? { deny: why } : next(e)
+    if (why) return { deny: why }
+    const r = await next(e)
+    // #1279: a question about an issue goes into that issue's Open questions.
+    const question = String(e.questions?.[0]?.question ?? '')
+    const answers = (r as { result?: { answers?: Record<string, unknown> } }).result?.answers
+    // A multi-select answer arrives as a list, and is an answer all the same (lessons review).
+    const given = answers?.[question]
+    const answer = typeof given === 'string' ? given : Array.isArray(given) && given.length ? given.map(String).join(', ') : null
+    if (!r.deny && question) offTheDialog($, () => recordOnIssues($, question, answer))
+    return r
   })
 
   // What Dan types, at the Mac or from his phone through Remote Control, as mod-kit's one reader says

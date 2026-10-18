@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import {
+  goalIssues,
   answerKey,
   askOptions,
   askText,
@@ -160,5 +161,22 @@ describe('the goal a session has set (#1242)', () => {
     expect(goalAnswer(NO_GOAL)).toEqual({ goal: null })
     expect(goalAnswer('   ')).toEqual({ goal: null })
     expect(goalAnswer(GO_TO_SLEEP)).toEqual({ goal: null, slept: true })
+  })
+})
+
+// #1279: the issues a goal names, whose Open questions /sleep asks before the night.
+describe('the issues a goal names', () => {
+  test('#N in the worker\'s repository, owner/name#N anywhere, each once', () => {
+    expect(goalIssues('Close #7 and #9, then #7 again', 'o/r')).toEqual([{ repo: 'o/r', issue: 7 }, { repo: 'o/r', issue: 9 }])
+    expect(goalIssues('Land o/other#12 and #3', 'o/r')).toEqual([{ repo: 'o/other', issue: 12 }, { repo: 'o/r', issue: 3 }])
+  })
+  test('a number named as a pull request is not read as an issue (lessons review)', () => {
+    expect(goalIssues('Merge PR #31, then close #7; pull request #40 too', 'o/r')).toEqual([{ repo: 'o/r', issue: 7 }])
+    expect(goalIssues('Merge PRs #31 and #32, pull requests #3, #4 and o/r#5, then close #9', 'o/r')).toEqual([{ repo: 'o/r', issue: 9 }])
+  })
+  test('a goal naming no issue, or a worker in no repository, names none it can read', () => {
+    expect(goalIssues('Finish the Saved views milestone', 'o/r')).toEqual([])
+    expect(goalIssues('Close #7', null)).toEqual([])
+    expect(goalIssues('Close o/r#7', null)).toEqual([{ repo: 'o/r', issue: 7 }])
   })
 })

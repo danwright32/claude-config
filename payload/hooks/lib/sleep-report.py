@@ -477,7 +477,9 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None):
         # Where it was asked: the repo and issue a worker named, else the folder the mod noted (#841).
         at = where(n) if n.get("repo") else (n.get("cwd") or "a session that did not say where")
         asked = [" ".join(str(q).split()) for q in n["questions"]] if isinstance(n.get("questions"), list) else []
-        qs.extend("%s: %s" % (at, q) for q in (asked or [text_of(n)]))
+        # A before bed question left unasked or unanswered says why (#1279).
+        why = " (left before bed: %s)" % " ".join(str(n["why"]).split()) if isinstance(n.get("why"), str) and n["why"].strip() else ""
+        qs.extend("%s: %s%s" % (at, q, why) for q in (asked or [text_of(n)]))
     section("Questions for you", qs)
 
     if final:
