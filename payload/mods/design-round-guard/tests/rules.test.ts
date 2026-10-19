@@ -19,7 +19,8 @@ import {
   modHookLogicOnly,
   onScreenProblem,
   sourceSpans,
-  settledTyped,
+  settledNotYet,
+  settledTypedSaid,
   skipTyped,
   dataOnlyChange,
   editedText,
@@ -489,8 +490,18 @@ test("a typed answer's two parts, what stays as it was and how to ask again", ()
   expect(t.still).toContain('app/page.tsx')
   expect(t.still).toContain('issue #978 in slate')
   expect(t.again).toBe('ask him the same question again, with the same metadata')
-  expect(settledTyped().again).toBe(`ask him "${SETTLED_QUESTION}" again, with the same metadata`)
-  for (const x of [t.still, t.again, settledTyped().still, settledTyped().again]) expect(DASHES.test(x)).toBe(false)
+  for (const x of [t.still, t.again]) expect(DASHES.test(x)).toBe(false)
+})
+
+// #1336: a typed answer to the settled question counts as Not yet, and is the next round's feedback.
+test('a typed answer to the settled question is said as Not yet, with his words as the next round\'s feedback', () => {
+  const said = settledTypedSaid('too much dead space in the boxes')
+  expect(said).toContain('"too much dead space in the boxes"')
+  expect(said).toContain(`counts as ${SETTLED_NO}`)
+  expect(said).toContain(settledNotYet)
+  expect(said).toContain('feedback for the next design round')
+  expect(said).not.toContain(`"${SETTLED_QUESTION}" again`)
+  expect(DASHES.test(said)).toBe(false)
 })
 
 // #1138: a mod's own hook files, judged by what they draw.

@@ -8746,6 +8746,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L788. A check that reads another system's status for work it already depends on must wait out that system's reporting lag on a readable 'not finished' or 'not listed yet' before refusing, and refuse at once only on a real failure; retrying only unreadable replies turns a few seconds of lag into a refusal that looks like a verdict.**
+  (Try-Pennie/slate#3926, 2026-10-19)
+  SHORT: A check reading another system's status must wait out its lag on a readable not finished or not listed, refusing at once only on a real failure.
+
 - **L787. A sync that skips the records your own system wrote into another system, to avoid reading them back, must still compare those records against your copy, because a person editing them there is otherwise invisible and the two drift with no signal.**
   (Try-Pennie/slate#3919, 2026-10-19)
   SHORT: A sync skipping records you wrote elsewhere must still compare them to your copy, or a person editing them there drifts the two silently.

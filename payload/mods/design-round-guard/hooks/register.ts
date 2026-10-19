@@ -70,7 +70,8 @@ import {
   skipOptions,
   skipQuestion,
   subjectsOf,
-  settledTyped,
+  settledNotYet,
+  settledTypedSaid,
   skipTyped,
   unreadable,
   unreadableCard,
@@ -109,8 +110,9 @@ import { errorText } from './mod-kit/skew.ts'
 //   settings hooks, so Dan is never asked about a call another guard refuses (#707, #875).
 // - Since #1138: the skip question leads with `onScreen`, the session's plain sentence saying what on
 //   screen changes or that nothing visible does, and names the file after it; without one nothing is
-//   asked (rules.ts onScreenProblem). A typed answer is said, to Dan in a toast and to Claude, as not
-//   recorded, with the question to ask again. A mod's own hook file is judged by what it draws
+//   asked (rules.ts onScreenProblem). A typed answer to the skip question is said, to Dan in a toast
+//   and to Claude, as not recorded, with the question to ask again; one to the settled question
+//   counts as Not yet and is the next round's feedback (#1336, rules.ts settledTypedSaid). A mod's own hook file is judged by what it draws
 //   (rules.ts modHookLogicOnly): an edit touching none of it passes unasked. Since #1248 the lines
 //   it touches end where it ends (rules.ts changedSpan), so the untouched line below a change is not
 //   read with it.
@@ -1086,7 +1088,7 @@ export const register: Register = on => {
       return `${head}, so edits that change the look on ${left} stay blocked. Tell him, and ask again.`
     }
 
-    // Dan typed an answer instead of choosing one (#1138): nothing is recorded, and mod-kit's one
+    // Dan typed an answer to the skip question instead of choosing one (#1138): nothing is recorded, and mod-kit's one
     // wording (#1145) tells him so in a toast and tells Claude to say so and ask again. A mod-kit that
     // cannot (one loaded before it had the member) is said, so Claude knows Dan was not told.
     const typed = async (r: Awaited<ReturnType<typeof next>>, chosen: string, parts: { still: string; again: string }) => {
@@ -1175,8 +1177,9 @@ export const register: Register = on => {
       const s = listed(subjects.map(x => x.label))
       const { r, chosen, none } = await asked(settledQuestion(subjects), settledOptions(subjects))
       if (chosen === undefined) return none ? say(r, none) : r
-      if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: nothing is recorded. Keep going with design rounds.`)
-      if (chosen !== SETTLED_YES) return typed(r, chosen, settledTyped())
+      if (chosen === SETTLED_NO) return say(r, `Dan answered ${SETTLED_NO}: ${settledNotYet}`)
+      // A typed answer counts as Not yet, and is the next round's feedback (#1336).
+      if (chosen !== SETTLED_YES) return say(r, settledTypedSaid(chosen))
       const kept = await record(subjects, 'settled')
       if (kept.why !== undefined) return say(r, partly(SETTLED_YES, kept))
       // Each refused call his answer covers in full can be sent again. It stays on the waiting list,
