@@ -52,7 +52,12 @@
 #                                       PR_REVIEW_READ=<key> (claude-config#788). Printing them is
 #                                       not reading them: a refusal can be hidden behind another
 #                                       hook's. This refusal is the only place the findings and
-#                                       their key are shown (the nudge stopped, #1090).
+#                                       their key are shown (the nudge stopped, #1090). N counts
+#                                       only the NEW findings: any that repeat one already answered
+#                                       in a "Lessons review" comment are listed apart after them,
+#                                       not counted (claude-config#1338, answered_findings).
+#   ok, every finding answered before   allowed, listing each with the review that raised it first
+#                                       and the comment that answered it (#1338), with no key.
 #   ok, N findings, read / 0            allowed (<review>.acknowledged).
 #   empty-diff                          allowed: the head adds nothing to the base.
 #   running                             refused, with elapsed time against the deadline.
