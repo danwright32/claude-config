@@ -33,6 +33,13 @@ export type Card = { repo: string; pr: number; title: string; url: string; state
 const STATE: Record<Deploy, State> = { live: 'live', deploying: 'deploying', failed: 'unconfirmed', unreachable: 'unconfirmed', none: 'no-deploy' }
 export const stateOf = (d: Deploy): State => STATE[d]
 
+// Whether the change has reached the people who asked for it, so the message telling them it is
+// live can be shown (#1335): live, or merged in a project with no deploy step, where merging is
+// going live (Dan, 2026-10-19). Deploying and could not confirm live hold the message (Dan,
+// 2026-10-19). A Record over the type, so a state added without a decision fails to type check.
+const OUT: Record<State, boolean> = { live: true, 'no-deploy': true, deploying: false, unconfirmed: false }
+export const isOut = (s: State): boolean => OUT[s]
+
 // The state leads the title (design round): "Live:" green, "Merged, deploying:" grey, "Could not
 // confirm live:" amber. The no deploy step title is the builder's, not yet settled.
 const LEAD: Record<State, string> = {
@@ -70,8 +77,11 @@ export const reasonToRefuse = (i: CardInput): string | undefined => {
     if (!VIAS.includes(r.via)) return `requester.via must be one of ${VIAS.join(', ')}.`
     if (/^dan$/i.test(r.name.trim())) return 'No message when Dan asked: leave requester out.'
     if (r.via === 'issue' && !(Number.isInteger(r.issue) && (r.issue as number) > 0)) return 'requester.issue must be the issue number when they asked in an issue.'
-    if (!(typeof i.message === 'string' && i.message.trim())) return `A message for ${r.name} is owed, in Dan's voice.`
-    if (DASH.test(i.message)) return "The message must have no dashes (Dan's voice): use a comma, colon or a new sentence."
+    // The message tells them it is live, so only a call saying the change is out owes it; an
+    // earlier call may pass it, and it is held until then (#1335).
+    const given = typeof i.message === 'string' && i.message.trim()
+    if (!given && isOut(stateOf(i.deploy))) return `A message for ${r.name} is owed, in Dan's voice.`
+    if (given && DASH.test(i.message as string)) return "The message must have no dashes (Dan's voice): use a comma, colon or a new sentence."
   } else if (has(i as unknown as Record<string, unknown>, 'message') && i.message) {
     return 'A message is only for someone other than Dan who asked: say who asked in requester, or leave the message out.'
   }
@@ -80,6 +90,14 @@ export const reasonToRefuse = (i: CardInput): string | undefined => {
 
 type Run = { text: string; color?: string; bold?: boolean }
 type Shown = CardInput & { state: State; title: string; url: string }
+
+/**
+ * Whether a card's message goes in the band now (#1335): it tells whoever asked that the change is
+ * live, so it is held, never shown with Copy and Mark sent, until a card for that PR says the
+ * change is out (isOut); deploying and could not confirm live hold it, and a sent one is done.
+ */
+export const pinnable = (c: { state: State; requester?: Requester; message?: string; sentAt?: number }): boolean =>
+  isOut(c.state) && Boolean(c.requester && c.message) && c.sentAt === undefined
 
 /**
  * The card as mod-kit's boxed card draws it (#663): the state leading the title in its colour, then
@@ -92,6 +110,7 @@ export const cardOf = (c: Shown): { title: Run[]; lines: Run[][] } => ({
     [{ text: c.changed.trim() }],
     [{ text: 'See it: ' }, { text: c.see.link }],
     ...c.see.clicks.map((k, n) => [{ text: `${n + 1}. ${k.trim()}` }]),
+    ...(!isOut(c.state) && c.requester ? [[{ text: `Message for ${c.requester.name} waits until this is live.` }]] : []),
   ],
 })
 
@@ -136,6 +155,9 @@ export const liveList = (cards: readonly Card[]): string => {
   const unsent = sorted.filter(c => c.requester && c.message && c.sentAt === undefined)
   return [
     ...sorted.map(c => `- ${titleOf(c.state, c.title)} (#${c.pr})`),
-    ...(unsent.length ? ['', 'Not sent yet:', ...unsent.map(c => `- Message for ${c.requester?.name} (#${c.pr}): ${c.message}`)] : []),
+    // A message held until its change is live is listed without its words (#1335).
+    ...(unsent.length
+      ? ['', 'Not sent yet:', ...unsent.map(c => (isOut(c.state) ? `- Message for ${c.requester?.name} (#${c.pr}): ${c.message}` : `- Message for ${c.requester?.name} waits until #${c.pr} is live.`))]
+      : []),
   ].join('\n')
 }

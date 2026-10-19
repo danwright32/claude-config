@@ -2046,12 +2046,21 @@ ones marked open are the builder's choice, waiting on Dan.
   (danwright32, and dwright-pennie, which owns repo-digest), read with only the logins taken so
   no token is read; when gh cannot list them, the active account alone counts and the card says
   so (#704).
+- **A message is shown only once the change is out** (#1335): it tells whoever asked that the
+  change is live, so it is pinned in the band only from a card that says live, or no deploy step
+  recorded, where merging is going live (Dan, 2026-10-19). A message passed on a deploying card,
+  or on one that could not confirm live (failed or unreachable, Dan, 2026-10-19), is held: the
+  card ends "Message for Kris waits until this is live.", /live lists it without its words, and a
+  row already pinned is taken down. The live and no deploy calls require the message; the others
+  accept it but never require it.
 - **A message waits until Dan presses Mark sent**, never until the next card: a later card for
   the same PR that names nobody keeps the message as it was, sent or not, and a message marked
   sent stays sent while a new card carries the same words; new words wait again (#704).
 - **Cards are kept per repository** in the mod's store, the newest 50, so `/live` lists them in
   any later session, newest first, then every message not yet marked sent; `/live` also pins
-  each unsent message in the band again, so Copy and Mark sent are at hand. The repository is
+  each unsent message whose change is out (the PR's newest card says live or no deploy step,
+  #1335) in the band again, so Copy and Mark sent are at hand, and lists a held one as waiting,
+  without its words. The repository is
   the one GitHub's own link for the PR names, folded to lowercase, so a card Claude typed in
   another case or under a repository's old name (gh accepts both) is one list with the rest;
   cards an earlier build kept under another case are read with them and moved onto the one key
