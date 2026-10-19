@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { CONTRACT, HEADER, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { git as gitCommand, pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -755,6 +755,42 @@ test("an agent worktree's branch is keyed by its own name, so another agent's br
   expect(refusalOf(await call($, PAGE))).toBe('')
   w.branches['/w/slate'] = 'worktree-agent-a26c84e7831f0b1c2'
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+})
+
+// #1322: before #1306, an agent worktree's branch read as the issues its random id spelled, and Dan's
+// Skip them there was kept under #7831, #26 and #84 on 2026-10-17, where a real branch for #26 or #84
+// would inherit it. Which branch an old answer came from was never kept, so an answer under an issue
+// counts only when it carries the branch reading it was written by (ISSUE_READING or newer); any
+// other is read as no answer and its issue asked again, while one under a branch or a session, never
+// read from digits, still counts.
+test('an answer kept under an issue by the old branch reading counts for nothing, so the issue is asked again (#1322)', withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = '84-real-issue'
+  w.store['record:/w/slate|issue:84'] = { kind: 'skipped', at: 1792266094540, label: 'issue #84 in slate' }
+  const why = refusalOf(await call($, PAGE))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('issue #84 in slate')
+  // His answer now is kept with the reading it was written by, and counts.
+  await askSkip($, w, why, SKIP_YES)
+  expect(w.store['record:/w/slate|issue:84']).toMatchObject({ kind: 'skipped', label: 'issue #84 in slate', reading: ISSUE_READING })
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  // A settled answer is read the same way.
+  w.branches['/w/slate'] = '26-other-issue'
+  w.store['record:/w/slate|issue:26'] = { kind: 'settled', at: 1792266094540, label: 'issue #26 in slate' }
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  // A newer reading's answer counts too, so a later bump never strands every answer (L255).
+  w.store['record:/w/slate|issue:26'] = { kind: 'settled', at: 1, label: 'issue #26 in slate', reading: ISSUE_READING + 1 }
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+test('an old answer under a branch or a session still counts, since no digits were read for it (#1322)', withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'feat-empty-states'
+  w.store['record:/w/slate|branch:feat-empty-states'] = { kind: 'skipped', at: 1, label: 'branch feat-empty-states in slate' }
+  expect(refusalOf(await call($, PAGE))).toBe('')
+  w.branches['/w/slate'] = 'main'
+  w.store['record:/w/slate|branch:main|session:s1'] = { kind: 'settled', at: 1, label: 'main in slate, for this session' }
+  expect(refusalOf(await call($, PAGE))).toBe('')
 })
 
 test('the settled question may name the issue when the branch does not, and Dan reads that issue in it', withKit, async ($, on) => {
