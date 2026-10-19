@@ -2802,6 +2802,103 @@ out_um3="$(env -u CI bash "$RUNNER" "$UM3" 2>&1)"; code_um3=$?
   || check "#1146 a suite that could not measure and also counts failures still fails" "exit=$code_um3 out=$out_um3"
 
 # ---------------------------------------------------------------------------
+# A SUITE STOPPED AT ITS DEADLINE ON AN OVERLOADED MACHINE is UNMEASURED, not FAIL (#1330).
+#
+# On 2026-10-18 seven suites ran past their deadlines in one full run at a load average of about 30
+# on 12 cores, and all seven passed on the recheck. lib/suite-deadline.sh now reads the shared load
+# reader when it stops a suite, and on a machine busier than its cores beyond the suite's own share
+# it says SUITE-DEADLINE-UNMEASURED <why> instead of FAIL. The runner gives that its own verdict and
+# its own count: never ok and never folded into the passes (L98), never FAIL either (L11), and the
+# run is not green, because a suite that was stopped verified nothing (L288). Under CI it fails.
+# ---------------------------------------------------------------------------
+STOP_MARK="SUITE""-DEADLINE-UNMEASURED"
+mk_stopped_suite() { # mk_stopped_suite <dir> <name> [an earlier line it printed]
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo ran >> "%s"\n' "$1/$2.runs"
+    [ -n "${3:-}" ] && printf 'echo "%s"\n' "$3"
+    printf 'echo "UNMEASURED: test-%s.sh ran past its own wall clock of 60s and was stopped"\n' "$2"
+    printf 'printf %s\\\\n "%s stopped at its 60s wall clock at a load average of 30.5 on 12 cores"\n' "'%s'" "$STOP_MARK"
+    printf 'exit 124\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+SD="$TMPROOT/dir-stopped"
+mk_suite "$SD" beside 0
+mk_stopped_suite "$SD" starved
+out_sd="$(env -u CI HOOK_TESTS_TIMINGS= bash "$RUNNER" "$SD" 2>&1)"; code_sd=$?
+[ "$code_sd" -ne 0 ] \
+  && check "#1330 a run with a suite stopped under load is not green" ok \
+  || check "#1330 a run with a suite stopped under load is not green" "exit=$code_sd out=$out_sd"
+printf '%s\n' "$out_sd" | grep -E '^ +UNMEASURED +test-starved\.sh .*load average of 30\.5 on 12 cores' > /dev/null \
+  && check "#1330 and that suite's verdict is UNMEASURED, with the load it read" ok \
+  || check "#1330 and that suite's verdict is UNMEASURED, with the load it read" "out=$out_sd"
+printf '%s\n' "$out_sd" | grep -E '^ +(FAIL|ok|NOT RUN) +test-starved\.sh' > /dev/null \
+  && check "#1330 and never FAIL, ok or NOT RUN" "out=$out_sd" \
+  || check "#1330 and never FAIL, ok or NOT RUN" ok
+printf '%s\n' "$out_sd" | grep -E '^1 SUITE\(S\) UNMEASURED.*: test-starved\.sh$' > /dev/null \
+  && check "#1330 and the summary counts it on its own line" ok \
+  || check "#1330 and the summary counts it on its own line" "out=$out_sd"
+printf '%s\n' "$out_sd" | grep -E '^NO SUITE FAILED, but 1 of 2 SUITES WERE UNMEASURED: test-starved\.sh$' > /dev/null \
+  && check "#1330 and the verdict says none failed but one was unmeasured" ok \
+  || check "#1330 and the verdict says none failed but one was unmeasured" "out=$out_sd"
+printf '%s\n' "$out_sd" | grep -E '^ALL [0-9]+ SUITES|COULD NOT RUN HERE' > /dev/null \
+  && check "#1330 and it reads neither as a pass nor as could not run" "out=$out_sd" \
+  || check "#1330 and it reads neither as a pass nor as could not run" ok
+[ "$(grep -c . "$SD/starved.runs" 2>/dev/null)" = 1 ] \
+  && check "#1330 and it is not rechecked as a flake" ok \
+  || check "#1330 and it is not rechecked as a flake" "runs=$(grep -c . "$SD/starved.runs" 2>/dev/null)"
+out_sd2="$(CI=true HOOK_TESTS_TIMINGS= bash "$RUNNER" "$SD" 2>&1)"; code_sd2=$?
+[ "$code_sd2" -ne 0 ] && printf '%s\n' "$out_sd2" | grep -E '^ +FAIL +test-starved\.sh.*unmeasured' > /dev/null \
+  && check "#1330 under CI a suite stopped under load fails, saying why" ok \
+  || check "#1330 under CI a suite stopped under load fails, saying why" "exit=$code_sd2 out=$out_sd2"
+# Not a way out of being judged: a suite that had already failed a check before it was stopped is a
+# FAIL, whatever the load.
+SD3="$TMPROOT/dir-stopped-and-failing"
+mk_stopped_suite "$SD3" starvedbad "FAIL: an earlier check found something"
+out_sd3="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$SD3" 2>&1)"; code_sd3=$?
+[ "$code_sd3" -ne 0 ] && printf '%s\n' "$out_sd3" | grep -E '^ +FAIL +test-starvedbad\.sh' > /dev/null \
+  && check "#1330 a suite stopped under load after a failed check is still a FAIL" ok \
+  || check "#1330 a suite stopped under load after a failed check is still a FAIL" "exit=$code_sd3 out=$out_sd3"
+# A failure elsewhere in the run is reported beside it, never instead of it.
+SD4="$TMPROOT/dir-stopped-and-other"
+mk_suite "$SD4" broken 1
+mk_stopped_suite "$SD4" starvedtoo
+out_sd4="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$SD4" 2>&1)"; code_sd4=$?
+[ "$code_sd4" -ne 0 ] \
+  && printf '%s\n' "$out_sd4" | grep -E '^1 of 2 SUITES FAILED: test-broken\.sh$' > /dev/null \
+  && printf '%s\n' "$out_sd4" | grep -E '^and 1 SUITE\(S\) WERE UNMEASURED: test-starvedtoo\.sh$' > /dev/null \
+  && check "#1330 a failure and an unmeasured suite in one run are each counted" ok \
+  || check "#1330 a failure and an unmeasured suite in one run are each counted" "exit=$code_sd4 out=$out_sd4"
+
+# The wiring, end to end (L3): a real suite armed with the real helper, put past its deadline
+# through the helper's clock seam, under the runner. The load decides UNMEASURED or FAIL.
+SDE="$TMPROOT/dir-stopped-real"
+mkdir -p "$SDE"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. "%s"\n' "$DIR/lib/suite-deadline.sh"
+  printf 'suite_deadline_arm 60 || exit $?\n'
+  printf 'out="$(sleep 30)"\n'
+  printf 'printf %s\\\\n "%s passed=1 failed=0"\n' "'%s'" "$MARK"
+} > "$SDE/test-armed.sh"
+chmod +x "$SDE/test-armed.sh"
+SDE_BUSY="$TMPROOT/loadavg-sde-busy"; printf '#!/bin/sh\necho 30.5\n' > "$SDE_BUSY"; chmod +x "$SDE_BUSY"
+SDE_LOW="$TMPROOT/loadavg-sde-low"; printf '#!/bin/sh\necho 2.5\n' > "$SDE_LOW"; chmod +x "$SDE_LOW"
+out_sde="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 LOAD_AVERAGE_CMD="$SDE_BUSY" LOAD_AVERAGE_CORES=12 \
+  SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05 bash "$RUNNER" "$SDE" 2>&1)"; code_sde=$?
+[ "$code_sde" -ne 0 ] && printf '%s\n' "$out_sde" | grep -E '^ +UNMEASURED +test-armed\.sh .*load average of 30\.5 on 12 cores' > /dev/null \
+  && check "#1330 a real suite stopped on an overloaded machine reaches the report as UNMEASURED" ok \
+  || check "#1330 a real suite stopped on an overloaded machine reaches the report as UNMEASURED" "exit=$code_sde out=$out_sde"
+out_sde2="$(env -u CI HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 LOAD_AVERAGE_CMD="$SDE_LOW" LOAD_AVERAGE_CORES=12 \
+  SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05 bash "$RUNNER" "$SDE" 2>&1)"; code_sde2=$?
+[ "$code_sde2" -ne 0 ] && printf '%s\n' "$out_sde2" | grep -E '^ +FAIL +test-armed\.sh' > /dev/null \
+  && printf '%s\n' "$out_sde2" | grep -F 'ran past its own wall clock of 60s' > /dev/null \
+  && check "#1330 and the same stop on a quiet machine reaches it as FAIL" ok \
+  || check "#1330 and the same stop on a quiet machine reaches it as FAIL" "exit=$code_sde2 out=$out_sde2"
+
+# ---------------------------------------------------------------------------
 # HOW BUSY THE MACHINE WAS when a suite failed (claude-config#1083, L356).
 #
 # On 2026-10-10 one pull reported 32 of 94 suites failing and a rerun minutes later passed them all, on a Mac

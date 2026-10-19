@@ -71,11 +71,50 @@ _suite_deadline_dir="$(cd "${_suite_deadline_dir:-/}" && pwd)"
 SUITE_WALL_DEFAULT=1200
 
 _suite_deadline_expired(){
+  # How busy the machine was when the deadline passed (claude-config#1330). On 2026-10-18 seven
+  # suites ran past their deadlines in one full run at a load average of about 30 on 12 cores, and
+  # all seven passed when run again: on a machine that busy a suite starved of the processor cannot
+  # be told from one that waits without end, so a red there is not a measurement (L411). Read
+  # through the one shared reader and judged by its one predicate, the rule #1259 set for the sync
+  # suite's cost guards (L370, L655): busy only when the load BEYOND this suite's own share of the
+  # run (HOOK_TESTS_SLOTS, handed to it by the runner, 1 when it was started directly) is more than
+  # the machine has cores. Everything that cannot be read is NOT busy, so it stays a FAIL: busy
+  # excuses a failure, and nothing unreadable may excuse one (L90).
+  local _sd_load="" _sd_cores="" _sd_own="${HOOK_TESTS_SLOTS:-1}" _sd_reader="$_suite_deadline_dir/load-average.sh"
+  if [ -f "$_sd_reader" ] && . "$_sd_reader" 2>/dev/null; then
+    _sd_load="$(load_average_one_minute)"
+    _sd_cores="$(load_average_cores)"
+    if load_average_busy "$_sd_load" "$_sd_cores" "$_sd_own"; then
+      echo "UNMEASURED: $_suite_deadline_label ran past its own wall clock of ${_suite_deadline_limit}s and was stopped, at a load average of $_sd_load on $_sd_cores cores ($_sd_own of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
+      echo "  On a machine that busy a suite that was only starved cannot be told from one that waits without end, so this is NOT judged as a failure. Every process it had started was killed and nothing after that step ran."
+      echo "  Run it again on its own on a quieter machine to judge it."
+      # The agreed line the runner reads (run-all-tests.sh), one line, carrying what was measured.
+      echo "SUITE-DEADLINE-UNMEASURED stopped at its ${_suite_deadline_limit}s wall clock at a load average of $_sd_load on $_sd_cores cores, more than the machine has cores beyond its own share of $_sd_own"
+      _suite_deadline_stop
+    fi
+  fi
   # Printed on stdout, where the runner collects a suite's FAIL lines, so the reason reaches the
   # report rather than only a terminal nobody is watching (L148).
   echo "FAIL: $_suite_deadline_label ran past its own wall clock of ${_suite_deadline_limit}s and was stopped (SUITE_WALL_TIMEOUT)."
   echo "  Something in it waited without end, so every process it had started was killed and nothing after that step ran."
   echo "  Run it again on its own to see where it stops; raise SUITE_WALL_TIMEOUT only if it is genuinely slower now."
+  # The load it was judged at, so the reader knows load was looked at and why it excused nothing (L11).
+  if [ ! -f "$_sd_reader" ]; then
+    echo "  The load average could not be read ($_sd_reader is missing), so this is judged as a failure rather than excused as load."
+  elif [ -z "$_sd_load" ]; then
+    echo "  The load average could not be read, so this is judged as a failure rather than excused as load."
+  elif [ -z "$_sd_cores" ]; then
+    echo "  The load average was $_sd_load, but the core count could not be read, so this is judged as a failure rather than excused as load."
+  else
+    case "$_sd_own" in
+      *[!0-9.]*) echo "  The load average was $_sd_load on $_sd_cores cores, but this suite's own share (HOOK_TESTS_SLOTS='$_sd_own') is not a number, so the load beyond it could not be judged and this is a failure rather than excused as load." ;;
+      *) echo "  The load average was $_sd_load on $_sd_cores cores ($_sd_own of it this suite's own share), not more than the machine has cores beyond that share, so this is not excused as load." ;;
+    esac
+  fi
+  _suite_deadline_stop
+}
+
+_suite_deadline_stop(){
   trap - USR1
   bash "$_suite_deadline_dir/kill-tree.sh" "$$" 2>/dev/null || true
   # The suite's own EXIT trap runs on the way out, which is where its scratch is removed.

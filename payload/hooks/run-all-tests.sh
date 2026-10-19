@@ -52,7 +52,10 @@
 # `SUITE-LOCK-REFUSED <who holds it>` (another run of it holds its lock, reported as NOT RUN),
 # `SUITE-LOCK-WAITED <seconds>` (how long it waited for that lock, taken off its recorded time),
 # and `SUITE-UNMEASURED <why>` (it ran but could not read what it judges, reported as NOT RUN, #1146);
-# under CI=true either of the last two fails the suite. Any
+# under CI=true either of the last two fails the suite. And `SUITE-DEADLINE-UNMEASURED <why>`, which
+# lib/suite-deadline.sh prints when it stops a suite on a machine busier than its cores (#1330):
+# reported as UNMEASURED and counted on its own, never a pass, and the run then exits 1; under
+# CI=true it fails the suite. Any
 # line saying `command not found` fails the suite whatever else it printed (#1044).
 
 set -uo pipefail
@@ -1041,6 +1044,10 @@ lock_count=0
 # And those that ran but could not measure what they judge (#1146), whose remedy is different again.
 blind_names=""
 blind_count=0
+# And those stopped at their deadline on a machine busier than its cores (#1330), counted apart
+# from all of these, because they ran, judged nothing, and keep the run from being a pass.
+overload_names=""
+overload_count=0
 divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
@@ -1104,6 +1111,35 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       lock_names="$lock_names $name"
       lock_count=$((lock_count + 1))
       printf '  NOT RUN %-37s %s\n' "$name" "refused the suite lock, held by $lock_holder"
+      continue
+    fi
+    # A suite STOPPED AT ITS DEADLINE ON AN OVERLOADED MACHINE (claude-config#1330). On 2026-10-18
+    # seven suites ran past their deadlines in one full run at a load average of about 30 on 12
+    # cores and all seven passed on the recheck, so the FAIL each one got was not a measurement.
+    # lib/suite-deadline.sh judges the load when it stops a suite, through the shared reader, and
+    # says SUITE-DEADLINE-UNMEASURED <why> only when the load beyond the suite's own share was more
+    # than the machine has cores. That gets its own verdict and its own count. Not ok, because a
+    # suite that was stopped verified nothing (L98), and not NOT RUN, because it did run and the
+    # remedy is different. Not FAIL either, or a busy Mac reads as broken code (L11). And not a pass
+    # for the RUN: the verdict below keeps it red, since a hang the change introduced looks exactly
+    # like this on a busy Mac and must not go green there (L288). Under CI it fails outright.
+    #
+    # Not a way out of being judged: a command not found, or any FAIL the suite printed before it
+    # was stopped, outranks the line, and the suite is then judged a FAIL as before.
+    stop_line="$(printf '%s\n' "$out" | grep -E '^SUITE-DEADLINE-UNMEASURED ' | sed -n 1p)"
+    stop_fail="$(printf '%s\n' "$out" | grep -E '^ *(FAIL|not ok)' | sed -n 1p)"
+    if [ -n "$stop_line" ] && [ -z "$cnf_lines" ] && [ -z "$stop_fail" ]; then
+      stop_why="${stop_line#SUITE-DEADLINE-UNMEASURED }"
+      if [ "${CI:-}" = "true" ]; then
+        failed=$((failed + 1))
+        failed_names="$failed_names $name"
+        printf '  FAIL  %-38s %-26s %s\n' "$name" "unmeasured, overloaded" "$dur"
+        printf '          It %s. Under CI a run must measure what it judges, so this fails.\n' "$stop_why"
+        continue
+      fi
+      overload_count=$((overload_count + 1))
+      overload_names="$overload_names $name"
+      printf '  UNMEASURED %-34s %s %s\n' "$name" "$stop_why" "$dur"
       continue
     fi
     # A suite that RAN BUT COULD NOT MEASURE what it judges (claude-config#1146): the secret scan
@@ -1596,7 +1632,14 @@ if [ "$notrun" -gt 0 ]; then
   fi
   echo
 fi
-if [ "$failed" -eq 0 ] && [ -z "$empty_dirs" ]; then
+# Suites stopped at their deadline on an overloaded machine (#1330): counted on their own line, and
+# never inside the pass or the could not run counts, which claude-sync reads as coverage.
+if [ "$overload_count" -gt 0 ]; then
+  echo "$overload_count SUITE(S) UNMEASURED, stopped at their deadline on a machine busier than its cores:$overload_names"
+  echo "  Nothing about their code was judged, so this run is not a pass. Run each again on its own on a quieter machine."
+  echo
+fi
+if [ "$failed" -eq 0 ] && [ "$overload_count" -eq 0 ] && [ -z "$empty_dirs" ]; then
   if [ "$notrun" -gt 0 ]; then
     echo "ALL $(( ran - notrun )) SUITES THAT COULD RUN PASSED, and $notrun could not run here"
   else
@@ -1604,5 +1647,10 @@ if [ "$failed" -eq 0 ] && [ -z "$empty_dirs" ]; then
   fi
   exit 0
 fi
-[ "$failed" -eq 0 ] || echo "$failed of $ran SUITES FAILED:$failed_names"
+if [ "$failed" -gt 0 ]; then
+  echo "$failed of $ran SUITES FAILED:$failed_names"
+  [ "$overload_count" -eq 0 ] || echo "and $overload_count SUITE(S) WERE UNMEASURED:$overload_names"
+elif [ "$overload_count" -gt 0 ]; then
+  echo "NO SUITE FAILED, but $overload_count of $ran SUITES WERE UNMEASURED:$overload_names"
+fi
 exit 1

@@ -1188,7 +1188,11 @@ the sync suite's verdict rather than NOT RUN; a suite that waited says so in a n
 verdict and prints `SUITE-LOCK-WAITED <seconds>`, which is taken off its recorded time (#1297). A suite that ran but could not read what it judges (the secret scan, when it
 cannot list or copy the tree) prints `SUITE-UNMEASURED <why>` and is reported the same way, NOT RUN
 with that reason here and a failure under CI, unless its own score counts failures, which then
-decide (#1146). And every failure carries the load average when the suite finished, saying when
+decide (#1146). A suite stopped at its deadline on a machine busier than its cores beyond its own
+share of the run prints `SUITE-DEADLINE-UNMEASURED <why>` with the load it read, and is reported as
+UNMEASURED, counted on its own summary line and never as a pass, so the run still exits 1 and says
+`NO SUITE FAILED, but N of M SUITES WERE UNMEASURED`; under CI, and wherever it had already printed
+a FAIL, it fails (#1330). And every failure carries the load average when the suite finished, saying when
 it was more than the machine has cores, as do `tools/check-mods.sh`'s engine refusals, so a failure
 caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`). The sync
 suite's two cost guards, its section time budget and its wall clock headroom, go further: where
@@ -1609,7 +1613,12 @@ which set to 0 turns the deadline off. `tests/test-claude-sync.sh` is the one su
 its own, its `SUITE_TIMEOUT` plus a margin, because a healthy run of it on a loaded Mac outlasts the
 shared default. A suite that does not arm it is a failure in `test-suite-deadline.sh`, which scans
 the suites the runner runs, so the next suite added cannot quietly have no bound
-(claude-config#465).
+(claude-config#465). When it stops a suite it reads the load average through
+`hooks/lib/load-average.sh` and judges it by that file's one predicate: where the load beyond the
+suite's own share (`HOOK_TESTS_SLOTS`, 1 when started directly) is more than the machine has cores,
+the stop says UNMEASURED with the figures, since a suite starved of the processor cannot be told
+from one that hangs; everywhere else, a figure that cannot be read included, it is the FAIL it
+always was, and says the load it was judged at (claude-config#1330).
 
 ## Branches and agent worktrees that already shipped
 
