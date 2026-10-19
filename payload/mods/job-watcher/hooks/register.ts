@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type { Jobs, JobsEntry } from '../types/index.d.ts'
-import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, type Outcome, type Verdict } from './jobs.ts'
+import { assess, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -9,7 +9,8 @@ import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerd
 // loop that has only ever repeated an error is stopped by itself; and Claude is told, mid turn, about
 // any job gone stuck. Claude keeps a job on purpose, with a reason, through the keep_job tool, and a
 // kept job is published for the status bar's amber band. A running job nobody kept is named on every
-// tool result until it is stopped or kept; the turn end itself is never refused. Leftover jobs whose
+// tool result until it is stopped or kept; this conversation's turn end itself is never refused, while
+// a dispatched agent's stop is, a bounded number of times, while it holds work it started (#1326). Leftover jobs whose
 // Claude Code process has gone are judged at session start without asking Dan (see leftovers below).
 
 // kept: Claude kept the job on purpose, with a reason (Dan, 2026-10-04). The status bar (#610) shows
@@ -111,6 +112,17 @@ type Seen = { at: number; lastTool?: string; startedAt?: number; inFlight: numbe
 const agentSeen = new Map<string, Seen>()
 const QUIET_MS = 20 * 60_000
 let toldAgentsUnlisted = false
+// #1326: which agent started each piece of background work, by the task id Claude Code lists it
+// under with a stop: a Bash job, a Monitor, an agent run in the background. The list sent with a
+// stop is the whole session's work (measured on 2.1.302, 2026-10-19), so whose work is whose comes
+// from here. Kept for the session; the list says what is still in flight, so nothing is dropped here.
+const startedBy = new Map<string, string>()
+// How many times running each agent's stop has been refused. Past STOP_REFUSALS_MAX it is let go and
+// this session is told what it left, so a refusal never traps an agent; a stop holding nothing ends
+// the run, so an agent resumed later is held again.
+const stopRefusals = new Map<string, number>()
+const STOP_REFUSALS_MAX = 2
+let toldInFlightUnreadable = false
 // A look still running when the next minute comes is not overlapped by a second (lessons review).
 // It describes the look in flight, not the session, so a session start never resets it: an earlier
 // session's look may still be running then, and a second would overlap it (#694). A look is given up
@@ -926,6 +938,9 @@ export const register: Register = on => {
     liveAgents.clear()
     agentSeen.clear()
     toldAgentsUnlisted = false
+    startedBy.clear()
+    stopRefusals.clear()
+    toldInFlightUnreadable = false
     retriedLeftovers = false
     askAgain?.cancel()
     askAgain = undefined
@@ -996,6 +1011,8 @@ export const register: Register = on => {
       // Recording has its own failure boundary: the job has started whatever happens here, so a
       // throw is said to Claude and never fails the call that started it (lessons review of #634).
       if (started) {
+        // Whose it is, for that agent's stop (#1326), even when recording the job below fails.
+        if (agentId !== undefined) startedBy.set(started.id, agentId)
         try {
           const owner = agentId === undefined ? undefined : { id: agentId, name: await agentName($, agentId) }
           jobs.set(started.id, {
@@ -1011,6 +1028,12 @@ export const register: Register = on => {
           say(e.agentId, `The background job watcher could not record background job ${started.id} (${shortCommand(String(input.command ?? ''))}): ${message(err)}. It is not watched, so stop it with TaskStop when it is no longer needed.`)
         }
       }
+    }
+    // A Monitor or an agent run in the background by an agent is that agent's too (#1326). The
+    // watcher does not watch them; only whose they are is kept, for the agent's stop.
+    if (agentId !== undefined && result.deny === undefined && !result.isError) {
+      const task = startedTask(e.tool, result.result, String(result.text ?? ''))
+      if (task !== undefined) startedBy.set(task, agentId)
     }
     // A job Claude stopped is dropped at once, so neither this result nor the next names it as
     // running (#706): Claude Code's own stop is by the job's traced handle, as the watcher's is (L1011).
@@ -1029,6 +1052,46 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     return said.length ? { ...result, context: [...(result.context ?? []), ...said] } : result
+  })
+
+  // #1326 (Dan, 2026-10-19: "Hook and brief"): a dispatched agent's stop is refused while it still
+  // holds background work it started, so it waits in the foreground, finishes, or stops the work, and
+  // then hands back, rather than ending its turn to wait on its own check watcher or Monitor. This
+  // conversation's own turn end is never refused (the Stop event, untouched here; Dan, 2026-10-04).
+  // What is in flight is Claude Code's list sent with the stop; whose it is, the calls the watcher saw.
+  // A refused stop answers here and passes nothing down: no stop happened, so the hooks beneath (the
+  // findings harvest) run at the stop that does.
+  on('classic.SubagentStop', async ($, e, next) => {
+    const agent = e.agent_id
+    if (typeof agent !== 'string' || !agent) return next(e)
+    const listed = inFlight((e as { background_tasks?: unknown }).background_tasks)
+    let held: InFlight[]
+    if (listed) {
+      // The agent's own entry (a background agent is listed under its own id) is never its work.
+      held = listed.filter(t => t.id !== agent && startedBy.get(t.id) === agent)
+    } else {
+      // The list is missing or is not a list: the watcher's own record of the agent's background jobs
+      // is all that can be checked, and it is said once that the rest went unchecked (L11).
+      held = [...jobs.values()].filter(j => j.owner?.id === agent).map(j => ({ id: j.id, what: shortCommand(j.command) }))
+      $.ui.log(`job-watcher: the background_tasks sent with agent ${agent}'s stop could not be read as a list`, { to: 'debug' })
+      if (!toldInFlightUnreadable) {
+        toldInFlightUnreadable = true
+        say(undefined, `The background job watcher could not read the list of background work Claude Code sent with agent ${await agentName($, agent)}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`)
+      }
+    }
+    if (!held.length) {
+      stopRefusals.delete(agent)
+      return next(e)
+    }
+    const refused = stopRefusals.get(agent) ?? 0
+    if (refused >= STOP_REFUSALS_MAX) {
+      stopRefusals.delete(agent)
+      const named = held.map(t => `${t.id} (${t.what})`).join(', ')
+      say(undefined, `Agent "${await agentName($, agent)}" (${agent}) ended still holding background work it started, after its stop was refused ${STOP_REFUSALS_MAX} times: ${named}. It will not report on that work now: wait on it here, or stop each with TaskStop.`)
+      return next(e)
+    }
+    stopRefusals.set(agent, refused + 1)
+    return { block: holdRefusal(held) }
   })
 
   // This conversation's own turns (#1234): a background agent gone quiet while one runs is read on

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob } from '../hooks/jobs.ts'
+import { assess, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -264,5 +264,47 @@ describe('a job named in a notice', () => {
   })
   test('a long repeated line is cut to one hundred and twenty characters', () => {
     expect(shortLine(`error: ${'b'.repeat(500)}`).length).toBe(120)
+  })
+})
+
+// #1326: the shapes are the 2.1.302 build's, from real transcripts (2026-10-19).
+describe('background work a call started that is no Bash job', () => {
+  const MONITOR_TEXT = 'Monitor started (task b16r21r6f, expires in 30m unless the source ends first). You will be notified on each event.'
+  test("a Monitor's task is read from its result, or from its opening words", () => {
+    expect(startedTask('Monitor', { taskId: 'b16r21r6f', persistent: false, timeoutMs: 1800000 }, MONITOR_TEXT)).toBe('b16r21r6f')
+    expect(startedTask('Monitor', MONITOR_TEXT, MONITOR_TEXT)).toBe('b16r21r6f')
+  })
+  test('a Monitor that started nothing, and words quoted by any other tool, are no task', () => {
+    expect(startedTask('Monitor', {}, 'Error: no such command')).toBeUndefined()
+    expect(startedTask('Bash', MONITOR_TEXT, MONITOR_TEXT)).toBeUndefined()
+    expect(startedTask('Monitor', {}, `line 1\n${MONITOR_TEXT}`)).toBeUndefined()
+  })
+  test('an agent run in the background is its agent id; one run in the foreground is nothing', () => {
+    expect(startedTask('Agent', { isAsync: true, status: 'async_launched', agentId: 'a86adeb544d22338e' }, '')).toBe('a86adeb544d22338e')
+    expect(startedTask('Agent', { status: 'completed', agentId: 'a86adeb544d22338e' }, '')).toBeUndefined()
+  })
+})
+
+describe('the background work sent with a stop', () => {
+  test('each entry is its task id, named by its command or else its description', () => {
+    expect(inFlight([
+      { id: 'b5injl7eg', type: 'shell', status: 'running', description: 'Sleep 200 seconds', command: 'sleep 200' },
+      { id: 'a41a8a9e4e2d20c71', type: 'subagent', status: 'running', description: 'probe2', agent_type: 'general-purpose' },
+    ])).toEqual([{ id: 'b5injl7eg', what: 'sleep 200' }, { id: 'a41a8a9e4e2d20c71', what: 'probe2' }])
+  })
+  test('a missing list, or one that is not a list, is unreadable, never empty (L10)', () => {
+    expect(inFlight(undefined)).toBeUndefined()
+    expect(inFlight({ b1: 'running' })).toBeUndefined()
+    expect(inFlight([])).toEqual([])
+  })
+  test('an entry naming no task is passed over', () => {
+    expect(inFlight([null, 'b1', { type: 'shell' }, { id: '' }, { id: 'b2' }])).toEqual([{ id: 'b2', what: 'b2' }])
+  })
+  test('the refusal names each piece of work and the ways out', () => {
+    const said = holdRefusal([{ id: 'b1', what: 'gh pr checks 9 --watch' }, { id: 'mon1', what: 'gh run watch 99' }])
+    expect(said).toContain('You still hold background work you started: b1 (gh pr checks 9 --watch), mon1 (gh run watch 99).')
+    expect(said).toContain('wait for it in the foreground')
+    expect(said).toContain('stop it with TaskStop')
+    expect(said).toContain('hand back your report')
   })
 })
