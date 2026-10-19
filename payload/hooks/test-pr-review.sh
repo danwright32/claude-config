@@ -117,6 +117,9 @@ case "$*" in
   # FAKE_GH_PR_ERR: the error a read of the pull request's description and comments fails with
   # (claude-config#1161); the merge gate's own read of the head is answered as before.
   "pr view"*) case "$*" in *body,comments*) [ -n "${FAKE_GH_PR_ERR:-}" ] && { printf '%s\n' "$FAKE_GH_PR_ERR" >&2; exit 1; } ;; esac
+              # A pull request asked for by number answers from its own file when the case wrote one
+              # (claude-config#1340, an earlier pull request this one names).
+              [ -f "$FAKE_LOG/pr-view-$3.json" ] && { cat "$FAKE_LOG/pr-view-$3.json"; exit 0; }
               [ -f "$FAKE_LOG/pr-view.json" ] && { cat "$FAKE_LOG/pr-view.json"; exit 0; }
               echo "no pull requests found for branch" >&2; exit 1 ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
@@ -1671,7 +1674,9 @@ G checkout -q feat/mac2
 M_D="$(G commit -q --allow-empty -m "a finding"; G rev-parse HEAD)"
 FAKE_CLAUDE_OUT="$CF" mac_start "$M_D"
 out="$(prr check --dir "$REPO" --sha "$M_D" --base-ref main --branch feat/mac2)"
-check "#1168 a refusal with findings says to answer them in a comment beginning Lessons review" 'in a comment on the pull request beginning "Lessons review"' "$out"
+check "#1168 a refusal with findings says to answer them in a comment beginning Lessons review" "in a comment on the pull request beginning \"Lessons review at ${M_D:0:7}\"" "$out"
+# The shape quoted answers are matched in (#1340): the head named, each finding quoted after "> ".
+check "#1340 and to quote each finding it answers on a line beginning >" 'on a line of its own beginning "> ", exactly as shown here' "$out"
 runners_done || bad "#1168 a runner was still going at the end"
 G checkout -q feat/sync
 
@@ -1834,7 +1839,9 @@ before="$(pr_reads)"
 out="$(ans_check "$AN_A")"; rc=$?
 check_eq "#1338 the first review's findings refuse as before" "1" "$rc"
 check_not "#1338 with nothing called answered" "not counted" "$out"
-check_eq "#1338 a review whose findings repeat nothing earlier does not read the pull request again" "$before" "$(pr_reads)"
+# Since #1340 an answer can carry the finding it answers (quoted), from either Mac, so a review with
+# findings reads the pull request at the check even when nothing on this Mac repeats: once.
+check_eq "#1340 a review with findings reads the pull request once at the check, for an answer quoting one" "$((before + 1))" "$(pr_reads)"
 # The next head adds two lines at the top, so every line the first review cited moved down by two.
 { printf 'import Foundation\n\n'; cat "$REPO/App/Ans.swift"; } > "$WORKDIR/ans.tmp" && mv "$WORKDIR/ans.tmp" "$REPO/App/Ans.swift"
 G commit -q -am "import Foundation"
@@ -1891,6 +1898,203 @@ out="$(ans_check "$AN_D")"; rc=$?
 check_eq "#1338 a repeat at lines changed since the answer is new" "1" "$rc"
 check_not "#1338 and is not called answered" "not counted" "$out"
 runners_done || bad "#1338 a runner was still going at the end"
+G checkout -q feat/sync
+
+# ===========================================================================================
+# 18. The three cases #1338 left showing an answered finding as new (#1340): a branch rewritten
+#     (amended or rebased, so the earlier head is no longer an ancestor), a finding raised only on
+#     the other Mac (its text is not stored here), and answers written on an earlier pull request
+#     that this one replaced. Each is matched as strictly as #1338: the same file, the cited lines
+#     unchanged since, largely the same claim, and an answer by somebody with write access. Each
+#     condition missing leaves the finding new. Content invented, in the real records' shape.
+# ===========================================================================================
+# pr_json <number> <state> <head branch> <description> [<association>|<when>|<body>]...
+pr_json(){
+  python3 - "$@" > "$FAKE_LOG/pr-view-$1.json" <<'PY'
+import json, sys
+def comment(c):
+    assoc, when, body = c.split("|", 2)
+    who = "danwright32" if assoc != "NONE" else "stranger"
+    return {"author": {"login": who}, "authorAssociation": assoc, "createdAt": when, "body": body}
+n, state, head, body = sys.argv[1:5]
+print(json.dumps({"number": int(n), "state": state, "headRefName": head, "baseRefName": "main",
+  "headRefOid": "", "isCrossRepository": False, "body": body,
+  "comments": [comment(c) for c in sys.argv[5:]]}))
+PY
+}
+rw_start(){ # rw_start <head> <branch> <pr> <findings>
+  FAKE_CLAUDE_OUT="$4" prr start --dir "$REPO" --sha "$1" --base-ref main --branch "$2" --pr "$3" >/dev/null
+  wait_final "$1" || bad "#1340 the review of ${1:0:7} finished"
+}
+rw_check(){ prr check --dir "$REPO" --sha "$1" --base-ref main --branch "$2" --pr "$3"; }
+claim_of(){ # claim_of <file> <kind>: a finding line at line 14 of that file
+  case "$2" in
+    first) printf '%s:14: fetchAll swallows the decoding error and returns an empty list, so a bad payload reads as no rows (L10). Should be: throw it. [severity: major]' "$1" ;;
+    again) printf '%s:14: fetchAll still swallows the decoding error and returns an empty list, so a bad payload looks like no rows (L10). Should be: rethrow it. [severity: major]' "$1" ;;
+    other) printf '%s:14: the retry count is read from a constant the tests cannot change, so a test of the backoff waits for real (L524). Should be: inject it. [severity: minor]' "$1" ;;
+  esac
+}
+answered_of(){ awk '/not counted|so none is new/ { on = 1 } on' <<<"$1"; }
+new_of(){ awk '/not counted|so none is new/ { exit } { print }' <<<"$1"; }
+
+# --- 18a. An AMENDED branch: the earlier head shares a commit of the branch's own with this one,
+# so it is the same pull request's history though no longer an ancestor. The answer is the #1338
+# kind, naming the file and line.
+reset_state
+G checkout -q -b feat/amended main
+seq 1 30 | sed 's/^/rw line /' > "$REPO/App/Rw.swift"
+G add App/Rw.swift
+G commit -q -m "add rw"
+printf 'note\n' > "$REPO/App/Note.txt"
+G add App/Note.txt
+G commit -q -m "note"
+RW_A="$(G rev-parse HEAD)"
+rw_start "$RW_A" feat/amended 91 "$(claim_of App/Rw.swift first)"
+printf 'note, amended\n' > "$REPO/App/Note.txt"
+G commit -q --amend -am "note"
+RW_B="$(G rev-parse HEAD)"
+G merge-base --is-ancestor "$RW_A" "$RW_B" && bad "#1340 fixture: the amended head must not descend from the earlier one"
+pr_json 91 OPEN feat/amended "Adds rw." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review (head ${RW_A:0:7}):"$'\n\n'"1. Rw.swift:14: not a defect. The caller logs the error, see Log.swift."
+rw_start "$RW_B" feat/amended 91 "$(claim_of App/Rw.swift again)"$'\n'"$(claim_of App/Rw.swift other)"
+out="$(rw_check "$RW_B" feat/amended 91)"; rc=$?
+check_eq "#1340 an amended branch with a new finding beside the answered one still refuses" "1" "$rc"
+check "#1340 the repeat of a finding answered before the amend is shown as answered" "$(claim_of App/Rw.swift again)" "$(answered_of "$out")"
+check_not "#1340 and not among the new" "$(claim_of App/Rw.swift again)" "$(new_of "$out")"
+check "#1340 naming the review of the head before the amend" "the review of ${RW_A:0:7}" "$(answered_of "$out")"
+check "#1340 a different claim at the same lines is new" "$(claim_of App/Rw.swift other)" "$(new_of "$out")"
+# Control: a review of the same branch name whose head shares only the base with this one is not
+# this pull request's history (a reused name), so its answered finding answers nothing here.
+reset_state
+G checkout -q -b feat/reused main
+seq 1 30 | sed 's/^/rw line /' > "$REPO/App/Rw.swift"
+G add App/Rw.swift
+G commit -q -m "add rw, the first use of the name"
+RW_C="$(G rev-parse HEAD)"
+rw_start "$RW_C" feat/amended 91 "$(claim_of App/Rw.swift first)"
+pr_json 91 OPEN feat/amended "Adds rw." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review (head ${RW_C:0:7}):"$'\n\n'"1. Rw.swift:14: not a defect. The caller logs the error, see Log.swift."
+rw_start "$RW_B" feat/amended 91 "$(claim_of App/Rw.swift again)"
+out="$(rw_check "$RW_B" feat/amended 91)"; rc=$?
+check_eq "#1340 a review of a reused branch name sharing only the base answers nothing" "1" "$rc"
+check_not "#1340 so nothing is called answered" "not counted" "$out"
+
+# --- 18b. A REBASED branch sharing nothing of its own with the earlier head, answered in the new
+# way the refusal asks for: the finding quoted on a line beginning "> ", the head it was raised at
+# named above it. The quote, not this Mac's copy, is what the finding is matched against.
+reset_state
+G checkout -q -b feat/rebased main
+seq 1 30 | sed 's/^/rb line /' > "$REPO/App/Rb.swift"
+G add App/Rb.swift
+G commit -q -m "add rb"
+RB_A="$(G rev-parse HEAD)"
+rw_start "$RB_A" feat/rebased 92 "$(claim_of App/Rb.swift first)"
+G checkout -q main
+printf '# fixture\n\nMoved on.\n' > "$REPO/README.md"
+G commit -q -am "main moves on"
+G checkout -q feat/rebased
+G rebase -q main
+RB_B="$(G rev-parse HEAD)"
+pr_json 92 OPEN feat/rebased "Adds rb." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review at ${RB_A:0:7}:"$'\n\n'"> $(claim_of App/Rb.swift first)"$'\n\n'"Not a defect: the caller logs the error, see Log.swift."
+rw_start "$RB_B" feat/rebased 92 "$(claim_of App/Rb.swift again)"$'\n'"$(claim_of App/Rb.swift other)"
+out="$(rw_check "$RB_B" feat/rebased 92)"; rc=$?
+check_eq "#1340 a rebased branch with a new finding beside the answered one still refuses" "1" "$rc"
+check "#1340 the repeat of a finding quoted in an answer before the rebase is shown as answered" "$(claim_of App/Rb.swift again)" "$(answered_of "$out")"
+check "#1340 naming the head the answer quoted it at" "${RB_A:0:7}" "$(answered_of "$out")"
+check "#1340 a different claim at the quoted lines is new" "$(claim_of App/Rb.swift other)" "$(new_of "$out")"
+# Control: the same words NOT quoted (no "> ") are an answer in prose, which carries no finding.
+pr_json 92 OPEN feat/rebased "Adds rb." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review at ${RB_A:0:7}:"$'\n\n'"$(claim_of App/Rb.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$RB_B" feat/rebased 92)"
+check_not "#1340 a finding written out but not quoted answers nothing after a rebase" "$(claim_of App/Rb.swift again)" "$(answered_of "$out")"
+
+# --- 18c. A finding raised only on the OTHER Mac: no review of the earlier head is stored here at
+# all, so the quote in the answer is the only record of it.
+reset_state
+G checkout -q -b feat/elsewhere main
+seq 1 30 | sed 's/^/el line /' > "$REPO/App/El.swift"
+G add App/El.swift
+G commit -q -m "add el"
+EL_A="$(G rev-parse HEAD)"
+printf 'more\n' > "$REPO/App/More.txt"
+G add App/More.txt
+G commit -q -m "more"
+EL_B="$(G rev-parse HEAD)"
+EL_LONG="App/El.swift:20: the pager reads the next page token from the response body and loops until the token is empty, but a server that returns the same token twice keeps it looping for ever, and the only stop is the request timeout, which the caller reads as a network failure and retries, so one bad response becomes an endless retry loop that drains the battery (L10). Should be: stop when a token repeats and report it. [severity: major]"
+EL_CUT="$(printf '%s' "$EL_LONG" | cut -c 1-300)..."
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}, from the review on the work MacBook:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect: the caller logs it."$'\n\n'"> $EL_CUT"$'\n\n'"Not a defect: the server never repeats a token."
+rw_start "$EL_B" feat/elsewhere 93 "$(claim_of App/El.swift again)"$'\n'"$EL_LONG"$'\n'"$(claim_of App/El.swift other)"
+out="$(rw_check "$EL_B" feat/elsewhere 93)"; rc=$?
+check_eq "#1340 with a new finding beside the ones answered from the other Mac the merge still refuses" "1" "$rc"
+check "#1340 a finding raised only on the other Mac and quoted in its answer is shown as answered" "$(claim_of App/El.swift again)" "$(answered_of "$out")"
+check "#1340 so is one quoted as the refusal cut it, ending in ..." "App/El.swift:20: the pager" "$(answered_of "$out")"
+check_not "#1340 and neither is among the new" "App/El.swift:20: the pager" "$(new_of "$out")"
+check "#1340 a different claim at the quoted lines is new" "$(claim_of App/El.swift other)" "$(new_of "$out")"
+check "#1340 counting only the new one" "with 1 finding. Here" "$out"
+# Each condition taken away alone leaves the finding new.
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "NONE|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$EL_B" feat/elsewhere 93)"
+check_not "#1340 a quote by somebody without write access answers nothing" "not counted" "$out"
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "OWNER|2099-01-01T10:00:00Z|About the review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$EL_B" feat/elsewhere 93)"
+check_not "#1340 a quote in a comment whose first line does not name the lessons review answers nothing" "not counted" "$out"
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$EL_B" feat/elsewhere 93)"
+check_not "#1340 a quote naming no head it was raised at answers nothing" "not counted" "$out"
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/Other.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$EL_B" feat/elsewhere 93)"
+check_not "#1340 a quote of another file answers nothing" "not counted" "$out"
+pr_json 93 OPEN feat/elsewhere "Adds el." \
+  "OWNER|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
+awk 'NR == 15 { print "el line 15 rewritten"; next } { print }' "$REPO/App/El.swift" > "$WORKDIR/el.tmp" && mv "$WORKDIR/el.tmp" "$REPO/App/El.swift"
+G commit -q -am "rewrite the quoted lines"
+EL_C="$(G rev-parse HEAD)"
+rw_start "$EL_C" feat/elsewhere 93 "$(claim_of App/El.swift again)"
+out="$(rw_check "$EL_C" feat/elsewhere 93)"; rc=$?
+check_eq "#1340 a quoted finding whose lines changed since the head it names is new" "1" "$rc"
+check_not "#1340 and is not called answered" "not counted" "$out"
+
+# --- 18d. Answers written on an EARLIER pull request of the same branch, which this one replaces
+# and names (Bidspoke #2491 named #2482, where the rounds had been answered).
+reset_state
+G checkout -q -b feat/replaced main
+seq 1 30 | sed 's/^/rp line /' > "$REPO/App/Rp.swift"
+G add App/Rp.swift
+G commit -q -m "add rp"
+RP_A="$(G rev-parse HEAD)"
+rw_start "$RP_A" feat/replaced 95 "$(claim_of App/Rp.swift first)"
+printf 'later\n' > "$REPO/App/Later.txt"
+G add App/Later.txt
+G commit -q -m "later"
+RP_B="$(G rev-parse HEAD)"
+RP_ANSWER="OWNER|2099-01-01T10:00:00Z|Lessons review (head ${RP_A:0:7}):"$'\n\n'"1. Rp.swift:14: not a defect. The caller logs the error, see Log.swift."
+pr_json 95 OPEN feat/replaced "Replaces #94, which GitHub closed when its base branch was deleted. Closes #5."
+pr_json 94 CLOSED feat/replaced "The first try." "$RP_ANSWER"
+rw_start "$RP_B" feat/replaced 95 "$(claim_of App/Rp.swift again)"$'\n'"$(claim_of App/Rp.swift other)"
+out="$(rw_check "$RP_B" feat/replaced 95)"; rc=$?
+check_eq "#1340 with a new finding beside one answered on the pull request this replaces, still refused" "1" "$rc"
+check "#1340 a finding answered on the earlier pull request this one names is shown as answered" "$(claim_of App/Rp.swift again)" "$(answered_of "$out")"
+check "#1340 saying on which pull request" "on #94" "$(answered_of "$out")"
+check "#1340 a different claim at the same lines is new" "$(claim_of App/Rp.swift other)" "$(new_of "$out")"
+# Controls: an earlier pull request of ANOTHER branch, one still open, or one this pull request does
+# not name answers nothing.
+pr_json 94 CLOSED feat/somebody-else "The first try." "$RP_ANSWER"
+out="$(rw_check "$RP_B" feat/replaced 95)"
+check_not "#1340 a named pull request of another branch answers nothing" "not counted" "$out"
+pr_json 94 OPEN feat/replaced "The first try." "$RP_ANSWER"
+out="$(rw_check "$RP_B" feat/replaced 95)"
+check_not "#1340 a named pull request still open answers nothing" "not counted" "$out"
+pr_json 94 CLOSED feat/replaced "The first try." "$RP_ANSWER"
+pr_json 95 OPEN feat/replaced "Adds rp. Closes #5."
+out="$(rw_check "$RP_B" feat/replaced 95)"
+check_not "#1340 an earlier pull request this one does not name answers nothing" "not counted" "$out"
+runners_done || bad "#1340 a runner was still going at the end"
 G checkout -q feat/sync
 
 echo
