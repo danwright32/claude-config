@@ -42,8 +42,9 @@ load_average_cores(){   # -> a whole number, or nothing
 
 # Whether the machine was busier than it has cores: exits 0 only when the figure, less any load the
 # caller names as its own, is more than the cores. The one place that is decided (claude-config#1259),
-# for the sentence below and for the sync suite's budgets, which report a run on such a machine as
-# unmeasured rather than failing it. Anything it cannot read is NOT busy, never a zero: busy excuses
+# for the sentence below, for the sync suite's budgets, which report a run on such a machine as
+# unmeasured rather than failing it, and for lib/suite-deadline.sh, which does the same for a suite
+# stopped at its deadline (claude-config#1330). Anything it cannot read is NOT busy, never a zero: busy excuses
 # a failure, so an unreadable figure must not be what excuses one (L90).
 load_average_busy(){   # load cores [own load] -> exit 0 when busy
   local l="${1-}" c="${2-}" o="${3:-0}"

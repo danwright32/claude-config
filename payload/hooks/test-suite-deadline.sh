@@ -94,6 +94,15 @@ mk_armed(){
 
 now="$(date +%s)"
 
+# The load average a stopped suite reads, SET rather than measured on whatever this Mac is doing
+# (claude-config#1330, L290), through the shared reader's own seam. A stub prints one figure.
+mk_load(){   # mk_load <name> <figure> -> the stub's path
+  printf '#!/bin/sh\necho %s\n' "$2" > "$TMPROOT/load-$1"
+  chmod +x "$TMPROOT/load-$1"
+  printf '%s' "$TMPROOT/load-$1"
+}
+QUIET_LOAD="$(mk_load quiet 0.5)"
+
 # ---------------------------------------------------------------------------
 # A suite blocked on a child that never ends is stopped at its deadline.
 # ---------------------------------------------------------------------------
@@ -101,6 +110,8 @@ now="$(date +%s)"
 # trapped signal until the foreground command returns, so a handler alone could never fire here,
 # and the deadline has to reach the child to get the suite moving again.
 mk_armed "$TMPROOT/overrun.sh" "out=\"\$(bash '$HOLDER' '$TMPROOT/overrun.child')\""
+# On a quiet machine, so what this judges is the deadline and never how busy the Mac running it is.
+LOAD_AVERAGE_CMD="$QUIET_LOAD" LOAD_AVERAGE_CORES=12 \
 SUITE_WALL_STARTED=$(( now - 1000 )) SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/overrun.wd" \
   bash "$TMPROOT/overrun.sh" > "$TMPROOT/overrun.out" 2>&1 &
 ov=$!
@@ -142,6 +153,129 @@ case "$ov_wd" in
        && check "#444 and the watchdog is gone once it has fired" ok \
        || check "#444 and the watchdog is gone once it has fired" "pid $ov_wd is still running" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# A deadline missed on a machine busier than its cores is UNMEASURED, not a failure (#1330).
+# ---------------------------------------------------------------------------
+# On 2026-10-18 seven suites ran past their deadlines in one full run at a load average of about 30
+# on 12 cores, and all seven passed when run again. A suite starved of the processor cannot be told
+# from one that waits without end, so where the shared reader (lib/load-average.sh) says the load
+# beyond the suite's own share was more than the machine has cores, the stop says UNMEASURED with
+# the figures it read, on the agreed line the runner reads. Everywhere else, including every way the
+# figure cannot be read, it stays a FAIL: busy excuses a failure, so nothing unreadable may (L90).
+#
+# overrun_with <name> [VAR=value...]: a suite past its deadline, blocked on a child, run with only
+# the load seams given here, since an inherited share or seam would decide the case (L169). Leaves
+# the exit status in ow_rc and the output in ow_out.
+overrun_with(){
+  local n="$1" p; shift
+  mk_armed "$TMPROOT/$n.sh" "out=\"\$(bash '$HOLDER' '$TMPROOT/$n.child')\""
+  env -u HOOK_TESTS_SLOTS -u LOAD_AVERAGE_CMD -u LOAD_AVERAGE_CORES "$@" \
+    SUITE_WALL_STARTED=$(( now - 1000 )) SUITE_WALL_POLL=0.05 \
+    bash "$TMPROOT/$n.sh" > "$TMPROOT/$n.out" 2>&1 &
+  p=$!
+  ALL_PIDS="$ALL_PIDS $p"
+  wait_file "$TMPROOT/$n.child" && ALL_PIDS="$ALL_PIDS $(cat "$TMPROOT/$n.child")"
+  if wait_gone "$p"; then wait "$p"; ow_rc=$?; else ow_rc="still running"; fi
+  ow_out="$(cat "$TMPROOT/$n.out")"
+}
+STOP_MARK="SUITE""-DEADLINE-UNMEASURED"
+said_fail(){ printf '%s\n' "$1" | grep -E '^ *FAIL' > /dev/null; }
+said_mark(){ printf '%s\n' "$1" | grep -E "^$STOP_MARK " > /dev/null; }
+
+# The figures from 2026-10-18: about 30 on 12 cores.
+overrun_with busy LOAD_AVERAGE_CMD="$(mk_load busy 30.5)" LOAD_AVERAGE_CORES=12
+[ "$ow_rc" = 124 ] \
+  && check "#1330 a suite stopped on an overloaded machine still exits 124" ok \
+  || check "#1330 a suite stopped on an overloaded machine still exits 124" "exit=$ow_rc out=$ow_out"
+case "$ow_out" in
+  *"UNMEASURED: busy.sh ran past its own wall clock of 60s"*"load average of 30.5 on 12 cores"*)
+    check "#1330 and it says UNMEASURED, naming the suite, the limit and the load it read" ok ;;
+  *) check "#1330 and it says UNMEASURED, naming the suite, the limit and the load it read" "out=$ow_out" ;;
+esac
+printf '%s\n' "$ow_out" | grep -E "^$STOP_MARK .*load average of 30\.5 on 12 cores" > /dev/null \
+  && check "#1330 and prints the agreed line the runner reads, with the load" ok \
+  || check "#1330 and prints the agreed line the runner reads, with the load" "out=$ow_out"
+said_fail "$ow_out" \
+  && check "#1330 and says no FAIL" "out=$ow_out" \
+  || check "#1330 and says no FAIL" ok
+case "$ow_out" in
+  *finished*) check "#1330 and it was still stopped: nothing after the blocked step ran" "out=$ow_out" ;;
+  *) check "#1330 and it was still stopped: nothing after the blocked step ran" ok ;;
+esac
+
+# The control: the same stop on a quiet machine is the failure it always was, with the figure.
+overrun_with quiet LOAD_AVERAGE_CMD="$(mk_load low 2.5)" LOAD_AVERAGE_CORES=12
+case "$ow_rc:$ow_out" in
+  "124:"*"FAIL: quiet.sh ran past its own wall clock of 60s"*"load average was 2.5 on 12 cores"*)
+    check "#1330 the same stop on a quiet machine is a FAIL that names the load" ok ;;
+  *) check "#1330 the same stop on a quiet machine is a FAIL that names the load" "exit=$ow_rc out=$ow_out" ;;
+esac
+said_mark "$ow_out" \
+  && check "#1330 and it is not marked unmeasured" "out=$ow_out" \
+  || check "#1330 and it is not marked unmeasured" ok
+
+# A figure that cannot be read excuses nothing.
+overrun_with unreadable LOAD_AVERAGE_CMD="$(mk_load junk nonsense)" LOAD_AVERAGE_CORES=12
+if [ "$ow_rc" = 124 ] && said_fail "$ow_out" && ! said_mark "$ow_out"; then
+  case "$ow_out" in
+    *"could not be read"*) check "#1330 a load average that cannot be read leaves it a FAIL, and says why" ok ;;
+    *) check "#1330 a load average that cannot be read leaves it a FAIL, and says why" "out=$ow_out" ;;
+  esac
+else
+  check "#1330 a load average that cannot be read leaves it a FAIL, and says why" "exit=$ow_rc out=$ow_out"
+fi
+# Nor does a core count that cannot be read, however high the figure.
+overrun_with nocores LOAD_AVERAGE_CMD="$(mk_load busy2 30.5)" LOAD_AVERAGE_CORES=0
+[ "$ow_rc" = 124 ] && said_fail "$ow_out" && ! said_mark "$ow_out" \
+  && check "#1330 a core count that cannot be read leaves it a FAIL" ok \
+  || check "#1330 a core count that cannot be read leaves it a FAIL" "exit=$ow_rc out=$ow_out"
+# Nor a share from the runner that is not a number, since the load beyond it cannot be judged.
+overrun_with badshare LOAD_AVERAGE_CMD="$(mk_load busy3 30.5)" LOAD_AVERAGE_CORES=12 HOOK_TESTS_SLOTS=many
+[ "$ow_rc" = 124 ] && said_fail "$ow_out" && ! said_mark "$ow_out" \
+  && check "#1330 a share that is not a number leaves it a FAIL" ok \
+  || check "#1330 a share that is not a number leaves it a FAIL" "exit=$ow_rc out=$ow_out"
+
+# The suite's own share, handed to it by the runner in HOOK_TESTS_SLOTS, is not load from elsewhere
+# (the rule #1259 set): 15 less a share of 4 is 11, not more than 12 cores. Moved both ways (L497):
+# 17 less 4 is 13, which is.
+overrun_with ownshare LOAD_AVERAGE_CMD="$(mk_load fifteen 15)" LOAD_AVERAGE_CORES=12 HOOK_TESTS_SLOTS=4
+[ "$ow_rc" = 124 ] && said_fail "$ow_out" && ! said_mark "$ow_out" \
+  && check "#1330 load that is only the suite's own share does not excuse the stop" ok \
+  || check "#1330 load that is only the suite's own share does not excuse the stop" "exit=$ow_rc out=$ow_out"
+overrun_with pastshare LOAD_AVERAGE_CMD="$(mk_load seventeen 17)" LOAD_AVERAGE_CORES=12 HOOK_TESTS_SLOTS=4
+[ "$ow_rc" = 124 ] && said_mark "$ow_out" && ! said_fail "$ow_out" \
+  && check "#1330 and load past that share does" ok \
+  || check "#1330 and load past that share does" "exit=$ow_rc out=$ow_out"
+
+# A copy of the helper with no load reader beside it cannot read a figure, so it fails as before
+# and says the reader is missing rather than printing nothing (L90).
+NOLOAD="$TMPROOT/noload-lib"
+mkdir -p "$NOLOAD"
+cp "$LIB" "$DIR/lib/kill-tree.sh" "$NOLOAD/"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '. "%s"\n' "$NOLOAD/suite-deadline.sh"
+  printf 'suite_deadline_arm 60 || exit $?\n'
+  printf 'out="$(bash %q %q)"\n' "$HOLDER" "$TMPROOT/noload.child"
+  printf 'echo finished\n'
+} > "$TMPROOT/noload.sh"
+env -u HOOK_TESTS_SLOTS LOAD_AVERAGE_CMD="$(mk_load busy4 30.5)" LOAD_AVERAGE_CORES=12 \
+  SUITE_WALL_STARTED=$(( now - 1000 )) SUITE_WALL_POLL=0.05 \
+  bash "$TMPROOT/noload.sh" > "$TMPROOT/noload.out" 2>&1 &
+nl=$!
+ALL_PIDS="$ALL_PIDS $nl"
+wait_file "$TMPROOT/noload.child" && ALL_PIDS="$ALL_PIDS $(cat "$TMPROOT/noload.child")"
+if wait_gone "$nl"; then wait "$nl"; nl_rc=$?; else nl_rc="still running"; fi
+nl_out="$(cat "$TMPROOT/noload.out")"
+if [ "$nl_rc" = 124 ] && said_fail "$nl_out" && ! said_mark "$nl_out"; then
+  case "$nl_out" in
+    *"load-average.sh is missing"*) check "#1330 a helper with no load reader beside it fails as before, saying the reader is missing" ok ;;
+    *) check "#1330 a helper with no load reader beside it fails as before, saying the reader is missing" "out=$nl_out" ;;
+  esac
+else
+  check "#1330 a helper with no load reader beside it fails as before, saying the reader is missing" "exit=$nl_rc out=$nl_out"
+fi
 
 # ---------------------------------------------------------------------------
 # The control: a suite that finishes inside its deadline is not touched, and leaves nothing behind.
@@ -264,6 +398,7 @@ esac
 } > "$TMPROOT/default.sh"
 # Started past the shared default, so a suite that silently took some other limit (or none, which
 # is what an unset argument under `set -u` used to give) either runs on or names a different one.
+LOAD_AVERAGE_CMD="$QUIET_LOAD" LOAD_AVERAGE_CORES=12 \
 SUITE_WALL_STARTED=$(( now - ${SHARED_DEFAULT:-0} - 5 )) SUITE_WALL_POLL=0.05 \
   bash "$TMPROOT/default.sh" > "$TMPROOT/default.out" 2>&1 &
 df=$!
