@@ -35,7 +35,8 @@
 # could not be executed. It blocks on a scanner that ran and failed, and, in its own words, on a
 # scanner that could not run because another suite run held its lock past the wait (#642), and on
 # a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
-# which it calls a fault in its own run rather than a finding (#1146). Finding NO
+# or, in a SUITE-DEADLINE-UNMEASURED line, that it was stopped at its deadline on a machine busier
+# than its cores (#1333), which it calls a fault in its own run rather than a finding (#1146). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -275,15 +276,33 @@ start_one(){         # $1 = the suite path   $2 = a section, or empty
 "
     return 0
   fi
+  # Only queued here. It is started below, once the whole selection is known, because each run is
+  # told how many runs are in flight with it (#1333).
   _sc_n=$(( _sc_n + 1 ))
-  local out="$_sc_work/$_sc_n"
-  printf '%s\n%s\n' "$1" "${2:-}" > "$out.what"
-  if [ -n "${2:-}" ]; then
-    ( SECTION_ONLY="$2" bash "$1" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
-  else
-    ( bash "$1" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
-  fi
+  printf '%s\n%s\n' "$1" "${2:-}" > "$_sc_work/$_sc_n.what"
   return 0
+}
+
+# THE SHARE OF THE MACHINE EACH RUN IS TOLD IS ITS OWN (claude-config#1333). A suite stopped at its
+# deadline judges the load average it reads against its own share of it, HOOK_TESTS_SLOTS, and only
+# load BEYOND that share can make the stop UNMEASURED rather than a FAIL (lib/suite-deadline.sh,
+# #1330). run-all-tests.sh hands every suite that share. This gate handed none, so each scanner
+# judged its share as 1 and counted the scanners running beside it, which this same push started,
+# as load from elsewhere: work of the push's own making could excuse a stop as the machine being
+# busy. Unlike the runner, nothing here bounds the runs in flight by a budget, so the load this gate
+# itself puts on the machine is every run it has in flight at once, and that whole count is each
+# run's share. The push is held whether the stop is judged UNMEASURED or FAIL; this decides only
+# which it is called. The sync suite also takes the share as its shard count, which a single
+# section run does not use: it runs filtered, in one process.
+_sc_launch(){        # $1 = run index   $2 = the runs in flight at once
+  local out="$_sc_work/$1" s sec
+  s="$(sed -n 1p "$out.what")"; sec="$(sed -n 2p "$out.what")"
+  rm -f "$out.rc"
+  if [ -n "$sec" ]; then
+    ( HOOK_TESTS_SLOTS="$2" SECTION_ONLY="$sec" bash "$s" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
+  else
+    ( HOOK_TESTS_SLOTS="$2" bash "$s" > "$out.out" 2>&1; printf '%s' "$?" > "$out.rc" ) &
+  fi
 }
 
 while IFS= read -r s; do
@@ -304,6 +323,11 @@ done <<EOF
 $scanners
 EOF
 
+_sc_i=1
+while [ "$_sc_i" -le "$_sc_n" ]; do
+  _sc_launch "$_sc_i" "$_sc_n"
+  _sc_i=$(( _sc_i + 1 ))
+done
 wait
 
 # A SCANNER THAT NEVER RAN BECAUSE ANOTHER SUITE RUN HELD ITS LOCK (claude-config#642). The sync
@@ -339,15 +363,11 @@ _sc_locked="$(_sc_locked_list)"
 while [ -n "$_sc_locked" ] && [ "$_sc_tries_left" -gt 0 ]; do
   "$_sc_sleep" "$_sc_lock_poll"
   _sc_tries_left=$(( _sc_tries_left - 1 ))
+  # Only the refused runs go again, so they are the runs in flight at once this time.
+  _sc_relaunch_n="$(printf '%s\n' "$_sc_locked" | grep -c . || true)"
   while IFS= read -r _sc_i; do
     [ -n "$_sc_i" ] || continue
-    _sc_s="$(sed -n 1p "$_sc_work/$_sc_i.what")"; _sc_sec="$(sed -n 2p "$_sc_work/$_sc_i.what")"
-    rm -f "$_sc_work/$_sc_i.rc"
-    if [ -n "$_sc_sec" ]; then
-      ( SECTION_ONLY="$_sc_sec" bash "$_sc_s" > "$_sc_work/$_sc_i.out" 2>&1; printf '%s' "$?" > "$_sc_work/$_sc_i.rc" ) &
-    else
-      ( bash "$_sc_s" > "$_sc_work/$_sc_i.out" 2>&1; printf '%s' "$?" > "$_sc_work/$_sc_i.rc" ) &
-    fi
+    _sc_launch "$_sc_i" "$_sc_relaunch_n"
   done <<LOCKED
 $_sc_locked
 LOCKED
@@ -389,8 +409,17 @@ fi
 # nothing, so it is neither a pass, which would publish an unscanned tree, nor a failure of the code
 # (L11, L411). It is held apart and said as a fault in this gate's own run, with the scanner's reason.
 # A FAIL line outranks it: a scanner that found something is judged by what it found.
+#
+# The same holds for a scanner STOPPED AT ITS DEADLINE on a machine busier than its cores
+# (claude-config#1333). lib/suite-deadline.sh says so in its own agreed line,
+# `SUITE-DEADLINE-UNMEASURED <why>`, and exits 124 with no FAIL line (#1330). Matched on the first
+# marker alone, such a scanner blocked under "exited 124 with no FAIL line", a failure heading over
+# a run that judged nothing (L11, L683). Both markers are read here, each reason given without its
+# marker, and a deadline stop adds the remedy for load, since retrying at once on the same busy
+# machine is likely to stop it again. The push is held either way: nothing was scanned.
 failed=""
 unmeasured=""
+unmeasured_load=""
 ran=0
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
@@ -408,11 +437,12 @@ this scanner never reported an exit code, so its verdict is missing rather than 
 "
   elif [ "$_sc_rc_now" != "0" ]; then
     _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
-    _sc_unm="$(awk '/^SUITE-UNMEASURED / { if (n++ < 5) print substr($0, 18) }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    _sc_unm="$(awk '/^SUITE-(DEADLINE-)?UNMEASURED / { if (n++ < 5) { sub(/^SUITE-(DEADLINE-)?UNMEASURED /, ""); print } }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
     if [ -z "$_sc_fails" ] && [ -n "$_sc_unm" ]; then
       unmeasured="$unmeasured=== $_sc_what ===
 $_sc_unm
 "
+      grep -q '^SUITE-DEADLINE-UNMEASURED ' "$_sc_work/$_sc_i.out" 2>/dev/null && unmeasured_load=1
     else
       # No FAIL line at all is a failure whose reason is somewhere else in what it printed, so the
       # end of that is shown rather than an empty detail (#642 was found behind one).
@@ -436,11 +466,16 @@ fi
 
 # What the unmeasured scanners said, written once, for the block below whichever form it takes.
 _sc_unmeasured_note(){
-  echo "These scanners ran and measured nothing: each could not read what it judges, which is a"
-  echo "fault in this gate's own run, not a finding about your change. Nothing was found, and"
-  echo "nothing was checked either. Each said why:"
+  echo "These scanners ran and measured nothing: each could not read what it judges, or was stopped"
+  echo "at its deadline on a machine too busy to judge it, which is a fault in this gate's own run,"
+  echo "not a finding about your change. Nothing was found, and nothing was checked either. Each said why:"
   echo ""
   printf '%s' "$unmeasured"
+  # Said in both blocks that print this note, so a deadline stop beside a real failure gets it too.
+  if [ -n "$unmeasured_load" ]; then
+    echo ""
+    echo "A scanner was stopped at its deadline while this Mac was busier than its cores, so retry the push when the machine is quieter."
+  fi
 }
 
 if [ -z "$failed" ] && [ -n "$unmeasured" ]; then
