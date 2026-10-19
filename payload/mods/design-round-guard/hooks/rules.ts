@@ -646,12 +646,15 @@ type Span = readonly [number, number]
  * `Promise<X>` and `a < b` are never read as one. `strings` is what each string, template literal
  * part and regular expression holds, its quotes and the template's `${` and `}` aside (#1275). With
  * `jsx` false, for a `.ts` file, which holds none, a `<` opens nothing, so a generic arrow may be
- * written with no comma (`<T>(`, as status bar's and scope modes' hook files do).
+ * written with no comma (`<T>(`, as status bar's and scope modes' hook files do). `children` is each
+ * `{...}` among an element's children, braces included, where a JSX comment (`{/* note *\/}`) sits
+ * (#1341).
  */
-export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments: Span[]; strings: Span[] } | null => {
+export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments: Span[]; strings: Span[]; children: Span[] } | null => {
   const jsx: Span[] = []
   const comments: Span[] = []
   const strings: Span[] = []
+  const children: Span[] = []
   const n = text.length
   const unread = new Error('unread')
   const id = (c: string | undefined) => c !== undefined && /[\w$]/.test(c)
@@ -752,8 +755,11 @@ export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments:
         return e + 1
       }
       if (text[j] === '<') j = element(j)
-      else if (text[j] === '{') j = code(j + 1, true) + 1
-      else j++
+      else if (text[j] === '{') {
+        const s = j
+        j = code(j + 1, true) + 1
+        children.push([s, j])
+      } else j++
     }
   }
   // Code from `i`: to the `}` closing an expression when `nested` (its offset), else to the end.
@@ -827,7 +833,7 @@ export const sourceSpans = (text: string, jsx_ = true): { jsx: Span[]; comments:
   }
   try {
     code(0, false)
-    return { jsx, comments, strings }
+    return { jsx, comments, strings, children }
   } catch (err) {
     if (err === unread) return null
     throw err
@@ -898,6 +904,106 @@ export const modHookLogicOnly = (before: string, after: string): boolean => {
   }
   return true
 }
+
+// The spacing the language and JSX read alike: spaces, tabs and line breaks, never a no break space,
+// which JSX keeps as text.
+const BLANK = /[ \t\r\n]/
+
+/**
+ * A text as the language reads it with its comments taken out (#1341), or null where the reader
+ * cannot follow it (sourceSpans). A comment naming `@jsx` is kept, since that pragma changes how JSX
+ * is built. Each run of spacing and taken out comments is read as what it can mean: nothing at the
+ * start or end of the text, one line break where it holds any (all such runs read alike, in code and
+ * in JSX text, where a run holding a line break is trimmed away or read as one space), else one space
+ * where it held a comment in code, else exactly the spacing it holds. What a string, template literal
+ * or regular expression holds is kept exactly. A JSX comment among an element's children
+ * (`{/* note *\/}`) is taken out whole, braces and all, only where every run of spacing beside it is
+ * empty or holds a line break and it stands between tags or other braces (a `>` or `}` before, a `<`
+ * or `{` after): beside JSX text it can take away the space a line break would read as, or leave a
+ * space more, so there its braces stay as code and only its words go.
+ */
+const withoutComments = (text: string, jsx: boolean): string | null => {
+  const spans = sourceSpans(text, jsx)
+  if (!spans) return null
+  const n = text.length
+  // 0 code, 1 a comment taken out, 2 a JSX comment taken out whole, 3 what a string holds.
+  const mask = new Uint8Array(n)
+  for (const [a, b] of spans.comments) if (!/@jsx/i.test(text.slice(a, b))) mask.fill(1, a, b)
+  for (const [a, b] of spans.strings) mask.fill(3, a, b)
+  const blank = (i: number) => mask[i] === 1 || (mask[i] === 0 && BLANK.test(text[i] as string))
+  // The JSX comments: braces holding only spacing and comments, at least one of them.
+  const notes = spans.children.filter(([a, b]) => {
+    let comment = false
+    for (let i = a + 1; i < b - 1; i++) {
+      if (!blank(i)) return false
+      if (mask[i] === 1) comment = true
+    }
+    return comment
+  })
+  notes.sort((x, y) => x[0] - y[0])
+  // Grouped where only spacing lies between, each group judged by what stands either side of it.
+  const spaced = (from: number, to: number) => {
+    const s = text.slice(from, to)
+    return s === '' || s.includes('\n')
+  }
+  for (let k = 0; k < notes.length; ) {
+    let last = k
+    while (last + 1 < notes.length && /^[ \t\r\n]*$/.test(text.slice((notes[last] as Span)[1], (notes[last + 1] as Span)[0]))) last++
+    const first = notes[k] as Span
+    const end = notes[last] as Span
+    let l = first[0]
+    while (l > 0 && BLANK.test(text[l - 1] as string)) l--
+    let r = end[1]
+    while (r < n && BLANK.test(text[r] as string)) r++
+    let apart = spaced(l, first[0]) && spaced(end[1], r) && /[>}]/.test(text[l - 1] ?? '') && /[<{]/.test(text[r] ?? '')
+    for (let m = k; m < last && apart; m++) apart = spaced((notes[m] as Span)[1], (notes[m + 1] as Span)[0])
+    if (apart) for (let m = k; m <= last; m++) mask.fill(2, (notes[m] as Span)[0], (notes[m] as Span)[1])
+    k = last + 1
+  }
+  let out = ''
+  let i = 0
+  while (i < n) {
+    if (mask[i] === 3 || !(mask[i] || BLANK.test(text[i] as string))) {
+      out += text[i]
+      i++
+      continue
+    }
+    const from = i
+    let line = false
+    let comment = false
+    let spacing = ''
+    while (i < n && (mask[i] === 1 || mask[i] === 2 || (mask[i] === 0 && BLANK.test(text[i] as string)))) {
+      if (text[i] === '\n') line = true
+      if (mask[i] === 1) comment = true
+      else if (mask[i] === 0) spacing += text[i]
+      i++
+    }
+    out += from === 0 || i === n ? '' : line ? '\n' : comment ? ' ' : spacing
+  }
+  return out
+}
+
+/**
+ * Whether changing a mod's hook file from `before` to `after` changes only its comments (#1341): the
+ * two read the same with their comments taken out (withoutComments), so nothing the file runs or draws
+ * differs. `jsx` for a `.tsx` or `.jsx` file. A comment's words inside a string, a template literal,
+ * JSX text or a quoted prop are what is shown, never a comment; text the reader cannot follow is never
+ * judged so. Only a mod's own hook files are read so: an app's screen file is not, since Tailwind finds
+ * the classes it builds in every word of a file, its comments included.
+ */
+export const commentOnlyChange = (before: string, after: string, jsx: boolean): boolean => {
+  if (before === after) return false
+  const was = withoutComments(before, jsx)
+  return was !== null && was === withoutComments(after, jsx)
+}
+
+/**
+ * What a refusal says of a mod hook file a shell command writes (#1341): what the command leaves
+ * cannot be read before it runs, so the whole file was judged, and the Edit tool, whose change the
+ * guard reads first, lets a change to comments alone through unasked.
+ */
+export const shellUnread = (file: string): string =>
+  `The design round guard cannot read what a shell command leaves in ${file} before it runs, so it judged the whole file as a look change. A change that touches only comments there goes through unasked when it is made with the Edit tool, whose change the guard reads first: if that is all this change does, make it that way rather than asking Dan.`
 
 /**
  * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files in
