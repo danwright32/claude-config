@@ -48,6 +48,11 @@ if [ -n "${FAKE_FAIL_TOKEN:-}" ] && grep -qF -- "$FAKE_FAIL_TOKEN" "$FAKE_DIR/st
   echo "fake claude: refusing on purpose" >&2
   exit 1
 fi
+# Fail exactly one call: whichever call removes the marker file first.
+if [ -n "${FAKE_FAIL_ONCE:-}" ] && rm "$FAKE_FAIL_ONCE" 2>/dev/null; then
+  echo "fake claude: failing this one call on purpose" >&2
+  exit 1
+fi
 text="No issues found."
 [ -n "$answer" ] && text="$(tail -n +2 "$answer")"
 json=0
@@ -216,6 +221,9 @@ rm -rf "$CASES/invented-paginate-2" "$CASES/invented-retry-2"
 out="$(FAKE_FAIL_TOKEN="report/send.sh" score run --all --cases "$CASES" --results-dir "$WORK/fail-results")"; rc=$?
 check "a failed review is named as unmeasured" "unmeasured: invented-retry" "$out"
 check "the rates come from the cases that were measured" "catch rate: 2 of 3 real defects caught (67%)" "$out"
+failed_runs=("$WORK/fail-results"/run-*.json)
+out="$(score rescore "${failed_runs[0]}" --cases "$CASES" --results-dir "$WORK/fail-results")"
+check "a rescore names the cases whose stored reviews failed" "unmeasured: invented-retry (error)" "$out"
 out="$(FAKE_FAIL_TOKEN="diff --git" score run --all --cases "$CASES" --results-dir "$WORK/fail-results")"; rc=$?
 check "when every review fails the run is unmeasured" "UNMEASURED" "$out"
 check_not "an all failed run never prints a catch rate" "catch rate:" "$out"
@@ -241,6 +249,10 @@ check "a case the run holds but the set no longer does is named as unmeasured" "
 # --- 9. repeats pool their reviews ---------------------------------------------------------------
 out="$(score run --all --repeat 2 --cases "$CASES" --results-dir "$WORK/repeat-results")"
 check "two reviews per case double the denominators" "catch rate: 6 of 10 real defects caught (60%)" "$out"
+touch "$WORK/fail-once"
+out="$(FAKE_FAIL_ONCE="$WORK/fail-once" score run --only invented-retry --repeat 2 --cases "$CASES" --results-dir "$WORK/repeat-results")"
+check "a case with one of its repeats failed says so" "unmeasured: invented-retry (1 of 2 reviews failed: error)" "$out"
+check "and is scored on the review that succeeded" "catch rate: 1 of 2 real defects caught (50%)" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

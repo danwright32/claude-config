@@ -481,6 +481,22 @@ def compare(run, base, cases, window):
     return EXIT_OK, lines
 
 
+def failed_reviews(run):
+    """One line per case of a run with a failed review, for both a run and a rescore: a case whose
+    reviews all failed is left out of the score, and one where only some failed is scored on fewer
+    reviews, and neither may happen without being said."""
+    out = []
+    for cid in sorted(run["cases"]):
+        statuses = [rv.get("status", "error") for rv in run["cases"][cid].get("reviews", [])]
+        failed = sorted({s for s in statuses if s != "ok"})
+        if failed and "ok" not in statuses:
+            out.append(f"{cid} ({', '.join(failed)})")
+        elif failed:
+            n_bad = sum(1 for s in statuses if s != "ok")
+            out.append(f"{cid} ({n_bad} of {len(statuses)} reviews failed: {', '.join(failed)})")
+    return out
+
+
 def load_all_cases(root, ids):
     cases, bad = {}, {}
     for cid in ids:
@@ -585,10 +601,7 @@ def cmd_run(args):
             done += 1
             print(f"  [{done}/{len(jobs)}] {cid}: {rv['status']}, {len(rv['findings'])} finding"
                   f"{'s' if len(rv['findings']) != 1 else ''}, {rv['seconds']}s", flush=True)
-    for cid in sorted(run["cases"]):
-        statuses = [rv["status"] for rv in run["cases"][cid]["reviews"]]
-        if all(s != "ok" for s in statuses):
-            unmeasured.append(f"{cid} ({', '.join(sorted(set(statuses)))})")
+    unmeasured += failed_reviews(run)
     run["finished"] = int(time.time())
     per = score_run(run, cases, args.window)
     run["scored"] = per
@@ -652,7 +665,8 @@ def cmd_rescore(args):
     cases, bad = load_all_cases(root, [c for c in run["cases"] if c in ids])
     results_dir = os.path.abspath(args.results_dir or os.path.join(root, "results"))
     unmeasured = sorted([f"{cid} ({'; '.join(p)})" for cid, p in bad.items()]
-                        + [f"{cid} (no longer in the case set)" for cid in run["cases"] if cid not in ids])
+                        + [f"{cid} (no longer in the case set)" for cid in run["cases"] if cid not in ids]
+                        + failed_reviews(run))
     print(f"Rescoring {os.path.basename(args.run)} against the case set as it is now (no review is run).")
     return report(run, cases, args.window, results_dir, unmeasured)
 
