@@ -80,6 +80,12 @@ case "$*" in
     bt="$(rd branch-tip)"
     printf '{"ref":"refs/heads/feat/x","object":{"sha":"%s","type":"commit"}}\n' "${bt:-$(rd head)}"
     ;;
+  # The base branch, read as the positive control for a 404 on the merged branch: base-hidden makes
+  # GitHub answer 404 for it too, as it does for anything the account cannot see.
+  "api repos/acme/widget/git/ref/heads/main"*)
+    [ -e "$ST/base-hidden" ] && { echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    printf '{"ref":"refs/heads/main","object":{"sha":"%s","type":"commit"}}\n' "$(rd main-tip)"
+    ;;
   "pr list"*)
     fail_read list
     jq -nc --rawfile s "$ST/stacked" '[$s | split("\n")[] | select(. != "") | {number: tonumber}]'
@@ -809,6 +815,15 @@ out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a branch already gone is not an error" "0" "$rc"
 check_eq "#1337 and is not deleted again" "0" "$(count gh-calls 'X DELETE')"
 check "#1337 saying so" "already deleted" "$out"
+
+# A 404 is also GitHub's answer for what the account cannot see, so it reads as deleted only when
+# the base branch, asked the same way, can be seen (a positive control, L248).
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/branch-deleted"; : > "$ST/base-hidden"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a 404 GitHub also gives for the base is not read as deleted" "4" "$rc"
+check_not "#1337 and is not reported as deleted" "already deleted" "$out"
+check "#1337 it says the branch was left in place" "branch feat/x was left in place" "$out"
 
 # A pull request from a fork: its branch is not in this repository, so nothing here deletes one.
 fresh "$OLD" 0 "$GREEN"

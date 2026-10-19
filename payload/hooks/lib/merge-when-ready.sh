@@ -286,7 +286,13 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
     [ -n "$ref_tip" ] && return 0
     read_err="${out:0:300}"; return 1
   fi
-  case "$out" in *"HTTP 404"*) ref_gone=1; return 0 ;; esac
+  # GitHub answers 404 for what the account cannot see as well as for what is not there, so a 404
+  # reads as deleted only when the base branch, asked the same way, can be seen.
+  case "$out" in *"HTTP 404"*)
+    if gh_as api "repos/$slug/git/ref/heads/$base" >/dev/null 2>&1; then ref_gone=1; return 0; fi
+    read_err="GitHub answered 404 for $branch and could not show $base either, so a deleted branch cannot be told from one it will not show"
+    return 1 ;;
+  esac
   read_err="${out:0:300}, exit $rc"
   mt_gh_transient "$out" && return 2
   return 1
