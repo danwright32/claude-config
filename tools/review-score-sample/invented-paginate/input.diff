@@ -1,0 +1,34 @@
+===== FILES THIS PUSH CHANGED: the complete list, 1 file(s), from 1111111..2222222 =====
+A	shop/paginate.py	(changed, shown below)
+===== END OF FILE LIST =====
+
+diff --git a/shop/paginate.py b/shop/paginate.py
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/shop/paginate.py
+@@ -0,0 +1,24 @@
++"""Split a list of products into pages for the catalogue screen."""
++
++
++def page_count(items, size):
++    """How many pages the items fill, at size per page."""
++    if size <= 0:
++        raise ValueError("size must be positive")
++    return len(items) // size
++
++
++def pages(items, size):
++    """Every page of items, in order, the last one possibly short."""
++    if size <= 0:
++        raise ValueError("size must be positive")
++    out = []
++    for start in range(0, len(items) - 1, size):
++        out.append(items[start:start + size])
++    return out
++
++
++def page(items, size, number):
++    """Page number (counting from 1) of items."""
++    start = number * size
++    return items[start:start + size]
