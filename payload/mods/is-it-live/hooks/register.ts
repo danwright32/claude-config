@@ -529,8 +529,10 @@ export const register: Register = on => {
       .map(c => ({ c, owing: owes(c) ? c : all.filter(o => o.pr === c.pr && owes(o)).sort((a, b) => b.at - a.at)[0] }))
       .sort((a, b) => b.c.at - a.c.at)
     // Newest first across both names, as cardsOf gives one name's: the band pins in this order.
-    // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
-    for (const { owing } of shown) if (owing) await pin($, owing)
+    // Every message not yet sent whose change is out is pinned again, so Copy and Mark sent are at
+    // hand in any session; one whose change is not is held (#1335). Whether it is out is the newest
+    // card's state for the PR, as the list below says, wherever the message is kept.
+    for (const { c, owing } of shown) if (owing) await pin($, { ...owing, state: c.state })
     const cards = shown.map(({ c, owing }) => (owing && owing !== c ? { ...c, requester: owing.requester, message: owing.message, sentAt: undefined } : c))
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
     return { text: liveList(cards) + unasked }

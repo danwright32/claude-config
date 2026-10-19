@@ -2058,7 +2058,9 @@ ones marked open are the builder's choice, waiting on Dan.
   sent stays sent while a new card carries the same words; new words wait again (#704).
 - **Cards are kept per repository** in the mod's store, the newest 50, so `/live` lists them in
   any later session, newest first, then every message not yet marked sent; `/live` also pins
-  each unsent message in the band again, so Copy and Mark sent are at hand. The repository is
+  each unsent message whose change is out (the PR's newest card says live or no deploy step,
+  #1335) in the band again, so Copy and Mark sent are at hand, and lists a held one as waiting,
+  without its words. The repository is
   the one GitHub's own link for the PR names, folded to lowercase, so a card Claude typed in
   another case or under a repository's old name (gh accepts both) is one list with the rest;
   cards an earlier build kept under another case are read with them and moved onto the one key

@@ -643,6 +643,24 @@ test('/live after a rename keeps the unsent message an older card under the othe
   expect(await live($)).toBe('- Live: Newer (#300)')
 })
 
+// #1335 lessons review: whether the message is out is the PR's newest card's state, wherever the
+// message is kept, so /live's band and list agree.
+test('/live after a rename shows or holds an older card\'s message by the newest card\'s state (#1335)', withKit, async ($, on) => {
+  const old = (state: string) => ({ repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state, at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' })
+  const now = (state: string) => ({ repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state, at: T0 - 1000 })
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old('deploying')], 'cards:danwright32/slate': [now('live')] } })
+  expect(await live($)).toBe('- Live: Newer (#300)\n\nNot sent yet:\n- Message for Kris (#300): About 300.')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.'])
+})
+
+test('/live after a rename holds an older live card\'s message while the newest card for the PR is deploying (#1335)', withKit, async ($, on) => {
+  const old = { repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
+  const now = { repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state: 'deploying', at: T0 - 1000 }
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old], 'cards:danwright32/slate': [now] } })
+  expect(await live($)).toBe('- Merged, deploying: Newer (#300)\n\nNot sent yet:\n- Message for Kris waits until #300 is live.')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
+})
+
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
   const w = world(on, { remote: 'git@github.com:danwright32/old-slate.git' })
   await card($, CARD)
