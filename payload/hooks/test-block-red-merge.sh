@@ -1245,6 +1245,19 @@ if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widg
 out=$(MWR_DELETE_BRANCH= GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "$PINNED")
 if behind_refusal "$out" && ! holds "$out" "--delete-branch"; then pass; else fail "#1351 the hint names --delete-branch nobody asked for: $out"; fi
 rm -rf "$dir"
+# #1351: gh takes the short spellings too (-s, -m, -r, -d, and clustered like -sd), and the hint
+# names the method and the delete whichever spelling was typed. Only the merge's own words count:
+# a value such as a --body, or another command on the line, is not the merge asking for anything.
+compare_dir "$UPTODATE_PR"
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 -s -d --match-head-commit $HEAD_SHA")
+if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ."; then pass; else fail "#1351 the hint drops a method and delete typed as -s -d: $out"; fi
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 -sd --match-head-commit $HEAD_SHA")
+if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ."; then pass; else fail "#1351 the hint drops a method and delete typed as one cluster, -sd: $out"; fi
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 -r --body 'not -m, not --delete-branch' --match-head-commit $HEAD_SHA")
+if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --rebase ." && ! holds "$out" "--merge ." && ! holds "$out" "--rebase --delete-branch"; then pass; else fail "#1351 the hint reads -r, and nothing out of the --body: $out"; fi
+out=$(GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "echo -d --delete-branch && gh pr merge 7 -m --match-head-commit $HEAD_SHA")
+if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --merge ." && ! holds "$out" "--merge --delete-branch"; then pass; else fail "#1351 the hint takes a flag from a command that is not the merge: $out"; fi
+rm -rf "$dir"
 
 # One commit behind reads in the singular.
 compare_dir "$UPTODATE_PR"

@@ -791,7 +791,10 @@ with exit 4, merged, saying which pull requests were not moved and why; running 
 again finds the merge done and finishes the branch. A branch GitHub already deleted, or one in a
 fork, is left alone. Since the merge the gates judge no longer carries `--delete-branch`, the helper
 runs them with `MWR_DELETE_BRANCH=1` when it was asked to delete, so the rerun command
-`block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351). A base that keeps moving no longer stops it (claude-config#1271): it used to give up after
+`block-red-merge.sh` suggests on sending the merge back still carries the flag (claude-config#1351).
+That command carries the merge method and the delete a typed merge asked for in any spelling gh
+takes (`-s`, `-d`, `-sd`, `--squash`), read from the merge's own words, so neither a `--body` nor
+another command on the line adds one. A base that keeps moving no longer stops it (claude-config#1271): it used to give up after
 three updates, which on a busy day (2026-10-16: several merges at once, 15 to 30 minute check runs) handed the
 restart to a person. The first update is made at once; after that it waits until the base's tip
 has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges costs one fresh check

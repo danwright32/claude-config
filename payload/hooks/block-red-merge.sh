@@ -471,17 +471,72 @@ slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
 [ -n "$slug" ] || slug="$remote_slug"
 # The one step remedy both rules hand over, carrying this merge's own method so it merges the same
 # way. Only the flags the helper carries are read; anything else is not its to pass on.
-helper_flags=""
-for hf in --squash --merge --rebase --delete-branch; do
-  case " $command " in *" $hf "*) helper_flags="$helper_flags $hf" ;; esac
+#
+# Read from the gh pr merge's OWN words, as the shell reads them, in whichever spelling gh takes
+# (claude-config#1351): --squash or -s, --merge or -m, --rebase or -r, --delete-branch or -d, short
+# ones clustered (-sd), and --flag=true. Searching the whole command text for the long spellings
+# dropped every short one, and took a flag out of a --body or out of another command on the line.
+# The value after a flag that takes one is skipped, so a body reading "-m" asks for nothing.
+# Without a reading (no python3) the command's own blank separated tokens are read instead.
+want_squash=""; want_merge=""; want_rebase=""; want_delete=""
+brm_merge_words(){   # fills brm_words with the words of the gh pr merge this command runs
+  local i end w
+  brm_words=()
+  if ps__read "$command" || [ "$?" -eq 3 ]; then
+    i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+    while [ "$i" -lt "$end" ]; do
+      if ps_runs_at gh "$i" pr merge; then
+        w="${PS__R_WORDS[$i]}"
+        while [ -n "$w" ]; do
+          brm_words+=("${w%%$'\x1f'*}")
+          case "$w" in *$'\x1f'*) w="${w#*$'\x1f'}" ;; *) w="" ;; esac
+        done
+        return 0
+      fi
+      i=$((i + 1))
+    done
+    return 0
+  fi
+  read -ra brm_words <<< "$command"
+}
+brm_merge_words
+brm_after_merge=""; brm_skip=""; brm_prev=""
+for w in ${brm_words[@]+"${brm_words[@]}"}; do
+  if [ -z "$brm_after_merge" ]; then
+    [ "$brm_prev" = pr ] && [ "$w" = merge ] && brm_after_merge=1
+    brm_prev="$w"; continue
+  fi
+  if [ -n "$brm_skip" ]; then brm_skip=""; continue; fi
+  case "$w" in
+    --) break ;;
+    --squash|--squash=true) want_squash=1 ;;
+    --merge|--merge=true) want_merge=1 ;;
+    --rebase|--rebase=true) want_rebase=1 ;;
+    --delete-branch|--delete-branch=true) want_delete=1 ;;
+    --body|--body-file|--subject|--repo|--author-email|--match-head-commit) brm_skip=1 ;;
+    --*) ;;
+    -?*)
+      c="${w#-}"
+      while [ -n "$c" ]; do
+        case "${c:0:1}" in
+          s) want_squash=1 ;;
+          m) want_merge=1 ;;
+          r) want_rebase=1 ;;
+          d) want_delete=1 ;;
+          # A flag taking a value takes the rest of the cluster, or the next word when it ends it.
+          b|F|t|R|A) [ "${#c}" -eq 1 ] && brm_skip=1; break ;;
+          *) break ;;
+        esac
+        c="${c:1}"
+      done ;;
+  esac
 done
 # The helper never hands gh --delete-branch (it deletes the branch itself, after moving the pull
 # requests stacked on it, claude-config#1337), so the merge it asks about here cannot show that it
 # was asked to delete. It says so in MWR_DELETE_BRANCH=1 when it runs this gate, and the hint carries
 # the flag, or following it exactly merges and leaves the branch on GitHub (claude-config#1351).
-if [ "${MWR_DELETE_BRANCH:-}" = 1 ]; then
-  case "$helper_flags " in *" --delete-branch "*) ;; *) helper_flags="$helper_flags --delete-branch" ;; esac
-fi
+[ "${MWR_DELETE_BRANCH:-}" = 1 ] && want_delete=1
+helper_flags="${want_squash:+ --squash}${want_merge:+ --merge}${want_rebase:+ --rebase}${want_delete:+ --delete-branch}"
 helper_cmd="bash ~/.claude/hooks/lib/merge-when-ready.sh $number${slug:+ --repo $slug}$helper_flags"
 gh_as_viewer(){   # gh, as the account that could see the pull request when that was not the active one
   local tok=""
