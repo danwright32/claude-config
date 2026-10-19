@@ -13,13 +13,17 @@
 # refused, `hello.sh "/abs/path"` and `hello.sh .` ran. So the documented form could never work
 # for exactly the agents it was written for.
 #
-# The fix has two halves and this suite holds both:
+# The #1342 fix has two halves and this suite holds both:
 #   1. The documented call passes `.` instead of `$PWD`, and `note` turns whatever directory it is
 #      handed into an absolute path before recording it. Without that, the record's `cwd` would be
 #      the literal ".", which every later reader resolves against ITS OWN directory, attributing
 #      the finding to whichever project the reader happens to stand in.
 #   2. No instruction an agent follows may hand `note` a shell expansion again: a scan of every
 #      place the call is documented, seen to fail on planted copies of the old form (L1, L30).
+#
+# And the wider class it belongs to (claude-config#1347): the same refusal fires on any shell
+# variable or loop in a worktree agent's command, so the last check asserts CLAUDE.md's dispatch
+# guidance tells every brief to hand such an agent plain, separate commands with literal paths.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -203,6 +207,13 @@ documented="$(grep -cE 'issue-spool\.sh"? +note +\. ' "$PAYLOAD/CLAUDE.md" 2>/de
 [ "${documented:-0}" -ge 1 ] \
   && check "CLAUDE.md documents the note call in the form a worktree agent can run" ok \
   || check "CLAUDE.md documents the note call in the form a worktree agent can run" "found ${documented:-0} documented note calls using '.'"
+
+# The dot form is one case of a wider refusal: Claude Code refuses a worktree agent's Bash command
+# when it holds a shell variable or a loop, so the dispatch guidance must say so for every brief (#1347).
+plain="$(grep -E '^- \*\*A worktree agent runs plain, separate commands with literal paths' "$PAYLOAD/CLAUDE.md" 2>/dev/null | grep -E 'shell variable' | grep -cE 'a loop' || true)"
+[ "${plain:-0}" -ge 1 ] \
+  && check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" ok \
+  || check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" "no dispatch rule naming the shell variable and loop cases"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
