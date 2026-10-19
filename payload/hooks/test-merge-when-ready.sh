@@ -844,6 +844,34 @@ out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a delete GitHub refuses ends merged with the branch in place" "4" "$rc"
 check "#1337 with GitHub's words" "Reference update failed" "$out"
 
+# =================================================================================================
+# 13. The REAL checks gate's rerun hint keeps --delete-branch (claude-config#1351). Since #1337 the
+#     helper hands gh, and so the gates, a merge without --delete-branch, and the gate built the
+#     helper command it suggests from that merge's flags, so following its hint exactly merged and
+#     left the branch on GitHub. Here main moves between the helper's last look and the gate's own
+#     read (the review check is the step between them), so the real gate sends the merge back.
+# =================================================================================================
+cat > "$STUBS/pr-review-main-moves.sh" <<'EOS'
+#!/usr/bin/env bash
+case "$1" in
+  start) exit 0 ;;
+  check) printf '1' > "$ST/behind"; exit 0 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-main-moves.sh"
+
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_RED_GATE="$DIR/block-red-merge.sh" MWR_REVIEW_LIB="$STUBS/pr-review-main-moves.sh" run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
+check_eq "#1351 the real gate sends back a merge whose base moved under it" "1" "$rc"
+check "#1351 its rerun hint carries --delete-branch when the helper was asked for it" "merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ." "$out"
+check_eq "#1351 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_RED_GATE="$DIR/block-red-merge.sh" MWR_REVIEW_LIB="$STUBS/pr-review-main-moves.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1351 control: the real gate sends it back without --delete-branch too" "1" "$rc"
+check "#1351 control: with the rerun hint" "merge-when-ready.sh 7 --repo acme/widget --squash ." "$out"
+check_not "#1351 which does not add --delete-branch the helper was not asked for" "--delete-branch" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
