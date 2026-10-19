@@ -204,6 +204,13 @@ documented="$(grep -cE 'issue-spool\.sh"? +note +\. ' "$PAYLOAD/CLAUDE.md" 2>/de
   && check "CLAUDE.md documents the note call in the form a worktree agent can run" ok \
   || check "CLAUDE.md documents the note call in the form a worktree agent can run" "found ${documented:-0} documented note calls using '.'"
 
+# The dot form is one case of a wider refusal: Claude Code refuses a worktree agent's Bash command
+# when it holds a shell variable or a loop, so the dispatch guidance must say so for every brief (#1347).
+plain="$(grep -cE 'worktree.*plain, separate commands with literal paths' "$PAYLOAD/CLAUDE.md" 2>/dev/null || true)"
+[ "${plain:-0}" -ge 1 ] \
+  && check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" ok \
+  || check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" "no dispatch guidance found"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
