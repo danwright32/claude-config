@@ -8746,6 +8746,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L787. A sync that skips the records your own system wrote into another system, to avoid reading them back, must still compare those records against your copy, because a person editing them there is otherwise invisible and the two drift with no signal.**
+  (Try-Pennie/slate#3919, 2026-10-19)
+  SHORT: A sync skipping records you wrote elsewhere must still compare them to your copy, or a person editing them there drifts the two silently.
+
 - **L778. A work queue that retries permanent failures rarely and also orders by least recently attempted puts those failures at the front every time their retry comes up, so a batch fills with work that cannot succeed and reads as the whole queue failing; drop records that can never succeed rather than backing them off.**
   (Try-Pennie/slate#3805, 2026-10-16)
   SHORT: Rarely retried permanent failures jump to the front of a least recently attempted queue; drop work that can never succeed instead of backing it off.
