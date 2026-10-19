@@ -890,7 +890,8 @@ PY_COMPACT
 # This session's transcript, resolved from the environment, or nothing when it cannot be resolved.
 #
 # CLAUDE.md tells every dispatched agent to record a finding with the three argument
-# `note "$PWD" "<finding>" "<who>"`, which passes no transcript, so the key fell back to the
+# `note . "<finding>" "<who>"` (it said `"$PWD"` until claude-config#1342, which Claude Code
+# refuses from an agent in a worktree), which passes no transcript, so the key fell back to the
 # agent's own directory. For an agent working in a repo NESTED inside its session's folder that is
 # a different key from the one every review reads, so the documented capture path filed where
 # nobody looks (claude-config#214). The instruction and the mechanism disagreed, and the
