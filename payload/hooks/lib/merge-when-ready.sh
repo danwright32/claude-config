@@ -192,10 +192,12 @@ done
 merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "$1"; }
 
 # Hand one gate a PreToolUse payload for the merge command; prints its reason when it refuses.
+# MWR_DELETE_BRANCH tells block-red-merge.sh this run was asked for --delete-branch, which the merge
+# command no longer carries, so the rerun command it suggests keeps it (claude-config#1351).
 ask_gate(){   # $1 = gate script, $2 = command text
   local payload out rc reason
   payload="$(jq -nc --arg c "$2" --arg d "$top" '{session_id:"merge-when-ready",cwd:$d,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
-  out="$(printf '%s' "$payload" | bash "$1" 2>&1)"; rc=$?
+  out="$(printf '%s' "$payload" | MWR_DELETE_BRANCH="$want_delete" bash "$1" 2>&1)"; rc=$?
   reason="$(printf '%s' "$out" | jq -r 'select(.hookSpecificOutput.permissionDecision == "deny") | .hookSpecificOutput.permissionDecisionReason' 2>/dev/null)"
   if [ "$rc" -ne 0 ] || [ -n "$reason" ]; then
     printf '%s' "${reason:-$out}"
