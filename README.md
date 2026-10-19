@@ -1177,7 +1177,7 @@ those (`bash payload/hooks/run-all-tests.sh tests tools`). A directory it was to
 holds no suite is a failure, not a quiet pass, because reading nothing and reading everything green
 look identical otherwise.
 
-Three other outcomes are told apart rather than folded into pass or fail. A suite whose output says
+Four other outcomes are told apart rather than folded into pass or fail. A suite whose output says
 `command not found` fails, naming the line, whatever its own score says: a case calling a helper
 that does not exist adds no pass and no fail, so it otherwise reads as one that passed (#1044). A
 suite refused its lock because another run of it holds it prints `SUITE-LOCK-REFUSED <holder>` and
