@@ -23,7 +23,9 @@ import {
   contractOf,
   card,
   checked,
+  commentOnlyChange,
   dataOnlyChange,
+  shellUnread,
   addedOntoFolder,
   shellBraces,
   afterVariable,
@@ -32,6 +34,7 @@ import {
   inScratchpad,
   isModHook,
   isModHookTs,
+  drawnParts,
   drawsChange,
   isOwnRecord,
   isSwiftUI,
@@ -140,6 +143,12 @@ import { errorText } from './mod-kit/skew.ts'
 //   kept by (rules.ts ISSUE_READING and answerCounts), since one kept before #1306 may sit under an
 //   issue an agent branch's digits spelled. Such an answer is read as none and its issue asked again;
 //   nothing in the store is deleted, and answers under a branch or a session still count.
+// - Since #1341: an Edit, MultiEdit or Write changing only the comments of a mod's hook file, .ts, .tsx
+//   or .jsx, a JSX comment standing between tags included, passes unasked (rules.ts
+//   commentOnlyChange); words spelled like a comment in a string, JSX text or a quoted prop are what is
+//   shown, and an app's screen file is not read so, since Tailwind reads its comments for classes. A
+//   shell write there still cannot be read before it runs, so it is held as before, and the refusal
+//   says the Edit tool lets a change to comments alone through (rules.ts shellUnread).
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -439,7 +448,7 @@ const changeOf = async ($: EngineInterface, t: Target & { path: string }, tree: 
 const nothingShown = async ($: EngineInterface, path: string, tree: string, before: string, after: string): Promise<boolean> => {
   // Only a real Claude Code mod's folder, whose plugin.json says so; one that cannot be read is asked.
   const modHook = isModHook(relTo(path, tree)) && (await $.fs.exists(modManifestOf(path)).catch(() => false))
-  const shows = (b: string, a: string) => !dataOnlyChange(b, a) && !(modHook && modHookLogicOnly(b, a))
+  const shows = (b: string, a: string) => !dataOnlyChange(b, a) && !(modHook && (modHookLogicOnly(b, a) || commentOnlyChange(b, a, true)))
   if (before === after || !shows(before, after)) return true
   const runs = changedRuns(before, after)
   return runs.length > 1 && runs.every(([b, a]) => !shows(b, a))
@@ -452,7 +461,9 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 // MultiEdit's text applied to the file, what git puts back (#1158). One that cannot be read before it
 // runs (a shell write, an edit that would not apply, a call naming several files) is held where the
 // file draws now and passes where it does not; a shell write passing so goes into `watch`, to be
-// judged by the file it leaves once it ran (afterShell, #1296).
+// judged by the file it leaves once it ran (afterShell, #1296), and one held so is 'shell', which the
+// refusal says the Edit tool lets through where it only changes comments (#1341). A change to its
+// comments alone passes (rules.ts commentOnlyChange, #1341).
 const drawingChange = async (
   $: EngineInterface,
   t: Target & { path: string },
@@ -461,7 +472,7 @@ const drawingChange = async (
   input: Record<string, unknown>,
   notAlone: string | undefined,
   watch: Watched[],
-): Promise<'held' | 'pass' | { unread: string }> => {
+): Promise<'held' | 'shell' | 'pass' | { unread: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
   const name = t.path.slice(dir.length + 1)
@@ -481,11 +492,13 @@ const drawingChange = async (
     after = back.text
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
-    if (drawsChange(files, name, undefined, now)) return 'held'
+    // Said as 'shell' only where the mod's files can be read, so an Edit there could be judged.
+    if (drawsChange(files, name, undefined, now)) return tool === 'Bash' && drawnParts(files, name) !== null ? 'shell' : 'held'
     // Once per file, however many of the command's words write it (lessons review).
     if (tool === 'Bash' && !watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
     return 'pass'
   }
+  if (now !== undefined && commentOnlyChange(now, after, /\.(tsx|jsx)$/i.test(name))) return 'pass'
   return drawsChange(files, name, now, after) ? 'held' : 'pass'
 }
 
@@ -517,7 +530,8 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
 
   // The look changing files, each with the checkout it is in; a file in none is in no project.
   const byTree = new Map<string, string[]>()
-  // Per checkout, what a refusal says of a git checkout or restore whose lines could not be read (#1158).
+  // Per checkout, what a refusal says of a git checkout or restore whose lines could not be read (#1158),
+  // or of a shell write to a mod hook file, which cannot be read before it runs (#1341).
   const unreadIn = new Map<string, string[]>()
   // restoreAlone's answer for this call once asked; null until then.
   let notAlone: string | undefined | null = null
@@ -607,7 +621,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (drawn === 'pass') continue
       if (drawn !== 'held') {
         const notes = unreadIn.get(tree) ?? []
-        const said = unreadPutBack(relTo(t.path, tree), drawn.unread)
+        const said = drawn === 'shell' ? shellUnread(relTo(t.path, tree)) : unreadPutBack(relTo(t.path, tree), drawn.unread)
         if (!notes.includes(said)) notes.push(said)
         unreadIn.set(tree, notes)
       }
@@ -628,6 +642,14 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     } else if (change && (await nothingShown($, t.path, tree, change.before, change.after))) continue
+    else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
+      // A shell write to a mod's TSX or JSX hook file cannot be read before it runs (#1341), and an
+      // Edit making only a comment change there would pass, so the refusal says so.
+      const notes = unreadIn.get(tree) ?? []
+      const said = shellUnread(relTo(t.path, tree))
+      if (!notes.includes(said)) notes.push(said)
+      unreadIn.set(tree, notes)
+    }
     const files = byTree.get(tree) ?? []
     if (!files.includes(t.path)) files.push(t.path)
     byTree.set(tree, files)

@@ -221,6 +221,9 @@ with the line the refusal gave it, and the main session asks with it.
 A Claude Code mod's own hook file (`mods/<mod>/hooks/<file>.tsx`) counts as a screen file, because
 it draws Claude Code's panels, but an edit to one that touches none of its JSX and names none of
 the words a mod draws with (a colour, a frame, a border, a row) is logic and goes through unasked.
+So does an Edit, MultiEdit or Write to any mod hook file, `.ts` included, that changes only its
+comments (claude-config#1341). A shell command writing one that draws is still held whole, since
+what it leaves cannot be read before it runs: make a comment only change there with the Edit tool.
 
 ## The last step: is this design settled?
 
