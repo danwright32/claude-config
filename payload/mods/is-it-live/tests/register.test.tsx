@@ -409,6 +409,70 @@ test('someone else asked in an issue: the message is pinned in the band, Copy co
   expect(await live($)).not.toContain('Not sent yet')
 })
 
+// #1335: the message tells whoever asked that the change is live, so it is held, never shown to
+// Dan with Copy and Mark sent, until a card for that PR says live.
+test('a message waits while the deploy runs: nothing is pinned until the card for the same PR says live (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  const r = await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...ask })
+  expect(r.deny).toBeUndefined()
+  expect(await shown($)).toEqual(['engine band'])
+  expect(textOf(r).split('\n').at(-1)).toBe('Message for Kris waits until this is live.')
+  expect(textOf(r)).not.toContain('The venue filter is live now.')
+  expect((r.context ?? []).join(' ')).toContain('call this again with deploy "live"')
+  expect(await live($)).not.toContain('The venue filter is live now.')
+  // /live pins every unsent message again, and still not this one.
+  expect(await shown($)).toEqual(['engine band'])
+  const l = await card($, { ...CARD, ...ask })
+  expect(textOf(l)).not.toContain('waits until')
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+})
+
+test('a deploy that failed or could not be reached keeps the message held, and takes down one already pinned (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  for (const deploy of ['failed', 'unreachable']) {
+    await card($, { ...CARD, ...ask })
+    expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+    const r = await card($, { ...CARD, ...ask, deploy, checked: 'The deploy check timed out.' })
+    expect(r.deny).toBeUndefined()
+    expect(await shown($)).toEqual(['engine band'])
+    expect(textOf(r)).toContain('Message for Kris waits until this is live.')
+    expect(await live($)).toContain('- Message for Kris waits until #412 is live.')
+  }
+})
+
+// Dan, 2026-10-19: with no deploy step, merging is going live, so the message is shown at once.
+test('a project with no deploy step pins the message at once, and a "none" call naming who asked owes it (#1335)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, deploy: 'none', checked: undefined, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' })
+  expect(r.deny).toBeUndefined()
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+  expect(textOf(r)).not.toContain('waits until')
+  expect((r.context ?? []).join(' ')).not.toContain('is held')
+  expect((await card($, { ...CARD, pr: 413, deploy: 'none', checked: undefined, requester: { name: 'Kris', via: 'slack' } })).deny).toContain('message for Kris')
+})
+
+test('a message Dan already marked sent is not said to wait when a later card for the PR is not live (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  await card($, { ...CARD, ...ask })
+  await press($, 'is-it-live:sent-danwright32-slate-412')
+  const r = await card($, { ...CARD, ...ask, deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(textOf(r)).not.toContain('waits until')
+  expect((r.context ?? []).join(' ')).not.toContain('is held')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('a deploying card naming who asked, with no message yet, is made, and says a message for them waits (#1335)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, deploy: 'deploying', checked: undefined, requester: { name: 'Kris', via: 'slack' } })
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r).split('\n').at(-1)).toBe('Message for Kris waits until this is live.')
+  expect((r.context ?? []).join(' ')).toContain('with deploy "live" and the message')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
 test('a Copy the clipboard refuses says so, rather than seeming to work', withKit, async ($, on) => {
   const w = world(on, { copied: false })
   await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live now.' })
@@ -577,6 +641,24 @@ test('/live after a rename keeps the unsent message an older card under the othe
   await press($, 'is-it-live:sent-danwright32-old-slate-300')
   expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
   expect(await live($)).toBe('- Live: Newer (#300)')
+})
+
+// #1335 lessons review: whether the message is out is the PR's newest card's state, wherever the
+// message is kept, so /live's band and list agree.
+test('/live after a rename shows or holds an older card\'s message by the newest card\'s state (#1335)', withKit, async ($, on) => {
+  const old = (state: string) => ({ repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state, at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' })
+  const now = (state: string) => ({ repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state, at: T0 - 1000 })
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old('deploying')], 'cards:danwright32/slate': [now('live')] } })
+  expect(await live($)).toBe('- Live: Newer (#300)\n\nNot sent yet:\n- Message for Kris (#300): About 300.')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual(['About 300.'])
+})
+
+test('/live after a rename holds an older live card\'s message while the newest card for the PR is deploying (#1335)', withKit, async ($, on) => {
+  const old = { repo: 'danwright32/old-slate', pr: 300, title: 'Older', url: 'https://github.com/danwright32/old-slate/pull/300', state: 'live', at: T0 - 5000, requester: { name: 'Kris', via: 'named' }, message: 'About 300.' }
+  const now = { repo: 'danwright32/slate', pr: 300, title: 'Newer', url: 'https://github.com/danwright32/slate/pull/300', state: 'deploying', at: T0 - 1000 }
+  world(on, { remote: 'git@github.com:danwright32/old-slate.git', stored: { 'cards:danwright32/old-slate': [old], 'cards:danwright32/slate': [now] } })
+  expect(await live($)).toBe('- Merged, deploying: Newer (#300)\n\nNot sent yet:\n- Message for Kris waits until #300 is live.')
+  expect((await shown($)).filter(t => t.startsWith('About'))).toEqual([])
 })
 
 test("/live in a checkout whose origin still has the repo's old name lists the cards kept under the name GitHub gives it now", withKit, async ($, on) => {
