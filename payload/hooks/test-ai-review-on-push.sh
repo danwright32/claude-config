@@ -914,6 +914,120 @@ minor_line="$(printf '%s\n' "$wire_body" | grep 'never read')"
 check_not "an ordinary finding beside it is not marked" "IS in this push" "$minor_line"
 check "and the answer says how many findings were marked" "1 finding below" "$wire_body"
 
+# ===========================================================================
+# 11. The premise mark is for a claim about a WHOLE FILE, never a symbol or part inside one
+# (claude-config#1354). The mark of section 9 was set by any absence wording anywhere in a finding
+# plus any listed path anywhere in it, and every finding starts with its own path, which a review
+# of a push is almost always reading because the push changed it. So "`pickerVendors` was not
+# updated like the other call sites" was called false. Measured 2026-10-19 on the personal
+# MacBook: 11 distinct marked findings (10 in ~/.claude/state/ai-review, 1 more only in a session
+# transcript), and every mark was wrong. 10 matched only on the finding's own location; the 11th
+# named a file in the list but claimed a ROW in it was not updated. The two that do claim a whole
+# file was left out named files the push really had not changed, so they were true.
+#
+# Dan's decision (2026-10-19): a finding naming a symbol or part inside a listed changed file is
+# left unmarked, and only a finding claiming a whole file was left out of the push is marked.
+#
+# Each fixture keeps the sentence shape of a real marked finding, with its identifiers and paths
+# invented, since several came from other repositories (L155). The function is called directly,
+# because the end to end run of section 9 can carry one answer per push and these are many.
+# ===========================================================================
+RUNNER="$DIR/lib/ai-review-run.py"
+premise_out="$(python3 - "$RUNNER" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+S = " Should be: fix it. [severity: major]"
+# (name, finding, changed paths, should it be marked)
+cases = [
+    # Symbols and parts inside a listed file: the shapes of the real marked findings. None is marked.
+    ("a symbol not updated like its siblings",
+     "src/billing/ledger.ts:52: `vendorPicker` was not updated like the other call sites in src/billing/ledger.ts." + S,
+     ["src/billing/ledger.ts"], False),
+    ("a header comment not updated",
+     "src/app/orders/page.tsx:12: the header comment was not updated for #3641, so it still names the old route." + S,
+     ["src/app/orders/page.tsx"], False),
+    ("a block in a plan doc not updated for a fix in a listed file",
+     "docs/plans/2026-01-01-widget.md:300: Task 1's `readPrefs` block and its tests were not updated for the newest wins fix shipped in `src/lib/prefs/store.ts`. The plan still has `if (saved) return saved;`." + S,
+     ["docs/plans/2026-01-01-widget.md", "src/lib/prefs/store.ts"], False),
+    ("a test suite not updated to a reworded message, named by its basename",
+     "tools/entry-check.sh:116: The message no longer contains `INDEX.md`, but `test-entry-check.sh` still asserts it. That check now fails, and the suite was not updated to match the reworded message." + S,
+     ["tools/entry-check.sh", "tools/test-entry-check.sh"], False),
+    ("the text of a function not changed",
+     "lib/review-gate.sh:1131: The comments here say the refusal asks for a quoted answer. The refusal text in `do_check` was not changed. It still only says to comment." + S,
+     ["lib/review-gate.sh"], False),
+    ("a range of lines not changed since it was first raised",
+     "lib/night-queue.sh:206: When every goal fails to read, `goal` stays empty and the refusal blames a goal that was named. Lines 203 to 209 have not changed since this was first raised." + S,
+     ["lib/night-queue.sh"], False),
+    ("the same, in a TypeScript file",
+     "mods/night/driver.ts:394: `decideFailure` has no no goal check, though `decideStop` now stops a worker with no goal. Lines 391 to 397 have not changed since this was first raised." + S,
+     ["mods/night/driver.ts"], False),
+    ("not in the push SEGMENT, which is no absence claim at all",
+     "hooks/push-gate.sh:83: The delete exemption matches `-d` anywhere in the whole command, not in the push segment, so `rm -d dir && git push origin feat` skips the gate." + S,
+     ["hooks/push-gate.sh"], False),
+    ("a sentence in a listed doc not updated",
+     "mods/kit/types/index.d.ts:63: The rest of the docs were not updated for the new `tray` slot. `docs/mods-look.md` still states the settled order with no `tray`." + S,
+     ["mods/kit/types/index.d.ts", "docs/mods-look.md"], False),
+    ("a row in a listed table not updated",
+     "scripts/test-plan.sh:187: The suite opens `scripts/notify.sh` from a non comment line. The `notify.sh` row in `scripts/lib/roles.tsv` lists its callers and was not updated to include this suite." + S,
+     ["scripts/test-plan.sh", "scripts/lib/roles.tsv"], False),
+    ("an array in a listed test file not updated to include new cases",
+     "Tests/SignInTests/AuthManagerTests.swift:445: The `all` array in `noMessageNamesAnyApp` was not updated to include the new `.grantMissing` and `.scopesRefused(...)` cases, so their error text is never checked." + S,
+     ["Tests/SignInTests/AuthManagerTests.swift"], False),
+    ("a possessive: a part of the file, however the clause reads",
+     "src/a.ts:1: the diff contains no change to `src/config.ts`'s `retryLimit`, which the new caller needs." + S,
+     ["src/a.ts", "src/config.ts"], False),
+
+    # Whole file claims about a file the list names: these premises are false, so each is marked.
+    ("the original bidspoke shape: the diff holds no change to a listed file",
+     "src/wiring.ts:1: The tests expect deploy.yml to call the hash script, but the diff contains no change to `.github/workflows/deploy.yml` to add this wiring." + S,
+     ["src/wiring.ts", ".github/workflows/deploy.yml"], True),
+    ("a listed file said to be not changed, in parentheses",
+     "mods/night/bedtime.ts:154: `trayIn` and `trayMark` are new exports with no production caller in this branch (mods/night/register.ts is not changed)." + S,
+     ["mods/night/bedtime.ts", "mods/night/register.ts"], True),
+    ("a listed suite said to be not updated in this branch",
+     "skills/labels/labels-lib.sh:36: The failure message changed, and `skills/labels/test-ensure-labels.sh` was not updated in this branch." + S,
+     ["skills/labels/labels-lib.sh", "skills/labels/test-ensure-labels.sh"], True),
+    ("this push does not touch a listed file",
+     "src/a.ts:3: the new export is read in src/b.ts, but this push does not touch `src/b.ts`." + S,
+     ["src/a.ts", "src/b.ts"], True),
+    ("a listed file said to be not part of the diff",
+     "src/a.ts:3: `src/b.ts` is not part of the diff, so its caller still passes the old shape." + S,
+     ["src/a.ts", "src/b.ts"], True),
+    ("a listed file said to be missing from this push",
+     "src/a.ts:3: src/b.ts is missing from this push." + S,
+     ["src/a.ts", "src/b.ts"], True),
+
+    # The same whole file claims about a file the list does NOT name are true, so none is marked.
+    ("a file really not changed, in parentheses",
+     "mods/night/bedtime.ts:154: `trayIn` has no production caller in this branch (mods/night/register.ts is not changed)." + S,
+     ["mods/night/bedtime.ts"], False),
+    ("a suite really not updated in this branch",
+     "skills/labels/labels-lib.sh:36: `skills/labels/test-ensure-labels.sh` was not updated in this branch." + S,
+     ["skills/labels/labels-lib.sh"], False),
+]
+for name, finding, paths, want in cases:
+    text, n = m.mark_false_absences(finding, paths)
+    got = n == 1 and "premise is false" in text
+    if n not in (0, 1) or got != want:
+        print(f"FAIL\t{name}: expected {'marked' if want else 'unmarked'}, got {n} marks: {text}")
+    else:
+        print(f"PASS\t{name}")
+EOF
+)"
+premise_ran=0
+while IFS=$'\t' read -r verdict rest; do
+  case "$verdict" in
+    PASS) ok; premise_ran=$((premise_ran + 1)) ;;
+    FAIL) bad "premise mark: $rest"; premise_ran=$((premise_ran + 1)) ;;
+    *) [ -n "$verdict" ] && bad "premise mark fixture printed something unexpected: $verdict $rest" ;;
+  esac
+done <<< "$premise_out"
+# Counted, so a runner that crashed on import and printed nothing reads as a failure, never a pass.
+[ "$premise_ran" -eq 20 ] && ok || bad "the premise mark fixtures ran $premise_ran of 20 cases"
+
 echo
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

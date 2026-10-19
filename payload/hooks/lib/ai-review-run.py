@@ -110,14 +110,46 @@ def lessons_block(lessons_dir):
     return "===== LESSONS\n\n" + "\n\n".join(parts), ""
 
 
-# A finding that says a file was NOT changed (claude-config#533). The phrasings are the ones such a
-# claim takes, anchored on the diff or the push so an ordinary "does not change the return type" is
-# not caught; the path must also be one the complete list names, so a true absence is left alone.
-ABSENCE = re.compile(
-    r"(no changes? to|contains no change|not (?:been )?(?:changed|modified|updated|touched)|"
-    r"(?:absent|missing) from (?:the|this) (?:diff|push)|not in (?:the|this) (?:diff|push)|"
-    r"(?:diff|push) (?:does not|doesn't) (?:change|modify|touch|include))",
+# A finding that says a WHOLE FILE was not changed (claude-config#533, narrowed in #1354). The path
+# must sit in the clause itself, as its subject ("<path> is not changed", "<path> is not part of the
+# diff") or as the object of a change the diff or push is said not to hold ("no change to <path>",
+# "this push does not touch <path>"). An absence word anywhere in the finding plus a path anywhere
+# in it is not enough: every finding starts with its own path, and "`pickerVendors` was not updated"
+# or "Lines 203 to 209 have not changed" is about a symbol or part inside a changed file, which Dan
+# decided on 2026-10-19 is left unmarked. A possessive after the path ("<path>'s `retryLimit`") is
+# a part too. The path must also be one the complete list names, so a true absence is left alone.
+_ABSENT_VERB = r"(?:changed|modified|updated|touched|edited|included)"
+_CHANGE_SET = r"(?:diff|push|change|changeset|branch|pr|pull request|commit)"
+ABSENCE_AFTER_PATH = re.compile(
+    r"^`?(?: file)?\s+(?:"
+    r"(?:is|was|are|were|has|have)\s+(?:not|never)\s+(?:been\s+)?" + _ABSENT_VERB + r"|"
+    r"(?:is|was|stays|remains)\s+unchanged|"
+    r"(?:is|was)\s+(?:absent|missing)\s+from\s+(?:the|this)\s+" + _CHANGE_SET + r"|"
+    r"(?:is|was)\s+not\s+(?:in|part\s+of)\s+(?:the|this)\s+" + _CHANGE_SET + r"(?![\w-]|\s+(?:segment|command|step|string|text)\b))",
     re.IGNORECASE)
+ABSENCE_BEFORE_PATH = re.compile(
+    r"(?:no\s+(?:changes?|edits?|modifications?)\s+(?:at\s+all\s+)?to|"
+    r"\b" + _CHANGE_SET + r"s?\s+(?:does\s+not|doesn't|did\s+not|didn't|never)\s+"
+    r"(?:change|modify|touch|include|update|edit)s?)"
+    r"\s+(?:the\s+(?:file\s+)?)?`?$",
+    re.IGNORECASE)
+POSSESSIVE = re.compile(r"^`?['’]s\b")
+LOCATION = re.compile(r"^\S+:\d+: ")
+
+
+def claims_file_absent(body, path):
+    """True when `path` appears in `body` as the file a whole file absence clause is about."""
+    start = body.find(path)
+    while start != -1:
+        before, after = body[:start], body[start + len(path):]
+        bounded = (not before or not (before[-1].isalnum() or before[-1] in "/._-")) and \
+                  (not after or not (after[0].isalnum() or after[0] in "/_-" or
+                                     (after[0] == "." and after[1:2].isalnum())))
+        if bounded and not POSSESSIVE.match(after) and \
+                (ABSENCE_AFTER_PATH.match(after) or ABSENCE_BEFORE_PATH.search(before)):
+            return True
+        start = body.find(path, start + 1)
+    return False
 
 
 def changed_files(diff_path):
@@ -148,17 +180,19 @@ def changed_files(diff_path):
 def mark_false_absences(text, paths):
     """(text, count): each finding claiming a listed file was not changed gets a visible mark.
     Marked rather than deleted, because deleting would destroy the evidence the reviewer ignored
-    the list, which is the thing to know about it (L340)."""
+    the list, which is the thing to know about it (L340). Only the finding's text after its own
+    `<path>:<line>: ` location is read, since that location names where the reviewer was reading,
+    never a file it claims the push left out."""
     if not paths:
         return text, 0
     out, marked = [], 0
     for line in text.splitlines():
         hit = None
-        if ABSENCE.search(line):
-            for p in sorted(paths, key=len, reverse=True):
-                if p in line:
-                    hit = p
-                    break
+        body = LOCATION.sub("", line, count=1)
+        for p in sorted(paths, key=len, reverse=True):
+            if claims_file_absent(body, p):
+                hit = p
+                break
         if hit:
             line += (f" [review harness: {hit} IS in this push, per the complete list of changed files, "
                      "so this finding's premise is false]")
