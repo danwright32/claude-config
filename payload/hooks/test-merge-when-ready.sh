@@ -243,6 +243,10 @@ check "#851 the checks gate is asked about that exact merge command" "gh pr merg
 check "#851 and so is the lessons review gate" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/review-gate-payloads")"
 check "#851 the review is asked about the pull request's head, base and branch" "check --dir $REPO --sha $OLD --base-ref origin/main --branch feat/x" "$(cat "$ST/review-calls")"
 check "#1161 and is started naming the pull request, whose comments it reads" "start --dir $REPO --sha $OLD --base-ref origin/main --branch feat/x --pr 7" "$(cat "$ST/review-calls")"
+# A review that allows says what it found, once: since #1338 an allow can carry findings that repeat
+# ones already answered, shown as answered, and the helper is where the session reads them.
+check "#1338 the review's verdict is shown when it allows" "The lessons review finished with 0 findings." "$out"
+check_eq "#1338 once, however often it is asked" "1" "$(grep -c 'The lessons review finished with 0 findings.' <<<"$out")"
 
 # =================================================================================================
 # 3. Behind: updated, then the NEW head's checks and review are waited for, and that head merged.
