@@ -107,6 +107,130 @@ uses "$P"
 check "a copy inside node_modules, pulled in by something else, does not count" \
   "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC, said: $OUT")"
 
+# ---- 1b. source code that READS a SUPABASE env variable, or names a supabase.co host (#1352) ----
+# PET runs on Supabase but calls its REST API over plain https with the keys in CI secrets, so it
+# has no supabase folder, no @supabase dependency and no env file, and the detector said no. These
+# fixtures are shaped like it: a git checkout whose only evidence is the code that reads the keys.
+gitrepo(){ git -C "$1" init -q 2>/dev/null && git -C "$1" add -A 2>/dev/null; }
+
+P="$TMP/pet"; mkdir -p "$P/src"
+printf 'const url = process.env.SUPABASE_URL;\nconst key = process.env.SUPABASE_SECRET_KEY;\nexport async function fetchRows(t){ return fetch(url + "/rest/v1/" + t, { headers: { apikey: key } }) }\n' > "$P/src/fetchSupabase.js"
+printf '{"dependencies":{"node-fetch":"3.3.2"}}\n' > "$P/package.json"
+gitrepo "$P"
+uses "$P"
+check "a checkout whose code reads process.env.SUPABASE_URL uses Supabase (the PET shape)" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+check "and it names the file and that it reads an env variable" \
+  "$(grep -q 'src/fetchSupabase.js' <<< "$OUT" && grep -q 'reads a SUPABASE env variable' <<< "$OUT" && echo ok || echo "said: $OUT")"
+
+P="$TMP/workflow"; mkdir -p "$P/.github/workflows" "$P/scripts"
+printf 'on: push\njobs:\n  sync:\n    runs-on: ubuntu-latest\n    env:\n      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}\n    steps:\n      - run: node scripts/sync.js\n' > "$P/.github/workflows/sync.yml"
+printf 'console.log("sync")\n' > "$P/scripts/sync.js"
+gitrepo "$P"
+uses "$P"
+check "a workflow file passing secrets.SUPABASE_URL means it uses Supabase" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && grep -q 'sync.yml' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+P="$TMP/host"; mkdir -p "$P/app"
+printf 'BASE = "https://abcdefghijkl.supabase.co/rest/v1"\nKEY = "eyJnot-a-real-key"\n' > "$P/app/client.py"
+gitrepo "$P"
+uses "$P"
+check "code naming a project's supabase.co host means it uses Supabase" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && grep -q 'app/client.py names a supabase.co host' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+check "and the matching line is never printed, only the file" \
+  "$(grep -q -e 'abcdefghijkl' -e 'eyJ' <<< "$OUT" && echo "printed: $OUT" || echo ok)"
+
+# Negative controls: the word alone, in prose or a comment, or a link to supabase.com, is not use.
+P="$TMP/readme-only"; mkdir -p "$P/src"
+printf '# App\n\nWe looked at Supabase (https://supabase.com/docs, app.supabase.com) and chose not to use it.\n' > "$P/README.md"
+printf 'export const x = 1\n' > "$P/src/index.js"
+gitrepo "$P"
+uses "$P"
+check "a README that only mentions Supabase is still no (exit 1)" \
+  "$([ "$RC" -eq 1 ] && grep -q '^no' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+P="$TMP/comment-only"; mkdir -p "$P/src"
+printf '// TODO: maybe move this table to supabase later\nexport const SUPABASE_NOTE = "not used"\n' > "$P/src/index.ts"
+gitrepo "$P"
+uses "$P"
+check "a comment or a constant that only names supabase is still no (exit 1)" \
+  "$([ "$RC" -eq 1 ] && grep -q '^no' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+# Measured from Overture, a Swift app with no Supabase: its only match was a code snippet inside a
+# Markdown plan written for another project. Prose documents are not the project's code.
+P="$TMP/plan-doc"; mkdir -p "$P/docs/plans" "$P/Sources"
+printf '# Plan\n\n```ts\nconst db = createClient(\n  env.NEXT_PUBLIC_SUPABASE_URL,\n  env.SUPABASE_SERVICE_ROLE_KEY,\n)\n```\n' > "$P/docs/plans/2026-06-22-plan.md"
+printf 'notes: see https://abcdefghijkl.supabase.co\n' > "$P/docs/notes.txt"
+printf 'let x = 1\n' > "$P/Sources/App.swift"
+gitrepo "$P"
+uses "$P"
+check "an env read or host inside a Markdown or text document is still no (the Overture shape)" \
+  "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC, said: $OUT")"
+
+# A folder given with a trailing slash still names its evidence relative to the folder.
+uses "$TMP/env-only/"
+check "a folder given with a trailing slash names the file relative to it, not as a full path" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes: \.env\.local sets' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+# Vendored and build output, and lockfiles, are somebody else's code even when committed.
+P="$TMP/vendored-read"; mkdir -p "$P/dist" "$P/vendor/lib" "$P/node_modules/x" "$P/src"
+printf 'var u=process.env.SUPABASE_URL\n' > "$P/dist/bundle.js"
+printf 'u = os.environ["SUPABASE_URL"]\n' > "$P/vendor/lib/x.py"
+printf 'var u=process.env.SUPABASE_URL\n' > "$P/node_modules/x/index.js"
+printf 'resolved "https://abc.supabase.co/x.tgz"\n' > "$P/yarn.lock"
+printf 'export const x = 1\n' > "$P/src/index.js"
+gitrepo "$P"
+uses "$P"
+check "reads in committed dist, vendor or node_modules folders, or a lockfile, do not count" \
+  "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC, said: $OUT")"
+
+# Every common language form of reading an env variable. These folders are NOT git checkouts, so
+# they also exercise the bounded walk used when there is no git index to search.
+n=0
+while IFS='|' read -r file line; do
+  [ -n "$file" ] || continue
+  n=$((n + 1)); P="$TMP/form-$n"; mkdir -p "$(dirname "$P/$file")"
+  printf '%s\n' "$line" > "$P/$file"
+  uses "$P"
+  check "form $n ($file: $line) reads as yes outside a git checkout" \
+    "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && grep -q 'not a git checkout' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+done <<'FORMS'
+src/a.js|const u = process.env["NEXT_PUBLIC_SUPABASE_URL"]
+src/b.ts|const u = import.meta.env.VITE_SUPABASE_URL
+app/c.py|u = os.environ["SUPABASE_URL"]
+app/d.py|u = os.environ.get('SUPABASE_URL')
+app/e.py|u = os.getenv("SUPABASE_KEY")
+fn/f.ts|const u = Deno.env.get("SUPABASE_URL")
+lib/g.rb|u = ENV["SUPABASE_URL"]
+lib/h.rb|u = ENV.fetch("SUPABASE_URL")
+cmd/i.go|u := os.Getenv("SUPABASE_URL")
+src/j.rs|let u = std::env::var("SUPABASE_URL");
+bin/k.sh|curl "$SUPABASE_URL/rest/v1/rows"
+bin/l.sh|curl "${SUPABASE_URL}/rest/v1/rows"
+FORMS
+
+# A fresh checkout with nothing added yet has no index to search, so the walk covers it.
+P="$TMP/untracked"; mkdir -p "$P/src"; printf 'const u = process.env.SUPABASE_URL\n' > "$P/src/x.js"
+git -C "$P" init -q 2>/dev/null
+uses "$P"
+check "a git checkout with nothing tracked yet is walked instead, not read as no" \
+  "$([ "$RC" -eq 0 ] && grep -q '^yes' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+# The walk outside git is bounded by a file count; past it, finding nothing is could not tell.
+P="$TMP/too-many"; mkdir -p "$P/src"
+printf 'a\n' > "$P/src/1.js"; printf 'b\n' > "$P/src/2.js"; printf 'c\n' > "$P/src/3.js"; printf 'd\n' > "$P/src/4.js"
+OUT="$(PLAN_COUNCIL_SCAN_FILE_CAP=3 bash "$USES" "$P" 2>&1)"; RC=$?
+check "a walk that hit its file cap and found nothing is could not tell (exit 2), never no" \
+  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
+# A git search that fails is could not tell, never no (L11): a shim git refuses grep only.
+REALGIT="$(command -v git)"; mkdir -p "$TMP/shim"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = grep ] && { echo "fatal: simulated" >&2; exit 128; }; done\nexec "%s" "$@"\n' "$REALGIT" > "$TMP/shim/git"
+chmod +x "$TMP/shim/git"
+OUT="$(PATH="$TMP/shim:$PATH" bash "$USES" "$TMP/readme-only" 2>&1)"; RC=$?
+check "a git search that errors is could not tell (exit 2), never no" \
+  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
 uses "$TMP/no-such-project"
 check "a folder that is not there is could not tell (exit 2), never no" \
   "$([ "$RC" -eq 2 ] && echo ok || echo "exit $RC, said: $OUT")"
