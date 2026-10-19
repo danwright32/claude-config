@@ -699,7 +699,11 @@ onto main drew reviews that reopened settled points, once asking to reverse what
 had asked for, each costing a CI cycle. It is context and never a filter: whatever the new review
 returns is reported, and refuses as before unless it repeats a point already answered (below), so no
 new finding is let through for resembling an old one. The same pull request means a review labelled with the same branch, of a head this one
-descends from, so a reused branch name or a rewritten branch starts with no history. The history
+descends from, or (since claude-config#1340) of a head sharing a commit of the branch's own with
+this one, which is what an amended branch leaves: a commit the base does not hold. A reused branch
+name starts again from the base and a rebased branch keeps none of its own commits, so each starts
+with no history here (answers to a rebased branch are matched through the finding they quote,
+below). The history
 is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way first, saying so.
 
 An update from the base that changed nothing the review reads is not reviewed again
@@ -752,16 +756,48 @@ with write access, whose first line names the lessons review, written after that
 started, naming the file and line as `<file name>:<line>`. A review whose every finding is answered
 allows, listing each with the review that raised it first and the comment that answered it; one with
 new findings refuses with those, the answered ones listed apart after them. The pull request is read
-for this only when some finding meets the first four, so a review that repeats nothing costs no read,
-and it is read afresh at the check, since the answer to the last head is often written after this
-head's review began. When the match cannot be made (python3 missing, the pull request unreadable)
-every finding counts as new, saying why. The 0.35 was measured on 2026-10-19 over 657 pairs of
-findings stored reviews here raised on the same branch, file and lines: of 40 labelled by hand, every
-pair raising a different point scored 0.31 or less, and 13 of 22 repeats scored 0.35 or more, so a
-repeat the rule misses is shown as new, as before. Two cases it does not cover: a finding raised
-only on the other Mac (its text is not on this one), and an answer written on an earlier pull request
-of the same branch. The merge helper shows the review's verdict when it allows, once each time it
-changes, so answered findings are seen there too.
+afresh at the check, since the answer to the last head is often written after this head's review
+began. When the match cannot be made (python3 missing, the pull request unreadable) every finding
+counts as new, saying why. The 0.35 was measured on 2026-10-19 over 657 pairs of findings stored
+reviews here raised on the same branch, file and lines: of 40 labelled by hand, every pair raising a
+different point scored 0.31 or less, and 13 of 22 repeats scored 0.35 or more, so a repeat the rule
+misses is shown as new, as before. The merge helper shows the review's verdict when it allows, once
+each time it changes, so answered findings are seen there too.
+
+Three cases that rule could not see still showed an answered finding as new, and since
+claude-config#1340 each is matched as strictly:
+
+- **An amended branch.** The earlier head is no longer an ancestor, but it shares a commit of the
+  branch's own with this one, so it counts as the same pull request's history (above) and its
+  findings are matched by the rule above. Over the claude-config reviews on the personal MacBook,
+  50 repeats at unchanged lines had an earlier head that was not an ancestor (184 had one that was),
+  and 18 of the 50 share such a commit.
+- **A finding raised only on the other Mac, or before a rebase.** This Mac holds no earlier finding
+  it can match, so the answer itself carries it: the refusal asks for a comment beginning "Lessons
+  review at `<head>`" that quotes each finding it answers on a line of its own beginning `> `,
+  exactly as the refusal showed it. A quote is a finding line in the shape a review file holds, so
+  it is matched by the same conditions in place of a stored finding: the same file (its full path),
+  the lines it cites unchanged from the head named above the quote (a commit prefix of seven or
+  more that this checkout holds) to this one and carried to this finding's line within three,
+  largely the same claim (0.35; a quote the refusal cut, ending `...`, against this finding cut
+  alike), and a comment by somebody with write access whose first line names the lessons review.
+  A line not beginning `> ` is prose and is never matched, so an answer's own words are not taken
+  for a finding; an answer naming no head, or a head this checkout has never had, matches nothing.
+  Since an answer like that can come from either Mac, the pull request is read at the check for
+  every review with findings, once, not only when this Mac holds a candidate; no pull request yet
+  (a push before one is opened) says nothing.
+- **Answers on an earlier pull request this one replaces.** Bidspoke #2491 replaced #2482, closed
+  when the branch it was stacked on was deleted, and every round had been answered on #2482. A pull
+  request this one names as `#N`, in its description (not a fork's) or in a comment by somebody with
+  write access, has its "Lessons review" comments read too when it is in this repository, has the
+  same head branch, and is no longer open; at most three, read only while some finding is still
+  unanswered, and `Closes #N` and its kin are never followed, since they name issues. Its comments
+  then answer by either rule above, saying on which pull request. A pull request of another branch
+  name is not followed; one named that cannot be read is said.
+
+Two gaps remain, each still shown as new: an answer in the older form (naming `<file name>:<line>`
+without quoting the finding) to a branch since rebased, and a quote naming a head this checkout has
+never fetched, which is what a branch rebased on the other Mac leaves.
 
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
