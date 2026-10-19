@@ -1951,15 +1951,28 @@ export const skipOptions = (subjects: readonly DesignRoundSubject[]) => [
   { label: NOT_LOOK, description: 'Nothing on screen changes, so only this edit goes ahead, recorded as your word; the next one is asked about again' },
 ]
 
-// Dan typed an answer instead of choosing one (#1138): said to him and to Claude in mod-kit's one
-// wording ($.modkit.typedAnswer, #1145), given what stays as it was and how to ask again.
+// Dan typed an answer to the skip question instead of choosing one (#1138): said to him and to
+// Claude in mod-kit's one wording ($.modkit.typedAnswer, #1145), given what stays as it was and how
+// to ask again. A typed answer to the settled question is not that (#1336): see settledTypedSaid.
 /** The skip question's: the refused edit and the issue stay held, and the same question is asked again. */
 export const skipTyped = (files: readonly string[], subjects: readonly DesignRoundSubject[]) => ({
   still: `the edit to ${listed(files)} stays held, as do edits that change the look on ${named(subjects)}`,
   again: 'ask him the same question again, with the same metadata',
 })
-/** The settled question's: nothing is settled, and it is asked again. */
-export const settledTyped = () => ({ still: 'nothing is settled', again: `ask him "${SETTLED_QUESTION}" again, with the same metadata` })
+/** What Claude is told after Not yet, chosen or typed: nothing is recorded, and the rounds go on. */
+export const settledNotYet = 'nothing is recorded. Keep going with design rounds.'
+
+// A typed answer to the settled question counts as Not yet (#1336). It is nearly always feedback on
+// the design ("not yet, there is too much dead space in the boxes", Slate, 2026-10-19), and asking
+// the same question again at once handed it back to Dan before the feedback was acted on (Dan,
+// 2026-10-19: "a typed response should always count as not settled"). Only choosing Settled ever
+// settles, so nothing is recorded and no toast is shown, exactly as for a chosen Not yet; Claude
+// takes his words as the next round's feedback.
+/** What Claude is told when Dan types an answer to the settled question instead of choosing one. */
+export const settledTypedSaid = (typed: string): string =>
+  `Dan typed "${typed}" instead of choosing, which counts as ${SETTLED_NO}: ${settledNotYet} ` +
+  'Take what he typed as the feedback for the next design round and act on it, answering anything it asks; ' +
+  'ask him whether the design is settled only once he has seen that round.'
 
 /** Dan's Not a look change, kept with the refused call (#1010): what it let through, and why. */
 export const notLookWhy = (files: readonly string[]): string =>
