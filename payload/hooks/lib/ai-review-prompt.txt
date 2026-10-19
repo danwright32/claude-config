@@ -15,9 +15,10 @@ Act as a senior developer doing a thorough code review of the git diff on standa
 Ignore pure style and formatting nitpicks unless they cause a real bug.
 
 OUTPUT FORMAT, follow it exactly.
-CASE 1, you found at least one issue: output nothing but the list, one issue per line, each line in this shape:
+CASE 1, you found at least one issue: output nothing but the list, each issue as two lines in this shape:
 <path/to/file>:<line>: <what is wrong> (L<number>). Should be: <what it should be>. [severity: critical|major|minor]
-The file reference is mandatory. Use the path and the new line number as they appear in the diff. The (L<number>) is the recorded lesson the issue repeats: check every issue against the lessons and include it whenever one describes the same mistake, and leave it out only when none does.
+Quote: <the line of code the issue is about, copied exactly>
+The file reference is mandatory. Use the path and the new line number as they appear in the diff. The Quote line is mandatory too: copy the one line that carries the problem, character for character, from the diff or the full file as it is at the pushed revision, without the diff's leading + or space: never a blank line or a lone brace beside it, and never a paraphrase. The issue is placed by that line, so a line number that is off is corrected, and a quote that is not in the file is reported as such. The (L<number>) is the recorded lesson the issue repeats: check every issue against the lessons and include it whenever one describes the same mistake, and leave it out only when none does.
 CASE 2, no issues: output exactly this line and nothing else:
 No issues found.
 Never describe correct code, never summarize, never praise, no introductions or conclusions.

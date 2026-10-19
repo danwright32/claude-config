@@ -103,7 +103,10 @@ def findings_of(path):
 
 
 def words(claim):
-    """The words a claim is compared by: its own, before the fix it asks for, without its severity."""
+    """The words a claim is compared by: its own, before the fix it asks for, without its severity
+    and without any mark the review runner put on it, which says how the runner read the finding and
+    is the same words on findings about different things (claude-config#1357)."""
+    claim = claim.split(' [review harness:')[0]
     claim = re.sub(r'\[severity:[^\]]*\]', '', claim).split('Should be:')[0]
     return {w for w in re.findall(r'[a-z0-9_]+', claim.lower()) if len(w) > 2 and w not in STOP}
 

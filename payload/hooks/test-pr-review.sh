@@ -1334,7 +1334,11 @@ HF1='App/Hist.swift:2: the second line is wrong (L11). Should be: fixed. [severi
 HF2='App/Hist.swift:90: the ninetieth line is wrong (L12). Should be: fixed. [severity: minor]'
 HF3='Docs/notes.md:3: the third note is unclear (L21). Should be: clearer. [severity: minor]'
 HF4='README.md:1: the heading is wrong (L22). Should be: right. [severity: minor]'
-FAKE_CLAUDE_OUT="$HF1"$'\n'"$HF2"$'\n'"$HF3"$'\n'"$HF4" prr start --dir "$REPO" --sha "$H_A" --base-ref main --branch feat/hist >/dev/null
+# Each with the line it means quoted under it, as the prompt asks since #1357, so each is placed at
+# the line it cites and stored as written.
+HQ='carrying enough text to give each file some weight'
+FAKE_CLAUDE_OUT="$HF1"$'\n'"Quote: hist line 2 $HQ"$'\n'"$HF2"$'\n'"Quote: hist line 90 $HQ"$'\n'"$HF3"$'\n'"Quote: note 3 $HQ too"$'\n'"$HF4"$'\n'"Quote: # fixture" \
+  prr start --dir "$REPO" --sha "$H_A" --base-ref main --branch feat/hist >/dev/null
 wait_final "$H_A" || bad "#1063 the review of the first head finished"
 check_not "#1063 the first review of a pull request has no earlier reviews to be given" "EARLIER REVIEWS" "$(cat "$FAKE_LOG/stdin")"
 # Answered: one point fixed in a commit, one declined in words, and main moved on README.md, then
@@ -2095,6 +2099,92 @@ pr_json 95 OPEN feat/replaced "Adds rp. Closes #5."
 out="$(rw_check "$RP_B" feat/replaced 95)"
 check_not "#1340 an earlier pull request this one does not name answers nothing" "not counted" "$out"
 runners_done || bad "#1340 a runner was still going at the end"
+G checkout -q feat/sync
+
+# ===========================================================================================
+# 18. Findings are placed by the line they quote, and everything keyed on file and line reads the
+#     placed line (#1357). In 44 of 60 judged findings the reviewer cited the wrong line, so two
+#     reviews raising the same point at the same code cited lines too far apart for the answered
+#     match (#1338, three lines either side) or the earlier review history to see one point. Each
+#     review here cites a different wrong line and quotes the same real one; placed, they agree.
+#     The control without the quote is the same answer left where it was cited, and stays new.
+#     Content invented.
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/placed main
+seq 1 40 | sed 's/^/place line /' > "$REPO/App/Place.swift"
+G add App/Place.swift
+G commit -q -m "add place"
+PL_A="$(G rev-parse HEAD)"
+pl_json(){ # pl_json [<when>|<body>]: the open pull request of feat/placed, with that owner comment
+  python3 - "$@" > "$FAKE_LOG/pr-view.json" <<'PY'
+import json, sys
+comments = []
+for c in sys.argv[1:]:
+    when, body = c.split("|", 1)
+    comments.append({"author": {"login": "danwright32"}, "authorAssociation": "OWNER", "createdAt": when, "body": body})
+print(json.dumps({"number": 77, "state": "OPEN", "headRefName": "feat/placed", "baseRefName": "main",
+  "headRefOid": "", "isCrossRepository": False, "body": "Adds the place file.", "comments": comments}))
+PY
+}
+pl_start(){ # pl_start <head> <answer>
+  FAKE_CLAUDE_OUT="$2" prr start --dir "$REPO" --sha "$1" --base-ref main --branch feat/placed --pr 77 >/dev/null
+  wait_final "$1" || bad "#1357 the review of ${1:0:7} finished"
+}
+meta_of_final(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$(final_of "$1")"; }
+pl_check(){ prr check --dir "$REPO" --sha "$1" --base-ref main --branch feat/placed --pr 77; }
+PF='App/Place.swift:5: syncNow swallows the network error and returns an empty list, so a failed fetch reads as no events (L10). Should be: throw the error to the caller. [severity: major]'
+PF2='App/Place.swift:31: syncNow still swallows the network error and returns an empty list, so a failed fetch looks like no events at all (L10). Should be: rethrow it. [severity: major]'
+pl_json
+pl_start "$PL_A" "$PF"$'\n''Quote: place line 20'
+out="$(pl_check "$PL_A")"; rc=$?
+check_eq "#1357 a placed finding refuses like any other" "1" "$rc"
+check "#1357 the finding is shown at the line it quoted" "App/Place.swift:20: syncNow swallows" "$out"
+check_not "#1357 not at the line it cited" "App/Place.swift:5:" "$out"
+check_not "#1357 and its Quote line is not shown" "Quote:" "$out"
+check_eq "#1357 counted once" "1" "$(meta_of_final "$PL_A" findings)"
+G commit -q --allow-empty -m "next head"
+PL_B="$(G rev-parse HEAD)"
+pl_json "2099-01-01T10:00:00Z|Lessons review (head ${PL_A:0:7}):
+
+1. Place.swift:20: not a defect. The caller reports the error."
+pl_start "$PL_B" "$PF2"$'\n''Quote: place line 20'
+hist="$(awk '/EARLIER REVIEWS OF THIS PULL REQUEST/ { on = 1 } on && !done { print } /END OF EARLIER REVIEWS/ { done = on }' "$FAKE_LOG/stdin")"
+check "#1357 the next review's history gives the earlier finding at its placed line" "App/Place.swift:20: syncNow swallows" "$hist"
+check "#1357 judged at the placed lines" "lines 17 to 23 of App/Place.swift are unchanged" "$hist"
+out="$(pl_check "$PL_B")"; rc=$?
+check_eq "#1357 the same point cited at another wrong line but quoting the same code is answered" "0" "$rc"
+check "#1357 saying so" "so none is new" "$out"
+# The control (L1): the same answer without its quote stays at the line it cited, and is new.
+G commit -q --allow-empty -m "third head"
+PL_C="$(G rev-parse HEAD)"
+pl_start "$PL_C" "$PF2"
+out="$(pl_check "$PL_C")"; rc=$?
+check_eq "#1357 without the quote the same answer is not matched, so the placement is what matched it" "1" "$rc"
+check "#1357 and it says it was not placed" "quoted no line" "$out"
+# An approximate number is a finding (seen 2026-10-19 on a branch whose only finding was "~253").
+G commit -q --allow-empty -m "fourth head"
+PL_D="$(G rev-parse HEAD)"
+pl_start "$PL_D" 'App/Place.swift:~12: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
+check_eq "#1357 a review whose only finding has an approximate number is a review" "ok" "$(meta_of_final "$PL_D" status)"
+check_eq "#1357 with that finding counted" "1" "$(meta_of_final "$PL_D" findings)"
+out="$(pl_check "$PL_D")"; rc=$?
+check_eq "#1357 and it refuses like any finding" "1" "$rc"
+check "#1357 shown at the plain number" "App/Place.swift:12: the timeout constant" "$out"
+# The answered match compares claims, never the mark the runner puts on a finding it could not
+# place: two different points carrying the same mark are not one point.
+sim="$(python3 - "$DIR/lib/review-answered.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("review_answered", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+mark = " [review harness: not placed, it quoted no line, so line 4 is the reviewer's own number, unchecked]"
+print(m.similarity("the cache key ignores the locale" + mark, "retries never back off between attempts" + mark))
+PY
+)"
+python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.35 else 1)" "${sim:-1}" && ok \
+  || bad "#1357 two different claims carrying the same harness mark read as one point (similarity $sim)"
+runners_done || bad "#1357 a runner was still going at the end"
 G checkout -q feat/sync
 
 echo

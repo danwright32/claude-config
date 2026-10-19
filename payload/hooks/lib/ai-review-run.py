@@ -43,6 +43,12 @@ command, and the whole process group is killed on expiry so a stuck child cannot
 The finished file's first lines are `name=value` metadata (repo, branch, sha, started, finished,
 status, model), then a blank line, then the review. The nudge reads only that shape.
 
+PLACED BY QUOTE (claude-config#1357). The reviewer writes a `Quote:` line under each finding, the
+line of code it means, and the runner moves the finding to the line of the file at the reviewed
+head that matches it, then drops the Quote line, so the stored review is one line per finding in
+the `<path>:<line>: ` shape every reader parses. A finding it cannot place keeps its number, marked
+as unchecked (place_findings below).
+
 TWO KINDS, one reviewer (claude-config#560). `--kind push` (the default) is the advisory review of
 one push. `--kind pr` is the lessons review of a WHOLE branch that lib/pr-review.sh starts when a
 pull request is opened, and that the merge gate waits for. A pr review also records `kind`, `base`
@@ -138,7 +144,12 @@ ABSENCE_BEFORE_PATH = re.compile(
     r"\s+(?:the\s+(?:file\s+)?)?`?$",
     re.IGNORECASE)
 POSSESSIVE = re.compile(r"^`?['’]s\b")
-LOCATION = re.compile(r"^\S+:\d+: ")
+# A finding's own location, `<path>:<line>: `, or `<path>:~<line>: ` when the reviewer marks its
+# number as approximate (seen 2026-10-19, refused as unparsed though the finding was real). The one
+# pattern every reading of a finding here uses; place_findings writes the number back plain, so what
+# is stored, and every reader after this runner, sees only `<path>:<line>: ` (claude-config#1357).
+FINDING = re.compile(r"^(\S+):(~?)([0-9]+): ")
+LOCATION = FINDING
 
 
 def claims_file_absent(body, path):
@@ -205,13 +216,115 @@ def mark_false_absences(text, paths):
     return "\n".join(out), marked
 
 
-FINDING = re.compile(r"^\S+:\d+: ")
 LESSON = re.compile(r"\(L([0-9]{1,4})\)")
 
 
 def count_findings(text):
     """The number of lines in the review's own finding shape, `<path>:<line>: ...`."""
     return sum(1 for line in text.splitlines() if FINDING.match(line))
+
+
+# PLACEMENT BY QUOTED LINE (claude-config#1357). In a hand judged sample of 60 lessons review
+# findings on 2026-10-19, 44 cited the wrong line, usually a blank line, a lone brace or a neighbour
+# within about 20 lines of the real one, and everything keyed on file and line (the earlier review
+# history and the answered findings match in pr-review.sh) was misled by it. So the prompt asks for
+# the line itself on a `Quote: <the line>` line under each finding, and this places the finding at
+# the line of the file AT THE REVIEWED HEAD that matches it: compared with surrounding white space
+# trimmed and runs of it collapsed, nothing more, and the occurrence nearest the cited number when
+# the line is there more than once. The Quote line is then dropped, so a stored review stays one
+# line per finding for every reader. A finding that cannot be placed keeps the number it cited and
+# says why on its own line, so a guess never reads as a checked line (L11); it is never dropped.
+QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
+
+
+def _normal(s):
+    return " ".join(s.split())
+
+
+def _quoted(raw):
+    q = raw.strip()
+    if len(q) >= 2 and q[0] == "`" and q[-1] == "`":
+        q = q[1:-1]
+    return _normal(q)
+
+
+def _head_lines(repo_dir, sha, path, cache):
+    """The file's lines at the head, None when it is not a file there, or raises OSError when the
+    head itself cannot be read."""
+    if "" not in cache:
+        r = subprocess.run(["git", "-C", repo_dir, "cat-file", "-e", f"{sha}^{{commit}}"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
+        cache[""] = r.returncode == 0
+    if not cache[""]:
+        raise OSError("head unreadable")
+    if path not in cache:
+        r = subprocess.run(["git", "-C", repo_dir, "cat-file", "blob", f"{sha}:{path}"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30, check=False)
+        if r.returncode != 0:
+            cache[path] = None
+        else:
+            # Split on newlines only, as git and the reviewer count them; str.splitlines would also
+            # split on form feeds and Unicode separators and shift every line after one.
+            body = r.stdout.decode("utf-8", errors="replace")
+            if body.endswith("\n"):
+                body = body[:-1]
+            cache[path] = [line.rstrip("\r") for line in body.split("\n")]
+    return cache[path]
+
+
+def _place(path, cited, quote, repo_dir, sha, cache):
+    """(line, None) for a placed finding, or (None, why) for one that cannot be placed."""
+    if quote is None:
+        return None, "it quoted no line"
+    if not quote:
+        return None, "its Quote line was empty"
+    try:
+        lines = _head_lines(repo_dir, sha, path, cache)
+    except (OSError, subprocess.SubprocessError):
+        return None, "the reviewed head could not be read to check it"
+    if lines is None:
+        return None, f"{path} is not a file at the reviewed head"
+    hits = [n for n, line in enumerate(lines, 1) if _normal(line) == quote]
+    if not hits:
+        shown = quote if len(quote) <= 60 else quote[:60] + "..."
+        return None, f'its quote matches no line of {path} at the reviewed head: "{shown}"'
+    return min(hits, key=lambda n: (abs(n - cited), n)), None
+
+
+def place_findings(text, repo_dir, sha):
+    """(text, counts): each finding moved to the line its Quote names, its Quote line dropped, and
+    every approximate `~N` written as a plain number. counts holds how many were placed and not."""
+    lines = text.splitlines()
+    out, counts, cache = [], {"placed": 0, "unplaced": 0}, {}
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = FINDING.match(line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+        # The finding's quote is the next line that is not blank, when it is a Quote line.
+        k = i + 1
+        while k < len(lines) and not lines[k].strip():
+            k += 1
+        quote = None
+        if k < len(lines):
+            q = QUOTE_LINE.match(lines[k])
+            if q:
+                quote = _quoted(q.group(1))
+                i = k
+        path, cited, rest = m.group(1), int(m.group(3)), line[m.end():]
+        placed, why = _place(path, cited, quote, repo_dir, sha, cache)
+        if why is None:
+            counts["placed"] += 1
+            out.append(f"{path}:{placed}: {rest}")
+        else:
+            counts["unplaced"] += 1
+            out.append(f"{path}:{cited}: {rest} [review harness: not placed, {why}, so line {cited} "
+                       "is the reviewer's own number, unchecked]")
+        i += 1
+    return "\n".join(out), counts
 
 
 def append_ledger(state_dir, meta, text):
@@ -367,6 +480,8 @@ def main(argv):
                         "\"No issues found.\", so this is not a review. What it said:\n" + redact(text))
             else:
                 status = "ok"
+                # Placed first, so every later reading of a finding sees the line it is about.
+                text, _ = place_findings(text, a.repo_dir, a.sha)
                 text, marked = mark_false_absences(text, changed_files(a.diff_file))
                 if marked:
                     text = (f"Note: {marked} finding below claims a file this push changed was not changed; "
