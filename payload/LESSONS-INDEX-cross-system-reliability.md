@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L787. A sync skipping records you wrote elsewhere must still compare them to your copy, or a person editing them there drifts the two silently.
 - L778. Rarely retried permanent failures jump to the front of a least recently attempted queue; drop work that can never succeed instead of backing it off.
 - L777. A repair a request triggers must finish before its response when the client's next read depends on it, or that read sees unrepaired state.
 - L774. When unrelated dependencies all slow at once, split latency by the hosting location before blaming one; a bad location looks like all of them failing.
