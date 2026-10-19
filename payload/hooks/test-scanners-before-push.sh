@@ -374,8 +374,8 @@ o36="$(H="$FAKEHOOKS/scanners-before-push.sh" SCANNERS_STATE_DIR="$UNREAD_STATE"
   && check "#1146 and no pass is remembered while the uncommitted files went unread" ok \
   || check "#1146 and no pass is remembered while the uncommitted files went unread" "it wrote: $(cat "$UNREAD_STATE"/* 2>/dev/null)"
 
-# A scanner that fails with no FAIL line and no SUITE-UNMEASURED line is a failure, and its detail is
-# the end of what it printed, never an empty one: the block over #642 had nothing under the name.
+# A scanner that fails with no FAIL line and neither unmeasured line (SUITE-UNMEASURED, or
+# SUITE-DEADLINE-UNMEASURED since #1333) is a failure, and its detail is the end of what it printed, never an empty one: the block over #642 had nothing under the name.
 R35="$(mkrepo nofailline)"
 printf '#!/usr/bin/env bash\ngit ls-files >/dev/null\necho "kappa broke: tar: x: Cannot stat" >&2\nexit 1\n' > "$R35/payload/hooks/test-kappa.sh"
 commit_all "$R35"
