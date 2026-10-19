@@ -52,6 +52,40 @@ export const startedJob = (resultText: string, call: { inBackground: boolean; ta
   return undefined
 }
 
+// #1326: background work a call starts that is no Bash job, by the task id Claude Code lists it under
+// in a stop's background_tasks: a Monitor's task, and an agent run in the background, whose task id
+// is its agent id. The shapes are the 2.1.302 build's, read from real transcripts (2026-10-19): a
+// Monitor's result carries taskId and opens "Monitor started (task X, ...", and an agent run in the
+// background answers isAsync with its agentId. A Monitor is read from its words when the result
+// carries no task field; an agent is read from its result alone.
+const MONITOR_STARTED = /^Monitor started \(task ([^\s,)]+)/
+export const startedTask = (tool: string, result: unknown, text: string): string | undefined => {
+  const r = typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {}
+  if (tool === 'Monitor') return typeof r.taskId === 'string' && r.taskId ? r.taskId : MONITOR_STARTED.exec(text.trimStart())?.[1]
+  if (tool === 'Agent' && r.isAsync === true && typeof r.agentId === 'string' && r.agentId) return r.agentId
+  return undefined
+}
+
+// One entry of the background work Claude Code sends with a stop (background_tasks): the whole
+// session's work in flight, whoever started it. Undefined when the list is missing or is not a list,
+// so a caller can tell an unreadable list from an empty one (L10); an entry naming no task is passed over.
+export type InFlight = { id: string; what: string }
+export const inFlight = (raw: unknown): InFlight[] | undefined => {
+  if (!Array.isArray(raw)) return undefined
+  return raw.flatMap(t => {
+    const e = typeof t === 'object' && t !== null ? (t as Record<string, unknown>) : {}
+    if (typeof e.id !== 'string' || !e.id) return []
+    const what = typeof e.command === 'string' && e.command ? e.command : typeof e.description === 'string' ? e.description : ''
+    return [{ id: e.id, what: shortCommand(what || e.id) }]
+  })
+}
+
+// What a subagent is told when its stop is refused for the work it still holds (#1326).
+export const holdRefusal = (held: InFlight[]): string =>
+  `You still hold background work you started: ${held.map(t => `${t.id} (${t.what})`).join(', ')}. ` +
+  'A dispatched agent never ends its turn to wait on its own background work, since nothing reads its report until it hands back. ' +
+  'Either wait for it in the foreground (a Bash call that waits on it, not run in the background), finish what it was for, or stop it with TaskStop; then hand back your report, or finish the merge yourself.'
+
 // The jobs a notice from Claude Code reports on, by id: "<task-id>X</task-id>" (seen in a session on
 // 2026-10-04). Only ever a prompt to look again; the watcher drops a job on its own evidence.
 export const notifiedTasks = (text: string): string[] => [...text.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)].map(m => m[1] as string)
