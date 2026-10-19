@@ -7414,6 +7414,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (sonar#85, 2026-09-28: the questions, the running test and a finished result all sat at the site
   root; only a result opened from a shared link had its own address.)
 
+- **L786. A control whose accessible name is set separately from its visible text must have a name
+  that contains those visible words, because voice control users activate it by saying what they
+  see; write the extra context after the visible words, never in place of them.**
+  (bidspoke#2477, 2026-10-19)
+  SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
+
 ## External systems
 - **L775. After changing something through another service's management API, check the change by
   reading again on a short timer until a deadline, never with one immediate read, because those
