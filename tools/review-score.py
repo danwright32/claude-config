@@ -599,9 +599,18 @@ def cmd_run(args):
         json.dump(run, f, indent=2)
     print(f"Results: {path}")
     code = report(run, cases, args.window, results_dir, unmeasured)
-    if args.save_baseline and code != EXIT_UNMEASURED:
-        shutil.copyfile(path, os.path.join(results_dir, "baseline.json"))
-        print(f"Saved as the baseline in {results_dir}.")
+    # Only a run that is not worse replaces the baseline: saving a regressed one would make the
+    # next comparison measure against it and the regression would vanish (L5). Accepting a worse
+    # run on purpose is the baseline command, named in the refusal.
+    if args.save_baseline:
+        if code in (EXIT_OK, EXIT_NO_BASELINE):
+            shutil.copyfile(path, os.path.join(results_dir, "baseline.json"))
+            print(f"Saved as the baseline in {results_dir}.")
+        elif code == EXIT_WORSE:
+            print(f"This run is worse than the baseline, so it was not saved as the baseline. To accept "
+                  f"it anyway: review-score.py baseline {path} --results-dir {results_dir}")
+        else:
+            print("Nothing was measured, so it was not saved as the baseline.")
     return code
 
 

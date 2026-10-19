@@ -172,6 +172,11 @@ check "a catch only regression leaves the wrong rate where it was" "wrong findin
 check "a run that catches less is a regression" "REGRESSION" "$out"
 check "the regression names the rate that fell" "catch rate fell from 60% to 40%" "$out"
 check_rc "a regression exits 1" 1 "$rc"
+base_before="$(cat "$RESULTS/baseline.json")"
+out="$(score run --all --save-baseline --cases "$CASES" --results-dir "$RESULTS")"; rc=$?
+check "a regressed run is refused as the baseline" "not saved as the baseline" "$out"
+[ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --save-baseline must not overwrite the baseline with a run that is worse"; }
+check_rc "a refused save still exits as the regression it is" 1 "$rc"
 answer retry "report/send.sh" "$RETRY_GOOD"
 answer paginate "shop/paginate.py" "$PAGINATE_GOOD
 shop/paginate.py:14: size of zero is not checked here either. Should be: check it. [severity: minor]"
