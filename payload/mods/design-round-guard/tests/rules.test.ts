@@ -50,6 +50,8 @@ import {
   checked,
   unsure,
   unreadable,
+  commentOnlyChange,
+  shellUnread,
 } from '../hooks/rules.ts'
 
 // The design round guard's rules (claude-config#978), each on its own: which files change how a
@@ -965,6 +967,104 @@ test('#1296: which call a card attaches to, what a value is only tested for, and
   // Only the keys named for that are left out: any other key's value is followed (lessons review).
   const keyed = ["const KIND = 'steps'", 'export const show = async ($: Engine) => {', '  const k = KIND', "  await $.modkit.bandRow({ mod: 'demo', id: 'x', slot: 's', key: k, lines: [] })", '}', ''].join('\n')
   expect(drawsChange([{ name: 'b.ts', text: keyed }], 'b.ts', keyed, keyed.replace("'steps'", "'rows'"))).toBe(true)
+})
+
+// #1341: a change that only touches comments in a mod hook file changes nothing it draws, so it is
+// never asked about; anything that only looks like a comment (a string, JSX text) still counts.
+const COMMENTED = [
+  "import type { Register } from 'claude-code'",
+  '',
+  '// A mod hook file is judged as a screen file, and screen file edits are',
+  '// judged by their before and after text,',
+  '// so a comment changes nothing.',
+  'export const register: Register = on => {',
+  "  on('session.start', async ($, e, next) => {",
+  "    const note = 'Held. // not a comment'",
+  '    /* why the card says so */',
+  "    await $.modkit.blocked({ toolUseId: 'x', guard: 'G', reason: note, safeWay: `Ask // Dan` })",
+  '    return next(e) // hand on',
+  '  })',
+  '}',
+  '',
+].join('\n')
+
+test('#1341: a change to comments alone is comment only, reflowed, added, removed or rewritten, in .ts', () => {
+  const swap = (from: string, to: string) => {
+    if (!COMMENTED.includes(from)) throw new Error(`the fixture holds no ${from}`)
+    return COMMENTED.replace(from, to)
+  }
+  const only = (after: string) => commentOnlyChange(COMMENTED, after, false)
+  // The reflow of #1341: three lines of comment made two, the words the same.
+  expect(only(swap('// A mod hook file is judged as a screen file, and screen file edits are\n// judged by their before and after text,\n// so a comment changes nothing.', '// A mod hook file is judged as a screen file, and screen file edits are judged\n// by their before and after text, so a comment changes nothing.'))).toBe(true)
+  expect(only(swap('/* why the card says so */', '/* why the card says so, in plain words */'))).toBe(true)
+  expect(only(swap('// hand on', '// hand on to the next hook'))).toBe(true)
+  expect(only(swap(' // hand on', ''))).toBe(true)
+  expect(only(swap('    /* why the card says so */\n', ''))).toBe(true)
+  expect(only(swap('export const register', '// One hook.\nexport const register'))).toBe(true)
+  expect(only(`// A header.\n${COMMENTED}`)).toBe(true)
+  // Nothing changed is no change at all.
+  expect(only(COMMENTED)).toBe(false)
+  // A comment beside a change that is not one.
+  expect(only(swap('// hand on', '// hand on').replace("guard: 'G'", "guard: 'H'"))).toBe(false)
+  expect(only(swap('/* why the card says so */', '/* why */').replace('return next(e)', 'return next(e) ?? 1'))).toBe(false)
+  // Inside a string or a template literal it only looks like a comment, and is what is shown.
+  expect(only(swap('// not a comment', '// not a comment at all'))).toBe(false)
+  expect(only(swap('Ask // Dan', 'Ask // Dan first'))).toBe(false)
+  // A comment made code, or code made a comment.
+  expect(only(swap('/* why the card says so */', 'note.trim()'))).toBe(false)
+  expect(only(swap('    return next(e) // hand on', '    // return next(e)'))).toBe(false)
+  // A line break taken away where the language reads one (return, then a value on the next line).
+  expect(commentOnlyChange('const f = () => {\n  return // nothing\n  1\n}\n', 'const f = () => {\n  return 1\n}\n', false)).toBe(false)
+  // Where a template literal's own lines move, what it holds changes.
+  expect(commentOnlyChange('const s = `a\n  b` // c\n', 'const s = `a\nb` // c, said again\n', false)).toBe(false)
+  // A pragma in a comment changes how the JSX is built.
+  expect(commentOnlyChange('/* @jsxImportSource preact */\nconst a = 1\n', '/* @jsxImportSource react */\nconst a = 1\n', true)).toBe(false)
+  // Text the reader cannot follow is never comment only.
+  expect(commentOnlyChange('/* open\nconst a = 1\n', '/* opened\nconst a = 1\n', false)).toBe(false)
+})
+
+test('#1341: in TSX, a JSX comment is a comment, and JSX text or a quoted prop spelled like one is not', () => {
+  const tsx = [
+    'export const View = () => (',
+    '  <Box flexDirection="column">',
+    '    {/* the heading */}',
+    '    <Text bold>Steps // to do</Text>',
+    '    <Text title="// note">Hello world</Text>',
+    '  </Box>',
+    ')',
+    '',
+  ].join('\n')
+  const only = (from: string, to: string) => {
+    if (!tsx.includes(from)) throw new Error(`the fixture holds no ${from}`)
+    return commentOnlyChange(tsx, tsx.replace(from, to), true)
+  }
+  expect(only('{/* the heading */}', '{/* the heading, bold */}')).toBe(true)
+  // A JSX comment on a line of its own, added or taken away.
+  expect(only('    {/* the heading */}\n', '')).toBe(true)
+  expect(only('    <Text bold>', '    {/* each step */}\n    <Text bold>')).toBe(true)
+  // A JSX comment beside a look change.
+  expect(only('{/* the heading */}\n    <Text bold>', '{/* the heading */}\n    <Text>')).toBe(false)
+  // JSX text and a quoted prop that read like comments are what the screen shows.
+  expect(only('Steps // to do', 'Steps // to do now')).toBe(false)
+  expect(only('title="// note"', 'title="// notes"')).toBe(false)
+  // A JSX comment put inside a line of text, between two spaces, leaves two spaces on screen.
+  expect(only('Hello world', 'Hello {/* who */} world')).toBe(false)
+  // One on a line of its own between two lines of text takes away the space the line break read as:
+  // "Hello world" becomes "Helloworld". Its words may still change where it already stands.
+  const text = 'const v = (\n  <Text>\n    Hello\n    world\n  </Text>\n)\n'
+  const noted = text.replace('Hello\n', 'Hello\n    {/* who */}\n')
+  expect(commentOnlyChange(text, noted, true)).toBe(false)
+  expect(commentOnlyChange(noted, text, true)).toBe(false)
+  expect(commentOnlyChange(noted, noted.replace('who', 'whom'), true)).toBe(true)
+})
+
+test('#1341: a shell write the guard cannot read before it runs says a comment only change goes through with the Edit tool', () => {
+  const said = shellUnread('payload/mods/demo/hooks/card.ts')
+  expect(said).toContain('payload/mods/demo/hooks/card.ts')
+  expect(said).toContain('shell command')
+  expect(said).toContain('Edit tool')
+  expect(said).toContain('only comments')
+  expect(DASHES.test(said)).toBe(false)
 })
 
 // #1322: an answer under an issue counts only from the fixed branch reading on; one under a branch or

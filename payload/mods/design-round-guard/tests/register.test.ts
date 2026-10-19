@@ -1520,6 +1520,67 @@ test("#1275: a shell write to a line builder file is asked about, to one that dr
   expect(w.ran.length).toBe(3)
 })
 
+// #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
+// look change. A change to comments alone draws nothing, by any tool the guard can read before it runs.
+test('#1341: an edit to comments alone in a mod hook file passes unasked by Edit, MultiEdit or Write; beside a look change, or in what only looks like a comment, it is asked', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, '/w/slate/app/page.tsx': MOD_TEXT } })
+  // A comment inside a line builder in a mod's .ts hook file, among what it draws (register.tsx draws
+  // its lines here, until MOD_TEXT takes that file's place below).
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: LINES, old_string: '    lines.push(', new_string: '    // One numbered, bold line a step.\n    lines.push(' }))).toBe('')
+  w.files[MOD_HOOK] = MOD_TEXT
+  const edit = (old_string: string, new_string: string, file_path = MOD_HOOK) => ({ tool: 'Edit', file_path, old_string, new_string })
+  // A JSX comment on a line of its own among what the hook draws.
+  expect(refusalOf(await call($, edit('        {button}\n', '        {/* the button, or what to type where a click may not land */}\n        {button}\n')))).toBe('')
+  // A comment reflowed onto two lines, and a JSX comment, in one MultiEdit.
+  const multi = {
+    tool: 'MultiEdit',
+    file_path: MOD_HOOK,
+    edits: [
+      { old_string: '// Whether the reply is the one offered.', new_string: '// Whether the reply is the one\n// offered.' },
+      { old_string: '      <Box flexDirection="column">\n', new_string: '      <Box flexDirection="column">\n        {/* the reply, under its button */}\n' },
+    ],
+  }
+  expect(refusalOf(await call($, multi))).toBe('')
+  // A Write leaving the file as it was but for a header comment.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: MOD_HOOK, content: `// The demo mod's reply button.\n${MOD_TEXT}` }))).toBe('')
+  expect(w.ran.length).toBe(4)
+  // A comment beside a look change is asked about.
+  expect(refusalOf(await call($, edit('<Box flexDirection="column">\n        {button}', '<Box flexDirection="row">\n        {/* side by side */}\n        {button}')))).toContain(SKIP_QUESTION)
+  // JSX text and a quoted prop spelled like a comment are what the screen shows.
+  expect(refusalOf(await call($, edit('</Text>/simpler', '</Text>// simpler')))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, edit('label="Simpler"', 'label="// Simpler"')))).toContain(SKIP_QUESTION)
+  // A JSX comment put inside a line of text, which leaves a space more on screen.
+  expect(refusalOf(await call($, edit('<Text dimColor>type: </Text>', '<Text dimColor>type: {/* the command */} </Text>')))).toContain(SKIP_QUESTION)
+  // An app's own screen file is not read so: a comment there may be what Tailwind scans for a class.
+  expect(refusalOf(await call($, edit('        {button}\n', '        {/* bg-red-500 */}\n        {button}\n', '/w/slate/app/page.tsx')))).toContain(SKIP_QUESTION)
+  expect(w.ran.length).toBe(4)
+})
+
+// #1341: what a shell command leaves cannot be read before it runs, so a shell write to a mod hook file
+// that draws stays held whole, and the refusal says the Edit tool lets a comment only change through.
+test('#1341: a shell write to a mod hook file that draws is held whole, and told a comment only change goes through by the Edit tool', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, '/w/slate/app/page.tsx': MOD_TEXT } })
+  const python = {
+    tool: 'Bash',
+    command: "python3 - <<'EOF'\np = 'payload/mods/demo/hooks/card.ts'\nt = open(p).read()\nopen(p, 'w').write(t.replace('x', 'y'))\nEOF",
+  }
+  for (const c of [python, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/card.ts" }]) {
+    const why = refusalOf(await call($, c))
+    expect(why).toContain(SKIP_QUESTION)
+    expect(why).toContain('payload/mods/demo/hooks/card.ts')
+    expect(why).toContain('Edit tool')
+  }
+  w.files[MOD_HOOK] = MOD_TEXT
+  const tsx = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/register.tsx" }))
+  expect(tsx).toContain(SKIP_QUESTION)
+  expect(tsx).toContain('Edit tool')
+  // An app's screen file is never let through for its comments, so the refusal promises nothing.
+  const page = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' app/page.tsx" }))
+  expect(page).toContain(SKIP_QUESTION)
+  expect(page).not.toContain('Edit tool')
+  expect(w.ran.length).toBe(0)
+})
+
 test('#1275: a mod whose hook files cannot be listed or read is asked about rather than passed', withKit, async ($, on) => {
   const w = world($, on, { files: { ...DEMO_FILES } })
   w.ctl.listFails = true
