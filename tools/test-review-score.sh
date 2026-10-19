@@ -197,7 +197,6 @@ out="$(score run --only invented-retry --save-baseline --cases "$CASES" --result
 check "a subset run is refused as the baseline of the whole set" "covers only some of the baseline's cases" "$out"
 [ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a subset run must not replace a baseline holding more cases"; }
 mkdir -p "$WORK/other-set"; cp -R "$CASES/invented-retry" "$WORK/other-set/invented-other"
-cp "$RESULTS/baseline.json" "$WORK/baseline-copy.json"
 out="$(score run --all --save-baseline --cases "$WORK/other-set" --results-dir "$RESULTS")"; rc=$?
 check "a run sharing no case with the baseline says nothing was compared" "nothing is compared" "$out"
 [ "$(cat "$RESULTS/baseline.json")" = "$base_before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a run sharing no case with the baseline must not replace it"; }
