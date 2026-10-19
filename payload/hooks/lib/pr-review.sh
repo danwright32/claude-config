@@ -1100,8 +1100,8 @@ remedy() {
 # is every finding when the match cannot be made (no python3, the pull request unreadable): the gate
 # then says why and refuses exactly as it did before this existed.
 #
-# The pull request is read here only when some finding has a candidate (the first three conditions,
-# from files on this Mac), so a review whose findings repeat nothing costs no read. It is read
+# The pull request is read here only when some finding has a candidate (every condition but the
+# comment, judged from files on this Mac), so a review whose findings repeat nothing costs no read. It is read
 # afresh, not from the review's start, because the answer to the previous head is often written
 # after this head's review began. Sets ans_n (how many answered), ans_lines (those finding lines, in
 # the review's order), ans_text (each with where it was answered) and ans_note (why the match could
