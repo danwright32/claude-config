@@ -8746,6 +8746,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L789. A pipeline job that must follow another but tolerate it being skipped is gated with always(), which also tolerates the other one FAILING, so its condition must refuse a failed or cancelled predecessor by name, or a later step ships against an earlier one that never landed.**
+  (Try-Pennie/bidspoke#2510, 2026-10-19)
+  SHORT: A job gated with always() to tolerate a skipped predecessor also tolerates a failed one, so refuse a failed or cancelled predecessor by name.
 - **L788. A check that reads another system's status for work it already depends on must wait out that system's reporting lag on a readable 'not finished' or 'not listed yet' before refusing, and refuse at once only on a real failure; retrying only unreadable replies turns a few seconds of lag into a refusal that looks like a verdict.**
   (Try-Pennie/slate#3926, 2026-10-19)
   SHORT: A check reading another system's status must wait out its lag on a readable not finished or not listed, refusing at once only on a real failure.
