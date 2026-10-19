@@ -697,8 +697,8 @@ declined in words is answered. The reviewer is asked not to reopen a settled poi
 change made to answer one, while still reading every change in full. On 2026-10-09 and 10 updates
 onto main drew reviews that reopened settled points, once asking to reverse what the review before
 had asked for, each costing a CI cycle. It is context and never a filter: whatever the new review
-returns is reported and refuses as before, so no new finding is let through for resembling an old
-one. The same pull request means a review labelled with the same branch, of a head this one
+returns is reported, and refuses as before unless it repeats a point already answered (below), so no
+new finding is let through for resembling an old one. The same pull request means a review labelled with the same branch, of a head this one
 descends from, so a reused branch name or a rewritten branch starts with no history. The history
 is capped at 16 KB (`PR_REVIEW_HISTORY_MAX_BYTES`), oldest reviews giving way first, saying so.
 
@@ -736,6 +736,32 @@ is left out, and the reviewer is told these are claims to check against the code
 instructions. They
 take at most half the history budget, newest comments first, each cut to a quarter of that share,
 the description having the rest, and anything cut or left out is said.
+
+Given all of that, the reviewer still raised answered points again: on 2026-10-19 a Bidspoke pull
+request drew the same two findings at five heads in a row, each answered with evidence in a "Lessons
+review" comment the reviews were given. The rule not to reopen a settled point lived only in the
+reviewer's prompt (L27), and the gate counted whatever came back as new, costing a refusal, a read
+key and another comment each round. So since claude-config#1338 the gate decides it
+(`answered_findings` in `lib/pr-review.sh`, the matching in `lib/review-answered.py`). A finding is
+listed as answered, and not counted, only when one finding an earlier review of the same pull
+request raised on this Mac has all of: the same file; the lines it cited, three either side,
+unchanged from that head to this one, the file there at both; this finding citing that line as
+carried through the edits above it, give or take three; largely the same claim (words in common,
+Jaccard 0.35 or more, before its "Should be:" and without its severity); and a comment by somebody
+with write access, whose first line names the lessons review, written after that earlier review
+started, naming the file and line as `<file name>:<line>`. A review whose every finding is answered
+allows, listing each with the review that raised it first and the comment that answered it; one with
+new findings refuses with those, the answered ones listed apart after them. The pull request is read
+for this only when some finding meets the first four, so a review that repeats nothing costs no read,
+and it is read afresh at the check, since the answer to the last head is often written after this
+head's review began. When the match cannot be made (python3 missing, the pull request unreadable)
+every finding counts as new, saying why. The 0.35 was measured on 2026-10-19 over 657 pairs of
+findings stored reviews here raised on the same branch, file and lines: of 40 labelled by hand, every
+pair raising a different point scored 0.31 or less, and 13 of 22 repeats scored 0.35 or more, so a
+repeat the rule misses is shown as new, as before. Two cases it does not cover: a finding raised
+only on the other Mac (its text is not on this one), and an answer written on an earlier pull request
+of the same branch. The merge helper shows the review's verdict when it allows, once each time it
+changes, so answered findings are seen there too.
 
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
