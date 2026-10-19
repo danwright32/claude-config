@@ -224,19 +224,31 @@ check "a walk that hit its file cap and found nothing is could not tell (exit 2)
   "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
 
 # A walk that could not read part of the folder found nothing only in what it read, so it is could
-# not tell, never no (L11): first a folder it cannot enter, then a file it cannot open.
+# not tell, never no (L11): first a folder it cannot enter, then a file it cannot open. Both depend
+# on chmod 000 actually locking this user out, which root or a filesystem ignoring modes defeats, so
+# each first confirms the lock took and otherwise says UNMEASURED rather than passing or failing
+# (L411).
+unmeasured=0
+locked_check() { # locked_check <description> <path that should now be unreadable>
+  local readable=""
+  if [ -d "$2" ]; then ls "$2" >/dev/null 2>&1 && readable=1; else cat "$2" >/dev/null 2>&1 && readable=1; fi
+  if [ -n "$readable" ]; then
+    unmeasured=$((unmeasured + 1))
+    echo "UNMEASURED: $1 (chmod 000 did not lock this user out of $2, so the walk could read it)"
+    return
+  fi
+  check "$1" "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+}
 P="$TMP/locked-dir"; mkdir -p "$P/src" "$P/secret"; printf 'x\n' > "$P/src/a.js"; printf 'y\n' > "$P/secret/b.js"
 chmod 000 "$P/secret"
 uses "$P"
+locked_check "a walk that could not enter a folder and found nothing is could not tell (exit 2)" "$P/secret"
 chmod 755 "$P/secret"
-check "a walk that could not enter a folder and found nothing is could not tell (exit 2)" \
-  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
 P="$TMP/locked-file"; mkdir -p "$P/src"; printf 'x\n' > "$P/src/a.js"; printf 'y\n' > "$P/src/b.js"
 chmod 000 "$P/src/b.js"
 uses "$P"
+locked_check "a walk that could not open a file and found nothing is could not tell (exit 2)" "$P/src/b.js"
 chmod 644 "$P/src/b.js"
-check "a walk that could not open a file and found nothing is could not tell (exit 2)" \
-  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
 # And the no it does give claims only what it read: files of 1MB or more are skipped, and it says so.
 uses "$TMP/form-1/../swift"
 check "a walk's no says it read only files under 1MB" \
@@ -318,6 +330,7 @@ check "and says not-applicable is no warning" \
   "$(grep -qF '`schemaState` of `not-applicable` means the project does not use Supabase' <<< "$grounding_line" && echo ok || echo "the line is: $grounding_line")"
 
 echo ""
+if [ "$unmeasured" -gt 0 ]; then echo "unmeasured: $unmeasured (named above, neither passed nor failed)"; fi
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
