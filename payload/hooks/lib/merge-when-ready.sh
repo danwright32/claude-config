@@ -359,7 +359,9 @@ while :; do
   fi
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
   case "$rev_rc" in
-    0) ;;
+    # An allow can carry findings that repeat ones already answered, listed as answered
+    # (claude-config#1338), so the verdict is shown, once each time it changes.
+    0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; } ;;
     3) waiting="${waiting:+$waiting, }lessons review still running" ;;
     *) printf '%s\n' "$rev_out"
        stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above). If it has findings, read them, fix what is real or say why not, then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . Nothing was merged." ;;

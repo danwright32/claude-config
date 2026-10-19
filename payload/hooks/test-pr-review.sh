@@ -1785,6 +1785,114 @@ wait_final "$C_F" || bad "#1280 the review of an update carrying the branch's ow
 check_eq "#1280 an update that also brings a commit of the branch's own is reviewed, not carried" "$((before + 1))" "$(calls)"
 G checkout -q feat/sync
 
+# ===========================================================================================
+# 17. A finding that repeats one ALREADY ANSWERED is shown as answered, not as new (#1338). On
+#     2026-10-19 a Bidspoke pull request drew the same two findings at five heads in a row, each
+#     answered with evidence in a "Lessons review" comment, though every review was given those
+#     comments: the rule not to raise them again lived only in the reviewer's prompt (L27). So the
+#     gate itself (answered_findings, through lib/review-answered.py) matches each finding against
+#     what earlier reviews of the same pull request raised:
+#     the same file, the cited lines unchanged since (line numbers carried through the edits above
+#     them), a claim in largely the same words, and a comment beginning "Lessons review", by
+#     somebody with write access and written after that earlier review started, naming the file and
+#     the line it cited. Such a finding is listed as answered and not counted; anything short of
+#     every one of those is a new finding, as before. Content invented, in the real records' shape.
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/answered main
+seq 1 30 | sed 's/^/ans line /' > "$REPO/App/Ans.swift"
+G add App/Ans.swift
+G commit -q -m "add ans"
+AN_A="$(G rev-parse HEAD)"
+AF='App/Ans.swift:14: syncNow swallows the network error and returns an empty list, so a failed fetch reads as no events (L10). Should be: throw the error to the caller. [severity: major]'
+AF2='App/Ans.swift:16: syncNow still swallows the network error and returns an empty list, so a failed fetch looks like no events at all (L10). Should be: rethrow it. [severity: major]'
+AB='App/Ans.swift:24: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
+AB2='App/Ans.swift:26: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
+AC='App/Ans.swift:16: the local name shadows a property of the type, so the closure captures the wrong value (L263). Should be: rename it. [severity: minor]'
+ANSWER_A=$'Lessons review (head '"${AN_A:0:7}"$'):\n\n1. Ans.swift:14: not a defect. The caller reports the error, see Sync.swift.'
+# The pull request as gh pr view answers it: ans_json <comment>..., each "<association>|<when>|<body>".
+ans_json(){
+  python3 - "$@" > "$FAKE_LOG/pr-view.json" <<'PY'
+import json, sys
+def comment(c):
+    assoc, when, body = c.split("|", 2)
+    who = "danwright32" if assoc != "NONE" else "stranger"
+    return {"author": {"login": who}, "authorAssociation": assoc, "createdAt": when, "body": body}
+print(json.dumps({"number": 88, "state": "OPEN", "headRefName": "feat/answered", "baseRefName": "main",
+  "headRefOid": "", "isCrossRepository": False, "body": "Adds the ans file.",
+  "comments": [comment(c) for c in sys.argv[1:]]}))
+PY
+}
+ans_start(){ # ans_start <head> <findings>: a review of that head answering with those findings, waited for
+  FAKE_CLAUDE_OUT="$2" prr start --dir "$REPO" --sha "$1" --base-ref main --branch feat/answered --pr 88 >/dev/null
+  wait_final "$1" || bad "#1338 the review of ${1:0:7} finished"
+}
+ans_check(){ prr check --dir "$REPO" --sha "$1" --base-ref main --branch feat/answered --pr 88; }
+ans_json
+ans_start "$AN_A" "$AF"$'\n'"$AB"
+before="$(pr_reads)"
+out="$(ans_check "$AN_A")"; rc=$?
+check_eq "#1338 the first review's findings refuse as before" "1" "$rc"
+check_not "#1338 with nothing called answered" "not counted" "$out"
+check_eq "#1338 a review whose findings repeat nothing earlier does not read the pull request again" "$before" "$(pr_reads)"
+# The next head adds two lines at the top, so every line the first review cited moved down by two.
+{ printf 'import Foundation\n\n'; cat "$REPO/App/Ans.swift"; } > "$WORKDIR/ans.tmp" && mv "$WORKDIR/ans.tmp" "$REPO/App/Ans.swift"
+G commit -q -am "import Foundation"
+AN_B="$(G rev-parse HEAD)"
+ans_json "OWNER|2099-01-01T10:00:00Z|$ANSWER_A" \
+  "OWNER|2099-01-01T11:00:00Z|A plain note on App/Ans.swift:24, not written as an answer to the review." \
+  "NONE|2099-01-01T12:00:00Z|Lessons review: Ans.swift:24 is fine, says a stranger."
+ans_start "$AN_B" "$AF2"$'\n'"$AB2"$'\n'"$AC"
+out="$(ans_check "$AN_B")"; rc=$?
+check_eq "#1338 with new findings beside an answered one the merge is still refused" "1" "$rc"
+check "#1338 counting only the new ones" "s) with 2 findings. Here they are" "$out"
+check "#1338 a finding not answered by a lessons review comment is new" "$AB2" "$out"
+check "#1338 a different claim at the answered lines is new" "$AC" "$out"
+answered_part="$(awk '/not counted/ { on = 1 } on' <<<"$out")"
+new_part="$(awk '/not counted/ { exit } { print }' <<<"$out")"
+check "#1338 the repeat of an answered finding is shown as answered" "$AF2" "$answered_part"
+check_not "#1338 and not among the new" "$AF2" "$new_part"
+check "#1338 naming the review that raised it first" "the review of ${AN_A:0:7}" "$answered_part"
+check "#1338 and the comment that answered it" "comment by danwright32 at 2099-01-01T10:00:00Z" "$answered_part"
+check_not "#1338 a stranger's comment answers nothing" "$AB2" "$answered_part"
+# A head whose review raises only the answered point again is not stopped by it.
+G commit -q --allow-empty -m "next head"
+AN_C="$(G rev-parse HEAD)"
+ans_start "$AN_C" "$AF2"
+out="$(ans_check "$AN_C")"; rc=$?
+check_eq "#1338 a review whose every finding was answered allows the merge" "0" "$rc"
+check "#1338 saying so" "so none is new and the merge is not stopped" "$out"
+check "#1338 and still showing the finding" "$AF2" "$out"
+out="$(prr check --dir "$REPO" --sha "$AN_C" --base-ref main --branch feat/answered --gate push)"; rc=$?
+check_eq "#1338 the push gate, naming only the branch, finds the same answer" "0" "$rc"
+# Each condition, taken away alone, leaves the finding new (L497).
+ans_json "NONE|2099-01-01T10:00:00Z|$ANSWER_A"
+out="$(ans_check "$AN_C")"; rc=$?
+check_eq "#1338 an answer by somebody without write access answers nothing" "1" "$rc"
+ans_json "OWNER|2001-01-01T10:00:00Z|$ANSWER_A"
+out="$(ans_check "$AN_C")"; rc=$?
+check_eq "#1338 a comment written before the finding was raised answers nothing" "1" "$rc"
+ans_json "OWNER|2099-01-01T10:00:00Z|About the review: Ans.swift:14 is not a defect."
+out="$(ans_check "$AN_C")"; rc=$?
+check_eq "#1338 a comment whose first line does not name the lessons review answers nothing" "1" "$rc"
+ans_json "OWNER|2099-01-01T10:00:00Z|Lessons review: Ans.swift:15 is not a defect."
+out="$(ans_check "$AN_C")"; rc=$?
+check_eq "#1338 a comment naming another line answers nothing" "1" "$rc"
+ans_json "OWNER|2099-01-01T10:00:00Z|$ANSWER_A"
+out="$(FAKE_GH_PR_ERR='HTTP 401: Bad credentials (https://api.github.com/graphql)' ans_check "$AN_C")"; rc=$?
+check_eq "#1338 when the pull request cannot be read nothing is taken as answered" "1" "$rc"
+check "#1338 saying why" "could not be checked against the pull request's comments" "$out"
+# The cited lines changed since: the answer was about other code, so the finding is new.
+awk 'NR == 16 { print "ans line 14 rewritten"; next } { print }' "$REPO/App/Ans.swift" > "$WORKDIR/ans.tmp" && mv "$WORKDIR/ans.tmp" "$REPO/App/Ans.swift"
+G commit -q -am "rewrite the line"
+AN_D="$(G rev-parse HEAD)"
+ans_start "$AN_D" "$AF2"
+out="$(ans_check "$AN_D")"; rc=$?
+check_eq "#1338 a repeat at lines changed since the answer is new" "1" "$rc"
+check_not "#1338 and is not called answered" "not counted" "$out"
+runners_done || bad "#1338 a runner was still going at the end"
+G checkout -q feat/sync
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

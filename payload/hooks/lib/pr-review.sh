@@ -92,8 +92,11 @@
 #
 # EARLIER REVIEWS OF THE SAME PULL REQUEST (claude-config#1063): a review is given what earlier
 # reviews of the same pull request raised and what has happened since to the lines each cites, as
-# context and never as a filter, and the pull request's own description and comments, where agents
-# write their answers (claude-config#1161). See earlier_reviews and pr_words below.
+# context, and the pull request's own description and comments, where agents write their answers
+# (claude-config#1161). See earlier_reviews and pr_words below. Given them, the reviewer still raised
+# answered points again, so the gate itself lists a finding as answered, and does not count it,
+# when it repeats one an earlier review raised and a "Lessons review" comment answered, by a strict
+# rule (claude-config#1338, answered_findings and lib/review-answered.py).
 #
 # Environment: AI_REVIEW_STATE_DIR (shared with the push review), PR_REVIEW_DEADLINE_SECONDS,
 # PR_REVIEW_MAX_BYTES, PR_REVIEW_MAX_GROUPS, PR_REVIEW_HISTORY_MAX_BYTES, AI_REVIEW_MODEL,
@@ -363,7 +366,9 @@ KEPT
 # with it.
 #
 # Context, never a filter: nothing here removes, merges or discounts a finding the new review
-# returns, so a real new finding can never be let through because an earlier one looked like it.
+# returns. The one place a finding is not counted is answered_findings (#1338), whose rule needs the
+# same file, unchanged lines, largely the same claim AND a written answer, so a real new finding is
+# not let through for merely resembling an earlier one.
 # The SAME pull request means a finished review labelled with this branch, of a head this head
 # descends from: an update onto the base keeps the old head as an ancestor, and a review of a
 # branch name reused later, or of a head since rewritten, is not this history. Reviews are read
@@ -402,43 +407,51 @@ line_since() {   # $1 = earlier head, $2 = path, $3 = cited line -> what happene
   fi
 }
 
+# The earlier reviews of the same pull request, one per line,
+# "<distance>\t<finished>\t<sha>\t<file>\t<started>", the head nearest this one first: every finished
+# review labelled with this branch that returned a review, of a head this head descends from. Both
+# earlier_reviews (what the reviewer is given) and answered_findings (what the gate matches against,
+# #1338) read them here, so the two never disagree on which reviews are this pull request's history.
+earlier_rows() {
+  [ -n "$full_sha" ] && [ "$branch_known" = 1 ] || return 0
+  local f rows fin s rf st d ranked=""
+  local -a files=()
+  for f in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -gt 0 ] || return 0
+  # One awk over every review's header: finished, head, file and start of each finished review of
+  # this branch label that returned a review.
+  rows="$(awk -v br="$branch" '
+    FNR == 1 { b = ""; s = ""; st = ""; fin = 0; sta = 0 }
+    /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
+    /^status=/ { st = substr($0, 8) } /^finished=/ { fin = substr($0, 10) + 0 }
+    /^started=/ { sta = substr($0, 9) + 0 }
+    /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\t%s\n", fin, s, FILENAME, sta; nextfile }' "${files[@]}" 2>/dev/null)"
+  # Newest first means the head NEAREST this one, counted in commits, never the finish stamp: on CI
+  # (2026-10-13, PR #1109) two reviews finished in the same second, the tie went by sha, and the
+  # newer review was the one the cap left out. The stamp only breaks a tie in distance.
+  while IFS=$'\t' read -r fin s rf st; do
+    [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
+    git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null || continue
+    d="$(git rev-list --count "$s..$full_sha" 2>/dev/null)"
+    case "$d" in ''|*[!0-9]*) continue ;; esac
+    ranked="$ranked$d"$'\t'"$fin"$'\t'"$s"$'\t'"$rf"$'\t'"$st"$'\n'
+  done <<ROWS
+$rows
+ROWS
+  printf '%s' "$ranked" | sort -t "$(printf '\t')" -k1,1n -k2,2nr
+}
+
 # Prints the block, or nothing when there is neither an earlier review with findings on this Mac nor
 # an open pull request to read. Called from do_start, whose mb it reads.
 earlier_reviews() {
   [ -n "$full_sha" ] || return 0
   # The short commit names no pull request, so without a branch only a caller's --pr can.
   [ "$branch_known" = 1 ] || [ -n "$pr_arg" ] || return 0
-  local f rows="" fin s rf line sect oldest="" out="" seen=$'\n' kept=0 left=0
-  local -a files=()
-  if [ "$branch_known" = 1 ]; then
-    for f in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$f" ] && files+=("$f"); done
-  fi
-  # One awk over every review's header: finished, head and file of each finished review of this
-  # branch label that returned a review.
-  if [ "${#files[@]}" -gt 0 ]; then
-    rows="$(awk -v br="$branch" '
-      FNR == 1 { b = ""; s = ""; st = ""; fin = 0 }
-      /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
-      /^status=/ { st = substr($0, 8) } /^finished=/ { fin = substr($0, 10) + 0 }
-      /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\n", fin, s, FILENAME; nextfile }' "${files[@]}" 2>/dev/null)"
-  fi
-  # Newest first means the head NEAREST this one, counted in commits, never the finish stamp: on CI
-  # (2026-10-13, PR #1109) two reviews finished in the same second, the tie went by sha, and the
-  # newer review was the one the cap left out. The stamp only breaks a tie in distance.
-  local d ranked=""
-  while IFS=$'\t' read -r fin s rf; do
-    [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
-    git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null || continue
-    d="$(git rev-list --count "$s..$full_sha" 2>/dev/null)"
-    case "$d" in ''|*[!0-9]*) continue ;; esac
-    ranked="$ranked$d"$'\t'"$fin"$'\t'"$s"$'\t'"$rf"$'\n'
-  done <<ROWS
-$rows
-ROWS
-  rows="$(printf '%s' "$ranked" | sort -t "$(printf '\t')" -k1,1n -k2,2nr)"
+  local rows d fin s rf line sect oldest="" out="" seen=$'\n' kept=0 left=0
+  rows="$(earlier_rows)"
   local re='^([^ :]+):([0-9]+): '
   local -a sects=() heads=()
-  while IFS=$'\t' read -r d fin s rf; do
+  while IFS=$'\t' read -r d fin s rf _; do
     [ -n "$s" ] || continue
     sect=""
     while IFS= read -r line; do
@@ -556,27 +569,50 @@ pr_item() {   # $1 = label, $2 = text, $3 = the most its text may take
   printf '  %s, cut: the first %s of its %s bytes shown:\n%s\n' "$1" "$3" "$n" "$(head -c "$3" <<<"$body")"
 }
 
+# Reads the pull request (--pr, else the branch's open one) into prr_pr_env, which the caller
+# declares local with the other prr_pr_ variables, so pr_words and answered_findings read it by one
+# route. Returns 0 when it was read; 4 when merge-target.sh, which reads it, is missing; 5 when a
+# tool it needs is not on PATH, named in prr_pr_err; otherwise what mt_retry_read returned.
+pr_fetch() {
+  local t
+  if [ -n "$pr_arg" ]; then prr_pr_sel="$pr_arg"; else prr_pr_sel="$branch"; fi
+  declare -F mt_retry_read >/dev/null || . "$PRR_LIB/merge-target.sh" 2>/dev/null
+  if ! declare -F mt_retry_read >/dev/null || ! declare -F mt_pr_view >/dev/null; then return 4; fi
+  for t in gh jq; do
+    command -v "$t" >/dev/null 2>&1 || { prr_pr_err="$t"; return 5; }
+  done
+  prr_pr_slug="$(mt_remote_slug)"
+  mt_retry_read "$PRR_PR_TRIES" "$PRR_PR_WAIT" "$PRR_SLEEP" "$((SECONDS + PRR_PR_READ_BUDGET))" "" prr_pr_read
+}
+
+# Which comments speak for the branch, and which record a lessons review finding: jq definitions
+# both readers of the pull request use (pr_words, answered_findings). Only people with write access:
+# the repository is public, so anybody can comment (lessons review of #1161). A comment whose FIRST
+# line names the lessons review records a finding and the answer it got (#1168). An empty body
+# splits into no lines at all, so its first line is taken as empty, never null, which jq cannot
+# match and would stop the whole read on, silenced.
+PRR_JQ_DEFS='def trusted: (.authorAssociation // "") as $a | ["OWNER", "MEMBER", "COLLABORATOR"] | index($a);
+def text: (.body // "") | gsub("\r"; "");
+def records_finding: ((text | split("\n"))[0] // "") | test("lessons review"; "i");'
+
 pr_words() {   # $1 = the most its description and comments may take, in bytes
   local cap="$1" what rc num state t rec item one used=0 left=0 desc dcap head notes="" items=""
   local unread="so an answer given there to an earlier finding is not shown here, and the review went ahead without it"
   # What prr_pr_read sets, local here so they reach it (bash scopes dynamically) and end with this.
   local prr_pr_sel prr_pr_slug prr_pr_env="" prr_pr_err="" prr_pr_tries=0
-  if [ -n "$pr_arg" ]; then what="pull request #$pr_arg"; prr_pr_sel="$pr_arg"
-  else what="the open pull request of branch $branch"; prr_pr_sel="$branch"; fi
-  declare -F mt_retry_read >/dev/null || . "$PRR_LIB/merge-target.sh" 2>/dev/null
-  if ! declare -F mt_retry_read >/dev/null || ! declare -F mt_pr_view >/dev/null; then
+  if [ -n "$pr_arg" ]; then what="pull request #$pr_arg"
+  else what="the open pull request of branch $branch"; fi
+  pr_fetch; rc=$?
+  if [ "$rc" -eq 4 ]; then
     printf -- '--- %s: its description and comments could not be read, because %s/merge-target.sh, which reads them, is missing, %s ---' "$what" "$PRR_LIB" "$unread"
     pr_read_record failed "$PRR_LIB/merge-target.sh is missing"
     return 0
   fi
-  for t in gh jq; do
-    command -v "$t" >/dev/null 2>&1 && continue
-    printf -- '--- %s: its description and comments could not be read, because %s is not on PATH, %s ---' "$what" "$t" "$unread"
-    pr_read_record failed "$t is not on PATH"
+  if [ "$rc" -eq 5 ]; then
+    printf -- '--- %s: its description and comments could not be read, because %s is not on PATH, %s ---' "$what" "$prr_pr_err" "$unread"
+    pr_read_record failed "$prr_pr_err is not on PATH"
     return 0
-  done
-  prr_pr_slug="$(mt_remote_slug)"
-  mt_retry_read "$PRR_PR_TRIES" "$PRR_PR_WAIT" "$PRR_SLEEP" "$((SECONDS + PRR_PR_READ_BUDGET))" "" prr_pr_read; rc=$?
+  fi
   if [ "$rc" -ne 0 ]; then
     if [ "$(printf '%s' "$prr_pr_env" | jq -r '.notFound // false' 2>/dev/null)" = true ]; then
       if [ -n "$pr_arg" ]; then
@@ -612,17 +648,15 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
   # branch's answer. A comment carries its author's association; the description has none, but a
   # pull request from a branch of this repository was opened by somebody who could push to it,
   # while one from a fork may not have been, so a fork's description is left out, saying so.
-  local trusted='["OWNER", "MEMBER", "COLLABORATOR"]' strangers fork
-  strangers="$(printf '%s' "$prr_pr_env" | jq -r --argjson ok "$trusted" '[(.view.comments // [])[] | select((.authorAssociation // "") as $a | $ok | index($a) | not)] | length' 2>/dev/null)"
+  local strangers fork
+  strangers="$(printf '%s' "$prr_pr_env" | jq -r "$PRR_JQ_DEFS"' [(.view.comments // [])[] | select(trusted | not)] | length' 2>/dev/null)"
   case "$strangers" in ''|*[!0-9]*) strangers=0 ;; esac
   [ "$strangers" -gt 0 ] && notes="  ($strangers comment(s) by people without write access to the repository left out: anybody can comment on it.)"$'\n'
   fork="$(printf '%s' "$prr_pr_env" | jq -r '.view.isCrossRepository // false' 2>/dev/null)"
   # The share is what the lines saying what was read leave of it.
   local avail=$((cap - $(bytes_of "$head"$'\n'"$notes")))
-  # Newest first, kept while they fit, then put back in the order they were written. A comment whose
-  # first line names the lessons review records a finding and the answer it got (#1168), marked so.
-  # An empty body splits into no lines at all, so its first line is taken as empty, never null, which
-  # jq cannot match and would stop the whole read on, silenced.
+  # Newest first, kept while they fit, then put back in the order they were written. A comment that
+  # records a lessons review finding (PRR_JQ_DEFS) is marked so.
   local found_mark=", recording a lessons review finding" found=0
   while IFS= read -r -d $'\x1e' rec; do
     if [ "$left" -eq 0 ]; then
@@ -634,10 +668,9 @@ pr_words() {   # $1 = the most its description and comments may take, in bytes
       fi
     fi
     left=$((left + 1))
-  done < <(printf '%s' "$prr_pr_env" | jq -j --argjson ok "$trusted" --arg mark "$found_mark" '[(.view.comments // [])[]
-    | select((.authorAssociation // "") as $a | $ok | index($a))] | reverse | .[]
-    | ((.body // "") | gsub("\r"; "")) as $b
-    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if ((($b | split("\n"))[0] // "") | test("lessons review"; "i")) then $mark else "" end)\u001f\($b)\u001e"' 2>/dev/null)
+  done < <(printf '%s' "$prr_pr_env" | jq -j --arg mark "$found_mark" "$PRR_JQ_DEFS"' [(.view.comments // [])[]
+    | select(trusted)] | reverse | .[]
+    | "\(.author.login // "someone") (\(.authorAssociation | ascii_downcase)), \(.createdAt // "at an unknown time")\(if records_finding then $mark else "" end)\u001f\(text)\u001e"' 2>/dev/null)
   [ "$found" -gt 0 ] && notes="$notes  ($found comment(s) below record a lessons review finding and the answer it got, from a review on either Mac.)"$'\n'
   [ "$left" -gt 0 ] && notes="$notes  ($left older comment(s) left out: the pull request's words take at most $cap bytes of the history budget, PR_REVIEW_HISTORY_MAX_BYTES.)"$'\n'
   [ -n "$items" ] || [ "$left" -gt 0 ] || items="  no comments by people with write access."$'\n'
@@ -1048,6 +1081,81 @@ remedy() {
   printf 'Run it again with: bash ~/.claude/hooks/lib/pr-review.sh restart --dir %s --sha %s\nOr, only after telling Dan why, %s with the one command override: %s <the %s command>.\n' "$top" "${full_sha:-$sha}" "$act" "$PRR_OVERRIDE" "$act"
 }
 
+# A FINDING ALREADY ANSWERED IS NOT NEW (claude-config#1338). On 2026-10-19 a Bidspoke pull request
+# drew the same two findings at five heads in a row, each answered with evidence in a comment
+# beginning "Lessons review", though every one of those reviews was given the comments
+# (earlier_reviews, pr_words) and its prompt asked it not to raise a settled point again. A rule
+# that lives only in a prompt is a hope (L27), and this gate counted whatever came back as new: a
+# refusal, a read key and another comment each round. So the gate itself decides which findings
+# repeat an answered one, by the strict rule lib/review-answered.py states: the same file, the cited
+# lines unchanged since an earlier review of this pull request raised it, largely the same claim,
+# and a "Lessons review" comment by somebody with write access, written after that review started,
+# naming the file and line. Such a finding is listed as answered, with where, and is not counted;
+# when nothing else is left the merge is allowed, saying so. Anything less is new, as before, and so
+# is every finding when the match cannot be made (no python3, the pull request unreadable): the gate
+# then says why and refuses exactly as it did before this existed.
+#
+# The pull request is read here only when some finding has a candidate (the first three conditions,
+# from files on this Mac), so a review whose findings repeat nothing costs no read. It is read
+# afresh, not from the review's start, because the answer to the previous head is often written
+# after this head's review began. Sets ans_n (how many answered), ans_lines (those finding lines, in
+# the review's order), ans_text (each with where it was answered) and ans_note (why the match could
+# not be made, or empty).
+answered_findings() {
+  ans_n=0; ans_lines=""; ans_text=""; ans_note=""
+  [ "$branch_known" = 1 ] || return 0
+  local rows tmp n out rc i s who at line state why
+  rows="$(earlier_rows)"
+  [ -n "$rows" ] || return 0
+  local cannot="Whether any finding repeats one already answered in a \"Lessons review\" comment could not be checked"
+  if ! command -v python3 >/dev/null 2>&1; then
+    ans_note="($cannot: python3 is not on PATH, so every finding counts as new.)"; return 0
+  fi
+  if [ ! -f "$PRR_LIB/review-answered.py" ]; then
+    ans_note="($cannot: $PRR_LIB/review-answered.py is missing, so every finding counts as new.)"; return 0
+  fi
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/pr-review-answered.XXXXXX" 2>/dev/null)" \
+    || { ans_note="($cannot: no temporary folder could be made, so every finding counts as new.)"; return 0; }
+  printf '%s\n' "$rows" | awk -F '\t' 'NF >= 5 { print $3 "\t" $5 "\t" $4 }' > "$tmp/earlier"
+  n="$(python3 "$PRR_LIB/review-answered.py" --repo "$top" --head "$full_sha" --review "$final" --earlier "$tmp/earlier" 2>"$tmp/err")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ans_note="($cannot: $(tail -n 1 "$tmp/err" 2>/dev/null), so every finding counts as new.)"; rm -rf "$tmp"; return 0
+  fi
+  case "$n" in ''|*[!0-9]*|0) rm -rf "$tmp"; return 0 ;; esac
+  # What pr_fetch sets, local here so they reach it and end with this.
+  local prr_pr_sel prr_pr_slug prr_pr_env="" prr_pr_err="" prr_pr_tries=0
+  pr_fetch; rc=$?
+  case "$rc" in
+    0) state="$(printf '%s' "$prr_pr_env" | jq -r '.view.state // ""' 2>/dev/null)"
+       why=""
+       # Found by the branch but not open is an earlier use of the name, as pr_words judges it.
+       [ -z "$pr_arg" ] && [ "$state" != OPEN ] && why="the only pull request found for branch $branch is ${state:-in an unknown state}" ;;
+    4) why="$PRR_LIB/merge-target.sh, which reads it, is missing" ;;
+    5) why="$prr_pr_err is not on PATH" ;;
+    *) why="${prr_pr_err:-gh gave no reason}" ;;
+  esac
+  if [ -n "$why" ]; then
+    ans_note="($n finding(s) repeat one an earlier review of this pull request raised at lines unchanged since, but whether a \"Lessons review\" comment answered it could not be checked against the pull request's comments ($why), so every finding counts as new.)"
+    rm -rf "$tmp"; return 0
+  fi
+  printf '%s' "$prr_pr_env" | jq -c "$PRR_JQ_DEFS"' [(.view.comments // [])[] | select(trusted and records_finding)
+    | {author: (.author.login // "someone"), at: (.createdAt // ""), body: text}]' > "$tmp/comments" 2>/dev/null \
+    || { ans_note="($cannot: the pull request's comments could not be parsed, so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
+  out="$(python3 "$PRR_LIB/review-answered.py" --repo "$top" --head "$full_sha" --review "$final" --earlier "$tmp/earlier" --comments "$tmp/comments" 2>"$tmp/err")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    ans_note="($cannot: $(tail -n 1 "$tmp/err" 2>/dev/null), so every finding counts as new.)"; rm -rf "$tmp"; return 0
+  fi
+  rm -rf "$tmp"
+  while IFS=$'\t' read -r i s who at; do
+    case "$i" in ''|*[!0-9]*) continue ;; esac
+    line="$(awk -v want="$i" 'found && /^[^ :]+:[0-9]+: / && ++n == want { print; exit } /^$/ { found = 1 }' "$final")"
+    [ -n "$line" ] || continue
+    ans_n=$((ans_n + 1))
+    ans_lines="$ans_lines$line"$'\n'
+    ans_text="$ans_text$(printf '%s\n' "$line" | ar_redact | cut -c "1-$PRR_LINE_CHARS")"$'\n'"    raised before by the review of ${s:0:7}, the lines it cites unchanged since; answered in the comment by $who at $at."$'\n'
+  done <<<"$out"
+}
+
 do_check() {
   local now; now="$(date +%s)"
   # A review in groups whose groups have all answered is written here too, should the process
@@ -1172,10 +1280,19 @@ do_check() {
         echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), read: this $act presented their key."
         return 0
       fi
-      local noun="findings"; [ "$findings" -eq 1 ] && noun="finding"
+      # Findings that repeat one already answered are shown as answered and not counted (#1338).
+      local ans_n ans_lines ans_text ans_note new_findings
+      answered_findings
+      new_findings=$((findings - ans_n))
+      if [ "$ans_n" -gt 0 ] && [ "$new_findings" -le 0 ]; then
+        echo "The lessons review of $repo_label $branch at $short finished with $findings finding(s), and each repeats one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since, so none is new and the $act is not stopped (claude-config#1338). Shown here so an answer that no longer holds can still be acted on:"
+        printf '%s' "$ans_text"
+        return 0
+      fi
+      local noun="findings"; [ "$new_findings" -eq 1 ] && noun="finding"
       local readkey keyrc=0
       readkey="$(ar_review_issue_key "$final")" || keyrc=$?
-      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $findings $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review\", which every later review of it reads on either Mac, then $act with their read key in front of the $act command:"
+      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $new_findings $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review\", which every later review of it reads on either Mac, then $act with their read key in front of the $act command:"
       if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the $act command>"
         echo "The key is only in this message, so a $act carrying it proves the findings were shown. A $act without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
@@ -1184,7 +1301,25 @@ do_check() {
       fi
       # Only when keys can be checked at all: with a tool missing, the presented key was never judged.
       [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
-      ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
+      if [ "$ans_n" -gt 0 ]; then
+        # The new ones under the key, the answered ones after them, apart (#1338).
+        # A copy without them, in a temporary file of its own, since several checks can run at once.
+        local newf
+        if newf="$(mktemp "${TMPDIR:-/tmp}/pr-review-new.XXXXXX" 2>/dev/null)"; then
+          awk 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next } found && ($0 in skip) { next } { print } /^$/ { found = 1 }' \
+            <(printf '%s' "$ans_lines") "$final" > "$newf" 2>/dev/null
+          ar_capped_body "$newf" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS" \
+            | awk -v a="$newf" -v b="$final" '{ i = index($0, a); if (i) $0 = substr($0, 1, i - 1) b substr($0, i + length(a)); print }'
+          rm -f "$newf"
+        else
+          ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
+        fi
+        echo "Also raised again, and not counted: $ans_n finding(s) repeating one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since (claude-config#1338):"
+        printf '%s' "$ans_text"
+      else
+        ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
+      fi
+      [ -n "$ans_note" ] && echo "$ans_note"
       return 1
       ;;
     empty-diff)
