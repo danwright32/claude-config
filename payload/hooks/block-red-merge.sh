@@ -475,6 +475,13 @@ helper_flags=""
 for hf in --squash --merge --rebase --delete-branch; do
   case " $command " in *" $hf "*) helper_flags="$helper_flags $hf" ;; esac
 done
+# The helper never hands gh --delete-branch (it deletes the branch itself, after moving the pull
+# requests stacked on it, claude-config#1337), so the merge it asks about here cannot show that it
+# was asked to delete. It says so in MWR_DELETE_BRANCH=1 when it runs this gate, and the hint carries
+# the flag, or following it exactly merges and leaves the branch on GitHub (claude-config#1351).
+if [ "${MWR_DELETE_BRANCH:-}" = 1 ]; then
+  case "$helper_flags " in *" --delete-branch "*) ;; *) helper_flags="$helper_flags --delete-branch" ;; esac
+fi
 helper_cmd="bash ~/.claude/hooks/lib/merge-when-ready.sh $number${slug:+ --repo $slug}$helper_flags"
 gh_as_viewer(){   # gh, as the account that could see the pull request when that was not the active one
   local tok=""

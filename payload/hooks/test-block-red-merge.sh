@@ -27,7 +27,7 @@ trap 'rm -rf "$SLEEP_DIR"' EXIT
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "${BRM_SLEEP_LOG:-/dev/null}"\n' > "$SLEEP_DIR/fake-sleep"
 chmod +x "$SLEEP_DIR/fake-sleep"
 export BRM_SLEEP="$SLEEP_DIR/fake-sleep"
-unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS 2>/dev/null || true
+unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS MWR_DELETE_BRANCH 2>/dev/null || true
 passed=0
 failed=0
 
@@ -1233,6 +1233,18 @@ if holds "$out" "ALLOW_BEHIND_MERGE=1"; then pass; else fail "the refusal does n
 # #851: and the one step remedy, carrying this merge's own method so it merges the same way.
 if holds "$out" "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo acme/widget --squash ."; then pass; else fail "#851 the refusal does not hand over the one step update, wait and merge: $out"; fi
 rm -rf "$dir"
+# #1351: merge-when-ready.sh no longer hands gh --delete-branch (it deletes the branch itself after
+# moving stacked pull requests, #1337), so the merge this gate judges from it never carries the flag.
+# The helper says it was asked to delete through MWR_DELETE_BRANCH=1, and the hint carries it, or
+# following the hint exactly merges and leaves the branch on GitHub.
+compare_dir "$UPTODATE_PR"
+out=$(MWR_DELETE_BRANCH=1 GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "$PINNED")
+if behind_refusal "$out" && holds "$out" "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ."; then pass; else fail "#1351 the hint drops --delete-branch the helper was asked for: $out"; fi
+out=$(MWR_DELETE_BRANCH=1 GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "gh pr merge 7 --squash --delete-branch --match-head-commit $HEAD_SHA")
+if behind_refusal "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ." && ! holds "$out" "--delete-branch --delete-branch"; then pass; else fail "#1351 a typed --delete-branch and the helper's word together name the flag once: $out"; fi
+out=$(MWR_DELETE_BRANCH= GH_COMPARE_JSON="$BEHIND3" run_hook "$dir" "$PINNED")
+if behind_refusal "$out" && ! holds "$out" "--delete-branch"; then pass; else fail "#1351 the hint names --delete-branch nobody asked for: $out"; fi
+rm -rf "$dir"
 
 # One commit behind reads in the singular.
 compare_dir "$UPTODATE_PR"
@@ -1404,6 +1416,8 @@ out=$(GH_RUNS_JSON="$RUNS_CI_PENDING" run_hook "$dir" "$PINNED")
 if denied "$out"; then pass; else fail "a head whose CI run had not registered its checks was allowed on one fast green check: $out"; fi
 if holds "$out" "CI (pending)"; then pass; else fail "the refusal does not name the run still to report: $out"; fi
 if holds "$out" "merge-when-ready.sh 7"; then pass; else fail "the refusal does not hand over the helper that waits for it: $out"; fi
+out=$(MWR_DELETE_BRANCH=1 GH_RUNS_JSON="$RUNS_CI_PENDING" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "merge-when-ready.sh 7 --repo acme/widget --squash --delete-branch ."; then pass; else fail "#1351 the pending runs hint drops --delete-branch the helper was asked for: $out"; fi
 if grep -qF "repos/acme/widget/actions/runs?head_sha=$HEAD_SHA" "$GH_RUNS_LOG"; then pass; else
   fail "the runs were not read for the judged head in this repository: $(cat "$GH_RUNS_LOG")"
 fi
