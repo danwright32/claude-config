@@ -213,6 +213,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
   }
   mock.env(on, { HOME: '/Users/dan' })
   let started = 0
+  let monitors = 0
   const byPath = (p: string | undefined) => list.findIndex((_, i) => outOf(`job${i + 1}`) === p)
   const groupOf = (i: number) => list[i]?.pgid ?? 501 + i
   const byGroup = (g: number) => list.findIndex((_, i) => groupOf(i) === g)
@@ -412,6 +413,20 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
           resolve((how === 'ok' ? { result: 'stopped', text: 'stopped' } : { deny: `no task ${String(input.task_id)} is running` }) as never)
         })
       })
+    }
+    // #1326: a Monitor's start and an agent run in the background, in the shapes the 2.1.302 build
+    // records for them (toolUseResult in real transcripts, 2026-10-19). A Monitor described with
+    // TEXT-ONLY answers with its text alone, so the start is read from the words.
+    if (e.tool === 'Monitor') {
+      monitors += 1
+      const id = `mon${monitors}`
+      const text = `Monitor started (task ${id}, expires in 30m unless the source ends first; you get one notice at expiry). You will be notified on each event. Keep working.`
+      if (String(input.description).includes('TEXT-ONLY')) return { result: text, text } as never
+      return { result: { taskId: id, persistent: false, timeoutMs: 1_800_000 }, text } as never
+    }
+    if (e.tool === 'Agent' && input.run_in_background) {
+      const text = 'Async agent launched successfully. agentId: a9 (internal ID, do not mention to user).'
+      return { result: { isAsync: true, status: 'async_launched', agentId: 'a9', description: String(input.description) }, text } as never
     }
     return { result: 'ran', text: 'ran' } as never
   })
@@ -2362,4 +2377,175 @@ test("a second ask for the session list set before a new session starts is never
   expect(w.sessionAsks).toBe(3)
   await clock.advance(5 * MIN)
   expect(w.sessionAsks).toBe(3)
+})
+
+// #1326 (Dan, 2026-10-19: "Hook and brief"): a dispatched agent ended its turn to wait on its own
+// check watcher and Monitor, with no report and no merge. Its stop is refused while it still holds
+// background work it started, a bounded number of times, and never this conversation's own turn end.
+// The list of what is in flight is Claude Code's own, sent with the stop: measured on 2.1.302 with a
+// headless probe (2026-10-19) to carry the whole session's work, this conversation's job, and a
+// background agent's own entry under its agent id among them, so it says nothing of whose work is
+// whose. That comes from the calls each agent made, as the watcher saw them.
+type InFlight = { id: string; type: string; status: string; description: string; command?: string; agent_type?: string }
+const shell = (id: string, command: string): InFlight => ({ id, type: 'shell', status: 'running', description: command, command })
+const subagentEntry = (id: string): InFlight => ({ id, type: 'subagent', status: 'running', description: 'fix CI', agent_type: 'general-purpose' })
+type Stops = { classic: { SubagentStop: (e: never) => Promise<unknown>; Stop: (e: never) => Promise<unknown> } }
+const subagentStop = async ($: unknown, agentId: string, tasks: unknown) => {
+  const e: Record<string, unknown> = { hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: 'general-purpose', stop_hook_active: false, last_assistant_message: 'Still pending; the monitor will tell me.' }
+  if (tasks !== 'absent') e.background_tasks = tasks
+  return (await ($ as Stops).classic.SubagentStop(e as never)) as { block?: string }
+}
+const STOP_BENEATH = (on: On) => {
+  on('classic.SubagentStop', () => ({}) as never)
+  on('classic.Stop', () => ({}) as never)
+}
+const HOLD = 'You still hold background work you started:'
+
+test('a subagent that ends its turn holding a background job it started is refused, and told how to hand back (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'pending\n', size: 8 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'gh pr checks 2383 --watch')])
+  expect(r.block).toContain(`${HOLD} job1 (gh pr checks 2383 --watch)`)
+  expect(r.block).toContain('wait for it in the foreground')
+  expect(r.block).toContain('stop it with TaskStop')
+  expect(r.block).toContain('hand back')
+})
+
+test('a Monitor the subagent started holds its stop too, read from its result or from its words (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'tail -f deploy.log', description: 'deploy TEXT-ONLY' }))
+  const r = await subagentStop($, 'a1', [shell('mon1', 'gh run watch 99'), shell('mon2', 'tail -f deploy.log')])
+  expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99), mon2 (tail -f deploy.log)`)
+})
+
+test('an agent the subagent ran in the background holds its stop too (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Agent', description: 'run the suite', prompt: 'run it', run_in_background: true }))
+  const r = await subagentStop($, 'a1', [{ id: 'a9', type: 'subagent', status: 'running', description: 'run the suite', agent_type: 'general-purpose' }])
+  expect(r.block).toContain(`${HOLD} a9 (run the suite)`)
+})
+
+test("work this conversation, a sibling agent or nobody known started never holds a subagent's stop, nor its own entry (#1326)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, [{ tail: '', size: 0 }, { tail: '', size: 0 }], { agents: [AGENT, { ...AGENT, id: 'a2', description: 'other' }] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'bash suite.sh', run_in_background: true }, 'a2'))
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'npm run dev'), shell('job2', 'bash suite.sh'), shell('bx', 'sleep 100')])
+  expect(r.block).toBeUndefined()
+})
+
+test('a subagent whose work has ended or been stopped stops at once (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+  const r = await subagentStop($, 'a1', [subagentEntry('a1')])
+  expect(r.block).toBeUndefined()
+})
+
+test('the refusal is bounded: past two, the subagent stops and this conversation is told what it left (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  const held = [shell('mon1', 'gh run watch 99')]
+  expect((await subagentStop($, 'a1', held)).block).toContain(HOLD)
+  expect((await subagentStop($, 'a1', held)).block).toContain(HOLD)
+  expect((await subagentStop($, 'a1', held)).block).toBeUndefined()
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(mine)).toContain('Agent "fix CI" (a1) ended still holding background work it started, after its stop was refused 2 times: mon1 (gh run watch 99).')
+  // Said once, not on every result after.
+  const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(noticesOf(again)).not.toContain('ended still holding')
+})
+
+test('a clean stop resets the count, so a resumed subagent is refused again (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
+  const held = [shell('mon1', 'gh run watch 99')]
+  await subagentStop($, 'a1', held)
+  await subagentStop($, 'a1', held)
+  expect((await subagentStop($, 'a1', [])).block).toBeUndefined()
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 100', description: 'CI again' }))
+  expect((await subagentStop($, 'a1', [shell('mon2', 'gh run watch 100')])).block).toContain(`${HOLD} mon2 (gh run watch 100)`)
+})
+
+test("this conversation's own turn end is never refused, whatever it holds (#1326)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' } as never)
+  const r = (await ($ as unknown as Stops).classic.Stop({ hook_event_name: 'Stop', stop_hook_active: false, background_tasks: [shell('mon1', 'gh run watch 99')] } as never)) as { block?: string }
+  expect(r.block).toBeUndefined()
+  // A stop with no agent named is let through too, never read as an agent's.
+  const bare = (await ($ as unknown as Stops).classic.SubagentStop({ hook_event_name: 'SubagentStop', stop_hook_active: false, background_tasks: [shell('mon1', 'gh run watch 99')] } as never)) as { block?: string }
+  expect(bare.block).toBeUndefined()
+})
+
+// The failure paths: a stop whose in flight list is missing or not a list (a later build, a changed
+// payload) falls back to the watcher's own record of the agent's background jobs, and says once that
+// the list could not be read, so Monitors and agents going unchecked is never silent (L11).
+for (const [why, tasks] of [['missing', 'absent'], ['not a list', { b1: 'running' }]] as const) {
+  test(`with the in flight list ${why}, the watcher's own record of the subagent's jobs still holds its stop (#1326)`, withDeps, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+    STOP_BENEATH(on)
+    await start($)
+    await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+    const r = await subagentStop($, 'a1', tasks)
+    expect(r.block).toContain(`${HOLD} job1 (gh pr checks 2383 --watch)`)
+    const mine = await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+    expect(noticesOf(mine)).toContain("could not read the list of background work Claude Code sent with agent fix CI's stop")
+  })
+}
+
+test('with the in flight list unreadable and no job on record, the subagent stops and it is said once (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
+  expect((await subagentStop($, 'a1', 'absent')).block).toBeUndefined()
+  expect((await subagentStop($, 'a1', null)).block).toBeUndefined()
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said.split('could not read the list of background work').length - 1).toBe(1)
+  expect(said).toContain('Monitors and agents it started were not checked')
+})
+
+test('an entry of the in flight list that names no task is passed over, and the rest still read (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
+  const r = await subagentStop($, 'a1', [null, { type: 'shell' }, 'mon1', shell('mon1', 'gh run watch 99')])
+  expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
+})
+
+test('a new session forgets which agent started what (#1326)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
+  await start($)
+  expect((await subagentStop($, 'a1', [shell('mon1', 'gh run watch 99')])).block).toBeUndefined()
 })
