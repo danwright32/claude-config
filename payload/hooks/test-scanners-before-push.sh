@@ -234,6 +234,79 @@ grep -q 'gamma' <<< "$fail_part" && grep -q 'psi found something' <<< "$fail_par
 grep -q 'omega could not copy the tree' <<< "$o34" && grep -q 'measured nothing' <<< "$o34" \
   && check "#1146 and the unmeasured one is named apart, with its reason" ok \
   || check "#1146 and the unmeasured one is named apart, with its reason" "out=$o34"
+
+# --- a scanner STOPPED AT ITS DEADLINE on a machine busier than its cores measured nothing either
+#     (claude-config#1333). Since #1330, lib/suite-deadline.sh says so in its own agreed line,
+#     SUITE-DEADLINE-UNMEASURED, and exits 124 with no FAIL line. This gate matched only
+#     SUITE-UNMEASURED, so such a scanner blocked the push under "exited 124 with no FAIL line" and
+#     the tail of its output, a failure heading for a run that judged nothing (L11, L683). The push
+#     is still held, since nothing was scanned; what changes is that the block says why. The lines
+#     below are the ones the library prints, with figures of the 2026-10-18 run (load about 30 on 12).
+add_deadline_scanner(){   # $1 = repo  $2 = name  $3 = also print a FAIL line first (1) or not (0)
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+echo "scanner $2 ran"
+[ $3 -eq 0 ] || echo "FAIL: scanner $2 found something"
+echo "UNMEASURED: test-$2.sh ran past its own wall clock of 600s and was stopped, at a load average of 30.12 on 12 cores (1 of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
+echo "  Run it again on its own on a quieter machine to judge it."
+echo "SUITE-DEADLINE-UNMEASURED stopped at its 600s wall clock at a load average of 30.12 on 12 cores, more than the machine has cores beyond its own share of 1"
+exit 124
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R37="$(mkrepo deadlineunmeasured)"; add_scanner "$R37" alpha 0; add_deadline_scanner "$R37" chi 0; commit_all "$R37"
+o37="$(fire "$R37" "git push")"; c37=$?
+[ "$c37" -eq 2 ] && check "#1333 a scanner stopped at its deadline under load still holds the push" ok \
+  || check "#1333 a scanner stopped at its deadline under load still holds the push" "exit=$c37 out=$o37"
+if grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o37" || grep -q 'exited 124' <<< "$o37"; then
+  check "#1333 and is never reported as a failing scanner that exited 124" "out=$o37"
+else
+  check "#1333 and is never reported as a failing scanner that exited 124" ok
+fi
+grep -q 'measured nothing' <<< "$o37" && grep -q "fault in this gate's own run" <<< "$o37" \
+  && check "#1333 and says it measured nothing, in the gate's own words" ok \
+  || check "#1333 and says it measured nothing, in the gate's own words" "out=$o37"
+grep -q '^stopped at its 600s wall clock at a load average of 30.12 on 12 cores, more than the machine has cores beyond its own share of 1$' <<< "$o37" \
+  && check "#1333 and gives the reason whole, without the marker" ok \
+  || check "#1333 and gives the reason whole, without the marker" "out=$o37"
+# The gate's own sentence, never the scanner's, whose tail also says "quieter machine".
+grep -q 'retry the push when the machine is quieter' <<< "$o37" \
+  && check "#1333 and says to retry on a quieter machine, the remedy for load" ok \
+  || check "#1333 and says to retry on a quieter machine, the remedy for load" "out=$o37"
+grep -q 'retry the push when the machine is quieter' <<< "$o33" \
+  && check "#1333 and a scanner that could not read the tree is not told the machine was busy" "out=$o33" \
+  || check "#1333 and a scanner that could not read the tree is not told the machine was busy" ok
+# The same, end to end through the REAL library rather than lines copied from it (L48): a scanner
+# that arms lib/suite-deadline.sh, starts past its deadline (SUITE_WALL_STARTED, the library's own
+# seam, L524) and blocks on a child, on a load SET through lib/load-average.sh's seams to the
+# 2026-10-18 figures rather than read off whatever this Mac is doing (L290).
+printf '#!/bin/sh\necho 30.5\n' > "$TMPROOT/load-busy"; chmod +x "$TMPROOT/load-busy"
+R39="$(mkrepo deadlinereal)"
+cat > "$R39/payload/hooks/test-psi.sh" <<EOF
+#!/usr/bin/env bash
+. "$DIR/lib/suite-deadline.sh" || exit 1
+suite_deadline_arm 60 || exit \$?
+git ls-files '*.sh' >/dev/null
+out="\$(sleep 30)"
+echo "FAIL: scanner psi was never stopped"
+EOF
+chmod +x "$R39/payload/hooks/test-psi.sh"; commit_all "$R39"
+o39="$(unset HOOK_TESTS_SLOTS
+  export LOAD_AVERAGE_CMD="$TMPROOT/load-busy" LOAD_AVERAGE_CORES=12 \
+    SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05
+  fire "$R39" "git push")"; c39=$?
+[ "$c39" -eq 2 ] && grep -q 'measured nothing' <<< "$o39" && grep -q '^stopped at its 60s wall clock at a load average of 30.5 on 12 cores' <<< "$o39" \
+  && ! grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o39" \
+  && check "#1333 a scanner the real library stopped under load is held as measuring nothing, with its reason" ok \
+  || check "#1333 a scanner the real library stopped under load is held as measuring nothing, with its reason" "exit=$c39 out=$o39"
+# A FAIL line printed before the stop outranks the deadline line, as it does SUITE-UNMEASURED: a
+# scanner that found something is judged by what it found.
+R38="$(mkrepo deadlineafterfail)"; add_deadline_scanner "$R38" phi 1; commit_all "$R38"
+o38="$(fire "$R38" "git push")"; c38=$?
+[ "$c38" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o38" && grep -q 'phi found something' <<< "$o38" \
+  && check "#1333 a FAIL printed before the deadline stop is still reported as failing" ok \
+  || check "#1333 a FAIL printed before the deadline stop is still reported as failing" "exit=$c38 out=$o38"
 # The gate's OWN listing of the uncommitted files is the same kind of read: when it fails, the count
 # is unknown, never zero, and with the uncommitted files unread there is no key a pass can be
 # remembered on, or a later push would skip a scan over files nobody had read (#1146, L90). Run from

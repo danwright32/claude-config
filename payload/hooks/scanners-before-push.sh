@@ -35,7 +35,8 @@
 # could not be executed. It blocks on a scanner that ran and failed, and, in its own words, on a
 # scanner that could not run because another suite run held its lock past the wait (#642), and on
 # a scanner that ran and said, in a SUITE-UNMEASURED line, that it could not read what it judges,
-# which it calls a fault in its own run rather than a finding (#1146). Finding NO
+# or, in a SUITE-DEADLINE-UNMEASURED line, that it was stopped at its deadline on a machine busier
+# than its cores (#1333), which it calls a fault in its own run rather than a finding (#1146). Finding NO
 # scanners is reported rather than passed silently, because reading nothing and reading everything
 # green look identical otherwise (L98).
 #
@@ -389,8 +390,17 @@ fi
 # nothing, so it is neither a pass, which would publish an unscanned tree, nor a failure of the code
 # (L11, L411). It is held apart and said as a fault in this gate's own run, with the scanner's reason.
 # A FAIL line outranks it: a scanner that found something is judged by what it found.
+#
+# The same holds for a scanner STOPPED AT ITS DEADLINE on a machine busier than its cores
+# (claude-config#1333). lib/suite-deadline.sh says so in its own agreed line,
+# `SUITE-DEADLINE-UNMEASURED <why>`, and exits 124 with no FAIL line (#1330). Matched on the first
+# marker alone, such a scanner blocked under "exited 124 with no FAIL line", a failure heading over
+# a run that judged nothing (L11, L683). Both markers are read here, each reason given without its
+# marker, and a deadline stop adds the remedy for load, since retrying at once on the same busy
+# machine is likely to stop it again. The push is held either way: nothing was scanned.
 failed=""
 unmeasured=""
+unmeasured_load=""
 ran=0
 _sc_i=1
 while [ "$_sc_i" -le "$_sc_n" ]; do
@@ -408,11 +418,12 @@ this scanner never reported an exit code, so its verdict is missing rather than 
 "
   elif [ "$_sc_rc_now" != "0" ]; then
     _sc_fails="$(awk '/^FAIL|^not ok/ { if (n++ < 10) print }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
-    _sc_unm="$(awk '/^SUITE-UNMEASURED / { if (n++ < 5) print substr($0, 18) }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
+    _sc_unm="$(awk '/^SUITE-(DEADLINE-)?UNMEASURED / { if (n++ < 5) { sub(/^SUITE-(DEADLINE-)?UNMEASURED /, ""); print } }' "$_sc_work/$_sc_i.out" 2>/dev/null)"
     if [ -z "$_sc_fails" ] && [ -n "$_sc_unm" ]; then
       unmeasured="$unmeasured=== $_sc_what ===
 $_sc_unm
 "
+      grep -q '^SUITE-DEADLINE-UNMEASURED ' "$_sc_work/$_sc_i.out" 2>/dev/null && unmeasured_load=1
     else
       # No FAIL line at all is a failure whose reason is somewhere else in what it printed, so the
       # end of that is shown rather than an empty detail (#642 was found behind one).
@@ -436,11 +447,16 @@ fi
 
 # What the unmeasured scanners said, written once, for the block below whichever form it takes.
 _sc_unmeasured_note(){
-  echo "These scanners ran and measured nothing: each could not read what it judges, which is a"
-  echo "fault in this gate's own run, not a finding about your change. Nothing was found, and"
-  echo "nothing was checked either. Each said why:"
+  echo "These scanners ran and measured nothing: each could not read what it judges, or was stopped"
+  echo "at its deadline on a machine too busy to judge it, which is a fault in this gate's own run,"
+  echo "not a finding about your change. Nothing was found, and nothing was checked either. Each said why:"
   echo ""
   printf '%s' "$unmeasured"
+  # Said in both blocks that print this note, so a deadline stop beside a real failure gets it too.
+  if [ -n "$unmeasured_load" ]; then
+    echo ""
+    echo "A scanner was stopped at its deadline while this Mac was busier than its cores, so retry the push when the machine is quieter."
+  fi
 }
 
 if [ -z "$failed" ] && [ -n "$unmeasured" ]; then

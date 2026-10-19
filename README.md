@@ -1192,7 +1192,9 @@ decide (#1146). A suite stopped at its deadline on a machine busier than its cor
 share of the run prints `SUITE-DEADLINE-UNMEASURED <why>` with the load it read, and is reported as
 UNMEASURED, counted on its own summary line and never as a pass, so the run still exits 1 and says
 `NO SUITE FAILED, but N of M SUITES WERE UNMEASURED`; under CI, and wherever it had already printed
-a FAIL, it fails (#1330). And every failure carries the load average when the suite finished, saying when
+a FAIL, it fails (#1330). The pre push scanner gate reads that line as it reads `SUITE-UNMEASURED`:
+it holds the push as a scanner that measured nothing, gives the reason, and says to retry when the
+machine is quieter, never as a scanner that failed (#1333). And every failure carries the load average when the suite finished, saying when
 it was more than the machine has cores, as do `tools/check-mods.sh`'s engine refusals, so a failure
 caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`). The sync
 suite's two cost guards, its section time budget and its wall clock headroom, go further: where
