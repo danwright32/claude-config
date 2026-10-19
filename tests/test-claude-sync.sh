@@ -1368,7 +1368,7 @@ case "$SUITE_LOCK_WAIT_POLL" in
     echo "test suite: SUITE_LOCK_WAIT_POLL='$SUITE_LOCK_WAIT_POLL' is not a positive number of seconds. Refusing rather than spinning against the lock with no pause between looks." >&2
     exit 4 ;;
 esac
-_lk_wait_start="$(date +%s)"
+_lk_wait_start=""
 _lk_waited=0
 _lk_wait_said=""
 # One look's worth of waiting for a lock somebody else holds: 0 after a pause, ready for the next
@@ -1376,9 +1376,21 @@ _lk_wait_said=""
 # The bound is read off the clock rather than counted in pauses, which a busy Mac stretches (#152).
 # The mark the watchdog reads is rewritten with the seconds waited, so a wait is progress to it and
 # the wait's own bound is what ends it; the mark is the run's to write until a section claims it.
+#
+# The clock starts at the FIRST look that finds the lock held, never as the run sets up, and that
+# first look counts as no time waited at all (claude-config#1327). Started earlier, a busy machine
+# spent the wait before the run had looked: a 1 second wait whose first look came a second late
+# refused without waiting once, and said it refused rather than queueing (seen 2026-10-17, reproduced
+# 2026-10-18). Not computed on the first
+# look either, because two whole second readings a moment apart can straddle a tick.
 suite_lock_wait_more(){   # $1 = who holds it, as the refusal names them
   [ "$SUITE_LOCK_WAIT" -gt 0 ] || return 1
-  _lk_waited=$(( $(date +%s) - _lk_wait_start ))
+  if [ -z "$_lk_wait_start" ]; then
+    _lk_wait_start="$(date +%s)"
+    _lk_waited=0
+  else
+    _lk_waited=$(( $(date +%s) - _lk_wait_start ))
+  fi
   [ "$_lk_waited" -lt "$SUITE_LOCK_WAIT" ] || return 1
   if [ -z "$_lk_wait_said" ]; then
     _lk_wait_said="$1"
@@ -8182,6 +8194,62 @@ check "#1297 and its sentence says it waited, never that it refused rather than 
   "grep -q 'Waited [0-9]*s for it, the most SUITE_LOCK_WAIT allowed' <<< \"\$_ow\" && ! grep -q 'rather than queueing' <<< \"\$_ow\""
 check "#1297 while a run that was not asked to wait still says it refused rather than queueing" \
   "grep -q 'Refusing rather than queueing behind it' <<< \"\$_held\""
+
+# A BUSY MACHINE MUST NOT EAT THE WAIT BEFORE IT STARTS (claude-config#1327). The two checks above
+# that need the run to have SAID it waited failed on 2026-10-17 while other sessions' suites were
+# running here, and passed on the automatic second run. It looked like they were reading the real
+# suite lock, but every one of them already points at a lock under $WORK, and holding the real lock
+# from another live process while this section ran changed nothing (3 runs of 3 passed, measured
+# 2026-10-18, as were the counts below). What a
+# busy machine changes is TIME: the wait's clock started as the run set up, before it ever looked at
+# the lock, so a 1 second wait whose first look came a second late was already spent, and the run
+# refused without having waited at all, saying it refused rather than queueing (1 run in 20 with
+# every core saturated, none in 40 idle). The clock now starts at the first look that finds the
+# lock held, so a run asked to wait always waits at least once and says so, however late it looks.
+#
+# Made slow on purpose rather than hoped for: a `hostname` that takes longer than the whole wait is
+# consulted on every look, before the decision to wait, which is the gap a busy machine opened. A
+# minimum, so load only widens it, never closes it (L290). Resolved from this machine's PATH, not
+# named, since it lives in a different place on a Linux runner (L153).
+_slk_real_hostname="$(command -v hostname)"
+_slk_bin="$WORK/slow-hostname-bin"; mkdir -p "$_slk_bin"
+_slk_mark="$WORK/slow-hostname-calls"; : > "$_slk_mark"
+cat > "$_slk_bin/hostname" <<EOF
+#!/bin/bash
+echo called >> '$_slk_mark'
+sleep 1.2
+exec '$_slk_real_hostname' "\$@"
+EOF
+chmod +x "$_slk_bin/hostname"
+_mklock "$_lockdir/slow-look" "$$" "$_thishost" "$((_now - 30))"
+_slk="$(PATH="$_slk_bin:$PATH" _try_lock_waiting "$_lockdir/slow-look" 1)"; _slk_rc=$?
+_slk_calls="$(wc -l < "$_slk_mark" | tr -d ' ')"
+# The fixture is real first: the slow lookup was consulted, so the first look really did come after
+# the whole wait had gone by on the old clock (L98, L159).
+check "#1327 the slow lookup really was on the path to the lock decision ($_slk_calls calls)" "[ '$_slk_calls' -ge 1 ]"
+check "#1327 a run whose first look comes after its whole wait has gone by is still refused" "[ '$_slk_rc' -eq 5 ]"
+check "#1327 and it still says it waited, in the line the runner reads" \
+  "grep -qE '^SUITE-LOCK-REFUSED process $$ on .*after waiting [0-9]+s' <<< \"\$_slk\""
+check "#1327 and it said so as it started waiting" "grep -q 'Waiting up to 1s' <<< \"\$_slk\""
+check "#1327 and its sentence says it waited, never that it refused rather than queueing" \
+  "grep -q 'Waited [0-9]*s for it, the most SUITE_LOCK_WAIT allowed' <<< \"\$_slk\" && ! grep -q 'rather than queueing' <<< \"\$_slk\""
+
+# The control the issue asked for: the lock a run uses when it is NOT pointed elsewhere, held by a
+# different live process for the whole of a run that is. Built in a temp root of its own, because
+# that default path is TMPDIR's, and holding the machine's real one would make every other session's
+# suite wait on this one, which is the collision the lock exists to stop. If a run read the default
+# lock it would name that holder; it must name only the one at the path it was given.
+_dl_root="$WORK/default-lock-root"; mkdir -p "$_dl_root"
+sleep 300 &
+_dl_holder=$!
+_mklock "$_dl_root/claude-sync-suite.lock" "$_dl_holder" "$_thishost" "$((_now - 30))"
+_mklock "$_lockdir/beside-default" "$$" "$_thishost" "$((_now - 30))"
+_dl="$(TMPDIR="$_dl_root" _try_lock_waiting "$_lockdir/beside-default" 1)"; _dl_rc=$?
+check "#1327 with the default lock held by another live run, the run given its own lock is judged by that one" \
+  "[ '$_dl_rc' -eq 5 ] && grep -qE '^SUITE-LOCK-REFUSED process $$ on .*after waiting [0-9]+s' <<< \"\$_dl\""
+check "#1327 and the default lock's holder is named nowhere in what it said" "! grep -q 'process $_dl_holder ' <<< \"\$_dl\""
+check "#1327 and that holder kept its lock" "[ \"\$(cat '$_dl_root/claude-sync-suite.lock/pid' 2>/dev/null)\" = '$_dl_holder' ]"
+kill "$_dl_holder" 2>/dev/null; wait "$_dl_holder" 2>/dev/null
 
 # A wait that is not a whole number of seconds is refused rather than guessed at: guessing could
 # mean no wait at all, which is the refusal this exists to avoid, or one with no end (L50).
