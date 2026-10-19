@@ -1,14 +1,14 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { IsItLive, IsItLiveCard, IsItLiveOwed } from '../types/index.d.ts'
-import { type CardInput, MOD, buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from './card.ts'
+import { type CardInput, MOD, buttonId, cardOf, cardText, isOut, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from './card.ts'
 import { type MergeCall, type Proof, TOOL, VIEW_FIELDS, WAIT_MS, letGoOf, mergeCallOf, nudgeOf, proofOf, refusalOf } from './merges.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
 // Is it live (claude-config#617). After a merge, and after checking the project's deploy, Claude
 // calls this mod's card tool with what it found; the mod confirms the merge with GitHub itself (L161:
 // a fact the system can read is checked, never taken from the model), keeps the card per repository
-// so /live can list it in any later session, toasts it, and pins a message for whoever asked in the
-// band until Dan presses Mark sent. Spec agreed with Dan 2026-10-03, looks settled 2026-10-04.
+// so /live can list it in any later session, toasts it, and, once a card says live, pins a message
+// for whoever asked in the band until Dan presses Mark sent (#1335). Spec agreed with Dan 2026-10-03, looks settled 2026-10-04.
 //
 // The card's result row is mod-kit's boxed card ($.modkit.card, #663), the blocked card's shape:
 // only mod-kit draws a result row (tools/check-mod-shared-parts.sh, L613). The same lines go to the
@@ -94,7 +94,7 @@ const accountsOf = async ($: EngineInterface): Promise<Accounts> => {
 }
 
 const pin = async ($: EngineInterface, c: IsItLiveCard): Promise<string | undefined> => {
-  if (!c.requester || !c.message || c.sentAt !== undefined) return undefined
+  if (!pinnable(c) || !c.requester || !c.message) return undefined
   try {
     await $.modkit.bandRow(messageRow({ repo: c.repo, pr: c.pr, requester: c.requester, message: c.message }) as never)
     return undefined
@@ -235,6 +235,7 @@ const DESCRIPTION = [
   'deploy is "live" only when you confirmed the change itself is live (say how in checked); "failed" or "unreachable" when you could not confirm it (say why in checked); "none" when the project has no recorded deploy step.',
   'changed: what changed, in 2 to 3 plain sentences. see: the direct link and the exact clicks to see it.',
   'requester and message ONLY when someone other than Dan asked: an issue another person reported (via "issue" with its number), a pasted Slack thread ("slack"), or a person Dan named ("named"). The message is in Dan\'s voice, with no dashes.',
+  'The message tells them the change is live, so Dan is shown it only once a card for that PR says "live", or "none" (with no deploy step, merging is going live): it is required on those calls, and one passed on an earlier call ("deploying", "failed", "unreachable") is held until then.',
   SEEN,
 ].join(' ')
 
@@ -367,12 +368,18 @@ export const register: Register = on => {
     await saveCards($, repo, [kept, ...had.filter(c => c.pr !== input.pr)])
     const verdicts = (await $.state.get(verdictsRef)).value ?? {}
     await $.state.set(verdictsRef, { ...verdicts, [verdictKey(repo, input.pr)]: { state, at: now } })
-    // Taken out of the band when the card carries no message for it.
-    if (!kept.message) await $.modkit.clearBandRow({ mod: MOD, id: buttonId(repo, input.pr) }).catch(() => undefined)
+    // Taken out of the band when the card carries no message for it, or holds it until live (#1335).
+    if (!kept.message || !pinnable(kept)) await $.modkit.clearBandRow({ mod: MOD, id: buttonId(repo, input.pr) }).catch(() => undefined)
     const unpinned = await pin($, kept)
     if (unpinned) notes.push(`The message for ${kept.requester?.name} could not be pinned in the band (${unpinned}); /live lists it.`)
+    // Who a held message is for: the one this card keeps, or the requester this call named before
+    // writing it, whose message the live call owes. A message Dan marked sent waits for nothing.
+    const waiting = isOut(state) || kept.sentAt !== undefined ? undefined : (kept.requester ?? requester)
+    if (waiting)
+      notes.push(`The message for ${waiting.name} is held, not shown to Dan, until a card for #${input.pr} says live: once you confirm it is live, call this again with deploy "live"${kept.message ? '' : ' and the message'}.`)
 
-    const shown = { ...input, state, title, url: kept.url }
+    const { requester: _r, message: _m, ...rest } = input
+    const shown = { ...rest, ...(waiting ? { requester: waiting } : {}), state, title, url: kept.url }
     try {
       await $.modkit.card({ toolUseId: String(toolUseId ?? ''), ...cardOf(shown) })
     } catch (err) {
@@ -522,8 +529,10 @@ export const register: Register = on => {
       .map(c => ({ c, owing: owes(c) ? c : all.filter(o => o.pr === c.pr && owes(o)).sort((a, b) => b.at - a.at)[0] }))
       .sort((a, b) => b.c.at - a.c.at)
     // Newest first across both names, as cardsOf gives one name's: the band pins in this order.
-    // Every message not yet sent is pinned again, so Copy and Mark sent are at hand in any session.
-    for (const { owing } of shown) if (owing) await pin($, owing)
+    // Every message not yet sent whose change is out is pinned again, so Copy and Mark sent are at
+    // hand in any session; one whose change is not is held (#1335). Whether it is out is the newest
+    // card's state for the PR, as the list below says, wherever the message is kept.
+    for (const { c, owing } of shown) if (owing) await pin($, { ...owing, state: c.state })
     const cards = shown.map(({ c, owing }) => (owing && owing !== c ? { ...c, requester: owing.requester, message: owing.message, sentAt: undefined } : c))
     const unasked = now.error !== undefined ? `\n\nGitHub could not be asked for the name this repository has now (${now.error}), so any cards kept under another name for it may be missing.` : ''
     return { text: liveList(cards) + unasked }
