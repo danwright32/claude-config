@@ -55,7 +55,9 @@
 # issue named and is not built: it would serialise only this Mac's helpers, not the other MacBook's
 # or a typed merge, and would need a holder that dies to be noticed (L409).
 #
-# WHAT IT REFUSES TO CARRY. Only the merge method and --delete-branch are passed to gh. Anything
+# WHAT IT REFUSES TO CARRY. Only the merge method is passed to gh, and --delete-branch is carried
+# out here once the merge has landed: the open pull requests based on the branch are moved onto the
+# merged one's base first, so deleting it closes none of them (claude-config#1337). Anything
 # else is refused before any call: --admin and --auto would bypass or defer the very checks this
 # waits for, a pin of your own could disagree with the head judged, and free text (a subject or a
 # body) could carry an override token the gates read from the command (ALLOW_RED_MERGE=1 and the
@@ -69,6 +71,9 @@
 #      closed, or a read GitHub refused or still did not answer after being asked again
 #   3  still waiting (on checks, the review, or a base still moving) when the deadline or the poll
 #      count ran out; running it again resumes
+#   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
+#      based on it could not be moved, GitHub could not be read, or the branch holds commits the
+#      merge did not; running it again finishes the branch
 #   64 refused its arguments, or was run outside a checkout
 #
 # Findings to read: the review's own refusal carries a read key. Read them, fix what is real, then
@@ -131,7 +136,7 @@ while [ $# -gt 0 ]; do
       case "$1" in *[!0-9]*) usage "$1 is not a pull request number." ;; esac
       [ -z "$pr" ] || usage "more than one pull request number was given."
       pr="$1"; shift ;;
-    *) usage "$1 is not carried: only the merge method and --delete-branch are passed to gh pr merge, so nothing here can bypass, defer or override the gates it waits for." ;;
+    *) usage "$1 is not carried: only the merge method is passed to gh pr merge, and --delete-branch is done here after the merge, so nothing here can bypass, defer or override the gates it waits for." ;;
   esac
 done
 [ -n "$pr" ] || usage "name the pull request by number."
@@ -177,8 +182,13 @@ gh_as(){
 }
 
 # The exact command the gates judge and gh runs, as one line of text and as an argument list.
+# --delete-branch is taken out of it and done here, after the merge (claude-config#1337, see
+# finish_branch), so the gates judge the command that actually runs.
+want_delete=""
 merge_argv=(pr merge "$pr" --repo "$slug")
-[ ${#flags[@]} -gt 0 ] && merge_argv+=("${flags[@]}")
+for f in ${flags[@]+"${flags[@]}"}; do
+  case "$f" in --delete-branch|-d) want_delete=1 ;; *) merge_argv+=("$f") ;; esac
+done
 merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "$1"; }
 
 # Hand one gate a PreToolUse payload for the merge command; prints its reason when it refuses.
@@ -216,7 +226,7 @@ with_retries(){   # $1 = what is being read, for the line it says; $2 = the read
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
 read_pr(){   # sets view_env
   local rc
-  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
+  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
   mt_view_class "$view_env"; rc=$?
   read_err="$MT_VIEW_ERR"
   [ "$rc" -eq 1 ] && read_err="${read_err:-no answer}"
@@ -251,6 +261,99 @@ read_back(){   # sets after
   return 1
 }
 
+# THE BRANCH IS DELETED HERE, NEVER BY gh (claude-config#1337). On 2026-10-19 this merged
+# Try-Pennie/bidspoke#2478 with --delete-branch passed through to gh pr merge, which deleted the
+# branch the moment the merge landed. GitHub closed #2482, which was based on that branch (a branch
+# deleted through the API does not move the pull requests based on it, as one deleted in the web
+# page does), and a closed pull request's base can never be changed, so it was opened again as a
+# new one, losing its review thread and a CI round. So gh merges without deleting anything, and only
+# once the merge is read back MERGED does finish_branch move every open pull request based on the
+# branch onto the merged one's base and then delete it. Nothing moves BEFORE the merge: a stacked
+# pull request moved onto main while its parent is still open shows the parent's commits as its own,
+# and the merge can still be refused. Every step is judged by the state it leaves, and any doubt
+# leaves the branch where it is, which costs a stray branch, where deleting wrongly costs a closed
+# pull request that cannot be reopened onto anything (L5). That is stop 4, and running the same
+# command again finishes the job: the read at the top finds the merge done and comes back here,
+# where only what is still based on the branch is moved. Only the branch on GitHub is deleted;
+# gh's --delete-branch also deleted the local one and switched the checkout, which from a worktree
+# failed after the merge had landed, and touched a checkout another session may be standing in.
+read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
+  local out rc
+  ref_tip=""; ref_gone=""
+  out="$(gh_as api "repos/$slug/git/ref/heads/$branch" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    ref_tip="$(printf '%s' "$out" | jq -r '.object.sha // ""' 2>/dev/null)"
+    [ -n "$ref_tip" ] && return 0
+    read_err="${out:0:300}"; return 1
+  fi
+  # GitHub answers 404 for what the account cannot see as well as for what is not there, so a 404
+  # reads as deleted only when the base branch, asked the same way, can be seen.
+  case "$out" in *"HTTP 404"*)
+    if gh_as api "repos/$slug/git/ref/heads/$base" >/dev/null 2>&1; then ref_gone=1; return 0; fi
+    read_err="GitHub answered 404 for $branch and could not show $base either, so a deleted branch cannot be told from one it will not show"
+    return 1 ;;
+  esac
+  read_err="${out:0:300}, exit $rc"
+  mt_gh_transient "$out" && return 2
+  return 1
+}
+# The open pull requests based on the branch, one number a line in stacked. An answer that is not a
+# list is a failed read, never an empty one: "could not list" must not read as "nothing stacked".
+read_stacked(){
+  local out rc
+  stacked=""
+  out="$(gh_as pr list --repo "$slug" --base "$branch" --state open --limit 1000 --json number 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && stacked="$(printf '%s' "$out" | jq -r 'if type == "array" then .[].number else error("not a list") end' 2>/dev/null)"; then
+    return 0
+  fi
+  stacked=""
+  read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
+  return 1
+}
+# Moves one pull request onto the merged one's base. A write, so never asked again here; prints
+# GitHub's answer when the base it reports is not the one asked for.
+retarget(){   # $1 = pull request number
+  local out rc
+  out="$(gh_as api -X PATCH "repos/$slug/pulls/$1" -f "base=$base" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.base.ref // ""' 2>/dev/null)" = "$base" ] && return 0
+  printf '%s, exit %s' "${out:0:300}" "$rc"
+  return 1
+}
+finish_branch(){   # $1 = the sentence saying it merged; always stops
+  local said="$1" left n why moved="" failed="" del rrc
+  [ -n "$want_delete" ] || stop 0 "$said."
+  if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
+    stop 0 "$said. Its branch $branch is in a fork, not in $slug, so no branch was deleted."
+  fi
+  left="$said, but branch $branch was left in place"
+  [ -n "$branch" ] || stop 4 "$said, but GitHub did not name its branch, so no branch was deleted."
+  with_retries "branch $branch" read_ref; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 4 "$left: could not read it from GitHub ($read_err$(tried "$rrc")). Delete it by hand, or run the same command again to finish."
+  [ -z "$ref_gone" ] || stop 0 "$said. Its branch $branch was already deleted."
+  [ "$ref_tip" = "$head" ] || stop 4 "$left: it now points at ${ref_tip:0:7}, not the merged head ${head:0:7}, so it holds commits the merge did not."
+  with_retries "the pull requests based on $branch" read_stacked; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 4 "$left: could not list the open pull requests based on it ($read_err$(tried "$rrc")), and deleting it would close every one. Run the same command again to finish."
+  for n in $stacked; do
+    case "$n" in ''|*[!0-9]*) stop 4 "$left: GitHub listed '$n' among the pull requests based on it, which is not a number." ;; esac
+    if why="$(retarget "$n")"; then moved="$moved #$n"; else failed="$failed #$n ($why)"; fi
+  done
+  [ -z "$moved" ] || say "Moved the pull request(s) based on $branch onto $base:$moved."
+  [ -z "$failed" ] || stop 4 "$left: GitHub would not move$failed onto $base, and deleting the branch would close them.${moved:+ Already moved:$moved.} Move them by hand, or run the same command again to finish."
+  # Judged by the state left, never by the answers: a pull request still based on the branch now
+  # (one GitHub said yes about, or one opened meanwhile) would be closed by the delete.
+  with_retries "the pull requests based on $branch" read_stacked; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 4 "$left: could not list the open pull requests based on it after moving them ($read_err$(tried "$rrc")). Run the same command again to finish."
+  if [ -n "$stacked" ]; then
+    stop 4 "$left: $(printf '#%s ' $stacked)still based on it after the move, and deleting it would close them. Run the same command again to finish."
+  fi
+  if ! del="$(gh_as api -X DELETE "repos/$slug/git/refs/heads/$branch" 2>&1)"; then
+    with_retries "branch $branch" read_ref
+    [ -n "$ref_gone" ] || stop 4 "$left: GitHub refused to delete it (${del:0:300}). Delete it by hand, or run the same command again to finish."
+  fi
+  stop 0 "$said. Deleted its branch $branch${moved:+, after moving$moved onto $base}."
+}
+
 record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 tip_seen=""; tip_moved_at=""
 # Out of time while waiting on something: the same stop wherever the wait is.
@@ -280,7 +383,9 @@ while :; do
   base="$(printf '%s' "$view" | jq -r '.baseRefName // ""')"
   branch="$(printf '%s' "$view" | jq -r '.headRefName // ""')"
   case "$state" in
-    MERGED) stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
+    # A run that stopped with the branch left in place (stop 4) is finished here when run again.
+    MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+            stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
     OPEN) ;;
     *) stop 1 "Stopped: pull request #$pr in $slug is ${state:-in an unknown state}, not open. Nothing was merged." ;;
   esac
@@ -387,8 +492,7 @@ while :; do
   fi
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?
-  # Judged by the state it leaves, never by what gh printed: --delete-branch from a worktree can fail
-  # after the merge has landed.
+  # Judged by the state it leaves, never by what gh printed: gh can fail after the merge has landed.
   with_retries "#$pr back after the merge" read_back; rrc=$?
   if [ "$rrc" -ne 0 ]; then
     # Unreadable is not "the head moved": say what is known and look again, where the read at the
@@ -398,7 +502,7 @@ while :; do
   fi
   if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then
     note=""; [ "$merge_rc" -ne 0 ] && note=" (gh exited $merge_rc after merging: ${merge_out:0:200})"
-    stop 0 "Merged #$pr in $slug at ${head:0:7}$note."
+    finish_branch "Merged #$pr in $slug at ${head:0:7}$note"
   fi
   if [ "$(printf '%s' "$after" | jq -r '.headRefOid // ""')" != "$head" ]; then
     say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
