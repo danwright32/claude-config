@@ -748,8 +748,9 @@ would refuse. The changelog record gate is also asked at the first look, before 
 review, because nothing those do can add a missing label. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
-to the hooks block but not to the helper fails it. It carries only the merge
-method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
+to the hooks block but not to the helper fails it. It accepts only the merge
+method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
+the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
 out. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
 merge landed: on 2026-10-19 that closed Try-Pennie/bidspoke#2482, which was based on the merged
