@@ -409,6 +409,70 @@ test('someone else asked in an issue: the message is pinned in the band, Copy co
   expect(await live($)).not.toContain('Not sent yet')
 })
 
+// #1335: the message tells whoever asked that the change is live, so it is held, never shown to
+// Dan with Copy and Mark sent, until a card for that PR says live.
+test('a message waits while the deploy runs: nothing is pinned until the card for the same PR says live (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  const r = await card($, { ...CARD, deploy: 'deploying', checked: undefined, ...ask })
+  expect(r.deny).toBeUndefined()
+  expect(await shown($)).toEqual(['engine band'])
+  expect(textOf(r).split('\n').at(-1)).toBe('Message for Kris waits until this is live.')
+  expect(textOf(r)).not.toContain('The venue filter is live now.')
+  expect((r.context ?? []).join(' ')).toContain('call this again with deploy "live"')
+  expect(await live($)).not.toContain('The venue filter is live now.')
+  // /live pins every unsent message again, and still not this one.
+  expect(await shown($)).toEqual(['engine band'])
+  const l = await card($, { ...CARD, ...ask })
+  expect(textOf(l)).not.toContain('waits until')
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+})
+
+test('a deploy that failed or could not be reached keeps the message held, and takes down one already pinned (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  for (const deploy of ['failed', 'unreachable']) {
+    await card($, { ...CARD, ...ask })
+    expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+    const r = await card($, { ...CARD, ...ask, deploy, checked: 'The deploy check timed out.' })
+    expect(r.deny).toBeUndefined()
+    expect(await shown($)).toEqual(['engine band'])
+    expect(textOf(r)).toContain('Message for Kris waits until this is live.')
+    expect(await live($)).toContain('- Message for Kris waits until #412 is live.')
+  }
+})
+
+// Dan, 2026-10-19: with no deploy step, merging is going live, so the message is shown at once.
+test('a project with no deploy step pins the message at once, and a "none" call naming who asked owes it (#1335)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, deploy: 'none', checked: undefined, requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' })
+  expect(r.deny).toBeUndefined()
+  expect(await shown($)).toEqual(['Message for Kris', 'The venue filter is live now.'])
+  expect(textOf(r)).not.toContain('waits until')
+  expect((r.context ?? []).join(' ')).not.toContain('is held')
+  expect((await card($, { ...CARD, pr: 413, deploy: 'none', checked: undefined, requester: { name: 'Kris', via: 'slack' } })).deny).toContain('message for Kris')
+})
+
+test('a message Dan already marked sent is not said to wait when a later card for the PR is not live (#1335)', withKit, async ($, on) => {
+  world(on)
+  const ask = { requester: { name: 'Kris', via: 'slack' }, message: 'The venue filter is live now.' }
+  await card($, { ...CARD, ...ask })
+  await press($, 'is-it-live:sent-danwright32-slate-412')
+  const r = await card($, { ...CARD, ...ask, deploy: 'failed', checked: 'The deploy check timed out.' })
+  expect(textOf(r)).not.toContain('waits until')
+  expect((r.context ?? []).join(' ')).not.toContain('is held')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
+test('a deploying card naming who asked, with no message yet, is made, and says a message for them waits (#1335)', withKit, async ($, on) => {
+  world(on)
+  const r = await card($, { ...CARD, deploy: 'deploying', checked: undefined, requester: { name: 'Kris', via: 'slack' } })
+  expect(r.deny).toBeUndefined()
+  expect(textOf(r).split('\n').at(-1)).toBe('Message for Kris waits until this is live.')
+  expect((r.context ?? []).join(' ')).toContain('with deploy "live" and the message')
+  expect(await shown($)).toEqual(['engine band'])
+})
+
 test('a Copy the clipboard refuses says so, rather than seeming to work', withKit, async ($, on) => {
   const w = world(on, { copied: false })
   await card($, { ...CARD, requester: { name: 'Kris', via: 'named' }, message: 'It is live now.' })
