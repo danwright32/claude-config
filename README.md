@@ -774,10 +774,22 @@ would refuse. The changelog record gate is also asked at the first look, before 
 review, because nothing those do can add a missing label. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
-to the hooks block but not to the helper fails it. It carries only the merge
-method and `--delete-branch`, and stops, in its own words, on a gate's refusal, on findings to read
+to the hooks block but not to the helper fails it. It accepts only the merge
+method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
+the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
-out. A base that keeps moving no longer stops it (claude-config#1271): it used to give up after
+out. `--delete-branch` is never handed to `gh pr merge`, which deleted the branch the moment the
+merge landed: on 2026-10-19 that closed Try-Pennie/bidspoke#2482, which was based on the merged
+branch, and a closed pull request's base cannot be changed, so it had to be opened again as a new
+one, losing its review thread and a CI round (claude-config#1337). Instead, once the merge reads
+back as merged, the helper lists the open pull requests based on the branch, moves each onto the
+merged one's base, lists them again to confirm none is left, and only then deletes the branch on
+GitHub (never the local one). Nothing is moved before the merge, since a refused merge would leave
+a stacked pull request showing its parent's commits. A list or move that fails, a branch that now
+holds commits the merge did not, or a delete GitHub refuses leaves the branch in place and stops
+with exit 4, merged, saying which pull requests were not moved and why; running the same command
+again finds the merge done and finishes the branch. A branch GitHub already deleted, or one in a
+fork, is left alone. A base that keeps moving no longer stops it (claude-config#1271): it used to give up after
 three updates, which on a busy day (2026-10-16: several merges at once, 15 to 30 minute check runs) handed the
 restart to a person. The first update is made at once; after that it waits until the base's tip
 has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges costs one fresh check
