@@ -235,6 +235,9 @@ PY
 out="$(score rescore "$run1" --cases "$CASES" --results-dir "$RESULTS")"
 check "a rescore applies the case set's current judgements" "trivial 2, unsure 0, unjudged 0" "$out"
 [ "$(calls)" = "$before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a rescore must not call the reviewer"; }
+cp -R "$CASES" "$WORK/shrunk"; rm -rf "$WORK/shrunk/invented-retry"
+out="$(score rescore "$run1" --cases "$WORK/shrunk" --results-dir "$WORK/shrunk-results")"
+check "a case the run holds but the set no longer does is named as unmeasured" "unmeasured: invented-retry (no longer in the case set)" "$out"
 
 # --- 9. repeats pool their reviews ---------------------------------------------------------------
 out="$(score run --all --repeat 2 --cases "$CASES" --results-dir "$WORK/repeat-results")"

@@ -651,7 +651,8 @@ def cmd_rescore(args):
     ids = require_cases(root)
     cases, bad = load_all_cases(root, [c for c in run["cases"] if c in ids])
     results_dir = os.path.abspath(args.results_dir or os.path.join(root, "results"))
-    unmeasured = [f"{cid} ({'; '.join(p)})" for cid, p in sorted(bad.items())]
+    unmeasured = sorted([f"{cid} ({'; '.join(p)})" for cid, p in bad.items()]
+                        + [f"{cid} (no longer in the case set)" for cid in run["cases"] if cid not in ids])
     print(f"Rescoring {os.path.basename(args.run)} against the case set as it is now (no review is run).")
     return report(run, cases, args.window, results_dir, unmeasured)
 
