@@ -275,12 +275,10 @@ def rates(t):
             "wrong": (t["wrong"] / t["findings"]) if t["findings"] else None}
 
 
-def score_run(run, cases, window, only=None):
+def score_run(run, cases, window):
     """{case id: counts} for the measured cases of a stored run, judged by the cases as they are now."""
     per = {}
     for cid, entry in run["cases"].items():
-        if only is not None and cid not in only:
-            continue
         case = cases.get(cid)
         if case is None:
             continue
@@ -431,16 +429,15 @@ def print_scores(t, per, unmeasured, cost):
     missed = [f"{cid} {m}" for cid in sorted(per) for m in per[cid]["missed"]]
     print(f"  missed: {', '.join(missed) if missed else 'none'}")
     print(f"  unmeasured: {', '.join(unmeasured) if unmeasured else 'none'}")
-    if cost is not None:
-        print(cost)
+    print(cost)
 
 
 def cost_line(run):
     usd, tin, tout, n, gaps = 0.0, 0, 0, 0, 0
     for entry in run["cases"].values():
         for rv in entry.get("reviews", []):
-            if rv.get("status") not in ("ok",) and "cost_usd" not in rv:
-                continue
+            if rv.get("status") != "ok" and "cost_usd" not in rv:
+                continue  # a review that failed before claude answered cost nothing to report
             if rv.get("cost_usd") is None:
                 gaps += 1
                 continue
@@ -594,7 +591,7 @@ def cmd_run(args):
             unmeasured.append(f"{cid} ({', '.join(sorted(set(statuses)))})")
     run["finished"] = int(time.time())
     per = score_run(run, cases, args.window)
-    run["scored"] = {cid: {k: v for k, v in s.items()} for cid, s in per.items()}
+    run["scored"] = per
     with open(path, "w", encoding="utf-8") as f:
         json.dump(run, f, indent=2)
     print(f"Results: {path}")
