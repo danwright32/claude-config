@@ -182,8 +182,8 @@ misses="$(grep -cE "$NOTE_EXPANSION_PAT" "$clean" 2>/dev/null || true)"
   && check "the expansion pattern matches every planted old form and none of the safe ones" ok \
   || check "the expansion pattern matches every planted old form and none of the safe ones" "matched $hits of 4 planted and $misses of 3 safe"
 
-# Every file that instructs an agent. Discovered, not listed, beyond the two named files: skills,
-# agents and commands are scanned whole so a new brief is covered on the day it lands (L96).
+# Every file that instructs an agent: CLAUDE.md, the review docs, README, DESIGN and the spool script
+# by name, then skills, agents and commands scanned whole so a new brief is covered the day it lands (L96).
 scan_files=()
 for f in "$PAYLOAD/CLAUDE.md" "$PAYLOAD/hooks/review/"*.md "$REPO_ROOT/README.md" "$REPO_ROOT/DESIGN.md" "$SPOOL_LIB"; do
   [ -f "$f" ] && scan_files+=("$f")
