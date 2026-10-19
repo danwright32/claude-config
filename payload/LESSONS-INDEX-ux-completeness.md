@@ -105,3 +105,4 @@ which is NOT loaded into the session.
 - L729. Safari ignores a button's own gap, so space an icon or cue from its label on an inner span and check customer controls in WebKit.
 - L732. A browser reload restores unsaved form edits, so a settings form rendered with defaultChecked shows them as stored: turn restoration off.
 - L734. Give every screen, especially a result, its own address that restores it on a fresh load, or refresh, copy link and Back all break.
+- L786. An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
