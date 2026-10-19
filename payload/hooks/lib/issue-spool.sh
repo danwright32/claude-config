@@ -24,6 +24,7 @@
 #   issue-spool.sh archive-path <dir>          the archive file for <dir>
 #   issue-spool.sh append       <dir> <json>   append one record; non-zero if refused
 #   issue-spool.sh note <dir> <text> [who]     record a finding directly, no model call
+#                                              (agents pass `.` as <dir>, never "$PWD": see #1342)
 #   issue-spool.sh raw          <dir>          the pending records, verbatim
 #   issue-spool.sh pending <dir> [transcript] [stamp-out] [seen-ledger]
 #                                              what a person should read; exit 1 if nothing.
@@ -943,6 +944,16 @@ issue_spool_session_transcript() { # session-transcript
 
 issue_spool_note() { # note <dir> <finding text> [who reported it] [session-transcript]
   local dir="${1:-$PWD}" text="${2:-}" source="${3:-self-reported}" transcript="${4:-}" record
+  # ABSOLUTE before it is recorded (claude-config#1342). The documented call passes `.`, because
+  # Claude Code refuses a command from an agent isolated in a worktree that hands a script a runtime
+  # value such as "$PWD", so the form CLAUDE.md used to teach could never run for those agents. A
+  # bare `.` stored as the record's cwd would later be resolved against whichever directory the
+  # READER stands in, attributing the finding to the wrong project. A directory that cannot be
+  # entered is kept exactly as given: the finding matters more than its attribution (L98).
+  case "$dir" in
+    /*) ;;
+    *) dir="$(CDPATH='' cd -- "$dir" 2>/dev/null && pwd)" || dir="${1:-$PWD}" ;;
+  esac
   # Given one wins. A caller that knows its transcript is the harvest, and it knows better than a
   # lookup through the environment does.
   [ -n "$transcript" ] || transcript="$(issue_spool_session_transcript)"
