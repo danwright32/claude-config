@@ -45,7 +45,9 @@
 #     and reads the first PLAN_COUNCIL_SCAN_FILE_CAP files under 1MB (default 5000). A walk that hit the cap
 #     and found nothing answers could not tell, because the files it never read could hold the
 #     answer (L564)
-#   - a git search that ERRORS answers could not tell, never no (L11)
+#   - a git search that ERRORS, or a walk that could not enter a folder or open a file, and found
+#     nothing, answers could not tell, never no (L11). Files of 1MB or more are not read by the
+#     walk, and its no says so
 #   - both skip node_modules, vendor, third_party, dist, build, out, .next, .nuxt, coverage, Pods,
 #     target and virtualenv folders, lockfiles, minified files and source maps: a dependency's or a
 #     bundler's copy says nothing about this project
@@ -143,19 +145,36 @@ for d in $SKIP_DIRS .git; do prune+=(-name "$d" -o); done
 skipf=()
 for f in $SKIP_FILES; do skipf+=(! -name "$f"); done
 for e in $SKIP_EXTS; do skipf+=(! -name "*.$e"); done
+# find's status says whether any folder could not be entered; grep's errors (a file it could not
+# open) go to a scratch file, because through xargs a grep error and a grep that matched nothing
+# both come back as 123. Only the COUNT of errors is used, never their text.
 listing="$(find -H "$dir" -mindepth 1 -maxdepth 6 \( "${prune[@]}" -false \) -prune -o -type f -size -1024k "${skipf[@]}" -print 2>/dev/null)"
+find_rc=$?
 count="$(grep -c . <<< "$listing")"
 capped=""
 if [ "$count" -gt "$cap" ]; then capped=1; count="$cap"; listing="$(head -n "$cap" <<< "$listing")"; fi
-for kind in env host; do
-  if [ "$kind" = env ]; then pat="$ENV_READ"; else pat="$HOST"; fi
-  hits="$(tr '\n' '\0' <<< "$listing" | xargs -0 grep -I -l -E -e "$pat" -- 2>/dev/null)"
-  hit="${hits%%$'\n'*}"
-  if [ -n "$hit" ]; then say_found "${hit#"$dir"/}" "$kind" " ($why, so the files were walked)"; fi
-done
-if [ -n "$capped" ]; then
-  echo "could not tell: no supabase folder, dependency or env file, and $dir ($why) holds more than $cap files, so only the first $cap were searched for a SUPABASE env read or supabase.co host"
+errf="$(mktemp "${TMPDIR:-/tmp}/uses-supabase.XXXXXXXX")" || {
+  echo "could not tell: no scratch file for the walk of $dir, so its source was not read"
+  exit 2
+}
+trap 'rm -f "$errf"' EXIT
+grep_errors=0
+if [ "$count" -gt 0 ]; then
+  for kind in env host; do
+    if [ "$kind" = env ]; then pat="$ENV_READ"; else pat="$HOST"; fi
+    hits="$(tr '\n' '\0' <<< "$listing" | xargs -0 grep -I -l -E -e "$pat" -- 2>"$errf")"
+    hit="${hits%%$'\n'*}"
+    if [ -n "$hit" ]; then say_found "${hit#"$dir"/}" "$kind" " ($why, so the files were walked)"; fi
+    if [ -s "$errf" ]; then grep_errors=$((grep_errors + $(grep -c . < "$errf"))); fi
+  done
+fi
+if [ "$find_rc" -ne 0 ] || [ "$grep_errors" -gt 0 ]; then
+  echo "could not tell: no supabase folder, dependency or env file, and the walk of $dir ($why) could not read part of it (find exit $find_rc, $grep_errors file read errors), so what it did not read could hold a SUPABASE env read or supabase.co host"
   exit 2
 fi
-echo "no: no supabase folder, @supabase dependency, SUPABASE variable in an env file, SUPABASE env read or supabase.co host in $dir ($why, so all $count files within six levels were walked)"
+if [ -n "$capped" ]; then
+  echo "could not tell: no supabase folder, dependency or env file, and $dir ($why) holds more than $cap files under 1MB, so only the first $cap were searched for a SUPABASE env read or supabase.co host"
+  exit 2
+fi
+echo "no: no supabase folder, @supabase dependency, SUPABASE variable in an env file, SUPABASE env read or supabase.co host in $dir ($why, so all $count files under 1MB within six levels were walked; larger files were not read)"
 exit 1

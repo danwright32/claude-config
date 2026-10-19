@@ -223,6 +223,25 @@ OUT="$(PLAN_COUNCIL_SCAN_FILE_CAP=3 bash "$USES" "$P" 2>&1)"; RC=$?
 check "a walk that hit its file cap and found nothing is could not tell (exit 2), never no" \
   "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
 
+# A walk that could not read part of the folder found nothing only in what it read, so it is could
+# not tell, never no (L11): first a folder it cannot enter, then a file it cannot open.
+P="$TMP/locked-dir"; mkdir -p "$P/src" "$P/secret"; printf 'x\n' > "$P/src/a.js"; printf 'y\n' > "$P/secret/b.js"
+chmod 000 "$P/secret"
+uses "$P"
+chmod 755 "$P/secret"
+check "a walk that could not enter a folder and found nothing is could not tell (exit 2)" \
+  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+P="$TMP/locked-file"; mkdir -p "$P/src"; printf 'x\n' > "$P/src/a.js"; printf 'y\n' > "$P/src/b.js"
+chmod 000 "$P/src/b.js"
+uses "$P"
+chmod 644 "$P/src/b.js"
+check "a walk that could not open a file and found nothing is could not tell (exit 2)" \
+  "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+# And the no it does give claims only what it read: files of 1MB or more are skipped, and it says so.
+uses "$TMP/form-1/../swift"
+check "a walk's no says it read only files under 1MB" \
+  "$([ "$RC" -eq 1 ] && grep -q 'under 1MB' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"
+
 # A git search that fails is could not tell, never no (L11): a shim git refuses grep only.
 REALGIT="$(command -v git)"; mkdir -p "$TMP/shim"
 printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = grep ] && { echo "fatal: simulated" >&2; exit 128; }; done\nexec "%s" "$@"\n' "$REALGIT" > "$TMP/shim/git"
