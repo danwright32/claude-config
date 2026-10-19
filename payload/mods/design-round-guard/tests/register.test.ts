@@ -1,7 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
-import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES } from '../hooks/rules.ts'
+import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES, settledNotYet } from '../hooks/rules.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { git as gitCommand, pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
@@ -1328,21 +1328,42 @@ test('#1138: a typed answer is not recorded, Dan is told so, and Claude is told 
   expect(w.toasts.some(t => t.includes('not recorded'))).toBe(true)
   expect(Object.keys(w.store)).toEqual([])
   expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
-  // The settled question the same way.
-  const typedSettled = contextOf(await askSettled($, w, 'looks fine to me'))
-  expect(typedSettled).toContain('not recorded')
-  expect(typedSettled).toContain(`ask him "${SETTLED_QUESTION}" again`)
-  expect(w.toasts.length).toBe(2)
-  expect(Object.keys(w.store)).toEqual([])
   // A mod-kit that cannot say it (loaded before it had the member): Claude is still told, and told
   // that Dan was not.
   const unsaid = contextOf(await askSkip($, w, why, 'BREAKS'))
   expect(unsaid).toContain('nothing is recorded')
   expect(unsaid).toContain('could not tell him')
   expect(unsaid).toContain('the same question again')
-  expect(w.toasts.length).toBe(2)
+  expect(w.toasts.length).toBe(1)
   // Asked again and answered by choosing, it is recorded.
   await askSkip($, w, why, SKIP_YES)
+  expect(refusalOf(await call($, PAGE))).toBe('')
+})
+
+// #1336: a typed answer to the settled question is nearly always feedback on the design ("not yet,
+// there is too much dead space in the boxes", Slate, 2026-10-19), so it counts as Not yet (Dan,
+// 2026-10-19: "a typed response should always count as not settled"). Nothing is settled, only
+// choosing Settled ever settles, and Claude takes his words as the next round's feedback rather than
+// asking the same question again. Typing the word itself, in any other case, settles nothing either.
+test('#1336: a typed answer to the settled question counts as Not yet, and is the next round\'s feedback', withKit, async ($, on) => {
+  const w = world($, on)
+  expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  expect(contextOf(await askSettled($, w, SETTLED_NO))).toContain(settledNotYet)
+  for (const said of ['not yet, there is too much dead space in the boxes', 'settled', 'BREAKS']) {
+    const typed = contextOf(await askSettled($, w, said))
+    expect(typed).toContain(`"${said}"`)
+    expect(typed).toContain(`counts as ${SETTLED_NO}`)
+    expect(typed).toContain('feedback for the next design round')
+    expect(typed).not.toContain(`ask him "${SETTLED_QUESTION}" again`)
+    expect(typed).not.toContain('not recorded')
+    // Exactly what choosing Not yet does: nothing recorded, no toast, the edit still held.
+    expect(typed).toContain(settledNotYet)
+    expect(w.toasts.length).toBe(0)
+    expect(Object.keys(w.store)).toEqual([])
+    expect(refusalOf(await call($, PAGE))).toContain(SKIP_QUESTION)
+  }
+  // Only choosing Settled settles it.
+  expect(contextOf(await askSettled($, w, SETTLED_YES))).toContain(`Dan answered ${SETTLED_YES}`)
   expect(refusalOf(await call($, PAGE))).toBe('')
 })
 
