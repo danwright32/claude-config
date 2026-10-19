@@ -2817,6 +2817,19 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
   why, never that it was undone. The command's other effects stand. Sent again after Dan answers, the
   same command stands.
 
+### What #1336 changed, 2026-10-19
+
+- **A typed answer to "Is this design settled?" counts as Not yet** (Dan, 2026-10-19: "a typed
+  response should always count as not settled"). A typed answer there is nearly always feedback on
+  the design ("not yet, there is too much dead space in the boxes", a Slate round that day), and
+  asking the same question again at once handed it back to him before the feedback was acted on. So
+  it does what choosing Not yet does: nothing is recorded and no toast is shown, and Claude is told
+  to take his words as the next round's feedback and to ask whether the design is settled only once
+  he has seen that round (rules.ts `settledTypedSaid`). Only choosing Settled ever settles; typing
+  the word settles nothing. A typed answer to the skip question is unchanged: it records nothing, is
+  said in mod-kit's one wording with a toast, and the same question is asked again, since a refused
+  edit waits on that answer and there is no round for words to feed.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
