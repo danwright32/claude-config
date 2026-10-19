@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { buttonId, cardOf, cardText, liveList, messageRow, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
+import { buttonId, cardOf, cardText, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
 
 // Is it live (claude-config#617): the card's state, words and the message row, settled with Dan on
 // 2026-10-04 (docs/mods-design.md, Is it live).
@@ -54,6 +54,36 @@ test('a message needs someone other than Dan who asked, and is written without d
   expect(reasonToRefuse({ ...base, requester: { name: 'Kris', via: 'email' as never }, message: 'Done.' })).toContain('via')
 })
 
+// #1335: the message says the change is live, so only the live call owes it; before that it may be
+// passed early and is held. With no deploy step, merging is going live (Dan, 2026-10-19), so a
+// "none" call owes it as live does.
+test('the message is owed on the live call, and may be passed earlier but is never required there', () => {
+  const kris = { name: 'Kris', via: 'named' as const }
+  expect(reasonToRefuse({ ...base, deploy: 'none', checked: undefined, requester: kris })).toContain('message for Kris')
+  expect(reasonToRefuse({ ...base, deploy: 'none', checked: undefined, requester: kris, message: 'It is live now.' })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, deploy: 'deploying', checked: undefined, requester: kris })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, deploy: 'failed', checked: 'Timed out.', requester: kris })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, deploy: 'unreachable', checked: 'No answer.', requester: kris })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, deploy: 'deploying', checked: undefined, requester: kris, message: 'It is live now.' })).toBeUndefined()
+  expect(reasonToRefuse({ ...base, deploy: 'deploying', checked: undefined, requester: kris, message: `Live ${EM} look.` })).toContain('dash')
+  expect(reasonToRefuse({ ...base, requester: kris })).toContain('message for Kris')
+})
+
+test('a card that is not live says the message for whoever asked waits, and never shows its words', () => {
+  const kris = { name: 'Kris', via: 'named' as const }
+  const held = { ...base, requester: kris, message: 'The venue filter is live now.', title: 'x', url: 'u' }
+  for (const [deploy, state] of [['deploying', 'deploying'], ['failed', 'unconfirmed'], ['unreachable', 'unconfirmed']] as const) {
+    const text = cardText({ ...held, deploy, state })
+    expect(text.split('\n').at(-1)).toBe('Message for Kris waits until this is live.')
+    expect(text).not.toContain('The venue filter is live now.')
+  }
+  expect(cardText({ ...held, state: 'live' })).not.toContain('Message for Kris')
+  expect(cardText({ ...held, deploy: 'none', state: 'no-deploy' })).not.toContain('Message for Kris')
+  expect(pinnable({ state: 'no-deploy', requester: kris, message: 'It is live now.' })).toBe(true)
+  expect(pinnable({ state: 'unconfirmed', requester: kris, message: 'It is live now.' })).toBe(false)
+  expect(cardText({ ...base, deploy: 'deploying', state: 'deploying', title: 'x', url: 'u' })).not.toContain('Message for')
+})
+
 test('the card as text: title, what changed, how to see it, and why live could not be confirmed', () => {
   expect(cardText({ ...base, state: 'live', title: 'Filter bookings by venue', url: 'https://github.com/danwright32/slate/pull/412' })).toBe(
     [
@@ -105,11 +135,14 @@ test('the message row: a violet heading naming who asked, the message, then Copy
 })
 
 test("/live lists the project's recent cards, newest first, and every unsent message", () => {
+  const deploying = { repo: 'r/s', pr: 2, title: 'New', state: 'deploying' as const, at: 2, url: 'u2', requester: { name: 'Kris', via: 'named' as const }, message: 'Soon.' }
   const cards = [
     { repo: 'r/s', pr: 1, title: 'Old', state: 'live' as const, at: 1, url: 'u1' },
-    { repo: 'r/s', pr: 2, title: 'New', state: 'deploying' as const, at: 2, url: 'u2', requester: { name: 'Kris', via: 'named' as const }, message: 'Soon.' },
+    deploying,
     { repo: 'r/s', pr: 3, title: 'Sent', state: 'live' as const, at: 3, url: 'u3', requester: { name: 'Ana', via: 'slack' as const }, message: 'Done.', sentAt: 4 },
   ]
-  expect(liveList(cards)).toBe(['- Live: Sent (#3)', '- Merged, deploying: New (#2)', '- Live: Old (#1)', '', 'Not sent yet:', '- Message for Kris (#2): Soon.'].join('\n'))
+  // A message held while its change deploys is listed as waiting, without its words (#1335).
+  expect(liveList(cards)).toBe(['- Live: Sent (#3)', '- Merged, deploying: New (#2)', '- Live: Old (#1)', '', 'Not sent yet:', '- Message for Kris waits until #2 is live.'].join('\n'))
+  expect(liveList([{ ...deploying, state: 'live' as const }])).toBe(['- Live: New (#2)', '', 'Not sent yet:', '- Message for Kris (#2): Soon.'].join('\n'))
   expect(liveList([])).toBe('No merged changes have a card in this project yet.')
 })
