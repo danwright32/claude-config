@@ -300,6 +300,52 @@ o39="$(unset HOOK_TESTS_SLOTS
   && ! grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o39" \
   && check "#1333 a scanner the real library stopped under load is held as measuring nothing, with its reason" ok \
   || check "#1333 a scanner the real library stopped under load is held as measuring nothing, with its reason" "exit=$c39 out=$o39"
+
+# --- each scanner is told its share of the machine, as run-all-tests.sh tells every suite
+#     (claude-config#1333). The gate runs its scanners side by side and used to hand them no
+#     HOOK_TESTS_SLOTS, so lib/suite-deadline.sh took a scanner's share as 1 and counted the
+#     scanners this same push started beside it as load from elsewhere, which could excuse a stop as
+#     a busy machine. Nothing bounds the gate's runs by a budget, so the share is every run in
+#     flight at once. First what each one is handed: a scanner that records it.
+add_slot_scanner(){   # $1 = repo  $2 = name
+  cat > "$1/payload/hooks/test-$2.sh" <<EOF
+#!/usr/bin/env bash
+git ls-files '*.sh' >/dev/null
+printf '%s' "\${HOOK_TESTS_SLOTS:-unset}" > "$TMPROOT/slots-$2"
+exit 0
+EOF
+  chmod +x "$1/payload/hooks/test-$2.sh"
+}
+R40="$(mkrepo slots)"; add_slot_scanner "$R40" s1; add_slot_scanner "$R40" s2; add_slot_scanner "$R40" s3; commit_all "$R40"
+o40="$(unset HOOK_TESTS_SLOTS; fire "$R40" "git push")"; c40=$?
+[ "$c40" -eq 0 ] && [ "$(cat "$TMPROOT/slots-s1" "$TMPROOT/slots-s2" "$TMPROOT/slots-s3" 2>/dev/null)" = "333" ] \
+  && check "#1333 each of three scanners run at once is handed a share of 3" ok \
+  || check "#1333 each of three scanners run at once is handed a share of 3" "exit=$c40 handed=$(cat "$TMPROOT"/slots-s* 2>/dev/null) out=$o40"
+# Then what the share decides, through the real library: a load of 15 on 12 cores is busy for a
+# suite whose own share is 1 (15 less 1 is more than 12) and not busy for one of four scanners run
+# at once (15 less 4 is not). So the stop beside three siblings is the FAIL it is, and the push is
+# held either way.
+printf '#!/bin/sh\necho 15\n' > "$TMPROOT/load-fifteen"; chmod +x "$TMPROOT/load-fifteen"
+R41="$(mkrepo deadlinesiblings)"; cp "$R39/payload/hooks/test-psi.sh" "$R41/payload/hooks/test-psi.sh"
+add_slot_scanner "$R41" t1; add_slot_scanner "$R41" t2; add_slot_scanner "$R41" t3; commit_all "$R41"
+o41="$(unset HOOK_TESTS_SLOTS
+  export LOAD_AVERAGE_CMD="$TMPROOT/load-fifteen" LOAD_AVERAGE_CORES=12 \
+    SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05
+  fire "$R41" "git push")"; c41=$?
+[ "$c41" -eq 2 ] && grep -q 'a scanner that reads the WHOLE repository fails' <<< "$o41" && grep -q 'ran past its own wall clock of 60s' <<< "$o41" \
+  && ! grep -q 'measured nothing' <<< "$o41" \
+  && check "#1333 a stop whose load is the push's own scanners is a FAIL, not excused as a busy machine" ok \
+  || check "#1333 a stop whose load is the push's own scanners is a FAIL, not excused as a busy machine" "exit=$c41 out=$o41"
+# The control, so the case above is the share at work and not a load the library never excuses:
+# the same scanner alone, at the same load, is UNMEASURED.
+R42="$(mkrepo deadlinealone)"; cp "$R39/payload/hooks/test-psi.sh" "$R42/payload/hooks/test-psi.sh"; commit_all "$R42"
+o42="$(unset HOOK_TESTS_SLOTS
+  export LOAD_AVERAGE_CMD="$TMPROOT/load-fifteen" LOAD_AVERAGE_CORES=12 \
+    SUITE_WALL_STARTED=$(( $(date +%s) - 1000 )) SUITE_WALL_POLL=0.05
+  fire "$R42" "git push")"; c42=$?
+[ "$c42" -eq 2 ] && grep -q 'measured nothing' <<< "$o42" && grep -q 'load average of 15 on 12 cores' <<< "$o42" \
+  && check "#1333 and the same stop alone at the same load is held as UNMEASURED" ok \
+  || check "#1333 and the same stop alone at the same load is held as UNMEASURED" "exit=$c42 out=$o42"
 # A FAIL line printed before the stop outranks the deadline line, as it does SUITE-UNMEASURED: a
 # scanner that found something is judged by what it found.
 R38="$(mkrepo deadlineafterfail)"; add_deadline_scanner "$R38" phi 1; commit_all "$R38"

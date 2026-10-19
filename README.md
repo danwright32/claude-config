@@ -1194,7 +1194,9 @@ UNMEASURED, counted on its own summary line and never as a pass, so the run stil
 `NO SUITE FAILED, but N of M SUITES WERE UNMEASURED`; under CI, and wherever it had already printed
 a FAIL, it fails (#1330). The pre push scanner gate reads that line as it reads `SUITE-UNMEASURED`:
 it holds the push as a scanner that measured nothing, gives the reason, and says to retry when the
-machine is quieter, never as a scanner that failed (#1333). And every failure carries the load average when the suite finished, saying when
+machine is quieter, never as a scanner that failed. It also hands each scanner `HOOK_TESTS_SLOTS`, as
+the runner hands every suite, set to every scanner run it has in flight at once, so the scanners
+this same push started are counted as its own load rather than as a busy machine (#1333). And every failure carries the load average when the suite finished, saying when
 it was more than the machine has cores, as do `tools/check-mods.sh`'s engine refusals, so a failure
 caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`). The sync
 suite's two cost guards, its section time budget and its wall clock headroom, go further: where
