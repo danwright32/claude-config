@@ -4638,6 +4638,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2391, 2026-10-18)
   SHORT: A self baselined detector that never stores an anomaly can never accept a deliberate change; build a rebaseline path tied to the change.
 
+- **L785. A check that stops a repeat page by leaving a still true finding out of its report, sent
+  to an alerter that reads an empty report as recovery, announces an all clear for something still
+  broken; keep suppressing repeats inside the alerter and report the standing finding every run, so
+  an empty report means only that the condition is gone.**
+  (bidspoke#2457, 2026-10-18)
+  SHORT: Suppress repeat pages in the alerter, never by omitting a still true finding, or an alerter reading empty as recovery sends a false all clear.
+
 ## State and identity
 
 - **L782. A freshness margin enforced on a cached value must also be enforced on whatever refills
