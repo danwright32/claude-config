@@ -117,13 +117,17 @@ def lessons_block(lessons_dir):
 # in it is not enough: every finding starts with its own path, and "`pickerVendors` was not updated"
 # or "Lines 203 to 209 have not changed" is about a symbol or part inside a changed file, which Dan
 # decided on 2026-10-19 is left unmarked. A possessive after the path ("<path>'s `retryLimit`") is
-# a part too. The path must also be one the complete list names, so a true absence is left alone.
+# a part too, and so is "<path> was not updated to mention the new flag". The path must also be one the complete list names, so a true absence is left alone.
 _ABSENT_VERB = r"(?:changed|modified|updated|touched|edited|included)"
 _CHANGE_SET = r"(?:diff|push|change|changeset|branch|pr|pull request|commit)"
+# "<path> was not updated" ends there, or goes on only to say where ("in this push"). Going on to
+# say what or why ("to mention the new flag", "for #3641") makes it a claim about a part.
+_CLAUSE_END = (r"(?=\s*(?:[.,;:)\]!?]|$)|\s+(?:in|by|from|on|with)\s+(?:the|this|that)\s+" + _CHANGE_SET +
+               r"\b|\s+(?:at\s+all|yet|either)\b)")
 ABSENCE_AFTER_PATH = re.compile(
     r"^`?(?: file)?\s+(?:"
-    r"(?:is|was|are|were|has|have)\s+(?:not|never)\s+(?:been\s+)?" + _ABSENT_VERB + r"|"
-    r"(?:is|was|stays|remains)\s+unchanged|"
+    r"(?:is|was|are|were|has|have)\s+(?:not|never)\s+(?:been\s+)?" + _ABSENT_VERB + _CLAUSE_END + r"|"
+    r"(?:is|was|stays|remains)\s+unchanged" + _CLAUSE_END + r"|"
     r"(?:is|was)\s+(?:absent|missing)\s+from\s+(?:the|this)\s+" + _CHANGE_SET + r"|"
     r"(?:is|was)\s+not\s+(?:in|part\s+of)\s+(?:the|this)\s+" + _CHANGE_SET + r"(?![\w-]|\s+(?:segment|command|step|string|text)\b))",
     re.IGNORECASE)

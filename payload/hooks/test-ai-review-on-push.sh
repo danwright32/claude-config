@@ -976,6 +976,14 @@ cases = [
     ("an array in a listed test file not updated to include new cases",
      "Tests/SignInTests/AuthManagerTests.swift:445: The `all` array in `noMessageNamesAnyApp` was not updated to include the new `.grantMissing` and `.scopesRefused(...)` cases, so their error text is never checked." + S,
      ["Tests/SignInTests/AuthManagerTests.swift"], False),
+    # Raised by the lessons review of this change: a listed file as the subject, with the clause
+    # going on to say WHAT in it was not updated, is a part too.
+    ("a listed doc not updated to mention a new flag",
+     "src/cli.ts:40: the new `--quiet` flag is parsed here, but `docs/guide.md` was not updated to mention the new flag." + S,
+     ["src/cli.ts", "docs/guide.md"], False),
+    ("a listed file not updated for an issue",
+     "src/a.ts:9: src/app/page.tsx was not updated for #3641, so its header still names the old route." + S,
+     ["src/a.ts", "src/app/page.tsx"], False),
     ("a possessive: a part of the file, however the clause reads",
      "src/a.ts:1: the diff contains no change to `src/config.ts`'s `retryLimit`, which the new caller needs." + S,
      ["src/a.ts", "src/config.ts"], False),
@@ -1026,7 +1034,7 @@ while IFS=$'\t' read -r verdict rest; do
   esac
 done <<< "$premise_out"
 # Counted, so a runner that crashed on import and printed nothing reads as a failure, never a pass.
-[ "$premise_ran" -eq 20 ] && ok || bad "the premise mark fixtures ran $premise_ran of 20 cases"
+[ "$premise_ran" -eq 22 ] && ok || bad "the premise mark fixtures ran $premise_ran of 22 cases"
 
 echo
 echo "passed: $pass, failed: $fail"
