@@ -56,6 +56,7 @@ fail_read(){
   [ -s "$ST/$1-down" ] && { cat "$ST/$1-down" >&2; exit 1; }
   return 0
 }
+gone(){ : > "$ST/branch-deleted"; printf 'feat/x\n' >> "$ST/deleted"; cat "$ST/stacked" >> "$ST/closed" 2>/dev/null; : > "$ST/stacked"; }
 case "$*" in
   "auth status"*) exit 0 ;;
   "pr view"*)
@@ -64,8 +65,39 @@ case "$*" in
     ms=CLEAN; [ "$(rd behind)" != 0 ] && ms=BEHIND
     # labels holds the pull request's labels as JSON, for the changelog record gate (#1178).
     lb="$(rd labels)"
-    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+    # cross holds true when the pull request's branch lives in a fork (claude-config#1337).
+    cx="$(rd cross)"
+    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",isCrossRepository:$x,statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+    ;;
+  # The merged pull request's branch and the pull requests stacked on it (claude-config#1337).
+  # stacked holds the numbers of the open pull requests whose base is feat/x, one per line. Deleting
+  # the branch closes every one still there, as GitHub does, into closed: a closed pull request's
+  # base can never be changed again, which is the harm the helper must not cause.
+  "api repos/acme/widget/git/ref/heads/feat/x"*)
+    fail_read ref
+    [ -e "$ST/branch-deleted" ] && { echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    bt="$(rd branch-tip)"
+    printf '{"ref":"refs/heads/feat/x","object":{"sha":"%s","type":"commit"}}\n' "${bt:-$(rd head)}"
+    ;;
+  "pr list"*)
+    fail_read list
+    jq -nc --rawfile s "$ST/stacked" '[$s | split("\n")[] | select(. != "") | {number: tonumber}]'
+    ;;
+  "api -X PATCH repos/acme/widget/pulls/"*)
+    n="$(printf '%s\n' "$*" | sed -nE 's#.*pulls/([0-9]+).*#\1#p')"
+    b="$(printf '%s\n' "$*" | sed -nE 's#.* base=([^ ]+).*#\1#p')"
+    [ -e "$ST/retarget-fails-$n" ] && { echo "gh: Validation Failed (HTTP 422)" >&2; exit 1; }
+    # retarget-ignored-<n>: GitHub answers as if it moved the pull request, and it did not.
+    if [ ! -e "$ST/retarget-ignored-$n" ]; then
+      { grep -vx "$n" "$ST/stacked" || true; } > "$ST/stacked.tmp"; mv "$ST/stacked.tmp" "$ST/stacked"
+      printf '%s %s\n' "$n" "$b" >> "$ST/retargeted"
+    fi
+    printf '{"number":%s,"base":{"ref":"%s"}}\n' "$n" "$b"
+    ;;
+  "api -X DELETE repos/acme/widget/git/refs/heads/feat/x"*)
+    [ -s "$ST/delete-fails" ] && { cat "$ST/delete-fails" >&2; exit 1; }
+    gone
     ;;
   "api repos/acme/widget/compare/"*)
     fail_read compare
@@ -91,6 +123,8 @@ case "$*" in
     pinned="$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')"
     [ "$pinned" = "$(rd head)" ] || { echo "Head branch was modified. Review and try the merge again." >&2; exit 1; }
     : > "$ST/merged"
+    # gh pr merge --delete-branch deletes the branch through the API as soon as the merge lands.
+    case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
     ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 3 ;;
 esac
@@ -168,7 +202,7 @@ fresh(){ # fresh <head> <behind> <rollup>
   rm -rf "$ST"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
-  : > "$ST/next-heads"; : > "$ST/on-sleep"
+  : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
   printf '1000000' > "$ST/clock"; printf 'm0' > "$ST/main-tip"
 }
 run(){ (cd "$REPO" && bash "$HELPER" "$@" 2>&1); }
@@ -198,9 +232,9 @@ check_eq "#851 an up to date green pull request merges" "0" "$rc"
 check "#851 and says it merged that head" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 check_eq "#851 the branch is not updated when it is not behind" "0" "$(count gh-calls 'pr update-branch')"
 check_eq "#851 exactly one merge" "1" "$(count gh-calls 'pr merge')"
-check "#851 the merge pins the head it judged" "pr merge 7 --repo acme/widget --squash --delete-branch --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
-check "#851 the checks gate is asked about that exact merge command" "gh pr merge 7 --repo acme/widget --squash --delete-branch --match-head-commit $OLD" "$(cat "$ST/red-gate-payloads")"
-check "#851 and so is the lessons review gate" "gh pr merge 7 --repo acme/widget --squash --delete-branch --match-head-commit $OLD" "$(cat "$ST/review-gate-payloads")"
+check "#851 the merge pins the head it judged" "pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
+check "#851 the checks gate is asked about that exact merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/red-gate-payloads")"
+check "#851 and so is the lessons review gate" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/review-gate-payloads")"
 check "#851 the review is asked about the pull request's head, base and branch" "check --dir $REPO --sha $OLD --base-ref origin/main --branch feat/x" "$(cat "$ST/review-calls")"
 check "#1161 and is started naming the pull request, whose comments it reads" "start --dir $REPO --sha $OLD --base-ref origin/main --branch feat/x --pr 7" "$(cat "$ST/review-calls")"
 
@@ -517,7 +551,7 @@ check "#1178 in those words" "already merged" "$out"
 fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
 check_eq "#1178 with a record the merge goes through" "0" "$rc"
-check "#1178 the changelog gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --delete-branch --match-head-commit $OLD" "$(cat "$ST/changelog-gate-payloads" 2>/dev/null)"
+check "#1178 the changelog gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/changelog-gate-payloads" 2>/dev/null)"
 check "#1178 the merge line names every gate, not two" "every merge gate allows it" "$out"
 
 fresh "$OLD" 0 "$PENDING"
@@ -658,6 +692,138 @@ if [[ "$wait_expr" =~ ^[0-9*]+$ ]]; then
 else
   bad "#1271 could not read WAIT_MS from is-it-live's merges.ts (read: '$wait_line')"
 fi
+
+# =================================================================================================
+# 12. Pull requests stacked on the merged branch are moved onto its base before the branch is
+#     deleted (claude-config#1337). On 2026-10-19 this merged Try-Pennie/bidspoke#2478 with
+#     --delete-branch, GitHub closed #2482, which was based on that branch, and a closed pull
+#     request's base can never be changed, so it was opened again as a new one, losing its review
+#     thread and a CI round. The fake gh closes whatever is still based on the branch when it is
+#     deleted, by gh's own --delete-branch or by the API, as GitHub does.
+# =================================================================================================
+line_of(){ grep -n -m1 -- "$1" "$ST/gh-calls" | cut -d: -f1; }
+
+fresh "$OLD" 0 "$GREEN"
+printf '8\n9\n' > "$ST/stacked"
+out="$(run 7 --repo acme/widget --squash --delete-branch)"; rc=$?
+check_eq "#1337 a merge with pull requests stacked on its branch ends merged" "0" "$rc"
+check_eq "#1337 no stacked pull request is closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+check_eq "#1337 each is moved onto the merged pull request's base" "8 main 9 main" "$(tr '\n' ' ' < "$ST/retargeted" 2>/dev/null | sed 's/ $//')"
+check_eq "#1337 and the branch is deleted, once" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_not "#1337 gh pr merge is never handed --delete-branch, which deletes before anything can move" "delete-branch" "$(grep 'pr merge' "$ST/gh-calls")"
+check "#1337 the stacked pull requests are listed by the branch they are based on" "pr list --repo acme/widget --base feat/x --state open" "$(cat "$ST/gh-calls")"
+ml="$(line_of 'pr merge')"; pl="$(line_of 'X PATCH')"; dl="$(line_of 'X DELETE')"
+[ -n "$ml" ] && [ -n "$pl" ] && [ -n "$dl" ] && [ "$ml" -lt "$pl" ] && [ "$pl" -lt "$dl" ] && ok \
+  || bad "#1337 the order is merge, then move, then delete (lines: merge $ml, move $pl, delete $dl)"
+check "#1337 it says which pull requests it moved" "#8 #9" "$out"
+check "#1337 and that it deleted the branch" "Deleted its branch feat/x" "$out"
+
+# Nothing stacked: listed, then deleted.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 with nothing stacked the branch is still deleted" "0 feat/x" "$rc $(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#1337 having moved nothing" "0" "$(count gh-calls 'X PATCH')"
+
+# No --delete-branch: the branch is not read, listed or touched.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1337 without --delete-branch it merges" "0" "$rc"
+check_eq "#1337 and leaves the branch and its stacked pull requests alone" "0 0 0" "$(count gh-calls 'pr list') $(count gh-calls 'X PATCH') $(count gh-calls 'X DELETE')"
+
+# A merge that does not happen moves nothing: a stacked pull request moved onto main while its
+# parent is still open would show the parent's commits as its own.
+fresh "$OLD" 0 "$RED"
+printf '8\n' > "$ST/stacked"
+printf 'tests=FAILURE' > "$ST/red-gate-deny"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a refused merge stops as before" "1" "$rc"
+check_eq "#1337 and nothing stacked on it is moved or deleted" "0 0" "$(count gh-calls 'X PATCH') $(count gh-calls 'X DELETE')"
+
+# The list GitHub refuses is not "nothing stacked": the branch stays, and it says why.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+printf 'gh: Resource not accessible by integration (HTTP 403)\n' > "$ST/list-down"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a list that fails leaves the branch in place, merged, with its own exit" "4" "$rc"
+check_eq "#1337 the merge itself landed" "yes" "$([ -e "$ST/merged" ] && echo yes)"
+check_eq "#1337 the branch was not deleted" "0" "$(count gh-calls 'X DELETE')"
+check_eq "#1337 so nothing stacked was closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+check "#1337 it says the branch was left in place" "branch feat/x was left in place" "$out"
+check "#1337 and why, in GitHub's words" "could not list the open pull requests based on it" "$out"
+check "#1337 carrying GitHub's error" "HTTP 403" "$out"
+
+# A list that fails in transit is asked again, through the injected sleep, and then goes on.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+printf 'read tcp: connection reset by peer\n' > "$ST/list-fails"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a list that failed in transit once is asked again, and the merge finishes" "0" "$rc"
+check_eq "#1337 asked again, then once more to confirm nothing is left on the branch" "3" "$(count gh-calls 'pr list')"
+check "#1337 waiting the injected retry interval, never a real one" "7" "$(cat "$ST/sleeps" 2>/dev/null)"
+check_eq "#1337 then moving the stacked pull request" "8 main" "$(cat "$ST/retargeted" 2>/dev/null)"
+
+# One move refused: the branch stays, naming which pull request was not moved.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n9\n' > "$ST/stacked"
+: > "$ST/retarget-fails-9"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a move GitHub refuses leaves the branch in place" "4" "$rc"
+check_eq "#1337 the branch was not deleted" "0" "$(count gh-calls 'X DELETE')"
+check_eq "#1337 and nothing was closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+check "#1337 it names the pull request that was not moved" "#9" "$out"
+check "#1337 with GitHub's reason" "HTTP 422" "$out"
+check "#1337 and says how to finish" "run the same command again" "$out"
+
+# Run again once the cause is dealt with: it finds the merge done and finishes the branch, moving
+# only what is still based on it and merging nothing twice (L33).
+rm -f "$ST/retarget-fails-9"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 running it again finishes the branch" "0" "$rc"
+check_eq "#1337 one merge across both runs" "1" "$(count gh-calls 'pr merge')"
+check_eq "#1337 each pull request moved once" "8 main 9 main" "$(tr '\n' ' ' < "$ST/retargeted" | sed 's/ $//')"
+check_eq "#1337 the branch deleted" "feat/x" "$(cat "$ST/deleted" 2>/dev/null)"
+check_eq "#1337 with nothing closed" "" "$(cat "$ST/closed" 2>/dev/null)"
+
+# A move GitHub answers yes to that did not happen is caught by reading the list again.
+fresh "$OLD" 0 "$GREEN"
+printf '8\n' > "$ST/stacked"
+: > "$ST/retarget-ignored-8"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a pull request still based on the branch after the move keeps it in place" "4" "$rc"
+check_eq "#1337 judged by the list read again, not by the answer" "0" "$(count gh-calls 'X DELETE')"
+check "#1337 naming it" "#8" "$out"
+
+# The branch now holds commits the merge did not: never deleted.
+fresh "$OLD" 0 "$GREEN"
+printf '%s' "$NEW" > "$ST/branch-tip"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a branch that moved past the merged head is left in place" "4" "$rc"
+check_eq "#1337 and not deleted" "0" "$(count gh-calls 'X DELETE')"
+check "#1337 saying what it points at" "points at ${NEW:0:7}" "$out"
+
+# GitHub deleted it already (the repository deletes head branches itself): nothing left to do.
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/branch-deleted"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a branch already gone is not an error" "0" "$rc"
+check_eq "#1337 and is not deleted again" "0" "$(count gh-calls 'X DELETE')"
+check "#1337 saying so" "already deleted" "$out"
+
+# A pull request from a fork: its branch is not in this repository, so nothing here deletes one.
+fresh "$OLD" 0 "$GREEN"
+printf 'true' > "$ST/cross"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a fork's pull request merges" "0" "$rc"
+check_eq "#1337 and no branch of this repository is read or deleted" "0 0" "$(count gh-calls 'git/ref') $(count gh-calls 'X DELETE')"
+check "#1337 saying why" "fork" "$out"
+
+# The delete itself refused: merged, branch in place, said.
+fresh "$OLD" 0 "$GREEN"
+printf 'gh: Reference update failed (HTTP 422)\n' > "$ST/delete-fails"
+out="$(run 7 --squash --delete-branch)"; rc=$?
+check_eq "#1337 a delete GitHub refuses ends merged with the branch in place" "4" "$rc"
+check "#1337 with GitHub's words" "Reference update failed" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
