@@ -477,7 +477,10 @@ slug=$(printf '%s' "$rollup" | jq -r '.url // ""' 2>/dev/null \
 # ones clustered (-sd), and --flag=true. Searching the whole command text for the long spellings
 # dropped every short one, and took a flag out of a --body or out of another command on the line.
 # The value after a flag that takes one is skipped, so a body reading "-m" asks for nothing.
-# Without a reading (no python3) the command's own blank separated tokens are read instead.
+# The words are the merge's own as gh finds them (PS__R_TOOL, shell-words.py tool_field): pr's flags
+# written in front of merge (gh pr -R o/x merge 7 -s) and every word after merge. Without a reading
+# (python3 is refused above; this is a reader that crashed) no flag is read, so the hint names only
+# what the helper said, rather than guessing from text that may hold a --body or another command.
 want_squash=""; want_merge=""; want_rebase=""; want_delete=""
 brm_merge_words(){   # fills brm_words with the words of the gh pr merge this command runs
   local i end w
@@ -486,7 +489,8 @@ brm_merge_words(){   # fills brm_words with the words of the gh pr merge this co
     i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
     while [ "$i" -lt "$end" ]; do
       if ps_runs_at gh "$i" pr merge; then
-        w="${PS__R_WORDS[$i]}"
+        # tool 0x1d sub 0x1d action 0x1d the words, 0x1f between
+        w="${PS__R_TOOL[$i]#*$'\x1d'*$'\x1d'*$'\x1d'}"
         while [ -n "$w" ]; do
           brm_words+=("${w%%$'\x1f'*}")
           case "$w" in *$'\x1f'*) w="${w#*$'\x1f'}" ;; *) w="" ;; esac
@@ -497,15 +501,10 @@ brm_merge_words(){   # fills brm_words with the words of the gh pr merge this co
     done
     return 0
   fi
-  read -ra brm_words <<< "$command"
 }
 brm_merge_words
-brm_after_merge=""; brm_skip=""; brm_prev=""
+brm_skip=""
 for w in ${brm_words[@]+"${brm_words[@]}"}; do
-  if [ -z "$brm_after_merge" ]; then
-    [ "$brm_prev" = pr ] && [ "$w" = merge ] && brm_after_merge=1
-    brm_prev="$w"; continue
-  fi
   if [ -n "$brm_skip" ]; then brm_skip=""; continue; fi
   case "$w" in
     --) break ;;

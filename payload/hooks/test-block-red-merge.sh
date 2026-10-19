@@ -975,6 +975,13 @@ asked_about() {  # $1 = a literal the gh call log must hold
 }
 PIN="--squash --match-head-commit $HEAD_SHA"
 
+# #1351: gh reads pr's own -R written before the action as well (lessons review of #1353), so the
+# rerun hint reads the method and the delete from the words after it too.
+two_repos SUCCESS
+out=$(GH_COMPARE_JSON='{"status":"diverged","ahead_by":2,"behind_by":3}' run_hook "$dir" "gh pr -R other/repo merge 7 -s -d --match-head-commit $HEAD_SHA")
+if denied "$out" && holds "$out" "merge-when-ready.sh 7 --repo other/repo --squash --delete-branch ."; then pass; else fail "#1351 the hint drops the method and delete of a merge with -R before merge: $out"; fi
+rm -rf "$dir"
+
 # The issue's own case: --repo naming a repository other than the folder the session sits in.
 for form in "--repo other/repo" "-R other/repo" "--repo=other/repo"; do
   two_repos SUCCESS
