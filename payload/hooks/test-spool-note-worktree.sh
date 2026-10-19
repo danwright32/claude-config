@@ -20,6 +20,10 @@
 #      the finding to whichever project the reader happens to stand in.
 #   2. No instruction an agent follows may hand `note` a shell expansion again: a scan of every
 #      place the call is documented, seen to fail on planted copies of the old form (L1, L30).
+#
+# And the wider class it belongs to (claude-config#1347): the same refusal fires on any shell
+# variable or loop in a worktree agent's command, so the last check asserts CLAUDE.md's dispatch
+# guidance tells every brief to hand such an agent plain, separate commands with literal paths.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
