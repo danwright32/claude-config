@@ -931,7 +931,9 @@ Each case costs one review by the real runner, and the run reports what it cost 
 measured it. On 2026-10-19 one review of a small invented diff cost about $0.18, nearly all of it
 the lessons index and the prompt (about 62,000 input tokens), so a case costs that plus its diff.
 Results go to `<cases>/results` (or `--results-dir`): one file per run, holding every finding, and
-`baseline.json`. A comparison re-judges both runs against the case set as it is now, over only the
+`baseline.json`. `run --save-baseline` replaces the baseline only with a run that is not worse
+and measured every case the baseline did; anything else takes the `baseline` command, on purpose.
+A comparison re-judges both runs against the case set as it is now, over only the
 cases both measured. The terminal shows ids and counts, never a finding's text; findings that
 match no judged point are counted as unjudged and kept in the run file, to be judged and added to
 the case, after which `review-score.py rescore <run file>` re-scores without another review. One

@@ -599,19 +599,42 @@ def cmd_run(args):
         json.dump(run, f, indent=2)
     print(f"Results: {path}")
     code = report(run, cases, args.window, results_dir, unmeasured)
-    # Only a run that is not worse replaces the baseline: saving a regressed one would make the
-    # next comparison measure against it and the regression would vanish (L5). Accepting a worse
-    # run on purpose is the baseline command, named in the refusal.
     if args.save_baseline:
-        if code in (EXIT_OK, EXIT_NO_BASELINE):
-            shutil.copyfile(path, os.path.join(results_dir, "baseline.json"))
-            print(f"Saved as the baseline in {results_dir}.")
-        elif code == EXIT_WORSE:
-            print(f"This run is worse than the baseline, so it was not saved as the baseline. To accept "
-                  f"it anyway: review-score.py baseline {path} --results-dir {results_dir}")
-        else:
-            print("Nothing was measured, so it was not saved as the baseline.")
+        save_baseline_if_safe(run, path, code, results_dir)
     return code
+
+
+def save_baseline_if_safe(run, path, code, results_dir):
+    """Replace the baseline only with a run that is not worse AND measured every case the baseline
+    did, or when there is none yet. A regressed run saved would make the next comparison measure
+    against the regression, and a subset run saved would drop every other case from all later
+    comparisons (L5). Accepting either on purpose is the baseline command, named in the refusal."""
+    base_path = os.path.join(results_dir, "baseline.json")
+    accept = f"To accept it anyway: review-score.py baseline {path} --results-dir {results_dir}"
+    if code == EXIT_UNMEASURED:
+        print("Nothing was measured, so it was not saved as the baseline.")
+        return
+    if not os.path.isfile(base_path):
+        shutil.copyfile(path, base_path)
+        print(f"Saved as the baseline in {results_dir}.")
+        return
+    if code == EXIT_WORSE:
+        print(f"This run is worse than the baseline, so it was not saved as the baseline. {accept}")
+        return
+    with open(base_path, encoding="utf-8") as f:
+        base = json.load(f)
+
+    def measured(r):
+        return {cid for cid, e in r.get("cases", {}).items()
+                if any(rv.get("status") == "ok" for rv in e.get("reviews", []))}
+
+    left_out = sorted(measured(base) - measured(run))
+    if left_out:
+        print(f"This run covers only some of the baseline's cases ({len(left_out)} of the baseline's "
+              f"{len(measured(base))} not measured here), so it was not saved as the baseline. {accept}")
+        return
+    shutil.copyfile(path, base_path)
+    print(f"Saved as the baseline in {results_dir}.")
 
 
 def read_run(path):
