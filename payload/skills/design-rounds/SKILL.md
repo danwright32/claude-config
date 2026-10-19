@@ -265,8 +265,9 @@ Ask it exactly like this, one question in one AskUserQuestion call:
 - Only Dan's own choice of Settled records it. Never fill in `answers`, never ask from a
   subagent, and never write anything else to record it: the guard refuses all three, and a
   write to its record. Not yet records nothing: carry on. An answer he types instead of
-  choosing records nothing either; the guard tells him so, and you tell him in one line,
-  answer what he said, and ask the same question again.
+  choosing counts as Not yet (claude-config#1336): nothing is settled, and what he typed is
+  the feedback for the next round. Act on it, answer anything it asks, and ask whether the
+  design is settled only once he has seen that round, never straight away.
 - Then write the deliverable below. Look changing edits on that issue now go through.
 
 ## The deliverable
