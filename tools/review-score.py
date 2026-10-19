@@ -315,8 +315,17 @@ sys.exit(p.returncode)
 
 
 def review_once(case, cfg, real_claude):
-    """One review of one case by the real runner. Never raises: a failure is a status."""
+    """One review of one case by the real runner. Never raises: a failure is a status, so one case
+    whose setup fails (a full disk, its diff gone) cannot end the run before its results are written."""
     started = time.time()
+    try:
+        return _review_once(case, cfg, real_claude, started)
+    except Exception as e:  # noqa: BLE001  any failure here is this one review's, reported as such
+        return {"status": "error", "note": f"the review could not be set up: {type(e).__name__}: {e}"[:200],
+                "findings": [], "seconds": round(time.time() - started)}
+
+
+def _review_once(case, cfg, real_claude, started):
     tmp = tempfile.mkdtemp(prefix="review-score-")
     try:
         state = os.path.join(tmp, "state"); os.mkdir(state)
@@ -600,7 +609,8 @@ def cmd_run(args):
             run["cases"].setdefault(cid, {"reviews": []})["reviews"].append(rv)
             done += 1
             print(f"  [{done}/{len(jobs)}] {cid}: {rv['status']}, {len(rv['findings'])} finding"
-                  f"{'s' if len(rv['findings']) != 1 else ''}, {rv['seconds']}s", flush=True)
+                  f"{'s' if len(rv['findings']) != 1 else ''}, {rv['seconds']}s"
+                  + (f" ({rv['note']})" if rv.get("note") else ""), flush=True)
     unmeasured += failed_reviews(run)
     run["finished"] = int(time.time())
     per = score_run(run, cases, args.window)

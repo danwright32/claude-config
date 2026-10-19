@@ -220,6 +220,8 @@ rm -rf "$CASES/invented-paginate-2" "$CASES/invented-retry-2"
 # --- 7. a case whose review fails is unmeasured, never a zero ---------------------------------------
 out="$(FAKE_FAIL_TOKEN="report/send.sh" score run --all --cases "$CASES" --results-dir "$WORK/fail-results")"; rc=$?
 check "a failed review is named as unmeasured" "unmeasured: invented-retry" "$out"
+check "a failed review's progress line says why it failed" "invented-retry: error, 0 findings" "$out"
+check "with the runner's own reason" "claude exited 1" "$out"
 check "the rates come from the cases that were measured" "catch rate: 2 of 3 real defects caught (67%)" "$out"
 failed_runs=("$WORK/fail-results"/run-*.json)
 out="$(score rescore "${failed_runs[0]}" --cases "$CASES" --results-dir "$WORK/fail-results")"
@@ -228,6 +230,24 @@ out="$(FAKE_FAIL_TOKEN="diff --git" score run --all --cases "$CASES" --results-d
 check "when every review fails the run is unmeasured" "UNMEASURED" "$out"
 check_not "an all failed run never prints a catch rate" "catch rate:" "$out"
 check_rc "an all failed run exits 2" 2 "$rc"
+# A review whose own setup fails (the disk full, the case's diff gone) is a failed review with a
+# reason, never an exception that would end the run before its results are written.
+out="$(PATH="$FAKEBIN:$PATH" python3 - "$TOOL" "$CASES" <<'PY' 2>&1
+import importlib.util, shutil, sys
+spec = importlib.util.spec_from_file_location("review_score", sys.argv[1])
+rs = importlib.util.module_from_spec(spec); spec.loader.exec_module(rs)
+case, problems = rs.load_case(sys.argv[2], "invented-retry")
+def refuse(*a, **k):
+    raise OSError(28, "No space left on device")
+shutil.copyfile = refuse
+rv = rs.review_once(case, {"hooks_lib": rs.DEFAULT_HOOKS_LIB, "lessons_dir": rs.DEFAULT_LESSONS_DIR,
+                           "model": "sonnet", "deadline": 30, "finding_re": None}, shutil.which("claude"))
+print("status=%s note=%s" % (rv["status"], rv.get("note", "")))
+PY
+)"
+check "a review that cannot be set up is a failed review, not a crash" "status=error" "$out"
+check "the failed setup says why" "No space left on device" "$out"
+check_not "a review that cannot be set up raises nothing" "Traceback" "$out"
 
 # --- 8. rescoring a stored run costs no review --------------------------------------------------
 before="$(calls)"
