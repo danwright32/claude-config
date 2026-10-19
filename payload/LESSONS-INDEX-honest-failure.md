@@ -109,3 +109,4 @@ which is NOT loaded into the session.
 - L743. Before a timeout is read as a failure, compute the work's duration at the slowest passing input and keep it well inside the limit.
 - L762. A check against a bounded cache or mirror judges only the range it is defined to hold; a missing row beyond it is unmeasured, not absent.
 - L783. A self baselined detector that never stores an anomaly can never accept a deliberate change; build a rebaseline path tied to the change.
+- L785. Suppress repeat pages in the alerter, never by omitting a still true finding, or an alerter reading empty as recovery sends a false all clear.
