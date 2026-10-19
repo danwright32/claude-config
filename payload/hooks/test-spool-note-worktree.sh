@@ -13,7 +13,7 @@
 # refused, `hello.sh "/abs/path"` and `hello.sh .` ran. So the documented form could never work
 # for exactly the agents it was written for.
 #
-# The fix has two halves and this suite holds both:
+# The #1342 fix has two halves and this suite holds both:
 #   1. The documented call passes `.` instead of `$PWD`, and `note` turns whatever directory it is
 #      handed into an absolute path before recording it. Without that, the record's `cwd` would be
 #      the literal ".", which every later reader resolves against ITS OWN directory, attributing
@@ -210,10 +210,10 @@ documented="$(grep -cE 'issue-spool\.sh"? +note +\. ' "$PAYLOAD/CLAUDE.md" 2>/de
 
 # The dot form is one case of a wider refusal: Claude Code refuses a worktree agent's Bash command
 # when it holds a shell variable or a loop, so the dispatch guidance must say so for every brief (#1347).
-plain="$(grep -cE 'worktree.*plain, separate commands with literal paths' "$PAYLOAD/CLAUDE.md" 2>/dev/null || true)"
+plain="$(grep -E '^- \*\*A worktree agent runs plain, separate commands with literal paths' "$PAYLOAD/CLAUDE.md" 2>/dev/null | grep -E 'shell variable' | grep -cE 'a loop' || true)"
 [ "${plain:-0}" -ge 1 ] \
   && check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" ok \
-  || check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" "no dispatch guidance found"
+  || check "CLAUDE.md tells briefs a worktree agent runs plain commands with literal paths" "no dispatch rule naming the shell variable and loop cases"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
