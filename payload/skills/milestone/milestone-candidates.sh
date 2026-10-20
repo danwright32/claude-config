@@ -21,6 +21,10 @@
 #   milestone-candidates.sh <owner/name> --like "<the idea's title>"
 #   milestone-candidates.sh <owner/name> --like "<idea>" --snapshot <issues.json>
 #       scores against a saved issue list and reads nothing from GitHub, for measuring
+#   milestone-candidates.sh <owner/name> --like "<idea>" --closed-since <YYYY-MM-DD>
+#       also reads the issues closed on or after that date, for the close match only:
+#       scope modes asks this of each overnight proposal before offering it, since one
+#       filed and closed after its night is as handled as one still open (claude-config#1389)
 #
 # Output (first token is the line's kind, so a reader can branch):
 #   OPEN-MILESTONE #<num> <title>            an open milestone, the catch-all excluded
@@ -41,6 +45,13 @@
 #   READ-TRUNCATED <n> at the limit          the read hit its cap, so every count that
 #                                            follows is about a subset of the backlog
 #   DUPLICATE-COUNT <n>                      reported apart from the sibling count
+#   READ-TRUNCATED-CLOSED <n> at the limit   the --closed-since read hit its cap, so the
+#                                            close matches saw a subset of what closed
+#   CLOSE-MATCH <score> #<num> <title> [in: <milestone>] [shares: <words>] [closed]
+#                                            an issue covering most of the idea: it may
+#                                            already be filed. [closed] only on one read
+#                                            by --closed-since. Ranks, never rules
+#   CLOSE-MATCH-COUNT <n>                    how many close matches are listed
 #   NO-CANDIDATES <repo>                     read fine, nothing to report (exit 1)
 #
 # Exit codes:
@@ -86,15 +97,29 @@ show_max=12
 # known duplicate itself, so a working rule read as a broken one (L487, claude-config#437). The
 # milestone list is not read in this mode and the output says so.
 snapshot=""
+closed_since=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --like) like="${2:-}"; shift 2 ;;
     --limit) limit="${2:-}"; shift 2 ;;
     --show) show_max="${2:-}"; shift 2 ;;
     --snapshot) snapshot="${2:-}"; shift 2 ;;
+    --closed-since) closed_since="${2:-}"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# A date gh's search reads as a date, or the read would answer some other question silently.
+if [[ -n "$closed_since" && ! "$closed_since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  echo "--closed-since takes a date as YYYY-MM-DD, not \"$closed_since\"." >&2
+  exit 2
+fi
+# A snapshot reads nothing from GitHub, so it cannot also read what was closed: refused rather
+# than answering about the snapshot alone while the caller believes closed issues were asked.
+if [[ -n "$closed_since" && -n "$snapshot" ]]; then
+  echo "--closed-since reads GitHub, and --snapshot reads nothing from it: give one or the other." >&2
+  exit 2
+fi
 
 if [[ -z "$like" ]]; then
   echo "Usage: milestone-candidates.sh <owner/name> --like \"<the idea's title>\"" >&2
@@ -218,11 +243,26 @@ elif ! issues_raw="$(gh issue list --repo "$repo" --state open \
   fi
 fi
 
+# The issues closed on or after --closed-since, kept in a file the scorer reads, for the close
+# match only. A read that fails is exit 6 like every other: an idea already filed and closed is the
+# one this read exists to find, so an empty answer standing in for it would be the reassuring lie.
+closed_file=""
+if [[ -n "$closed_since" ]]; then
+  closed_file="$(mktemp)"
+  trap 'rm -f "$gh_err" "$closed_file"' EXIT
+  if ! gh issue list --repo "$repo" --state closed --search "closed:>=$closed_since" \
+    --limit "$limit" --json number,title,body,milestone >"$closed_file" 2>"$gh_err"; then
+    echo "Could not read the CLOSED ISSUES of $repo since $closed_since: $(tr '\n' ' ' <"$gh_err")" >&2
+    exit 6
+  fi
+fi
+
 siblings_out="$(printf '%s' "$issues_raw" | python3 -c '
 import json, re, sys
 
 like, catch_all, show_max = sys.argv[1], sys.argv[2], int(sys.argv[3])
 limit = int(sys.argv[4])
+closed_path = sys.argv[5] if len(sys.argv) > 5 else ""
 
 # Words shorter than this carry no subject on their own.
 MIN_WORD = 4
@@ -299,6 +339,21 @@ try:
 except Exception as exc:
     sys.stderr.write("the response did not parse (%s)\n" % exc)
     sys.exit(3)
+
+# The issues closed since --closed-since (claude-config#1389), scored for the close match only:
+# a closed issue is never a sibling to group with, and never a risk of filing twice in a feature
+# still open, but an idea it already covers was handled all the same.
+closed = []
+if closed_path:
+    try:
+        with open(closed_path) as fh:
+            closed = json.loads(fh.read() or "[]")
+        if not isinstance(closed, list):
+            raise ValueError("expected a list of issues")
+    except Exception as exc:
+        sys.stderr.write("the CLOSED ISSUES response did not parse (%s)\n" % exc)
+        sys.exit(3)
+    closed = [it for it in closed if isinstance(it, dict) and it.get("title")]
 
 
 def norm(s):
@@ -454,8 +509,9 @@ CLOSE_MIN_IDEA = 3
 import math
 
 close = []
-if len(target) >= CLOSE_MIN_IDEA and valid:
-    doc_words = [words(it["title"]) | words(it.get("body") or "") for it in valid]
+scored_close = valid + closed
+if len(target) >= CLOSE_MIN_IDEA and scored_close:
+    doc_words = [words(it["title"]) | words(it.get("body") or "") for it in scored_close]
     n_docs = len(doc_words)
     df = {}
     for dw in doc_words:
@@ -471,7 +527,7 @@ if len(target) >= CLOSE_MIN_IDEA and valid:
     held = [w for w in target if df.get(w, 0) > 0]
     rarest_df = min(df[w] for w in held) if held else 0
     rarest = {w for w in held if df[w] == rarest_df}
-    for it, other in zip(valid, doc_words):
+    for k, (it, other) in enumerate(zip(scored_close, doc_words)):
         shared = target & other
         if not shared:
             continue
@@ -479,7 +535,7 @@ if len(target) >= CLOSE_MIN_IDEA and valid:
         plain = len(shared) / float(len(target))
         if covered >= CLOSE_FLOOR and plain >= CLOSE_FLOOR and (shared & rarest):
             close.append((covered, it.get("number", 0), it["title"],
-                          milestone_of(it) or catch_all, sorted(shared)))
+                          milestone_of(it) or catch_all, sorted(shared), k >= len(valid)))
     close.sort(key=lambda r: (-r[0], -r[1]))
     close = close[:CLOSE_MAX]
 
@@ -491,6 +547,12 @@ if len(valid) >= limit:
     print("READ-TRUNCATED %d issues came back at the limit of %d, so this saw a SUBSET "
           "of the backlog and every count below is about that subset only. Re-run with "
           "--limit above %d." % (len(valid), limit, limit))
+# The closed read is capped the same way, and the issue it missed may be the very filing it exists
+# to find, so a read at its limit is announced too, on its own line (claude-config#1389).
+if closed_path and len(closed) >= limit:
+    print("READ-TRUNCATED-CLOSED %d closed issues came back at the limit of %d, so the close "
+          "matches below saw a SUBSET of what was closed since then. Re-run with --limit above %d."
+          % (len(closed), limit, limit))
 print("HOLDING-PEN %s open=%d" % (catch_all, len(pen)))
 for score, num, title, shared in candidates[:show_max]:
     print("CANDIDATE %d #%s %s [shares: %s]" % (score, num, title, ", ".join(shared)))
@@ -501,9 +563,10 @@ for score, num, title, ms, shared in dups[:show_max]:
           % (score, num, title, ms, ", ".join(shared)))
 if len(dups) > show_max:
     print("DUPLICATE-TRUNCATED %d of %d shown" % (show_max, len(dups)))
-for prop, num, title, ms, shared in close:
-    print("CLOSE-MATCH %.3f #%s %s [in: %s] [shares: %s]"
-          % (prop, num, title, ms, ", ".join(shared)))
+for prop, num, title, ms, shared, was_closed in close:
+    # A closed one says so, read only with --closed-since, so no reader takes it for open work.
+    print("CLOSE-MATCH %.3f #%s %s [in: %s] [shares: %s]%s"
+          % (prop, num, title, ms, ", ".join(shared), " [closed]" if was_closed else ""))
 # How many were SHOWN, which is not how many are related. Named so that nothing can
 # read it as the second: the count the "2 or more issues" rule consumes is one the
 # reader states after reading the titles, and passes to ensure-milestone.sh itself.
@@ -511,7 +574,7 @@ print("CANDIDATE-COUNT %d shown, which is NOT a count of related issues: read th
       "titles and decide" % len(candidates))
 print("DUPLICATE-COUNT %d" % len(dups))
 print("CLOSE-MATCH-COUNT %d" % len(close))
-' "$like" "$CATCH_ALL" "$show_max" "$limit" 2>"$gh_err")"
+' "$like" "$CATCH_ALL" "$show_max" "$limit" "$closed_file" 2>"$gh_err")"
 irc=$?
 if [[ $irc -ne 0 ]]; then
   if [[ -n "$snapshot" ]]; then

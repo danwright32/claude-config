@@ -250,3 +250,51 @@ describe('morningPrompt carries what the session held overnight (#1284)', () => 
     expect(morningPrompt({ worker: false, issues: [], lessons: [], held: [] })).toBe(morningPrompt({ worker: false, issues: [], lessons: [] }))
   })
 })
+
+// #1389: a proposal already filed, or held by another open session, is said and never offered.
+describe('morningPrompt: proposals already handled are not offered again (#1389)', () => {
+  const filed = [
+    { issue: issue({ repo: 'acme/bidspoke', title: 'Bid totals round twice' }), number: 4643, url: null },
+    { issue: issue({ repo: 'acme/bidspoke', title: 'Export drops the folder' }), number: 4650, url: 'https://github.com/acme/bidspoke/issues/4650' },
+  ]
+  const only = morningPrompt({ worker: false, issues: [], lessons: [], filed, forRepo: 'acme/bidspoke' })
+  test('each already filed one is listed in the data block with its issue, never as an option', () => {
+    expect(only).toContain('5.1 acme/bidspoke#4643: Bid totals round twice')
+    expect(only).toContain('5.2 acme/bidspoke#4650: Export drops the folder')
+    expect(only).toMatch(/already filed, numbered 5\.n in the block below: tell Dan in one line that each is already filed as the issue named, and never offer or file it again\./)
+    expect(only).not.toContain('1.1 ')
+    expect(only).not.toMatch(/multiSelect/)
+  })
+  test('with every issue filed, it never says nothing was proposed', () => {
+    expect(only).not.toMatch(/No issue or lesson was proposed/)
+    expect(only).toMatch(/No other issue or lesson is left to offer for acme\/bidspoke, so there are no morning pickers\./)
+  })
+  test('the titles ride in the one data block, since workers wrote them', () => {
+    expect(only.indexOf('Bid totals round twice')).toBeGreaterThan(only.indexOf('<untrusted-overnight-text>'))
+  })
+  test('those held by another open session are counted and left to it', () => {
+    const p = morningPrompt({ worker: false, issues: [], lessons: [], elsewhere: 2, forRepo: 'acme/bidspoke' })
+    expect(p).toMatch(/2 proposed issues for acme\/bidspoke are being offered in another open session, so they are left to it\./)
+    expect(p).not.toMatch(/No issue or lesson was proposed/)
+  })
+  test('one whose filing could not be checked is offered with the reason, and checked before filing', () => {
+    const p = morningPrompt({ worker: false, issues: [issue({ title: 'T' })], lessons: [], unchecked: 'gh: HTTP 502' })
+    expect(p).toContain('1.1 o/r: T')
+    expect(p).toMatch(/Whether these proposed issues were already filed could not be checked \(gh: HTTP 502\): before filing each one Dan selects, run milestone-candidates\.sh as issue-review\.md says and drop any already filed\./)
+  })
+  test('each selected issue is filed with its title exactly as proposed, so its claim is found', () => {
+    const p = morningPrompt({ worker: false, issues: [issue({ title: 'T' })], lessons: [] })
+    expect(p).toMatch(/File only what he selects, in the repository named, with gh issue create, each with its title exactly as proposed, so no other session files it again\./)
+  })
+  test('one Dan declined on an earlier morning is listed as declined, never as an option', () => {
+    const p = morningPrompt({ worker: false, issues: [], lessons: [], declined: [issue({ repo: 'acme/bidspoke', title: 'Bid totals round twice' })], forRepo: 'acme/bidspoke' })
+    expect(p).toContain('6.1 acme/bidspoke: Bid totals round twice')
+    expect(p).toMatch(/Proposed issues Dan declined on an earlier morning, numbered 6\.n in the block below: tell Dan in one line that each was declined before, and offer or file it only if he asks for it now\./)
+    expect(p).not.toContain('1.1 ')
+    expect(p).not.toMatch(/No issue or lesson was proposed/)
+    expect(p).not.toMatch(DASHES)
+  })
+  test('none of it uses a dash as punctuation', () => {
+    expect(only).not.toMatch(DASHES)
+  })
+})
