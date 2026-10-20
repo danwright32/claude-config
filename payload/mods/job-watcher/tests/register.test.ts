@@ -123,7 +123,8 @@ type Job = {
   mtime?: number
   unreadable?: boolean
   gone?: boolean
-  stop?: 'ok' | 'refused' | 'throws' | 'hangs' | 'held'
+  /** notRunning: Claude Code's error result for a task that has already ended (#1387). */
+  stop?: 'ok' | 'refused' | 'throws' | 'hangs' | 'held' | 'notRunning'
   holder?: 'held' | 'none' | 'error'
   /**
    * The parent of its group's leader: the Claude Code process that started it while that runs, or
@@ -142,6 +143,8 @@ type Job = {
   slow?: { cmd: string; ms: number }
   /** Its output file is no longer there (#784: an entry left after its process went). */
   missing?: boolean
+  /** ps cannot say whether its group still runs (#1387): it fails with an error. */
+  psFails?: boolean
 }
 /** One agent of the session as $.agent.list() names it (#759). */
 type Agent = { id: string; description: string; type: string; status: string }
@@ -288,6 +291,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     if (cmd === 'ps' && args.includes('pgid=')) return ok(`${args[args.length - 1]}\n`)
     if (cmd === 'ps' && args.includes('-g')) {
       const j = list[byGroup(Number(args[args.indexOf('-g') + 1]))]
+      if (j?.psFails) return res(1, '', 'ps: Operation not permitted')
       return !j || j.gone ? res(1, '') : ok('501\n')
     }
     if (cmd === '/bin/kill') {
@@ -403,6 +407,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
+    // Claude Code's own words for a task that has already ended, seen live on 2026-10-20 (#1387).
+    if (e.tool === 'TaskStop' && j?.stop === 'notRunning') {
+      const text = `Task ${String(input.task_id)} is not running (status: completed)`
+      return { result: text, text, isError: true } as never
+    }
     // A stop Claude Code never answers.
     if (e.tool === 'TaskStop' && j?.stop === 'hangs') return new Promise<never>(() => undefined)
     // A stop Claude Code answers only when the test says, as one answered late.
@@ -2548,4 +2557,89 @@ test('a new session forgets which agent started what (#1326)', withDeps, async (
   await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
   await start($)
   expect((await subagentStop($, 'a1', [shell('mon1', 'gh run watch 99')])).block).toBeUndefined()
+})
+
+// #1387: on 2026-10-20 a merge helper a subagent ran in the foreground timed out into the background
+// (buzcb3opu), exited 0, and went on being named as running until the next minute's look. Its end
+// notice reached the subagent inside its own turn, never as a prompt this conversation submitted, so
+// the watcher's drop on that notice never ran; and TaskStop, answering that no such task existed, was
+// an error result the watcher took as nothing. Reproduced in a live subagent on 2026-10-20: a job
+// that had exited, its output held by nobody and its end notice delivered, was still named on the
+// next tool result. So a job is measured by the process group it traced before it is named or held.
+test('a job whose process has ended is not named on the next result, though no end notice or look came (#1387)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'exit 0\n', size: 7 }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'slow bash merge-when-ready.sh 1381' } as never)
+  job.gone = true
+  const next = await $.tool.call({ tool: 'Bash', command: 'gh pr view 1381' } as never)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+test('a job a subagent started that has ended is dropped from its results, a TaskStop answered as not running included (#1387)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'exit 0\n', size: 7, stop: 'notRunning' }
+  const w = world(on, job, { agents: [AGENT] })
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'slow bash merge-when-ready.sh 1381' }))
+  job.gone = true
+  const stopped = await $.tool.call(asAgent({ tool: 'TaskStop', task_id: 'job1' }))
+  expect((stopped as { isError?: boolean }).isError).toBe(true)
+  expect(contextOf(stopped)).not.toContain(REMINDER)
+  const next = await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr view 1381' }))
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+test("a job whose process has ended never holds a subagent's stop, whether Claude Code lists it or its list is unreadable (#1387)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'exit 0\n', size: 7 }
+  world(on, job, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+  job.gone = true
+  expect((await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'gh pr checks 2383 --watch')])).block).toBeUndefined()
+  expect((await subagentStop($, 'a1', 'absent')).block).toBeUndefined()
+})
+
+test("a job whose process still runs is still named and still holds a subagent's stop, listed or from the record (#1387)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'pending\n', size: 8 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+  const next = await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  expect(contextOf(next)).toContain(`${REMINDER} background job job1 (gh pr checks 2383 --watch)`)
+  expect((await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'gh pr checks 2383 --watch')])).block).toContain(`${HOLD} job1`)
+  expect((await subagentStop($, 'a1', 'absent')).block).toContain(`${HOLD} job1`)
+})
+
+// The failure path: whether a group has ended is read only from ps saying it holds nobody. A ps that
+// cannot answer says nothing either way, so the job stays named and held rather than dropped unseen.
+test("a job whose process group ps cannot read stays named and holds a subagent's stop (#1387)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'pending\n', size: 8 }
+  world(on, job, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 2383 --watch', run_in_background: true }))
+  job.psFails = true
+  const next = await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
+  expect((await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'gh pr checks 2383 --watch')])).block).toContain(`${HOLD} job1`)
+})
+
+test('an untraced job whose output nobody holds any more is dropped before it is named (#1387)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'building\n', size: 9, holder: 'error' }
+  const w = world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.holder = 'none'
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
 })
