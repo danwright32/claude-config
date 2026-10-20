@@ -113,6 +113,32 @@ check "the skill says, in one paragraph, that du counts APFS clones at full size
 check "and names Chrome's code_sign_clone folder as a known false lead" \
   "$(grep -qF 'com.google.Chrome.code_sign_clone' "$SKILL" && echo ok || echo "code_sign_clone is not named")"
 
+# ---- 6. Xcode's orphaned build caches are listed by the sweep, and deleting them is Dan's ----
+# Every agent worktree starts a DerivedData folder of its own and nothing removes it when the
+# worktree goes: 30 of them, about 48.6 GB, on 2026-10-19 (claude-config#1369). The skill lists them
+# with the one copy of the orphan rule rather than a du of the whole folder, which cannot tell a
+# live cache from a dead one, and the listing command is RUN as written against a fixture (L442).
+sweep_line="$(grep -m 1 -xF 'bash ~/.claude/hooks/derived-data-sweep.sh' <<< "$CODE")"
+check "a command block lists Xcode's orphaned build caches with the sweep" \
+  "$([ -n "$sweep_line" ] && echo ok || echo "no block line is exactly: bash ~/.claude/hooks/derived-data-sweep.sh")"
+DD="$TMP/derived-data"; mkdir -p "$DD/App-orphan"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>WorkspacePath</key><string>%s</string></dict></plist>\n' \
+  "$TMP/removed-worktree/App.xcodeproj" > "$DD/App-orphan/info.plist"
+find "$DD" -exec touch -t 202601011200 {} +
+printf '#!/bin/sh\nexit 0\n' > "$TMP/ps"; chmod +x "$TMP/ps"
+sweep_out="$(XCODE_DERIVED_DATA_ROOT="$DD" DERIVED_DATA_PS="$TMP/ps" bash -c "${sweep_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"
+check "and that command, run as written, lists the orphan and deletes nothing" \
+  "$(grep -qF "$DD/App-orphan" <<< "$sweep_out" && [ -d "$DD/App-orphan" ] && echo ok || echo "said: $sweep_out")"
+# The deleting form is Dan's decision (L9), so the paragraph introducing it must say so.
+unhanded_delete="$(awk '
+  /^```/ { if (!inside) before = para; inside = !inside; next }
+  inside { if ($0 ~ /derived-data-sweep\.sh --delete/) { if (before !~ /Dan/) print $0 }; next }
+  /^[[:space:]]*$/ { blank = 1; next }
+  { if (blank) para = $0; else para = para " " $0; blank = 0 }
+' "$SKILL")"
+check "the command that deletes them is introduced as Dan's decision" \
+  "$([ -z "$unhanded_delete" ] && grep -qF 'derived-data-sweep.sh --delete' <<< "$CODE" && echo ok || echo "not handed to Dan, or missing: $unhanded_delete")"
+
 echo ""
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"

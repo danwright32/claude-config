@@ -86,5 +86,18 @@ printf '%s' "$key" > "$STATE" 2>/dev/null || true
 # sequence is long, it has to be ready before the disk is full, and a message is not where it can
 # live (L111: name an action that changes the state they are stuck in).
 echo "$answer"
+# How much of Xcode's build cache belongs to project folders that are gone (claude-config#1369): the
+# one leak that is measured rather than suspected, since every agent worktree starts a cache of its
+# own and nothing removes it. Counted by derived-data-sweep.sh, the one copy of the orphan rule, and
+# only LISTED: whether anything deletes them on its own is Dan's decision, not yet made (L9), so the
+# warning hands over the command and runs nothing. Asked only here, once the notice is going to be
+# said, because sizing them reads every file in them and must not cost every prompt. Its own sizing
+# stops within DERIVED_DATA_SUMMARY_SECONDS, which keeps this hook inside its 10 second timeout
+# (both are settings, not measurements).
+SWEEP="$DIR/derived-data-sweep.sh"
+if [ -f "$SWEEP" ]; then
+  derived="$(bash "$SWEEP" --summary 2>&1 || true)"
+  [ -n "$derived" ] && printf '%s\n' "$derived"
+fi
 echo "What to do about it is the disk-full skill, which holds the measured triage sequence. It takes readings before it names anything, because a static size cannot say what is filling the disk."
 exit 0
