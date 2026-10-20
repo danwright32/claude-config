@@ -20,6 +20,9 @@ The spec, with paths resolved against the spec's own folder:
     {
       "title":    "Team capacity",
       "chrome":   {...the round's "chrome", see chrome_frame.py...},
+      "screen":   "email" | "document" | "new-product",   in place of "chrome", for a design with no
+                                         product page around it: each frame is drawn alone at its own
+                                         width (claude-config#1393)
       "builder":  "builder.js",          buildScreen(variant), as in the rounds
       "styles":   "screen.css",          optional
       "fixture":  "../fixtures/team-capacity.json",   the committed data both sides draw
@@ -41,7 +44,7 @@ The spec, with paths resolved against the spec's own folder:
     }
 
 It writes NOTHING when it refuses, and refuses: a chrome that is not a captured one (no stand ins), a
-frame with no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
+"screen" that is not one of the three kinds, or one named beside a captured chrome, a frame with no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, and an exception without Dan's words, a date and where he said them. Exit 2 with the reason.
 """
@@ -56,6 +59,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "score"))
 import chrome_frame  # noqa: E402
+import design_file  # noqa: E402
 import design_score  # noqa: E402
 
 TOKEN = "__DR_VARIANT__"
@@ -86,8 +90,24 @@ def main(argv):
         fail("the spec must be an object")
     base = os.path.dirname(os.path.abspath(spec_path))
 
+    # A design with no product page around it names its kind in "screen", as its rounds did; every other
+    # design is drawn in the captured page. Naming both is refused rather than one winning, because they
+    # contradict each other, and picking either silently draws the frames against the other's intent:
+    # bare when they belong in the product (the stand in this skill forbids), or in a page an email
+    # never has (claude-config#1393, the same "keep one" the switcher says for the terminal).
+    kind = spec.get("screen")
     try:
-        chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
+        if kind is not None:
+            if spec.get("chrome") is not None:
+                fail('the spec names the kind "%s", which has no product page around it, and a captured page as '
+                     "well; keep one" % kind)
+            if not isinstance(kind, str) or kind not in design_file.NO_PAGE_KINDS:
+                fail('the spec asks for the screen %s, and make-settled.py draws every frame inside the product\'s '
+                     "captured page, or alone as one of the kinds with no product page around it: %s"
+                     % (json.dumps(kind), design_file.no_page_kinds()))
+            chrome = chrome_frame.no_page(kind)
+        else:
+            chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
     except chrome_frame.ChromeError as err:
         fail(str(err))
     builder_name = str(spec.get("builder", "")).strip()
@@ -162,6 +182,10 @@ def main(argv):
     variants = {f["id"]: chrome_frame.script_text(json.dumps(f["variant"])) for f in frames}
     frames_block = {"frames": [dict({"id": f["id"], "title": f["title"], "width": f["width"]},
                                     **({"height": f["height"]} if f.get("height") else {})) for f in frames]}
+    if chrome["kind"] == "none":
+        # Read by the score, which records and says it, so a 100% on an email is never read as a build
+        # drawn inside the product (claude-config#1393).
+        frames_block["kind"] = chrome["page"]
     page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants)
 
     # The decision map is held to check-decision-map.py's own rule, on the file as written, before it
@@ -239,12 +263,16 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
        json.dumps(json.dumps(TOKEN)),
        json.dumps({f["id"]: bool(f.get("height")) for f in frames}))
     dmap = {"decisions": decisions}
+    if chrome["kind"] == "none":
+        drawn = "%s Every frame is drawn at its own width" % e(chrome["line"])
+    else:
+        drawn = "Every frame is drawn inside the product's real chrome, captured from %s" % e(chrome["source"])
     return """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>%s, the settled design</title>
 <style>%s</style></head>
 <body><div class="dr-doc">
 <h1>%s</h1>
-<p class="dr-meta">The settled design. Every frame is drawn inside the product's real chrome, captured from %s, from the committed fixture the built page renders too. The build is done when it scores 100%% against this file on both halves.</p>
+<p class="dr-meta">The settled design. %s, from the committed fixture the built page renders too. The build is done when it scores 100%% against this file on both halves.</p>
 <h2>Decisions</h2>
 <ol class="dr-decisions">%s</ol>
 <h2>Exceptions Dan approved</h2>
@@ -264,7 +292,7 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
 </script>
 <script>%s</script>
 </body></html>
-""" % (e(spec.get("title", "Design")), DOC_STYLE, e(spec.get("title", "Design")), e(chrome["source"]),
+""" % (e(spec.get("title", "Design")), DOC_STYLE, e(spec.get("title", "Design")), drawn,
        "".join(items), exc, frame_html, idiom_html,
        chrome_frame.script_text(json.dumps(dmap, indent=1)), chrome_frame.script_text(json.dumps(frames_block, indent=1)),
        chrome_frame.script_text(json.dumps({"exceptions": exceptions}, indent=1)), script)

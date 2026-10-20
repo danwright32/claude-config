@@ -28,6 +28,10 @@ can collide with the page around it.
 make-settled.py draws each frame of the settled design this way, in an iframe for the reader, and the
 settled file gives each frame's whole document from designFrameDocument(<id>), which the score's web
 adapter draws as a page of its own at the frame's width.
+
+A screen that has no product page around it (claude-config#1393) is drawn by no_page(<kind>) instead:
+an email, a document or a new product, the three kinds Dan allowed by name on 2026-10-20, each frame
+then the round's drawing alone at its own size, with no margin around it. Any other kind is refused.
 """
 import base64
 import json
@@ -36,8 +40,10 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "score"))
 import pngio  # noqa: E402
+from design_file import NO_PAGE_KINDS, no_page_kinds  # noqa: E402
 
 ID = re.compile(r"^#([A-Za-z][\w-]*)$")
 
@@ -51,7 +57,21 @@ NO_CHROME = ('this round names no captured chrome. Dan, 2026-10-19: "No stand in
              'masked and the settled design can be scored against the build. Add "chrome": {"captured": '
              '"<the page saved with capture-chrome.js, or a screenshot of the app\'s window>", "from": '
              '"<where and when>", "slot": "<#id, or [x, y, width, height]>", "width": <pixels>} to the '
-             'spec. A round about a Claude Code mod asks for "screen": "terminal" instead.')
+             'spec. A round about a Claude Code mod asks for "screen": "terminal" instead, and a screen '
+             'with no product page around it names its kind as "screen", one of: ' + no_page_kinds() +
+             ' (Dan, 2026-10-20, claude-config#1393).')
+
+
+def no_page(kind):
+    """A design drawn with no product page around it (claude-config#1393): an email, a document or a new
+    product, the kinds Dan allowed by name. Each frame is then the round's drawing alone, at its own
+    size. Any other kind is refused, naming the allowed ones."""
+    if kind not in NO_PAGE_KINDS:
+        raise ChromeError('the spec names the kind "%s", and a screen drawn with no product page around it is '
+                          "one of: %s. Every other round is drawn inside the product's captured page."
+                          % (kind, no_page_kinds()))
+    return {"kind": "none", "page": kind, "line": NO_PAGE_KINDS[kind] + ".", "slot": None, "width": None,
+            "height": None, "source": None}
 
 
 def script_text(text):
@@ -156,6 +176,11 @@ def frame_document(chrome, builder, styles, variant, fixture=None):
         "__SLOT__", json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot"))
     scripts += "<script>\n%s\n</script>\n" % boot
     style = "<style>\n%s\n</style>\n" % styles if styles else ""
+    if chrome["kind"] == "none":
+        # Nothing around the round: its drawing is the body's first element, with no margin, so the
+        # frame is the email or the document at its own size, as the build draws it alone (#1393).
+        return ("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<style>\nhtml, body { margin: 0; }\n</style>\n"
+                "%s</head><body><div id=\"dr-slot\"></div>\n%s</body></html>\n" % (style, scripts))
     if chrome["kind"] == "png":
         x, y, w, h = chrome["slot"]
         return ("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<style>\nhtml, body { margin: 0; }\n"

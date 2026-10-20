@@ -22,9 +22,13 @@ The spec, with paths resolved against the spec file's own directory:
       "builder":     "builder.js",                defines buildScreen(variant)
       "styles":      "screen.css",                optional, inlined
       "chrome":      {...},                       the product's captured chrome, required
-                                                  unless "screen" names the shared one
+                                                  unless "screen" names the shared one or a
+                                                  kind with no product page around it
       "fixture":     "fixture.json",              optional, the data, as window.DESIGN_FIXTURE
-      "screen":      "terminal",                  optional, a shared screen from screens/
+      "screen":      "terminal",                  optional, a shared screen from screens/, or the
+                                                  kind of a screen with no product page around it:
+                                                  "email", "document" or "new-product"
+      "width":       600,                         the width a kind is drawn at, with a kind only
       "variants": [
         {"key": "1", "name": "Espresso",
          "why": "what this option is testing",
@@ -38,7 +42,15 @@ hand: each option is then its own document, the captured page with the round dra
 slot, shown in an iframe at the width it was captured at, so its own media queries answer to
 that width and nothing in the builder can collide with this page. buildScreen(variant) then
 returns what goes in the slot. A spec naming no captured chrome is refused, unless it asks for
-a shared screen (the terminal), which is itself the chrome and is drawn on this page.
+a shared screen (the terminal), which is itself the chrome and is drawn on this page, or names
+one of the kinds below.
+
+A SCREEN WITH NO PRODUCT PAGE AROUND IT (Dan, 2026-10-20, claude-config#1393: "allow named kinds"): an
+email, a document (a PDF, an invoice export) or a new product whose page does not exist yet names its
+kind in "screen" and the width it is drawn at in "width". Each option is then its own document holding
+the round's drawing alone, at that width, and the page says the kind in one plain line. Those three and
+no other: an unknown kind is refused naming the allowed ones, and a kind named beside a captured chrome
+is refused rather than either winning, since each says the other is wrong.
 
 buildScreen(variant) receives the whole variant object and returns one element:
 the entire screen, chrome included (the slot's content, with a captured chrome). Every option goes through that one function
@@ -72,6 +84,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import chrome_frame  # noqa: E402
+from design_file import NO_PAGE_KINDS, no_page_kinds  # noqa: E402
 
 KEY = re.compile(r"^[0-9a-z]$")
 
@@ -191,7 +204,7 @@ __STYLES__
 <body>
 <div class="dr-frame">
   <p class="dr-eyebrow">__TITLE__</p>
-  <h1 class="dr-round">__ROUND__</h1>
+  <h1 class="dr-round">__ROUND__</h1>__KIND__
   __ASKS__
   __MEASUREMENT__
   <div class="dr-tabs" id="dr-tabs"></div>
@@ -506,9 +519,10 @@ def load_screen(spec, builder, builder_name):
     screens = available_screens()
     # First, so a misspelt screen is reported as that rather than as a builder using a screen
     # its spec never asked for, which would send somebody to add a field they already wrote.
-    if asked and asked not in screens:
-        fail('the spec asks for the screen "%s", and the screens that ship with this tool are: %s'
-             % (asked, ", ".join(screens) if screens else "none"))
+    if asked and asked not in screens and asked not in NO_PAGE_KINDS:
+        fail('the spec asks for the screen "%s". A round is drawn in one of the shared screens that ship with '
+             "this tool (%s), or, with no product page around it, names its kind, one of: %s"
+             % (asked, ", ".join(screens) if screens else "none", no_page_kinds()))
 
     code = code_only(builder)
     for name in screens:
@@ -523,7 +537,7 @@ def load_screen(spec, builder, builder_name):
                  'it. Add "screen": "%s" to the spec so it is on the page.'
                  % (builder_name, other, name, name))
 
-    if not asked:
+    if not asked or asked in NO_PAGE_KINDS:
         return "", ""
     script = read_file(os.path.join(SCREENS_DIR, asked + ".js"), "screen script")
     styles = read_file(os.path.join(SCREENS_DIR, asked + ".css"), "screen stylesheet")
@@ -559,6 +573,11 @@ def picker_options(spec, variants):
         options.append({"label": str(variant.get("name", "")).strip(),
                         "description": description})
     return {"round": round_text, "question": round_text + "?", "options": options}
+
+
+# The one plain line a round with no product page around it carries (claude-config#1393), styled as the
+# readout's sentences are. It names the kind and says nothing about the page itself (L604).
+KIND_STYLE = ".dr-kind { margin: 0 0 6px; max-width: 62ch; color: #3D342E; font-weight: 600; }"
 
 
 CHROME_BUILDER = r"""/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
@@ -610,7 +629,7 @@ function drVerdict() {
       return;
     }
     if (!seen.report.built) {
-      said.push("The builder threw when it drew " + seen.name + ": " + seen.report.why + ". That option shows its captured chrome with nothing in it.");
+      said.push("The builder threw when it drew " + seen.name + ": " + seen.report.why + ". __EMPTY__");
       return;
     }
     if (Object.prototype.hasOwnProperty.call(marks, seen.drawn)) {
@@ -689,11 +708,31 @@ def main(argv):
              % (builder_name, ", ".join(reached), reached[0]))
 
     screen_script, screen_styles = load_screen(spec, builder, builder_name)
+    asked = spec.get("screen")
+    kind = asked.strip() if isinstance(asked, str) and asked.strip() in NO_PAGE_KINDS else None
 
     # No stand ins (claude-config#1364): a round draws in the product's captured chrome, or in a
-    # shared screen that ships with this tool, which is itself the chrome.
+    # shared screen that ships with this tool, which is itself the chrome, or, for one of the kinds of
+    # screen with no product page around it that Dan allowed by name, alone (claude-config#1393).
     chrome = None
-    if screen_script:
+    width = spec.get("width")
+    if width is not None and not kind:
+        fail('"width" is for a round with no product page around it (%s). A round in captured chrome is '
+             "drawn at the width its page was captured at, the chrome's own \"width\", and the terminal at "
+             "the width its builder gives it; take it out" % no_page_kinds())
+    if kind:
+        # Both named is refused rather than one winning: they contradict each other, and either choice
+        # draws the round against the other's intent, bare when it belongs in the product (the stand in
+        # this tool exists to refuse), or in a page an email never has.
+        if spec.get("chrome") is not None:
+            fail('the spec names the kind "%s", which has no product page around it, and a captured chrome '
+                 "as well; keep one" % kind)
+        if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
+            fail('the spec names the kind "%s", which has no product page around it to take a width from, so '
+                 'give the width it is drawn at as "width": <pixels>' % kind)
+        chrome = chrome_frame.no_page(kind)
+        chrome["width"] = width
+    elif screen_script:
         if spec.get("chrome") is not None:
             fail('the spec asks for the shared screen "%s", which is its chrome, and names a captured '
                  "chrome as well; keep one" % str(spec.get("screen")).strip())
@@ -729,10 +768,15 @@ def main(argv):
         values = {"TEMPLATE": chrome_frame.script_text(json.dumps(template)),
                   "OPTIONS": chrome_frame.script_text(json.dumps(options)),
                   "WIDTH": str(chrome["width"]), "HEIGHT": str(chrome["height"] or 0),
-                  "SLOT": json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot")}
+                  "SLOT": json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot"),
+                  # Plain text inside a quoted string of the builder, so it holds no quote or backslash.
+                  "EMPTY": ("That option is empty." if chrome["kind"] == "none"
+                            else "That option shows its captured chrome with nothing in it.")}
         # One pass, so a value holding another placeholder's spelling is never replaced again.
-        builder = re.sub(r"__(TEMPLATE|OPTIONS|WIDTH|HEIGHT|SLOT)__", lambda m: values[m.group(1)], CHROME_BUILDER)
-        styles = ""
+        builder = re.sub(r"__(TEMPLATE|OPTIONS|WIDTH|HEIGHT|SLOT|EMPTY)__", lambda m: values[m.group(1)], CHROME_BUILDER)
+        # The round's own stylesheet is in each option's document; this page keeps only the rule for the
+        # line naming a kind, added only where there is one, so every other round's page is unchanged.
+        styles = KIND_STYLE if chrome["kind"] == "none" else ""
 
     asks = str(spec.get("asks", "")).strip()
     measurement = str(spec.get("measurement", "")).strip()
@@ -740,6 +784,8 @@ def main(argv):
     page = PAGE
     page = page.replace("__TITLE__", escape_text(spec.get("title", "Design round")))
     page = page.replace("__ROUND__", escape_text(spec.get("round", "Which of these")))
+    page = page.replace("__KIND__", '\n  <p class="dr-kind">%s</p>' % escape_text(chrome["line"])
+                        if chrome and chrome["kind"] == "none" else "")
     page = page.replace("__ASKS__", '<p class="dr-asks">%s</p>' % escape_text(asks) if asks else "")
     page = page.replace("__MEASUREMENT__",
                         '<p class="dr-measurement">%s</p>' % escape_text(measurement)

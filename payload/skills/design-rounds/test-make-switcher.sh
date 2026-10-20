@@ -1633,6 +1633,104 @@ PY
   check_eq "the committed example draws its fixture's four rows inside the captured header, in both options" "Invoices:4,Invoices:4" "$ex"
 fi
 
+# --- a screen with no product page around it: the three named kinds (claude-config#1393) ---
+# Dan, 2026-10-20, on #1393: "allow named kinds". A round may declare itself an email, a document or a
+# new product in "screen", where the terminal is declared; it is then drawn at its own size with no
+# page around it, and the switcher says so in one plain line. Every other round still needs the
+# captured page.
+NP="$TMP/nopage"; mkdir -p "$NP"
+printf 'function buildScreen(variant) { var d = document.createElement("div"); d.className = "mail"; d.textContent = variant.name; return d; }\n' > "$NP/builder.js"
+printf '.mail { width: 600px; height: 120px; background: #fff; }\n' > "$NP/screen.css"
+for kind in email document new-product; do
+  case "$kind" in
+    email) line="An email, with no product page around it." ;;
+    document) line="A document, with no product page around it." ;;
+    new-product) line="A new product, whose page does not exist yet." ;;
+  esac
+  spec "$NP/$kind.json" "$TWO" "{\"screen\": \"$kind\", \"width\": 600}"
+  out="$(run "$NP/$kind.json" "$NP/$kind.html")"; rc=$?
+  check_eq "a round declaring itself $kind builds with no captured page" "0" "$rc"
+  check "and the switcher says so in one plain line ($kind)" "<p class=\"dr-kind\">$line</p>" "$(cat "$NP/$kind.html" 2>/dev/null)"
+  check_eq "that line is on the page once ($kind)" "1" "$(grep -c 'class="dr-kind"' "$NP/$kind.html" 2>/dev/null)"
+done
+check_not "a round in captured chrome carries no such line" 'class="dr-kind"' "$(cat "$NS/out.html" 2>/dev/null)"
+check_not "nor does a round in the terminal" 'class="dr-kind"' "$(cat "$TMP/term.html" 2>/dev/null)"
+
+spec "$NP/postcard.json" "$TWO" '{"screen": "postcard", "width": 600}'
+out="$(run "$NP/postcard.json" "$NP/postcard.html")"; rc=$?
+check_eq "an unknown kind is refused (exit 2)" "2" "$rc"
+check "and the refusal names the kind asked for" "postcard" "$out"
+check "and lists the email kind" "email" "$out"
+check "and the document kind" "document" "$out"
+check "and the new product kind" "new-product" "$out"
+check "and still the shared screens" "terminal" "$out"
+check_eq "and writes no page" "0" "$([ -e "$NP/postcard.html" ] && echo 1 || echo 0)"
+
+out="$(run "$NS/bare.json" "$NS/bare-again.html")"; rc=$?
+check_eq "a round with no kind and no captured page is still refused" "2" "$rc"
+check "and the refusal names the kinds that need no page" "email, document, new-product" "$out"
+
+spec "$NP/both.json" "$TWO" '{"screen": "email", "width": 600, "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+python3 - "$NP/both.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])); s["screen"] = "email"; json.dump(s, open(sys.argv[1], "w"))
+PY
+cp "$NS/chrome.html" "$NP/chrome.html"
+out="$(run "$NP/both.json" "$NP/both.html")"; rc=$?
+check_eq "a round naming a kind and a captured page is refused" "2" "$rc"
+check "and asks for one" "keep one" "$out"
+check_eq "and writes no page" "0" "$([ -e "$NP/both.html" ] && echo 1 || echo 0)"
+
+spec "$NP/nowidth.json" "$TWO" '{"screen": "email"}'
+out="$(run "$NP/nowidth.json" "$NP/nowidth.html")"; rc=$?
+check_eq "a kind with no width is refused, since no page gives it one" "2" "$rc"
+check "and names the width" '"width"' "$out"
+spec "$NP/chromewidth.json" "$TWO" '{"width": 600, "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+out="$(run "$NP/chromewidth.json" "$NP/chromewidth.html")"; rc=$?
+check_eq "a round width beside a captured page is refused, since the page's own width is the one drawn" "2" "$rc"
+
+nopage_probe() { # nopage_probe <page> -> the line, each frame's width, state and drawing, then the readout after a key inside
+  python3 - "$1" <<'PROBEPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+setTimeout(function () {
+  var line = document.querySelector(".dr-kind");
+  var frames = document.querySelectorAll("#dr-stage iframe");
+  var drawn = Array.prototype.map.call(frames, function (f) {
+    var d = f.contentDocument, slot = d && d.getElementById("dr-slot");
+    var bare = d && d.body.firstElementChild === slot ? "bare" : "around";
+    return (f.hidden ? "hidden:" : "shown:") + Math.round(f.getBoundingClientRect().width || parseInt(f.style.width, 10)) + ":" + bare + ":" + (slot ? slot.textContent : "none");
+  });
+  var tall = frames[0].getBoundingClientRect().height;
+  frames[0].contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  setTimeout(function () {
+    var out = document.createElement("pre"); out.id = "PROBE";
+    out.textContent = (line ? line.textContent : "no line") + "|" + drawn.join(",") + "|" + (tall >= 119 && tall < 200 ? "fitted" : "unfitted:" + tall)
+      + "|" + document.querySelector(".dr-readout h2").textContent + "|" + document.querySelectorAll(".dr-sameness").length;
+    document.body.append(out);
+  }, 300);
+}, 800);
+</script>
+"""
+open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+PROBEPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
+    --dump-dom "file://$1.probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")'
+}
+if [[ ! -x "$CHROME" ]]; then
+  echo "UNMEASURED: no browser at $CHROME, so a round with no product page was not drawn"
+  unmeasured=$((unmeasured + 1))
+else
+  got="$(nopage_probe "$NP/email.html")"
+  check_eq "an email round draws each option at its own width with nothing around it, one shown, fitted to its height, and a key inside switches" \
+    "An email, with no product page around it.|shown:600:bare:Espresso,hidden:600:bare:Ink|fitted|Ink|0" "$got"
+  got="$(nopage_probe "$NP/new-product.html")"
+  check "a new product round says its page does not exist yet, on the page" "A new product, whose page does not exist yet.|shown:600:bare:Espresso" "$got"
+fi
+
 # --- the committed terminal example is what the tool produces today ---
 
 TEX="$DIR/example-terminal"

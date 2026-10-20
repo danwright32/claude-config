@@ -547,6 +547,23 @@ check("show of a score file that is not there is no score", rc == 2, out)
 rc, out = run()
 check("no arguments prints the usage and exits 2", rc == 2 and "usage" in out.lower(), out)
 
+# 11. A design with no product page around it (claude-config#1393): an email, a document or a new
+# product, which Dan allowed by name on 2026-10-20. Its frames are scored like any other, at their own
+# size, and the score records and says the kind, so a 100% is never read as drawn inside the product.
+rc, out, data = score(make("email", lambda s: s["frames"].__setitem__("kind", "email")))
+check("a design declaring itself an email scores like any other, both halves", rc == 0 and "MATCHED" in out, out)
+check("and the score file records the kind", data and data.get("kind") == "email", data and data.get("kind"))
+check("and says it in one plain line", "  kind       an email, with no product page around it" in out, out)
+rc, out = run("show", os.path.join(T, "email", "score.json"))
+check("show of that score file holds and says the kind", rc == 0 and "an email, with no product page around it" in out, out)
+rc, out, data = score(make("plain-kind", None))
+check("a design in captured chrome records no kind and says none", data and data.get("kind") is None and "  kind " not in out, out)
+rc, out, data = score(make("postcard", lambda s: s["frames"].__setitem__("kind", "postcard")))
+check("a design naming a kind that is not allowed is no score, naming the allowed ones",
+      rc == 2 and "postcard" in out and "email, document, new-product" in out, out)
+rc, out = run("frames", os.path.join(T, "postcard", "settled.html"))
+check("and its frames are not handed to an adapter either", rc == 2 and "postcard" in out, out)
+
 shutil.rmtree(T, ignore_errors=True)
 print()
 print("passed: %d, failed: %d" % (passed, failed))
