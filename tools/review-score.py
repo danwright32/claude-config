@@ -205,31 +205,20 @@ def parse_findings(lines):
     return out
 
 
-# How much of an item's claim a finding must restate, in the words review-answered.py compares
-# claims by, when it shares only one of the item's keywords: the same 0.35 that decides two lessons
-# review findings make the same point (claude-config#1338).
-CLAIM_SIMILARITY = 0.35
-STOP = set('the a an of to in is and or it that this as on for be by not with at its are was from so '
-           'but if then than when which who what into out up can will would should could has have had '
-           'does did do no yes all any each one two'.split())
+def _answered_module():
+    """review-answered.py, whose measure decides two lessons review findings make the same point
+    (claude-config#1338): a restated claim is judged by that one measure and threshold, not a copy."""
+    path = os.path.join(DEFAULT_HOOKS_LIB, "review-answered.py")
+    spec = importlib.util.spec_from_file_location("review_answered", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def claim_words(text):
-    """The words a claim is compared by: before the fix it asks for, without its severity, and
-    without the mark the review runner adds to a finding it could not place, which carries the same
-    words on findings about different things (claude-config#1357)."""
-    text = re.split(r'\s*\[review harness:', text, maxsplit=1, flags=re.I)[0]
-    text = re.sub(r'\[severity:[^\]]*\]', '', text, flags=re.I)
-    text = re.split(r'should be:', text, maxsplit=1, flags=re.I)[0]
-    return {w for w in re.findall(r'[a-z0-9_]+', text.lower()) if len(w) > 2 and w not in STOP}
+_ANSWERED = _answered_module()
 
 
-def claim_similarity(a, b):
-    a, b = claim_words(a), claim_words(b)
-    return len(a & b) / max(1, len(a | b))
-
-
-def claim_matches(text, item, quoted):
+def claim_matches(text, item, quoted, raw):
     """Whether a finding's text makes the item's claim. An item listing one keyword, or none,
     needs that one. One listing several needs two of them, or one plus either the item's quoted
     line or a restatement of its claim: a single shared word such as "range" credited an off topic
@@ -243,7 +232,7 @@ def claim_matches(text, item, quoted):
     if len(kws) == 1 or hits >= 2 or quoted:
         return True
     claim = item.get("claim") or ""
-    return bool(claim) and claim_similarity(text, claim) >= CLAIM_SIMILARITY
+    return bool(claim) and _ANSWERED.similarity(raw, claim) >= _ANSWERED.MIN_SIMILARITY
 
 
 def match_item(finding, items, window):
@@ -259,7 +248,7 @@ def match_item(finding, items, window):
             dist = 0
         elif dist > window:
             continue
-        if not claim_matches(text, it, bool(quote and quote.lower() in text)):
+        if not claim_matches(text, it, bool(quote and quote.lower() in text), finding["text"]):
             continue
         if best is None or dist < best_dist:
             best, best_dist = it, dist
