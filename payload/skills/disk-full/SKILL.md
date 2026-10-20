@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that wait for Dan's decision, in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own), in the order that finds the cause fastest.
 ---
 
 # disk-full

@@ -55,7 +55,9 @@
 # rather than reporting the du figure as space recovered (L93, L98).
 #
 # Exit codes: 0 done (a list, a summary, or every removal worked); 1 at least one removal failed;
-# 2 refused (an argument or setting it does not know, or a DerivedData folder it cannot read).
+# 2 refused (an argument or setting it does not know, or a DerivedData folder it cannot read), or
+# --start could not start a sweep; and for --start only, 3 no DerivedData on this Mac, so nothing was
+# started, and 75 a sweep is already running, so no second one was started.
 #
 # Environment (every one a seam the suite sets, so no test reads this Mac, L2):
 #   XCODE_DERIVED_DATA_ROOT        the DerivedData folder (lib/derived-data.sh)
