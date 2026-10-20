@@ -80,6 +80,66 @@ outcome, `SEND-OUTCOME withheld <files>`, which the watcher logs as `NOT sent: <
 followed by the send's own sentence, so "nothing to send" means only that nothing differs. Every
 other line a send prints beside its marker goes into the log too, indented under the tick's summary.
 
+### A send that catches up reports what the catch up sent (#1402)
+
+A send has two ways into a sync: it finds this Mac behind and catches up first (#323), or its own
+push is refused because the shared repo moved after it looked. Either way the sync stages, commits
+and pushes this Mac's edits itself. The behind send then fell through to its own commit, found
+everything already gone, and reported `nothing`; the refused send reported nothing at all, or only
+the CI gate's line about the shared commit's tests, after the send over an untested commit (shipped
+in #1398) had put this Mac's edit on top of it. From
+2026-10-18 to 2026-10-20 one Mac's log showed receives between skipped sends and not one `sent`.
+
+**The sync says what it did with this Mac's work, and the send reports that.** At its push step the
+sync writes `.reconcile-outcome`: `published`, `nothing` (including a push of commits the shared
+repo already held, which sends nothing), `push-refused` or `scan-refused`; #1398's path writes its
+own kinds there as before, and a published merge of rule files after the apply upgrades `nothing`
+to `published`. The lines after the first are the paths the hook suite gate held back, because the
+behind catch up runs in a subshell and its own record of them dies with it. The send turns that into
+its marker through `report_send_result`, the same function its direct path uses, so `withheld`,
+`nothing` and `sent` mean the same thing whichever path decided them.
+
+**The behind send no longer re-sends after a catch up that decided.** Before, it fell through to
+staging and committing again, which is what found nothing; and with the gate now in the catch up
+(#1403) it would also have run the gate a second time and said every held hook twice, with two
+notifications for one save. Edits made while the catch up ran are not lost: the watcher sends again
+for anything that arrived during a send (#262). It still asks whether this Mac is behind straight
+after the catch up, whatever the catch up said, because asking repairs `.last-applied` when the
+catch up's own commits moved HEAD past it, and the #514 check fails without that.
+
+**Only for a send.** The file is written only when a send asked for it (`RECONCILE_OUTCOME_WANTED`),
+so a sync typed by hand leaves nothing in the clone that nobody reads.
+
+**Not covered:** when the sync a refused push falls back to pulls a new copy of `claude-sync` and
+hands off to it (`reexec_after_self_update`), the send's process is replaced before it can print its
+marker, and the watcher logs that the send did not say what it did. That is honest, rare (a race
+and a tool update at once) and was the same before.
+
+### The send side hook suite gate lives where the commit is made (#1403)
+
+`send_hook_tests` (#244, #269) was called by the send's direct path alone. The sync a behind send
+catches up with stages and commits on its own, as does a typed `sync`, a typed `push`, and the
+publishing of merged rule files, and #1398's send over an untested commit pushes what that sync
+committed. All of them published hook edits with no suite run here. Calling the gate at each of
+those sites would have left the next push site added to forget it, which is how the catch up
+missed it (L370, L247), so it is called inside `commit_if_changed`, the one place any of them turns
+this Mac's staged edits into a commit. A commit made earlier and pushed later went through it when
+it was made.
+
+What that costs a typed `sync` or `push` is what it already cost a send: only the suites covering a
+changed hook, or a declared scan whose scope a change falls under, with verdicts reused while their
+inputs are unchanged, so a typed command that changes no hook runs nothing. `SYNC_NO_SEND_TESTS=1`
+skips it for one run of any of them.
+
+A send whose own push is refused makes its commit twice, once itself and once in the sync it falls
+back to, so the gate runs twice in one run. The second pass reuses the first one's verdict, and a
+hold already said in the run is not said or notified again (`SEND_GATE_TOLD`), so one save gives
+one sentence and one notification.
+
+A hook held back in a catch up is not reverted by that catch up's apply: the payload keeps the
+shared copy and this Mac's file differs from it, which the apply reads as an edit this Mac has not
+sent (`locally_ahead_paths`), exactly as for an edit the secret scan refused.
+
 ### Designing the spill state out rather than refusing it
 
 Considered for #513 and not done. Two refusals on the lesson minting path had no caller that could
