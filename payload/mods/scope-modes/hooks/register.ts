@@ -84,9 +84,11 @@ import {
   proposalsIn,
   repoKey,
   UNATTRIBUTED,
+  type FiledProposal,
   type NightQuestion,
   type ProposedIssue,
 } from './wake.ts'
+import { claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath, type ProposalState } from './proposals.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
@@ -1626,14 +1628,36 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   const has = (key: string) => (key === LESSONS_KEY ? read.lessons.length > 0 : read.issues.some(i => repoKey(i.repo) === key) || orphans.some(o => o.key === key))
   const claimed = new Set<string>()
   if (night.generation !== null) for (const key of keys) if (has(key) && (await claimOffer($, night.generation, key))) claimed.add(key)
-  const issues = read.issues.filter(i => claimed.has(repoKey(i.repo)))
+  // Each claimed issue is sorted before it is offered (#1389): one already filed is said, one another
+  // open session claimed is left to it, and the rest are claimed one by one for this session.
+  const sorted = await sortProposals(
+    $,
+    read.issues.filter(i => claimed.has(repoKey(i.repo))),
+    (night.generation !== null ? nightStart(night.generation) : null) ?? (await $.clock.now()) - BACKLOG_MS,
+  )
+  const issues = sorted.offer
   const lessons = claimed.has(LESSONS_KEY) ? read.lessons : []
   const questions = [...read.questions.filter(q => q.by === self), ...orphans.filter(o => claimed.has(o.key)).map(o => o.q)]
   // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
   // offer, and this session says nothing of them (lessons review).
-  const offers = issues.length > 0 || lessons.length > 0 || (night.offers && ![...keys].some(has))
+  const offers = issues.length > 0 || lessons.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0 || sorted.elsewhere > 0 || (night.offers && ![...keys].some(has))
   return {
-    prompt: morningPrompt({ worker: night.worker, offers, held: deliveries, merges, questions, issues, lessons, bad: read.bad, ...(mine ? { forRepo: mine } : {}), ...(reportName ? { reportName } : {}) }),
+    prompt: morningPrompt({
+      worker: night.worker,
+      offers,
+      held: deliveries,
+      merges,
+      questions,
+      issues,
+      lessons,
+      bad: read.bad,
+      ...(sorted.filed.length ? { filed: sorted.filed } : {}),
+      ...(sorted.declined.length ? { declined: sorted.declined } : {}),
+      ...(sorted.elsewhere ? { elsewhere: sorted.elsewhere } : {}),
+      ...(sorted.unchecked !== undefined ? { unchecked: sorted.unchecked } : {}),
+      ...(mine ? { forRepo: mine } : {}),
+      ...(reportName ? { reportName } : {}),
+    }),
     anything: night.worker || offers || held.length > 0 || questions.length > 0,
   }
 }
@@ -1646,23 +1670,253 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
 // morning already offered (lessons review).
 const claimOffer = async ($: EngineInterface, generation: string, key: string, fresh = false): Promise<boolean> => {
   const dir = `${(await sleepPaths($)).dir}/offered/${generation.replace(/[^\w.-]/g, '_')}`
-  const path = `${dir}/${keyFile(key)}`
-  const tmp = `${dir}/.${keyFile(key)}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  const linked = await linkInto($, dir, keyFile(key), await $.session.id())
+  if (linked === 'linked') return true
+  // This session's own earlier claim (a morning that did not go in, asked again) is still its own.
+  if (linked === 'taken') return !fresh && (await $.fs.read(`${dir}/${keyFile(key)}`).catch(() => '')) === (await $.session.id())
+  $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${linked.error}), so they are left in the report for a later session`, { to: 'debug' })
+  return false
+}
+
+// One file written whole beside its name, then linked into place: `ln` refuses when the name is
+// there, so of two sessions writing one name exactly one succeeds (assume it runs twice). The one
+// way this mod claims anything in the shared sleep state: a night's proposals by repository
+// (#1286), and each proposal before it is offered and filed (#1389). `taken` is the name already
+// there; anything else that stops the link is said, never read as a lost race (L11).
+const linkInto = async ($: EngineInterface, dir: string, name: string, text: string): Promise<'linked' | 'taken' | { error: string }> => {
+  const tmp = `${dir}/.${name}.${Math.random().toString(36).slice(2, 10)}.tmp`
   try {
     await run($, ['mkdir', '-p', dir])
-    await $.fs.write(tmp, await $.session.id())
-    const ln = await run($, ['ln', tmp, path])
-    if (ln.exitCode === 0) return true
-    // This session's own earlier claim (a morning that did not go in, asked again) is still its own.
-    if (/File exists/i.test(ln.stderr)) return !fresh && (await $.fs.read(path).catch(() => '')) === (await $.session.id())
-    $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}), so they are left in the report for a later session`, { to: 'debug' })
-    return false
+    await $.fs.write(tmp, text)
+    const ln = await run($, ['ln', tmp, `${dir}/${name}`])
+    if (ln.exitCode === 0) return 'linked'
+    if (/File exists/i.test(ln.stderr)) return 'taken'
+    return { error: ln.stderr.trim() || `ln exited ${ln.exitCode}` }
   } catch (err) {
-    $.ui.log(`scope-modes: the night's proposals for ${key} could not be claimed (${msg(err)}), so they are left in the report for a later session`, { to: 'debug' })
-    return false
+    return { error: msg(err) }
   } finally {
     await run($, ['rm', '-f', tmp])
   }
+}
+
+// ---- #1389: each overnight proposal offered once and filed once (hooks/proposals.ts decides) ----
+
+// A proposal's entries by number. An absent folder is no entries; one that cannot be listed throws.
+const proposalEntries = async ($: EngineInterface, dir: string): Promise<Record<string, string>> => {
+  if (!(await $.fs.exists(dir))) return {}
+  const ls = await run($, ['ls', dir])
+  if (ls.exitCode !== 0) throw new Error(ls.stderr.trim() || `ls exited ${ls.exitCode}`)
+  const out: Record<string, string> = {}
+  for (const name of ls.stdout.split('\n').map(s => s.trim()).filter(s => /^\d+$/.test(s))) out[name] = await $.fs.read(`${dir}/${name}`)
+  return out
+}
+
+// The sessions open now, or null when the registry cannot be read: then only a claim's age frees it.
+const openSessions = async ($: EngineInterface): Promise<Set<string> | null> => {
+  try {
+    return new Set((await $.sessions.list()).open.map(o => o.sessionId))
+  } catch (err) {
+    $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so another session's claim on a proposal holds until it is a day old`, { to: 'debug' })
+    return null
+  }
+}
+
+// One entry added at the next free number, judged again after a lost race, so two writers never
+// share a number. Returns the state the proposal was in when the entry went in, or why it did not.
+const addEntry = async (
+  $: EngineInterface,
+  dir: string,
+  open: Set<string> | null,
+  entry: (now: number, self: string) => string,
+  stopAt: (s: ProposalState) => boolean,
+): Promise<{ added: true; before: ProposalState } | { added: false; state: ProposalState } | { error: string }> => {
+  const self = await $.session.id()
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let state: ProposalState
+    try {
+      state = judgeProposal(await proposalEntries($, dir), self, open, await $.clock.now())
+    } catch (err) {
+      return { error: msg(err) }
+    }
+    if (stopAt(state)) return { added: false, state }
+    const next = 'next' in state ? state.next : 1
+    const linked = await linkInto($, dir, String(next), entry(await $.clock.now(), self))
+    if (linked === 'linked') return { added: true, before: state }
+    if (linked !== 'taken') return linked
+  }
+  return { error: 'another session kept writing to this proposal first' }
+}
+
+const MILESTONE_CANDIDATES = (home: string) => `${home}/.claude/skills/milestone/milestone-candidates.sh`
+const DAY_MS = 24 * 60 * MIN
+
+// Whether GitHub already holds a proposal, by the end of turn review's own duplicate check
+// (milestone-candidates.sh, its CLOSE-MATCH, never a second matcher here: L370), over the issues open
+// now and those closed since the day before the night it came from: it can only have been filed
+// after it was proposed, so nothing closed earlier can be its filing, and the day before covers a
+// night that began on the previous date in UTC.
+const filedOnGitHub = async ($: EngineInterface, repo: string, title: string, since: number): Promise<{ number: number } | null | { error: string }> => {
+  const home = (await sleepPaths($)).home
+  const r = await run($, ['bash', MILESTONE_CANDIDATES(home), repo, '--like', title, '--closed-since', new Date(since - DAY_MS).toISOString().slice(0, 10)], 90_000)
+  if (r.exitCode === 1) return null
+  if (r.exitCode !== 0) return { error: (r.stderr.trim() || r.stdout.trim()).split('\n')[0] || `milestone-candidates.sh exited ${r.exitCode}` }
+  const m = closeMatchIn(r.stdout)
+  return m ? { number: m.number } : null
+}
+
+type SortedProposals = { offer: ProposedIssue[]; filed: FiledProposal[]; declined: ProposedIssue[]; elsewhere: number; unchecked?: string }
+
+// The proposed issues a session is about to offer, sorted before it offers any (#1389): those filed
+// already (recorded here, or found on GitHub by a close match) are said and never offered; those Dan
+// declined on an earlier morning are said as declined; those another open session claimed are left
+// to it; each of the rest is claimed for this session, so no second session offers it. `since` is
+// when the oldest of their nights began. A check or claim that cannot be made still offers the
+// proposal (losing it is the worse failure), says a check that failed, and logs a claim that failed:
+// filing claims it again. What is offered is remembered by its number, so a picker Dan answers
+// records the ones he left as declined.
+const sortProposals = async ($: EngineInterface, issues: readonly ProposedIssue[], since: number): Promise<SortedProposals> => {
+  const out: SortedProposals = { offer: [], filed: [], declined: [], elsewhere: 0 }
+  if (!issues.length) return out
+  const sleep = (await sleepPaths($)).dir
+  const open = await openSessions($)
+  // One proposal written twice (by two nights, or twice in one) is one proposal.
+  const seen = new Set<string>()
+  type Sorted = { issue: ProposedIssue; dir: string | null; to: 'offer' | 'elsewhere' | 'declined'; why?: string } | { issue: ProposedIssue; filed: FiledProposal }
+  const each = await Promise.all(
+    issues.map(async (issue): Promise<Sorted | null> => {
+      const dir = proposalPath(sleep, issue.repo, issue.title)
+      if (dir === null) return { issue, dir, to: 'offer' }
+      if (seen.has(dir)) return null
+      seen.add(dir)
+      const self = await $.session.id()
+      let state: ProposalState
+      try {
+        state = judgeProposal(await proposalEntries($, dir), self, open, await $.clock.now())
+      } catch (err) {
+        $.ui.log(`scope-modes: whether "${issue.title}" was already offered or filed could not be read (${msg(err)}), so it is offered`, { to: 'debug' })
+        return { issue, dir, to: 'offer' }
+      }
+      const settled = (s: ProposalState): Sorted | null =>
+        s.state === 'filed' ? { issue, filed: { issue, number: s.number, url: s.url } } : s.state === 'declined' ? { issue, dir, to: 'declined' } : s.state === 'held' ? { issue, dir, to: 'elsewhere' } : null
+      const now = settled(state)
+      if (now) return now
+      if (state.state === 'mine') return { issue, dir, to: 'offer' }
+      let why: string | undefined
+      if (issue.repo && issue.title) {
+        const found = await filedOnGitHub($, repoKey(issue.repo), issue.title, since)
+        if (found && 'error' in found) why = found.error
+        // A close match only resembles, and milestone-candidates.sh rules on nothing (lessons review):
+        // it is shown with its number, for Dan to correct, and never recorded as filed, so a wrong
+        // one hides nothing for good and never refuses a filing he asks for. A later night proposing
+        // it again is checked again.
+        else if (found) return { issue, filed: { issue, number: found.number, url: null } }
+      }
+      const r = await addEntry($, dir, open, (at, by) => claimEntry(by, at), s => s.state !== 'free')
+      if ('error' in r) $.ui.log(`scope-modes: "${issue.title}" could not be claimed before it is offered (${r.error}); filing claims it again`, { to: 'debug' })
+      else if (!r.added) {
+        const raced = settled(r.state)
+        if (raced) return raced
+      }
+      return { issue, dir, to: 'offer', ...(why !== undefined ? { why } : {}) }
+    }),
+  )
+  const numbered = new Map<string, string>()
+  for (const e of each) {
+    if (e === null) continue
+    if ('filed' in e) out.filed.push(e.filed)
+    else if (e.to === 'elsewhere') out.elsewhere++
+    else if (e.to === 'declined') out.declined.push(e.issue)
+    else {
+      out.offer.push(e.issue)
+      if (e.dir !== null) numbered.set(`1.${out.offer.length}`, e.dir)
+      if (e.why !== undefined && out.unchecked === undefined) out.unchecked = e.why
+    }
+  }
+  rememberOffered(numbered)
+  return out
+}
+
+// The proposed issues this session offered, by the number its prompt gave each (1.n), so the picker
+// Dan answers records the ones he left unselected as declined (#1389). Every offer numbers from 1.1,
+// so a second offer in the same session (the backlog's beside the morning's) can give a number to a
+// different proposal while the first picker still waits: such a number is dropped for the rest of
+// the session, since an answer cannot say which was meant, and a wrong decline would hide a
+// proposal for good where a missed one only offers it again. Held in memory: a reload before he
+// answers loses it, and those proposals are then neither declined nor lost (their claims expire,
+// and a later morning offers them again).
+let offeredByNumber = new Map<string, string>()
+const ambiguousNumbers = new Set<string>()
+const rememberOffered = (numbered: ReadonlyMap<string, string>) => {
+  for (const [n, dir] of numbered) {
+    if (ambiguousNumbers.has(n)) continue
+    const had = offeredByNumber.get(n)
+    if (had !== undefined && had !== dir) {
+      ambiguousNumbers.add(n)
+      offeredByNumber.delete(n)
+    } else offeredByNumber.set(n, dir)
+  }
+}
+
+// Each proposal Dan left unselected in a picker he answered, recorded declined for good.
+const noteDeclined = async ($: EngineInterface, input: Record<string, unknown>, result: { result?: unknown }) => {
+  if (!offeredByNumber.size) return
+  const answers = (result.result as { answers?: unknown } | undefined)?.answers
+  for (const n of declinedIn(input.questions, answers, new Set(offeredByNumber.keys()))) {
+    const dir = offeredByNumber.get(n) as string
+    const r = await addEntry($, dir, null, (at, by) => declinedEntry(by, at), s => s.state === 'filed' || s.state === 'declined')
+    if ('error' in r) $.ui.log(`scope-modes: a proposal Dan declined (${n}) could not be recorded as declined (${r.error}), so a later morning may offer it again`, { to: 'debug' })
+  }
+}
+
+// When the night a generation names began (its leading time), or null for one named by no time.
+const nightStart = (generation: string): number | null => {
+  const at = Number(/^(\d+)-/.exec(generation)?.[1])
+  return Number.isFinite(at) ? at : null
+}
+
+// Before a `gh issue create` whose title is an overnight proposal's (#1389): filed already, or held
+// by another open session, it is refused, saying where it is; otherwise this session claims it, so
+// a second session filing it at the same moment is refused, and `dir` is where it is recorded filed
+// once gh says it was made. A call that names no proposal, or cannot be read, is left alone.
+const proposalFiling = async ($: EngineInterface, raw: string): Promise<{ dir: string } | { deny: string } | null> => {
+  let cmds: Cmd[]
+  try {
+    cmds = await readCommands($, raw)
+  } catch (err) {
+    $.ui.log(`scope-modes: a gh issue create could not be read for an overnight proposal (${msg(err)}), so it runs unclaimed`, { to: 'debug' })
+    return null
+  }
+  const gh = cmds.find(c => c.gh?.sub === 'issue' && c.gh.act === 'create')?.gh
+  if (!gh || gh.unreadable) return null
+  const title = gh.flags.filter(f => f.name === '--title' || f.name === '-t').pop()?.value
+  if (typeof title !== 'string') return null
+  const repo = gh.named === undefined ? ((await $.env.get('GH_REPO')) || (await repoOf($)).slug) : gh.named
+  if (!repo) return null
+  const dir = proposalPath((await sleepPaths($)).dir, repo, title)
+  if (dir === null || !(await $.fs.exists(dir))) return null
+  const r = await addEntry($, dir, await openSessions($), (now, by) => claimEntry(by, now), s => s.state !== 'free')
+  if ('error' in r) {
+    $.ui.log(`scope-modes: the overnight proposal "${title}" could not be claimed before filing (${r.error}), so it is filed unclaimed`, { to: 'debug' })
+    return { dir }
+  }
+  if (r.added) return { dir }
+  const s = r.state
+  if (s.state === 'filed')
+    return { deny: `Not filed: this overnight proposal is already filed as ${s.url ?? `${repo}#${s.number ?? '?'}`}. Tell Dan in one line, and do not file it again.` }
+  if (s.state === 'held')
+    return { deny: 'Not filed: another open session is offering this overnight proposal, so it is filed from there if Dan picks it there, never twice. Tell Dan in one line.' }
+  return { dir }
+}
+
+// Once gh made the issue, the proposal is recorded filed, with its link, so no session offers or
+// files it again. One that cannot be recorded is logged: the next morning's duplicate check against
+// GitHub still finds it.
+const noteProposalFiled = async ($: EngineInterface, dir: string, result: { text?: string }) => {
+  const made = issueLinkIn(String(result.text ?? ''))
+  // A link mod-kit's one link reader does not read as a repository's is no issue made (L613).
+  if (!made || !(await $.modkit.linkRepo({ link: made.url }).catch(() => null))) return
+  const r = await addEntry($, dir, null, (now, by) => filedEntry(by, now, { url: made.url, number: made.number }), s => s.state === 'filed')
+  if ('error' in r) $.ui.log(`scope-modes: ${made.url} was filed from an overnight proposal but could not be recorded (${r.error}); a later morning's check against GitHub still finds it`, { to: 'debug' })
 }
 
 // How far back a session started later looks for its repository's proposals no session offered
@@ -1681,8 +1935,10 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
   const ls = await run($, ['ls', p.notes])
   if (ls.exitCode !== 0) return
   const now = await $.clock.now()
-  const issues: ProposedIssue[] = []
+  const claimedIssues: ProposedIssue[] = []
   const questions: NightQuestion[] = []
+  // When the oldest night offered here began, for the duplicate check's closed issues (#1389).
+  let since = now
   let bad = 0
   // A question is offered here only when its own session is no longer open to ask it (lessons review).
   let open: Set<string> | null = null
@@ -1716,14 +1972,37 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
       if (repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) === mine) asksHere.push(q)
     }
     if ((mineHere.length || asksHere.length) && (await claimOffer($, generation, mine, true))) {
-      issues.push(...mineHere)
+      claimedIssues.push(...mineHere)
       questions.push(...asksHere)
+      if (mineHere.length) since = Math.min(since, at)
     }
   }
-  if (!issues.length && !questions.length) return
-  const lead = `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
+  // A proposal filed since its night, by a session or by hand, is said as filed and never offered
+  // again (#1389: on 2026-10-20 four were offered here that had been filed eleven days before).
+  const sorted = await sortProposals($, claimedIssues, since)
+  const issues = sorted.offer
+  if (!issues.length && !questions.length && !sorted.filed.length && !sorted.declined.length) return
+  const lead =
+    issues.length || questions.length
+      ? `Proposals and questions for ${mine} from an earlier night were never put to Dan, since no session in it was open when that night ended: offer them now.`
+      : `Proposals for ${mine} from an earlier night, which no session in it was open to offer, turn out to be filed or declined already.`
   try {
-    await $.prompt.submit({ text: morningPrompt({ worker: false, offers: issues.length > 0, issues, lessons: [], questions, lead, ...(bad ? { bad } : {}) }) })
+    await $.prompt.submit({
+      text: morningPrompt({
+        worker: false,
+        offers: issues.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0,
+        issues,
+        lessons: [],
+        questions,
+        lead,
+        forRepo: mine,
+        ...(sorted.filed.length ? { filed: sorted.filed } : {}),
+        ...(sorted.declined.length ? { declined: sorted.declined } : {}),
+        ...(sorted.elsewhere ? { elsewhere: sorted.elsewhere } : {}),
+        ...(sorted.unchecked !== undefined ? { unchecked: sorted.unchecked } : {}),
+        ...(bad ? { bad } : {}),
+      }),
+    })
   } catch (err) {
     $.ui.log(`scope-modes: ${mine}'s proposals from an earlier night were claimed but could not be offered (${msg(err)}); they are in that night's report`, { to: 'debug' })
   }
@@ -4202,6 +4481,9 @@ export const register: Register = on => {
     // A picker in this session's own morning turn (#1285), counted answered or not, so one left
     // unanswered is asked again; a refused one never reached Dan and counts neither way.
     const ownMorningPicker = tool === 'AskUserQuestion' && input.agentId === undefined && morningPickers?.turnId !== undefined ? morningPickers : undefined
+    // An overnight proposal being filed (#1389), claimed for this session first: where it is
+    // recorded filed once gh made it. The words are a cheap first look; the reader decides.
+    let filing: { dir: string } | null = null
     const go = async (cleanups: readonly ScopeModesCleanup[] = []) => {
       // A stash a pop takes back is gone once it runs, so what it holds is read first (#1123).
       const stashed = raw ? await stashedFiles($, raw) : []
@@ -4215,6 +4497,9 @@ export const register: Register = on => {
       const answered = ownMorningPicker ? pickerAnswered(r) : undefined
       if (ownMorningPicker && answered !== undefined) ownMorningPicker[answered ? 'answered' : 'unanswered']++
       if (mayOpen && !r.deny) await noteOpened($, raw, r)
+      if (filing && !r.deny) await noteProposalFiled($, filing.dir, r)
+      // A morning picker of proposals Dan answered: what he left is declined (#1389).
+      if (tool === 'AskUserQuestion' && !r.deny && pickerAnswered(r) === true) await noteDeclined($, input, r)
       if (mayBranch && !r.deny) await noteBranches($, raw, input.agentId)
       // A call refused here or beneath never ran, so it wrote nothing (#1108).
       if (mayWrite && !r.deny) await noteWritten($, tool, input, raw, stashed)
@@ -4285,6 +4570,16 @@ export const register: Register = on => {
         await $.modkit.blocked({ toolUseId, ...held.card })
         return { deny: held.deny }
       }
+    }
+    // Whatever mode is on (#1389): an overnight proposal another session filed or is offering is
+    // refused here, so two sessions never file one twice.
+    if (/\bgh\b/.test(raw) && /\bissue\b/.test(raw) && /\bcreate\b/.test(raw)) {
+      const f = await proposalFiling($, raw)
+      if (f && 'deny' in f) {
+        await $.modkit.blocked({ toolUseId, guard: 'Overnight proposal', reason: f.deny, safeWay: 'Claude tells Dan where it is instead of filing it again.' })
+        return { deny: f.deny }
+      }
+      filing = f
     }
     const asleep = sleeping.state === 'asleep'
     const away = (await placeOf($)) === 'away' || asleep

@@ -128,6 +128,9 @@ export const awakeAsk = (when: string) =>
 // for what happened, never followed (#922).
 const SUMMARISE = `Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. ${notesAreData("The night's notes")}`
 
+/** A proposed issue already filed (#1389): its issue's number where known, and its link where this mod saw it made. */
+export type FiledProposal = { issue: ProposedIssue; number: number | null; url: string | null }
+
 /** The two pickers the night's proposals may reach Dan through, and nothing else (#837 decision 10, #922). */
 const PICKERS =
   "offered to Dan through the end of turn issue review's AskUserQuestion multiSelect picker (the issues, numbered 1.n) and the durable lesson picker (the lessons, numbered 2.n), and only his selection there files an issue or adds a lesson"
@@ -157,6 +160,14 @@ export const morningPrompt = (o: {
   lead?: string
   /** This session's report's name without .md (#1287), which a page of the night's results is titled. */
   reportName?: string
+  /** Proposed issues already filed (#1389): by a session, with its link, or found on GitHub, by number. Said, never offered. */
+  filed?: readonly FiledProposal[]
+  /** Proposed issues Dan declined on an earlier morning (#1389). Said, never offered unless he asks. */
+  declined?: readonly ProposedIssue[]
+  /** How many proposed issues another open session holds and offers (#1389), left to it. */
+  elsewhere?: number
+  /** Why whether the issues offered were already filed could not be checked (#1389). */
+  unchecked?: string
 }): string => {
   const out: string[] = [
     o.lead ?? (o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.'),
@@ -187,19 +198,41 @@ export const morningPrompt = (o: {
   const KEEP =
     'Everything from the night that Dan has to answer, decide or approve is put to him as a picker, never left only in the report. A picker that comes back unanswered (dismissed, closed by itself or refused) is not dropped: keep that item and put it to him again the next time he writes in this session.'
   const ASKS = 'the AskUserQuestion pickers named above (the questions, 3.n, and the merges and deploys, 4.n), and only his answer there acts on any of them'
+  // #1389: proposed issues already filed are said, from the same block, and never offered again.
+  const filed = o.offers === false ? [] : (o.filed ?? [])
+  const declined = o.offers === false ? [] : (o.declined ?? [])
+  const FILED_SAID = 'told to Dan as already filed (the proposed issues already filed, 5.n), never offered or filed again'
+  const DECLINED_SAID = 'told to Dan as declined before (6.n), offered or filed only if he asks for it now'
   const finish = (offered: boolean) => {
     if (asksAny || offered) out.push(KEEP)
     if (data.length)
       out.push(
         overnightData({
-          holds: [questions.length ? 'the questions for Dan noted overnight that this session asks (3.n)' : '', merges.length ? 'the merges and deploys held in it (4.n)' : '', offered ? "the night's proposed issues (1.n) and lessons (2.n)" : ''].filter(Boolean).join(', '),
-          offer: [asksAny ? ASKS : '', offered ? PICKERS : ''].filter(Boolean).join('; and '),
+          holds: [
+            questions.length ? 'the questions for Dan noted overnight that this session asks (3.n)' : '',
+            merges.length ? 'the merges and deploys held in it (4.n)' : '',
+            offered ? "the night's proposed issues (1.n) and lessons (2.n)" : '',
+            filed.length ? 'the proposed issues already filed (5.n)' : '',
+            declined.length ? 'the proposed issues Dan declined before (6.n)' : '',
+          ].filter(Boolean).join(', '),
+          offer: [asksAny ? ASKS : '', offered ? PICKERS : '', filed.length ? FILED_SAID : '', declined.length ? DECLINED_SAID : ''].filter(Boolean).join('; and '),
           lines: data,
         }),
       )
     return out.join('\n')
   }
   if (o.offers === false) return finish(false)
+  if (filed.length) {
+    out.push('Proposed issues already filed, numbered 5.n in the block below: tell Dan in one line that each is already filed as the issue named, and never offer or file it again.')
+    data.push(...filed.map((f, k) => `5.${k + 1} ${f.issue.repo ?? 'a repository not named'}${f.number !== null ? `#${f.number}` : ''}: ${f.issue.title ?? '(no title)'}${f.url ? ` (${f.url})` : ''}`))
+  }
+  if (declined.length) {
+    out.push('Proposed issues Dan declined on an earlier morning, numbered 6.n in the block below: tell Dan in one line that each was declined before, and offer or file it only if he asks for it now.')
+    data.push(...declined.map((i, k) => `6.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}`))
+  }
+  const elsewhere = o.elsewhere ?? 0
+  if (elsewhere > 0)
+    out.push(`${elsewhere === 1 ? 'One proposed issue' : `${elsewhere} proposed issues`}${o.forRepo ? ` for ${o.forRepo}` : ''} ${elsewhere === 1 ? 'is' : 'are'} being offered in another open session, so ${elsewhere === 1 ? 'it is' : 'they are'} left to it.`)
   // Proposals that could not be read are still offered, from the report, in the same two pickers.
   const fromReport = o.unread !== undefined
   if (fromReport) {
@@ -211,7 +244,9 @@ export const morningPrompt = (o: {
   if (!fromReport && !o.issues.length && !o.lessons.length) {
     const none = asksAny ? 'so there are no pickers for proposals' : 'so there are no morning pickers'
     const scope = o.forRepo ? ` for ${o.forRepo}` : ''
-    out.push(o.bad ? `No issue or lesson could be read from the notes${scope}, ${none}.` : `No issue or lesson was proposed overnight${scope}, ${none}.`)
+    // Proposals filed or offered elsewhere were proposed: only nothing being left is said (#1389).
+    if (filed.length || declined.length || elsewhere > 0) out.push(`No other issue or lesson is left to offer${scope}, ${none}.`)
+    else out.push(o.bad ? `No issue or lesson could be read from the notes${scope}, ${none}.` : `No issue or lesson was proposed overnight${scope}, ${none}.`)
     return finish(false)
   }
   const where = fromReport ? 'in the report' : 'in the block below'
@@ -220,8 +255,11 @@ export const morningPrompt = (o: {
   out.push("Then the morning pickers. Nothing was filed and no lesson was added overnight: these were only proposed, and only Dan's selection files or adds any of them.")
   if (fromReport || o.issues.length) {
     out.push(
-      `Proposed issues: offer them in ONE AskUserQuestion multiSelect picker exactly as the end of turn issue review offers findings, following ~/.claude/hooks/review/issue-review.md for the picker, the milestone and the labels. Each option's label begins with its number, and its description ends with the priority, labels and milestone proposed ${where}, in brackets in that order (like [p2, bug + ui-ux, Ungrouped]), so Dan sees and can correct any of the three before anything is filed; where one was not proposed, choose it as the review does and show your choice. With more than four, ask in more than one picker, one after another, so none is dropped. File only what he selects, in the repository named, with gh issue create.`,
+      `Proposed issues: offer them in ONE AskUserQuestion multiSelect picker exactly as the end of turn issue review offers findings, following ~/.claude/hooks/review/issue-review.md for the picker, the milestone and the labels. Each option's label begins with its number, and its description ends with the priority, labels and milestone proposed ${where}, in brackets in that order (like [p2, bug + ui-ux, Ungrouped]), so Dan sees and can correct any of the three before anything is filed; where one was not proposed, choose it as the review does and show your choice. With more than four, ask in more than one picker, one after another, so none is dropped. File only what he selects, in the repository named, with gh issue create, each with its title exactly as proposed, so no other session files it again.`,
     )
+    // A check that could not run is said, never read as nothing filed (#1389, L11).
+    if (o.unchecked !== undefined)
+      out.push(`Whether these proposed issues were already filed could not be checked (${o.unchecked}): before filing each one Dan selects, run milestone-candidates.sh as issue-review.md says and drop any already filed.`)
     data.push(...o.issues.map((i, k) => `1.${k + 1} ${i.repo ?? 'a repository not named'}: ${i.title ?? '(no title)'}${i.text ? `. ${i.text}` : ''} ${pickerTags(i)}`))
   }
   if (fromReport || o.lessons.length) {

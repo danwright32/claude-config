@@ -66,6 +66,14 @@ case "$*" in
     cat "$GH_MILESTONES"
     exit 0
     ;;
+  *"issue list"*"--state closed"*)
+    if [ -n "${GH_FAIL_CLOSED:-}" ]; then
+      echo "gh: simulated closed issue list failure" >&2
+      exit 1
+    fi
+    cat "${GH_CLOSED:-/dev/null}"
+    exit 0
+    ;;
   *"issue list"*)
     if [ -n "${GH_FAIL_ISSUES:-}" ]; then
       echo "gh: simulated issue list failure" >&2
@@ -549,6 +557,47 @@ else
   check "no gh on PATH says so rather than reporting an empty backlog" "gh" "$OUT"
   check_not "no gh on PATH never reads as nothing found" "SIBLING-COUNT" "$OUT"
 fi
+
+# --- --closed-since: an idea already filed and closed (claude-config#1389) -----
+# Scope modes offers a night's proposed issues in the morning, and one filed and then closed
+# since that night is as handled as one still open. The open read alone cannot see it, so
+# --closed-since also reads what was closed on or after a date, scored only as a close match
+# and marked closed, never a sibling and never a duplicate risk.
+cat >"$TMP/closed.json" <<'JSON'
+[
+  { "number": 4643, "title": "Stop the export dialog dropping the chosen folder",
+    "body": "Choosing a folder in the export dialog and pressing export writes to the default folder instead.",
+    "milestone": { "title": "Ungrouped" }, "state": "CLOSED" }
+]
+JSON
+export GH_CLOSED="$TMP/closed.json"
+IDEA_CLOSED="Stop the export dialog dropping the chosen folder"
+run acme/widgets --like "$IDEA_CLOSED"
+check_not "without --closed-since nothing closed is read" "--state closed" "$(cat "$GH_CALLS")"
+check "and the closed issue is not a close match" "CLOSE-MATCH-COUNT 0" "$OUT"
+run acme/widgets --like "$IDEA_CLOSED" --closed-since 2026-10-09
+check_eq "--closed-since reads fine" 0 "$RC"
+check "it asks for issues closed on or after the date" "--state closed --search closed:>=2026-10-09" "$(cat "$GH_CALLS")"
+closed_lines=""
+while IFS= read -r line; do
+  case "$line" in "CLOSE-MATCH "*) closed_lines="$closed_lines$line"$'\n' ;; esac
+done <<<"$OUT"
+check "an issue closed since then is a close match" "#4643" "$closed_lines"
+check "and it is marked closed" "[closed]" "$closed_lines"
+check_not "a closed issue is never a sibling" "CANDIDATE 1 #4643" "$OUT"
+check_not "nor a duplicate risk" "DUPLICATE-RISK 1 #4643" "$OUT"
+check_not "a closed read under the limit says nothing of a subset" "READ-TRUNCATED-CLOSED" "$OUT"
+# A closed read that comes back AT the limit saw a subset, and the one it missed may be the very
+# filing this read exists to find, so it is announced as the open read's is (lessons review).
+run acme/widgets --like "$IDEA_CLOSED" --closed-since 2026-10-09 --limit 1
+check "a closed read at the limit is announced" "READ-TRUNCATED-CLOSED 1 closed issues came back at the limit of 1" "$OUT"
+GH_FAIL_CLOSED=1 run acme/widgets --like "$IDEA_CLOSED" --closed-since 2026-10-09
+check_eq "a closed read that fails exits 6, never an empty answer" 6 "$RC"
+check "and says which read failed" "CLOSED" "$OUT"
+run acme/widgets --like "$IDEA_CLOSED" --closed-since "last week"
+check_eq "a date that is not YYYY-MM-DD is a usage error" 2 "$RC"
+run acme/widgets --like "$IDEA_CLOSED" --closed-since 2026-10-09 --snapshot "$TMP/issues.json"
+check_eq "--closed-since with --snapshot is a usage error, since a snapshot reads nothing" 2 "$RC"
 
 # --- an unparseable response is a read failure, not an empty one ----------
 GH_MILESTONES="$TMP/garbage.json" run acme/widgets --like "x"
