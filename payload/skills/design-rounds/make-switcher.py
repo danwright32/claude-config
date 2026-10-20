@@ -256,6 +256,7 @@ __BUILDER__
        time that option is chosen. The fallback covers the one case where drawAll could not
        finish, so a page whose builder threw is still usable rather than blank. */
     var incoming = built[current] || buildScreen(variant);
+    var kept = [];
     if (KEEP_ALL) {
       built[current] = incoming;
       built.forEach(function (node, position) {
@@ -263,11 +264,11 @@ __BUILDER__
         if (node.parentNode !== stage) stage.append(node);
         node.hidden = position !== current;
       });
-      return;
+    } else {
+      var outgoing = stage.firstElementChild;
+      kept = outgoing ? scrolled(outgoing) : [];
+      stage.replaceChildren(incoming);
     }
-    var outgoing = stage.firstElementChild;
-    var kept = outgoing ? scrolled(outgoing) : [];
-    stage.replaceChildren(incoming);
     /* A browser resets the scroll of an element taken out of the document, so every scrolling
        region came back at the top on a switch, and a round about anything below the fold could not
        be compared in place (claude-config#1206). The positions the outgoing screen was scrolled to
@@ -581,14 +582,20 @@ function buildScreen(variant) {
 }
 /* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
    options drawing the same thing are said, as the page says it for a round with no captured chrome. */
+/* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
+   again each time it is shown; the page calls this after every switch. */
+function drFit(frame) {
+  var doc = frame.contentDocument;
+  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = doc.documentElement.scrollHeight + "px";
+}
+function screenShown(variant, frame) { drFit(frame); }
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
   var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
-  if (!DR_HEIGHT && doc) frame.style.height = doc.documentElement.scrollHeight + "px";
+  drFit(frame);
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
-  if (report.built && !slot) report = { built: false, why: "its captured chrome has no element #" + DR_SLOT + " to draw into" };
-  DR_SEEN[variant.key] = { name: variant.name, report: report, drawn: report.built ? slot.innerHTML : null };
+  DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? slot.innerHTML : null };
   if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
 }
 function drVerdict() {
@@ -596,6 +603,10 @@ function drVerdict() {
   var marks = {};
   Object.keys(DR_SEEN).forEach(function (key) {
     var seen = DR_SEEN[key];
+    if (seen.noSlot) {
+      said.push(seen.name + " has nowhere to draw: its captured chrome holds no element #" + DR_SLOT + ", so nothing of the round is on it. Capture the chrome again, or name its slot.");
+      return;
+    }
     if (!seen.report.built) {
       said.push("The builder threw when it drew " + seen.name + ": " + seen.report.why + ". That option shows its captured chrome with nothing in it.");
       return;

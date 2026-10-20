@@ -1555,6 +1555,7 @@ setTimeout(function () {
   frames[0].contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
   setTimeout(function () {
     heads.push(document.querySelector(".dr-readout h2").textContent);
+    heads.push(frames[1].getBoundingClientRect().height > 20 ? "tall" : "flat:" + frames[1].style.height);
     var strips = Array.prototype.map.call(document.querySelectorAll(".dr-sameness"), function (p) { return p.textContent; });
     var out = document.createElement("pre"); out.id = "PROBE";
     out.textContent = heads.join(",") + "|" + slots.join(",") + "|" + strips.join(" / ");
@@ -1575,7 +1576,7 @@ if [[ ! -x "$CHROME" ]]; then
 else
   got="$(chrome_probe "$NS/out.html")"
   check_eq "every option is drawn into the captured page's slot, one shown, and a key pressed inside it switches" \
-    "Espresso,Ink|shown:Espresso,hidden:Ink|" "$got"
+    "Espresso,Ink,tall|shown:Espresso,hidden:Ink|" "$got"
   printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = "same"; return d; }\n' > "$NS/builder.js"
   run "$NS/spec.json" "$NS/same.html" >/dev/null
   got="$(chrome_probe "$NS/same.html")"
@@ -1584,6 +1585,13 @@ else
   run "$NS/spec.json" "$NS/throw.html" >/dev/null
   got="$(chrome_probe "$NS/throw.html")"
   check "a builder throwing inside the chrome is said, with its message" "threw when it drew Espresso: no rows yet" "$got"
+  # A slot the text names but the page does not hold (its id only in a comment) is said as itself.
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }\n' > "$NS/builder.js"
+  printf '<!doctype html><html><head><meta charset="utf-8"></head><body><header>Ovation</header><!-- <main id="main"> --><div id="content"></div></body></html>\n' > "$NS/chrome.html"
+  run "$NS/spec.json" "$NS/noslot.html" >/dev/null
+  got="$(chrome_probe "$NS/noslot.html")"
+  check "a captured page without its slot is said as that, never as a builder that threw" "has nowhere to draw" "$got"
+  check_not "and never blamed on the builder" "threw" "$got"
 fi
 
 # --- the committed terminal example is what the tool produces today ---

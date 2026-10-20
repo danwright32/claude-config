@@ -117,6 +117,12 @@ BOOT = """(function () {
   var V = __VARIANT__;
   var slot = document.getElementById(__SLOT__);
   var report = { built: false, why: "" };
+  /* A slot the captured page's text names but its document does not hold (an id inside a comment)
+     is said as that, never as the builder throwing (lessons review of #1364). */
+  if (!slot) {
+    window.DR_FRAME = { built: false, noSlot: true, why: "the captured page holds no element " + __SLOT__ };
+    return;
+  }
   try {
     var node = buildScreen(V);
     if (!node || !node.nodeType) throw new Error("buildScreen returned no element");
