@@ -1592,7 +1592,24 @@ else
   got="$(chrome_probe "$NS/noslot.html")"
   check "a captured page without its slot is said as that, never as a builder that threw" "has nowhere to draw" "$got"
   check_not "and never blamed on the builder" "threw" "$got"
+  # The round's fixture reaches each option as window.DESIGN_FIXTURE, the same data the settled design
+  # and the build draw.
+  cat > "$NS/chrome.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"></head><body><header>Ovation</header><main id="main"></main></body></html>
+HTML
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name + " " + window.DESIGN_FIXTURE.open; return d; }\n' > "$NS/builder.js"
+  printf '{"open": 42}\n' > "$NS/fixture.json"
+  spec "$NS/fixture-spec.json" "$TWO" '{"fixture": "fixture.json", "chrome": {"captured": "chrome.html", "from": "Ovation at localhost, 2026-10-19", "slot": "#main", "width": 640}}'
+  run "$NS/fixture-spec.json" "$NS/fixture.html" >/dev/null
+  got="$(chrome_probe "$NS/fixture.html")"
+  check "the round's fixture is each option's DESIGN_FIXTURE" "shown:Espresso 42,hidden:Ink 42" "$got"
 fi
+
+printf '{ not json\n' > "$NS/bad-fixture.json"
+spec "$NS/bad-fixture-spec.json" "$TWO" '{"fixture": "bad-fixture.json", "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+out="$(run "$NS/bad-fixture-spec.json" "$NS/bad-fixture.html")"; rc=$?
+check_eq "a round fixture that is not JSON is refused" "2" "$rc"
+check "and named" "bad-fixture.json is not JSON" "$out"
 
 # --- the committed terminal example is what the tool produces today ---
 
