@@ -81,7 +81,7 @@ case "$REL" in
   .claude*|*/.claude*) bad "the shared install lives outside ~/.claude, so the sync never carries it (root is $REL)";;
   *) ok;;
 esac
-if printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then ok; else bad "the Playwright version is pinned exactly (it is $VERSION)"; fi
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then ok; else bad "the Playwright version is pinned exactly (it is $VERSION)"; fi
 
 # --- 2. a fresh install -----------------------------------------------------------------------------
 H="$T/h1"; mkdir -p "$H"; L="$T/h1.log"; : > "$L"
