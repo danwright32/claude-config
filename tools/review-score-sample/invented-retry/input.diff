@@ -1,0 +1,33 @@
+===== FILES THIS PUSH CHANGED: the complete list, 1 file(s), from 4444444..5555555 =====
+A	report/send.sh	(changed, shown below)
+===== END OF FILE LIST =====
+
+diff --git a/report/send.sh b/report/send.sh
+new file mode 100755
+index 0000000..6666666
+--- /dev/null
++++ b/report/send.sh
+@@ -0,0 +1,23 @@
++#!/usr/bin/env bash
++# Send the nightly report, retrying a failed upload.
++set -u
++
++upload() {   # $1 = file
++  curl -sf -T "$1" "$REPORT_URL" >/dev/null 2>&1 || true
++}
++
++send_with_retry() {   # $1 = file
++  local n=0
++  while [ "$n" -lt 3 ]; do
++    if upload "$1"; then
++      echo "sent"
++      return 0
++    fi
++    n=$((n + 1))
++    sleep 5
++  done
++  echo "gave up after 3 tries" >&2
++  return 1
++}
++
++send_with_retry /tmp/report.csv
