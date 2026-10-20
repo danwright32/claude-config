@@ -125,6 +125,12 @@ declare module 'claude-code' {
        * proposals (the session that ended sleep does). Null once its morning went in.
        */
       nightSeen: { generation: string | null; worker: boolean; offers: boolean; unread?: string } | null
+      /**
+       * The last morning this session put to Dan (#1383): its night's generation and the held calls
+       * it carried, written by a write of its own once it went in, so a reload that reads a night its
+       * mark could not clear does not put that morning again. Null when none has gone in.
+       */
+      morningPut: { generation: string | null; calls: string[] } | null
       /** Whether this session's morning turn left a picker unanswered, asked again with Dan's next message (#1285). */
       morningUnanswered: boolean
     }
