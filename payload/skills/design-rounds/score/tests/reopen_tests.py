@@ -282,8 +282,10 @@ if os.path.exists(os.path.join(sd, "stub-ran")):
 with open(os.path.join(sd, "last-finish"), "w") as fh:
     fh.write("1000010\n")
 rc, out = hook(sd, 1_000_000 + 3600)
-time.sleep(0.3)
-check("and not again within the day", not os.path.exists(os.path.join(sd, "stub-ran")) and rc == 0 and not out.strip(), out)
+# A start is recorded before the run starts, so "not started" is read from that record at once, with
+# no wait for a run that is meant never to come (L290).
+check("and not again within the day", open(os.path.join(sd, "last-start")).read().strip() == "1000000"
+      and rc == 0 and not out.strip(), out)
 rc, out = hook(sd, 1_000_000 + 86400)
 check("and again a day later", wait_for(os.path.join(sd, "stub-ran")), out)
 with open(os.path.join(sd, "result.1.1"), "w") as fh:
@@ -300,8 +302,7 @@ check("a run that started and never finished is said", "never finished" in out, 
 check("and a new one is started", wait_for(os.path.join(sd, "stub-ran")), out)
 sd = tempfile.mkdtemp(dir=T)
 rc, out = hook(sd, 1_000_000, CLAUDE_DETACHED_RUN="1")
-time.sleep(0.3)
-check("a detached headless run starts nothing", not os.path.exists(os.path.join(sd, "stub-ran")) and rc == 0, out)
+check("a detached headless run starts nothing", not os.path.exists(os.path.join(sd, "last-start")) and rc == 0, out)
 
 shutil.rmtree(T, ignore_errors=True)
 print()
