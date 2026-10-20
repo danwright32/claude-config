@@ -3,7 +3,8 @@
 //
 //   node capture-web.mjs --design <settled.html> --build <fixture route URL> --out <capture folder>
 //        [--fixture <fixture.json>] [--checks <checks.js>] [--storage <state.json>]
-//        [--channel chrome|bundled] [--repo <app checkout>] [--perturb <css>] [--design-only]
+//        [--channel chrome|bundled] [--repo <app checkout>] [--perturb <css>] [--ready <selector>]
+//        [--design-only]
 //
 // Draws every frame the settled design declares twice, in one browser at the frame's own width:
 // the design's own frame (the whole document the settled file gives for it from
@@ -24,7 +25,11 @@
 //   - one signed in context for the run, closed with the browser, when the page needs a session;
 //   - the design's own checks run on the design's frame as the positive control, so a check that
 //     fails on the design is reported as a wrong check, not a wrong build;
-//   - --perturb <css> changes the built side on purpose, the negative control (L1).
+//   - --perturb <css> changes the built side on purpose, the negative control (L1);
+//   - --ready <selector> waits for the built page to show its content before the picture: a streamed
+//     page fired load before its content arrived on a slow runner, and CI pictured the loading
+//     placeholder at 12.9% where every other run read 100% (Try-Pennie/slate#3947). A page that never
+//     shows it within READY_TIMEOUT_MS is recorded as not loaded, which the score reads as no score.
 //
 // THE CHECKS are <design stem>.checks.js beside the design unless --checks names another: a script
 // that sets window.DESIGN_CHECKS = [{id: "D1", frames: ["f1"], check(doc, ctx) -> {ok, detail}}],
@@ -54,13 +59,15 @@ const PIN_FILE = join(HERE, "shared-playwright.json");
 const INSTALLER = join(HERE, "install-playwright.sh");
 const DEFAULT_HEIGHT = 900;
 const DEFAULT_WIDTH = 1280;
+// How long a built page may take to show its --ready content: the bound Slate's trial used (#3947).
+const READY_TIMEOUT_MS = 30_000;
 // Deterministic rasterisation, measured in Slate's trial (see above).
 export const LAUNCH_ARGS = ["--disable-gpu", "--force-color-profile=srgb", "--disable-partial-raster",
   "--disable-lcd-text", "--font-render-hinting=none"];
 
 export function parseArgs(argv) {
   const want = { "--design": "design", "--build": "build", "--out": "out", "--fixture": "fixture",
-    "--checks": "checks", "--storage": "storage", "--channel": "channel", "--repo": "repo", "--perturb": "perturb" };
+    "--checks": "checks", "--storage": "storage", "--channel": "channel", "--repo": "repo", "--perturb": "perturb", "--ready": "ready" };
   const o = { channel: "chrome", designOnly: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -71,7 +78,7 @@ export function parseArgs(argv) {
     o[want[a]] = v; i++;
   }
   if (!o.design || !o.out || (!o.build && !o.designOnly)) {
-    throw new Error("usage: capture-web.mjs --design <settled.html> --build <fixture route URL> --out <capture folder> [--fixture <json>] [--checks <checks.js>] [--storage <state.json>] [--channel chrome|bundled] [--repo <checkout>] [--perturb <css>] [--design-only]");
+    throw new Error("usage: capture-web.mjs --design <settled.html> --build <fixture route URL> --out <capture folder> [--fixture <json>] [--checks <checks.js>] [--storage <state.json>] [--channel chrome|bundled] [--repo <checkout>] [--perturb <css>] [--ready <selector>] [--design-only]");
   }
   if (o.channel !== "chrome" && o.channel !== "bundled") throw new Error("--channel is chrome or bundled");
   return o;
@@ -181,7 +188,15 @@ export async function capture(o, browser, frames, deps = {}) {
       if (ctxBuilt) await bpage.setViewportSize(viewport);
       // A page that could not be loaded at all is no score; a page the server answered, an error
       // page included, is a page that does not match yet (L11).
-      const err = await bpage.goto(frameUrl(o.build, f.id)).then(() => null, (e) => String(e).split("\n")[0]);
+      let err = await bpage.goto(frameUrl(o.build, f.id)).then(() => null, (e) => String(e).split("\n")[0]);
+      // Its content, never its loading placeholder: waited on as a condition, not a time (L290).
+      if (!err && o.ready) {
+        err = await bpage.waitForSelector(o.ready, { timeout: READY_TIMEOUT_MS }).then(() => null,
+          (e) => e && e.name === "TimeoutError"
+            ? `the page never showed ${o.ready} within ${Math.round(READY_TIMEOUT_MS / 1000)}s`
+            // A bad selector or a page that crashed is said as itself, never as a slow page (L11).
+            : `waiting for ${o.ready} failed: ${String(e).split("\n")[0]}`);
+      }
       if (err) {
         row.builtError = err;
         row.checks = [];

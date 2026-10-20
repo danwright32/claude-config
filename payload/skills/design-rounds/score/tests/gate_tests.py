@@ -105,6 +105,29 @@ MATCH_ISSUE = {"number": 9, "title": "Match the settled design", "state": "open"
 PLAIN_ISSUE = {"number": 5, "title": "Phase 1: the page", "state": "open", "body": "Builds Requirement 1."}
 
 
+# --- the one reading of a milestone's Match issues (score_github.match_issues) -------------------
+class ListingGh:
+    """Answers the milestone listing only, and records what it was asked."""
+    def __init__(self, issues):
+        self.issues, self.asked = issues, []
+
+    def api(self, endpoint, repo, paginate=False):
+        self.asked.append((endpoint, repo, paginate))
+        return self.issues
+
+
+_listing = ListingGh([MATCH_ISSUE, PLAIN_ISSUE, dict(MATCH_ISSUE, number=11, pull_request={"url": "x"}),
+                      {"number": 12, "title": "Match the settled design", "state": "open",
+                       "body": sg.mark(sg.ISSUE_MARK, "docs/design/other.html")}])
+check("match_issues: only this design's Match issues, never a pull request or another design's",
+      [i["number"] for i in sg.match_issues(_listing, REPO, 3, DESIGN)] == [9],
+      [i["number"] for i in sg.match_issues(_listing, REPO, 3, DESIGN)])
+check("match_issues: every page of the milestone, open and closed",
+      _listing.asked[0] == ("repos/%s/issues?milestone=3&state=all&per_page=100" % REPO, REPO, True), _listing.asked)
+check("milestone_issues: every issue, pull requests left out",
+      [i["number"] for i in sg.milestone_issues(_listing, REPO, 3)] == [9, 5, 12])
+
+
 def routes(issue9=MATCH_ISSUE, comments=None, design_bytes=design_html, extra=(), trees=None, milestone=None,
            milestone_issues=None):
     trees = trees or {HEAD: TREE}
