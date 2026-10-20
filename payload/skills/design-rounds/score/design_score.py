@@ -48,6 +48,8 @@ SwiftUI test cannot run on an HTML frame) leaves it out, and the score says so.
 
 THE DESIGN FILE carries three JSON blocks (<script type="application/json" id="...">):
   decision-map       {"decisions": [{"id", "decision", "requirement" | "noCode", "verify"?, "provenBy"?}]}
+                     "requirements"?: [{"number", "text"}], the design's own (claude-config#1401),
+                     held by check-decision-map.py and not read by the score
   design-frames      {"frames": [{"id": "f1", "title": "Tomorrow, light", "width": 1280, "height"?: 900}]}
                      no height: the full page, as tall as it draws
                      "kind"?: "email" | "document" | "new-product", for a design drawn with no product

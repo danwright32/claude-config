@@ -19,6 +19,16 @@ The spec, with paths resolved against the spec's own folder:
 
     {
       "title":    "Team capacity",
+      "intro":    "For Sam's team leads, settled over three rounds, approved by Dan on 2026-10-19",
+                                         optional: the design's opening paragraph, shown under its title
+      "requirements": [{"number": "1", "text": "Sam sees tomorrow's open calls by team"}],
+                                         optional: the PRD's numbered requirements, each number written as
+                                         text exactly as the PRD numbers it. Given, they are listed on the
+                                         page, every decision's owner reads as its sentence, the decision
+                                         map carries them, and a decision naming a number they do not hold
+                                         is refused. Left out, a decision's number is shown alone and the
+                                         PRD holds its sentence, as before claude-config#1401, and it says
+                                         so when it writes
       "chrome":   {...the round's "chrome", see chrome_frame.py...},
       "screen":   "email" | "document" | "new-product",   in place of "chrome", for a design with no
                                          product page around it: each frame is drawn alone at its own
@@ -51,7 +61,10 @@ It writes NOTHING when it refuses, and refuses: a chrome that is not a captured 
 builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
 no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
-not hold, and an exception without Dan's words, a date and where he said them. Exit 2 with the reason.
+not hold, an intro that is not text, a requirements list that is empty or not in the shape above (a
+number not written as text, a requirement with no sentence, two sharing a number), a decision naming a
+requirement the list does not hold (check-decision-map.py's UNLISTED), and an exception without Dan's
+words, a date and where he said them. Exit 2 with the reason.
 """
 import html
 import json
@@ -184,6 +197,17 @@ def main(argv):
             if not shown:
                 fail("decision %s is verified by a check but names no frames it shows on (\"frames\")" % did)
 
+    # The design's opening paragraph and its numbered requirements (claude-config#1401), each optional.
+    # Present but empty is refused rather than read as absent, since nobody can tell the two apart later.
+    if "intro" in spec and (not isinstance(spec["intro"], str) or not spec["intro"].strip()):
+        fail('the spec\'s "intro" must be the design\'s opening paragraph, as text; leave it out for none')
+    requirements = spec.get("requirements")
+    if "requirements" in spec:
+        try:
+            design_file.read_requirements(requirements)
+        except ValueError as err:
+            fail(str(err))
+
     exceptions = spec.get("exceptions", [])
     if not isinstance(exceptions, list):
         fail('"exceptions" must be a list')
@@ -215,8 +239,23 @@ def main(argv):
         fail("the decision map does not hold:\n" + check.stdout + check.stderr)
     os.replace(tmp, out_path)
     print("SETTLED %s frames=%d decisions=%d exceptions=%d" % (out_path, len(frames), len(decisions), len(exceptions)))
+    if requirements is None:
+        named = []
+        for d in decisions:
+            req = d.get("requirement")
+            if isinstance(req, str) and req.strip() and req.strip() not in named:
+                named.append(req.strip())
+        if named:
+            print('make-settled: the decisions name Requirement %s, and the spec gives no "requirements", so the '
+                  "page shows those numbers without their sentences" % ", ".join(named), file=sys.stderr)
     return 0
 
+
+# Added only to a page that lists its requirements, so a design without them is written byte for byte
+# as it was before claude-config#1401.
+REQUIREMENTS_STYLE = """  .dr-requirements { list-style: none; padding-left: 0; }
+  .dr-requirements li { margin: 0 0 10px; }
+"""
 
 DOC_STYLE = """
   body { margin: 0; background: #F4F1ED; color: #1B1613; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -233,15 +272,28 @@ DOC_STYLE = """
 
 def render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants):
     e = lambda v: html.escape(str(v), quote=True)  # noqa: E731
+    requirements = spec.get("requirements")
+    sentences = {r["number"].strip(): r["text"].strip() for r in requirements} if requirements else {}
     items = []
     for d in decisions:
-        owner = ("Requirement %s" % e(d["requirement"])) if d.get("requirement") else ("No code: %s" % e(d.get("noCode", "")))
+        sentence = None
+        if d.get("requirement"):
+            owner = "Requirement %s" % e(d["requirement"])
+            sentence = sentences.get(str(d["requirement"]).strip())
+            if sentence:
+                owner += ": %s" % e(sentence.rstrip("."))
+        else:
+            owner = "No code: %s" % e(d.get("noCode", ""))
         verify = d.get("verify", "check")
         how = {"check": "Checked on %s: %s" % (e(", ".join(d.get("frames", []))), e(d.get("check", ""))),
                "picture": "Held by the picture half",
                "elsewhere": "Proven by %s" % e(d.get("provenBy", ""))}.get(verify, e(verify))
         why = (" %s" % e(d["why"])) if d.get("why") else ""
-        items.append('<li id="%s"><strong>%s</strong> %s.%s <span class="dr-how">%s. %s.</span></li>'
+        # A requirement's sentence that is a question or an exclamation keeps its own mark, and only
+        # a sentence ending some other way is closed with a full stop (as every owner was before #1401).
+        # A noCode reason is closed as it always was, so a spec without requirements keeps its bytes.
+        owner = owner if sentence and owner.endswith(("?", "!")) else owner + "."
+        items.append('<li id="%s"><strong>%s</strong> %s.%s <span class="dr-how">%s %s.</span></li>'
                      % (e(d["id"]), e(d["id"]), e(d.get("decision", "")), why, owner, how))
     if exceptions:
         exc = "".join('<li><strong>%s</strong>, %s, %s: "%s" (%s)</li>' % (
@@ -277,7 +329,11 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
 """ % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps(variants)),
        json.dumps(json.dumps(TOKEN)),
        json.dumps({f["id"]: bool(f.get("height")) for f in frames}))
-    dmap = {"decisions": decisions}
+    dmap = {"requirements": requirements, "decisions": decisions} if requirements else {"decisions": decisions}
+    intro_html = "<p>%s</p>\n" % e(spec["intro"].strip()) if spec.get("intro") else ""
+    req_html = ("<h2>Requirements</h2>\n<ul class=\"dr-requirements\">%s</ul>\n" % "".join(
+        "<li><strong>%s</strong> %s</li>" % (e(r["number"].strip()), e(r["text"].strip())) for r in requirements)
+        if requirements else "")
     if chrome["kind"] in ("none", "screen"):
         drawn = "%s Every frame is drawn at its own width" % e(chrome["line"])
     else:
@@ -287,8 +343,8 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
 <style>%s</style></head>
 <body><div class="dr-doc">
 <h1>%s</h1>
-<p class="dr-meta">The settled design. %s, from the committed fixture the built page renders too. The build is done when it scores 100%% against this file on both halves.</p>
-<h2>Decisions</h2>
+%s<p class="dr-meta">The settled design. %s, from the committed fixture the built page renders too. The build is done when it scores 100%% against this file on both halves.</p>
+%s<h2>Decisions</h2>
 <ol class="dr-decisions">%s</ol>
 <h2>Exceptions Dan approved</h2>
 %s
@@ -307,7 +363,8 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
 </script>
 <script>%s</script>
 </body></html>
-""" % (e(spec.get("title", "Design")), DOC_STYLE, e(spec.get("title", "Design")), drawn,
+""" % (e(spec.get("title", "Design")), DOC_STYLE + (REQUIREMENTS_STYLE if requirements else ""),
+       e(spec.get("title", "Design")), intro_html, drawn, req_html,
        "".join(items), exc, frame_html, idiom_html,
        chrome_frame.script_text(json.dumps(dmap, indent=1)), chrome_frame.script_text(json.dumps(frames_block, indent=1)),
        chrome_frame.script_text(json.dumps({"exceptions": exceptions}, indent=1)), script)

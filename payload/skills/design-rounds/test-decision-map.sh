@@ -74,6 +74,32 @@ run "$T/numeric.html"
   && check "a requirement written as a number is named as mistyped" ok || check "a requirement written as a number is named as mistyped" "rc=$rc $out"
 said '^UNMAPPED' && check "and is not reported as unmapped" "$out" || check "and is not reported as unmapped" ok
 
+# A map carrying the design's requirements (claude-config#1401) must resolve every number a decision
+# names against them, so a decision's owner is a sentence somebody can read, never a dangling number.
+design "$T/listed.html" '{"requirements": [
+  {"number": "6.4", "text": "Every invoice is on one list."},
+  {"number": "6.5", "text": "Red means something is wrong."}
+], "decisions": [
+  {"id": "D1", "decision": "The invoice list is one column", "requirement": "6.4"},
+  {"id": "D2", "decision": "Red only where something is wrong", "requirement": "6.5"},
+  {"id": "D3", "decision": "The heading reads Invoices", "noCode": "Copy only"}
+]}'
+run "$T/listed.html"
+[ "$rc" -eq 0 ] && check "a map whose decisions name only listed requirements passes" ok \
+  || check "a map whose decisions name only listed requirements passes" "rc=$rc $out"
+design "$T/unlisted.html" '{"requirements": [{"number": "6.4", "text": "Every invoice is on one list."}], "decisions": [
+  {"id": "D1", "decision": "The invoice list is one column", "requirement": "6.4"},
+  {"id": "D2", "decision": "Red only where something is wrong", "requirement": "6.5"}
+]}'
+run "$T/unlisted.html"
+[ "$rc" -eq 1 ] && said '^UNLISTED D2: Red only where something is wrong (it names Requirement 6.5, and the design'"'"'s requirements are 6.4)$' \
+  && check "a decision naming a requirement the map does not list is refused, naming the number" ok \
+  || check "a decision naming a requirement the map does not list is refused, naming the number" "rc=$rc $out"
+design "$T/badlist.html" '{"requirements": [{"number": 6.4, "text": "x"}], "decisions": [{"id": "D1", "decision": "A", "requirement": "6.4"}]}'
+run "$T/badlist.html"
+[ "$rc" -eq 2 ] && said 'number' && check "a requirements list not in the shape is unreadable (exit 2)" ok \
+  || check "a requirements list not in the shape is unreadable (exit 2)" "rc=$rc $out"
+
 # 4. A map that cannot be read is exit 2, never a pass (L98, L11).
 printf '<html><body>no map here</body></html>\n' > "$T/nomap.html"
 run "$T/nomap.html"
