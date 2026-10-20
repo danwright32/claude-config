@@ -56,6 +56,19 @@ export type HeldDelivery = { label: string; call: string }
 /** A merge, deploy or push the night's lists refused in this session (#1285): put to Dan at wake. */
 export type HeldMerge = HeldDelivery & { why: string }
 
+/** A morning this session put to Dan (#1383): its night's generation (null when not known) and the held calls it carried. */
+export type PutMorning = { generation: string | null; calls: string[] }
+
+/**
+ * Whether the morning about to be put is one this session already put (#1383): the same night, or
+ * with the night already cleared, carrying no call the put one did not. A copy of the mod with fresh
+ * memory reads the night and the held calls from $.state, where a mark that failed can leave them.
+ */
+export const alreadyPut = (put: PutMorning | null, night: { generation: string | null } | null, held: readonly HeldDelivery[]): boolean => {
+  if (!put || !held.every(h => put.calls.includes(h.call))) return false
+  return night === null || night.generation === put.generation
+}
+
 /** What a session is told at wake about what it held: empty when it held nothing. */
 export const heldAtWake = (held: readonly HeldDelivery[]): string => {
   if (!held.length) return ''
