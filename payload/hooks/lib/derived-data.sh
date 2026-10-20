@@ -22,8 +22,9 @@
 # reused by anything, so deleting it costs nobody a rebuild. Every other answer, including every
 # answer this file cannot work out, keeps the folder.
 #
-# Whether anything deletes these on its own is Dan's decision and has not been made (L9). Nothing in
-# this file runs by itself; derived-data-sweep.sh lists by default and deletes only with --delete.
+# Nothing in this file runs by itself. derived-data-sweep.sh lists by default and deletes with
+# --delete, and since Dan's decision on #1369 (2026-10-20, L9) the low free space warning starts that
+# deletion on its own unless FREE_SPACE_DERIVED_DATA_AUTO_DELETE is 0 on the Mac.
 #
 # Environment, every one a seam so a fixture drives the real functions against a throwaway directory
 # and never reaches the real one (L2):

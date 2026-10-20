@@ -53,6 +53,12 @@ export FREE_SPACE_SYMBOL_CACHE="$TMPROOT/no-symbol-cache-here"
 # The same for Xcode's DerivedData, which the nudge sizes when it speaks (claude-config#1369): a
 # folder of the suite's own that does not exist, unless a case makes one and names it.
 export XCODE_DERIVED_DATA_ROOT="$TMPROOT/no-derived-data-here"
+# The automatic sweep the warning starts keeps its lock and its record in a folder of the suite's
+# own, never ~/.claude/state, and asks a process list of the suite's own (L2).
+export DERIVED_DATA_SWEEP_STATE_DIR="$TMPROOT/no-sweep-state-here"
+QUIET_PS="$TMPROOT/quiet-ps"
+printf '#!/bin/sh\necho "  77 /usr/bin/login -f someone"\n' > "$QUIET_PS"; chmod +x "$QUIET_PS"
+export DERIVED_DATA_PS="$QUIET_PS"
 
 GB=$((1024 * 1024 * 1024))
 T0=1757500000            # a fixed instant, so every span below is arithmetic rather than a race
@@ -492,31 +498,125 @@ n_other="$(nudge "$((7 * GB))" "$((T0 + 180))" "$NS2" sess-other)"
 check "a different session is told as well, having heard nothing itself" \
   "$(grep -q 'GB free on' <<< "$n_other" && echo ok || echo "said: $n_other")"
 
-# When the warning speaks it says how much of Xcode's build cache belongs to project folders that are
-# gone, and hands over the command that clears them, which it never runs (claude-config#1369). The
-# count comes from derived-data-sweep.sh, the one copy of the orphan rule, not from a second reading
-# here (L370).
-DD_ROOT="$TMPROOT/nudge-derived-data"
-mkdir -p "$DD_ROOT/App-orphan" "$DD_ROOT/ModuleCache.noindex"
-cat > "$DD_ROOT/App-orphan/info.plist" <<PLIST
+# When the warning speaks it clears Xcode's build caches whose project folder is gone, on its own:
+# Dan's decision on claude-config#1369, 2026-10-20. Which folders those are is decided by
+# derived-data-sweep.sh, the one copy of the orphan rule, never a second reading here (L370). The
+# deletion runs DETACHED, so a slow sweep can neither slow the warning nor be killed with it at the
+# hook's 10 second timeout, and what it did reaches the next warning through its record (L13, L98).
+dd_folder() {   # dd_folder <root> <name> <workspace>: one build folder, written long ago
+  mkdir -p "$1/$2/Build"
+  head -c 40000 /dev/zero > "$1/$2/Build/a.o"
+  cat > "$1/$2/info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>WorkspacePath</key>
-	<string>$TMPROOT/removed-worktree/App.xcodeproj</string>
+	<string>$3</string>
 </dict>
 </plist>
 PLIST
-NS_DD="$TMPROOT/ns-dd"; mkdir -p "$NS_DD"
-n_dd="$(payload sess-dd | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
-  FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"; n_dd_rc=$?
-check "a low disk notice says how many Xcode build caches are orphaned" \
-  "$(grep -qF 'Xcode build caches whose project folder is gone: 1 folder(s)' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
-check "and hands over the command that deletes them" \
-  "$(grep -qxF 'bash ~/.claude/hooks/derived-data-sweep.sh --delete' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
-check "and deleted nothing itself" "$([ -d "$DD_ROOT/App-orphan" ] && echo ok || echo "the orphan was removed by a warning")"
+  find "$1/$2" -exec touch -t 202601011200 {} +
+}
+# Waits on the condition (a finished record and nothing marked in progress), never a fixed time
+# (L290); the deadline only turns a sweep that never finishes into a failure rather than a hang.
+sweep_finished() {   # sweep_finished <state dir>
+  local deadline=$(( $(date +%s) + 30 ))
+  while [ ! -f "$1/last-result" ] || [ -e "$1/in-progress" ]; do
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+run_logs() { find "$1" -name 'run-*.log' 2>/dev/null | wc -l | tr -d ' '; }
+dd_nudge() {   # dd_nudge <session> <derived data root> <sweep state> [VAR=value...] -> prints all output
+  local sess="$1" root="$2" state="$3"; shift 3
+  mkdir -p "$TMPROOT/fs-$sess"
+  payload "$sess" | env FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/fs-$sess" \
+    FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$root" DERIVED_DATA_SWEEP_STATE_DIR="$state" \
+    FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" "$@" bash "$NUDGE" 2>&1
+}
+
+DD_ROOT="$TMPROOT/nudge-derived-data"; SW1="$TMPROOT/sweep-1"
+mkdir -p "$DD_ROOT/ModuleCache.noindex" "$TMPROOT/live-checkout/App.xcodeproj"
+dd_folder "$DD_ROOT" App-orphan "$TMPROOT/removed-worktree/App.xcodeproj"
+dd_folder "$DD_ROOT" App-live "$TMPROOT/live-checkout/App.xcodeproj"
+dd_folder "$DD_ROOT" App-fresh "$TMPROOT/removed-fresh/App.xcodeproj"
+printf 'new' > "$DD_ROOT/App-fresh/Build/b.o"
+n_dd="$(dd_nudge sess-dd "$DD_ROOT" "$SW1")"; n_dd_rc=$?
+check "a low disk notice says it started clearing the orphaned Xcode build caches" \
+  "$(grep -qF 'Started clearing Xcode build caches whose project folder is gone' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
+check "and names the switch that turns that off on one Mac" \
+  "$(grep -qF 'FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
 check "and still does not block the prompt" "$([ "$n_dd_rc" -eq 0 ] && echo ok || echo "exit $n_dd_rc")"
+check "the sweep it started finishes and records what it did" \
+  "$(sweep_finished "$SW1" && echo ok || echo "no finished record in $SW1")"
+check "and it deleted the orphan" "$([ ! -d "$DD_ROOT/App-orphan" ] && echo ok || echo "App-orphan is still there")"
+check "and kept the cache whose project is still on disk" "$([ -d "$DD_ROOT/App-live" ] && echo ok || echo "App-live was removed")"
+check "and kept the orphan written in the last hour" "$([ -d "$DD_ROOT/App-fresh" ] && echo ok || echo "App-fresh was removed")"
+check "and never touched the shared cache" "$([ -d "$DD_ROOT/ModuleCache.noindex" ] && echo ok || echo "ModuleCache.noindex was removed")"
+n_dd_next="$(dd_nudge sess-dd-next "$DD_ROOT" "$SW1")"
+check "the next warning reports what the last sweep deleted and the df gain" \
+  "$(grep -qF 'deleted 1 of 1 orphaned folder(s)' <<< "$n_dd_next" && grep -qF 'df measured' <<< "$n_dd_next" && echo ok || echo "said: $n_dd_next")"
+sweep_finished "$SW1" || true
+
+# A slow sweep never slows the warning, and a second warning while it runs starts no second sweep.
+# The process list blocks until the suite releases it, so the first sweep is still running, by
+# construction, when the second warning arrives.
+DD2="$TMPROOT/nudge-derived-data-slow"; SW2="$TMPROOT/sweep-2"; RELEASE2="$TMPROOT/release-2"
+dd_folder "$DD2" Slow-orphan "$TMPROOT/removed-slow/App.xcodeproj"
+BLOCKING_PS="$TMPROOT/blocking-ps"
+cat > "$BLOCKING_PS" <<PS
+#!/bin/sh
+n=0
+while [ ! -e "$RELEASE2" ] && [ "\$n" -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done
+echo "  77 /usr/bin/login -f someone"
+PS
+chmod +x "$BLOCKING_PS"
+slow_start="$(date +%s)"
+n_slow1="$(dd_nudge sess-slow1 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
+slow_took=$(( $(date +%s) - slow_start ))
+n_slow2="$(dd_nudge sess-slow2 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
+: > "$RELEASE2"
+check "a warning whose sweep is slow still arrives within its time budget" \
+  "$(grep -q 'GB free on' <<< "$n_slow1" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow1")"
+check "and says it started the sweep" "$(grep -qF 'Started clearing' <<< "$n_slow1" && echo ok || echo "said: $n_slow1")"
+check "a second warning while that sweep runs says one is already running" \
+  "$(grep -qF 'already running' <<< "$n_slow2" && ! grep -qF 'Started clearing' <<< "$n_slow2" && echo ok || echo "said: $n_slow2")"
+check "the one sweep finishes" "$(sweep_finished "$SW2" && echo ok || echo "no finished record in $SW2")"
+check "and only one sweep ran" "$([ "$(run_logs "$SW2")" = 1 ] && echo ok || echo "$(run_logs "$SW2") sweeps ran")"
+check "and it deleted the orphan" "$([ ! -d "$DD2/Slow-orphan" ] && echo ok || echo "Slow-orphan is still there")"
+
+# A sweep that fails is reported by the next warning as failing, never as one that freed nothing.
+DD3="$TMPROOT/nudge-derived-data-stuck"; SW3="$TMPROOT/sweep-3"
+dd_folder "$DD3" Stuck-orphan "$TMPROOT/removed-stuck/App.xcodeproj"
+chmod 500 "$DD3/Stuck-orphan/Build"
+dd_nudge sess-stuck1 "$DD3" "$SW3" >/dev/null
+check "a failing sweep still records" "$(sweep_finished "$SW3" && echo ok || echo "no finished record in $SW3")"
+n_stuck="$(dd_nudge sess-stuck2 "$DD3" "$SW3")"
+sweep_finished "$SW3" || true
+chmod 700 "$DD3/Stuck-orphan/Build"
+check "the next warning says the last sweep FAILED and what it could not delete" \
+  "$(grep -qF 'FAILED' <<< "$n_stuck" && grep -qF 'could not delete 1 of 1' <<< "$n_stuck" && echo ok || echo "said: $n_stuck")"
+
+# The off switch, for one Mac: nothing is started and nothing deleted, and the warning falls back to
+# the count and the commands, saying the automatic delete is off so the switch is never forgotten
+# (L523).
+DD4="$TMPROOT/nudge-derived-data-off"; SW4="$TMPROOT/sweep-4"
+dd_folder "$DD4" Off-orphan "$TMPROOT/removed-off/App.xcodeproj"
+n_off="$(dd_nudge sess-off "$DD4" "$SW4" FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0)"
+check "with the off switch the warning says automatic deletion is off on this Mac" \
+  "$(grep -qF 'is off on this Mac' <<< "$n_off" && echo ok || echo "said: $n_off")"
+check "and falls back to the count" \
+  "$(grep -qF 'Xcode build caches whose project folder is gone: 1 folder(s)' <<< "$n_off" && echo ok || echo "said: $n_off")"
+check "and hands over the command that deletes them" \
+  "$(grep -qxF 'bash ~/.claude/hooks/derived-data-sweep.sh --delete' <<< "$n_off" && echo ok || echo "said: $n_off")"
+check "and started no sweep" "$([ ! -e "$SW4/in-progress" ] && [ "$(run_logs "$SW4")" = 0 ] && echo ok || echo "a sweep was started in $SW4")"
+check "and deleted nothing" "$([ -d "$DD4/Off-orphan" ] && echo ok || echo "Off-orphan was removed")"
+# A value that is neither 0 nor 1 keeps the caches (L50): an unreadable switch never deletes.
+n_odd="$(dd_nudge sess-odd "$DD4" "$SW4" FREE_SPACE_DERIVED_DATA_AUTO_DELETE=maybe)"
+check "a switch that is neither 0 nor 1 is said and treated as off" \
+  "$(grep -qF "FREE_SPACE_DERIVED_DATA_AUTO_DELETE is set to 'maybe'" <<< "$n_odd" && [ "$(run_logs "$SW4")" = 0 ] && [ -d "$DD4/Off-orphan" ] && echo ok || echo "said: $n_odd")"
 # The whole count is bounded, not only the sizing inside it: reading every folder's info.plist forks
 # a reader per folder, so a DerivedData with hundreds of folders could otherwise carry the hook past
 # its 10 second timeout (a setting, not a measurement) and lose the free space warning with it.
@@ -526,12 +626,24 @@ NS_SLOW="$TMPROOT/ns-slow"; mkdir -p "$NS_SLOW"
 slow_start="$(date +%s)"
 n_slow="$(payload sess-slow | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW" \
   FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=1 \
-  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+  FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0 FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
 slow_took=$(( $(date +%s) - slow_start ))
 check "a count that runs past its bound is stopped, and the warning still arrives" \
   "$(grep -q 'GB free on' <<< "$n_slow" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow")"
 check "and the notice says the count did not finish rather than saying nothing" \
   "$(grep -qF 'did not finish within 1s' <<< "$n_slow" && ! grep -qF 'should never be printed' <<< "$n_slow" && echo ok || echo "said: $n_slow")"
+# The same bound holds the steps that report the last sweep and start the next one, which normally
+# answer at once: a sweep script that hangs there must not carry the hook past its timeout either.
+NS_SLOW_AUTO="$TMPROOT/ns-slow-auto"; mkdir -p "$NS_SLOW_AUTO"
+slow_start="$(date +%s)"
+n_slow_auto="$(payload sess-slow-auto | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW_AUTO" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=1 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+slow_took=$(( $(date +%s) - slow_start ))
+check "a sweep script that hangs when asked to start is stopped, and the warning still arrives" \
+  "$(grep -q 'GB free on' <<< "$n_slow_auto" && [ "$slow_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_slow_auto" && echo ok || echo "took ${slow_took}s, said: $n_slow_auto")"
+check "and the notice says starting it did not answer rather than claiming it started" \
+  "$(grep -qF 'did not answer within 1s' <<< "$n_slow_auto" && ! grep -qF 'Started clearing' <<< "$n_slow_auto" && echo ok || echo "said: $n_slow_auto")"
 # Zero turns the count off. Handed to perl's alarm it would mean no bound at all, the opposite of
 # what a zero reads as.
 NS_ZERO="$TMPROOT/ns-zero"; mkdir -p "$NS_ZERO"
@@ -542,6 +654,7 @@ n_zero="$(payload sess-zero | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0
 zero_took=$(( $(date +%s) - zero_start ))
 check "a bound of 0 turns the count off rather than leaving it unbounded" \
   "$(grep -q 'GB free on' <<< "$n_zero" && [ "$zero_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_zero" && echo ok || echo "took ${zero_took}s, said: $n_zero")"
+NS_DD="$TMPROOT/ns-dd"; mkdir -p "$NS_DD"
 n_dd_fine="$(payload sess-dd-fine | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
   FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
 check "a disk with room says nothing about Xcode caches either" \

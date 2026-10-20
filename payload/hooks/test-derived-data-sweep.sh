@@ -2,8 +2,9 @@
 # Tests for derived-data-sweep.sh, the command that lists Xcode build caches whose project folder is
 # gone and deletes them only when told to (claude-config#1369).
 #
-# Whether the sweep may delete on its own is Dan's decision and has not been made (L9), so the
-# promise held here above all is that the DEFAULT deletes nothing: every folder in the fixture is
+# Deleting on its own happens only through --start, which the low free space warning runs (Dan's
+# decision on #1369, 2026-10-20, L9), so the promise held here first is still that a plain run
+# deletes nothing: every folder in the fixture is
 # checked to still be there after a plain run. --delete is then checked to remove exactly the true
 # orphans and nothing that is live, unattributable, on an unplugged drive, freshly written, or named
 # by a running xcodebuild, and to report the df gain so a delete that frees nothing is visible
@@ -214,6 +215,122 @@ OUT="$(XCODE_DERIVED_DATA_ROOT="$ROOT" DERIVED_DATA_PS="$FAKE_PS" DERIVED_DATA_R
 check "a window setting that is not a number is refused with exit 2" "$(eq "$RC" 2)"
 check "and the refusal names the setting" "$(has "$OUT" "DERIVED_DATA_RECENT_MINUTES")"
 check "and nothing was deleted under it" "$(isdir "$ROOT/App-orphan")"
+
+# ================== --start, --auto and --last: the sweep that runs on its own ==================
+# Dan's decision on #1369 (2026-10-20): when the low free space warning fires, the orphans are cleared
+# without asking and the space freed is reported. The warning runs inside a 10 second hook timeout,
+# so --start takes the lock and hands the work to a detached --auto, and the outcome goes into a
+# record the NEXT warning reads with --last, so a sweep that freed nothing, failed, or died partway
+# is still seen (L13, L98). Every case gets a state folder of its own; none reads ~/.claude/state.
+run_state() {   # run_state <root> <state dir> [args...]  -> sets OUT and RC
+  local root="$1" state="$2"; shift 2
+  OUT="$(XCODE_DERIVED_DATA_ROOT="$root" DERIVED_DATA_PS="$FAKE_PS" DERIVED_DATA_RECENT_MINUTES="${RECENT_FOR_RUN:-60}" \
+    DERIVED_DATA_DF_VOLUME="$TMP_ROOT" DERIVED_DATA_SWEEP_STATE_DIR="$state" bash "$SWEEP" "$@" 2>&1)"
+  RC=$?
+}
+# Waits on the CONDITION, a finished record with no sweep still marked in progress, never a fixed
+# time (L290). The deadline only turns a sweep that never finishes into a failure rather than a hang.
+wait_finished() {   # wait_finished <state dir> -> 0 once finished, 1 at the deadline
+  local deadline=$(( $(date +%s) + 30 ))
+  while [ ! -f "$1/last-result" ] || [ -e "$1/in-progress" ]; do
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep 0.1
+  done
+  return 0
+}
+run_logs() { find "$1" -name 'run-*.log' 2>/dev/null | wc -l | tr -d ' '; }
+
+S_EMPTY="$TMP_ROOT/state-empty"
+run_state "$ROOT" "$S_EMPTY" --last
+check "--last before any sweep has run says nothing" "$(eq "$OUT" "")"
+check "and exits 0" "$(eq "$RC" 0)"
+
+ROOT6="$TMP_ROOT/dd-auto"; S6="$TMP_ROOT/state-auto"
+mkdir -p "$ROOT6"; build_fixture "$ROOT6"; write_fake_ps "$ROOT6"
+auto_start="$(date +%s)"
+run_state "$ROOT6" "$S6" --start
+auto_took=$(( $(date +%s) - auto_start ))
+check "--start exits 0 when it started a sweep" "$(eq "$RC" 0)"
+check "and returns at once rather than waiting for the sweep" "$([ "$auto_took" -lt 3 ] && echo ok || echo "took ${auto_took}s")"
+check "the started sweep finishes and records what it did" "$(wait_finished "$S6" && echo ok || echo "no finished record in $S6")"
+check "the automatic sweep removes the first orphan" "$(gone "$ROOT6/App-orphan")"
+check "the automatic sweep removes the second orphan" "$(gone "$ROOT6/App-orphan-two")"
+for name in ModuleCache.noindex App-live App-unmounted App-noplist App-fresh App-building; do
+  check "the automatic sweep leaves $name in place" "$(isdir "$ROOT6/$name")"
+done
+run_state "$ROOT6" "$S6" --last
+LAST="$OUT"
+check "--last reports how many the last sweep deleted" "$(has "$LAST" "deleted 2 of 2 orphaned folder(s)")"
+check "--last reports the gain df measured, not only du" "$(has "$LAST" "df measured")"
+log6="$(find "$S6" -name 'run-*.log' -print -quit)"
+check "--last names the log of that sweep" "$([ -n "$log6" ] && has "$LAST" "$log6" || echo "no run log in $S6, said: $LAST")"
+check "and that log names each folder it removed" \
+  "$([ -n "$log6" ] && has "$(cat "$log6")" "Deleted $ROOT6/App-orphan-two" || echo "no run log in $S6")"
+check "the record holds df before and after" \
+  "$(grep -qE '^df_before_mb=[0-9]+$' "$S6/last-result" && grep -qE '^df_after_mb=[0-9]+$' "$S6/last-result" && echo ok || echo "record: $(cat "$S6/last-result" 2>/dev/null)")"
+
+# Two warnings at once never run two sweeps: the lock is taken by --start itself, before the sweep is
+# handed off, so the second --start is refused even while the first is still starting (assume it
+# runs twice). The process list blocks until the suite releases it, so the first sweep is
+# demonstrably still running when the second is asked for.
+ROOT7="$TMP_ROOT/dd-locked"; S7="$TMP_ROOT/state-locked"; RELEASE7="$TMP_ROOT/release-7"
+mkdir -p "$ROOT7"
+make_folder "$ROOT7" "Lock-orphan" "$TMP_ROOT/removed-lock/App.xcodeproj" >/dev/null
+BLOCKING_PS="$TMP_ROOT/blocking-ps"
+cat > "$BLOCKING_PS" <<PS
+#!/bin/sh
+n=0
+while [ ! -e "$RELEASE7" ] && [ "\$n" -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done
+echo "  77 /usr/bin/login -f someone"
+PS
+chmod +x "$BLOCKING_PS"
+SAVED_PS="$FAKE_PS"; FAKE_PS="$BLOCKING_PS"
+run_state "$ROOT7" "$S7" --start
+first_rc="$RC"
+run_state "$ROOT7" "$S7" --start
+second_rc="$RC"; second_out="$OUT"
+: > "$RELEASE7"
+FAKE_PS="$SAVED_PS"
+check "the first --start starts a sweep" "$(eq "$first_rc" 0)"
+check "a second --start while it runs is refused with exit 75" "$(eq "$second_rc" 75)"
+check "and says a sweep is already running" "$(has "$second_out" "already running")"
+check "the one sweep finishes" "$(wait_finished "$S7" && echo ok || echo "no finished record in $S7")"
+check "and only one sweep ran" "$(eq "$(run_logs "$S7")" 1)"
+check "and it removed the orphan" "$(gone "$ROOT7/Lock-orphan")"
+
+# A sweep that fails is reported as failing by the next reader, never as a sweep that freed nothing.
+ROOT8="$TMP_ROOT/dd-auto-stuck"; S8="$TMP_ROOT/state-stuck"
+mkdir -p "$ROOT8"
+make_folder "$ROOT8" "Stuck-orphan" "$TMP_ROOT/removed-stuck-auto/App.xcodeproj" >/dev/null
+chmod 500 "$ROOT8/Stuck-orphan/Build/Intermediates.noindex"
+write_fake_ps "$ROOT8"
+run_state "$ROOT8" "$S8" --start
+check "a failing sweep still finishes and records" "$(wait_finished "$S8" && echo ok || echo "no finished record in $S8")"
+chmod 700 "$ROOT8/Stuck-orphan/Build/Intermediates.noindex"
+run_state "$ROOT8" "$S8" --last
+check "--last says the last sweep FAILED" "$(has "$OUT" "FAILED")"
+check "and how many it could not delete" "$(has "$OUT" "could not delete 1 of 1")"
+
+# A refusal inside the detached sweep is recorded as a failure too, and deletes nothing.
+ROOT9="$TMP_ROOT/dd-auto-refused"; S9="$TMP_ROOT/state-refused"
+mkdir -p "$ROOT9"
+make_folder "$ROOT9" "Refused-orphan" "$TMP_ROOT/removed-refused/App.xcodeproj" >/dev/null
+RECENT_FOR_RUN=soon run_state "$ROOT9" "$S9" --start
+check "a sweep that refuses still records" "$(wait_finished "$S9" && echo ok || echo "no finished record in $S9")"
+run_state "$ROOT9" "$S9" --last
+check "--last says a refused sweep FAILED, with its exit code" "$(has "$OUT" "FAILED (it exited 2)")"
+check "and the refused sweep deleted nothing" "$(isdir "$ROOT9/Refused-orphan")"
+
+# A sweep killed partway leaves its in-progress mark and no record, and nothing holds the lock: that
+# is said, never read as no sweep at all (L13).
+S10="$TMP_ROOT/state-died"; mkdir -p "$S10"
+printf 'started=%s\nlog=%s\n' "$(( $(date +%s) - 600 ))" "$S10/run-1.log" > "$S10/in-progress"
+run_state "$ROOT" "$S10" --last
+check "--last says a sweep stopped before recording what it did" "$(has "$OUT" "stopped before recording")"
+
+run_state "$ROOT" "$TMP_ROOT/state-direct" --auto
+check "--auto run by hand, without the lock --start takes, is refused with exit 2" "$(eq "$RC" 2)"
+check "and deletes nothing" "$(isdir "$ROOT/App-orphan")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
