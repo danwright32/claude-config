@@ -16,6 +16,7 @@ completeness gates, not safety gates, and a false block on a command we merely
 could not read would teach the override habit.
 """
 
+import glob
 import importlib.util
 import os
 import re
@@ -159,6 +160,145 @@ class Unreadable(Exception):
     """The command could not be tokenized, so no gate may judge it."""
 
 
+# ---- where each create runs: what the command sets before it (claude-config#1416) ----
+#
+# A --body-file is read the way the shell will read it, so a path through a variable or a relative
+# path needs what the command did before the create: the variables it set and the directory it cd'd
+# to. Shell variables do not carry from one Bash call to the next, so a variable the command does not
+# set itself, and the environment it starts with does not hold, is empty when the create runs.
+SET_WORDS = {"export", "declare", "typeset", "local", "readonly"}
+CD_WORDS = {"cd", "pushd"}
+VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])\}|([A-Za-z_][A-Za-z0-9_]*|[0-9@*]))")
+POSITIONAL = re.compile(r"^(?:[0-9]+|[@*])$")
+# Options of `read` that take a value, so the word after one is not a variable it sets.
+READ_VALUE_OPTIONS = {"-a", "-d", "-i", "-n", "-N", "-p", "-t", "-u"}
+# What a variable expands to when the command gives it a value only as it runs: a for or read loop's
+# variable, a function's positional parameter. A path holding it is a pattern (RUNTIME stands for
+# any run of characters within one path segment), never a path, and never a character in a real one.
+RUNTIME = "\x00"
+
+
+def runtime_pattern(path):
+    """The glob a path holding RUNTIME stands for, everything else in it matched literally."""
+    return "*".join(glob.escape(piece) for piece in path.split(RUNTIME))
+
+
+class Place:
+    """Where a create runs: the variables the command set before it, and its working directory.
+
+    vars maps a name to its value, or to None when it was set from something only running the
+    command can tell (a substitution). cwd is None once a cd the gate cannot follow has run, or
+    when the directory the command starts in was never given. environ is what the command starts with.
+    """
+
+    def __init__(self, cwd, environ, variables=None):
+        self.cwd = cwd
+        self.environ = environ
+        self.vars = dict(variables or {})
+
+    def copy(self):
+        return Place(self.cwd, self.environ, self.vars)
+
+
+def _lookup(name, place):
+    if POSITIONAL.match(name):
+        return RUNTIME, None  # a function's or script's arguments, given as it is called
+    if name in place.vars:
+        if place.vars[name] is None:
+            return None, "$%s is set in this command from something the gate cannot read" % name
+        return place.vars[name], None
+    if name in place.environ:
+        return place.environ[name], None
+    return None, ("$%s is not set in this command (a variable set in an earlier Bash call is gone by "
+                  "this one)" % name)
+
+
+def expand(word, place):
+    """A word as the shell would expand it: (value, None), or (None, why it cannot be told).
+
+    Only what needs nothing run: a leading ~, and $NAME or ${NAME} from what the command set before
+    this point or the environment it starts with. Anything else the shell expands (a substitution,
+    ${NAME:-x}, $1, a backtick) is something the gate cannot work out, and says so.
+    """
+    text = word
+    if text.startswith("~"):
+        head, sep, rest = text.partition("/")
+        if head == "~":
+            home, why = _lookup("HOME", place)
+            if why:
+                return None, why
+        else:
+            home = os.path.expanduser(head)
+            if home == head:
+                return None, "%s names a home directory the gate cannot find" % head
+        text = home + sep + rest
+    leftover = VARIABLE.sub("", text)
+    if "$" in leftover or "`" in leftover:
+        return None, "it holds an expansion the gate cannot work out without running the command"
+    out, last = [], 0
+    for m in VARIABLE.finditer(text):
+        value, why = _lookup(m.group(1) or m.group(2), place)
+        if why:
+            return None, why
+        out += [text[last:m.start()], value]
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out), None
+
+
+def resolve_path(word, place):
+    """The absolute path a word names where the create runs: (path, None), or (None, why not)."""
+    value, why = expand(word, place)
+    if why:
+        return None, why
+    if not os.path.isabs(value):
+        if place.cwd is None:
+            return None, "it is relative, and the gate cannot tell which directory the command is in"
+        value = os.path.join(place.cwd, value)
+    return os.path.normpath(value), None
+
+
+def _assign(place, word):
+    """Record NAME=value as the shell would leave it for later commands."""
+    name, value = word.split("=", 1)
+    place.vars[name], _ = expand(value, place)
+
+
+def _follow(place, words):
+    """Record what a command that is not a create leaves behind: an assignment, or a cd."""
+    k = 0
+    while k < len(words) and (words[k] in HEAD_WORDS or ASSIGNMENT.match(words[k])):
+        k += 1
+    if k >= len(words):
+        return
+    name, rest = words[k], words[k + 1:]
+    if name in ("for", "select") and rest and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", rest[0]):
+        place.vars[rest[0]] = RUNTIME
+    elif name == "read":
+        skip = False
+        for w in rest:
+            if skip:
+                skip = False
+            elif w in READ_VALUE_OPTIONS:
+                skip = True
+            elif not w.startswith("-"):
+                place.vars[w] = RUNTIME
+    elif name in SET_WORDS:
+        for w in rest:
+            if ASSIGNMENT.match(w):
+                _assign(place, w)
+    elif name in CD_WORDS:
+        targets = [w for w in rest if w == "-" or not w.startswith("-")]
+        if not targets:
+            place.cwd, _ = expand("~", place)
+        elif targets[0] == "-":
+            place.cwd = None
+        else:
+            place.cwd, _ = resolve_path(targets[0], place)
+    elif name == "popd":
+        place.cwd = None
+
+
 def scan_creates(command):
     """Find every real `gh issue create` in a command string.
 
@@ -174,6 +314,18 @@ def scan_creates(command):
     tripping a gate.
 
     Raises Unreadable when the command cannot be tokenized.
+    """
+    return [(args, envs) for args, envs, _ in scan_creates_in_context(command)]
+
+
+def scan_creates_in_context(command, cwd=None, environ=None):
+    """scan_creates, with the Place each create runs in as a third field (claude-config#1416).
+
+    cwd is the directory the command starts in, None when unknown; environ the environment it starts
+    with, empty when not given. Variables set by a segment of bare assignments or by export and its
+    kin carry to later segments; an assignment in front of a command applies to that command only,
+    after the shell has expanded its arguments, so it does not reach them. A cd or pushd moves the
+    directory. Each lasts to the end of the subshell it was made in.
     """
     if not command or not command.strip():
         return []
@@ -195,6 +347,8 @@ def scan_creates(command):
     creates = []
     i = 0
     at_head = True
+    place = Place(cwd, environ if environ is not None else {})
+    subshells = []
     # An override belongs to the ONE command it prefixes. Reading it across the whole
     # call is how an unmilestoned create slipped through on 2026-07-29: an override on
     # line 1 silently exempted a second create three lines later.
@@ -202,6 +356,14 @@ def scan_creates(command):
     while i < len(tokens):
         tok = tokens[i]
         if _is_operator(tok):
+            # Assignments with no command after them set variables for the rest of the command.
+            for w in seg_env:
+                _assign(place, w)
+            for ch in tok:
+                if ch == "(":
+                    subshells.append(place.copy())
+                elif ch == ")" and subshells:
+                    place = subshells.pop()
             at_head = True
             seg_env = []
             i += 1
@@ -218,6 +380,8 @@ def scan_creates(command):
                 j += 1
             found = gh_command(tokens[i:j])
             if not found or tuple(found[:2]) != ("issue", "create"):
+                _follow(place, tokens[i:j])
+                seg_env = []  # they applied to that command alone
                 i = j
                 at_head = False
                 continue
@@ -227,7 +391,7 @@ def scan_creates(command):
             # which is absurd and teaches exactly the override habit this exists to
             # avoid. A gate that cries wolf gets ignored.
             if not any(a in NON_FILING_FLAGS for a in args):
-                creates.append((args, list(seg_env)))
+                creates.append((args, list(seg_env), place.copy()))
             i = j
             at_head = True
             seg_env = []

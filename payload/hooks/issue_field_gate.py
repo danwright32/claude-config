@@ -19,14 +19,17 @@ Two properties kept deliberately from the old design:
 
 1. Each rule has its OWN override, so waiving one never waives another. They answer
    different questions about the issue.
-2. It fails OPEN. Anything unparseable exits quietly rather than blocking work. This
-   is a completeness gate, not a safety gate, and a false block on a command it merely
-   could not read would teach the override habit.
+2. It fails OPEN on a COMMAND it cannot parse. Anything unparseable exits quietly rather
+   than blocking work. This is a completeness gate, not a safety gate, and a false block on
+   a command it merely could not read would teach the override habit. A --body-file it
+   cannot read is different (claude-config#1416): the command parsed, and it points gh at a
+   description that is not there, so that is refused, naming the path and why.
 
 What changed for the better: a create missing two things now says so once, instead of
 whichever of three gates happened to be reported first.
 """
 
+import glob
 import importlib.util
 import json
 import os
@@ -104,9 +107,9 @@ def _same_path(a, b):
     return os.path.normpath(os.path.expanduser(a)) == os.path.normpath(os.path.expanduser(b))
 
 
-def has_session_line(args, command):
+def has_session_line(args, command, place=None):
     """The body names the session that filed it (claude-config#536). See body_carries."""
-    return body_carries(args, command, lambda text: SESSION_MARK in text)
+    return body_carries(args, command, lambda text: SESSION_MARK in text, place=place)
 
 
 # The body's Open questions section (claude-config#1279, Dan 2026-10-17): a heading, at any level,
@@ -174,12 +177,105 @@ def holds_open_questions(text, spelled=False):
     return (OPEN_QUESTIONS if spelled else HEADING_LINE).search("\n".join("" if c else l for l, c in zip(lines, code))) is not None
 
 
-def has_open_questions(args, command):
+def has_open_questions(args, command, place=None):
     """The body holds an Open questions section, listing what only Dan can decide, or None."""
-    return body_carries(args, command, holds_open_questions, lambda text: holds_open_questions(text, spelled=True))
+    return body_carries(args, command, holds_open_questions, lambda text: holds_open_questions(text, spelled=True),
+                        place=place)
 
 
-def body_carries(args, command, found, found_in_command=None):
+def _here():
+    """Where a create runs when nothing more is known: this process's directory and environment."""
+    return scan.Place(os.getcwd(), dict(os.environ))
+
+
+def body_files(args, command, place=None):
+    """What the gate can tell about each --body-file one create names, as (word, state, detail).
+
+    word is the path as the command spells it, after the shell's quoting. state is one of:
+      "stdin"       `-F -`, `-F-`, `--body-file=-`: standard input, judged from the command text
+      "hidden"      written by this command from something it does not show (a script, an expansion),
+                    or named through a variable only running the command fills in (a loop's, a
+                    function's $1) where some non-empty file matches: either way, not judged here
+      "shown"       written by this command from text it shows, so judged from the command (#1246)
+      "text"        read from disk; detail is the text
+      "unreadable"  none of those, and not a file the gate can read; detail says why (#1416)
+
+    A path is read the way the shell will read it where the create runs (scan.resolve_path): a
+    variable the command does not set and its environment does not hold is empty there, and a
+    relative path is read against the command's directory and any cd before the create. A file the
+    command itself writes is matched by its spelling or by where it resolves to, and is never
+    unreadable, since the command makes it. A file present but empty, or only blank lines, files a
+    blank description, so it counts as unreadable too.
+    """
+    place = place or _here()
+    words = scan.flag_values(args, "--body-file", "-F")
+    if not words:
+        return []
+    try:
+        writes = scan.file_writes(command)
+        writes_known = True
+    except scan.Unreadable:
+        writes, writes_known = [], False
+    out = []
+    for word in words:
+        if word == "-":
+            out.append((word, "stdin", None))
+            continue
+        path, why = scan.resolve_path(word, place)
+        written = [w for w in writes if _same_path(w[0], word) or (path and scan.resolve_path(w[0], place)[0] == path)]
+        if any(not shown for _, _, shown in written):
+            out.append((word, "hidden", None))
+            continue
+        if any(not appends for _, appends, _ in written):
+            out.append((word, "shown", None))
+            continue
+        if why:
+            # Appended to here, from shown text, at a place the gate cannot find: judged from the text.
+            out.append((word, "shown", None) if written else (word, "unreadable", why))
+            continue
+        if scan.RUNTIME in path:
+            # Part of the path is filled in only as the command runs (a loop's variable, a function's
+            # $1), so which file is unknown: some non-empty file must be one it could name.
+            pattern = scan.runtime_pattern(path)
+            if written or any(os.path.isfile(m) and os.path.getsize(m) > 0 for m in glob.glob(pattern)):
+                out.append((word, "hidden", None))
+            else:
+                out.append((word, "unreadable", "no file matches %s that is not empty (each * is filled in "
+                            "only as the command runs)" % pattern))
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            if written:
+                out.append((word, "shown", None))
+            elif isinstance(e, FileNotFoundError):
+                out.append((word, "unreadable", "%s does not exist" % path))
+            elif isinstance(e, IsADirectoryError):
+                out.append((word, "unreadable", "%s is a directory" % path))
+            else:
+                out.append((word, "unreadable", "%s cannot be read (%s)" % (path, e.strerror or e)))
+            continue
+        if not written and not text.strip():
+            out.append((word, "unreadable", "%s is empty" % path))
+            continue
+        out.append((word, "text", text))
+    if not writes_known:
+        # Which files the command writes could not be read, so a file on disk may be one it is about
+        # to replace (judged as before #1416: not at all), and a file not there yet one it makes.
+        out = [(w, "hidden", None) if s == "text" else
+               (w, s, d + "; the gate also could not read which files this command writes" if s == "unreadable" else d)
+               for w, s, d in out]
+    return out
+
+
+def unreadable_body_files(args, command, place=None):
+    """Each --body-file of one create the gate cannot read, as a line naming it and saying why."""
+    return ["--body-file %s: %s" % (word, why) for word, state, why in body_files(args, command, place)
+            if state == "unreadable"]
+
+
+def body_carries(args, command, found, found_in_command=None, place=None):
     """Whether the body of a create holds what `found` looks for in a text.
 
     Looked for in the whole command text as well as the parsed arguments, because a body written
@@ -190,8 +286,10 @@ def body_carries(args, command, found, found_in_command=None):
     A body file the same command writes is judged from the command, not the disk (claude-config#1246):
     this gate runs before the command, so the file is missing or holds an older body. When what is
     written is text the command shows, and the line is nowhere in the command, the line is not in
-    the file either. Written by anything else (a script, an expansion), or not written here and not
-    readable, it is not held against the create: this gate fails open on what it cannot read.
+    the file either. Written by anything else (a script, an expansion), it is not held against the
+    create. A body file the gate cannot read is not judged here either: the body file rule refuses
+    it, naming the path and why (claude-config#1416), so this rule does not also claim a section or
+    line is missing from a file nobody could look in.
 
     `found_in_command`, when given, reads the command text and its arguments, as the command spells
     a body; `found` alone reads a body file, which is the body itself.
@@ -199,26 +297,11 @@ def body_carries(args, command, found, found_in_command=None):
     spelled = found_in_command or found
     if spelled(command) or any(spelled(a) for a in args):
         return True
-    paths = scan.flag_values(args, "--body-file", "-F")
-    try:
-        writes = scan.file_writes(command) if paths else []
-    except scan.Unreadable:
-        return True  # the other rules can still be judged, so this one alone stands down
-    for path in paths:
-        if path == "-":
-            continue  # standard input, judged above from the command text
-        written = [w for w in writes if _same_path(w[0], path)]
-        if any(not shown for _, _, shown in written):
+    for _, state, detail in body_files(args, command, place):
+        if state in ("hidden", "unreadable"):
             return True
-        if any(not appends for _, appends, _ in written):
-            continue  # written whole from shown text, which does not carry the line
-        try:
-            with open(os.path.expanduser(path), encoding="utf-8", errors="replace") as f:
-                if found(f.read()):
-                    return True
-        except OSError:
-            if not written:
-                return True
+        if state == "text" and found(detail):
+            return True
     return False
 
 
@@ -272,7 +355,7 @@ CATEGORY_FIX = (
 # Judged on the body, so it reads the command as the session line does (claude-config#1279).
 OPEN_QUESTIONS_RULE = {
     "name": "an Open questions section",
-    "check": lambda args, command: has_open_questions(args, command),
+    "check": lambda args, command, place: has_open_questions(args, command, place),
     "fix": ("OPEN QUESTIONS. The body ends its prose with a section listing what only Dan can decide about "
             "this issue, so /sleep asks each before the night begins instead of a worker finding it "
             "overnight. One unchecked item a question; if there are none, write None under it:\n"
@@ -283,15 +366,32 @@ OPEN_QUESTIONS_RULE = {
     "override": "SKIP_OPEN_QUESTIONS_CHECK=1",
 }
 
+# A --body-file the gate cannot read (claude-config#1416). Before it, the gate passed one, so
+# Try-Pennie/slate#3924 and #3925 were filed with a body holding only the session line from a path
+# through a variable an earlier Bash call had set. `details` names each path and why, and evaluate
+# fills them into {details}.
+BODY_FILE_RULE = {
+    "name": "a body file it can read",
+    "check": lambda args, command, place: not unreadable_body_files(args, command, place),
+    "details": lambda args, command, place: unreadable_body_files(args, command, place),
+    "fix": ("BODY FILE. The command points gh at a description the gate cannot find. Each --body-file "
+            "below, read as the shell will read it when the command runs:\n"
+            "{details}\n"
+            "   Write the path out in full, or set any variable it uses in this same command, make sure "
+            "the file holds the description, then re-run."),
+    "override": "SKIP_BODY_FILE_CHECK=1",
+}
+
 
 # The table. A new rule is one entry: what it is called, how to detect it from the create's
-# arguments and the whole command, what to say, and its own override. Order is the order the
-# fixes are listed in.
+# arguments, the whole command and the place it runs (scan.Place), what to say, and its own
+# override. Order is the order the fixes are listed in.
 RULES = [
-    {"name": "a milestone", "check": lambda args, command: has_milestone(args), "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
-    {"name": "a priority label", "check": lambda args, command: has_priority(args), "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
-    {"name": "a category label", "check": lambda args, command: has_category(args), "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
+    {"name": "a milestone", "check": lambda args, command, place: has_milestone(args), "fix": MILESTONE_FIX, "override": "SKIP_MILESTONE_CHECK=1"},
+    {"name": "a priority label", "check": lambda args, command, place: has_priority(args), "fix": PRIORITY_FIX, "override": "SKIP_PRIORITY_CHECK=1"},
+    {"name": "a category label", "check": lambda args, command, place: has_category(args), "fix": CATEGORY_FIX, "override": "SKIP_CATEGORY_CHECK=1"},
     OPEN_QUESTIONS_RULE,
+    BODY_FILE_RULE,
 ]
 
 
@@ -299,7 +399,7 @@ def session_rule(line):
     """The session line rule, which exists only inside a session: its fix names the exact line."""
     return {
         "name": "the session that filed it",
-        "check": lambda args, command: has_session_line(args, command),
+        "check": lambda args, command, place: has_session_line(args, command, place),
         "fix": ("SESSION. End the body with the line naming this session, the same line commits and pull "
                 "requests carry, so a session reading the issue list can tell which session filed what:\n"
                 "   " + line + "\n"
@@ -308,27 +408,35 @@ def session_rule(line):
     }
 
 
-def evaluate(command):
+def evaluate(command, cwd=None):
     """Which rules fail, across every create in the command.
 
+    cwd is the directory the command starts in (the payload's), this process's when not given.
     Returns (issue_count, [failing rule dicts]). The count is of offending creates, so
-    the message can say "1 issue" or "3 issues" correctly.
+    the message can say "1 issue" or "3 issues" correctly. A rule with `details` comes back
+    with its fix filled in from every create's details, each named once.
     """
-    creates = scan.scan_creates(command)
+    creates = scan.scan_creates_in_context(command, cwd or os.getcwd(), dict(os.environ))
     rules = list(RULES)
     line = session_line() if creates else None
     if line:
         rules.append(session_rule(line))
     offenders = 0
     failing = []
-    for args, envs in creates:
-        missing = [r for r in rules if r["override"] not in envs and not r["check"](args, command)]
+    details = {}
+    for args, envs, place in creates:
+        missing = [r for r in rules if r["override"] not in envs and not r["check"](args, command, place)]
         if not missing:
             continue
         offenders += 1
         for r in missing:
             if r["name"] not in [f["name"] for f in failing]:
                 failing.append(r)
+            if "details" in r:
+                seen = details.setdefault(r["name"], [])
+                seen += [d for d in r["details"](args, command, place) if d not in seen]
+    failing = [dict(r, fix=r["fix"].format(details="\n".join("     " + d for d in details[r["name"]])))
+               if "details" in r else r for r in failing]
     return offenders, failing
 
 
@@ -363,11 +471,12 @@ def main():
     try:
         data = json.loads(sys.stdin.read())
         command = (data.get("tool_input") or {}).get("command") or ""
+        cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
     except Exception:
         return 0
 
     try:
-        offenders, failing = evaluate(command)
+        offenders, failing = evaluate(command, cwd)
     except scan.Unreadable:
         return 0  # not ours to judge
 
