@@ -105,8 +105,8 @@ echo "$answer"
 # switch nobody can read never deletes (L50). Off is said every time this speaks, so it is never a
 # suppression nobody can find (L523).
 #
-# Every call to the sweep is bounded, by FREE_SPACE_DERIVED_DATA_SECONDS (default 6), and 0 turns the
-# whole Xcode step off. The count reads each folder's info.plist and forks a reader per folder, and a
+# The whole Xcode step is bounded, by FREE_SPACE_DERIVED_DATA_SECONDS (default 6), shared by its
+# calls rather than given to each, and 0 turns the step off. The count reads each folder's info.plist and forks a reader per folder, and a
 # hook killed at its 10 second timeout would lose the free space warning with it (both are settings,
 # not measurements). The call runs in a process group of its own and the WHOLE group is killed when
 # the bound runs out: killing only the sweep left its children (du, the plist reader) holding this
@@ -118,7 +118,8 @@ case "$SWEEP_SECONDS" in ''|*[!0-9]*) SWEEP_SECONDS=6 ;; esac
 AUTO_DELETE="${FREE_SPACE_DERIVED_DATA_AUTO_DELETE-1}"
 LIST_CMD="bash ~/.claude/hooks/derived-data-sweep.sh"
 
-bounded_sweep() {   # bounded_sweep <args...> -> sets SWEEP_OUT and SWEEP_RC (124 when the bound ran out)
+bounded_sweep() {   # bounded_sweep <seconds> <args...> -> sets SWEEP_OUT and SWEEP_RC (124 when the bound ran out)
+  local seconds="$1"; shift
   SWEEP_RC=0
   SWEEP_OUT="$(perl -e '
     my $t = shift @ARGV;
@@ -129,11 +130,11 @@ bounded_sweep() {   # bounded_sweep <args...> -> sets SWEEP_OUT and SWEEP_RC (12
     alarm $t;
     waitpid($pid, 0);
     alarm 0;
-    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$SWEEP_SECONDS" bash "$SWEEP" "$@" 2>&1)" || SWEEP_RC=$?
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$seconds" bash "$SWEEP" "$@" 2>&1)" || SWEEP_RC=$?
 }
 
 summary() {
-  bounded_sweep --summary
+  bounded_sweep "$SWEEP_SECONDS" --summary
   if [ "$SWEEP_RC" -eq 124 ]; then
     echo "Counting Xcode build caches whose project folder is gone did not finish within ${SWEEP_SECONDS}s, so how many there are is not known here. To list them: $LIST_CMD"
   elif [ -n "$SWEEP_OUT" ]; then
@@ -145,14 +146,24 @@ summary() {
 if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
   case "$AUTO_DELETE" in
     1)
-      bounded_sweep --last
+      # ONE budget for the whole step, never one per call: two calls each given the full bound would
+      # add up to twice it, 12 seconds at the default, past the hook's 10 second timeout. --start gets
+      # only what --last left, and none left means it is not tried, which is said.
+      step_start="$(date +%s)"
+      bounded_sweep "$SWEEP_SECONDS" --last
       if [ "$SWEEP_RC" -eq 124 ]; then
         echo "Reading what the last automatic sweep of Xcode build caches did did not answer within ${SWEEP_SECONDS}s, so it is not known here. To see it: $LIST_CMD --last"
       elif [ -n "$SWEEP_OUT" ]; then
         printf '%s\n' "$SWEEP_OUT"
       fi
-      bounded_sweep --start
+      left=$(( SWEEP_SECONDS - ($(date +%s) - step_start) ))
+      if [ "$left" -gt 0 ]; then
+        bounded_sweep "$left" --start
+      else
+        SWEEP_RC=-1
+      fi
       case "$SWEEP_RC" in
+        -1) echo "Reading the last sweep's record used all ${SWEEP_SECONDS}s this warning allows, so no time was left to start a new sweep of Xcode build caches; the next warning tries again. To list them: $LIST_CMD" ;;
         0)
           echo "Started clearing Xcode build caches whose project folder is gone, in the background. It deletes only those nothing has written to in the last hour or is building with, and keeps any whose project is still on disk or on a drive that is not mounted. The next warning says what it freed, and so does: $LIST_CMD --last"
           echo "To stop this deleting on its own on this Mac, set FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0 (the README's section on Xcode build caches says where)." ;;

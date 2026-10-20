@@ -644,6 +644,20 @@ check "a sweep script that hangs when asked to start is stopped, and the warning
   "$(grep -q 'GB free on' <<< "$n_slow_auto" && [ "$slow_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_slow_auto" && echo ok || echo "took ${slow_took}s, said: $n_slow_auto")"
 check "and the notice says starting it did not answer rather than claiming it started" \
   "$(grep -qF 'did not answer within 1s' <<< "$n_slow_auto" && ! grep -qF 'Started clearing' <<< "$n_slow_auto" && echo ok || echo "said: $n_slow_auto")"
+# The bound is for the whole Xcode step, not for each call in it: reading the last result and
+# starting the next sweep are two calls, and two full bounds back to back (12 seconds at the default
+# of 6) would carry the hook past its 10 second timeout. With a 3 second bound and a sweep that
+# hangs, the step must end inside one bound, not two.
+NS_SLOW_SUM="$TMPROOT/ns-slow-sum"; mkdir -p "$NS_SLOW_SUM"
+slow_start="$(date +%s)"
+n_slow_sum="$(payload sess-slow-sum | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW_SUM" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=3 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+slow_took=$(( $(date +%s) - slow_start ))
+check "the bound covers the whole Xcode step, so two hanging calls cannot add up past it" \
+  "$([ "$slow_took" -lt 5 ] && grep -q 'GB free on' <<< "$n_slow_sum" && echo ok || echo "took ${slow_took}s, said: $n_slow_sum")"
+check "and a sweep it had no time left to start is said, never claimed" \
+  "$(grep -qF 'no time was left to start' <<< "$n_slow_sum" && ! grep -qF 'Started clearing' <<< "$n_slow_sum" && echo ok || echo "said: $n_slow_sum")"
 # Zero turns the count off. Handed to perl's alarm it would mean no bound at all, the opposite of
 # what a zero reads as.
 NS_ZERO="$TMPROOT/ns-zero"; mkdir -p "$NS_ZERO"

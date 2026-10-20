@@ -1856,10 +1856,10 @@ To turn the automatic delete off on one Mac, give Claude Code the environment va
 is off, and falls back to `derived-data-sweep.sh --summary`, which says how many folders are
 orphaned and roughly how much they hold and names the listing and deleting commands without
 running either. Any other value than 0 or 1 is said and treated as off. Sizing them stops after
-`DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size. Every call
-the warning makes to the sweep (the count, `--last`, `--start`) stops after
-`FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), its process group killed, and then the notice says
-it did not finish. Both keep the prompt hook inside its 10 second timeout (all three are settings,
+`DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size. The whole
+Xcode step of the warning (the count, or `--last` then `--start`, which gets only the time `--last`
+left) stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), the process group of a call that
+runs out killed, and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout (all three are settings,
 not measurements), so the free space warning itself always arrives. A bound of 0 turns that step
 off (no sizing, or no Xcode step at all) rather than leaving it unbounded. The disk-full skill's
 step 6 runs the listing and `--last`.
