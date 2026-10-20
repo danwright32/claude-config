@@ -107,6 +107,16 @@ mkdir -p "$WORK/plain" "$WORK/repo"
 printf 'alpha\n' > "$WORK/plain/a.txt"
 printf 'beta\n'  > "$WORK/plain/b.txt"
 printf 'alpha\n' > "$WORK/plain/same.txt"
+# A node project with two local bins, one failing with a code that is neither 0 nor 1, so a
+# substitute that runs some OTHER program (claude-config#1408: `rtk npx` ran `npm <tool>`) is told
+# apart even when that other program also fails. npm is held offline, with its cache and logs in
+# here, so neither the real npx nor any substitute can reach the registry or write outside (L2).
+mkdir -p "$WORK/node/node_modules/.bin"
+printf '{"name":"fidelity-probe","version":"1.0.0"}\n' > "$WORK/node/package.json"
+printf '#!/bin/sh\nexit 3\n' > "$WORK/node/node_modules/.bin/probe-fail"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/node/node_modules/.bin/probe-ok"
+chmod +x "$WORK/node/node_modules/.bin/probe-fail" "$WORK/node/node_modules/.bin/probe-ok"
+export NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_CACHE="$WORK/npm-cache"
 repo_ready=no
 if command -v git >/dev/null 2>&1; then
   if git -C "$WORK/repo" init -q >/dev/null 2>&1 \
@@ -160,6 +170,13 @@ PROBES=(
   # half measured one (L2). So the always-0 direction is watched here and the always-1 direction is
   # not, which is named rather than left to be assumed (L142).
   "gh-outside-a-repo|gh|plain|fail|gh issue list"
+  # npx on a tool rtk has no filter for (claude-config#1408). rtk 0.31.0 runs `rtk npx <tool>` as
+  # `npm <tool>`, so the failing case exited 0 (npm printed its own version for `--version`) and
+  # the passing one exited 1 (npm found no script of that name). Both directions, local bins only.
+  # The passing case takes an argument npm does NOT swallow: given `--version` too, npm's own
+  # version exits 0 and the wrong program would agree with the right one by accident.
+  "npx-local-bin-fails|npx|node|fail|npx probe-fail --version"
+  "npx-local-bin-passes|npx|node|pass|npx probe-ok check"
 )
 
 # What the hook ACTUALLY substitutes for a command: its own answer, not a guess at its rules.

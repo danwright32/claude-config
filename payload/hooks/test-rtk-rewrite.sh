@@ -284,6 +284,84 @@ out_318="$(hook 'git diff --quiet')"
   || check "#318 and rtk git diff, which does carry its exit code, is still rewritten" "out=$out_318"
 
 # ---------------------------------------------------------------------------
+# A rewrite that changes WHICH PROGRAM RUNS is never made (claude-config#1408).
+#
+# On 2026-10-20 a background `cd "<checkout>" && npx wrangler kv key list --namespace-id <id>
+# --remote --config ...` printed "npm error Missing script: wrangler" instead of running wrangler.
+# rtk 0.31.0 rewrites any `npx <tool>` it has no dedicated filter for into `rtk npx <tool>`, and
+# `rtk npx` runs that as `npm <tool> <args>` (its own -vvv says "Running: npm wrangler ..."), an
+# npm SCRIPT lookup. Measured the same day: `npx probe --version` against a local bin exiting 3
+# became `npm probe --version`, which printed npm's own version and EXITED 0, and `rtk npx next dev`
+# ran `npx next build`. So the destination itself runs a different program; refused by DESTINATION
+# like the others, since every tool rtk does filter (tsc, eslint, prisma, prettier, next build,
+# vitest) is rewritten to its own subcommand and never reaches `rtk npx`.
+#
+# `rtk lint` has the same fault in one shape: its first argument names the LINTER when it is a bare
+# word, so `eslint src` became `rtk lint src`, which ran `npx src`, a registry package called src.
+# `rtk lint .`, `rtk lint src/` and `rtk lint --fix src` were measured to run eslint and keep it.
+# ---------------------------------------------------------------------------
+check "#1408 an npx tool rtk has no filter for is not routed to an npm script" \
+  "$(refused_to_rewrite 'rtk npx wrangler kv key list --namespace-id abc --remote --config workers/build-trigger/wrangler.toml')"
+check "#1408 nor in the issue's own shape, after an until loop and cd &&" \
+  "$(refused_to_rewrite 'until test -f /tmp/ready; do sleep 1; done; cd "/some dir" && rtk npx wrangler kv key list --remote')"
+check "#1408 nor with npx's own flags in front" "$(refused_to_rewrite 'rtk npx --yes wrangler --version')"
+check "#1408 nor a next subcommand rtk npx turns into next build" "$(refused_to_rewrite 'rtk npx next dev')"
+check "#1408 eslint on a bare directory name is not run as a package of that name" "$(refused_to_rewrite 'rtk lint src')"
+check "#1408 nor after cd &&" "$(refused_to_rewrite 'cd /repo && rtk lint src')"
+# The controls: the npx tools rtk DOES filter keep their rewrite, and so does eslint wherever its
+# first argument cannot be read as a linter name (L159).
+for keep1408 in 'rtk prisma migrate status' 'rtk lint .' 'rtk lint src/' 'rtk lint --fix src' 'rtk lint' 'rtk npm run build'; do
+  printf '%s\n' "$keep1408" > "$TMPROOT/rewrite"
+  out1408="$(hook 'some command')"
+  [ "$(printf '%s' "$out1408" | rewritten_to)" = "$keep1408" ] \
+    && check "#1408 and $keep1408 is still rewritten" ok \
+    || check "#1408 and $keep1408 is still rewritten" "out=$out1408"
+done
+# The same fault keyed on the SOURCE: a rewrite that drops the package RUNNER the command named.
+# rtk 0.31.0 rewrites `pnpm tsc --noEmit` to `rtk tsc --noEmit`, which runs `npx tsc --noEmit`
+# (its own -vvv says so), and `npx prisma ...` to `rtk prisma ...`, which runs a bare `prisma` from
+# PATH. Which program and version runs is then rtk's choice, not the command's, and none of it is
+# visible in the rewritten text. So every runner word in the command must survive into the rewrite.
+runner_refused() { # runner_refused <source> <rewrite>  -> "ok" when the hook passed through
+  printf '%s\n' "$2" > "$TMPROOT/rewrite"
+  local o; o="$(hook "$1")"
+  if [ -z "$o" ]; then echo ok; else echo "it rewrote to: $(printf '%s' "$o" | rewritten_to)"; fi
+}
+# These use destinations nothing else refuses, so only the runner rule can refuse them (L159);
+# `rtk tsc` is refused on its own below, whatever the source.
+check "#1408 pnpm prisma does not lose pnpm to rtk prisma" "$(runner_refused 'pnpm prisma migrate status' 'rtk prisma migrate status')"
+check "#1408 nor npx prisma, which rtk runs as a bare prisma" "$(runner_refused 'npx prisma migrate status' 'rtk prisma migrate status')"
+check "#1408 nor npx eslint" "$(runner_refused 'npx eslint src/' 'rtk lint src/')"
+check "#1408 nor yarn" "$(runner_refused 'yarn prisma generate' 'rtk prisma generate')"
+check "#1408 nor bunx" "$(runner_refused 'bunx prettier --check .' 'rtk prettier --check .')"
+check "#1408 nor pnpm after cd &&" "$(runner_refused 'cd /repo && pnpm prisma generate' 'cd /repo && rtk prisma generate')"
+# The controls: a rewrite that KEEPS the runner, or a command that named none, is still rewritten,
+# and a runner word that is only an argument is carried through unchanged (L159).
+for pair1408 in 'prisma migrate status|rtk prisma migrate status' 'npm run build|rtk npm run build' 'pnpm list|rtk pnpm list' 'echo npm && git status|echo npm && rtk git status'; do
+  src1408="${pair1408%%|*}"; rw1408="${pair1408#*|}"
+  printf '%s\n' "$rw1408" > "$TMPROOT/rewrite"
+  out1408="$(hook "$src1408")"
+  [ "$(printf '%s' "$out1408" | rewritten_to)" = "$rw1408" ] \
+    && check "#1408 and [$src1408] is still rewritten to [$rw1408]" ok \
+    || check "#1408 and [$src1408] is still rewritten to [$rw1408]" "out=$out1408"
+done
+# `rtk tsc` is refused whatever the source. It runs `npx tsc`, and where TypeScript is not a local
+# dependency npx can fetch the unrelated registry package called tsc. Dan's decision on the
+# finding, 2026-10-20: "Leave tsc unrewritten".
+check "#1408 bare tsc is not rewritten to rtk tsc" "$(runner_refused 'tsc --noEmit' 'rtk tsc --noEmit')"
+check "#1408 nor pnpm tsc" "$(runner_refused 'pnpm tsc --noEmit' 'rtk tsc --noEmit')"
+check "#1408 nor tsc after cd &&" "$(runner_refused 'cd /repo && tsc -p tsconfig.json' 'cd /repo && rtk tsc -p tsconfig.json')"
+# The issue said foreground and background differed. The hook reads only the command, so a payload
+# asking for the background must get exactly the answer the same command gets in the foreground.
+printf 'rtk npx wrangler --version\n' > "$TMPROOT/rewrite"
+for bg1408 in true false; do
+  python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":"npx wrangler --version","description":"d","run_in_background":sys.argv[1]=="true"}}))' "$bg1408" > "$TMPROOT/payload.json"
+  [ -z "$(PATH="$BIN:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null)" ] \
+    && check "#1408 the npx refusal holds with run_in_background=$bg1408" ok \
+    || check "#1408 the npx refusal holds with run_in_background=$bg1408" "it rewrote"
+done
+
+# ---------------------------------------------------------------------------
 # A refused destination ANYWHERE in the command, not only at its start (claude-config#399).
 #
 # On 2026-09-17, with every refusal above already shipped and installed, a diff still went through
@@ -506,6 +584,66 @@ else
   [ "$sub1419b" = 'rtk grep "|first|" f' ] \
     && check "#1419 and the same grep standing alone is still rewritten by the real rtk" ok \
     || check "#1419 and the same grep standing alone is still rewritten by the real rtk" "got [$sub1419b]"
+fi
+
+# ---------------------------------------------------------------------------
+# End to end against the REAL rtk for #1408: the issue's shape, through the real hook, RUN, against
+# a local bin that FAILS with exit 3. The program named must be the one that runs, and its failure
+# must reach the caller. `--version` is the argument because npm swallows it: through `rtk npx` it
+# printed npm's version and exited 0, the failure reading as a success.
+#
+# Same empty HOME as #1419, so no rtk config.toml can exclude npx and leave this measuring nothing.
+# npm is held offline with its cache and logs in the throwaway directory: nothing here may reach
+# the registry or write outside it (L2).
+# ---------------------------------------------------------------------------
+if ! command -v rtk >/dev/null 2>&1 || ! command -v npx >/dev/null 2>&1; then
+  echo "note: rtk or npx is not installed on this Mac, so the #1408 end to end check did not run."
+else
+  FX1408="$TMPROOT/fx1408"; mkdir -p "$FX1408/home" "$FX1408/node_modules/.bin"
+  printf '{"name":"fx1408","version":"1.0.0"}\n' > "$FX1408/package.json"
+  printf '#!/bin/sh\necho "probe1408 ran with: $*"\nexit 3\n' > "$FX1408/node_modules/.bin/probe1408"
+  chmod +x "$FX1408/node_modules/.bin/probe1408"
+  npm1408() { # npm1408 <command>  -> runs it in the fixture, offline, with HOME emptied
+    ( cd "$FX1408" && HOME="$FX1408/home" NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false \
+        NPM_CONFIG_CACHE="$FX1408/npm-cache" bash -c "$1" ) 2>&1
+  }
+  cmd1408="until test -d .; do sleep 1; done; cd '$FX1408' && npx probe1408 --version"
+  # The control: under this HOME rtk really does make the bad rewrite, and running it really does
+  # lose the program and its exit code, so a green below means the hook stopped it (L159).
+  ctl1408="$(HOME="$FX1408/home" rtk rewrite "$cmd1408" 2>/dev/null)"
+  ctl1408_out="$(npm1408 "$ctl1408")"; ctl1408_rc=$?
+  if [ -z "$ctl1408" ] || grep -q 'probe1408 ran' <<< "$ctl1408_out"; then
+    echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer routes the #1408 npx elsewhere (rewrite was [$ctl1408], exit $ctl1408_rc), so the end to end check below proves less than it did."
+  fi
+  payload "$cmd1408"
+  sub1408="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+  ran1408="${sub1408:-$cmd1408}"
+  out1408e="$(npm1408 "$ran1408")"; rc1408=$?
+  grep -q 'probe1408 ran with: --version' <<< "$out1408e" \
+    && check "#1408 the npx that actually runs is the program the command named" ok \
+    || check "#1408 the npx that actually runs is the program the command named" "ran [$ran1408]: $out1408e"
+  [ "$rc1408" -eq 3 ] \
+    && check "#1408 and its failure keeps its own non zero exit code" ok \
+    || check "#1408 and its failure keeps its own non zero exit code" "ran [$ran1408], exited $rc1408: $out1408e"
+  # The runner rule and the tsc refusal against the real rtk: each source IS rewritten by it to the
+  # destination named (the control), and the hook passes it through.
+  for pair1408e in 'npx prisma migrate status|rtk prisma migrate status' 'tsc --noEmit|rtk tsc --noEmit' 'pnpm tsc --noEmit|rtk tsc --noEmit'; do
+    src1408e="${pair1408e%%|*}"; want1408e="${pair1408e#*|}"
+    ctl1408e="$(HOME="$FX1408/home" rtk rewrite "$src1408e" 2>/dev/null)"
+    [ "$ctl1408e" = "$want1408e" ] \
+      || echo "note: this rtk now rewrites [$src1408e] to [$ctl1408e], so its check below proves less than it did."
+    payload "$src1408e"
+    sub1408e="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+    [ -z "$sub1408e" ] \
+      && check "#1408 the real rtk's rewrite of [$src1408e] is refused" ok \
+      || check "#1408 the real rtk's rewrite of [$src1408e] is refused" "got [$sub1408e]"
+  done
+  # The hook side control: prisma named with no runner is still rewritten by the real rtk.
+  payload 'prisma migrate status'
+  sub1408b="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+  [ "$sub1408b" = 'rtk prisma migrate status' ] \
+    && check "#1408 and prisma with no runner is still rewritten by the real rtk" ok \
+    || check "#1408 and prisma with no runner is still rewritten by the real rtk" "got [$sub1408b]"
 fi
 
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
