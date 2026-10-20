@@ -60,6 +60,13 @@ elif mode == "titles":
     print("|".join(",".join(g.flag_values(a, "--title", "-t")) for a, _ in creates))
 elif mode == "env":
     print("|".join(",".join(e) for _, e in creates))
+elif mode == "bodyfile":
+    # Where each create's --body-file resolves, starting in /start with only HOME=/h set (#1416).
+    out = []
+    for a, _, place in g.scan_creates_in_context(cmd, "/start", {"HOME": "/h"}):
+        path, why = g.resolve_path(g.flag_values(a, "--body-file", "-F")[0], place)
+        out.append(path or "NO:" + why)
+    print("|".join(out))
 PY
 }
 
@@ -195,6 +202,23 @@ case "$(ask count 'gh issue create --title "unbalanced')" in
 esac
 [ "$(ask count '')" = "0" ] \
   && check "an empty command is zero creates, not unreadable" ok || check "an empty command is zero creates, not unreadable" "got $(ask count '')"
+
+# ---------------------------------------------------------------------------
+# Where each create runs (claude-config#1416): the variables and directory the command sets before
+# it, so a --body-file is read the way the shell will read it.
+# ---------------------------------------------------------------------------
+bf() { # bf <description> <expected> <command>
+  local got; got="$(ask bodyfile "$3")"
+  [ "$got" = "$2" ] && check "$1" ok || check "$1" "got [$got], expected [$2]"
+}
+bf "a relative path is read against the starting directory" "/start/b.md" 'gh issue create --body-file b.md'
+bf "a cd moves it, relative to where the command is" "/start/x/b.md" 'cd x && gh issue create --body-file b.md'
+bf "a variable set earlier in the command is followed" "/v/b.md" 'D=/v; gh issue create --body-file "$D/b.md"'
+bf "each create sees only what came before it" '/start/b.md|/v/b.md' 'gh issue create --body-file "b.md"; D=/v; gh issue create -F "$D/b.md"'
+bf "a subshell's assignment and cd end with it" "NO:\$D is not set in this command (a variable set in an earlier Bash call is gone by this one)" '(D=/v; cd /w); gh issue create --body-file "$D/b.md"'
+bf "home comes from the environment given" "/h/b.md" 'gh issue create --body-file ~/b.md'
+bf "a substitution cannot be worked out" "NO:it holds an expansion the gate cannot work out without running the command" 'gh issue create --body-file "$(pwd)/b.md"'
+bf "cd - leaves a relative path unresolved" "NO:it is relative, and the gate cannot tell which directory the command is in" 'cd - && gh issue create --body-file b.md'
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
