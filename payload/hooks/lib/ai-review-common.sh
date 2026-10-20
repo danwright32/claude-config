@@ -71,6 +71,12 @@ sys.stdout.write("\x1f".join([s(d.get("cwd")), s(d.get("session_id")), s(r.get("
 ' 2>/dev/null
 }
 
+# The words that open the minor findings of a lessons review, which are advisory and need no fix
+# round (claude-config#1356). Defined once here: lib/pr-review.sh writes them, and the push and merge
+# gates (mt_review_allowed in lib/merge-target.sh) find them in an allow, to hand the advisory to the
+# session and to Dan rather than print it where neither sees it.
+AR_ADVISORY_LEAD="Advisory, minor findings:"
+
 # A finished review's text, capped (claude-config#560). A hook's output reaches the session through
 # additionalContext or a refusal reason, and anything past 10,000 characters is cut by the platform
 # with nothing said, so a review with two hundred findings would arrive as its first forty and read

@@ -21,6 +21,9 @@
 # HEAD, which can be a different commit (L179). Refuses when the pull request cannot be found:
 # merging something no review has read is what this gate exists to stop (L42).
 #
+# Only minor findings do not hold a merge (claude-config#1356): they are handed to the session and to
+# Dan as advisory, through mt_review_allowed in lib/merge-target.sh.
+#
 # Override, one command, visible: SKIP_PR_REVIEW=1 on the merge. Explain to Dan first.
 
 set -uo pipefail
@@ -113,5 +116,6 @@ case "$pr_number" in ''|*[!0-9]*) ;; *) args+=(--pr "$pr_number") ;; esac
 # `GH_TOKEN=$(gh auth token -u x) gh pr merge` is found and quotes around it are removed.
 read_key="$(mt_presented_read_key "$command" mt_runs_merge)"
 out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
-[ "$rc" -eq 0 ] && { printf 'pr-review-gate: %s\n' "$out"; exit 0; }
+# An allow with minor findings hands them over as advisory, to the session and to Dan (#1356).
+[ "$rc" -eq 0 ] && mt_review_allowed pr-review-gate "$out"
 refuse "$out"

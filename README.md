@@ -606,6 +606,21 @@ with no review gets one started by the gate. A repo whose own script merges insi
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
 
+Minor findings are advisory (claude-config#1356). In a judged sample of 60 round 1 findings, those
+marked major were real 7 times in 10 and those marked minor 26 times in 50, and 11 of the 12 wrong
+ones were minor, yet each cost a fix, a review and a push. So, as Dan decided on 2026-10-19, a review
+whose only new findings are minor allows the push or merge, with no read key, and prints them under
+`Advisory, minor findings:`. Any major or critical finding still refuses with its read key as
+before; the refusal counts and lists only those, then the minor ones apart under the same heading,
+and the key covers the review as a whole. A finding is minor only when its line ends with the
+format's own `[severity: minor]`, or with that followed only by the runner's own
+`[review harness: not placed, ...]` mark (#1357): a missing, unknown or misplaced severity counts as major, and so
+does any finding the review records that no minor line accounts for. On an allow carrying the
+advisory, the push and merge gates hand it over as JSON (`mt_review_allowed` in
+`lib/merge-target.sh`), as additionalContext for the session and a systemMessage for Dan, because a
+PreToolUse hook's plain output on an allow reaches neither; `merge-when-ready.sh` prints it in its
+log. The stored review is unchanged, so the report and every later review still see the minor ones.
+
 Every gate judges ONE repository, and every merge gate ONE pull request, per command, so a command
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one

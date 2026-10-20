@@ -892,6 +892,34 @@ check_eq "#1351 control: the real gate sends it back without --delete-branch too
 check "#1351 control: with the rerun hint" "merge-when-ready.sh 7 --repo acme/widget --squash ." "$out"
 check_not "#1351 which does not add --delete-branch the helper was not asked for" "--delete-branch" "$out"
 
+# =================================================================================================
+# 14. Minor findings are advisory (claude-config#1356): a review with only minor ones allows, so
+#     the helper merges, and the advisory the review printed is shown in its log, once. The review
+#     gate hands an advisory allow back as JSON with no permission decision, which is not a refusal.
+# =================================================================================================
+ADV='Advisory, minor findings: the lessons review finished with 1 minor finding, which does not stop the merge and needs no fix round.
+App/x.swift:1: the comment says seconds (L118). Should be: milliseconds. [severity: minor]'
+cat > "$STUBS/pr-review-advisory.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$ADV'; exit 0 ;;
+esac
+EOS
+cat > "$STUBS/review-gate-advisory.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/review-gate-payloads"; printf '\n' >> "$ST/review-gate-payloads"
+jq -nc '{systemMessage: "pr-review-gate: Advisory, minor findings", hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: "pr-review-gate: Advisory, minor findings"}}'
+exit 0
+EOS
+chmod +x "$STUBS/pr-review-advisory.sh" "$STUBS/review-gate-advisory.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-advisory.sh" MWR_REVIEW_GATE="$STUBS/review-gate-advisory.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1356 a review with only minor findings lets the helper merge" "0" "$rc"
+check_eq "#1356 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+check "#1356 the advisory is shown in its log" "App/x.swift:1: the comment says seconds" "$out"
+check_eq "#1356 once" "1" "$(grep -c 'App/x.swift:1: the comment says seconds' <<<"$out")"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
