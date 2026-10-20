@@ -99,11 +99,18 @@ export function frameUrl(base, id) {
 }
 
 /** Runs the checks for one frame in the page, each in its own try, so one throwing is reported by
- * name and the rest still run. A page the checks could not be loaded into is one result that threw. */
+ * name and the rest still run. A page the checks could not be loaded into is one result that threw.
+ *
+ * The checks file is evaluated as source through the browser's own tooling, never added as an inline
+ * script tag, which a page served with script-src 'self' refuses (PET's are, claude-config#1411). The
+ * page's policy is left switched on: a context made with bypassCSP also draws what the policy refuses
+ * (an inline style under style-src 'self', measured), so the picture would no longer be what a browser
+ * shows. The newline ends a last line comment, and void 0 keeps the file's last value (the checks,
+ * functions and all) from being sent back. */
 export async function runChecks(page, checksSrc, frame, fixture) {
   if (checksSrc === null) return [];
   try {
-    await page.addScriptTag({ content: checksSrc });
+    await page.evaluate(`${checksSrc}\n;void 0`);
     return await page.evaluate(({ frame, fixture }) => {
       const all = window.DESIGN_CHECKS;
       if (!Array.isArray(all)) return [{ id: "checks", ok: false, detail: "the checks file sets no window.DESIGN_CHECKS list", threw: true }];
