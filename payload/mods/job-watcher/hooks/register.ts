@@ -469,8 +469,9 @@ const lookAll = async ($: EngineInterface, live: Live) => {
 // Whether a job has ended. A traced job by its process group; an untraced one is traced again, and
 // is ended once nothing holds its output file open. Unknown is never ended: Claude is told once
 // that whether it has ended is unknown, never left silent (lessons review of #634). A look given up
-// meanwhile writes and says nothing (#706).
-const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live): Promise<boolean> => {
+// meanwhile writes and says nothing (#706). quiet: a check before a job is named (#1387) leaves that
+// telling to the look, so a job just started is never said to be untraceable before a look has tried.
+const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet = false): Promise<boolean> => {
   if (job.pgid !== null) return hasEnded($, job.pgid)
   const groups = await groupsHolding($, job.outputPath)
   if (groups === 'nobody') return true
@@ -490,7 +491,7 @@ const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live): Promis
   // removes a task's output with the task, so the entry is stale, and was shown stuck for an hour on
   // 2026-10-05 (#784). Only a stat that says the file does not exist counts, never a failed one.
   if (await isGone($, job.outputPath)) return true
-  if (live() && !w.toldUntraced) {
+  if (live() && !quiet && !w.toldUntraced) {
     w.toldUntraced = true
     say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. Stop it with TaskStop if it is no longer needed.`)
   }
@@ -614,6 +615,31 @@ const unkeptReminder = (loop: string | undefined): string | undefined => {
   if (!unkept.length) return undefined
   const named = unkept.map(j => `${j.id} (${shortCommand(j.command)}${j.owner && loop === undefined ? `, left by agent ${j.owner.name}` : ''})`).join(', ')
   return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
+}
+// #1387: a job is measured before it is named or held, never taken as running on the record alone.
+// The record learns of an end only from the minute's look or from Claude Code's end notice reaching
+// a prompt this conversation submits; a subagent's notice reaches it inside its own turn instead,
+// and a TaskStop answered "not running" is an error result, so on 2026-10-20 a merge job that had
+// exited 0 was named as running, and could not be stopped, until the next look. Each job is read by
+// the process group it traced (L1011), the same `ended` the look uses: one ps a job, and only for the
+// jobs about to be named. Only an end measured is dropped; a ps that cannot answer keeps the job.
+// Claude Code reports the end itself, so the watcher says nothing of it. A job the watcher's own stop
+// is under way on, or has been answered for after its look was given up, is the look's to say and
+// drop (#706), so it is left to it.
+const stillRunning = async ($: EngineInterface, job: Job): Promise<boolean> => {
+  if (stopping.has(job.id) || lateStops.has(job.id)) return true
+  try {
+    if (!(await ended($, job, watchOf(job), () => true, true))) return true
+  } catch (err) {
+    $.ui.log(`job-watcher: could not check whether background job ${job.id} has ended: ${message(err)}`, { to: 'debug' })
+    return true
+  }
+  if (jobs.has(job.id)) await forget($, job.id)
+  return false
+}
+// Every unkept job the reminder to this loop would name, measured first.
+const dropEnded = async ($: EngineInterface, loop: string | undefined) => {
+  for (const job of [...jobs.values()]) if (!job.kept && loopOf(job.owner) === loop) await stillRunning($, job)
 }
 const noteReminded = (id: unknown) => {
   if (typeof id !== 'string') return
@@ -978,6 +1004,7 @@ export const register: Register = on => {
     jobs.set(id, { ...current, kept })
     await publishSafely($)
     const said = take(e.agentId)
+    await dropEnded($, e.agentId)
     const reminder = unkeptReminder(e.agentId)
     if (reminder) {
       said.push(reminder)
@@ -1046,6 +1073,7 @@ export const register: Register = on => {
     // context, so its reminder goes into its row as it is appended (below).
     if (result.deny !== undefined) return result
     const said = result.isError ? [] : take(agentId)
+    await dropEnded($, agentId)
     const reminder = unkeptReminder(agentId)
     if (reminder) {
       said.push(reminder)
@@ -1079,6 +1107,15 @@ export const register: Register = on => {
         say(undefined, `The background job watcher could not read the list of background work Claude Code sent with agent ${await agentName($, agent)}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`)
       }
     }
+    // #1387: a Bash job on the watcher's record whose process group has ended holds nothing, listed
+    // or not; it is dropped from the record too. A Monitor or an agent, never on the record, is
+    // taken as Claude Code lists it.
+    const measured: InFlight[] = []
+    for (const t of held) {
+      const job = jobs.get(t.id)
+      if (!job || (await stillRunning($, job))) measured.push(t)
+    }
+    held = measured
     if (!held.length) {
       stopRefusals.delete(agent)
       return next(e)
@@ -1148,6 +1185,7 @@ export const register: Register = on => {
       return r.type === 'tool_result' && typeof r.tool_use_id === 'string' ? [r.tool_use_id] : []
     })
     const unreminded = ids.filter(id => !reminded.delete(id))
+    if (unreminded.length) await dropEnded($, e.agentId)
     const reminder = unreminded.length ? unkeptReminder(e.agentId) : undefined
     if (!reminder) return next(e)
     return next({ ...e, message: { ...e.message, content: [...e.message.content, { type: 'text', text: reminder }] } })
