@@ -70,6 +70,10 @@ pull(){   # $1 = home  $2 = repo  $3 = rtk binary (SYNC_RTK_BIN) -> output in OU
 status(){   # $1 = home  $2 = repo  $3 = rtk binary
   CLAUDE_HOME="$1" SYNC_REPO="$2" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude" SYNC_NO_NOTIFY=1 SYNC_RTK_BIN="$3" bash "$SCRIPT" status 2>&1
 }
+# GNU stat first: on Linux `stat -f` reads the FILE SYSTEM and prints its own lines before failing on
+# the format, so trying the BSD form first and falling back mixes both answers. macOS refuses `-c`
+# outright with nothing on stdout, so the order is safe there.
+mtime_of(){ stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 cfg_dir(){ printf '%s/%s/Library/Application Support/rtk' "$WORK" "$1"; }
 
 # ---- 1. A FRESH MAC: rtk installed, no config file yet. The pull writes one holding the list. ----
@@ -90,7 +94,7 @@ check "fresh Mac: nothing about rtk lands inside the Claude config" [ -z "$(find
 touch -t 202001010000 "$C1"; sum1="$(cksum < "$C1")"
 pull "$H1" "$R1" "$WORK/stub1/rtk"; out1b="$OUT"
 check "fresh Mac, second pull: the file is byte for byte" [ "$(cksum < "$C1")" = "$sum1" ]
-check "fresh Mac, second pull: and not rewritten" [ "$(stat -f %m "$C1" 2>/dev/null || stat -c %Y "$C1")" -lt 1600000000 ]
+check "fresh Mac, second pull: and not rewritten" [ "$(mtime_of "$C1")" -lt 1600000000 ]
 check "fresh Mac, second pull: claims to have written nothing to rtk" lacks "$out1b" "rtk config"
 
 # ---- 2. AN EXISTING CONFIG holding other keys and a different list: only the list changes. ----
