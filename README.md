@@ -1797,6 +1797,21 @@ a Claude agent's. Each is named with the reason it was kept. `tools/shipped-work
 locks the same way, through `payload/hooks/lib/agent-lock.sh`, so the two cleanups agree. Without
 `--remove` the check reports and changes nothing, locks included.
 
+## A build scored against its settled design
+
+A feature built from a settled design (the design rounds skill's deliverable) is done when it
+matches that design, not when its issues are closed (claude-config#1364). The design match score,
+`payload/skills/design-rounds/score/design_score.py`, reads a capture a platform adapter leaves (the
+design's frames and the build drawn from the same fixture, as PNGs, and each decision's automated
+check result) and gives two halves: decisions met out of the decision map's total, and the share of
+pixels that match per frame within 8 levels a channel. Both must be 100%. A deliberate difference
+is settled by a new design round or by an exception Dan approves, recorded in the design file in his
+words, which the score skips and lists every time. It writes `score.json`, one format for web and
+SwiftUI, and a diff picture per frame, and exits 0 matched, 1 not matched yet, 2 no score, so an
+unmeasured build never reads as done. It needs only python3's standard library (its own PNG reader,
+`pngio.py`, is checked against Pillow's reading of a real Chrome screenshot). The design rounds
+skill describes the blocks the design file carries; `test-design-score.sh` holds it.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
