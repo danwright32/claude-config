@@ -94,7 +94,12 @@ export async function runChecks(page, checksSrc, frame, fixture) {
       return all.filter((c) => Array.isArray(c.frames) && c.frames.includes(frame)).map((c) => {
         try {
           const r = c.check(document, { frame, fixture });
-          return { id: c.id, ok: r && r.ok === true, detail: String((r && r.detail) || "") };
+          // A check that answers nothing measured nothing: it is reported as having thrown, which
+          // the score reads as no score, rather than as a failure or a malformed entry.
+          if (!r || typeof r.ok !== "boolean") {
+            return { id: c.id, ok: false, detail: "the check answered no {ok, detail}", threw: true };
+          }
+          return { id: c.id, ok: r.ok, detail: String(r.detail || "") };
         } catch (e) {
           return { id: c.id, ok: false, detail: String(e && e.message ? e.message : e), threw: true };
         }

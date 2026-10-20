@@ -122,6 +122,10 @@ else
   if [ "$rc" -eq 1 ] && said "not matched yet" "$T/web-off.log" && said "see f1-diff.png" "$T/web-off.log"; then ok; else bad "the same build with its card drawn 19 levels off scores below 100%, naming the frame (rc=$rc)" "$(cat "$T/web-off.log")"; fi
   run_web "$T/web-gone" --build "http://127.0.0.1:9/nothing"; rc=$?
   if [ "$rc" -eq 2 ] && said "could not be drawn" "$T/web-gone.log"; then ok; else bad "a build that cannot be loaded is no score, exit 2 (rc=$rc)" "$(cat "$T/web-gone.log")"; fi
+  # A check that answers nothing measured nothing: no score, saying so, never a malformed entry.
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function () {}}];" > "$T/silent.checks.js"
+  run_web "$T/web-silent" --checks "$T/silent.checks.js"; rc=$?
+  if [ "$rc" -eq 2 ] && said "answered no {ok, detail}" "$T/web-silent.log"; then ok; else bad "a check that answers nothing is no score, said as such (rc=$rc)" "$(cat "$T/web-silent.log")"; fi
 fi
 
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
