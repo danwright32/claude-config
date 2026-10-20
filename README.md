@@ -2080,6 +2080,21 @@ either winning. `test-make-switcher.sh`, `test-make-settled.sh`, `test-design-sc
 `test-score-adapters.sh` (an email scored end to end in Chrome, at 100% and then with its heading
 changed) hold it.
 
+**A mod's design is settled in the shared terminal** (#1413). A Claude Code mod's rounds are drawn in
+the shared terminal (`"screen": "terminal"`), which is itself a mod's chrome, and so is its settled
+design: `make-settled.py` takes the same `"screen"`, draws each frame as the switcher draws the
+terminal (the terminal's script and stylesheet ahead of the round's, through one reader of `screens/`
+in `chrome_frame.py` that both tools call), the terminal window alone at the size its builder gives it,
+and records `"kind": "terminal"` in the `design-frames` block. The kinds a frames block may name are
+`FRAME_KINDS` in `design_file.py`: the three no page kinds and the shared screens in `SCREEN_KINDS`.
+The score scores a terminal design's decision half as it does any other, but its picture half is
+unmeasured: nothing yet captures a BUILT mod screen in the form the design's terminal is drawn in
+(#1414), so the score says so in its report and is no score (exit 2), which the close gate refuses, as
+it refuses every unmeasured score. A score file claiming a terminal design's pictures were measured is
+refused as not written by the score. `test-make-settled.sh` (each frame drawn in Chrome at its own
+width), `test-design-score.sh`, `test-design-score-gate.sh` and `test-score-adapters.sh` (a terminal
+design drawn by the web adapter and scored) hold it.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
