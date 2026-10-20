@@ -31,10 +31,22 @@ trap cleanup EXIT
 
 pass=0
 fail=0
+unmeasured=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '  output: %s\n' "$2"; return 0; }
+# A guard that answers 9 could not open a connection to the read only proxy for a reason on this
+# Mac (out of local ports or file handles, #1370), so it learned nothing about the proxy. When a
+# check wanted some other answer, that check is UNMEASURED, never a FAIL (L411), and the suite says
+# so in the line run-all-tests.sh reads. An answer naming the error the suite injects itself is
+# never excused: those checks are judged on it.
+busy_machine() { # busy_machine <got rc> <got output>
+  [ "$1" -eq 9 ] && grep -q 'this Mac could not open a connection' <<< "$2" && ! grep -q 'injected by test-bug-bash.sh' <<< "$2"
+}
 expect() { # expect <description> <want rc> <want words> <got rc> <got output>
-  if [ "$4" -eq "$2" ] && grep -qi -- "$3" <<< "$5"; then ok; else bad "$1 (want rc $2, got $4)" "$5"; fi
+  if [ "$4" -eq "$2" ] && grep -qi -- "$3" <<< "$5"; then ok
+  elif [ "$2" -ne 9 ] && busy_machine "$4" "$5"; then
+    unmeasured=$((unmeasured + 1)); echo "UNMEASURED: $1: this Mac could not open a connection to the read only proxy"
+  else bad "$1 (want rc $2, got $4)" "$5"; fi
 }
 
 # ---------------------------------------------------------------- read-only-proxy.js
@@ -249,6 +261,37 @@ PY
   openssl x509 -checkend $((7 * 86400)) -noout -in "$PROXY_CA" >/dev/null && ok || bad "the proxy's certificate authority is good for at least a week"
 fi
 
+# A machine out of local ports (#1370), stood in for: every connection a node process opens to
+# STUB_LOCAL_PORT fails with STUB_LOCAL_CODE (EADDRNOTAVAIL unless
+# named), STUB_LOCAL_TIMES times (every time unless named), the way the kernel refuses a connect
+# when no local port is free. The error says it was injected here, so the suite never excuses it as
+# a busy machine. Every wait the launcher's retry asks for is recorded and returned at once, never
+# slept (L524).
+cat > "$TMP/local-stub.js" <<'JS'
+const net = require('net')
+const fs = require('fs')
+const port = Number(process.env.STUB_LOCAL_PORT)
+const code = process.env.STUB_LOCAL_CODE || 'EADDRNOTAVAIL'
+let times = process.env.STUB_LOCAL_TIMES ? Number(process.env.STUB_LOCAL_TIMES) : Infinity
+const note = line => process.env.STUB_LOCAL_LOG && fs.appendFileSync(process.env.STUB_LOCAL_LOG, line + '\n')
+const real = net.Socket.prototype.connect
+net.Socket.prototype.connect = function (...args) {
+  const first = Array.isArray(args[0]) ? args[0][0] : args[0]
+  const to = Number(first && typeof first === 'object' ? first.port : first)
+  if (to !== port) return real.apply(this, args)
+  if (times <= 0) return real.apply(this, args)
+  times--
+  note('FAILED ' + code)
+  const err = Object.assign(new Error(`connect ${code} 127.0.0.1:${port} - Local (injected by test-bug-bash.sh)`), { code, syscall: 'connect', address: '127.0.0.1', port })
+  process.nextTick(() => this.destroy(err))
+  return this
+}
+if (process.env.STUB_LAUNCHER) {
+  require(process.env.STUB_LAUNCHER).sleep = ms => { note('SLEPT ' + ms); return Promise.resolve() }
+}
+JS
+localenv() { NODE_OPTIONS="--require $TMP/local-stub.js" STUB_LAUNCHER="$DIR/explorer-browser.js" STUB_LOCAL_LOG="$TMP/local.log" "$@"; }
+
 # ---------------------------------------------------------------- target-guard.sh
 # Three fixture sites under one server: a production build, a Next dev server, a Vite dev server.
 mkdir -p "$TMP/www/prod" "$TMP/www/nextdev" "$TMP/www/vitedev/@vite" "$TMP/www/wpdev"
@@ -330,6 +373,42 @@ else
   grep -q '`READ-ONLY <url> via <proxy>`' "$GUARD" && ok || bad "target-guard.sh's header names the READ-ONLY line it prints"
   out="$(BUG_BASH_PROXY= bash "$GUARD" --read-only "$BASE/prod/" 2>&1)"; rc=$?
   expect "read only against a local build with no proxy is refused" 7 "no read only proxy" "$rc" "$out"
+
+  # A Mac out of local ports cannot open a connection to the proxy at all (#1370). That says
+  # nothing about the proxy, so the guard neither passes nor reports it missing: it retries a few
+  # times, then refuses with its own answer, 9, naming the error and that the proxy was not judged.
+  pport="${PROXY##*:}"
+  : > "$TMP/local.log"
+  out="$(STUB_LOCAL_PORT="$pport" localenv bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
+  expect "a proxy this Mac could not open a connection to is refused as unmeasured, not missing" 9 "this Mac could not open a connection.*EADDRNOTAVAIL" "$rc" "$out"
+  ! grep -qi 'start it with\|start read-only-proxy\|answers as the bug bash' <<< "$out" && ok \
+    || bad "a busy Mac is not told to start a proxy that may well be running" "$out"
+  [ "$(grep -c '^FAILED' "$TMP/local.log")" = 4 ] && [ "$(grep '^SLEPT' "$TMP/local.log" | tr '\n' ' ')" = "SLEPT 100 SLEPT 400 SLEPT 1600 " ] && ok \
+    || bad "the proxy check is tried four times, waiting through the injectable sleep between tries" "$(cat "$TMP/local.log")"
+  # A shortage that clears within those tries is no refusal at all.
+  : > "$TMP/local.log"
+  out="$(STUB_LOCAL_PORT="$pport" STUB_LOCAL_TIMES=2 localenv bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
+  expect "a shortage of local ports that clears within the retries lets the run start" 0 "^READ-ONLY .* via $PROXY" "$rc" "$out"
+  # The write probe meets the same shortage: it is unmeasured too, never read as a proxy that let a
+  # write through. Driven on its own, since inside the guard it rides the health check's kept alive
+  # connection and opens none of its own.
+  : > "$TMP/local.log"
+  out="$(STUB_LOCAL_PORT="$pport" localenv node -e 'require(process.argv[1]).proxyRefusesWrite(process.argv[2]).then(r => console.log("refuses=" + r), e => console.log("local=" + !!e.local + " " + e.message))' "$DIR/explorer-browser.js" "$PROXY" 2>&1)"
+  grep -q '^local=true .*this Mac could not open a connection.*EADDRNOTAVAIL' <<< "$out" && [ "$(grep -c '^SLEPT' "$TMP/local.log")" = 3 ] && ok \
+    || bad "a write probe this Mac could not send is unmeasured after its retries, not a proxy that let a write through" "$out $(cat "$TMP/local.log")"
+  out="$(node -e 'require(process.argv[1]).proxyRefusesWrite(process.argv[2]).then(r => console.log("refuses=" + r), e => console.log("threw " + e.message))' "$DIR/explorer-browser.js" "$PROXY" 2>&1)"
+  [ "$out" = "refuses=true" ] && ok || bad "the write probe sees the proxy refuse a write" "$out"
+  out="$(node -e 'require(process.argv[1]).proxyRefusesWrite(process.argv[2]).then(r => console.log("refuses=" + r), e => console.log("threw " + e.message))' "$DIR/explorer-browser.js" "$IMPOSTOR" 2>&1)"
+  [ "$out" = "refuses=false" ] && ok || bad "the write probe sees a server that took a write as not refusing it" "$out"
+  # Out of file handles is the same kind of local reason.
+  out="$(STUB_LOCAL_PORT="$pport" STUB_LOCAL_CODE=EMFILE localenv bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
+  expect "a Mac out of file handles is unmeasured too" 9 "this Mac could not open a connection.*EMFILE" "$rc" "$out"
+  # Control, the same stand in shifted the other way (L497): a refused connection means nothing is
+  # listening, so it is still a missing proxy, at once, with no retry.
+  : > "$TMP/local.log"
+  out="$(STUB_LOCAL_PORT="$pport" STUB_LOCAL_CODE=ECONNREFUSED localenv bash "$GUARD" --read-only --proxy "$PROXY" "$BASE/prod/" 2>&1)"; rc=$?
+  expect "a refused connection still reports the proxy missing" 7 "answers as the bug bash read only proxy" "$rc" "$out"
+  ! grep -q '^SLEPT' "$TMP/local.log" && ok || bad "a refused connection is not retried" "$(cat "$TMP/local.log")"
 
 
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
@@ -1029,6 +1108,15 @@ out="$(proxied_launch "$PLAIN")"
 grep -q '^threw launched=0 .*not as the bug bash read only proxy' <<< "$out" && ok || bad "a read only browser whose proxy is some other server is refused before it launches" "$out"
 out="$(proxied_launch "$PROXY")"
 grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser whose proxy answers as itself launches" "$out"
+# A Mac out of local ports is not told its proxy is missing either (#1370): the launcher retries,
+# then refuses before launching, saying the proxy was not judged.
+: > "$TMP/local.log"
+out="$(STUB_LOCAL_PORT="${PROXY##*:}" localenv proxied_launch "$PROXY")"
+grep -q '^threw launched=0 .*this Mac could not open a connection.*EADDRNOTAVAIL' <<< "$out" && ! grep -q 'not answering' <<< "$out" && ok \
+  || bad "a read only browser this Mac could not connect to its proxy for is refused as unmeasured, not missing" "$out"
+: > "$TMP/local.log"
+out="$(STUB_LOCAL_PORT="${PROXY##*:}" STUB_LOCAL_TIMES=1 localenv proxied_launch "$PROXY")"
+grep -q '^launched=1$' <<< "$out" && ok || bad "a read only browser launches once a passing shortage of local ports clears" "$out"
 out="$(node -e 'const m = require(process.argv[1]); console.log(typeof m.MARK, typeof m.HEALTH)' "$LAUNCHER" 2>&1)"
 [ "$out" = "string string" ] && ! grep -Eq "^const (MARK|HEALTH) =" "$PROXY_JS" && ok \
   || bad "the proxy takes its health path and answer from explorer-browser.js, never a copy of its own" "$out"
@@ -1062,6 +1150,16 @@ if [ -n "${PROXY_PID:-}" ]; then
   out="$(cat "$TMP/second.out")"
   [ "$rc" = 3 ] && grep -q "already running" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
     || bad "a second proxy on a live proxy's directory refuses and leaves its proxy.json (rc $rc)" "$out"
+  # On a Mac out of local ports the second proxy cannot ask the live one whether it is up (#1370).
+  # Taking that for a dead proxy would remove the live one's proxy.json and start beside it, so it
+  # refuses instead, saying why, and leaves the file alone.
+  : > "$TMP/local.log"
+  STUB_LOCAL_PORT="${PROXY##*:}" localenv node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/second.out" 2>&1 & second=$!
+  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
+  out="$(cat "$TMP/second.out")"
+  [ "$rc" = 4 ] && grep -q "this Mac could not open a connection.*EADDRNOTAVAIL" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
+    || bad "a second proxy that cannot reach the live one on a busy Mac refuses and leaves its proxy.json (rc $rc)" "$out"
 fi
 # A left over proxy.json whose pid now belongs to some other live process (here, this suite's own
 # shell) names no proxy: nothing answers at its address, so it is stale, and a new proxy starts.
@@ -1094,6 +1192,10 @@ grep -q '^name: bug-bash$' <<< "$fm" && ok || bad "SKILL.md is named bug-bash"
 grep -q '^disable-model-invocation: true$' <<< "$fm" && ok || bad "SKILL.md is user invoked only, since it dispatches paid agents"
 grep -q 'bash ~/.claude/skills/bug-bash/target-guard.sh' "$SKILL" && ok || bad "SKILL.md runs target-guard.sh from its installed path"
 grep -q 'python3 ~/.claude/skills/bug-bash/report.py' "$SKILL" && ok || bad "SKILL.md builds the report with report.py from its installed path"
+# The guard's 9, a Mac too busy to check the proxy, is said in the skill as a wait and a rerun,
+# never a proxy to restart (#1370), and in the guard's own header beside its other answers.
+grep -qi 'exit 9' "$SKILL" && grep -q '9 a read only run whose proxy this Mac could not open a connection to' "$GUARD" && ok \
+  || bad "SKILL.md and the guard's header both say what the guard's 9 means"
 # Every rejection reason the skill names is one report.py accepts, and the reverse (L89).
 skill_reasons="$(grep -o '`[a-z][a-z-]*`' "$SKILL" | tr -d '`' | sort -u)"
 py_reasons="$(python3 -c 'import importlib.util,sys; s=importlib.util.spec_from_file_location("r",sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print("\n".join(sorted(m.REJECT_REASONS)))' "$REPORT")"
@@ -1101,7 +1203,32 @@ missing=""
 while IFS= read -r r; do grep -qx -- "$r" <<< "$skill_reasons" || missing="$missing $r"; done <<< "$py_reasons"
 [ -z "$missing" ] && ok || bad "SKILL.md names every rejection reason report.py accepts (missing:$missing)"
 
+# ---------------------------------------------------------------- a busy Mac is unmeasured, not red
+# The suite's own reading of the guard's 9 (#1370, L411), driven in a subshell so its counts stay
+# its own: a busy Mac's 9 is unmeasured; the error the suite injects, and any other wrong answer,
+# still fail.
+busy_out='target-guard: could not check the read only proxy at http://127.0.0.1:1: this Mac could not open a connection to it (connect EADDRNOTAVAIL 127.0.0.1:1 - Local (0.0.0.0:0))'
+out="$(pass=0; fail=0; unmeasured=0; expect "x" 0 "^READ-ONLY" 9 "$busy_out" >/dev/null; echo "$pass $fail $unmeasured")"
+[ "$out" = "0 0 1" ] && ok || bad "a check a busy Mac answered 9 is counted unmeasured, neither pass nor fail" "$out"
+out="$(pass=0; fail=0; unmeasured=0; expect "x" 0 "^READ-ONLY" 9 "$busy_out (injected by test-bug-bash.sh)" >/dev/null; echo "$pass $fail $unmeasured")"
+[ "$out" = "0 1 0" ] && ok || bad "the error the suite injects is never excused as a busy Mac" "$out"
+out="$(pass=0; fail=0; unmeasured=0; expect "x" 0 "^READ-ONLY" 7 "$busy_out" >/dev/null; echo "$pass $fail $unmeasured")"
+[ "$out" = "0 1 0" ] && ok || bad "only the guard's own 9 is read as a busy Mac" "$out"
+# The launcher's reading of an error is checked against one the kernel really raised: a connection
+# from an address this Mac does not have (192.0.2.1 is reserved for documentation) fails with the
+# same EADDRNOTAVAIL a Mac out of ports gives, and a port nothing listens on is refused.
+out="$(node -e '
+const m = require(process.argv[1])
+const net = require("net")
+const one = o => new Promise(r => net.connect(o).on("error", e => r(e.code + "=" + m.isLocalConnectError(e))).on("connect", function () { this.destroy(); r("connected") }))
+Promise.all([one({ host: "127.0.0.1", port: Number(process.argv[2]), localAddress: "192.0.2.1" }), one({ host: "127.0.0.1", port: Number(process.argv[2]) })]).then(a => console.log(a.join(" ")))
+' "$DIR/explorer-browser.js" "$dead_port" 2>&1)"
+[ "$out" = "EADDRNOTAVAIL=true ECONNREFUSED=false" ] && ok || bad "a real EADDRNOTAVAIL reads as a local reason and a refused connection does not" "$out"
+
 echo
-echo "passed: $pass, failed: $fail"
+echo "passed: $pass, failed: $fail, unmeasured: $unmeasured"
+if [ "$unmeasured" -gt 0 ]; then
+  printf 'SUITE-UNMEASURED %s target guard checks could not reach the read only proxy: this Mac was out of local ports or file handles\n' "$unmeasured"
+fi
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
