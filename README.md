@@ -1813,8 +1813,10 @@ Nothing deletes on its own. Whether the sweep may is Dan's decision and has not 
 count: when the low free space warning (`hooks/free-space-nudge.sh`) speaks, it adds
 `derived-data-sweep.sh --summary`, which says how many folders are orphaned and roughly how much
 they hold, and names the listing and deleting commands without running either. Sizing them stops
-after `DERIVED_DATA_SUMMARY_SECONDS` (default 4) so the prompt hook stays inside its 10 second
-timeout (both are settings, not measurements), and then the count is given without a size. The disk-full skill's step 6 runs the listing.
+after `DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size; the
+whole count stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), its process group killed,
+and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout
+(all three are settings, not measurements), so the free space warning itself always arrives. The disk-full skill's step 6 runs the listing.
 
 ## Branches and agent worktrees that already shipped
 
