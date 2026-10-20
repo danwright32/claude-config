@@ -6809,6 +6809,145 @@ out_bhst2="$(CLAUDE_HOME="$BHHA" SYNC_REPO="$BHA" SYNC_HOSTNAME=macBA SYNC_NO_NO
 check "#323 and a run that gets through clears the count" \
   "! grep -qE 'skipped [0-9]+ (send|time)' <<< \"\$out_bhst2\""
 
+section "== a send behind a tip still being tested goes out on top of it, not applied (#1398) =="
+# Sending from one Mac stuck three times on 2026-10-20, and every time a `claude-sync sync` typed by
+# hand cleared it at once. The watcher's own log says why: from 2026-10-18 to 2026-10-20 it recorded
+# 64 skipped sends whose reconcile "did not clear" being behind, every one of the 62 that said why
+# saying the shared repo's newest commit was "still being tested", and not one "watch: sent". The
+# reconcile is a sync under the CI gate, and the gate refuses to take in a head whose run is still
+# going. A run takes 15 to 17 minutes on main now and a commit landed about every 20, so the head was
+# nearly always being tested, and a send that cannot push without taking the head in never went out.
+# The gate is about what INSTALLS itself on this Mac. Publishing this Mac's own edit on top of the
+# untested head installs nothing here, so that is what the watcher now does when the two touch
+# different files, and the untested commits are still applied only once their tests pass.
+UTB="$WORK/ut-bare.git"; git init -q --bare -b main "$UTB"
+UTA="$WORK/ut-repoA"; git clone -q "$UTB" "$UTA" 2>/dev/null
+UTR="$WORK/ut-repoB"; git clone -q "$UTB" "$UTR" 2>/dev/null
+UTHA="$WORK/ut-homeA"; mkdir -p "$UTHA/skills/own"; echo '{"hooks":{}}' > "$UTHA/settings.json"
+UTHB="$WORK/ut-homeB"; mkdir -p "$UTHB/skills/theirs"; echo '{"hooks":{}}' > "$UTHB/settings.json"
+UTREG="$WORK/ut-clone-registry"; : > "$UTREG"
+UTN="$WORK/ut-notify.log"; : > "$UTN"
+UTNOTIFIER="$WORK/ut-notifier.sh"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n' "$UTN" > "$UTNOTIFIER"; chmod +x "$UTNOTIFIER"
+# A gh that answers every commit with the state the run is given, so a case is one word.
+UTBIN="$WORK/ut-bin"; mkdir -p "$UTBIN"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${UT_CI:-in_progress}"\n' > "$UTBIN/gh"; chmod +x "$UTBIN/gh"
+ut_sync(){   # $1 = A|B: a sync a person typed, so not gated
+  local h r
+  if [ "$1" = A ]; then h="$UTHA"; r="$UTA"; else h="$UTHB"; r="$UTR"; fi
+  CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_HOSTNAME="mac-ut-$1" SYNC_CLONE_REGISTRY="$UTREG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+}
+ut_send(){   # $1 = the CI state of every commit -> the watcher send's output on Mac A
+  UT_CI="$1" SYNC_GH="$UTBIN/gh" SYNC_REPO_SLUG="acme/widgets" SYNC_IN_WATCH=1 \
+    CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_HOSTNAME=mac-ut-A SYNC_CLONE_REGISTRY="$UTREG" \
+    SYNC_NOTIFIER="$UTNOTIFIER" SYNC_NO_NOTIFY=0 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 \
+    SYNC_RECONCILE_RETRY=0 bash "$SCRIPT" send 2>&1 || true
+}
+ut_shared(){ git -C "$UTB" show "main:payload/skills/$1/SKILL.md" 2>/dev/null || true; }
+ut_stuck(){ CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1 || true; }
+mkskill "$UTHA/skills/own/SKILL.md" 'A1'
+mkskill "$UTHB/skills/theirs/SKILL.md" 'B1'
+ut_sync A; ut_sync B; ut_sync A
+# The other Mac publishes, and its tests are still running.
+mkskill "$UTHB/skills/theirs/SKILL.md" 'B2, still being tested'
+ut_sync B
+mkskill "$UTHA/skills/own/SKILL.md" 'A2, written while the tip is being tested'
+check "#1398 the fixture leaves this Mac behind a commit it has not applied" \
+  "git -C '$UTA' fetch -q origin 2>/dev/null; [ \"\$(git -C '$UTA' rev-list --count HEAD..origin/main)\" != 0 ] && grep -q B1 '$UTHA/skills/theirs/SKILL.md'"
+out_ut1="$(ut_send in_progress)"
+dbg "#1398 first send behind an untested tip: $out_ut1"
+check "#1398 a watcher send behind a tip still being tested gets this Mac's edit into the shared repo" \
+  "ut_shared own | grep -q 'A2, written while the tip is being tested'"
+check "#1398 on top of the other Mac's untested commit, which it does not revert" \
+  "ut_shared theirs | grep -q 'B2, still being tested'"
+check "#1398 and the untested commit is NOT applied to this Mac" \
+  "grep -q B1 '$UTHA/skills/theirs/SKILL.md'"
+check "#1398 nor checked out in the clone the watcher runs from" \
+  "grep -q B1 '$UTA/payload/skills/theirs/SKILL.md'"
+check "#1398 and the watcher logs it as sent, not as a skipped send" \
+  "grep -q '^SEND-OUTCOME sent' <<< \"\$out_ut1\" && ! grep -q '^SEND-OUTCOME behind' <<< \"\$out_ut1\""
+check "#1398 and no skipped send is counted" "[ ! -e '$UTA/.behind-skips' ]"
+# It runs again and again while the tip stays untested, which is the real shape: assume it runs twice.
+ut_tip="$(git -C "$UTB" rev-parse main)"
+out_ut2="$(ut_send in_progress)"
+check "#1398 a send with nothing new sends nothing and pushes no empty commit" \
+  "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ] && grep -q '^SEND-OUTCOME nothing' <<< \"\$out_ut2\""
+check "#1398 and that is not counted as a skipped send either" "[ ! -e '$UTA/.behind-skips' ]"
+mkskill "$UTHA/skills/own/SKILL.md" 'A3'; ut_send in_progress >/dev/null
+mkskill "$UTHA/skills/own/SKILL.md" 'A4'; ut_send in_progress >/dev/null
+mkskill "$UTHA/skills/own/SKILL.md" 'A5, the latest'; out_ut5="$(ut_send in_progress)"
+check "#1398 every later edit made while the tip is untested goes out too" \
+  "ut_shared own | grep -q 'A5, the latest' && ut_shared theirs | grep -q 'B2, still being tested'"
+check "#1398 and sending is never reported as stuck however many times that happens" \
+  "! grep -q '^sending' <<< \"\$(ut_stuck)\""
+check "#1398 and nothing was notified about sending" "! grep -q 'has not sent' '$UTN'"
+# The records that say whether this clone sends read the commit that went up, not this clone's HEAD,
+# which the shared repo holds under another id. With the two hour check set to nothing, a clone
+# counted as holding unsent commits says so at once.
+mkskill "$UTHA/skills/own/SKILL.md" 'A5, the latest'
+out_ut_old="$(SYNC_SEND_STUCK_AFTER=0 ut_send in_progress)"
+check "#1398 the clone is not reported as holding unsent work it has sent" \
+  "! grep -q 'this clone has not sent' <<< \"\$out_ut_old\""
+check "#1398 and the push it watches the verdict of is the one in the shared repo" \
+  "[ \"\$(awk 'NR==1{print \$1}' '$UTA/.my-push')\" = \"\$(git -C '$UTB' rev-parse main)\" ]"
+check "#1398 while the clone itself still holds commits its record of the remote lacks" \
+  "[ \"\$(git -C '$UTA' rev-list --count origin/main..HEAD)\" != 0 ]"
+# The tests pass: the same automatic send now takes the other Mac's commit in, as it always did.
+out_ut_green="$(ut_send success)"
+dbg "#1398 send once the tests pass: $out_ut_green"
+check "#1398 once the tests pass the watcher applies the commit it held back" \
+  "grep -q 'B2, still being tested' '$UTHA/skills/theirs/SKILL.md'"
+check "#1398 and the clone is level with the shared repo in both directions" \
+  "[ \"\$(git -C '$UTA' rev-list --count HEAD...origin/main)\" = 0 ]"
+check "#1398 and this Mac's own edit is intact here and in the shared repo" \
+  "grep -q 'A5, the latest' '$UTHA/skills/own/SKILL.md' && ut_shared own | grep -q 'A5, the latest'"
+check "#1398 with nothing reported as a dropped snapshot, since it was this Mac's own send" \
+  "! grep -qi 'dropped' <<< \"\$out_ut_green\" && ! grep -qi 'dropped' '$UTN'"
+
+# A head that FAILED its tests is not sent over: a push on top of it would carry the failure, and
+# the verdict this Mac later reads for its own push would blame this Mac's edit for it. So the skip
+# is counted, and the stuck notice says why rather than the catch all.
+mkskill "$UTHB/skills/theirs/SKILL.md" 'B3, failed its tests'
+ut_sync B
+mkskill "$UTHA/skills/own/SKILL.md" 'A6, written over a red tip'
+ut_tip="$(git -C "$UTB" rev-parse main)"
+out_ut_red="$(ut_send failure)"
+check "#1398 over a tip that failed its tests nothing is sent" \
+  "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ]"
+check "#1398 and that skip is counted" "[ -s '$UTA/.behind-skips' ]"
+check "#1398 and the stuck notice names the failed tests as the reason" \
+  "ut_stuck | grep '^sending' | grep -q 'failed its tests'"
+ut_send success >/dev/null
+check "#1398 and the next green tip clears it the ordinary way" \
+  "ut_shared own | grep -q 'A6, written over a red tip' && [ ! -e '$UTA/.behind-skips' ]"
+
+# THE CASE IT MUST STILL REFUSE: this Mac changed a file the untested commits also change. Merging
+# the two is a decision nothing has tested, so it waits for the tests, and says that, never the
+# catch all and never a claim that the reconcile was tried and failed for some unnamed reason (L11).
+mkskill "$UTHA/skills/both/SKILL.md" 'both, base'
+ut_sync A; ut_sync B; ut_sync A
+mkskill "$UTHB/skills/both/SKILL.md" 'both, the other Mac'
+ut_sync B
+mkskill "$UTHA/skills/both/SKILL.md" 'both, this Mac'
+ut_tip="$(git -C "$UTB" rev-parse main)"
+out_ut_ov="$(ut_send in_progress)"
+dbg "#1398 overlapping send: $out_ut_ov"
+check "#1398 an edit to a file the untested commits also change is NOT sent over them" \
+  "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ] && ut_shared both | grep -q 'both, the other Mac'"
+check "#1398 and this Mac's edit is kept" "grep -q 'both, this Mac' '$UTHA/skills/both/SKILL.md'"
+check "#1398 and the skip is counted" "[ -s '$UTA/.behind-skips' ]"
+check "#1398 and the send says which file and why" \
+  "grep -q 'skills/both/SKILL.md' <<< \"\$out_ut_ov\" && grep -q 'still being tested' <<< \"\$out_ut_ov\""
+check "#1398 and the stuck notice gives that reason, not the catch all" \
+  "ut_stuck | grep '^sending' | grep -q 'also change'"
+# Ten minutes into the stretch, because under a minute it says "just now" and a doubled word cannot
+# show (L1). Every one of these lines said "10 minutes ago ago" in the real log.
+awk -v t="$(( $(date +%s) - 600 ))" 'NR==1{$2=t} {print}' "$UTA/.behind-skips" > "$UTA/.behind-skips.new" && mv "$UTA/.behind-skips.new" "$UTA/.behind-skips"
+out_ut_st="$(ut_stuck)"
+check "#1398 and it says how long once, not 'ago ago'" \
+  "grep -q '10 minutes ago, because' <<< \"\$out_ut_st\" && ! grep -q 'ago ago' <<< \"\$out_ut_st\""
+
 section "== a rebase a killed run left behind is concluded or refused, never ignored (#324, #325) =="
 # A run killed part way through its own `pull --rebase` leaves the clone detached with the branch
 # label stranded, and no later run noticed. Found on 2026-09-07: ~/claude-config-sync had been on
