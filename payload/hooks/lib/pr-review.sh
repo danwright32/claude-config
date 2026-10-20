@@ -1155,9 +1155,10 @@ remedy() {
 #     matched in its place, by the same conditions (review-answered.py, QUOTED ANSWERS);
 #   - answers on an EARLIER PULL REQUEST this one replaces (Bidspoke #2491 named #2482, where every
 #     round had been answered): a pull request this one names as #N in its description or a comment
-#     by somebody with write access, of the same head branch, in this repository and no longer
-#     open, has its "Lessons review" comments read too, at most three such, and only while some
-#     finding is still unanswered.
+#     by somebody with write access, in this repository, of the same head branch and no longer
+#     open (or, since #1360, of another head branch under the stricter conditions below), has its
+#     "Lessons review" comments read too, at most three such, and only while some finding is still
+#     unanswered.
 #
 # And three that left (claude-config#1360), each held to the same conditions, each read made only
 # while some finding is still unanswered:
@@ -1239,7 +1240,7 @@ answered_findings() {
   total="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")"
   got="$(answered_count "$out")"
   if [ "$got" -lt "$total" ]; then
-    local added=0 rnote="" labels="" own_base mine="[]" prr_pr_more=files
+    local rnote="" labels="" own_base mine="[]" prr_pr_more=files
     # An earlier pull request this one names. Of the same head branch, any that is no longer open
     # (#1340). Of ANOTHER head branch (#1360) only one closed WITHOUT merging whose files overlap this
     # one's: a pull request that merged is a predecessor, not one this replaces, and an answer there
@@ -1268,7 +1269,7 @@ answered_findings() {
                else (.view.state // "") == "CLOSED"
                     and ([(.view.files // [])[] | .path] as $theirs | [$mine[] as $p | $theirs[] | select(. == $p)] | length > 0) end)' 2>/dev/null)" = true ] || continue
       answer_comments "$prr_pr_env" "$ref" > "$tmp/more" 2>/dev/null || continue
-      jq -s 'add' "$tmp/comments" "$tmp/more" > "$tmp/all" 2>/dev/null && mv -f "$tmp/all" "$tmp/comments" && added=1
+      jq -s 'add' "$tmp/comments" "$tmp/more" > "$tmp/all" 2>/dev/null && mv -f "$tmp/all" "$tmp/comments"
       # Its own reviews on this Mac, labelled with its head branch, count as this pull request's
       # history by the same rule (earlier_rows), so an answer there naming a line can be matched.
       s="$(printf '%s' "$prr_pr_env" | jq -r '.view.headRefName // ""' 2>/dev/null)"
