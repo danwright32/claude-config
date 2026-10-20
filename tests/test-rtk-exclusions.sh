@@ -10,7 +10,7 @@
 #
 # Every case runs against a fixture: CLAUDE_HOME is a throwaway directory and rtk is a stub whose
 # `config` answers with a throwaway config path, so nothing here can reach the real
-# ~/Library/Application Support/rtk. Where the real rtk is installed, the last block runs it against
+# ~/Library/Application Support/rtk. Where the real rtk is installed, block 11 runs it against
 # a throwaway HOME to prove rtk itself reads what the pull wrote.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
