@@ -6974,6 +6974,182 @@ CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_HOSTNAME=mac-ut-A SYNC_CLONE_REGISTRY=
 check "#1398 a reconcile that gives no reason is reported with the general one, not the last reason" \
   "ut_stuck_sending_says 'the reconcile it tried did not clear them' && ! ut_stuck_sending_says 'also change'"
 
+section "== a send that catches up says what it sent, and gates what it sends (#1402, #1403) =="
+# #1402. A watcher send that finds this Mac behind catches up by running a sync, and that sync
+# commits and pushes this Mac's edit itself. The send then found nothing left to commit and told the
+# watcher "nothing to send", so a run that did send was logged as idle: on Daniels-MacBook-Pro-2 from
+# 2026-10-18 to 2026-10-20 receives happened between skips and the log never once said sent. A send
+# whose own push lost a race and fell back to a sync was the same, saying nothing at all about what
+# it did, or only that the shared head was still being tested when #1398's path had just sent on top
+# of it. A log that records a send as idle cannot tell a working sync from a dead one (L11, L98).
+#
+# #1403. That catch up staged and pushed without the send side hook suite gate (#244, #269), which
+# only the send's direct path ran, so a hook edited here while behind reached the shared repo, and
+# the other Mac, without the suite covering it being run here.
+SPB="$WORK/sp-bare.git"; git init -q --bare -b main "$SPB"
+SPA="$WORK/sp-repoA"; git clone -q "$SPB" "$SPA" 2>/dev/null
+SPR="$WORK/sp-repoB"; git clone -q "$SPB" "$SPR" 2>/dev/null
+SPHA="$WORK/sp-homeA"; mkdir -p "$SPHA/skills/own" "$SPHA/hooks"; echo '{"hooks":{}}' > "$SPHA/settings.json"
+SPHB="$WORK/sp-homeB"; mkdir -p "$SPHB/skills/theirs"; echo '{"hooks":{}}' > "$SPHB/settings.json"
+SPREG="$WORK/sp-clone-registry"; : > "$SPREG"
+# A gh that answers every commit with the state the run is given, as in the #1398 section above.
+SPBIN="$WORK/sp-bin"; mkdir -p "$SPBIN"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${SP_CI:-success}"\n' > "$SPBIN/gh"; chmod +x "$SPBIN/gh"
+sp_hook(){   # $1 = hook name  $2 = what it echoes  $3 = its suite's exit code
+  local pass=1 fail=0
+  [ "$3" -eq 0 ] || { pass=0; fail=1; }
+  printf '#!/usr/bin/env bash\necho %s\n' "$2" > "$SPHA/hooks/$1.sh"
+  printf '#!/usr/bin/env bash\n# covers %s.sh\necho "SUITE-RESULT passed=%s failed=%s"\nexit %s\n' \
+    "$1" "$pass" "$fail" "$3" > "$SPHA/hooks/test-$1.sh"
+  chmod +x "$SPHA/hooks/$1.sh" "$SPHA/hooks/test-$1.sh"
+}
+sp_sync(){   # $1 = A|B: a sync a person typed, with no gate of either kind
+  local h r
+  if [ "$1" = A ]; then h="$SPHA"; r="$SPA"; else h="$SPHB"; r="$SPR"; fi
+  CLAUDE_HOME="$h" SYNC_REPO="$r" SYNC_HOSTNAME="mac-sp-$1" SYNC_CLONE_REGISTRY="$SPREG" \
+    SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 SYNC_NO_SEND_TESTS=1 bash "$SCRIPT" sync >/dev/null 2>&1 || true
+}
+# The watcher's send on Mac A with the send side hook suite gate ON, which this file otherwise turns
+# off for every run, and SYNC_NO_HOOK_TESTS cleared too, since either one turns the gate off.
+sp_send(){   # $1 = the CI state of every commit -> the send's output
+  env -u SYNC_NO_SEND_TESTS -u SYNC_NO_HOOK_TESTS \
+    SP_CI="$1" SYNC_GH="$SPBIN/gh" SYNC_REPO_SLUG="acme/widgets" SYNC_IN_WATCH=1 \
+    CLAUDE_HOME="$SPHA" SYNC_REPO="$SPA" SYNC_HOSTNAME=mac-sp-A SYNC_CLONE_REGISTRY="$SPREG" \
+    SYNC_NO_NOTIFY=1 SYNC_RECONCILE_RETRY=0 bash "$SCRIPT" send 2>&1 || true
+}
+# Read into a variable and matched with case, never piped into grep -q (test-pipefail-shortcircuit.sh).
+sp_shared_has(){   # $1 = path under payload/  $2 = text -> does the shared repo's copy hold it
+  local body; body="$(git -C "$SPB" show "main:payload/$1" 2>/dev/null || true)"
+  case "$body" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
+sp_behind(){ git -C "$SPA" fetch -q origin 2>/dev/null; [ "$(git -C "$SPA" rev-list --count HEAD..origin/main)" != 0 ]; }
+mkskill "$SPHA/skills/own/SKILL.md" 'A1'
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B1'
+sp_hook spdemo 'spdemo one' 0
+sp_sync A; sp_sync B; sp_sync A
+
+# The catch up succeeds (the shared head is green) and sends this Mac's edit itself.
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B2'; sp_sync B
+mkskill "$SPHA/skills/own/SKILL.md" 'A2, sent by the catch up'
+check "#1402 the fixture leaves this Mac behind with an edit of its own" \
+  "sp_behind && sp_shared_has hooks/spdemo.sh 'spdemo one'"
+out_sp1="$(sp_send success)"
+dbg "#1402 behind send whose catch up sent: $out_sp1"
+check "#1402 a behind send whose catch up succeeds gets this Mac's edit into the shared repo" \
+  "sp_shared_has skills/own/SKILL.md 'A2, sent by the catch up' && grep -q B2 '$SPHA/skills/theirs/SKILL.md'"
+check "#1402 and the send reports it as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp1\""
+check "#1402 and never as nothing to send" "out_lacks \"\$out_sp1\" '^SEND-OUTCOME nothing'"
+# The control, so the line above is not simply printed for every catch up: with nothing of this
+# Mac's to send, the same catch up says so (L1).
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B3'; sp_sync B
+out_sp_none="$(sp_send success)"
+dbg "#1402 behind send with nothing of its own: $out_sp_none"
+check "#1402 a catch up with nothing of this Mac's to send says nothing to send, not sent" \
+  "grep -q B3 '$SPHA/skills/theirs/SKILL.md' && grep -q '^SEND-OUTCOME nothing' <<< \"\$out_sp_none\" && out_lacks \"\$out_sp_none\" '^SEND-OUTCOME sent'"
+
+# #1403: the same catch up, carrying a hook edit whose suite fails, beside an edit that may go.
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B4'; sp_sync B
+sp_hook spdemo 'spdemo changed while behind' 1
+mkskill "$SPHA/skills/own/SKILL.md" 'A3, beside a red hook'
+out_sp2="$(sp_send success)"
+dbg "#1403 behind send carrying a red hook: $out_sp2"
+check "#1403 a behind send whose catch up succeeds does not publish a hook whose suite fails" \
+  "sp_shared_has hooks/spdemo.sh 'spdemo one' && ! sp_shared_has hooks/spdemo.sh 'spdemo changed'"
+check "#1403 while the rest of that send still goes out" \
+  "sp_shared_has skills/own/SKILL.md 'A3, beside a red hook'"
+check "#1403 and one line names the hook it held back and the suite that failed" \
+  "line_has \"\$out_sp2\" 'NOT publishing' 'spdemo\.sh' 'test-spdemo\.sh fails'"
+check "#1403 and the held hook is untouched in this Mac's config, through the catch up's apply too" \
+  "grep -q 'spdemo changed while behind' '$SPHA/hooks/spdemo.sh'"
+check "#1402 and what did go is reported as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp2\""
+
+# #1403 on #1398's path: the shared head is still being tested, so this Mac's commit is built on top
+# of it and pushed without it being taken in. What is built on must have been through the gate too.
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B5, still being tested'; sp_sync B
+sp_hook spother 'spother red' 1
+mkskill "$SPHA/skills/own/SKILL.md" 'A4, over an untested tip'
+out_sp3="$(sp_send in_progress)"
+dbg "#1403 send over an untested tip carrying a red hook: $out_sp3"
+check "#1403 a send over a tip still being tested carries this Mac's edit on top of it" \
+  "sp_shared_has skills/own/SKILL.md 'A4, over an untested tip' && sp_shared_has skills/theirs/SKILL.md 'B5, still being tested'"
+check "#1403 and the untested tip is still not applied here" \
+  "grep -q B4 '$SPHA/skills/theirs/SKILL.md'"
+check "#1403 but a new hook whose suite fails is not in it" \
+  "sp_shared_has hooks/spdemo.sh 'spdemo one' && ! git -C '$SPB' cat-file -e main:payload/hooks/spother.sh 2>/dev/null"
+check "#1403 nor the hook the earlier send held back" "! sp_shared_has hooks/spdemo.sh 'spdemo changed'"
+check "#1403 and the send says which it held back" "line_has \"\$out_sp3\" 'NOT publishing' 'spother\.sh'"
+check "#1402 and it is reported as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp3\""
+
+# A behind send whose only change of its own is a held hook held it back. That is not nothing to send.
+mkskill "$SPHB/skills/theirs/SKILL.md" 'B6, still being tested'; sp_sync B
+out_sp4="$(sp_send in_progress)"
+dbg "#1402 behind send holding only a red hook: $out_sp4"
+check "#1402 a catch up that held this Mac's only change back says so, naming it" \
+  "grep -qE '^SEND-OUTCOME withheld .*hooks/spother\.sh' <<< \"\$out_sp4\" && out_lacks \"\$out_sp4\" '^SEND-OUTCOME (nothing|sent)'"
+# Once the suites pass the held hooks go out, so the gate on this path is not a permanent refusal.
+sp_hook spdemo 'spdemo changed while behind' 0
+sp_hook spother 'spother red' 0
+out_sp_green="$(sp_send success)"
+dbg "#1403 send once the suites pass: $out_sp_green"
+check "#1403 once their suites pass the held hooks are published by the next send" \
+  "sp_shared_has hooks/spdemo.sh 'spdemo changed while behind' && sp_shared_has hooks/spother.sh 'spother red' && ! sp_behind"
+
+# A typed push publishes this Mac's edits too, so it runs the same gate.
+sp_hook spdemo 'spdemo changed for a typed push' 1
+out_sp_push="$(env -u SYNC_NO_SEND_TESTS -u SYNC_NO_HOOK_TESTS CLAUDE_HOME="$SPHA" SYNC_REPO="$SPA" \
+  SYNC_HOSTNAME=mac-sp-A SYNC_CLONE_REGISTRY="$SPREG" SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1 || true)"
+dbg "#1403 typed push carrying a red hook: $out_sp_push"
+check "#1403 a typed push does not publish a hook whose suite fails either" \
+  "sp_shared_has hooks/spdemo.sh 'spdemo changed while behind' && ! sp_shared_has hooks/spdemo.sh 'for a typed push'"
+check "#1403 and it says so" "line_has \"\$out_sp_push\" 'NOT publishing' 'spdemo\.sh'"
+check "#1403 and it closes by naming what waits, not by saying nothing changed" \
+  "line_has \"\$out_sp_push\" '^Nothing published' 'held back' 'hooks/spdemo\.sh' && out_lacks \"\$out_sp_push\" '^Nothing changed'"
+# The red hook is left in place for the race below, whose catch up meets the gate a second time.
+
+# #1402 on the other path to a catch up: this Mac was level, so the send pushed directly, and the
+# shared repo moved between its fetch and its push. A pre-push hook in the clone makes that race
+# happen once, when armed, from a throwaway clone of the shared repo.
+SPRACE="$WORK/sp-race"; SPARM="$WORK/sp-race.armed"
+cat > "$SPA/.git/hooks/pre-push" <<EOF
+#!/usr/bin/env bash
+[ -s '$SPARM' ] || exit 0
+body="\$(cat '$SPARM')"; rm -f '$SPARM'
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+rm -rf '$SPRACE'; git clone -q '$SPB' '$SPRACE' 2>/dev/null || exit 0
+mkdir -p '$SPRACE/payload/skills/race'
+printf -- '---\nname: race\ndescription: a fixture skill for the suite\n---\n%s\n' "\$body" > '$SPRACE/payload/skills/race/SKILL.md'
+git -C '$SPRACE' add -A
+git -C '$SPRACE' -c user.email=race@localhost -c user.name=race commit -qm 'sync from mac-sp-B'
+git -C '$SPRACE' push -q origin HEAD:main 2>/dev/null
+exit 0
+EOF
+chmod +x "$SPA/.git/hooks/pre-push"
+printf 'race one\n' > "$SPARM"
+mkskill "$SPHA/skills/own/SKILL.md" 'A5, its push lost a race'
+check "#1402 the fixture starts this one level with the shared repo" "! sp_behind"
+out_sp5="$(sp_send success)"
+dbg "#1402 send whose push lost a race, green tip: $out_sp5"
+check "#1402 the race really did move the shared repo under the send" \
+  "[ ! -e '$SPARM' ] && sp_shared_has skills/race/SKILL.md 'race one'"
+check "#1402 a send whose own push lost a race still gets its edit there by catching up" \
+  "sp_shared_has skills/own/SKILL.md 'A5, its push lost a race'"
+check "#1402 and reports it as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp5\""
+# The send's own commit and the catch up's both pass through the gate, and one held hook is one
+# sentence (and one notification), not one per pass.
+check "#1403 a hook held back by both passes of one send is said once" \
+  "[ \"\$(grep -c '^claude-sync: NOT publishing spdemo' <<< \"\$out_sp5\")\" = 1 ] && ! sp_shared_has hooks/spdemo.sh 'for a typed push'"
+sp_hook spdemo 'spdemo changed for a typed push' 0
+# The same race against a tip still being tested: the catch up sends on top of it (#1398).
+printf 'race two\n' > "$SPARM"
+mkskill "$SPHA/skills/own/SKILL.md" 'A6, lost a race to an untested commit'
+out_sp6="$(sp_send in_progress)"
+dbg "#1402 send whose push lost a race, untested tip: $out_sp6"
+check "#1402 a send that lost a race to an untested commit sends on top of it" \
+  "sp_shared_has skills/own/SKILL.md 'A6, lost a race' && sp_shared_has skills/race/SKILL.md 'race two' && grep -q 'race one' '$SPHA/skills/race/SKILL.md'"
+check "#1402 and reports that as sent, not only that the tip is still being tested" \
+  "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp6\""
+rm -f "$SPA/.git/hooks/pre-push"
+
 section "== a rebase a killed run left behind is concluded or refused, never ignored (#324, #325) =="
 # A run killed part way through its own `pull --rebase` leaves the clone detached with the branch
 # label stranded, and no later run noticed. Found on 2026-09-07: ~/claude-config-sync had been on
