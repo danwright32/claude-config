@@ -29,6 +29,8 @@
 #
 # THE OUTCOMES, each in its own words (L11, L260), all from pr-review.sh check:
 #   0 findings, an empty diff, findings already read      allowed
+#   only minor findings                                   allowed, handing them over as advisory
+#                                                         (claude-config#1356, mt_review_allowed)
 #   findings not yet read                                 refused with the findings and their read
 #                                                         key, until a push presents it as
 #                                                         PR_REVIEW_READ=<key> <the push command>
@@ -118,7 +120,8 @@ t0="$(now_s)"
 while :; do
   out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
   case "$rc" in
-    0) printf 'pr-review-push-gate: %s\n' "$out"; exit 0 ;;
+    # An allow with minor findings hands them over as advisory (claude-config#1356).
+    0) mt_review_allowed pr-review-push-gate "$out" ;;
     3)
       now="$(now_s)"
       waited=$((now - t0))
