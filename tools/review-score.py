@@ -32,8 +32,10 @@ which the runner reads to name the framework.
 MATCHING a finding (`path:line: text`) to an item: the same file, and EITHER the cited line within
 --window lines of the item's (default 20: the 2026-10-19 sample found 44 of 60 findings citing the
 wrong line, nearly all within about 20 lines, #1357) OR the finding quoting the item's line text,
-AND, when the item lists keywords, at least one of them in the finding's text, so a finding near a
-defect that makes some other claim does not count as catching it. A finding takes the closest
+AND the finding making the item's claim (claim_matches): one keyword when the item lists only one,
+otherwise two of them, or one plus the quoted line or a restatement of the item's claim, so a
+finding near a defect that makes some other claim does not count as catching it, even when it
+shares a word with it (claude-config#1367). A finding takes the closest
 matching item. A real item matched by any finding is caught, once however many findings hit it.
 A finding matching no item is UNJUDGED: it counts in the denominator of the wrong rate but is not
 wrong, and its text is kept in the results file for a person to judge and add to the case.
@@ -203,6 +205,47 @@ def parse_findings(lines):
     return out
 
 
+# How much of an item's claim a finding must restate, in the words review-answered.py compares
+# claims by, when it shares only one of the item's keywords: the same 0.35 that decides two lessons
+# review findings make the same point (claude-config#1338).
+CLAIM_SIMILARITY = 0.35
+STOP = set('the a an of to in is and or it that this as on for be by not with at its are was from so '
+           'but if then than when which who what into out up can will would should could has have had '
+           'does did do no yes all any each one two'.split())
+
+
+def claim_words(text):
+    """The words a claim is compared by: before the fix it asks for, without its severity, and
+    without the mark the review runner adds to a finding it could not place, which carries the same
+    words on findings about different things (claude-config#1357)."""
+    text = re.split(r'\s*\[review harness:', text, maxsplit=1, flags=re.I)[0]
+    text = re.sub(r'\[severity:[^\]]*\]', '', text, flags=re.I)
+    text = re.split(r'should be:', text, maxsplit=1, flags=re.I)[0]
+    return {w for w in re.findall(r'[a-z0-9_]+', text.lower()) if len(w) > 2 and w not in STOP}
+
+
+def claim_similarity(a, b):
+    a, b = claim_words(a), claim_words(b)
+    return len(a & b) / max(1, len(a | b))
+
+
+def claim_matches(text, item, quoted):
+    """Whether a finding's text makes the item's claim. An item listing one keyword, or none,
+    needs that one. One listing several needs two of them, or one plus either the item's quoted
+    line or a restatement of its claim: a single shared word such as "range" credited an off topic
+    finding with a catch in #1355's smoke run (claude-config#1367)."""
+    kws = [k.lower() for k in item.get("keywords") or [] if k]
+    if not kws:
+        return True
+    hits = sum(1 for k in kws if k in text)
+    if hits == 0:
+        return False
+    if len(kws) == 1 or hits >= 2 or quoted:
+        return True
+    claim = item.get("claim") or ""
+    return bool(claim) and claim_similarity(text, claim) >= CLAIM_SIMILARITY
+
+
 def match_item(finding, items, window):
     """The item this finding is about, or None."""
     text = finding["text"].lower()
@@ -216,8 +259,7 @@ def match_item(finding, items, window):
             dist = 0
         elif dist > window:
             continue
-        kws = [k.lower() for k in it.get("keywords") or [] if k]
-        if kws and not any(k in text for k in kws):
+        if not claim_matches(text, it, bool(quote and quote.lower() in text)):
             continue
         if best is None or dist < best_dist:
             best, best_dist = it, dist

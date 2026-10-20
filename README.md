@@ -928,9 +928,11 @@ a fake model. A case is a directory holding `input.diff` (exactly what the revie
 `case.json` (its judged points, each with a verdict of real, trivial, wrong or unsure, a file, a
 line, the line's text, and keywords naming the claim); `review-score.py check` validates a set and
 counts it by verdict. A finding matches a judged point on the same file when it cites a line within
-20 of it or quotes its text, and names one of its keywords, because most findings cite a line a few
-off (#1357). Keyword overlap is loose, so a finding about something else that happens to share a
-keyword can be credited to a point; choose keywords only that claim would use.
+20 of it or quotes its text, because most findings cite a line a few off (#1357), and makes the
+point's claim: for a point listing several keywords that means two of them, or one plus either the
+point's quoted line or a restatement of its `claim` (word overlap of 0.35, the measure #1338 uses to
+tell two findings make the same point). One shared keyword alone credited an off topic finding with
+a catch in #1355's smoke run (#1367), and a catch rate that counts those overstates the review.
 
 Each case costs one review by the real runner, and the run reports what it cost as `claude`
 measured it. On 2026-10-19 one review of a small invented diff cost about $0.18, nearly all of it

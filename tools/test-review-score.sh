@@ -150,6 +150,23 @@ check "a finding quoting the defect's line matches wherever it points" "catch ra
 answer far "shop/paginate.py" 'shop/paginate.py:16: the docstring above is long. Should be: shorter. [severity: minor]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
 check "a finding on the right line making another claim does not match" "catch rate: 0 of 3 real defects caught (0%)" "$out"
+# One shared keyword is not a claim (claude-config#1367): the smoke run of #1355 credited an off
+# topic finding with a catch because it shared a single keyword with the defect. d2 lists several
+# keywords, so a finding on its line that names only "range" and is about something else must not
+# catch it, while the same finding naming a second of them, or quoting the line, still does.
+answer far "shop/paginate.py" 'shop/paginate.py:16: the range of page sizes callers may pass is not documented. Should be: a docstring. [severity: minor]'
+out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
+check "one shared keyword alone does not catch a defect that lists several" "catch rate: 0 of 3 real defects caught (0%)" "$out"
+check "and that finding is left unjudged for a person to judge" "unjudged 1" "$out"
+answer far "shop/paginate.py" 'shop/paginate.py:16: the range is off by one. Should be: len(items). [severity: major]'
+out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
+check "two of the defect's keywords still catch it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+answer far "shop/paginate.py" 'shop/paginate.py:16: the range in `for start in range(0, len(items) - 1, size):` is wrong. Should be: len(items). [severity: major]'
+out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
+check "one keyword plus the defect's quoted line still catches it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+answer far "shop/paginate.py" 'shop/paginate.py:16: the range stops one short, so a list of one item gives nothing back. Should be: len(items). [severity: major]'
+out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
+check "one keyword plus a restatement of the defect's claim still catches it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
 rm -f "$FAKE_DIR/answers/far.txt"
 answer far2 "shop/paginate.py" 'shop/paginate.py:16: range stops at len(items) - 1 (off by one). Should be: len(items). [severity: major]
 shop/paginate.py:17: range again drops the last item (off by one). Should be: len(items). [severity: major]'
