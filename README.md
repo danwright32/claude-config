@@ -1929,6 +1929,17 @@ refuses (fail closed), and there is no override. Not seen by it: a close in GitH
 closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
 holds it, against a fake gh.
 
+**Two adapters write the capture.** `score/capture-web.mjs` (web) draws each frame of the settled
+file (the document its `designFrameDocument(<id>)` gives, as a page of its own) and the app's
+fixture route (the page with `?frame=<id>`) at the
+frame's width in one Chrome, through the app's own Playwright, runs `<design>.checks.js` on both,
+and scores. `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (SwiftUI) is copied into an
+app's UI test target: after `capture-web.mjs --design-only` draws the design's side, a snapshot test
+renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
+`test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
+Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
+purpose (about 24 seconds, 2026-10-19); elsewhere those two say UNMEASURED.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
