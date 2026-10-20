@@ -167,6 +167,26 @@ check "one keyword plus the defect's quoted line still catches it" "catch rate: 
 answer far "shop/paginate.py" 'shop/paginate.py:16: the range stops one short, so a list of one item gives nothing back. Should be: len(items). [severity: major]'
 out="$(score run --all --cases "$WORK/match" --results-dir "$WORK/match-results")"
 check "one keyword plus a restatement of the defect's claim still catches it" "catch rate: 1 of 3 real defects caught (33%)" "$out"
+# A restated claim is judged by review-answered.py's own measure and threshold, never a copy that
+# can drift from it (lessons review of #1376): over pairs either side of the threshold, the scorer's
+# decision must be exactly the one that measure gives.
+agree="$(python3 -I - "$TOOL" "$DIR/../payload/hooks/lib/review-answered.py" <<'PY'
+import importlib.util, sys
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); return mod
+rs, ra = load("rs", sys.argv[1]), load("ra", sys.argv[2])
+item = {"keywords": ["range", "drop"], "claim": "the range stops one short, so a list of one item gives no pages."}
+texts = ["the range stops one short, so a list of one item gives nothing back. Should be: len(items).",
+         "the range stops early on short lists. [severity: major]",
+         "the range of page sizes callers may pass is not documented.",
+         "the range stops one short [review harness: not placed, no quote, so line 16 is the reviewer's own number, unchecked]"]
+bad = [t for t in texts
+       if rs.claim_matches(t.lower(), item, False, t) != (ra.similarity(t, item["claim"]) >= ra.MIN_SIMILARITY)]
+print("agree" if not bad else "differ: " + " | ".join(bad))
+PY
+)"
+check "a restated claim is judged by review-answered.py's own measure" "agree" "$agree"
 rm -f "$FAKE_DIR/answers/far.txt"
 answer far2 "shop/paginate.py" 'shop/paginate.py:16: range stops at len(items) - 1 (off by one). Should be: len(items). [severity: major]
 shop/paginate.py:17: range again drops the last item (off by one). Should be: len(items). [severity: major]'
