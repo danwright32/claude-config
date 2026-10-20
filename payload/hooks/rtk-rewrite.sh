@@ -236,6 +236,21 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
       } else if (inword) atcmd = 0
       word = ""; inword = 0; wordq = 0
     }
+    # Arithmetic opening at the "(" at position p: the position of its balancing ")", or 0 when it
+    # never balances. It is skipped whole rather than scanned, so a substitution inside it holding
+    # the word rtk (`$(( $(rtk grep -c x f) + 1 ))`) is a captured invocation and refused here.
+    function arith_end(p,   q, lvl, d, span) {
+      lvl = 0
+      for (q = p; q <= n; q++) {
+        d = substr(s, q, 1)
+        if (d == "(") lvl++
+        else if (d == ")") { lvl--; if (lvl == 0) break }
+      }
+      if (q > n) return 0
+      span = substr(s, p, q - p + 1)
+      if (span ~ /(\$\(|`)/ && span ~ /(^|[^A-Za-z0-9_-])rtk([^A-Za-z0-9_-]|$)/) bad = 1
+      return q
+    }
     function popgroup(   inner) {
       inner = grp[depth]; endcmd(); depth--
       if (inner) { rtk[depth] = 1; grp[depth] = 1 }
@@ -247,6 +262,10 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         if (ctx[depth] == "dq") {
           if (c == "\\") { i += 2; continue }
           if (c == "\"") { depth--; inword = 1; wordq = 1; i++; continue }
+          if (c == "$" && nx == "(" && substr(s, i + 2, 1) == "(") {
+            j = arith_end(i + 1); if (!j) { bad = 1; break }
+            i = j + 1; continue
+          }
           if (c == "$" && nx == "(") { push("cmdsub"); i += 2; continue }
           if (c == "`") { push("bt"); i++; continue }
           i++; continue
@@ -258,17 +277,9 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         }
         if (c == "\\") { inword = 1; wordq = 1; i += 2; continue }
         if (c == "\"") { inword = 1; wordq = 1; push("dq"); i++; continue }
-        # Arithmetic, $((...)) or ((...)), runs no command and its << is a shift, not a here
-        # document, so it is skipped whole to its balancing parenthesis.
+        # Arithmetic, $((...)) or ((...)), whose << is a shift, not a here document.
         if ((c == "$" && nx == "(" && substr(s, i + 2, 1) == "(") || (c == "(" && nx == "(" && !inword)) {
-          j = (c == "$") ? i + 1 : i; lvl = 0
-          while (j <= n) {
-            d = substr(s, j, 1)
-            if (d == "(") lvl++
-            else if (d == ")") { lvl--; if (lvl == 0) break }
-            j++
-          }
-          if (j > n) { bad = 1; break }
+          j = arith_end((c == "$") ? i + 1 : i); if (!j) { bad = 1; break }
           inword = 1; wordq = 1; i = j + 1; continue
         }
         if (c == "$" && nx == "(") { flushword(); push("cmdsub"); i += 2; continue }
