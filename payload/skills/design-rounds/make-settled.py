@@ -276,6 +276,7 @@ def render_page(spec, chrome, decisions, exceptions, frames, frames_block, templ
     sentences = {r["number"].strip(): r["text"].strip() for r in requirements} if requirements else {}
     items = []
     for d in decisions:
+        sentence = None
         if d.get("requirement"):
             owner = "Requirement %s" % e(d["requirement"])
             sentence = sentences.get(str(d["requirement"]).strip())
@@ -288,7 +289,11 @@ def render_page(spec, chrome, decisions, exceptions, frames, frames_block, templ
                "picture": "Held by the picture half",
                "elsewhere": "Proven by %s" % e(d.get("provenBy", ""))}.get(verify, e(verify))
         why = (" %s" % e(d["why"])) if d.get("why") else ""
-        items.append('<li id="%s"><strong>%s</strong> %s.%s <span class="dr-how">%s. %s.</span></li>'
+        # A requirement's sentence that is a question or an exclamation keeps its own mark, and only
+        # a sentence ending some other way is closed with a full stop (as every owner was before #1401).
+        # A noCode reason is closed as it always was, so a spec without requirements keeps its bytes.
+        owner = owner if sentence and owner.endswith(("?", "!")) else owner + "."
+        items.append('<li id="%s"><strong>%s</strong> %s.%s <span class="dr-how">%s %s.</span></li>'
                      % (e(d["id"]), e(d["id"]), e(d.get("decision", "")), why, owner, how))
     if exceptions:
         exc = "".join('<li><strong>%s</strong>, %s, %s: "%s" (%s)</li>' % (

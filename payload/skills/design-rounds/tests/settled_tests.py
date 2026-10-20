@@ -319,6 +319,12 @@ check("a decision's owner reads as the requirement's sentence, not only its numb
       d1 is not None and "Requirement 1: Sam sees tomorrow&#x27;s open calls by team. Checked on f1, f2" in d1.group(0),
       d1.group(0) if d1 else rbody[:1500])
 d3 = re.search(r'<li id="D3">.*?</li>', rbody, re.S)
+rc, out, qpath = make("requirements-question", spec(requirements=[
+    {"number": "1", "text": "Can Sam see tomorrow's open calls?"}, {"number": "2", "text": "Open calls stand out!"}]))
+qsrc = open(qpath, encoding="utf-8").read() if os.path.isfile(qpath) else ""
+check("a requirement ending in a question or exclamation mark keeps its own mark, with no full stop after it",
+      "open calls? Checked on f1, f2" in qsrc and "stand out! Held by the picture half." in qsrc and "?." not in qsrc
+      and "!." not in qsrc, out + qsrc[:1200])
 check("and a decision with no code consequence still gives its reason", d3 is not None and "No code: already built." in d3.group(0),
       d3.group(0) if d3 else "")
 rm = re.search(r'<script type="application/json" id="decision-map">(.*?)</script>', rsrc, re.S)
