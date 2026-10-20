@@ -89,8 +89,13 @@ offered three shortcuts that did nothing, while the round before it had working 
 python3 ~/.claude/skills/design-rounds/make-switcher.py spec.json switcher.html
 ```
 
-The spec names the round, the builder, and the options. Run the script with no
-arguments for the exact shape, and see `example/` for a working one.
+The spec names the round, the builder, the options, and the product's captured `chrome`
+(below, "No stand ins"), with the round's `fixture` when it has one. Run the script with no
+arguments for the exact shape, and see `example/` for a working one. A spec naming no
+captured chrome is refused, writing nothing, unless it asks for the shared terminal screen.
+Each option is then the captured page with the round drawn into its slot, in an iframe of
+its own at the width it was captured at, every option kept in the stage so switching never
+reloads one, and a key pressed inside an option still switches.
 
 **A round's files go in this session's scratchpad**, under `<issue number>/round<N>/`: the
 builder, the stylesheet, the spec, the switcher and its picker file. They are working files for

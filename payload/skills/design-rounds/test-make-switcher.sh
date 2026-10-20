@@ -76,8 +76,12 @@ s = {
   "styles": "screen.css",
   "variants": json.loads(variants),
 }
+s["screen"] = "terminal"
 if extra:
-  s.update(json.loads(extra))
+  more = json.loads(extra)
+  if "chrome" in more:
+    s.pop("screen")
+  s.update(more)
 open(out, "w").write(json.dumps(s))
 PY
 }
@@ -86,6 +90,14 @@ TWO='[{"key":"1","name":"Espresso","why":"The warm one you settled on, at twenty
       {"key":"2","name":"Ink","why":"Near black, no hue, so this asks whether the panel or the colour was doing the work."}]'
 
 run() { python3 "$SCRIPT" "$@" 2>&1; }
+
+# A captured chrome beside every spec this suite writes into $TMP, for the rounds that test a round
+# drawn in a product rather than the terminal (claude-config#1364).
+cat > "$TMP/chrome.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>header { height: 40px; }</style></head>
+<body><header>Demo</header><main id="main"></main></body></html>
+HTML
+IN_CHROME='{"chrome": {"captured": "chrome.html", "from": "the suite demo page", "slot": "#main", "width": 640}}'
 
 # --- 1. a good spec produces a page carrying every option and its reason ---
 
@@ -1270,8 +1282,11 @@ ORDERPY
 )"
 check_eq "the terminal script comes before the round's builder" "before" "$order"
 
-# A round that does not ask for it gets none of it, so a plain round's page is unchanged.
-check_not "a round that names no screen carries no terminal" "${lib_line:-NO-LIB-LINE}" "$(cat "$TMP/out.html")"
+# A round that does not ask for it gets none of it, so a round drawn in captured chrome carries none.
+spec "$TMP/plain.json" "$TWO" "$IN_CHROME"
+run "$TMP/plain.json" "$TMP/plain.html" >/dev/null
+check "control: the round in captured chrome was written" "function buildScreen" "$(cat "$TMP/plain.html" 2>/dev/null)"
+check_not "a round that names no screen carries no terminal" "${lib_line:-NO-LIB-LINE}" "$(cat "$TMP/plain.html" 2>/dev/null)"
 
 # --- the terminal's own namespace ---
 #
@@ -1332,7 +1347,7 @@ check_eq "nothing is written for a clashing builder" "0" "$([ -e "$TMP/shadow.ht
 
 # A builder calling the terminal from a spec that never asked for it would throw at load,
 # where the strip can say only that the builder threw. Said here instead, naming the field.
-spec "$TMP/unasked.json" "$TERM_TWO" '{"builder":"term-builder.js"}'
+spec "$TMP/unasked.json" "$TERM_TWO" '{"builder":"term-builder.js","chrome":{"captured":"chrome.html","from":"the demo page","slot":"#main","width":640}}'
 out="$(run "$TMP/unasked.json" "$TMP/unasked.html")"; rc=$?
 check_eq "a builder calling the terminal without asking for it exits 2" "2" "$rc"
 check "that refusal names the field to add" '"screen": "terminal"' "$out"
@@ -1484,6 +1499,91 @@ TRPY
 else
   unmeasured=$((unmeasured + 1))
   echo "UNMEASURED: no headless Chrome, so what the terminal draws was not measured"
+fi
+
+# --- no stand ins: a round draws in the product's captured chrome (claude-config#1364) ---
+# Dan, 2026-10-19: "No stand ins." A round naming no captured chrome, and asking for no shared screen,
+# is refused, writing nothing; one naming a captured page draws every option inside it, in an iframe
+# of its own at the width it was captured at, the round's builder drawing into its slot.
+NS="$TMP/nostand"; mkdir -p "$NS"
+printf 'function buildScreen(variant) { var d = document.createElement("div"); d.className = "screen"; d.textContent = variant.name; return d; }\n' > "$NS/builder.js"
+printf '.screen { color: #111; }\n' > "$NS/screen.css"
+python3 - "$NS/bare.json" "$TWO" <<'PY'
+import json, sys
+json.dump({"title": "Demo", "round": "Which", "builder": "builder.js", "styles": "screen.css", "variants": json.loads(sys.argv[2])}, open(sys.argv[1], "w"))
+PY
+out="$(run "$NS/bare.json" "$NS/bare.html")"; rc=$?
+check_eq "a round naming no captured chrome is refused (exit 2)" "2" "$rc"
+check "and says why, in Dan's words" "No stand ins" "$out"
+check_eq "and writes no page" "0" "$([ -e "$NS/bare.html" ] && echo 1 || echo 0)"
+cat > "$NS/chrome.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>header { height: 40px; background: #14213d; color: #fff; }</style></head>
+<body><header>Ovation</header><main id="main">the old screen</main></body></html>
+HTML
+CHROME_SPEC='{"chrome": {"captured": "chrome.html", "from": "Ovation at localhost, 2026-10-19", "slot": "#main", "width": 640}}'
+spec "$NS/both.json" "$TWO" '{"screen": "terminal", "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+python3 - "$NS/both.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])); s["screen"] = "terminal"; json.dump(s, open(sys.argv[1], "w"))
+PY
+out="$(run "$NS/both.json" "$NS/both.html")"; rc=$?
+check_eq "a round naming both a shared screen and a captured chrome is refused" "2" "$rc"
+check "and asks for one" "keep one" "$out"
+spec "$NS/gone.json" "$TWO" '{"chrome": {"captured": "nothing.html", "from": "x", "slot": "#main", "width": 640}}'
+out="$(run "$NS/gone.json" "$NS/gone.html")"; rc=$?
+check_eq "a captured chrome that is not there is refused" "2" "$rc"
+spec "$NS/spec.json" "$TWO" "$CHROME_SPEC"
+out="$(run "$NS/spec.json" "$NS/out.html")"; rc=$?
+check_eq "a round in captured chrome builds" "0" "$rc"
+cpage="$(cat "$NS/out.html" 2>/dev/null)"
+check "each option is the captured page" "<header>Ovation<" "$cpage"
+check "with the round's builder running inside it" "function buildScreen" "$cpage"
+check "and the closing picker still written beside it" "Espresso" "$(cat "$NS/out.picker.json" 2>/dev/null)"
+chrome_probe() { # chrome_probe <page> -> readout before and after a key pressed INSIDE the option, the slots, the strips
+  python3 - "$1" <<'PROBEPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+setTimeout(function () {
+  var heads = [document.querySelector(".dr-readout h2").textContent];
+  var frames = document.querySelectorAll("#dr-stage iframe");
+  var slots = Array.prototype.map.call(frames, function (f) {
+    var slot = f.contentDocument && f.contentDocument.getElementById("main");
+    return (f.hidden ? "hidden:" : "shown:") + (slot ? slot.textContent : "none");
+  });
+  frames[0].contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  setTimeout(function () {
+    heads.push(document.querySelector(".dr-readout h2").textContent);
+    var strips = Array.prototype.map.call(document.querySelectorAll(".dr-sameness"), function (p) { return p.textContent; });
+    var out = document.createElement("pre"); out.id = "PROBE";
+    out.textContent = heads.join(",") + "|" + slots.join(",") + "|" + strips.join(" / ");
+    document.body.append(out);
+  }, 300);
+}, 800);
+</script>
+"""
+open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+PROBEPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
+    --dump-dom "file://$1.probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
+}
+if [[ ! -x "$CHROME" ]]; then
+  echo "UNMEASURED: no browser at $CHROME, so a round in captured chrome was not drawn"
+  unmeasured=$((unmeasured + 1))
+else
+  got="$(chrome_probe "$NS/out.html")"
+  check_eq "every option is drawn into the captured page's slot, one shown, and a key pressed inside it switches" \
+    "Espresso,Ink|shown:Espresso,hidden:Ink|" "$got"
+  printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = "same"; return d; }\n' > "$NS/builder.js"
+  run "$NS/spec.json" "$NS/same.html" >/dev/null
+  got="$(chrome_probe "$NS/same.html")"
+  check "two options drawing the same thing inside the chrome are said" "draw the same picture" "$got"
+  printf 'function buildScreen(variant) { throw new Error("no rows yet"); }\n' > "$NS/builder.js"
+  run "$NS/spec.json" "$NS/throw.html" >/dev/null
+  got="$(chrome_probe "$NS/throw.html")"
+  check "a builder throwing inside the chrome is said, with its message" "threw when it drew Espresso: no rows yet" "$got"
 fi
 
 # --- the committed terminal example is what the tool produces today ---
