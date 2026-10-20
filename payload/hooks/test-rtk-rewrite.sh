@@ -296,9 +296,17 @@ out_318="$(hook 'git diff --quiet')"
 # ---------------------------------------------------------------------------
 check "#399 an rtk diff after cd && is refused" \
   "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f > f.md; rtk diff <(sed "s#a#b#g" f.md) g | cat; rtk git log --oneline -3')"
+# The shape above holds a redirect and a pipe on rtk invocations, which the #1419 rule refuses on
+# its own, so it no longer proves the DIFF refusal reaches past `cd &&`. The same command with
+# both taken out can be refused by nothing but the diff refusal (L159).
+check "#399 and the same command with no pipe or redirect is still refused for its rtk diff" \
+  "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f; rtk diff <(sed "s#a#b#g" f.md) g; rtk git log --oneline -3')"
 check "#399 an rtk diff after a semicolon is refused" "$(refused_to_rewrite 'rtk ls; rtk diff a b')"
 check "#399 an rtk diff behind an environment assignment is refused" "$(refused_to_rewrite 'LC_ALL=C rtk diff a b')"
 check "#399 an rtk diff inside a subshell is refused" "$(refused_to_rewrite '(cd /repo && rtk diff a b)')"
+# Since #1419 any rtk invocation captured by $(...) is refused whatever its destination, so this one
+# no longer isolates the diff refusal; the subshell check above is the one that proves the diff
+# refusal sees a nested invocation, and this stays as the shape that must be refused either way.
 check "#399 an rtk diff inside a command substitution is refused" "$(refused_to_rewrite 'echo "$(rtk diff a b)"')"
 check "#399 an rtk diff after || is refused" "$(refused_to_rewrite 'false || rtk diff a b')"
 check "#399 an rtk read after && is refused" "$(refused_to_rewrite 'cd /repo && rtk read Thing.swift')"
@@ -310,9 +318,12 @@ check "#399 a refused destination after a newline is refused" "$(refused_to_rewr
 
 # The control: the same compound shapes with no refused destination in them are still rewritten,
 # or every refusal above is satisfied by a hook that stopped rewriting compound commands (L159).
-printf 'cd /repo && rtk git status; rtk git log --oneline -3 | cat\n' > "$TMPROOT/rewrite"
-out_399="$(hook 'cd /repo && git status; git log --oneline -3 | cat')"
-[ "$(printf '%s' "$out_399" | rewritten_to)" = "cd /repo && rtk git status; rtk git log --oneline -3 | cat" ] \
+# The pipe here belongs to a command rtk did NOT rewrite: until #1419 it hung off the `rtk git log`,
+# and an rtk invocation whose output feeds a pipe is now refused (see #1419 below), which is a
+# different rule from the one this control exists for.
+printf 'cd /repo && rtk git status; rtk git log --oneline -3; echo done | cat\n' > "$TMPROOT/rewrite"
+out_399="$(hook 'cd /repo && git status; git log --oneline -3; echo done | cat')"
+[ "$(printf '%s' "$out_399" | rewritten_to)" = "cd /repo && rtk git status; rtk git log --oneline -3; echo done | cat" ] \
   && check "#399 a compound command with no refused destination is still rewritten" ok \
   || check "#399 a compound command with no refused destination is still rewritten" "out=$out_399"
 # And a word merely CONTAINING rtk, or the text rtk diff inside a quoted argument that is not a
@@ -322,6 +333,99 @@ out_399b="$(hook 'git commit -m artifact-diff')"
 [ -n "$out_399b" ] \
   && check "#399 a word that merely contains rtk is not read as an rtk invocation" ok \
   || check "#399 a word that merely contains rtk is not read as an rtk invocation" "it refused"
+
+# ---------------------------------------------------------------------------
+# An rtk invocation whose OUTPUT is read by another program is never rewritten (claude-config#1419).
+#
+# rtk's output is a summary for a person to read, and a pipe or a redirect hands it to a program
+# instead. On 2026-10-20 `grep "|first|" nsf-sep.txt | awk ... | sort | head -60 | cut -f2` drew a
+# 31 line "sample" built from rtk's header lines ("2 matches in 1F:", "[file] ... (2):", line
+# number prefixes) with no error. Dan's decision on the issue, 2026-10-20: "Leave grep unrewritten
+# when its output is piped or redirected." Measured against rtk 0.31.0 the same day, the defect is
+# not grep's alone: `rtk git log | wc -l` counted 1 line where git gave 5, `rtk git diff > p`
+# wrote a stat summary instead of a patch, and `rtk ls | cat` and `rtk git status | cat` both
+# changed what the next command read. One predicate, so one rule for every destination (L30).
+#
+# Judged on the rewritten command, by where each rtk invocation's standard output GOES: a pipe
+# (`|`, `|&`), a redirect of standard output (`>`, `>>`, `1>`, `&>`, `>&2`), or capture by the
+# shell (`$(...)`, backticks, `<(...)`). A redirect of standard error alone changes nothing the
+# next program reads, so it keeps the rewrite.
+# ---------------------------------------------------------------------------
+kept_as() { # kept_as <rewrite>  -> "ok" when the hook emitted exactly that rewrite
+  printf '%s\n' "$1" > "$TMPROOT/rewrite"
+  local o r; o="$(hook 'some command')"; r="$(printf '%s' "$o" | rewritten_to)"
+  if [ "$r" = "$1" ]; then echo ok; else echo "expected the rewrite to be kept, got [${r:-nothing}]"; fi
+}
+# The issue's own reproduction, as rtk 0.31.0 rewrites it.
+check "#1419 a grep piped into another command is not rewritten" "$(refused_to_rewrite 'rtk grep "|first|" f | cat')"
+check "#1419 nor one redirected to a file" "$(refused_to_rewrite 'rtk grep x f > out')"
+check "#1419 nor one appended to a file" "$(refused_to_rewrite 'rtk grep x f >> out')"
+check "#1419 nor one whose stdout is named by number" "$(refused_to_rewrite 'rtk grep x f 1>out')"
+check "#1419 nor one sending both streams to a file" "$(refused_to_rewrite 'rtk grep x f &>out')"
+check "#1419 nor one sending stdout to stderr" "$(refused_to_rewrite 'rtk grep x f >&2')"
+check "#1419 nor one with stderr merged and then piped" "$(refused_to_rewrite 'rtk grep x f 2>&1 | head')"
+check "#1419 nor one piped with |&" "$(refused_to_rewrite 'rtk grep x f |& cat')"
+check "#1419 nor one piped into tee" "$(refused_to_rewrite 'rtk grep x f | tee out')"
+check "#1419 nor one with no space before the pipe" "$(refused_to_rewrite 'rtk grep x f|wc -l')"
+check "#1419 nor one in a later stage whose output also feeds a pipe" "$(refused_to_rewrite 'cat f | rtk grep x | wc -l')"
+check "#1419 nor one after cd &&" "$(refused_to_rewrite 'cd /repo && rtk grep x f | wc -l')"
+check "#1419 nor the second of two commands" "$(refused_to_rewrite 'rtk grep x f; rtk grep y f | cat')"
+check "#1419 nor one captured by \$(...)" "$(refused_to_rewrite 'echo $(rtk grep x f)')"
+check "#1419 nor one captured into a variable" "$(refused_to_rewrite 'n=$(rtk grep -c x f)')"
+check "#1419 nor one captured inside double quotes" "$(refused_to_rewrite 'echo "$(rtk grep x f)"')"
+check "#1419 nor one captured by backticks" "$(refused_to_rewrite 'echo `rtk grep x f`')"
+check "#1419 nor one read through process substitution" "$(refused_to_rewrite 'diff <(rtk grep x f) g')"
+check "#1419 nor one inside a subshell that is piped" "$(refused_to_rewrite '(rtk grep x f) | cat')"
+check "#1419 nor one inside a brace group that is redirected" "$(refused_to_rewrite '{ rtk grep x f; } > out')"
+check "#1419 nor one inside a loop whose output is piped" "$(refused_to_rewrite 'for f in a b; do rtk grep x "$f"; done | cat')"
+check "#1419 nor one inside a conditional that is redirected" "$(refused_to_rewrite 'if true; then rtk ls; fi > out')"
+check "#1419 nor one in a case statement, whose patterns the scan does not parse" "$(refused_to_rewrite 'case x in a) rtk ls ;; esac')"
+check "#1419 nor one captured inside an unquoted here document, which the shell expands" \
+  "$(refused_to_rewrite "$(printf '%s\n' 'cat <<EOF' 'count: $(rtk grep -c x f)' 'EOF')")"
+# The class: the same predicate over every other destination, each measured to change piped output.
+check "#1419 the class: git log piped into wc" "$(refused_to_rewrite 'rtk git log | wc -l')"
+check "#1419 the class: git diff saved as a patch" "$(refused_to_rewrite 'rtk git diff > out.patch')"
+check "#1419 the class: ls piped" "$(refused_to_rewrite 'rtk ls -la | cat')"
+check "#1419 the class: git status piped" "$(refused_to_rewrite 'rtk git status | cat')"
+# Fail closed: a command the scan cannot balance is not rewritten, because a quote it lost track of
+# could be hiding a pipe (L98).
+check "#1419 a command with an unbalanced quote is not rewritten" "$(refused_to_rewrite "rtk grep 'x f | cat")"
+
+# The controls. Output only a person reads keeps the rewrite, or every refusal above is satisfied
+# by a hook that stopped rewriting grep altogether (L159).
+check "#1419 a grep standing alone is still rewritten" "$(kept_as 'rtk grep x f')"
+check "#1419 a pipe character inside double quotes is not a pipe" "$(kept_as 'rtk grep "a|b" f')"
+check "#1419 nor inside single quotes" "$(kept_as "rtk grep 'a|b>c' f")"
+check "#1419 nor escaped with a backslash" "$(kept_as 'rtk grep a\|b f')"
+check "#1419 && after a grep is not a pipe" "$(kept_as 'rtk grep x f && echo ok')"
+check "#1419 nor is ||" "$(kept_as 'rtk grep x f || true')"
+check "#1419 a redirect of stderr alone keeps the rewrite" "$(kept_as 'rtk grep x f 2>/dev/null')"
+check "#1419 and so does stderr to a file" "$(kept_as 'rtk grep x f 2>err')"
+check "#1419 and stderr merged into stdout that is not piped" "$(kept_as 'rtk git status 2>&1')"
+check "#1419 an input redirect keeps the rewrite" "$(kept_as 'rtk grep x f < in')"
+check "#1419 the last stage of a pipe is read by the person, so keeps it" "$(kept_as 'cat f | rtk grep x')"
+check "#1419 a pipe on a different command keeps it" "$(kept_as 'rtk grep x f; echo done | cat')"
+check "#1419 a quoted \$(...) that is only text in single quotes keeps it" "$(kept_as "rtk grep '\$(x)' f")"
+check "#1419 a shift inside arithmetic is not a here document that hides a later pipe" \
+  "$(refused_to_rewrite "$(printf '%s\n' 'echo $((1<<2))' 'rtk grep x f | cat')")"
+check "#1419 nor is a shift in a bare (( )) command" \
+  "$(refused_to_rewrite "$(printf '%s\n' '(( x = 1<<2 ))' 'rtk grep x f | cat')")"
+check "#1419 nor is a shift in arithmetic inside double quotes" \
+  "$(refused_to_rewrite "$(printf '%s\n' 'echo "$((1<<2))"' 'rtk grep x f | cat')")"
+check "#1419 an rtk invocation captured inside arithmetic is refused" \
+  "$(refused_to_rewrite 'echo $(( $(rtk grep -c x f) + 1 ))')"
+check "#1419 and inside a bare (( )) command" "$(refused_to_rewrite '(( n = $(rtk grep -c x f) ))')"
+check "#1419 nested subshells opening with (( are not mistaken for arithmetic" \
+  "$(refused_to_rewrite '((cd d && rtk grep x f) | cat)')"
+check "#1419 arithmetic with no rtk in it keeps the rewrite beside it" "$(kept_as 'echo $((1<<2)); rtk grep x f')"
+check "#1419 a loop whose output is not piped keeps it" "$(kept_as 'for f in a b; do rtk ls "$f"; done')"
+check "#1419 a word like done as an argument is not read as closing anything" "$(kept_as 'rtk git commit -m done')"
+check "#1419 a pipe character inside a format string keeps it" "$(kept_as 'rtk git log --format="%h|%s" -3')"
+check "#1419 a comment holding a pipe keeps it" "$(kept_as 'rtk ls ~/x # a | b')"
+check "#1419 a here document inside \$(...) inside quotes is not scanned as commands" \
+  "$(kept_as "$(printf '%s\n' 'rtk git commit -m "$(cat <<'"'"'EOF'"'"'' "it's a | b > c" 'EOF' ')"')")"
+check "#1419 a here document body is not scanned as commands" \
+  "$(kept_as "$(printf '%s\n' "rtk git commit -F - <<'EOF'" "it's a | b > c" "EOF")")"
 
 # ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
@@ -365,6 +469,43 @@ else
       && check "#399 and does not report the differing files as identical" "ran [$ran399]: $out399" \
       || check "#399 and does not report the differing files as identical" ok
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# End to end against the REAL rtk for #1419: the issue's reproduction, through the real hook and
+# the real rtk, RUN, with the downstream command required to see the raw matching lines.
+#
+# HOME points at an empty throwaway directory, so rtk reads no config.toml. That matters: a Mac
+# whose rtk config lists grep under [hooks] exclude_commands never rewrites grep at all, and there
+# this check would pass while measuring nothing. The control below proves rtk under this HOME does
+# rewrite the piped grep and does mangle its output, so a green means the hook stopped it (L159).
+# ---------------------------------------------------------------------------
+if ! command -v rtk >/dev/null 2>&1; then
+  echo "note: rtk is not installed on this Mac, so the #1419 end to end check did not run. Everything above used stubs."
+else
+  FX1419="$TMPROOT/fx1419"; mkdir -p "$FX1419/home"
+  printf 'a|first|x\nb|later|y\nc|first|z\n' > "$FX1419/f"
+  want1419="$(printf 'a|first|x\nc|first|z')"
+  cmd1419='grep "|first|" f | cat'
+  ctl1419="$(HOME="$FX1419/home" rtk rewrite "$cmd1419" 2>/dev/null)"
+  ctl1419_out="$(cd "$FX1419" && HOME="$FX1419/home" bash -c "$ctl1419" 2>&1)"
+  if [ -z "$ctl1419" ] || [ "$ctl1419_out" = "$want1419" ]; then
+    echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer rewrites or mangles the #1419 piped grep (rewrite was [$ctl1419]), so the end to end check below proves less than it did."
+  fi
+  payload "$cmd1419"
+  sub1419="$(HOME="$FX1419/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+  ran1419="${sub1419:-$cmd1419}"
+  out1419="$(cd "$FX1419" && HOME="$FX1419/home" bash -c "$ran1419" 2>&1)"
+  [ "$out1419" = "$want1419" ] \
+    && check "#1419 a piped grep that actually runs hands the next command the raw matching lines" ok \
+    || check "#1419 a piped grep that actually runs hands the next command the raw matching lines" "ran [$ran1419]: $out1419"
+  # The control on the hook side: the same grep standing alone IS rewritten by the real rtk through
+  # the real hook, so the green above is not a hook that has stopped talking to rtk.
+  payload 'grep "|first|" f'
+  sub1419b="$(HOME="$FX1419/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+  [ "$sub1419b" = 'rtk grep "|first|" f' ] \
+    && check "#1419 and the same grep standing alone is still rewritten by the real rtk" ok \
+    || check "#1419 and the same grep standing alone is still rewritten by the real rtk" "got [$sub1419b]"
 fi
 
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
