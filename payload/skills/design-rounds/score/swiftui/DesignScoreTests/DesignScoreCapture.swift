@@ -9,7 +9,10 @@
 //             folder: URL(fileURLWithPath: ProcessInfo.processInfo.environment["DESIGN_SCORE_CAPTURE"]!),
 //             build: "InvoiceListView",
 //             view: { frame in AnyView(InvoiceListView(model: fixture.model(for: frame))) },
-//             checks: { frame, model in [...] })
+//             checks: { frame in
+//                 let model = fixture.model(for: frame)
+//                 return [DesignScoreCheck("D1", ok: model.title == "Invoices", detail: model.title)]
+//             })
 //     }
 //
 // The DESIGN side is drawn first by the web adapter, which renders the settled HTML file's frames in a
