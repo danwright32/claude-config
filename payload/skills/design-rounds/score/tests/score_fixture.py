@@ -52,6 +52,10 @@ def make(root, name="app", decisions=("D1",), exception=False, failing=(), commi
                                "checks": checks,
                                "designChecks": [{"id": d, "ok": True, "detail": ""} for d in decisions]}]}, fh)
     proc = subprocess.run([sys.executable, SCORE, "score", cap], capture_output=True, text=True)
+    # 0 matched and 1 not matched are both scores a test can use; 2 is no score at all, which is the
+    # fixture broken, never a reading to test against.
+    if proc.returncode not in (0, 1):
+        raise RuntimeError("the fixture could not be scored (exit %d): %s" % (proc.returncode, proc.stdout + proc.stderr))
     with open(os.path.join(cap, "score.json")) as fh:
         score = json.load(fh)
     return work, design_bytes, score, proc, cap

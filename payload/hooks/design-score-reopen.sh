@@ -28,7 +28,8 @@
 # Env (seams for the tests):
 #   DESIGN_REOPEN_STATE_DIR  where the run's records live (default ~/.claude/state/design-score-reopen)
 #   DESIGN_REOPEN_PY         the check to start (default design-score-reopen.py beside this file)
-#   DESIGN_REOPEN_EVERY      seconds between runs (default 72000, 20 hours, so a daily habit is not
+#   DESIGN_REOPEN_EVERY      seconds between runs (default 72000, twenty hours, a setting rather than a
+#                            measurement, so a daily habit is not
 #                            skipped for starting a little earlier than yesterday)
 #   DESIGN_REOPEN_NOW        the clock, as an epoch (L290)
 set -uo pipefail

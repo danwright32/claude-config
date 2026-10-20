@@ -112,9 +112,7 @@ class Checker:
         repos = []
         for name in DIGEST_LISTS:
             try:
-                raw = self.gh.call(["api", "-H", "Accept: application/vnd.github.raw",
-                                    "repos/%s/contents/%s" % (DIGEST_REPO, name)], DIGEST_REPO)
-                listed = json.loads(raw)["repos"]
+                listed = json.loads(self.gh.raw(name, DIGEST_REPO).decode("utf-8", errors="replace"))["repos"]
                 repos += ["%s/%s" % (r["owner"], r["name"]) for r in listed]
             except (sg.GitHubError, ValueError, KeyError, TypeError) as err:
                 # A run over half the repositories reads like a run over all of them, so none is run.
@@ -193,7 +191,7 @@ class Checker:
         head = ("**Reopened.** This issue was closed on %s by @%s while its design match score did not read 100%% "
                 "on both halves for the code it was closed on (`%s`, %s)." % (eastern(closed_at), closer, ref[:7], why))
         return self.reopen(repo, n, label, "issue", n, closed_at, head, reason,
-                           ["api", "-X", "PATCH", "repos/%s/issues/%d" % (repo, n), "-f", "state=open"])
+                           "repos/%s/issues/%d" % (repo, n))
 
     def handle_milestone(self, repo, ms):
         n, closed_at = ms["number"], ms.get("closed_at") or ""
@@ -226,10 +224,12 @@ class Checker:
                 "design match score did not read 100%% on both halves for the code it was closed on (`%s`, %s)."
                 % (ms.get("title", ""), eastern(closed_at), ref[:7], why))
         return self.reopen(repo, targets, label, "milestone", n, closed_at, head, reason,
-                           ["api", "-X", "PATCH", "repos/%s/milestones/%d" % (repo, n), "-f", "state=open"])
+                           "repos/%s/milestones/%d" % (repo, n))
 
     # --- the one outward action ---------------------------------------------------------------
-    def reopen(self, repo, on, label, kind, number, closed_at, head, reason, patch):
+    def reopen(self, repo, on, label, kind, number, closed_at, head, reason, reopened):
+        """Comments on `on` (a Match issue, or a list of them), then sets the issue or milestone at
+        the endpoint `reopened` open."""
         targets = on if isinstance(on, list) else [on]
         # The judge's first line, which names the issue and ends in the way to 100%: both are said
         # once already, by this line's start and by the comment.
@@ -251,9 +251,8 @@ class Checker:
             for t in targets:
                 comments = self.gh.api("repos/%s/issues/%d/comments?per_page=100" % (repo, t), repo, paginate=True)
                 if not any(mark in (c.get("body") or "") for c in comments):
-                    self.gh.call(["api", "-X", "POST", "repos/%s/issues/%d/comments" % (repo, t), "-f", "body=" + body],
-                                 repo)
-            self.gh.call(patch, repo)
+                    self.gh.write("POST", "repos/%s/issues/%d/comments" % (repo, t), repo, body=body)
+            self.gh.write("PATCH", reopened, repo, state="open")
         except sg.GitHubError as err:
             self.say("Could not reopen %s, closed %s below 100%%: %s. The next run tries again." % (
                 label, eastern(closed_at), err), failure=True)
