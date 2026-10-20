@@ -211,6 +211,15 @@ broken = {"body": sg.SCORE_MARK + "\n<details><summary>Score file</summary>\n\n`
 routes(comments=[comment(MATCHED), broken])
 rc, reason, out = gate("gh issue close 9")
 check("a score comment that cannot be read is refused, never skipped", "not JSON" in reason, out)
+# A terminal design (claude-config#1413), scored for real: its decisions all met, its picture half
+# unmeasured until a built mod screen can be captured (claude-config#1414), so its Match issue stays open.
+_, term_html, TERMINAL, proc, _ = score_fixture.make(T, name="terminal", commit=HEAD, kind="terminal")
+check("control: the terminal design scores its decisions and no picture",
+      proc.returncode == 2 and TERMINAL["decisions"]["met"] == 1 and TERMINAL.get("kind") == "terminal", proc.stdout)
+routes(comments=[comment(TERMINAL)], design_bytes=term_html)
+rc, reason, out = gate("gh issue close 9")
+check("a terminal design's Match issue is refused while its picture half is unmeasured, saying why",
+      "below 100%" in reason and "picture half of a terminal design is unmeasured" in reason, out)
 routes(issue9=dict(MATCH_ISSUE, body="Hand filed, no mark", title="Match the settled design: capacity"))
 rc, reason, out = gate("gh issue close 9")
 check("a Match issue filed by hand with no mark is refused, naming the mark to add",

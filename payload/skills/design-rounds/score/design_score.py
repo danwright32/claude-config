@@ -52,6 +52,9 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
                      no height: the full page, as tall as it draws
                      "kind"?: "email" | "document" | "new-product", for a design drawn with no product
                      page around it (claude-config#1393); recorded in the score and said in its report
+                     | "terminal", for a Claude Code mod's screen drawn in the shared terminal
+                     (claude-config#1413): its decisions are scored, and its picture half is said to be
+                     unmeasured, so it is no score, until a built mod screen can be captured (#1414)
   design-exceptions  {"exceptions": [{"id": "X1", "decision": "D7" | "frame": "f3", "region"?: [x, y, w, h],
                                       "words": "Dan's own words", "date": "YYYY-MM-DD",
                                       "source": "where he said it: an issue comment or session link"}]}
@@ -78,7 +81,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import pngio  # noqa: E402
-from design_file import NO_PAGE_KINDS, find_blocks, no_page_kinds  # noqa: E402
+from design_file import FRAME_KINDS, find_blocks, frame_kinds  # noqa: E402
 
 # Out of 255 per channel. Measured in Slate's first trial of this score (#3934, 2026-10-19): with
 # both sides drawn by the same Chrome, 8 absorbs rounding, while 24 let a blank white page match
@@ -89,6 +92,17 @@ SCORE_FORMAT = "design-score"
 VERSION = 1
 VERIFY = ("check", "picture", "elsewhere")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# The kinds of design whose picture half cannot be measured yet, each with the sentence the score says
+# for it. A terminal design is a Claude Code mod's screen (claude-config#1413): its design side draws, but
+# nothing captures a BUILT mod screen in the form its terminal is drawn in, so no picture of the build
+# exists to compare with, whatever a capture holds. Unmeasured is never 100%, so such a design scores
+# its decision half and stays below matched until claude-config#1414 gives it a capture.
+PICTURES_UNMEASURED = {
+    "terminal": ("the picture half of a terminal design is unmeasured: nothing yet captures a built Claude "
+                 "Code mod screen in the form the design's terminal is drawn in (claude-config#1414), so no "
+                 "frame has a picture of the build to compare with, and unmeasured is never 100%"),
+}
 
 # Diff picture colours: a differing pixel, area only one side has, and an excepted region.
 RED = b"\xff\x00\x00\xff"
@@ -162,12 +176,14 @@ def read_design(path, frames_only=False):
         h = f.get("height")
         if h is not None and (not isinstance(h, int) or isinstance(h, bool) or h <= 0):
             raise Unreadable("frame %s in the design-frames block has a height that is not a number of pixels" % fid)
-    # A design with no product page around it names its kind (claude-config#1393). Only the kinds Dan
-    # allowed are read, so a design naming another is no score, never one scored as if it were allowed.
+    # A design with no product page around it names its kind (claude-config#1393), and so does one drawn
+    # in the shared terminal (claude-config#1413). Only the kinds Dan allowed are read, so a design naming
+    # another is no score, never one scored as if it were allowed.
     kind = fblock.get("kind")
-    if kind is not None and (not isinstance(kind, str) or kind not in NO_PAGE_KINDS):
+    if kind is not None and (not isinstance(kind, str) or kind not in FRAME_KINDS):
         raise Unreadable("the design-frames block in %s names the kind %s, and a design with no product page "
-                         "around it is one of: %s" % (path, json.dumps(kind), no_page_kinds()))
+                         "around it, or drawn in a shared screen, is one of: %s"
+                         % (path, json.dumps(kind), frame_kinds()))
 
     # An adapter asks for the frames alone (`frames`), and a design whose map is still being written
     # can already be drawn.
@@ -468,6 +484,7 @@ def score_capture(folder):
 
     # --- pictures ----------------------------------------------------------------------------
     pframes = []
+    unmeasurable = PICTURES_UNMEASURED.get(kind)
     for f in frames:
         fid = f["id"]
         pf = {"id": fid, "title": f.get("title", ""), "width": f["width"], "height": f.get("height"),
@@ -476,6 +493,9 @@ def score_capture(folder):
         if fid in excepted_frames:
             pf["status"] = "excepted"
             pf["detail"] = "exception %s" % excepted_frames[fid].get("id")
+            continue
+        if unmeasurable:
+            # Said once below for the whole design, and never compared, whatever pictures the capture holds.
             continue
         cf = captured.get(fid)
         if cf is None:
@@ -521,6 +541,8 @@ def score_capture(folder):
                    "score": matched / compared, "diff": diff_name,
                    "builtSize": [bimg[0], bimg[1]], "designSize": [dimg[0], dimg[1]]})
     measured = [p for p in pframes if p["status"] == "measured"]
+    if unmeasurable and not all(p["status"] == "excepted" for p in pframes):
+        no.append(unmeasurable)
     if all(p["status"] == "excepted" for p in pframes):
         no.append("every frame is excepted, so no frame is left to compare and the picture half measures nothing")
     whole = bool(measured) and all(p["matched"] == p["compared"] for p in measured)
@@ -543,6 +565,9 @@ def verify_score(s):
     try:
         if s["unmeasured"]:
             return "unmeasured", []
+        # A kind whose pictures this score never measures, read as measured, was not written by it.
+        if s.get("kind") in PICTURES_UNMEASURED:
+            return None, ["it scores a %s design as measured, and %s" % (s["kind"], PICTURES_UNMEASURED[s["kind"]])]
         rows = s["decisions"]["rows"]
         counted = [r for r in rows if r["status"] in ("met", "unmet", "unchecked")]
         met = sum(1 for r in counted if r["status"] == "met")
@@ -571,8 +596,8 @@ def render(s):
                                                           s.get("build") or "(no build named)", at))
     if s.get("dirty"):
         lines.append("  drawn from a checkout with uncommitted changes, so this score belongs to no commit")
-    if s.get("kind") in NO_PAGE_KINDS:
-        line = NO_PAGE_KINDS[s["kind"]]
+    if s.get("kind") in FRAME_KINDS:
+        line = FRAME_KINDS[s["kind"]]
         lines.append("  kind       %s" % (line[0].lower() + line[1:]))
     dec = s["decisions"]
     rows = dec["rows"]

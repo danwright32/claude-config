@@ -563,6 +563,41 @@ check("a design naming a kind that is not allowed is no score, naming the allowe
       rc == 2 and "postcard" in out and "email, document, new-product" in out, out)
 rc, out = run("frames", os.path.join(T, "postcard", "settled.html"))
 check("and its frames are not handed to an adapter either", rc == 2 and "postcard" in out, out)
+check("the refusal names the terminal among the kinds", "terminal" in out, out)
+
+# 12. A design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413). Its decision
+# half is scored like any other. Nothing yet captures a built mod screen in the form its terminal is drawn
+# in (claude-config#1414), so its picture half is unmeasured, said plainly, whatever pictures a capture
+# holds, and unmeasured is never 100%.
+rc, out, data = score(make("terminal", lambda s: s["frames"].__setitem__("kind", "terminal")))
+check("a terminal design is no score, exit 2, never matched", rc == 2 and "could not score" in out, out)
+check("its decision half is still scored", data and data["decisions"]["met"] == 2 and data["decisions"]["of"] == 2
+      and "decisions  2 of 2 met (100%)" in out, out)
+check("its picture half is said plainly to be unmeasured, naming the missing capture",
+      "the picture half of a terminal design is unmeasured" in out and "claude-config#1414" in out, out)
+check("with no frame's picture measured, though the capture held both pictures",
+      data and [f["status"] for f in data["pictures"]["frames"]] == ["unmeasured", "unmeasured"]
+      and "pictures   " not in out, data and data["pictures"])
+check("the score file records the kind", data and data.get("kind") == "terminal", data and data.get("kind"))
+check("and says it in one plain line", "  kind       the Claude Code terminal" in out, out)
+import design_score  # noqa: E402
+check("the close gate's reader of a score file holds it as unmeasured, holding together",
+      data and design_score.verify_score(data) == ("unmeasured", []), data and design_score.verify_score(data))
+rc, out = run("show", os.path.join(T, "terminal", "score.json"))
+check("show of that score file is no score and says why", rc == 2 and "picture half of a terminal design" in out, out)
+forged = json.loads(json.dumps(data or {}))
+if forged:
+    forged.update(unmeasured=[], verdict="matched")
+    for f in forged["pictures"]["frames"]:
+        f.update(status="measured", compared=1200, matched=1200, score=1)
+    forged["pictures"]["score"] = 1
+with open(os.path.join(T, "terminal", "forged.json"), "w") as fh:
+    json.dump(forged, fh)
+rc, out = run("show", os.path.join(T, "terminal", "forged.json"))
+check("a terminal score file claiming its pictures were measured is no score", rc == 2 and "terminal" in out, out)
+rc, out = run("frames", os.path.join(T, "terminal", "settled.html"))
+check("its frames are handed to an adapter, which draws the design's side",
+      rc == 0 and [f["id"] for f in json.loads(out)["frames"]] == ["f1", "f2"], out)
 
 shutil.rmtree(T, ignore_errors=True)
 print()
