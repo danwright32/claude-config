@@ -14069,7 +14069,10 @@ check "#336 and counts them, so a repo red once reads differently from one red a
 out_rdst="$(CLAUDE_HOME="$(ci_home red)" SYNC_REPO="$(ci_repo red)" SYNC_NO_NOTIFY=1 bash "$SCRIPT" status 2>&1 || true)"
 dbg "#336 status on a repo that stays red: $out_rdst"
 check "#336 status says receiving is stuck, naming how many and how long" \
-  "line_has \"\$out_rdst\" 'receiving is stuck' 'in a row' 'ago'"
+  "line_has \"\$out_rdst\" 'receiving is stuck' 'in a row' 'the first (just now|(less than a minute|[0-9]+ [a-z]+) ago)\.'"
+# "How long" in either of its two honest forms, followed straight by the full stop. This check used
+# to accept any "ago", which the doubled "just now ago" satisfied, so it passed on the wording #1398
+# removed and failed on CI the first time the stretch was under a minute old.
 
 # And the command it hands you names the repository, or it answers about whatever repo the reader
 # happens to be standing in (claude-config#418). status is what the per prompt notice prints inside
