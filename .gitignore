@@ -23,6 +23,8 @@ state/
 .resolved/
 .send-suite-verdicts
 .behind-skips
+.sent-over-untested
+.reconcile-outcome
 .send-refused
 .ci-unreadable-since
 .resurrected-reported
