@@ -259,18 +259,39 @@ case "$MODE" in
     # The record is written however the run ends, a refusal included, so the next warning can say a
     # sweep failed rather than finding nothing (L13). It goes in whole and is renamed into place, and
     # the in-progress mark goes only after it, so a reader never sees neither.
+    # The record is built as one string, every field optional, and its success is judged only by the
+    # write and the rename, never by whether some field happened to be present: an earlier version
+    # ended on `[ -n "$df_after" ] && printf`, so a sweep with nothing to delete wrote no record and
+    # the previous sweep's was reported as the latest. If the write itself fails (a full disk is the
+    # very state that starts this sweep), the in-progress mark is LEFT, so the next reader says the
+    # sweep stopped before recording rather than showing an older record as this one (L11).
     auto_record() {
-      local rc="$1" tmp="$RECORD.tmp.$$"
-      {
-        printf 'started=%s\nfinished=%s\nexit=%s\nlog=%s\n' "$AUTO_STARTED" "$(date +%s)" "$rc" "${DERIVED_DATA_SWEEP_LOG:-}"
-        [ "${NO_ROOT:-0}" = 1 ] && printf 'no_root=1\n'
-        if [ "${PASS_DONE:-0}" = 1 ]; then
-          printf 'orphans=%s\ndeleted=%s\nfailed=%s\ndu_kib=%s\nvolume=%s\n' "$orphan_n" "$deleted_n" "$failed_n" "$deleted_kib" "$DF_VOLUME"
-          [ -n "${df_before:-}" ] && printf 'df_before_mb=%s\n' "$df_before"
-          [ -n "${df_after:-}" ] && printf 'df_after_mb=%s\n' "$df_after"
-        fi
-      } > "$tmp" 2>/dev/null && mv -f "$tmp" "$RECORD"
-      rm -f "$IN_PROGRESS"
+      local rc="$1" tmp="$RECORD.tmp.$$" text
+      text="started=$AUTO_STARTED
+finished=$(date +%s)
+exit=$rc
+log=${DERIVED_DATA_SWEEP_LOG:-}
+"
+      if [ "${NO_ROOT:-0}" = 1 ]; then text="${text}no_root=1
+"; fi
+      if [ "${PASS_DONE:-0}" = 1 ]; then
+        text="${text}orphans=$orphan_n
+deleted=$deleted_n
+failed=$failed_n
+du_kib=$deleted_kib
+volume=$DF_VOLUME
+"
+        if [ -n "${df_before:-}" ]; then text="${text}df_before_mb=$df_before
+"; fi
+        if [ -n "${df_after:-}" ]; then text="${text}df_after_mb=$df_after
+"; fi
+      fi
+      if printf '%s' "$text" > "$tmp" 2>/dev/null && mv -f "$tmp" "$RECORD" 2>/dev/null; then
+        rm -f "$IN_PROGRESS"
+      else
+        rm -f "$tmp" 2>/dev/null
+        echo "derived-data-sweep: could not write its record to $RECORD, so the in-progress mark is left for the next reader."
+      fi
     }
     trap 'auto_record $?' EXIT
     echo "Automatic sweep started by the low free space warning, $(date '+%Y-%m-%d %H:%M %Z')."

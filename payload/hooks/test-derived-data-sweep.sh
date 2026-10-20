@@ -299,6 +299,44 @@ check "the one sweep finishes" "$(wait_finished "$S7" && echo ok || echo "no fin
 check "and only one sweep ran" "$(eq "$(run_logs "$S7")" 1)"
 check "and it removed the orphan" "$(gone "$ROOT7/Lock-orphan")"
 
+# A sweep that finds nothing to delete still writes its OWN record. Without one the previous sweep's
+# record stays, and the next warning reports that older sweep's deletions as if they were the latest.
+# The state folder starts holding a record of an earlier sweep that deleted something.
+ROOT11="$TMP_ROOT/dd-nothing"; S11="$TMP_ROOT/state-nothing"
+mkdir -p "$ROOT11" "$S11"; mkdir -p "$TMP_ROOT/live-checkout/App.xcodeproj"
+make_folder "$ROOT11" "App-live" "$TMP_ROOT/live-checkout/App.xcodeproj" >/dev/null
+printf 'started=1\nfinished=2\nexit=0\norphans=5\ndeleted=5\nfailed=0\ndu_kib=9\ndf_before_mb=1\ndf_after_mb=9\n' > "$S11/last-result"
+write_fake_ps "$ROOT11"
+run_state "$ROOT11" "$S11" --start
+check "a sweep with nothing to delete finishes" "$(wait_finished "$S11" && echo ok || echo "no finished record in $S11")"
+run_state "$ROOT11" "$S11" --last
+check "and --last reports that sweep, which deleted nothing" "$(has "$OUT" "found no orphaned folder that nothing was using")"
+check "not the earlier sweep's deletions" "$(hasnt "$OUT" "deleted 5 of 5")"
+
+# A record that cannot be written (a full disk is the very state that starts a sweep) leaves the
+# in-progress mark, so the next reader says the sweep stopped before recording instead of showing the
+# older record as this one. The state folder is made read only while the sweep is held at its process
+# list, then the sweep is released and waited on by its lock.
+ROOT12="$TMP_ROOT/dd-unwritable"; S12="$TMP_ROOT/state-unwritable"; RELEASE12="$TMP_ROOT/release-12"
+mkdir -p "$ROOT12" "$S12"
+make_folder "$ROOT12" "Unwritable-orphan" "$TMP_ROOT/removed-unwritable/App.xcodeproj" >/dev/null
+printf 'started=1\nfinished=2\nexit=0\norphans=5\ndeleted=5\nfailed=0\n' > "$S12/last-result"
+sed "s|$RELEASE7|$RELEASE12|" "$BLOCKING_PS" > "$TMP_ROOT/blocking-ps-12"; chmod +x "$TMP_ROOT/blocking-ps-12"
+SAVED_PS="$FAKE_PS"; FAKE_PS="$TMP_ROOT/blocking-ps-12"
+run_state "$ROOT12" "$S12" --start
+start12_rc="$RC"
+FAKE_PS="$SAVED_PS"
+chmod 500 "$S12"
+: > "$RELEASE12"
+lock_free_deadline=$(( $(date +%s) + 30 ))
+until perl -e 'use Fcntl qw(:flock); open(my $fh, "<", $ARGV[0]) or exit 1; flock($fh, LOCK_EX | LOCK_NB) ? exit 0 : exit 1;' "$S12/lock" \
+  || [ "$(date +%s)" -ge "$lock_free_deadline" ]; do sleep 0.1; done
+chmod 700 "$S12"
+run_state "$ROOT12" "$S12" --last
+check "a sweep whose record cannot be written was started" "$(eq "$start12_rc" 0)"
+check "and --last says it stopped before recording, not the older record" \
+  "$(has "$OUT" "stopped before recording")"
+
 # A sweep that fails is reported as failing by the next reader, never as a sweep that freed nothing.
 ROOT8="$TMP_ROOT/dd-auto-stuck"; S8="$TMP_ROOT/state-stuck"
 mkdir -p "$ROOT8"
