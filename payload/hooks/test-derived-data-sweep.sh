@@ -315,27 +315,41 @@ check "not the earlier sweep's deletions" "$(hasnt "$OUT" "deleted 5 of 5")"
 
 # A record that cannot be written (a full disk is the very state that starts a sweep) leaves the
 # in-progress mark, so the next reader says the sweep stopped before recording instead of showing the
-# older record as this one. The state folder is made read only while the sweep is held at its process
-# list, then the sweep is released and waited on by its lock.
-ROOT12="$TMP_ROOT/dd-unwritable"; S12="$TMP_ROOT/state-unwritable"; RELEASE12="$TMP_ROOT/release-12"
-mkdir -p "$ROOT12" "$S12"
+# older record as this one. The state folder stays WRITABLE and only the rename onto the record is
+# refused, by an mv on the sweep's PATH that refuses that one destination and logs each refusal. A
+# read only folder, as this test first used, also stopped the old writer removing the mark, so the
+# test passed against the writer it was meant to catch (#1407, L1). Here a writer that removes the
+# mark whether or not its record went in does remove it, and the older record is read as this one.
+ROOT12="$TMP_ROOT/dd-unwritable"; S12="$TMP_ROOT/state-unwritable"; SHIM12="$TMP_ROOT/mv-refuses-record"
+mkdir -p "$ROOT12" "$S12" "$SHIM12"
 make_folder "$ROOT12" "Unwritable-orphan" "$TMP_ROOT/removed-unwritable/App.xcodeproj" >/dev/null
 printf 'started=1\nfinished=2\nexit=0\norphans=5\ndeleted=5\nfailed=0\n' > "$S12/last-result"
-sed "s|$RELEASE7|$RELEASE12|" "$BLOCKING_PS" > "$TMP_ROOT/blocking-ps-12"; chmod +x "$TMP_ROOT/blocking-ps-12"
-SAVED_PS="$FAKE_PS"; FAKE_PS="$TMP_ROOT/blocking-ps-12"
+REAL_MV="$(command -v mv)"
+cat > "$SHIM12/mv" <<MV
+#!/bin/sh
+for a in "\$@"; do last="\$a"; done
+if [ "\$last" = "$S12/last-result" ]; then echo refused >> "$TMP_ROOT/mv-refused-12"; exit 1; fi
+exec "$REAL_MV" "\$@"
+MV
+chmod +x "$SHIM12/mv"
+SAVED_PATH="$PATH"; PATH="$SHIM12:$PATH"
 run_state "$ROOT12" "$S12" --start
 start12_rc="$RC"
-FAKE_PS="$SAVED_PS"
-chmod 500 "$S12"
-: > "$RELEASE12"
 lock_free_deadline=$(( $(date +%s) + 30 ))
 until perl -e 'use Fcntl qw(:flock); open(my $fh, "<", $ARGV[0]) or exit 1; flock($fh, LOCK_EX | LOCK_NB) ? exit 0 : exit 1;' "$S12/lock" \
   || [ "$(date +%s)" -ge "$lock_free_deadline" ]; do sleep 0.1; done
-chmod 700 "$S12"
+PATH="$SAVED_PATH"
 run_state "$ROOT12" "$S12" --last
 check "a sweep whose record cannot be written was started" "$(eq "$start12_rc" 0)"
-check "and --last says it stopped before recording, not the older record" \
-  "$(has "$OUT" "stopped before recording")"
+check "and it finished, releasing its lock" "$([ "$(date +%s)" -lt "$lock_free_deadline" ] && echo ok || echo "the lock was still held after 30s")"
+check "and it deleted the orphan" "$(gone "$ROOT12/Unwritable-orphan")"
+check "and its record was refused, so this case really ran" \
+  "$([ -s "$TMP_ROOT/mv-refused-12" ] && echo ok || echo "the mv on its PATH never refused the record")"
+check "the older record is left as it was" \
+  "$(grep -qx 'deleted=5' "$S12/last-result" && echo ok || echo "record: $(cat "$S12/last-result" 2>/dev/null)")"
+check "the in-progress mark is left for the next reader" "$([ -e "$S12/in-progress" ] && echo ok || echo "no mark in $S12")"
+check "and --last says it stopped before recording" "$(has "$OUT" "stopped before recording")"
+check "not the older record's deletions as this sweep's" "$(hasnt "$OUT" "deleted 5 of 5")"
 
 # A sweep that fails is reported as failing by the next reader, never as a sweep that freed nothing.
 ROOT8="$TMP_ROOT/dd-auto-stuck"; S8="$TMP_ROOT/state-stuck"
