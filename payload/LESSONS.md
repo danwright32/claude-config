@@ -9963,6 +9963,10 @@ for reference; L6 was reviewed and deliberately not adopted.
 - **L1021. Change directory to a looked-up or computed path only as `cd "${var:?}"`, because `cd` to an empty variable succeeds without moving, so the rest of the command runs wherever the shell already was, often a shared checkout.** (claude-config#1003, 2026-10-09)
   SHORT: cd to a computed path only as cd "${var:?}": cd to an empty variable succeeds in place and the rest of the command runs where you already are.
 
+- **L791. A CI workflow that names a secret the repository does not hold receives an empty string
+  instead of an error, so the step runs as though configured, so every secret a workflow names must
+  be checked to exist, by a guard that fails the build rather than by the step that uses it.** (project-enrollment-tracker#1750, 2026-10-20)
+  SHORT: A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
