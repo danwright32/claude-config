@@ -612,12 +612,19 @@ check_eq "and nothing is filed" "0" "$(issues_filed)"
 # --- a feature with a settled design (claude-config#1290) ------------------------
 # A plan naming its settled design is held to the design's decision map before anything is written:
 # every decision owned by a requirement or marked as having no code consequence, and every
-# requirement named by an issue. Then the milestone gets one more issue, the comparison of the built
-# screens against every design frame, so drift on the decisions that did have owners is found too.
+# requirement named by an issue. Then the milestone gets one more issue, "Match the settled design",
+# closed only when the build scores 100% on both halves of the design match score (#1364), so drift on
+# the decisions that did have owners is found too.
 design_file() { # design_file <path> <decisions json>
   printf '<!doctype html><html><body><main>screen</main>\n<script type="application/json" id="decision-map">{"decisions": %s}</script>\n</body></html>\n' "$2" >"$1"
 }
-design_file "$TMP/settled.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Heading reads Invoices", "noCode": "copy only"}]'
+# The settled design is committed in the app's repository, so it is written into a checkout: the
+# score and the close gate name it by its path there, the same on every machine (#1364).
+APP="$TMP/app"
+mkdir -p "$APP/docs/design"
+git init -q "$APP"
+DESIGN="$APP/docs/design/settled.html"
+design_file "$DESIGN" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Heading reads Invoices", "noCode": "copy only"}]'
 design_file "$TMP/gap.html" '[{"id": "D1", "decision": "One column list", "requirement": "6.4"}, {"id": "D2", "decision": "Empty state shows last month"}]'
 design_plan() { # design_plan <out> <design path> <phase 1 body>
   cat >"$1" <<JSON
@@ -642,7 +649,7 @@ check "#1290 the refusal names the unowned decision" "UNMAPPED D2: Empty state s
 check_eq "#1290 and nothing is filed" "0" "$(issues_filed)"
 check_eq "#1290 and no milestone is written" "0" "$(milestone_writes)"
 
-design_plan "$TMP/plan-noissue.json" "$TMP/settled.html" "Builds the list."
+design_plan "$TMP/plan-noissue.json" "$DESIGN" "Builds the list."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-noissue.json")"; rc=$?
 check_eq "#1290 a requirement no issue names exits 11" "11" "$rc"
 check "#1290 the refusal names the requirement" "NO-ISSUE Requirement 6.4 (D1)" "$out"
@@ -658,27 +665,48 @@ out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-missing.json")"; rc=$?
 check_eq "#1290 a design file that is not there exits 11" "11" "$rc"
 check "#1290 and says it could not be read" "DECISION-MAP UNREADABLE" "$out"
 
-design_plan "$TMP/plan-design.json" "$TMP/settled.html" "Builds Requirement 6.4."
+design_plan "$TMP/plan-design.json" "$DESIGN" "Builds Requirement 6.4."
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design.json")"; rc=$?
 check_eq "#1290 a design whose map holds files the plan" "0" "$rc"
 check_eq "#1290 with one more issue than the plan's phases" "3" "$(issues_filed)"
 # From the last create to the end of the log, since a body spanning lines spreads one call over several.
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
-check "#1290 the last is the comparison against every design frame" "--title Compare the built screens against every frame of the settled design" "$last_create"
-check "#1290 which names the design file" "$TMP/settled.html" "$last_create"
+check "#1364 the last is Match the settled design" "--title Match the settled design --body" "$last_create"
+check "#1364 whose body carries the mark the close gate finds the design by, as its path in the checkout" \
+  '<!-- design-score-issue {"design": "docs/design/settled.html"} -->' "$last_create"
+check "#1364 and says it is done at 100% on both halves" "100% on both halves" "$last_create"
+check "#1364 and how the score is made" "design_score.py score" "$last_create"
+check "#1364 and that closing it below 100% is refused" "refuses to close" "$last_create"
 check "#1290 and carries the plan's priority and labels" "--label priority-p2 --label enhancement" "$last_create"
-# A plan that already ends with the comparison does not get it twice.
-jq '.issues += [{"title": "Compare the built screens against every frame of the settled design", "body": "own words"}]' "$TMP/plan-design.json" >"$TMP/plan-design-own.json"
+first_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | sed -n 1p | cut -d: -f1),$(grep -n '^issue create' "$TMP/calls.log" | sed -n 2p | cut -d: -f1)p" "$TMP/calls.log")"
+check "#1364 every phase is told its pull request posts the current score" "design_score.py post" "$first_create"
+check "#1364 the milestone's description carries the design mark, so it is known as a design milestone" \
+  'design-score-milestone' "$(cat "$TMP/calls.log")"
+# A plan that already ends with its own Match issue does not get it twice, and its own issue gets the
+# mark, since the gate finds the design by it.
+jq '.issues += [{"title": "Match the settled design", "body": "own words"}]' "$TMP/plan-design.json" >"$TMP/plan-design-own.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-own.json")"; rc=$?
-check_eq "#1290 a plan carrying its own comparison files once" "3" "$(issues_filed)"
+check_eq "#1364 a plan carrying its own Match issue files it once" "3" "$(issues_filed)"
+last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
+check "#1364 keeping its own words" "own words" "$last_create"
+check "#1364 with the mark added" 'design-score-issue {"design": "docs/design/settled.html"}' "$last_create"
+# A settled design outside any checkout cannot be named the same way on every machine, so the plan
+# files nothing.
+mkdir -p "$TMP/loose"
+cp "$DESIGN" "$TMP/loose/settled.html"
+design_plan "$TMP/plan-loose.json" "$TMP/loose/settled.html" "Builds Requirement 6.4."
+out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-loose.json")"; rc=$?
+check_eq "#1364 a settled design in no git checkout exits 11" "11" "$rc"
+check "#1364 and says why" "not inside a git checkout" "$out"
+check_eq "#1364 filing nothing" "0" "$(issues_filed)"
 
 # Lessons review of #1290: a plan whose phases each carry their own level and categories, with no
-# plan level default, is not refused over the comparison issue it never wrote; the issue takes the
-# last phase's.
+# plan level default, is not refused over the Match issue it never wrote; the issue takes the last
+# phase's.
 cat >"$TMP/plan-design-perissue.json" <<JSON
 {
   "title": "Invoices screen",
-  "design": "$TMP/settled.html",
+  "design": "$DESIGN",
   "issues": [
     { "title": "Phase 1: the list", "body": "Builds Requirement 6.4.", "priority": "p1", "labels": ["enhancement"] },
     { "title": "Phase 2: the heading", "body": "Copy.", "priority": "p3", "labels": ["ui-ux"] }
@@ -689,21 +717,21 @@ labels_are enhancement ui-ux
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-perissue.json")"; rc=$?
 check_eq "#1290 a plan with only per phase levels and labels still files" "0" "$rc"
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
-check "#1290 and the comparison takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
+check "#1290 and the Match issue takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
 # An empty plan level default is no default, as labels_for reads it, so the last phase's still apply.
 jq '.labels = [] | .priority = ""' "$TMP/plan-design-perissue.json" >"$TMP/plan-design-emptydefaults.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-emptydefaults.json")"; rc=$?
 check_eq "#1290 empty plan level defaults still file" "0" "$rc"
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
-check "#1290 with the last phase's level and labels on the comparison" "--label priority-p3 --label ui-ux" "$last_create"
+check "#1290 with the last phase's level and labels on the Match issue" "--label priority-p3 --label ui-ux" "$last_create"
 
-# And the comparison is not counted as a phase: a design plan of ONE phase gets the same answer from
+# And the Match issue is not counted as a phase: a design plan of ONE phase gets the same answer from
 # the milestone helper as the same plan without a design, never a milestone it would refuse.
 cat >"$TMP/plan-one.json" <<'JSON'
 { "title": "Invoices screen", "priority": "p2", "labels": ["enhancement"],
   "issues": [ { "title": "Phase 1: the list", "body": "Builds Requirement 6.4." } ] }
 JSON
-jq --arg d "$TMP/settled.html" '.design = $d' "$TMP/plan-one.json" >"$TMP/plan-one-design.json"
+jq --arg d "$DESIGN" '.design = $d' "$TMP/plan-one.json" >"$TMP/plan-one-design.json"
 labels_are enhancement
 out_plain="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one.json")"; rc_plain=$?
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-one-design.json")"; rc=$?

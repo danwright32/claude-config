@@ -990,7 +990,7 @@ these cases.
 
 ### What a push actually waits on
 
-Twenty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Twenty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1002,7 +1002,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Seven of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Eight of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1010,6 +1010,7 @@ Seven of them came after the 2026-09-21 timing further down, which measured the 
 | `pr-review-gate.sh` (#560) | 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
 | `block-red-merge.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
 | `require-changelog-tag.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13, the same way |
+| `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
@@ -1852,6 +1853,21 @@ SwiftUI, and a diff picture per frame, and exits 0 matched, 1 not matched yet, 2
 unmeasured build never reads as done. It needs only python3's standard library (its own PNG reader,
 `pngio.py`, is checked against Pillow's reading of a real Chrome screenshot). The design rounds
 skill describes the blocks the design file carries; `test-design-score.sh` holds it.
+
+**Closing is held at 100%.** `create-milestone.sh` ends a design milestone with "Match the settled
+design" (marked with the design's path in the app's checkout, as is the milestone's description) and
+tells every other issue its pull request posts the score with `design_score.py post`, which puts it
+on the pull request and on the Match issue. `hooks/design-score-gate.sh`, a PreToolUse Bash hook,
+refuses to close the Match issue or its milestone unless the newest score posted for the code being
+closed on (the default branch's head, or a merging pull request's head; a squash merge of the scored
+branch has the same tree) is matched on both halves, was drawn with nothing uncommitted and was
+measured against the design file as committed there. It reads `gh issue close`, `delete` and
+`transfer`, a REST close of the issue or the milestone, `gh pr merge` of a pull request whose
+closing keywords name it, and `merge-when-ready.sh`, which asks it as it asks every merge gate; a
+GraphQL `closeIssue` is refused outright. Anything it cannot read, its own judge failing included,
+refuses (fail closed), and there is no override. Not seen by it: a close in GitHub's web page, and a
+closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
+holds it, against a fake gh.
 
 ## Mods
 

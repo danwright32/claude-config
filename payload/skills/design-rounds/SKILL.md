@@ -311,9 +311,9 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    planner. `/plan-council`, `/plan-lite` and `/milestone` put the settled file's path in
    their plan as `"design"`, and `create-milestone.sh` runs the same check with the plan,
    filing nothing while a decision has no requirement or a requirement has no issue naming it
-   as `Requirement <number>`. It then adds the milestone's last issue: screenshot the built
-   page against every frame of the design at the frame's own width and list every
-   difference, which finds drift on the decisions that did have owners.
+   as `Requirement <number>`. It then adds the milestone's last issue, "Match the settled
+   design", which closes only when the build scores 100% on both halves (below), which finds
+   drift on the decisions that did have owners.
 
 ## Scoring the build against the settled design
 
@@ -355,6 +355,23 @@ its frame's width, a check that threw, a check the design itself fails (so the c
 the build), or nothing left to measure. Unmeasured is never 100%. The capture's shape is at the top
 of `design_score.py`. It reads PNGs with the standard library alone, so it runs the same on both Macs
 and on CI: two 1280 by 2000 frames scored in about 7 seconds on 2026-10-19.
+
+**Done is 100%, and a hook holds it.** Every pull request in a design milestone posts the current
+score, on itself and on the milestone's "Match the settled design" issue:
+
+```bash
+python3 ~/.claude/skills/design-rounds/score/design_score.py post <capture folder>/score.json --repo <owner/name> --pr <number>
+```
+
+`design-score-gate.sh` refuses to close that issue, or the milestone, unless the newest score
+posted on it for the code being closed on (the default branch's head, or the head of a pull request
+whose closing keywords name it; a squash merge of the scored branch has the same tree and counts)
+reads matched on both halves, was drawn with nothing uncommitted, and was measured against the
+design file as committed there. It reads `gh issue close`, `delete` and `transfer`, a REST close of
+the issue or the milestone, `gh pr merge` and `merge-when-ready.sh`; a GraphQL `closeIssue` is
+refused, since `gh issue close` does the same readably. Anything it cannot read refuses, saying
+what. There is no override: a difference Dan means to keep is a new round or an exception in his
+words.
 
 ## Common mistakes
 
