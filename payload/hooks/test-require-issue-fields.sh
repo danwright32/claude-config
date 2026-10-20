@@ -40,10 +40,15 @@ fail=0
 # The session a create comes from is read from the environment Claude Code gives the hook
 # (claude-config#536). Cleared by default, so the three field rules below are judged the same
 # inside a session and in CI, and set explicitly only where the session line is what is tested.
+# PAYLOAD_CWD, when set, is the working directory Claude Code reports for the command (the payload's
+# cwd), which a relative --body-file is read against (claude-config#1416).
 run() {
-  printf '%s' "$1" | python3 -c '
-import sys, json
-json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}, sys.stdout)
+  printf '%s' "$1" | PAYLOAD_CWD="${PAYLOAD_CWD:-}" python3 -c '
+import os, sys, json
+payload = {"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}
+if os.environ.get("PAYLOAD_CWD"):
+    payload["cwd"] = os.environ["PAYLOAD_CWD"]
+json.dump(payload, sys.stdout)
 ' | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID ${SESSION_ENV:-} bash "$HOOK" 2>/dev/null
 }
 denies() {
@@ -278,8 +283,9 @@ m = importlib.util.module_from_spec(s); os.environ['GATE_DIR'] = '$DIR'; s.loade
 print(len(m.RULES))
 print(all(set(r) >= {'name','check','fix','override'} for r in m.RULES))
 ")"
-if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "4" ]]; then pass=$((pass + 1)); else
-  fail=$((fail + 1)); echo "FAIL: expected 4 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
+# A fifth since #1416: a body file the gate can read.
+if [[ "$(printf '%s' "$rules_n" | awk 'NR <= 1')" = "5" ]]; then pass=$((pass + 1)); else
+  fail=$((fail + 1)); echo "FAIL: expected 5 rules in the table, got $(printf '%s' "$rules_n" | awk 'NR <= 1')"; fi
 if [[ "$(printf '%s' "$rules_n" | tail -1)" = "True" ]]; then pass=$((pass + 1)); else
   fail=$((fail + 1)); echo "FAIL: every rule needs a name, check, fix and override"; fi
 
@@ -498,7 +504,9 @@ b
 EOF
 gh issue create --title t --body-file $NEWF $ALL"
 allows "#1246 printf of a variable is not judged" "printf '%s\n' \"\$BODY\" > $NEWF && gh issue create --title t --body-file $NEWF $ALL"
-allows "#1246 a body file nothing in the command writes, and that cannot be read, still passes" "gh issue create --title t --body-file $TMP_DIR/never-written.md $ALL"
+# Reversed by claude-config#1416: a body file nothing in the command writes and the gate cannot read
+# is refused, naming the path, rather than passed. gh cannot file from it either.
+denies "#1416 a body file nothing in the command writes, and that does not exist, is refused" "gh issue create --title t --body-file $TMP_DIR/never-written.md $ALL"
 # A body read from standard input is judged by the command text alone, as it always was: the
 # line has to be in the text the command pipes or feeds in.
 denies "#1246 a heredoc body on standard input without the line is refused" "gh issue create --title t -F - $ALL <<'EOF'
@@ -526,6 +534,129 @@ SESSION_ENV="CLAUDE_CODE_SESSION_ID=not-an-id"
 allows "#536 with no usable session identity the rule stands down rather than guess" "gh issue create --title t --body b $ALL"
 SESSION_ENV=""
 allows "#536 outside a session (CI, a plain shell) the rule does not apply" "gh issue create --title t --body b $ALL"
+
+# ---------------------------------------------------------------------------
+# A body file the gate cannot read (claude-config#1416). Try-Pennie/slate#3924 and #3925 were filed
+# with a body holding only the session line, from --body-file "$D/i7.md" in a Bash call where $D was
+# never set (variables do not carry between calls), and the gate passed it because it fails open on
+# a file it cannot open. A path naming a variable this command does not set, a file that does not
+# exist, and an empty file are each refused now, naming the path as the gate saw it and why. The
+# other three fields are satisfied and the body carries no section in the command, so a refusal here
+# is the body file's.
+# ---------------------------------------------------------------------------
+FC="$M $P $C"
+U='$ISSUE1416_UNSET_DIR'   # a variable nothing sets, written as the command spells it
+mkdir -p "$TMP_DIR/sub"
+GOOD="$TMP_DIR/good.md"
+printf 'b\n\n## Open questions\n\nNone\n' > "$GOOD"
+EMPTYF="$TMP_DIR/empty.md"
+: > "$EMPTYF"
+BLANKF="$TMP_DIR/blank.md"
+printf '  \n\n' > "$BLANKF"
+denies "#1416 a path through a variable this command never sets is refused" "gh issue create --title t --body-file \"$U/i7.md\" $FC"
+says "#1416 naming the path as the gate saw it" "$U/i7.md" "gh issue create --title t --body-file \"$U/i7.md\" $FC"
+says "#1416 and saying the variable is not set in this command" "ISSUE1416_UNSET_DIR is not set in this command" "gh issue create --title t --body-file \"$U/i7.md\" $FC"
+says "#1416 in the one message beside the gate's other refusals" "a milestone, a body file it can read" "gh issue create --title t --body-file \"$U/i7.md\" $P $C"
+denies "#1416 the braced spelling is the same variable" "gh issue create --title t --body-file \"\${ISSUE1416_UNSET_DIR}/i7.md\" $FC"
+denies "#1416 --body-file=path is the same flag" "gh issue create --title t --body-file=\"$U/i7.md\" $FC"
+denies "#1416 -F path is the same flag" "gh issue create --title t -F \"$U/i7.md\" $FC"
+denies "#1416 -Fpath is the same flag" "gh issue create --title t -F\"$U/i7.md\" $FC"
+# A variable the same command sets before the create is the value the shell will use.
+allows "#1416 a variable set earlier in the same command is followed" "D=$TMP_DIR; gh issue create --title t --body-file \"\$D/good.md\" $FC"
+allows "#1416 an exported one too" "export D=$TMP_DIR && gh issue create --title t --body-file \"\$D/good.md\" $FC"
+allows "#1416 one set from another variable the command set" "A=$TMP_DIR; D=\"\$A\"; gh issue create --title t --body-file \"\$D/good.md\" $FC"
+denies "#1416 a variable set earlier, naming a file that does not exist, is refused" "D=$TMP_DIR; gh issue create --title t --body-file \"\$D/missing.md\" $FC"
+says "#1416 and says the file does not exist, with the path as the shell would read it" "$TMP_DIR/missing.md does not exist" "D=$TMP_DIR; gh issue create --title t --body-file \"\$D/missing.md\" $FC"
+# The shell expands a create's arguments before an assignment in front of that create applies.
+denies "#1416 an assignment prefixed to the create itself does not reach its arguments" "D=$TMP_DIR gh issue create --title t --body-file \"\$D/good.md\" $FC"
+# An assignment in a subshell ends with it.
+denies "#1416 an assignment inside a subshell does not outlive it" "(D=$TMP_DIR); gh issue create --title t --body-file \"\$D/good.md\" $FC"
+# A variable set from something only running the command can tell, with no write here to judge.
+denies "#1416 a variable set from a command substitution, file not written here, is refused" "D=\$(mktemp -d); gh issue create --title t --body-file \"\$D/b.md\" $FC"
+says "#1416 and says the gate cannot read what it was set to" "D is set in this command from something the gate cannot read" "D=\$(mktemp -d); gh issue create --title t --body-file \"\$D/b.md\" $FC"
+denies "#1416 a path holding a command substitution is refused" "gh issue create --title t --body-file \"\$(git rev-parse --show-toplevel)/b.md\" $FC"
+# But a body file the command itself writes is still judged from the command (#1246), however its
+# path is spelled, since the file is the one the command makes.
+allows "#1416 a file under an unresolvable variable, written by this command from shown text, is judged from the text" "D=\$(mktemp -d); cat > \"\$D/b.md\" <<'EOF'
+b
+
+## Open questions
+
+None
+EOF
+gh issue create --title t --body-file \"\$D/b.md\" $FC"
+denies "#1416 and the same without the section is refused for the section, not the file" "D=\$(mktemp -d); cat > \"\$D/b.md\" <<'EOF'
+b
+EOF
+gh issue create --title t --body-file \"\$D/b.md\" $FC"
+omits "#1416 the file rule does not fire on a file the command writes" "a body file it can read" "D=\$(mktemp -d); cat > \"\$D/b.md\" <<'EOF'
+b
+EOF
+gh issue create --title t --body-file \"\$D/b.md\" $FC"
+# A variable the command fills in as it runs (a for or read loop's, a function's \$1) has no value
+# the gate can know, but the files it could name can be looked for. Measured on 2026-10-20 across
+# every past create with a body file in this Mac's transcripts: 4 of about 400 used one of these
+# shapes, each a real filing loop. One of them passes while some non-empty file matches, and is
+# refused when none could.
+allows "#1416 a for loop's variable naming files that exist passes" "for k in good; do gh issue create --title t --body-file \"$TMP_DIR/\$k.md\" $FC; done"
+allows "#1416 a read loop's variable too" "printf 'good\n' | while IFS=\$'\t' read -r k t; do gh issue create --title t --body-file \"$TMP_DIR/\$k.md\" $FC; done"
+allows "#1416 a function's positional parameter too" "f() { gh issue create --title \"\$1\" --body-file \"$TMP_DIR/\$2.md\" $FC; }
+f T good"
+denies "#1416 a loop variable no file could match is refused" "for k in a b; do gh issue create --title t --body-file \"$TMP_DIR/nothing-\$k.md\" $FC; done"
+says "#1416 and says no file matches, showing the pattern" "no file matches $TMP_DIR/nothing-*.md" "for k in a b; do gh issue create --title t --body-file \"$TMP_DIR/nothing-\$k.md\" $FC; done"
+mkdir -p "$TMP_DIR/only-empty"
+: > "$TMP_DIR/only-empty/e.md"
+denies "#1416 a pattern only an empty file matches is refused" "for k in e; do gh issue create --title t --body-file \"$TMP_DIR/only-empty/\$k.md\" $FC; done"
+# Home: ~ and \$HOME read as the shell would, from the environment the gate is given.
+SESSION_ENV="HOME=$TMP_DIR"
+allows "#1416 ~ is home" "gh issue create --title t --body-file ~/good.md $FC"
+allows "#1416 \$HOME is home" "gh issue create --title t --body-file \"\$HOME/good.md\" $FC"
+allows "#1416 \${HOME} is home" "gh issue create --title t --body-file \"\${HOME}/good.md\" $FC"
+denies "#1416 a file missing from home is refused" "gh issue create --title t --body-file \"\$HOME/missing.md\" $FC"
+SESSION_ENV=""
+# Present but empty: gh would file a blank body.
+denies "#1416 an empty body file is refused" "gh issue create --title t --body-file $EMPTYF $FC"
+says "#1416 and says it is empty" "$EMPTYF is empty" "gh issue create --title t --body-file $EMPTYF $FC"
+denies "#1416 a body file of only blank lines is refused as empty" "gh issue create --title t --body-file $BLANKF $FC"
+says "#1416 a missing literal path says it does not exist" "$TMP_DIR/never-written.md does not exist" "gh issue create --title t --body-file $TMP_DIR/never-written.md $FC"
+# A readable file holding the section passes, as it always did.
+allows "#1416 a readable body file passes" "gh issue create --title t --body-file $GOOD $FC"
+# Relative paths are read against the command's working directory, which Claude Code reports in the
+# payload, and against any cd the command makes before the create.
+PAYLOAD_CWD="$TMP_DIR"
+allows "#1416 a relative path is read against the command's working directory" "gh issue create --title t --body-file good.md $FC"
+allows "#1416 ./ too" "gh issue create --title t --body-file ./good.md $FC"
+PAYLOAD_CWD="$TMP_DIR/sub"
+denies "#1416 a relative path missing from the working directory is refused" "gh issue create --title t --body-file good.md $FC"
+says "#1416 and names where it looked" "$TMP_DIR/sub/good.md does not exist" "gh issue create --title t --body-file good.md $FC"
+allows "#1416 ../ from the working directory" "gh issue create --title t --body-file ../good.md $FC"
+PAYLOAD_CWD="/"
+allows "#1416 a cd earlier in the command moves where a relative path is read" "cd $TMP_DIR && gh issue create --title t --body-file good.md $FC"
+allows "#1416 a relative cd from the working directory" "cd ${TMP_DIR#/} && gh issue create --title t --body-file good.md $FC"
+allows "#1416 a cd through a variable the command set" "D=$TMP_DIR; cd \"\$D\"; gh issue create --title t --body-file good.md $FC"
+denies "#1416 a cd to a directory without the file is refused" "cd $TMP_DIR/sub && gh issue create --title t --body-file good.md $FC"
+denies "#1416 a cd inside a subshell does not move the create after it" "(cd $TMP_DIR) && gh issue create --title t --body-file good.md $FC"
+denies "#1416 a cd the gate cannot follow leaves a relative path unresolved" "cd - && gh issue create --title t --body-file good.md $FC"
+allows "#1416 an absolute path does not depend on a cd the gate cannot follow" "cd - && gh issue create --title t --body-file $GOOD $FC"
+PAYLOAD_CWD=""
+# Standard input is judged by the command text, as it always was (#1246), never as a file called -.
+allows "#1416 -F - with the section on standard input still passes" "gh issue create --title t -F - $FC <<'EOF'
+b
+
+## Open questions
+
+None
+EOF"
+omits "#1416 and standard input is never a body file it cannot read" "a body file it can read" "printf 'b\n' | gh issue create --title t --body-file=- $FC"
+# Two creates in one command: each unreadable path is named once, in the one message.
+says "#1416 both creates' paths are named" "$TMP_DIR/never-written.md does not exist" "gh issue create --title a --body-file \"$U/i7.md\" $FC && gh issue create --title b --body-file $TMP_DIR/never-written.md $FC"
+says "#1416 and the first one too" "$U/i7.md" "gh issue create --title a --body-file \"$U/i7.md\" $FC && gh issue create --title b --body-file $TMP_DIR/never-written.md $FC"
+# Its own visible override, waiving only this rule.
+allows "#1416 the rule has its own visible override" "SKIP_BODY_FILE_CHECK=1 gh issue create --title t --body-file \"$U/i7.md\" $FC"
+denies "#1416 and that override waives nothing else" "SKIP_BODY_FILE_CHECK=1 gh issue create --title t --body-file \"$U/i7.md\" $P $C"
+# gh issue edit and gh pr create are not issue creates, and this gate has never judged them.
+allows "#1416 gh issue edit is not judged here" "gh issue edit 5 --body-file \"$U/i7.md\""
+allows "#1416 gh pr create is not judged here" "gh pr create --title t --body-file \"$U/i7.md\""
 
 # The shared line maker, which the milestone and discussion scripts use too, so one spelling of the
 # line exists (L41).

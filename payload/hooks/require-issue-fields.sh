@@ -9,12 +9,14 @@
 # also meant three Python processes on every Bash command Claude ran, not just the
 # ones filing issues.
 #
-# Fails OPEN by design: anything it cannot parse exits quietly rather than blocking
-# work. A false block on a command it merely could not read would teach the override
-# habit, and the overrides are the one thing that must stay rare.
+# Fails OPEN by design on a command it cannot parse: that exits quietly rather than
+# blocking work. A false block on a command it merely could not read would teach the
+# override habit, and the overrides are the one thing that must stay rare. A --body-file
+# it cannot read in a command it did parse is refused (claude-config#1416).
 #
 # Deliberate overrides, each waiving ONE rule and only for the command it prefixes:
-#   SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1
+#   SKIP_MILESTONE_CHECK=1 / SKIP_PRIORITY_CHECK=1 / SKIP_CATEGORY_CHECK=1 /
+#   SKIP_OPEN_QUESTIONS_CHECK=1 / SKIP_BODY_FILE_CHECK=1 / SKIP_SESSION_LINE_CHECK=1
 
 set -uo pipefail
 
