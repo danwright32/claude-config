@@ -406,6 +406,10 @@ check "#1419 an input redirect keeps the rewrite" "$(kept_as 'rtk grep x f < in'
 check "#1419 the last stage of a pipe is read by the person, so keeps it" "$(kept_as 'cat f | rtk grep x')"
 check "#1419 a pipe on a different command keeps it" "$(kept_as 'rtk grep x f; echo done | cat')"
 check "#1419 a quoted \$(...) that is only text in single quotes keeps it" "$(kept_as "rtk grep '\$(x)' f")"
+check "#1419 a shift inside arithmetic is not a here document that hides a later pipe" \
+  "$(refused_to_rewrite "$(printf '%s\n' 'echo $((1<<2))' 'rtk grep x f | cat')")"
+check "#1419 nor is a shift in a bare (( )) command" \
+  "$(refused_to_rewrite "$(printf '%s\n' '(( x = 1<<2 ))' 'rtk grep x f | cat')")"
 check "#1419 a loop whose output is not piped keeps it" "$(kept_as 'for f in a b; do rtk ls "$f"; done')"
 check "#1419 a word like done as an argument is not read as closing anything" "$(kept_as 'rtk git commit -m done')"
 check "#1419 a pipe character inside a format string keeps it" "$(kept_as 'rtk git log --format="%h|%s" -3')"

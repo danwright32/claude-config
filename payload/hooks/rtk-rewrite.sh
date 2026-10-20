@@ -258,6 +258,19 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         }
         if (c == "\\") { inword = 1; wordq = 1; i += 2; continue }
         if (c == "\"") { inword = 1; wordq = 1; push("dq"); i++; continue }
+        # Arithmetic, $((...)) or ((...)), runs no command and its << is a shift, not a here
+        # document, so it is skipped whole to its balancing parenthesis.
+        if ((c == "$" && nx == "(" && substr(s, i + 2, 1) == "(") || (c == "(" && nx == "(" && !inword)) {
+          j = (c == "$") ? i + 1 : i; lvl = 0
+          while (j <= n) {
+            d = substr(s, j, 1)
+            if (d == "(") lvl++
+            else if (d == ")") { lvl--; if (lvl == 0) break }
+            j++
+          }
+          if (j > n) { bad = 1; break }
+          inword = 1; wordq = 1; i = j + 1; continue
+        }
         if (c == "$" && nx == "(") { flushword(); push("cmdsub"); i += 2; continue }
         if (c == "$" && nx == "{") {
           j = index(substr(s, i + 2), "}")
