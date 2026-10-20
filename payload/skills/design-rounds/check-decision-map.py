@@ -19,12 +19,19 @@ The map lives inside the settled design file, beside its decision record, as one
 Every decision carries exactly one of `requirement` (the PRD's number for the requirement that owns
 it) or `noCode` (why it has no code consequence). One with neither, or both, is refused by name.
 
+The map may also carry the design's own requirements, ahead of its decisions (claude-config#1401):
+
+    {"requirements": [{"number": "6.4", "text": "Every invoice is on one list"}], "decisions": [...]}
+
+When it does, a decision naming a number the list does not hold is refused as UNLISTED, naming the
+number. Without the list the numbers are the PRD's, and nothing here resolves them.
+
 Given the plan a planner hands to create-milestone.sh, it also refuses while any requirement the map
 names is named by no issue in the plan, as `Requirement <number>` in the issue's title or body.
 
 Exit codes, each distinct so no caller can read one as another (L11):
   0  every decision is owned (and, with a plan, every requirement has an issue)
-  1  refused: the lines starting UNMAPPED, AMBIGUOUS, DUPLICATE, UNSTATED, MISTYPED or NO-ISSUE
+  1  refused: the lines starting UNMAPPED, AMBIGUOUS, DUPLICATE, UNSTATED, MISTYPED, UNLISTED or NO-ISSUE
      say what is missing
   2  unreadable: no file, no map, more than one map, a map or plan that is not JSON or not the
      shape above, or a map with no decisions, which is never read as a pass (L98)
@@ -36,7 +43,7 @@ import sys
 
 # The one reader of a settled design's JSON blocks, shared with the design match score (#1364).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from design_file import find_blocks  # noqa: E402
+from design_file import find_blocks, read_requirements  # noqa: E402
 
 MAP_ID = "decision-map"
 
@@ -81,6 +88,14 @@ def main(argv):
         unreadable("the decision map in %s has no \"decisions\" list" % design)
     if not decisions:
         unreadable("the decision map in %s lists no decisions, and a settled design always has some" % design)
+    # The design's own requirements, when the map carries them (claude-config#1401), are what every
+    # number a decision names must resolve to; a map without them leaves the sentences to the PRD.
+    listed = None
+    if "requirements" in data:
+        try:
+            listed = read_requirements(data["requirements"])
+        except ValueError as err:
+            unreadable("the decision map in %s: %s" % (design, err))
 
     problems = []
     owners = {}  # requirement -> the decision ids it owns, in map order
@@ -114,6 +129,9 @@ def main(argv):
             problems.append("AMBIGUOUS %s: %s (it names Requirement %s and also says it has no code consequence)" % (did, what, req))
         elif req:
             owners.setdefault(req, []).append(did)
+            if listed is not None and req not in listed:
+                problems.append("UNLISTED %s: %s (it names Requirement %s, and the design's requirements are %s)"
+                                % (did, what, req, ", ".join(listed)))
         elif reason:
             no_code += 1
         else:
