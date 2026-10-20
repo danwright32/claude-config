@@ -2707,6 +2707,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   the rest have even registered.** (claude-config#1087, 2026-10-12)
   SHORT: Judge completion against the EXPECTED set, never only what has reported: an empty-set guard passes once one fast result arrives first.
 
+- **L790. A database maintenance command run without the privilege it needs, such as ANALYZE as a
+  role that does not own the table, prints a warning and carries on rather than failing, so a fix
+  built on it must be proved by reading back the effect (the table statistics, the plan) under the
+  role that will run it, never by the call returning success.** (project-enrollment-tracker#1741, 2026-10-20)
+  SHORT: A maintenance command lacking privilege (ANALYZE) warns and carries on, so prove its effect by reading it back under the role that runs it.
+
 ## Data safety
 
 - **L770. A test or preview of unsaved work must run against a resource named apart from the one
