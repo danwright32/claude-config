@@ -6943,7 +6943,13 @@ publish_merged_rule_files(){
   # goes out on the next run, so saying so beats acting on a ref nobody chose.
   if branch="$(sync_branch)"; then
     if git -C "$SYNC_REPO" remote get-url origin >/dev/null 2>&1; then
-      git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null || true
+      # A send whose reconcile this is hears that this went up too, or a reconcile that sent nothing
+      # else would be reported as nothing to send while it published the merge (claude-config#1402).
+      local ahead=0
+      unpushed_commits && ahead=1
+      if git -C "$SYNC_REPO" push -u origin "$branch" -q 2>/dev/null && [ "$ahead" = 1 ]; then
+        reconcile_outcome published "$(repo_head)"
+      fi
     fi
   else
     echo "claude-sync: the merged rule files were committed here but NOT pushed, because this clone has no branch checked out (HEAD is detached), so there is no ref to push them at. They go out on the next run once $SYNC_REPO is back on a branch." >&2
@@ -7349,6 +7355,13 @@ commit_if_changed(){
   # reads as behind and then skips every send. They go on their own ref instead, see
   # publish_applied_marker.
   git -C "$SYNC_REPO" add -A -- payload
+  # THE SEND SIDE HOOK SUITE GATE, here because this is the one place this Mac's edits become a
+  # commit that anything then pushes (claude-config#1403). It used to be called by the send's direct
+  # path alone, so the sync a behind send catches up with, the commit #1398 builds on a shared head
+  # still being tested, a typed sync and a typed push all published a hook edit with no suite run
+  # here. Called at each push site instead, the next route added would have been the next one to
+  # miss it (L370, L247). It holds back the hooks a red suite covers and leaves the rest staged.
+  send_hook_tests
   git -C "$SYNC_REPO" diff --cached --quiet -- payload && return 1
   git -C "$SYNC_REPO" "${SYNC_GIT_IDENTITY[@]}" \
     commit -m "sync from $(hostname -s)" >/dev/null
@@ -7768,6 +7781,11 @@ do_push(){
         fi
         return 1
       fi
+    # The send side hook suite gate runs here too now (claude-config#1403), and a push whose every
+    # change it held back did not find nothing changed: it says what waits, beside the line above
+    # saying why (L11).
+    elif [ -n "$SEND_HELD_BACK" ]; then
+      echo "Nothing published: every change here was held back, as said above: $(comma_list "$SEND_HELD_BACK")."
     else echo "Nothing changed — repo already up to date."; fi
   fi
 }
@@ -9065,8 +9083,29 @@ unsent_commit_range(){
   if mark="$(sent_over_untested)"; then printf '%s..HEAD' "${mark%% *}"; else printf '@{upstream}..HEAD'; fi
 }
 
+# Written only when a send asked for it, so a sync typed by hand leaves no answer lying in the clone
+# for nobody (claude-config#1402). The first line is what came of this Mac's own work and its detail;
+# every line after it is a path the send side hook suite gate held back in that run, since the
+# reconcile runs in a subshell and its record of them dies with it.
+RECONCILE_OUTCOME_WANTED=0
 reconcile_outcome(){   # $1 = what this Mac's own work came to   $2.. = its detail
-  printf '%s\n' "$*" > "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
+  [ "$RECONCILE_OUTCOME_WANTED" = 1 ] || return 0
+  { printf '%s\n' "$*"
+    [ -z "${SEND_HELD_BACK:-}" ] || printf '%s\n' "$SEND_HELD_BACK"
+  } > "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
+}
+
+# Read back by the send that ran the reconcile, and removed, so it can only ever describe that run.
+# Sets RECONCILED_KIND, empty when the reconcile never decided, and adds what it held back to this
+# run's own record so the send's marker names it.
+RECONCILED_KIND=""
+read_reconcile_outcome(){
+  local held
+  RECONCILED_KIND="$(awk 'NR==1{print $1}' "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true)"
+  held="$(awk 'NR>1' "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true)"
+  rm -f "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
+  [ -z "$held" ] || note_held_back "$held"
+  return 0
 }
 
 send_over_untested_tip(){   # $1 = branch. Always 0: what happened is said, and recorded for the send
@@ -9330,8 +9369,27 @@ do_sync(){
     # left `push` and every other route unstamped (#79, #82).
     # A refused send pushes NOTHING, commits made by earlier runs included: whatever the scan
     # refused this run, nothing leaves this Mac until a scan passes (claude-config#947).
+    # What came of this Mac's own work is recorded for a send that ran this as its reconcile, which
+    # otherwise finds everything already gone and calls it nothing to send (claude-config#1402).
     if [ -z "$SEND_REFUSED" ]; then
-      { [ "$pushed" -eq 1 ] || unpushed_commits; } && git -C "$SYNC_REPO" push -u origin "$branch" -q || true
+      if [ "$pushed" -eq 1 ] || unpushed_commits; then
+        # A commit the rebase found already there (drop_snapshot_already_in_tip) leaves HEAD level with
+        # the shared repo, and the push that follows sends nothing, so it must not be called a send.
+        local already_there=0
+        if git -C "$SYNC_REPO" rev-parse --verify -q "origin/$branch" >/dev/null 2>&1 \
+           && git -C "$SYNC_REPO" merge-base --is-ancestor HEAD "origin/$branch" 2>/dev/null; then
+          already_there=1
+        fi
+        if git -C "$SYNC_REPO" push -u origin "$branch" -q; then
+          if [ "$already_there" = 1 ]; then reconcile_outcome nothing; else reconcile_outcome published "$(repo_head)"; fi
+        else
+          reconcile_outcome push-refused
+        fi
+      else
+        reconcile_outcome nothing
+      fi
+    else
+      reconcile_outcome scan-refused
     fi
     # send half is done; hand off so the apply below runs the pulled logic. The refusal travels with
     # it, so the resumed run cannot close by saying it sent.
@@ -9951,8 +10009,33 @@ record_behind_skip(){   # $1 = when the reconcile was last attempted  $2 = why i
   printf 'skipped %s send(s) in a row now, the first %s' "$n" "$(age_in_words "$(( now - first ))")"
 }
 
+# A send that did not go, counted and said with the reason the reconcile found, when it found one,
+# since each needs something different of the reader (L11). One place for both ways a send reaches
+# it: being behind, and a push that lost a race and fell back to a reconcile (claude-config#1402).
+report_unsent_skip(){   # $1 = when the reconcile was attempted  $2 = why it did not clear, or nothing
+  echo "claude-sync: this edit was not sent, because $(behind_reason_words "${2:-}") ($(record_behind_skip "$1" "${2:-unknown}")). Run '$(receive_command)' and read what it says; until then nothing leaves this Mac." >&2
+  send_outcome behind
+}
+
+# The marker for a send that got as far as deciding, in ONE place for the send's own commit and for
+# a reconcile that committed and pushed on its behalf, so the two cannot describe the same result in
+# different words (claude-config#1402). Nothing sent is two states (claude-config#849): nothing
+# differed, or everything that did was held back, and only the first is "nothing".
+report_send_result(){   # $1 = sent|nothing
+  if [ "$1" = sent ]; then
+    send_outcome sent
+  elif [ -n "$SEND_HELD_BACK" ]; then
+    send_outcome "withheld $(comma_list "$SEND_HELD_BACK")"
+  else
+    send_outcome nothing
+  fi
+}
+
 do_send(){
   local hold_left
+  # What a reconcile this send runs did about this Mac's own work comes back through a file, because
+  # the reconcile behind runs in a subshell (claude-config#1398, #1402).
+  RECONCILE_OUTCOME_WANTED=1
   # The lessons index is derived BEFORE either gate below (claude-config#320).
   #
   # It used to be derived only inside stage_local_to_payload, which this function reaches only
@@ -10020,52 +10103,51 @@ do_send(){
     fi
     bh_tried="$bh_now"
     # Emptied first, so whatever is read back below can only have been written by this reconcile.
-    local bh_outcome bh_kind
     rm -f "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
     ( send_reconcile ) || true
-    bh_outcome="$(awk 'NR==1' "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true)"
-    rm -f "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
-    bh_kind="${bh_outcome%% *}"
-    if ! unapplied_remote_changes; then
-      # It worked, and the send that follows is the one the edit asked for. Nothing is skipped, so
-      # nothing is counted. The trap clears the record itself, from the finished state.
-      :
-    elif [ "$bh_kind" = published ] || [ "$bh_kind" = nothing ]; then
-      # Still behind, but only on the RECEIVING side: the shared head is still being tested, so it
-      # is not taken in here yet, and everything of this Mac's is in the shared repo already, either
-      # sent just now on top of that head or there before (claude-config#1398). No send was skipped,
-      # so none is counted, and the count from earlier ones is over. The head arrives once its tests
-      # pass, which the gate has already said in its own words above.
-      clear_behind_skips
-      if [ "$bh_kind" = published ]; then
-        # This run was holding work and the shared repo now has it, which the trap's stamp reads.
-        note_unsent_work
-        send_outcome sent
-      else
-        send_outcome nothing
-      fi
-      return 0
-    else
+    read_reconcile_outcome
+    # Asked whatever the reconcile said, and first, because asking also REPAIRS the record of what
+    # is applied here when the reconcile's own commits (a published merge of rule files among them)
+    # moved HEAD past it with their content already on this Mac. Left unrepaired, the staging of the
+    # next typed push reads those paths as the shared repo's and holds them back (#511, #514).
+    local bh_behind=0
+    if unapplied_remote_changes; then bh_behind=1; fi
+    case "$RECONCILED_KIND" in
+      published|nothing)
+        # The reconcile got as far as sending, so what it did IS this send's answer
+        # (claude-config#1402). It stages, commits and pushes this Mac's edits itself, through the
+        # same gate as the send below, so when it had caught up the send below found everything
+        # already gone and logged "nothing to send" for a run that sent. Whether or not it took the
+        # shared head in (one still being tested is not taken in yet, #1398), nothing of this Mac's
+        # is waiting, so no send was skipped and the count from earlier ones is over.
+        clear_behind_skips
+        if [ "$RECONCILED_KIND" = published ]; then
+          # This run was holding work and the shared repo now has it, which the trap's stamp reads.
+          note_unsent_work
+          report_send_result sent
+        else
+          report_send_result nothing
+        fi
+        return 0 ;;
+    esac
+    if [ "$RECONCILED_KIND" = push-refused ] || [ "$bh_behind" = 1 ]; then
       # It did not clear. THIS is the state worth counting: one is a hiccup, twenty in a row is a
-      # Mac that has stopped syncing, and before this nothing could tell them apart. Said with the
-      # reason the reconcile found, when it found one, since each needs something different (L11).
-      echo "claude-sync: this edit was not sent, because $(behind_reason_words "$bh_kind") ($(record_behind_skip "$bh_tried" "${bh_kind:-unknown}")). Run '$(receive_command)' and read what it says; until then nothing leaves this Mac." >&2
-      send_outcome behind
+      # Mac that has stopped syncing, and before this nothing could tell them apart.
+      report_unsent_skip "$bh_tried" "$RECONCILED_KIND"
       return 0
     fi
+    # Caught up by a reconcile that never decided what to send: a stand in through the seam, or
+    # one whose send the secret scan refused, which the send below meets again and says in the
+    # scan's own words.
   fi
   stage_local_to_payload
   have_git || return 0
-  send_hook_tests                        # holds back the hooks a red suite covers; the rest sends (#269)
-  # Nothing committed is two different states (claude-config#849): nothing differs, or something
-  # differs and every such file was held back. Only the first is "nothing"; the second names the
-  # files on its marker, and the sentence saying why has already been printed above.
+  # commit_if_changed runs the send side hook suite gate (#244, #269, claude-config#1403), so the
+  # hooks a red suite covers are held back and the rest is committed. Nothing committed is two
+  # different states (claude-config#849): nothing differs, or something differs and every such file
+  # was held back, which report_send_result tells apart.
   if ! commit_if_changed; then
-    if [ -n "$SEND_HELD_BACK" ]; then
-      send_outcome "withheld $(comma_list "$SEND_HELD_BACK")"
-    else
-      send_outcome nothing
-    fi
+    report_send_result nothing
     return 0
   fi
   # A commit we just made from our OWN ~/.claude is applied here by construction:
@@ -10083,7 +10165,22 @@ do_send(){
     record_sync_success
     echo "Sent."; send_outcome sent; return 0
   fi
-  do_sync                                # behind remote: reconcile (pull+apply+push)
+  # Refused, because the shared repo moved after the fetch above: reconcile (pull, apply, push),
+  # which sends this commit on top of it, and report what that reconcile sent. It used to report
+  # nothing at all, or only that the shared head was still being tested when #1398's path had just
+  # sent on top of it, and the watcher logged a send it could not describe (claude-config#1402).
+  rm -f "$RECONCILE_OUTCOME_FILE" 2>/dev/null || true
+  do_sync
+  read_reconcile_outcome
+  case "$RECONCILED_KIND" in
+    published) report_send_result sent ;;
+    nothing)   report_send_result nothing ;;
+    # No answer. Every way out of the reconcile that returns writes one, so this is not expected,
+    # and it is not guessed at here: the watcher logs that the send did not say what it did (L98).
+    '') : ;;
+    *)         report_unsent_skip "$(date +%s)" "$RECONCILED_KIND" ;;
+  esac
+  return 0
 }
 
 # ---------- status ----------
