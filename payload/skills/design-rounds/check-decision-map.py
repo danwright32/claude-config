@@ -30,33 +30,15 @@ Exit codes, each distinct so no caller can read one as another (L11):
      shape above, or a map with no decisions, which is never read as a pass (L98)
 """
 import json
+import os
 import re
 import sys
-from html.parser import HTMLParser
+
+# The one reader of a settled design's JSON blocks, shared with the design match score (#1364).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from design_file import find_blocks  # noqa: E402
 
 MAP_ID = "decision-map"
-
-
-class MapFinder(HTMLParser):
-    """Collects the text of every <script id="decision-map"> in the file."""
-
-    def __init__(self):
-        super().__init__(convert_charrefs=False)
-        self.maps = []
-        self._inside = False
-
-    def handle_starttag(self, tag, attrs):
-        if tag == "script" and dict(attrs).get("id") == MAP_ID:
-            self._inside = True
-            self.maps.append("")
-
-    def handle_endtag(self, tag):
-        if tag == "script":
-            self._inside = False
-
-    def handle_data(self, data):
-        if self._inside:
-            self.maps[-1] += data
 
 
 def unreadable(why):
@@ -84,16 +66,14 @@ def main(argv):
             source = fh.read()
     except OSError as err:
         unreadable("the settled design %s could not be read: %s" % (design, err.strerror or err))
-    finder = MapFinder()
-    finder.feed(source)
-    finder.close()
-    if not finder.maps:
+    maps = find_blocks(source, [MAP_ID])[MAP_ID]
+    if not maps:
         unreadable("%s holds no <script type=\"application/json\" id=\"%s\"> block, so no decision in it "
                    "can be shown to have an owner" % (design, MAP_ID))
-    if len(finder.maps) > 1:
-        unreadable("%s holds %d decision map blocks; keep one" % (design, len(finder.maps)))
+    if len(maps) > 1:
+        unreadable("%s holds %d decision map blocks; keep one" % (design, len(maps)))
     try:
-        data = json.loads(finder.maps[0])
+        data = json.loads(maps[0])
     except ValueError as err:
         unreadable("the decision map in %s is not JSON: %s" % (design, err))
     decisions = data.get("decisions") if isinstance(data, dict) else None
