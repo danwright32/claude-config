@@ -24,11 +24,12 @@ The spec, with paths resolved against the spec's own folder:
       "requirements": [{"number": "1", "text": "Sam sees tomorrow's open calls by team"}],
                                          optional: the PRD's numbered requirements, each number written as
                                          text exactly as the PRD numbers it. Given, they are listed on the
-                                         page, every decision's owner reads as its sentence, the decision
-                                         map carries them, and a decision naming a number they do not hold
-                                         is refused. Left out, a decision's number is shown alone and the
-                                         PRD holds its sentence, as before claude-config#1401, and it says
-                                         so when it writes
+                                         page, each with an anchor, every decision's owner is its number
+                                         linked to that entry (the sentence is on the page once, in the
+                                         list, claude-config#1429), the decision map carries them, and a
+                                         decision naming a number they do not hold is refused. Left out, a
+                                         decision's number is shown alone and the PRD holds its sentence,
+                                         and it says so when it writes
       "chrome":   {...the round's "chrome", see chrome_frame.py...},
       "screen":   "email" | "document" | "new-product",   in place of "chrome", for a design with no
                                          product page around it: each frame is drawn alone at its own
@@ -69,6 +70,7 @@ words, a date and where he said them. Exit 2 with the reason.
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -251,50 +253,95 @@ def main(argv):
     return 0
 
 
-# Added only to a page that lists its requirements, so a design without them is written byte for byte
-# as it was before claude-config#1401.
+# Added only to a page that lists its requirements: each entry is the target of the decisions that cite
+# it (claude-config#1429), so the one a reader followed a link to is marked where it lands.
 REQUIREMENTS_STYLE = """  .dr-requirements { list-style: none; padding-left: 0; }
-  .dr-requirements li { margin: 0 0 10px; }
+  .dr-requirements li { margin: 0 -6px 10px; padding: 2px 6px; border-radius: 4px; scroll-margin-top: 16px; }
+  .dr-requirements li:target { background: var(--dr-target); outline: none; }
+  .dr-decisions a { color: var(--dr-link); text-decoration: underline; text-underline-offset: 2px; }
+  .dr-decisions a:focus-visible { outline: 2px solid var(--dr-link); outline-offset: 2px; border-radius: 2px; }
 """
 
+# Every colour is a token on :root and is given again for the dark scheme, because Dan reads the page in
+# both (claude-config#1426). Text, muted text and links each clear 4.5 to 1 on the page in both schemes,
+# and text clears it on a requirement marked as the one a link landed on; test-make-settled.sh measures
+# all of it from this block. A frame's own surface stays white in both: a frame is the product's screen
+# as drawn, not the page around it, and a document that paints no background of its own is white.
 DOC_STYLE = """
-  body { margin: 0; background: #F4F1ED; color: #1B1613; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  :root {
+    color-scheme: light dark;
+    --dr-bg: #F4F1ED; --dr-text: #1B1613; --dr-muted: #665A51; --dr-border: #DDD5CD;
+    --dr-frame: #FFFFFF; --dr-link: #1D5A96; --dr-target: #F7E3BE;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --dr-bg: #171412; --dr-text: #EDE6DF; --dr-muted: #ADA197; --dr-border: #3F3731;
+      --dr-frame: #FFFFFF; --dr-link: #8FBDEB; --dr-target: #3D3122;
+    }
+  }
+  body { margin: 0; background: var(--dr-bg); color: var(--dr-text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
   .dr-doc { max-width: 1400px; margin: 0 auto; padding: 32px 24px 64px; }
   .dr-doc h1 { font-size: 28px; margin: 0 0 6px; }
   .dr-doc h2 { font-size: 18px; margin: 36px 0 10px; }
   .dr-doc h3 { font-size: 15px; margin: 24px 0 8px; }
-  .dr-meta { color: #6E6259; font-size: 13px; margin: 0; }
+  .dr-meta { color: var(--dr-muted); font-size: 13px; margin: 0; }
   .dr-decisions li { margin: 0 0 10px; }
-  .dr-how { color: #6E6259; font-size: 13px; }
-  .dr-frame { border: 1px solid #DDD5CD; background: #fff; display: block; }
+  .dr-how { color: var(--dr-muted); font-size: 13px; }
+  .dr-frame { border: 1px solid var(--dr-border); background: var(--dr-frame); display: block; }
 """
+
+# The ids the page itself writes, which no requirement's anchor may take.
+PAGE_IDS = ("decision-map", "design-frames", "design-exceptions")
+
+
+def closed(text):
+    """A sentence ending with its own mark, or closed with a full stop when it has none (#1426)."""
+    text = text.rstrip()
+    return text if text.endswith((".", "?", "!")) else text + "."
+
+
+def requirement_anchors(numbers, taken):
+    """{number: id} for each listed requirement (claude-config#1429). A number is text exactly as the PRD
+    writes it ("6.4", "R 1/2"), so its id keeps only ASCII letters, digits and underscores, every other
+    run becoming one hyphen, behind "req-" so it starts with a letter; and two numbers that come out
+    alike, or one that comes out as a decision's own id, are told apart by a counter, in list order."""
+    anchors, used = {}, set(taken)
+    for number in numbers:
+        slug = re.sub(r"[^A-Za-z0-9_]+", "-", number).strip("-")
+        base = "req-" + slug if slug else "req"
+        candidate, n = base, 2
+        while candidate in used:
+            candidate, n = "%s-%d" % (base, n), n + 1
+        used.add(candidate)
+        anchors[number] = candidate
+    return anchors
 
 
 def render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants):
     e = lambda v: html.escape(str(v), quote=True)  # noqa: E731
     requirements = spec.get("requirements")
-    sentences = {r["number"].strip(): r["text"].strip() for r in requirements} if requirements else {}
+    # Dan, 2026-10-20, on claude-config#1429: a decision shows its requirement's number as a link to the
+    # requirement in the list, and the sentence is on the page once, there. With no list, the number
+    # is shown alone, as it always was.
+    anchors = requirement_anchors([r["number"].strip() for r in requirements],
+                                  [d["id"] for d in decisions] + list(PAGE_IDS)) if requirements else {}
     items = []
     for d in decisions:
-        sentence = None
         if d.get("requirement"):
-            owner = "Requirement %s" % e(d["requirement"])
-            sentence = sentences.get(str(d["requirement"]).strip())
-            if sentence:
-                owner += ": %s" % e(sentence.rstrip("."))
+            number = str(d["requirement"]).strip()
+            label = "Requirement %s" % e(number)
+            owner = ('<a href="#%s">%s</a>.' % (anchors[number], label)) if number in anchors else label + "."
         else:
-            owner = "No code: %s" % e(d.get("noCode", ""))
+            owner = closed("No code: %s" % e(d.get("noCode", "")))
         verify = d.get("verify", "check")
         how = {"check": "Checked on %s: %s" % (e(", ".join(d.get("frames", []))), e(d.get("check", ""))),
                "picture": "Held by the picture half",
                "elsewhere": "Proven by %s" % e(d.get("provenBy", ""))}.get(verify, e(verify))
-        why = (" %s" % e(d["why"])) if d.get("why") else ""
-        # A requirement's sentence that is a question or an exclamation keeps its own mark, and only
-        # a sentence ending some other way is closed with a full stop (as every owner was before #1401).
-        # A noCode reason is closed as it always was, so a spec without requirements keeps its bytes.
-        owner = owner if sentence and owner.endswith(("?", "!")) else owner + "."
-        items.append('<li id="%s"><strong>%s</strong> %s.%s <span class="dr-how">%s %s.</span></li>'
-                     % (e(d["id"]), e(d["id"]), e(d.get("decision", "")), why, owner, how))
+        # The reason is its own sentence, closed before the muted owner begins, so the line never reads
+        # "Sam's word for it Requirement 1" run together (claude-config#1426).
+        why = (" %s" % closed(e(d["why"]))) if str(d.get("why", "")).strip() else ""
+        items.append('<li id="%s"><strong>%s</strong> %s%s <span class="dr-how">%s %s</span></li>'
+                     % (e(d["id"]), e(d["id"]), closed(e(d.get("decision", ""))), why, owner, closed(how)))
     if exceptions:
         exc = "".join('<li><strong>%s</strong>, %s, %s: "%s" (%s)</li>' % (
             e(x["id"]), e("decision %s" % x["decision"] if "decision" in x else "frame %s" % x["frame"]),
@@ -332,7 +379,9 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
     dmap = {"requirements": requirements, "decisions": decisions} if requirements else {"decisions": decisions}
     intro_html = "<p>%s</p>\n" % e(spec["intro"].strip()) if spec.get("intro") else ""
     req_html = ("<h2>Requirements</h2>\n<ul class=\"dr-requirements\">%s</ul>\n" % "".join(
-        "<li><strong>%s</strong> %s</li>" % (e(r["number"].strip()), e(r["text"].strip())) for r in requirements)
+        # tabindex -1 lets a followed link put focus here, so a screen reader reads the sentence next.
+        '<li id="%s" tabindex="-1"><strong>%s</strong> %s</li>' % (
+            anchors[r["number"].strip()], e(r["number"].strip()), e(r["text"].strip())) for r in requirements)
         if requirements else "")
     if chrome["kind"] in ("none", "screen"):
         drawn = "%s Every frame is drawn at its own width" % e(chrome["line"])
