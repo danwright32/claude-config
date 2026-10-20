@@ -86,6 +86,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/design-score-gate.sh",
+            "timeout": 60,
+            "statusMessage": "Checking the build matches its settled design before closing"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/pr-review-gate.sh",
             "timeout": 60,
             "statusMessage": "Checking the lessons review of the branch before merging"

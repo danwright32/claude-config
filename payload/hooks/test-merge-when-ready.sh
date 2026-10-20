@@ -195,9 +195,15 @@ cat >> "$ST/changelog-gate-payloads"; printf '\n' >> "$ST/changelog-gate-payload
 [ -s "$ST/changelog-gate-deny" ] && jq -nc --arg r "$(cat "$ST/changelog-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
+cat > "$STUBS/design-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/design-gate-payloads"; printf '\n' >> "$ST/design-gate-payloads"
+[ -s "$ST/design-gate-deny" ] && jq -nc --arg r "$(cat "$ST/design-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
-export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh"
+export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
@@ -590,6 +596,20 @@ printf '%s' '[{"name":"changelog/technical"}]' > "$ST/labels"
 out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1178 control: the real gate lets a labelled pull request through the helper" "0" "$rc"
 
+# The design score gate (#1364) is asked at the merge as well: a pull request whose closing keywords
+# name a Match the settled design issue below 100% is not merged through the helper any more than
+# when typed.
+fresh "$OLD" 0 "$GREEN"
+printf 'Match the settled design is below 100%% on the code being merged.' > "$ST/design-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1364 a merge the design score gate refuses stops the helper" "1" "$rc"
+check "#1364 in the gate's words" "below 100% on the code being merged" "$out"
+check_eq "#1364 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1364 with the design score gate allowing it, the merge goes through" "0" "$rc"
+check "#1364 the design score gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/design-gate-payloads" 2>/dev/null)"
+
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
 # recognises a merge through the shared reader (mt_runs_merge or mt_is_pr_merge) must be asked, or
@@ -899,6 +919,51 @@ check_eq "#1356 a review with only minor findings lets the helper merge" "0" "$r
 check_eq "#1356 exactly one merge" "1" "$(count gh-calls 'pr merge')"
 check "#1356 the advisory is shown in its log" "App/x.swift:1: the comment says seconds" "$out"
 check_eq "#1356 once" "1" "$(grep -c 'App/x.swift:1: the comment says seconds' <<<"$out")"
+
+# =================================================================================================
+# 15. After three rounds of findings the review asks to step back (claude-config#1358). The helper
+#     shows that refusal in full, and its own stop line asks for the step back too, rather than only
+#     to fix what is real, which is the one finding at a time habit the review is asking to break.
+# =================================================================================================
+STEP='Refusing to merge until these are read: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding.
+    PR_REVIEW_READ=0123abcd <the merge command>
+Step back: this is round 3 of lessons review findings on this pull request. Stop fixing findings one at a time and reconsider the approach.
+App/x.swift:2: the retry loop has no bound (L524). Should be: bound it. [severity: major]'
+cat > "$STUBS/pr-review-step-back.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$STEP'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-step-back.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-step-back.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1358 a refusal asking to step back stops the helper" "1" "$rc"
+check "#1358 showing the request in its log" "Step back: this is round 3 of" "$out"
+check "#1358 with the finding" "the retry loop has no bound" "$out"
+check "#1358 and the helper's own stop line asks for the step back" "step back and reconsider the approach" "$(grep 'Stopped:' <<<"$out")"
+check_eq "#1358 nothing merged" "0" "$(count gh-calls 'pr merge')"
+# A finding that only QUOTES the words, mid line, is not a request to step back.
+QUOTED='Refusing to merge until these are read: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding.
+lib/x.sh:3: the check matches "Step back:" anywhere in the text (L11). Should be: match it at the start of a line. [severity: major]'
+cat > "$STUBS/pr-review-quoted.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$QUOTED'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-quoted.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-quoted.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1358 a finding quoting the words still stops the helper" "1" "$rc"
+check_not "#1358 but its stop line does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
+# Control: an ordinary refusal's stop line is as before.
+fresh "$OLD" 0 "$GREEN"
+printf '1\n' > "$ST/review-answers"
+out="$(run 7 --squash)"; rc=$?
+check_not "#1358 control: an ordinary refusal does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
 
 echo
 echo "passed: $pass, failed: $fail"

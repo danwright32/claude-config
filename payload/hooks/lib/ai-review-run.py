@@ -230,7 +230,8 @@ def count_findings(text):
 # history and the answered findings match in pr-review.sh) was misled by it. So the prompt asks for
 # the line itself on a `Quote: <the line>` line under each finding, and this places the finding at
 # the line of the file AT THE REVIEWED HEAD that matches it: compared with surrounding white space
-# trimmed and runs of it collapsed, nothing more, and the occurrence nearest the cited number when
+# trimmed and runs of it collapsed, and one leading diff marker dropped only when the quote as given
+# matches nothing (claude-config#1368), nothing more, and the occurrence nearest the cited number when
 # the line is there more than once. The Quote line is then dropped, so a stored review stays one
 # line per finding for every reader. A finding that cannot be placed keeps the number it cited and
 # says why on its own line, so a guess never reads as a checked line (L11); it is never dropped.
@@ -284,11 +285,25 @@ def _place(path, cited, quote, repo_dir, sha, cache):
         return None, "the reviewed head could not be read to check it"
     if lines is None:
         return None, f"{path} is not a file at the reviewed head"
-    hits = [n for n, line in enumerate(lines, 1) if _normal(line) == quote]
+    hits = _hits(lines, quote)
+    tried = ""
+    # A quote copied from the diff can keep the diff's leading + or - (claude-config#1368). The
+    # quote as given is tried first and wins whenever it matches, because a real line can begin with
+    # either (a Markdown or YAML list item, a unary minus, a diff kept in the repository); only a
+    # quote matching nothing loses that one marker and is tried again. A quote that is nothing but
+    # the marker is not retried, since the empty rest would match every blank line. A leading space
+    # needs no such step: the quote is trimmed before it is compared.
+    if not hits and quote[0] in "+-" and quote[1:].strip():
+        hits = _hits(lines, _normal(quote[1:]))
+        tried = f", as given or without its leading {quote[0]}"
     if not hits:
         shown = quote if len(quote) <= 60 else quote[:60] + "..."
-        return None, f'its quote matches no line of {path} at the reviewed head: "{shown}"'
+        return None, f'its quote matches no line of {path} at the reviewed head{tried}: "{shown}"'
     return min(hits, key=lambda n: (abs(n - cited), n)), None
+
+
+def _hits(lines, quote):
+    return [n for n, line in enumerate(lines, 1) if _normal(line) == quote]
 
 
 def place_findings(text, repo_dir, sha):
@@ -377,6 +392,8 @@ def main(argv):
     ap.add_argument("--deadline", type=int, required=True)
     ap.add_argument("--kind", default="push", choices=("push", "pr"))
     ap.add_argument("--base", default="")
+    # A later round of a pull request review that reads only what changed since this head (#1358).
+    ap.add_argument("--since", default="")
     ap.add_argument("--scope-file", default="")
     ap.add_argument("--name", default="")
     ap.add_argument("--started", type=int, required=True)
@@ -396,6 +413,8 @@ def main(argv):
     if a.kind == "pr":
         meta["kind"] = "pr"
         meta["base"] = a.base
+        if a.since:
+            meta["since"] = a.since
         meta["findings"] = ""
 
     status, body = "error", ""

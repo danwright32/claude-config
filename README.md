@@ -621,6 +621,31 @@ advisory, the push and merge gates hand it over as JSON (`mt_review_allowed` in
 PreToolUse hook's plain output on an allow reaches neither; `merge-when-ready.sh` prints it in its
 log. The stored review is unchanged, so the report and every later review still see the minor ones.
 
+After three rounds of findings, step back (claude-config#1358). A review runs on every commit, push
+and pull request update with no limit on rounds, and measured on 2026-10-19 over 704 branches, 18%
+ran five or more rounds with findings, 25 ran ten or more, and about a third of later round findings
+restated an earlier round's. So from the third round, the refusal also says `Step back:` and asks
+the agent to stop fixing findings one at a time, read the round's findings with the earlier rounds'
+as one group, and reconsider the approach, naming the earlier rounds and where their findings are.
+It is guidance on top of the refusal, never another block: the read key lets the push or merge
+through exactly as before. `merge-when-ready.sh` prints that refusal and its own stop line then asks
+for the step back too. A round is a review whose findings stopped a push or merge. Dan decided on
+2026-10-19 that a clean review is not a round; a review whose new findings were all minor (advisory)
+or all already answered stopped nothing either, so it is not a round, and nor is a review never
+checked. The check records each round beside its review (`<review>.round`, keyed to the review's
+finish, with the pull request's number when known). The rounds counted are this pull request's: the
+earlier reviews of it on this Mac (the heads this one descends from, or shares a commit of its own
+with), so a branch name used again starts from none, and any review recorded under the same pull
+request number, so a rebase does not start the count again. A review carried to a later head
+(below) is the round it was carried from. A review started after three rounds reads only what
+changed since the last reviewed head: the files this branch changes that differ from that head,
+diffed from it, with their full text, the complete file list still naming every file of the branch
+(those not shown marked as read by the earlier reviews), and every earlier finding still given as
+history. Its review file records `since=<head>` and every verdict on it says what it read. The whole
+branch is read instead, saying why, when the last reviewed head is not an ancestor (a rebase or an
+amend), when nothing in the branch's files changed since it, or when the changes since it are over
+the size cap. Only this Mac's reviews are counted, since each Mac keeps its own.
+
 Every gate judges ONE repository, and every merge gate ONE pull request, per command, so a command
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one
@@ -990,7 +1015,7 @@ these cases.
 
 ### What a push actually waits on
 
-Twenty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Twenty-five PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1002,7 +1027,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Seven of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Eight of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1010,6 +1035,7 @@ Seven of them came after the 2026-09-21 timing further down, which measured the 
 | `pr-review-gate.sh` (#560) | 0.03 seconds, five readings on 2026-10-12; it acts on a merge, not a push |
 | `block-red-merge.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
 | `require-changelog-tag.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13, the same way |
+| `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
@@ -1887,6 +1913,21 @@ SwiftUI, and a diff picture per frame, and exits 0 matched, 1 not matched yet, 2
 unmeasured build never reads as done. It needs only python3's standard library (its own PNG reader,
 `pngio.py`, is checked against Pillow's reading of a real Chrome screenshot). The design rounds
 skill describes the blocks the design file carries; `test-design-score.sh` holds it.
+
+**Closing is held at 100%.** `create-milestone.sh` ends a design milestone with "Match the settled
+design" (marked with the design's path in the app's checkout, as is the milestone's description) and
+tells every other issue its pull request posts the score with `design_score.py post`, which puts it
+on the pull request and on the Match issue. `hooks/design-score-gate.sh`, a PreToolUse Bash hook,
+refuses to close the Match issue or its milestone unless the newest score posted for the code being
+closed on (the default branch's head, or a merging pull request's head; a squash merge of the scored
+branch has the same tree) is matched on both halves, was drawn with nothing uncommitted and was
+measured against the design file as committed there. It reads `gh issue close`, `delete` and
+`transfer`, a REST close of the issue or the milestone, `gh pr merge` of a pull request whose
+closing keywords name it, and `merge-when-ready.sh`, which asks it as it asks every merge gate; a
+GraphQL `closeIssue` is refused outright. Anything it cannot read, its own judge failing included,
+refuses (fail closed), and there is no override. Not seen by it: a close in GitHub's web page, and a
+closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
+holds it, against a fake gh.
 
 ## Mods
 

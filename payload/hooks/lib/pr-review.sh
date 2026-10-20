@@ -59,6 +59,9 @@
 #                                       N counts only the major and critical ones (and any whose
 #                                       severity is missing or unreadable); the minor ones are listed
 #                                       apart after them as advisory (claude-config#1356).
+#                                       From the third round of findings on the same pull request
+#                                       it also asks to step back and reconsider the approach,
+#                                       blocking nothing more (claude-config#1358, round_rows).
 #   ok, only minor findings new         allowed, printing them as advisory, with no key and nothing
 #                                       recorded as read (claude-config#1356, severity_split).
 #   ok, every finding answered before   allowed, listing each with the review that raised it first
@@ -160,6 +163,11 @@ PRR_SLEEP="${PR_REVIEW_SLEEP:-sleep}"
 PRR_SHOW_LINES=20
 PRR_LINE_CHARS=300
 PRR_OVERRIDE="SKIP_PR_REVIEW=1"
+# The round of findings from which a refusal asks to step back, and after which a review reads only
+# what changed since the last reviewed head (claude-config#1358, see round_rows).
+PRR_STEP_BACK_ROUNDS=3
+# The pull request's number, once answered_findings has read it, which a round is recorded under.
+prr_pr_number=""
 
 usage() { echo "usage: pr-review.sh start|check|restart --dir <repo> [--sha <head>] [--base-ref <ref>] [--branch <name>] [--pr <number>] [--gate merge|push]" >&2; exit 64; }
 
@@ -818,6 +826,175 @@ ROWS
   printf '%s' "$s"
 }
 
+# ROUNDS OF FINDINGS, AND STEPPING BACK AFTER THREE (claude-config#1358). A review runs on every
+# commit, push and pull request update, with no limit on rounds. Measured 2026-10-19 over 704
+# branches: 18% ran five or more rounds that had findings, 25 ran ten or more, and about a third of
+# the findings of later rounds restated an earlier round's. Fixing findings one at a time does not
+# converge when the approach is what they keep pointing at. So from the third round a refusal asks
+# the agent to step back and reconsider the approach (step_back), on top of the refusal it always
+# gave and never in place of it: the read key lets the push or merge through exactly as before. And
+# a review started after three rounds reads only what changed since the last reviewed head
+# (narrow_plan), still given every earlier finding as history (earlier_reviews).
+#
+# What counts as a round. Dan, 2026-10-19: only a review that returned findings; a clean review is
+# not a round. Of those, only one whose findings STOPPED a push or merge, because the point is fix
+# rounds: a review whose new findings were all minor is advisory (#1356) and one whose findings were
+# all answered already (#1338) each let the push or merge through and asked for no fix, so neither
+# is a round. Whether a review stopped anything is decided only at the check, against the comments
+# as they stand then, so the check records it: <review>.round, holding the review's own finish (as
+# an acknowledgement does, so a review written again for the same head is not counted until it too
+# stops something) and the pull request's number when known. A review that was never checked
+# stopped nothing and is not a round either.
+#
+# Whose rounds. This pull request's: the earlier reviews earlier_rows finds (heads this head
+# descends from, or shares a commit of the branch's own with), so a branch name used again by
+# another pull request starts from none; and, when the pull request's number is known, any review a
+# check recorded under that number, so a rebase, which earlier_rows cannot see past, does not start
+# the count again. A review carried to a later head unchanged (#1280) is the round it was carried
+# from. Only this Mac's reviews are counted: each Mac keeps its own state folder.
+#
+# The review a carried review was carried from, followed back to the one a reviewer wrote. Prints
+# that review's head.
+round_origin() {   # $1 = a review file
+  local f="$1" c n=0
+  while c="$(meta_of "$f" carried)" && [ -n "$c" ] && [ -e "$AR_STATE_DIR/$key-pr-$c.txt" ] && [ "$n" -lt 50 ]; do
+    f="$AR_STATE_DIR/$key-pr-$c.txt"; n=$((n + 1))
+  done
+  meta_of "$f" sha
+}
+
+# The earlier rounds of this pull request, oldest first, "<finished>\t<head>\t<review file>" each,
+# never this head's own review nor the one it was carried from.
+round_rows() {
+  [ -n "$full_sha" ] || return 0
+  local rows rf fin m origin num="${pr_arg:-${prr_pr_number:-}}" seen=$'\n' out=""
+  [ -e "$final" ] && seen="$seen$(round_origin "$final")"$'\n'
+  rows="$(earlier_rows | awk -F '\t' '{ print $4 }')"
+  if [ -n "$num" ]; then
+    for m in "$AR_STATE_DIR/$key-pr-"*.txt.round; do
+      [ -e "$m" ] && [ "$(meta_of "$m" pr)" = "$num" ] && rows="$rows"$'\n'"${m%.round}"
+    done
+  fi
+  while IFS= read -r rf; do
+    [ -n "$rf" ] && [ "$rf" != "$final" ] && [ -e "$rf" ] || continue
+    fin="$(meta_of "$rf" finished)"
+    [ -n "$fin" ] && [ "$(meta_of "$rf.round" finished)" = "$fin" ] || continue
+    origin="$(round_origin "$rf")"
+    case "$seen" in *$'\n'"$origin"$'\n'*) continue ;; esac
+    seen="$seen$origin"$'\n'
+    out="$out$fin"$'\t'"$(meta_of "$rf" sha)"$'\t'"$rf"$'\n'
+  done <<<"$rows"
+  printf '%s' "$out" | sort -t "$(printf '\t')" -k1,1n
+}
+
+# The request to step back, one line. $1 = round_rows, $2 = this round's number. Names the five
+# latest earlier rounds and where their findings are.
+step_back() {
+  local n="$2" total k=0 fin s rf heads="" files=""
+  total="$(printf '%s\n' "$1" | grep -c .)"
+  while IFS=$'\t' read -r fin s rf; do
+    [ -n "$s" ] || continue
+    k=$((k + 1))
+    [ "$k" -gt $((total - 5)) ] || continue
+    heads="$heads${heads:+, }${s:0:7}"; files="$files${files:+ }$rf"
+  done <<<"$1"
+  [ "$total" -gt 5 ] && heads="$((total - 5)) older and $heads"
+  echo "$AR_STEP_BACK_LEAD this is round $n of lessons review findings on this pull request (the earlier rounds were the reviews of $heads). Stop fixing findings one at a time. Read this round's findings with the earlier rounds' as one group, look for what they have in common, and reconsider the approach rather than patching the next line. The earlier rounds' findings are in: $files"
+}
+
+# After three rounds, what a review of this head reads: only the files this branch changes (or had
+# changed at the last reviewed head) that differ from the last reviewed head, from that head, since
+# the reviews before read the branch up to it. Sets since (that head) and narrow_specs (those files),
+# or, when the whole branch is read after all, narrow_note saying why: the last reviewed head is not
+# an ancestor of this one (a rebase or an amend), or nothing in the branch's files changed since it.
+# The last reviewed head is the nearest earlier review earlier_rows finds, of any outcome that
+# returned a review; past a rebase only the rounds recorded under the pull request's number are
+# known, and the latest of those is the one named. Called from do_start, whose mb it reads.
+narrow_plan() {
+  since=""; narrow_note=""; narrow_specs=(); narrow_rounds=0
+  [ "$branch_known" = 1 ] || [ -n "$pr_arg" ] || return 0
+  local prior n rows last="" lfile="" lbase now_names before_names="" changed p
+  prior="$(round_rows)"
+  n="$(printf '%s\n' "$prior" | grep -c .)"
+  [ "${n:-0}" -ge "$PRR_STEP_BACK_ROUNDS" ] || return 0
+  narrow_rounds="$n"
+  rows="$(earlier_rows)"
+  if [ -n "$rows" ]; then
+    IFS=$'\t' read -r _ _ last lfile _ <<<"${rows%%$'\n'*}"
+  else
+    IFS=$'\t' read -r _ last lfile <<<"${prior##*$'\n'}"
+  fi
+  [ -n "$last" ] || return 0
+  if ! git merge-base --is-ancestor "$last" "$full_sha" 2>/dev/null; then
+    narrow_note="${last:0:7}, the last reviewed head of this pull request, is not an ancestor of $short (the branch was rebased or amended since), so this review reads the whole branch"
+    return 0
+  fi
+  now_names="$(git -c core.quotepath=false diff --no-renames --name-only "$mb" "$full_sha" 2>/dev/null)"
+  lbase="$(meta_of "$lfile" base)"
+  if [ -n "$lbase" ] && git cat-file -e "$lbase^{commit}" 2>/dev/null; then
+    before_names="$(git -c core.quotepath=false diff --no-renames --name-only "$lbase" "$last" 2>/dev/null)"
+  fi
+  changed="$(git -c core.quotepath=false diff --no-renames --name-only "$last" "$full_sha" 2>/dev/null)"
+  while IFS= read -r p; do
+    [ -n "$p" ] && narrow_specs+=(":(literal)$p")
+  done < <(awk 'FILENAME == ARGV[1] { if ($0 != "") mine[$0] = 1; next } ($0 in mine) && !seen[$0]++' \
+             <(printf '%s\n%s\n' "$now_names" "$before_names") <(printf '%s\n' "$changed"))
+  if [ "${#narrow_specs[@]}" -eq 0 ]; then
+    narrow_note="nothing in the files this branch changes is different from ${last:0:7}, the last reviewed head of this pull request, so this review reads the whole branch"
+    return 0
+  fi
+  since="$last"
+}
+
+# What a narrowed review's input says about itself, after the file list.
+narrow_block() {
+  printf '===== THIS REVIEW READS ONLY WHAT CHANGED SINCE %s: earlier reviews of this pull request read the whole branch up to %s and returned findings in %s rounds, so this review is given only the changes made since then, below, with the full text of the files they touch. Review those changes. A file the list above marks as read by the earlier reviews is not shown, so its absence below is not a finding. What the earlier reviews raised is in the EARLIER REVIEWS block. =====\n\n' "${since:0:7}" "${since:0:7}" "$narrow_rounds"
+}
+
+# Starts the review of only what changed since $since (narrow_plan). Returns 1, starting nothing and
+# setting narrow_note, when even that is over the cap, so the whole branch is read the usual way,
+# which can leave proven files out or read in groups. Called from do_start, whose variables it reads.
+narrow_start() {
+  local marks="$AR_STATE_DIR/$name.marks" model="${AI_REVIEW_MODEL:-sonnet}" started fitted in out size p shown=""
+  for p in "${narrow_specs[@]}"; do shown="$shown${p#:(literal)}"$'\n'; done
+  # The file list still names every file of the branch, each one not shown marked as read before.
+  awk -v s="${since:0:7}" 'FILENAME == ARGV[1] { if ($0 != "") shown[$0] = 1; next }
+    $0 != "" && !($0 in shown) { printf "%s\t(changed by this branch before %s and not since, so read by the earlier reviews: not shown below)\n", $0, s }' \
+    <(printf '%s' "$shown") <(git -c core.quotepath=false diff --name-only "$mb" "$full_sha" 2>/dev/null) > "$marks" 2>/dev/null
+  {
+    file_list "$marks"
+    narrow_block
+    history_text
+    ar_review_diff "$(ar_generated_paths "$since" "$full_sha" "${narrow_specs[@]}")" "$since" "$full_sha" "${narrow_specs[@]}"
+  } > "$diff_file" 2>/dev/null
+  rm -f "$marks"
+  size="$(wc -c < "$diff_file" | tr -d '[:space:]')"
+  if [ "${size:-0}" -gt "$PRR_MAX_BYTES" ]; then
+    rm -f "$diff_file"
+    narrow_note="the changes since ${since:0:7} alone come to $(ar_size_text "$size"), over the $((PRR_MAX_BYTES / 1024)) KB a review can use, so this review reads the whole branch"
+    since=""
+    return 1
+  fi
+  fitted="$(ar_append_full_files "$diff_file" "$since" "$full_sha" $((PRR_MAX_BYTES - size)) "${narrow_specs[@]}")"
+  in="${fitted%% *}"; out="${fitted#* }"; out="${out%% *}"
+  started="$(date +%s)"
+  printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nsince=%s\ndir=%s\n' \
+    "$repo_label" "$branch" "$full_sha" "$started" "$model" "$PRR_DEADLINE" "$mb" "$since" "$top" > "$pending" 2>/dev/null \
+    || { rm -f "$diff_file"; record could-not-run "Could not write $pending."; echo "The lessons review could not run: could not write its state."; return 0; }
+  touch "$AR_STATE_DIR/.updated" 2>/dev/null || true
+  run_reviewer "$AR_STATE_DIR" "$name" "$diff_file" "$mb" "$model" "$PRR_DEADLINE" "$started" "$since" \
+    </dev/null >/dev/null 2>&1 &
+  disown "$!" 2>/dev/null || true
+  echo "The lessons review of the changes since ${since:0:7} on $repo_label $branch (${since:0:7}..$short, $((size / 1024)) KB, diff plus the full text of $in of $((in + out)) files changed since) started in the background with $model, after $narrow_rounds earlier rounds of findings on this pull request, whose reviews read the branch up to ${since:0:7}; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
+  return 0
+}
+
+# Why a review after three rounds reads the whole branch after all, when narrow_plan said why.
+narrow_said() {
+  [ -n "${narrow_note:-}" ] && echo "(Read whole, not only what changed since the last reviewed head: $narrow_note.)"
+  return 0
+}
+
 do_start() {
   if [ -e "$final" ] || [ -e "$pending" ]; then
     echo "The lessons review of $repo_label $branch at $short has already been run, or is still running."
@@ -825,7 +1002,7 @@ do_start() {
   fi
   # A new review answers for itself: a read key or an acknowledgement left by an earlier review of
   # this head (its file swept, or restarted) must not let THESE findings through unread (#788).
-  rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" "$prread" 2>/dev/null
+  rm -f "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$prread" 2>/dev/null
   # The groups of a review in groups (#601) are removed once it is written; these are what is left
   # when its waiting process died and nothing wrote it up, swept on the reviews' own 14 days.
   find "$parts_root" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} + 2>/dev/null || true
@@ -865,6 +1042,13 @@ do_start() {
   # this review is read from, single or in groups, and counted in each one's size.
   hist="$(earlier_reviews)"
   hist_bytes="$(history_text | wc -c | tr -d '[:space:]')"
+  # After three rounds of findings, only what changed since the last reviewed head (#1358).
+  local since="" narrow_note="" narrow_rounds=0
+  local -a narrow_specs=()
+  narrow_plan
+  if [ -n "$since" ] && narrow_start; then
+    return 0
+  fi
   {
     file_list /dev/null
     history_text
@@ -898,6 +1082,7 @@ do_start() {
         </dev/null >/dev/null 2>&1 &
       disown "$!" 2>/dev/null || true
       echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $(ar_size_text "$whole_size") of diff, over the $((PRR_MAX_BYTES / 1024)) KB one review can use) started in the background in $groups_n groups of files read at once ($groups_text), each by $model with the same deadline; the $act waits for every group (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
+      narrow_said
       ar_left_out_note "$leftout"
       return 0
     fi
@@ -925,14 +1110,15 @@ do_start() {
     </dev/null >/dev/null 2>&1 &
   disown "$!" 2>/dev/null || true
   echo "The lessons review of the whole branch $repo_label $branch ($short_mb..$short, $((size / 1024)) KB, $note) started in the background with $model; the $act waits for it (deadline $(elapsed_text "$PRR_DEADLINE"))$base_note."
+  narrow_said
   ar_left_out_note "$leftout"
 }
 
 # One reviewer over one review input, waited for: the single review of a branch that fits, and
 # each group of one that does not (#601), so the two can never be run two ways (L613).
-run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = model, $6 = deadline, $7 = started
+run_reviewer() {   # $1 = state dir, $2 = name, $3 = diff file, $4 = base, $5 = model, $6 = deadline, $7 = started, $8 = since (#1358)
   nohup python3 "$PRR_LIB/ai-review-run.py" \
-    --state-dir "$1" --key "$key" --sha "$full_sha" --name "$2" --kind pr --base "$4" \
+    --state-dir "$1" --key "$key" --sha "$full_sha" --name "$2" --kind pr --base "$4" ${8:+--since "$8"} \
     --repo-label "$repo_label" --branch "$branch" --repo-dir "$top" \
     --model "$5" --prompt-file "$PRR_LIB/ai-review-prompt.txt" \
     --scope-file "$PRR_LIB/ai-review-pr-scope.txt" \
@@ -1237,6 +1423,7 @@ answered_findings() {
   fi
   this_env="$prr_pr_env"
   this_num="$(printf '%s' "$this_env" | jq -r '.view.number // ""' 2>/dev/null)"
+  case "$this_num" in ''|*[!0-9]*) ;; *) prr_pr_number="$this_num" ;; esac
   this_head="$(printf '%s' "$this_env" | jq -r '.view.headRefName // ""' 2>/dev/null)"
   answer_comments "$this_env" "" > "$tmp/comments" \
     || { ans_note="($cannot: the pull request's comments could not be parsed, so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
@@ -1473,7 +1660,7 @@ do_check() {
         need="$(git merge-base "$base_ref" "$full_sha" 2>/dev/null)"
         if [ -n "$need" ] && ! git merge-base --is-ancestor "$rbase" "$need" 2>/dev/null; then
           local again_msg
-          rm -f "$final" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* 2>/dev/null
+          rm -f "$final" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" 2>/dev/null
           again_msg="$(do_start)"
           if [ -e "$pending" ]; then
             echo "Refusing to $act yet: the lessons review of $repo_label $branch at $short read from ${rbase:0:7}, which does not cover everything $base_ref brings in from ${need:0:7}, so it was started again over the whole range. $again_msg Run the $act again once it has finished."
@@ -1499,6 +1686,13 @@ do_check() {
   local carried_from
   carried_from="$(meta_of "$final" carried)"
   [ -n "$carried_from" ] && echo "(This head's review is carried from the review of ${carried_from:0:7}: the update changed nothing it reads, so no reviewer ran again, claude-config#1280.)"
+  # A review after three rounds of findings read only what changed since the last reviewed head (#1358).
+  local since_from scope_words="the whole branch $repo_label $branch"
+  since_from="$(meta_of "$final" since)"
+  if [ -n "$since_from" ]; then
+    scope_words="the changes since ${since_from:0:7} on $repo_label $branch"
+    echo "(This review read only the changes since ${since_from:0:7}, the last reviewed head: the earlier reviews of this pull request read the branch up to it, claude-config#1358.)"
+  fi
   case "$status" in
     ok)
       case "$findings" in ''|*[!0-9]*) findings="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")" ;; esac
@@ -1557,9 +1751,18 @@ do_check() {
         return 0
       fi
       local noun="findings"; [ "$block_n" -eq 1 ] && noun="finding"
+      # This review stopped the push or merge, so it is a round of findings (#1358, round_rows),
+      # recorded for its own finish and under the pull request's number when known.
+      local round_note="" prior_rounds this_round
+      if [ -n "$fin" ]; then
+        { printf 'finished=%s\npr=%s\n' "$fin" "${pr_arg:-$prr_pr_number}" > "$final.round"; } 2>/dev/null \
+          || round_note="(This round could not be recorded beside $final, so later reviews will not count it as a round.)"
+      fi
+      prior_rounds="$(round_rows)"
+      this_round=$(( $(printf '%s\n' "$prior_rounds" | grep -c .) + 1 ))
       local readkey keyrc=0
       readkey="$(ar_review_issue_key "$final")" || keyrc=$?
-      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $block_n $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
+      echo "Refusing to $act until these are read: the lessons review of $scope_words at $short finished ($took) with $block_n $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
       if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the $act command>"
         echo "The key is only in this message, so a $act carrying it proves the findings were shown. A $act without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
@@ -1568,6 +1771,8 @@ do_check() {
       fi
       # Only when keys can be checked at all: with a tool missing, the presented key was never judged.
       [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
+      # Guidance on top of the refusal, never another block: the key above still lets it through.
+      [ "$this_round" -ge "$PRR_STEP_BACK_ROUNDS" ] && step_back "$prior_rounds" "$this_round"
       # The ones to fix under the key, then the minor ones and the answered ones, each apart (#1338,
       # #1356).
       show_part fix
@@ -1580,6 +1785,7 @@ do_check() {
         printf '%s' "$ans_text"
       fi
       [ -n "$ans_note" ] && echo "$ans_note"
+      [ -n "$round_note" ] && echo "$round_note"
       return 1
       ;;
     empty-diff)
@@ -1620,7 +1826,7 @@ case "$verb" in
   # its start line, which named them already.
   check) do_check; rc=$?; [ "$rc" -eq 3 ] || { ar_left_out_note "$leftout" "$(meta_of "$final" status)"; pr_read_note; }; exit "$rc" ;;
   # A restart is asked for a fresh reading, so it never carries an earlier review (#1280 lessons review).
-  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$leftout" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
+  restart) rm -f "$final" "$pending" "$acknowledged" "$push_acknowledged" "$final.readkey"* "$final.readkeys"* "$final.round" "$leftout" "$prread"; rm -rf "$parts_root/$name".*; no_carry=1; do_start ;;
   _groups) do_groups ;;
 esac
 exit 0
