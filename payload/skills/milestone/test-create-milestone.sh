@@ -612,8 +612,9 @@ check_eq "and nothing is filed" "0" "$(issues_filed)"
 # --- a feature with a settled design (claude-config#1290) ------------------------
 # A plan naming its settled design is held to the design's decision map before anything is written:
 # every decision owned by a requirement or marked as having no code consequence, and every
-# requirement named by an issue. Then the milestone gets one more issue, the comparison of the built
-# screens against every design frame, so drift on the decisions that did have owners is found too.
+# requirement named by an issue. Then the milestone gets one more issue, "Match the settled design",
+# closed only when the build scores 100% on both halves of the design match score (#1364), so drift on
+# the decisions that did have owners is found too.
 design_file() { # design_file <path> <decisions json>
   printf '<!doctype html><html><body><main>screen</main>\n<script type="application/json" id="decision-map">{"decisions": %s}</script>\n</body></html>\n' "$2" >"$1"
 }
@@ -700,8 +701,8 @@ check "#1364 and says why" "not inside a git checkout" "$out"
 check_eq "#1364 filing nothing" "0" "$(issues_filed)"
 
 # Lessons review of #1290: a plan whose phases each carry their own level and categories, with no
-# plan level default, is not refused over the comparison issue it never wrote; the issue takes the
-# last phase's.
+# plan level default, is not refused over the Match issue it never wrote; the issue takes the last
+# phase's.
 cat >"$TMP/plan-design-perissue.json" <<JSON
 {
   "title": "Invoices screen",
@@ -716,15 +717,15 @@ labels_are enhancement ui-ux
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-perissue.json")"; rc=$?
 check_eq "#1290 a plan with only per phase levels and labels still files" "0" "$rc"
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
-check "#1290 and the comparison takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
+check "#1290 and the Match issue takes the last phase's level and labels" "--label priority-p3 --label ui-ux" "$last_create"
 # An empty plan level default is no default, as labels_for reads it, so the last phase's still apply.
 jq '.labels = [] | .priority = ""' "$TMP/plan-design-perissue.json" >"$TMP/plan-design-emptydefaults.json"
 out="$(run "$TMP/none.json" "acme/widgets" "$TMP/plan-design-emptydefaults.json")"; rc=$?
 check_eq "#1290 empty plan level defaults still file" "0" "$rc"
 last_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | tail -n 1 | cut -d: -f1),\$p" "$TMP/calls.log")"
-check "#1290 with the last phase's level and labels on the comparison" "--label priority-p3 --label ui-ux" "$last_create"
+check "#1290 with the last phase's level and labels on the Match issue" "--label priority-p3 --label ui-ux" "$last_create"
 
-# And the comparison is not counted as a phase: a design plan of ONE phase gets the same answer from
+# And the Match issue is not counted as a phase: a design plan of ONE phase gets the same answer from
 # the milestone helper as the same plan without a design, never a milestone it would refuse.
 cat >"$TMP/plan-one.json" <<'JSON'
 { "title": "Invoices screen", "priority": "p2", "labels": ["enhancement"],

@@ -31,9 +31,9 @@ close that waits loses nothing (fail closed). There is no override. A deliberate
 settled by a new design round, or by an exception Dan approves, recorded in the design file in his
 words, which the score then skips.
 
-Run by design-score-gate.sh with the hook payload on stdin, and with --merge-pr/--merge-repo/
---merge-dir when lib/merge-target.sh found a merge in the command. Prints the deny decision, or
-nothing to allow. Exit 0 either way; anything else is the gate failing, which the wrapper refuses on.
+Run by design-score-gate.sh with the hook payload on stdin, and with `--merge <pr> <repo> <dir>`
+(each possibly empty) when lib/merge-target.sh found a merge in the command. Prints the deny decision,
+or nothing to allow. Exit 0 either way; anything else is the judge failing, which the wrapper refuses on.
 """
 import hashlib
 import importlib.util
