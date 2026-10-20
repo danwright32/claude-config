@@ -6967,6 +6967,12 @@ awk -v t="$(( $(date +%s) - 600 ))" 'NR==1{$2=t} {print}' "$UTA/.behind-skips" >
 out_ut_st="$(ut_stuck)"
 check "#1398 and it says how long once, not 'ago ago'" \
   "grep -q '10 minutes ago, because' <<< \"\$out_ut_st\" && ! grep -q 'ago ago' <<< \"\$out_ut_st\""
+# A reconcile that stops before it can say why (here one that does nothing at all) must not inherit
+# the reason an EARLIER attempt found: the overlap above is not why this one failed.
+CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_HOSTNAME=mac-ut-A SYNC_CLONE_REGISTRY="$UTREG" SYNC_IN_WATCH=1 \
+  SYNC_NO_NOTIFY=1 SYNC_RECONCILE_RETRY=0 SYNC_SEND_RECONCILE=true bash "$SCRIPT" send >/dev/null 2>&1 || true
+check "#1398 a reconcile that gives no reason is reported with the general one, not the last reason" \
+  "ut_stuck_sending_says 'the reconcile it tried did not clear them' && ! ut_stuck_sending_says 'also change'"
 
 section "== a rebase a killed run left behind is concluded or refused, never ignored (#324, #325) =="
 # A run killed part way through its own `pull --rebase` leaves the clone detached with the branch

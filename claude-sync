@@ -10049,7 +10049,7 @@ do_send(){
       # It did not clear. THIS is the state worth counting: one is a hiccup, twenty in a row is a
       # Mac that has stopped syncing, and before this nothing could tell them apart. Said with the
       # reason the reconcile found, when it found one, since each needs something different (L11).
-      echo "claude-sync: this edit was not sent, because $(behind_reason_words "$bh_kind") ($(record_behind_skip "$bh_tried" "$bh_kind")). Run '$(receive_command)' and read what it says; until then nothing leaves this Mac." >&2
+      echo "claude-sync: this edit was not sent, because $(behind_reason_words "$bh_kind") ($(record_behind_skip "$bh_tried" "${bh_kind:-unknown}")). Run '$(receive_command)' and read what it says; until then nothing leaves this Mac." >&2
       send_outcome behind
       return 0
     fi
