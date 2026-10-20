@@ -21,6 +21,9 @@ The spec, with paths resolved against the spec file's own directory:
       "measurement": "72 checks, worst 4.83",     what was measured (optional)
       "builder":     "builder.js",                defines buildScreen(variant)
       "styles":      "screen.css",                optional, inlined
+      "chrome":      {...},                       the product's captured chrome, required
+                                                  unless "screen" names the shared one
+      "fixture":     "fixture.json",              optional, the data, as window.DESIGN_FIXTURE
       "screen":      "terminal",                  optional, a shared screen from screens/
       "variants": [
         {"key": "1", "name": "Espresso",
@@ -29,8 +32,16 @@ The spec, with paths resolved against the spec file's own directory:
       ]
     }
 
+NO STAND INS (Dan, 2026-10-19). A round draws inside the product's REAL chrome, captured from
+the product (chrome_frame.py says how, and capture-chrome.js does it), never a copy drawn by
+hand: each option is then its own document, the captured page with the round drawn into its
+slot, shown in an iframe at the width it was captured at, so its own media queries answer to
+that width and nothing in the builder can collide with this page. buildScreen(variant) then
+returns what goes in the slot. A spec naming no captured chrome is refused, unless it asks for
+a shared screen (the terminal), which is itself the chrome and is drawn on this page.
+
 buildScreen(variant) receives the whole variant object and returns one element:
-the entire screen, chrome included. Every option goes through that one function
+the entire screen, chrome included (the slot's content, with a captured chrome). Every option goes through that one function
 with one field changed between them, which is what makes "everything else held
 byte identical" structural rather than a promise.
 
@@ -58,6 +69,9 @@ import json
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import chrome_frame  # noqa: E402
 
 KEY = re.compile(r"^[0-9a-z]$")
 
@@ -208,6 +222,10 @@ __BUILDER__
   "use strict";
 
   var VARIANTS = __VARIANTS__;
+  /* With a captured chrome every option is an iframe, and an iframe taken out of the page reloads
+     when it is put back, losing its scroll and anything clicked open. So those options all stay in
+     the stage, one shown at a time (claude-config#1364). */
+  var KEEP_ALL = __KEEP_ALL__;
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -237,10 +255,20 @@ __BUILDER__
        for each option exactly once, and the same element is moved onto the stage every
        time that option is chosen. The fallback covers the one case where drawAll could not
        finish, so a page whose builder threw is still usable rather than blank. */
-    var outgoing = stage.firstElementChild;
-    var kept = outgoing ? scrolled(outgoing) : [];
     var incoming = built[current] || buildScreen(variant);
-    stage.replaceChildren(incoming);
+    var kept = [];
+    if (KEEP_ALL) {
+      built[current] = incoming;
+      built.forEach(function (node, position) {
+        if (!node) return;
+        if (node.parentNode !== stage) stage.append(node);
+        node.hidden = position !== current;
+      });
+    } else {
+      var outgoing = stage.firstElementChild;
+      kept = outgoing ? scrolled(outgoing) : [];
+      stage.replaceChildren(incoming);
+    }
     /* A browser resets the scroll of an element taken out of the document, so every scrolling
        region came back at the top on a switch, and a round about anything below the fold could not
        be compared in place (claude-config#1206). The positions the outgoing screen was scrolled to
@@ -533,6 +561,82 @@ def picker_options(spec, variants):
     return {"round": round_text, "question": round_text + "?", "options": options}
 
 
+CHROME_BUILDER = r"""/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
+   the captured page with the round's builder drawing into its slot, in an iframe of its own. */
+var DR_TEMPLATE = __TEMPLATE__;
+var DR_OPTION_VARIANTS = __OPTIONS__;
+var DR_WIDTH = __WIDTH__;
+var DR_HEIGHT = __HEIGHT__;
+var DR_SLOT = __SLOT__;
+var DR_SEEN = {};
+function buildScreen(variant) {
+  var frame = document.createElement("iframe");
+  frame.title = variant.name;
+  frame.setAttribute("data-dr-option", variant.key);
+  /* No display set here: an inline display would beat the hidden attribute show() sets, and the stage
+     lays its children out itself (lessons review of #1364). */
+  frame.style.cssText = "border:0;background:#fff;width:" + DR_WIDTH + "px;height:" + (DR_HEIGHT || 480) + "px";
+  frame.addEventListener("load", function () { drLoaded(frame, variant); });
+  frame.srcdoc = DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_OPTION_VARIANTS[variant.key]);
+  return frame;
+}
+/* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
+   options drawing the same thing are said, as the page says it for a round with no captured chrome. */
+/* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
+   again each time it is shown: the page calls screenShown after every switch, as it does for any
+   builder, and the frame's own load calls it too. */
+function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
+  var doc = frame.contentDocument;
+  /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
+     so a short screen would keep whatever height its frame started at. */
+  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+}
+function drLoaded(frame, variant) {
+  var doc = frame.contentDocument;
+  var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
+  screenShown(variant, frame);
+  if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
+  var slot = doc && doc.getElementById(DR_SLOT);
+  DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? slot.innerHTML : null };
+  if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
+}
+function drVerdict() {
+  var said = [];
+  var marks = {};
+  Object.keys(DR_SEEN).forEach(function (key) {
+    var seen = DR_SEEN[key];
+    if (seen.noSlot) {
+      said.push(seen.name + " has nowhere to draw: its captured chrome holds no element #" + DR_SLOT + ", so nothing of the round is on it. Capture the chrome again, or name its slot.");
+      return;
+    }
+    if (!seen.report.built) {
+      said.push("The builder threw when it drew " + seen.name + ": " + seen.report.why + ". That option shows its captured chrome with nothing in it.");
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(marks, seen.drawn)) {
+      said.push(marks[seen.drawn] + " and " + seen.name + " draw the same picture. That is what a round whose options do not differ looks like. Check the builder actually reads its argument before reading anything into this round.");
+    } else {
+      marks[seen.drawn] = seen.name;
+    }
+  });
+  var page = document.querySelector(".dr-frame");
+  said.forEach(function (text) {
+    var strip = document.createElement("p");
+    strip.className = "dr-sameness";
+    strip.textContent = text;
+    page.insertBefore(strip, page.firstChild);
+  });
+}
+/* A key pressed inside an option's frame comes here, so the arrows and jump keys work wherever the
+   focus is; the frame already left alone a key the design took or one typed into a field. */
+window.addEventListener("message", function (event) {
+  if (event.data && typeof event.data.drKey === "string") {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: event.data.drKey, bubbles: true }));
+  }
+});
+"""
+
+
 def main(argv):
     if len(argv) != 3:
         print(__doc__.split("\n\n")[1].strip().replace(
@@ -586,6 +690,26 @@ def main(argv):
 
     screen_script, screen_styles = load_screen(spec, builder, builder_name)
 
+    # No stand ins (claude-config#1364): a round draws in the product's captured chrome, or in a
+    # shared screen that ships with this tool, which is itself the chrome.
+    chrome = None
+    if screen_script:
+        if spec.get("chrome") is not None:
+            fail('the spec asks for the shared screen "%s", which is its chrome, and names a captured '
+                 "chrome as well; keep one" % str(spec.get("screen")).strip())
+    else:
+        try:
+            chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
+        except chrome_frame.ChromeError as err:
+            fail(str(err))
+    fixture = None
+    fixture_name = str(spec.get("fixture", "")).strip()
+    if fixture_name:
+        try:
+            fixture = json.loads(read_file(os.path.join(base, fixture_name), "fixture"))
+        except ValueError as err:
+            fail("the fixture %s is not JSON (%s)" % (fixture_name, err))
+
     styles = ""
     styles_name = str(spec.get("styles", "")).strip()
     if styles_name:
@@ -597,6 +721,18 @@ def main(argv):
     if screen_script:
         builder = screen_script + "\n" + builder
         styles = screen_styles + "\n" + styles
+    if chrome:
+        # The round's builder and stylesheet run inside each option's own document; this page gets
+        # the small builder that draws those documents.
+        template = chrome_frame.frame_document(chrome, builder, styles, "__DR_VARIANT__", fixture)
+        options = {v["key"]: chrome_frame.script_text(json.dumps(v)) for v in variants}
+        values = {"TEMPLATE": chrome_frame.script_text(json.dumps(template)),
+                  "OPTIONS": chrome_frame.script_text(json.dumps(options)),
+                  "WIDTH": str(chrome["width"]), "HEIGHT": str(chrome["height"] or 0),
+                  "SLOT": json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot")}
+        # One pass, so a value holding another placeholder's spelling is never replaced again.
+        builder = re.sub(r"__(TEMPLATE|OPTIONS|WIDTH|HEIGHT|SLOT)__", lambda m: values[m.group(1)], CHROME_BUILDER)
+        styles = ""
 
     asks = str(spec.get("asks", "")).strip()
     measurement = str(spec.get("measurement", "")).strip()
@@ -610,6 +746,7 @@ def main(argv):
                         if measurement else "")
     page = page.replace("__STYLES__", styles)
     page = page.replace("__BUILDER__", builder)
+    page = page.replace("__KEEP_ALL__", "true" if chrome else "false")
     page = page.replace("__VARIANTS__",
                         json.dumps(variants, indent=2).replace("</", "<\\/"))
 

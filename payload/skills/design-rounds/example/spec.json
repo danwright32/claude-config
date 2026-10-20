@@ -3,6 +3,8 @@
   "round": "How tall should a row be",
   "asks": "Eleven rows have to fit without scrolling, and the amount has to stay readable.",
   "measurement": "Both rows measured at 4.9 to 1 against the row fill.",
+  "chrome": {"captured": "chrome.html", "from": "the demo invoice app this example stands for; a real round saves its product's page with capture-chrome.js", "slot": "#main", "width": 640},
+  "fixture": "fixture.json",
   "builder": "builder.js",
   "styles": "screen.css",
   "variants": [
