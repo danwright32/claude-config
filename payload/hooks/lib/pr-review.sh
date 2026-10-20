@@ -56,6 +56,11 @@
 #                                       only the NEW findings: any that repeat one already answered
 #                                       in a "Lessons review" comment are listed apart after them,
 #                                       not counted (claude-config#1338, answered_findings).
+#                                       N counts only the major and critical ones (and any whose
+#                                       severity is missing or unreadable); the minor ones are listed
+#                                       apart after them as advisory (claude-config#1356).
+#   ok, only minor findings new         allowed, printing them as advisory, with no key and nothing
+#                                       recorded as read (claude-config#1356, severity_split).
 #   ok, every finding answered before   allowed, listing each with the review that raised it first
 #                                       and the comment that answered it (#1338), with no key.
 #   ok, N findings, read / 0            allowed (<review>.acknowledged).
@@ -1269,6 +1274,66 @@ pr_references() {
     | .[:3] | .[]' 2>/dev/null
 }
 
+# MINOR FINDINGS ARE ADVISORY (claude-config#1356). Every finding used to read as something to fix,
+# so a wrong or trivial one cost a whole commit, review and push round. In the 2026-10-19 judged
+# sample of 60 round 1 findings, those marked major were real 7 times in 10 and those marked minor
+# 26 times in 50, and 11 of the 12 wrong ones were minor. Dan's decision, the same day: with only
+# minor findings the push or merge goes through and they are printed as advisory, with no read key;
+# any major or critical one still blocks with its key as before, and a review holding both shows the
+# minor ones apart. The review file is left exactly as written, so every reader of the stored
+# reviews (the report, the scorer, the history given to the next review) still sees them.
+#
+# A finding is minor only when its line ENDS with the format's own "[severity: minor]"
+# (ai-review-prompt.txt), or with that followed only by the mark the runner itself appends to a
+# finding it could not place by its quoted line ("[review harness: not placed, ...]", #1357), which
+# says where the finding is, not how serious. Anything else blocks: critical, major, a missing tag, a
+# tag the format does not name, a tag anywhere but the end. And so does any finding the review
+# records that no minor line accounts for, so a count the lines cannot explain is never waved
+# through (L93). One pattern, PRR_MINOR, for both readings below.
+# Sets adv_n and adv_lines (the new minor finding lines, in the review's order) and block_n (how
+# many new findings are to fix). Reads ans_lines and new_findings from the caller.
+PRR_MINOR='[[]severity: minor[]]( [[]review harness: not placed, .*[]])?[[:space:]]*$'
+severity_split() {
+  local blk
+  adv_lines="$(awk -v minor="$PRR_MINOR" 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next }
+    found && /^[^ :]+:[0-9]+: / && !($0 in skip) && $0 ~ minor { print }
+    /^$/ { found = 1 }' <(printf '%s' "$ans_lines") "$final" 2>/dev/null)"
+  blk="$(awk -v minor="$PRR_MINOR" 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next }
+    found && /^[^ :]+:[0-9]+: / && !($0 in skip) && $0 !~ minor { n++ }
+    /^$/ { found = 1 } END { print n + 0 }' <(printf '%s' "$ans_lines") "$final" 2>/dev/null)"
+  case "$blk" in ''|*[!0-9]*) blk=0 ;; esac
+  adv_n=0
+  [ -n "$adv_lines" ] && { adv_n="$(printf '%s\n' "$adv_lines" | grep -c .)"; adv_lines="$adv_lines"$'\n'; }
+  block_n=$((new_findings - adv_n))
+  [ "$blk" -gt "$block_n" ] && block_n="$blk"
+}
+
+# The findings of one part of a review, capped as ar_capped_body caps the whole (#1356): "fix", the
+# review without its minor and answered lines, or "advisory", its minor ones alone. Written to a
+# temporary file of its own, since several checks can run at once; the line saying how many more
+# there are names the review file itself. With no temporary file, "fix" shows the whole review and
+# "advisory" its minor lines uncapped, so nothing is hidden for want of one.
+show_part() {   # $1 = fix | advisory
+  local f
+  if ! f="$(mktemp "${TMPDIR:-/tmp}/pr-review-part.XXXXXX" 2>/dev/null)"; then
+    if [ "$1" = fix ]; then
+      ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
+    else
+      printf '%s' "$adv_lines" | ar_redact | cut -c "1-$PRR_LINE_CHARS"
+    fi
+    return 0
+  fi
+  if [ "$1" = advisory ]; then
+    { printf '\n'; printf '%s' "$adv_lines"; } > "$f"
+  else
+    awk 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next } found && ($0 in skip) { next } { print } /^$/ { found = 1 }' \
+      <(printf '%s%s' "$ans_lines" "$adv_lines") "$final" > "$f" 2>/dev/null
+  fi
+  ar_capped_body "$f" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS" \
+    | awk -v a="$f" -v b="$final" '{ i = index($0, a); if (i) $0 = substr($0, 1, i - 1) b substr($0, i + length(a)); print }'
+  rm -f "$f"
+}
+
 do_check() {
   local now; now="$(date +%s)"
   # A review in groups whose groups have all answered is written here too, should the process
@@ -1402,10 +1467,24 @@ do_check() {
         printf '%s' "$ans_text"
         return 0
       fi
-      local noun="findings"; [ "$new_findings" -eq 1 ] && noun="finding"
+      # Of the new ones, the minor ones are advisory and the rest are to fix (#1356, severity_split).
+      local adv_n adv_lines block_n
+      severity_split
+      if [ "$block_n" -le 0 ]; then
+        local advnoun="findings"; [ "$adv_n" -eq 1 ] && advnoun="finding"
+        echo "$AR_ADVISORY_LEAD the lessons review of $repo_label $branch at $short finished ($took) with $adv_n minor $advnoun and nothing more serious. Minor findings do not stop the $act and need no fix round:"
+        show_part advisory
+        if [ "$ans_n" -gt 0 ]; then
+          echo "Also raised again, and not counted: $ans_n finding(s) repeating one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since (claude-config#1338):"
+          printf '%s' "$ans_text"
+        fi
+        [ -n "$ans_note" ] && echo "$ans_note"
+        return 0
+      fi
+      local noun="findings"; [ "$block_n" -eq 1 ] && noun="finding"
       local readkey keyrc=0
       readkey="$(ar_review_issue_key "$final")" || keyrc=$?
-      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $new_findings $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
+      echo "Refusing to $act until these are read: the lessons review of the whole branch $repo_label $branch at $short finished ($took) with $block_n $noun. Here they are. Check each against the code, fix what is real or say why it is not in a comment on the pull request beginning \"Lessons review at $short\", quoting each finding it answers on a line of its own beginning \"> \", exactly as shown here. Every later review of it reads that comment on either Mac, and a finding raised again that it quotes, at lines unchanged since, counts as answered. Then $act with their read key in front of the $act command:"
       if [ "$keyrc" -eq 0 ] && [ -n "$readkey" ]; then
         echo "    PR_REVIEW_READ=$readkey <the $act command>"
         echo "The key is only in this message, so a $act carrying it proves the findings were shown. A $act without it is refused again, with the findings again, because this refusal may have been hidden behind another hook's."
@@ -1414,23 +1493,16 @@ do_check() {
       fi
       # Only when keys can be checked at all: with a tool missing, the presented key was never judged.
       [ -n "${PR_REVIEW_READ:-}" ] && [ "$keyrc" -eq 0 ] && echo "The PR_REVIEW_READ given is not this review's key: it belongs to another review or head."
+      # The ones to fix under the key, then the minor ones and the answered ones, each apart (#1338,
+      # #1356).
+      show_part fix
+      if [ "$adv_n" -gt 0 ]; then
+        echo "$AR_ADVISORY_LEAD $adv_n more, which do not stop the $act and need no fix round or answer:"
+        show_part advisory
+      fi
       if [ "$ans_n" -gt 0 ]; then
-        # The new ones under the key, the answered ones after them, apart (#1338).
-        # A copy without them, in a temporary file of its own, since several checks can run at once.
-        local newf
-        if newf="$(mktemp "${TMPDIR:-/tmp}/pr-review-new.XXXXXX" 2>/dev/null)"; then
-          awk 'FILENAME == ARGV[1] { if ($0 != "") skip[$0] = 1; next } found && ($0 in skip) { next } { print } /^$/ { found = 1 }' \
-            <(printf '%s' "$ans_lines") "$final" > "$newf" 2>/dev/null
-          ar_capped_body "$newf" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS" \
-            | awk -v a="$newf" -v b="$final" '{ i = index($0, a); if (i) $0 = substr($0, 1, i - 1) b substr($0, i + length(a)); print }'
-          rm -f "$newf"
-        else
-          ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
-        fi
         echo "Also raised again, and not counted: $ans_n finding(s) repeating one an earlier review of this pull request raised that a \"Lessons review\" comment already answered, at lines unchanged since (claude-config#1338):"
         printf '%s' "$ans_text"
-      else
-        ar_capped_body "$final" "$PRR_SHOW_LINES" "$PRR_LINE_CHARS"
       fi
       [ -n "$ans_note" ] && echo "$ans_note"
       return 1

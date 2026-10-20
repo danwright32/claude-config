@@ -349,6 +349,34 @@ MTEOF
   return 0
 }
 
+# What the push and merge gates print when the lessons review ALLOWS (claude-config#1356). A
+# PreToolUse hook's plain stdout on an allow is shown to neither the session nor Dan, so an allow
+# carrying minor findings, which are advisory and need no fix round, is handed over as JSON: the
+# session reads it as additionalContext and Dan sees it as a systemMessage. It decides nothing about
+# the command (no permissionDecision), so the other hooks and Dan's own confirmation still apply.
+# Every other allow is printed as before. The words that mark an advisory are AR_ADVISORY_LEAD, read
+# from lib/ai-review-common.sh, which lib/pr-review.sh writes them from; should that file not load,
+# every allow is handed over, since showing a verdict twice costs less than hiding an advisory.
+# Without jq or python3 to build the JSON, the verdict goes to stderr with exit 1, Claude Code's
+# non blocking error, which is shown and stops nothing. Exits the hook.
+mt_review_allowed() {   # $1 = the gate's name, $2 = the review's verdict
+  local text="$1: $2" lead="${AR_ADVISORY_LEAD:-}"
+  [ -n "$lead" ] || { . "$_MT_LIB/ai-review-common.sh" 2>/dev/null; lead="${AR_ADVISORY_LEAD:-}"; }
+  if [ -n "$lead" ]; then
+    case "$2" in *"$lead"*) ;; *) printf '%s\n' "$text"; exit 0 ;; esac
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -nc --arg m "$text" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}' && exit 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$text" | python3 -c 'import json, sys
+m = sys.stdin.read()
+print(json.dumps({"systemMessage": m, "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": m}}))' && exit 0
+  fi
+  printf '%s\n' "$text" >&2
+  exit 1
+}
+
 # Does pr-review-push-gate.sh hold this push for the lessons review of the whole branch? The ONE
 # answer to that question (claude-config#1007, L261). The gate reads it to decide whether it runs,
 # and ai-review-on-push.sh reads it to decide whether its own review would be a second model run
