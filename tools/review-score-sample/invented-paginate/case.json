@@ -1,0 +1,50 @@
+{
+  "note": "Invented for the public sample: no real code. Three real defects, one trivial point and one known wrong finding.",
+  "items": [
+    {
+      "id": "d1",
+      "verdict": "real",
+      "file": "shop/paginate.py",
+      "line": 8,
+      "quote": "return len(items) // size",
+      "keywords": ["ceil", "floor", "round", "partial", "last page"],
+      "claim": "page_count rounds down, so a short last page is not counted."
+    },
+    {
+      "id": "d2",
+      "verdict": "real",
+      "file": "shop/paginate.py",
+      "line": 16,
+      "quote": "for start in range(0, len(items) - 1, size):",
+      "keywords": ["range", "len(items) - 1", "off by one", "drop", "empty", "no pages"],
+      "claim": "the range stops one short, so a list of one item gives no pages."
+    },
+    {
+      "id": "d3",
+      "verdict": "real",
+      "file": "shop/paginate.py",
+      "line": 23,
+      "quote": "start = number * size",
+      "keywords": ["number - 1", "first page", "counting from 1", "one based", "1 based", "skips"],
+      "claim": "page counts from 1 but starts at number * size, so page 1 returns the second page."
+    },
+    {
+      "id": "t1",
+      "verdict": "trivial",
+      "file": "shop/paginate.py",
+      "line": 21,
+      "quote": "def page(items, size, number):",
+      "keywords": ["validate", "size <= 0", "siblings"],
+      "claim": "page does not check size the way its siblings do."
+    },
+    {
+      "id": "w1",
+      "verdict": "wrong",
+      "file": "shop/paginate.py",
+      "line": 13,
+      "quote": "",
+      "keywords": ["not checked", "not validated", "zero"],
+      "claim": "Claims a size of zero is not checked; line 13 checks it."
+    }
+  ]
+}

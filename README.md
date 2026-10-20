@@ -907,6 +907,46 @@ exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000
 into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
 the checkout's objects read only. `--no-github` asks GitHub nothing.
 
+#### Scoring the review itself
+
+`tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:
+its CATCH RATE (the real defects in a fixed set of judged cases that the review finds) and its
+WRONG FINDING RATE (its findings that match one already judged wrong). Run it by hand whenever the
+review's prompt (`ai-review-prompt.txt`, `ai-review-pr-scope.txt`), its runner (`ai-review-run.py`)
+or its model changes, and never per pull request. Keep the change only if neither number gets worse.
+
+    python3 tools/review-score.py run               # a sample of 3 cases, compared with the baseline
+    python3 tools/review-score.py run --all         # every case
+    python3 tools/review-score.py baseline <run file printed by a run>
+
+The case set it reads is `--cases`, else `REVIEW_SCORE_CASES`, else `~/.claude-review-cases`. The
+real judged set quotes private code from other repositories, so it lives on the Mac that holds it,
+outside this public repository and outside `~/.claude`, where no sync can carry it; nothing from it
+belongs in this repository, a pull request or an issue. `tools/review-score-sample` is a small
+invented set that proves the scorer works, and the suite `tools/test-review-score.sh` runs it with
+a fake model. A case is a directory holding `input.diff` (exactly what the reviewer reads) and
+`case.json` (its judged points, each with a verdict of real, trivial, wrong or unsure, a file, a
+line, the line's text, and keywords naming the claim); `review-score.py check` validates a set and
+counts it by verdict. A finding matches a judged point on the same file when it cites a line within
+20 of it or quotes its text, and names one of its keywords, because most findings cite a line a few
+off (#1357). Keyword overlap is loose, so a finding about something else that happens to share a
+keyword can be credited to a point; choose keywords only that claim would use.
+
+Each case costs one review by the real runner, and the run reports what it cost as `claude`
+measured it. On 2026-10-19 one review of a small invented diff cost about $0.18, nearly all of it
+the lessons index and the prompt (about 62,000 input tokens), so a case costs that plus its diff.
+Results go to `<cases>/results` (or `--results-dir`): one file per run, holding every finding, and
+`baseline.json`. `run --save-baseline` replaces the baseline only with a run that is not worse
+and measured every case the baseline did; anything else takes the `baseline` command, on purpose.
+A comparison re-judges both runs against the case set as it is now, over only the
+cases both measured. The terminal shows ids and counts, never a finding's text; findings that
+match no judged point are counted as unjudged and kept in the run file, to be judged and added to
+the case, after which `review-score.py rescore <run file>` re-scores without another review. One
+run is one sample of a model that answers differently each time, so confirm a regression or an
+improvement with a second run (`--repeat 2` pools two reviews per case). Exit 0 is compared and
+not worse, 1 worse, 2 unmeasured (no case set, or no review succeeded), 3 no baseline covering
+these cases.
+
 ### What a push actually waits on
 
 Twenty-four PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
