@@ -26,9 +26,12 @@
 # With "design", the settled design file's decision map is checked first by
 # design-rounds/check-decision-map.py: a decision no requirement owns (and not marked as having no
 # code consequence), or a requirement no issue names as "Requirement <number>", files nothing at all
-# (exit 11), and neither does a design path that is not absolute or a file that cannot be read. A
-# plan that passes gets one more issue at its end, "Compare the built screens against every frame of
-# the settled design", unless it already carries one by that title (claude-config#1290).
+# (exit 11), and neither does a design path that is not absolute, a file that cannot be read, or a
+# file in no git checkout. A plan that passes gets one more issue at its end, "Match the settled
+# design", unless it already carries one by that title (whose body then gets the design mark): done is
+# the build at 100% on both halves of the design match score, and hooks/design-score-gate.sh refuses
+# to close that issue or the milestone below it. Every other issue is told its pull request posts the
+# current score, and the milestone's description carries the design mark (claude-config#1290, #1364).
 #
 # Every issue needs a priority AND at least one category label, either its own or the
 # plan-level default. Priority accepts "p2" or "priority-p2". Categories are not
@@ -94,9 +97,10 @@ fi
 # shipped as the old screen while the milestone read as nearly done. So a plan naming its settled
 # design files nothing until the design's decision map holds (every decision owned by a requirement
 # or marked as having no code consequence, and every requirement named by one of the plan's issues),
-# and then the milestone gets one more issue: the comparison of the built screens against every
-# design frame, which finds drift on the decisions that did have owners. Checked before the plan's
-# other refusals, and before anything is written, so a refused plan creates nothing.
+# and then the milestone gets one more issue, "Match the settled design", closed only at 100% on both
+# halves of the design match score, which finds drift on the decisions that did have owners (#1364).
+# Checked before the plan's other refusals, and before anything is written, so a refused plan creates
+# nothing.
 design="$(jq -r '.design // empty' "$plan")"
 compare_added=0
 if [[ -n "$design" ]]; then
@@ -113,25 +117,63 @@ if [[ -n "$design" ]]; then
     echo "ABORTED: no issues were filed, and the milestone was not touched, because the settled design's decision map does not hold (the design rounds skill's deliverable says how to write it)." >&2
     exit 11
   fi
-  compare_title="Compare the built screens against every frame of the settled design"
-  if [[ "$(jq --arg t "$compare_title" '[(.issues // [])[] | select(.title == $t)] | length' "$plan")" -eq 0 ]]; then
-    compare_body="The last step of this milestone, before it is closed (claude-config#1290). Open the settled design, $design, and screenshot the built page against every frame in it, each at that frame's own width. List every difference here, then fix each one or settle it with Dan as a decision. Drift on a decision that had an owner is found here, since every requirement can ship and close while the screen still differs from the design."
-    with_compare="$(mktemp)"
-    # Its level and categories are the plan's defaults, else the last phase's own, so a plan whose
-    # phases each carry theirs is not refused over an issue it never wrote (lessons review of #1290).
-    if ! jq --arg t "$compare_title" --arg b "$compare_body" '
-        (.issues // []) as $is | ($is | last) as $l
-        | .issues = $is + [{title: $t, body: $b}
-            + (if (.priority // "") != "" then {} elif ($l.priority // "") != "" then {priority: $l.priority} else {} end)
-            + (if ((.labels // []) | length) > 0 then {} elif (($l.labels // []) | length) > 0 then {labels: $l.labels} else {} end)]' "$plan" >"$with_compare"; then
-      echo "ABORTED: the comparison issue could not be added to the plan, so nothing was filed." >&2
-      rm -f "$with_compare"
-      exit 11
-    fi
-    plan="$with_compare"
-    compare_added=1
-    trap 'rm -f "$with_compare"' EXIT
+  # The design is named by its path in the app's checkout, the same on every machine, since the score
+  # and the close gate find it by that name (claude-config#1364). A design in no checkout cannot be.
+  design_top="$(git -C "$(dirname "$design")" rev-parse --show-toplevel 2>/dev/null)"
+  design_real="$(cd -P "$(dirname "$design")" 2>/dev/null && pwd)/$(basename "$design")"
+  design_top_real="$(cd -P "$design_top" 2>/dev/null && pwd)"
+  if [[ -z "$design_top" || -z "$design_top_real" || "$design_real" != "$design_top_real"/* ]]; then
+    echo "DESIGN-NOT-IN-CHECKOUT the settled design $design is not inside a git checkout, so the design match score could not name it the same way on every machine. Commit it in the app's repository (the design rounds skill's deliverable)." >&2
+    echo "ABORTED: no issues were filed, and the milestone was not touched." >&2
+    exit 11
   fi
+  design_rel="${design_real#"$design_top_real"/}"
+  # The marks the close gate (hooks/design-score-gate.py) and `design_score.py post` read, written by
+  # the one helper that writes them, so the writer and the readers cannot drift (score_github.py).
+  marks="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import score_github as g; print(g.mark(g.ISSUE_MARK, sys.argv[2])); print(g.mark(g.MILESTONE_MARK, sys.argv[2]))' "$HERE/../design-rounds/score" "$design_rel" 2>&1)"
+  issue_mark="$(printf '%s\n' "$marks" | sed -n 1p)"
+  milestone_mark="$(printf '%s\n' "$marks" | sed -n 2p)"
+  if [[ "$issue_mark" != "<!-- design-score-issue "* || "$milestone_mark" != "<!-- design-score-milestone "* ]]; then
+    echo "ABORTED: the design score marks could not be written ($marks), so nothing was filed." >&2
+    exit 11
+  fi
+  # The milestone's last issue is "Match the settled design": the milestone is done when the build
+  # matches the design on both halves of the design match score, not when its issues are closed, and
+  # a hook refuses to close this issue or the milestone below 100% (Dan, 2026-10-19, #1364). It
+  # replaced the comparison issue #1290 added, which listed differences by eye.
+  match_title="Match the settled design"
+  match_body="The last issue of this milestone, and the one that says it is done (claude-config#1364). Done is not every issue closed: it is the build matching the settled design, \`$design_rel\`, at 100% on both halves of the design match score. Decisions: every decision in the design's decision map met by its automated check. Pictures: every frame of the design matching the build drawn from the same fixture data, at the frame's own width.
+
+Score it with the platform adapter (a Playwright screenshot of the fixture route on web, a snapshot test on SwiftUI), then \`python3 ~/.claude/skills/design-rounds/score/design_score.py score <capture folder>\`, and post it from the pull request with \`design_score.py post <score.json> --repo <owner/name> --pr <number>\`, which puts it here too.
+
+A hook refuses to close this issue, or the milestone, below 100% on both halves, and an unmeasured build is never 100%. A difference Dan means to keep is settled by a new design round, or by an exception he approves, recorded in the design file in his words.
+
+$issue_mark"
+  phase_note="This milestone is built from the settled design \`$design_rel\`. This issue's pull request posts the current design match score: \`python3 ~/.claude/skills/design-rounds/score/design_score.py post <score.json> --repo <owner/name> --pr <number>\` (claude-config#1364)."
+  with_match="$(mktemp)"
+  trap 'rm -f "$with_match"' EXIT
+  # Its level and categories are the plan's defaults, else the last phase's own, so a plan whose
+  # phases each carry theirs is not refused over an issue it never wrote (lessons review of #1290).
+  # A plan that carries its own Match issue keeps its words, with the mark added; every other issue
+  # is told how its pull request posts the score.
+  if ! jq --arg t "$match_title" --arg b "$match_body" --arg m "$issue_mark" --arg n "$phase_note" '
+      (.issues // []) as $is | ($is | last) as $l
+      | ([$is[] | select(.title == $t)] | length) as $own
+      | .issues = [$is[] | if .title == $t
+                            then .body = ((.body // "") + "\n\n" + $m)
+                            else .body = ((.body // "") + "\n\n" + $n) end]
+        + (if $own > 0 then [] else [{title: $t, body: $b}
+            + (if (.priority // "") != "" then {} elif ($l.priority // "") != "" then {priority: $l.priority} else {} end)
+            + (if ((.labels // []) | length) > 0 then {} elif (($l.labels // []) | length) > 0 then {labels: $l.labels} else {} end)] end)
+      | .description = ((.description // "") + (if (.description // "") == "" then "" else "\n\n" end) + $mm)' \
+      --arg mm "$milestone_mark" "$plan" >"$with_match"; then
+    echo "ABORTED: the Match the settled design issue could not be added to the plan, so nothing was filed." >&2
+    exit 11
+  fi
+  if [[ "$(jq --arg t "$match_title" '[(.issues // [])[] | select(.title == $t)] | length' "$plan")" -eq 0 ]]; then
+    compare_added=1
+  fi
+  plan="$with_match"
 fi
 
 description="$(jq -r '.description // ""' "$plan")"
@@ -263,7 +305,7 @@ fi
 # is enforced on this path too rather than only on the ad hoc filing paths. A plan
 # with a single phase is a label with extra steps just as much as a single ad hoc
 # issue is, so it gets the same refusal and the same visible override.
-# The comparison issue a settled design adds is not one of the plan's phases, so it is not counted:
+# The Match issue a settled design adds is not one of the plan's phases, so it is not counted:
 # a plan of one phase is refused here as it would be with no design (lessons review of #1290).
 ensure_args=("$repo" "$title" --create-approved --for-issues "$((n_issues - compare_added))" --description "$description")
 [[ -n "$due_on" ]] && ensure_args+=(--due "$due_on")

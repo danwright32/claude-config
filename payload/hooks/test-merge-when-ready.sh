@@ -195,9 +195,15 @@ cat >> "$ST/changelog-gate-payloads"; printf '\n' >> "$ST/changelog-gate-payload
 [ -s "$ST/changelog-gate-deny" ] && jq -nc --arg r "$(cat "$ST/changelog-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
+cat > "$STUBS/design-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/design-gate-payloads"; printf '\n' >> "$ST/design-gate-payloads"
+[ -s "$ST/design-gate-deny" ] && jq -nc --arg r "$(cat "$ST/design-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
-export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh"
+export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
 
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
@@ -589,6 +595,20 @@ fresh "$OLD" 0 "$GREEN"
 printf '%s' '[{"name":"changelog/technical"}]' > "$ST/labels"
 out="$(CHANGELOG_REGISTRY="$REG" MWR_CHANGELOG_GATE="$DIR/require-changelog-tag.sh" run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1178 control: the real gate lets a labelled pull request through the helper" "0" "$rc"
+
+# The design score gate (#1364) is asked at the merge as well: a pull request whose closing keywords
+# name a Match the settled design issue below 100% is not merged through the helper any more than
+# when typed.
+fresh "$OLD" 0 "$GREEN"
+printf 'Match the settled design is below 100%% on the code being merged.' > "$ST/design-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1364 a merge the design score gate refuses stops the helper" "1" "$rc"
+check "#1364 in the gate's words" "below 100% on the code being merged" "$out"
+check_eq "#1364 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1364 with the design score gate allowing it, the merge goes through" "0" "$rc"
+check "#1364 the design score gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/design-gate-payloads" 2>/dev/null)"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that
