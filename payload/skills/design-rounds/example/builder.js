@@ -1,15 +1,13 @@
+// Draws only what goes in the product's slot: the chrome around it (the header) is the product's
+// own, captured in chrome.html, and the rows come from the round's fixture.
 function buildScreen(variant) {
-  var win = document.createElement("div");
-  win.className = "win " + variant.key;
-  var head = document.createElement("div");
-  head.className = "hd";
-  head.textContent = "Invoices";
-  win.append(head);
-  for (var i = 1; i <= 4; i++) {
+  var list = document.createElement("div");
+  list.className = "list";
+  window.DESIGN_FIXTURE.invoices.forEach(function (invoice) {
     var row = document.createElement("div");
     row.className = "row " + (variant.density || "normal");
-    row.textContent = "Client " + i + "   Oct " + i + "   $" + (i * 250);
-    win.append(row);
-  }
-  return win;
+    row.textContent = invoice.client + "   " + invoice.date + "   $" + invoice.amount;
+    list.append(row);
+  });
+  return list;
 }
