@@ -130,6 +130,11 @@ changed hook, or a declared scan whose scope a change falls under, with verdicts
 inputs are unchanged, so a typed command that changes no hook runs nothing. `SYNC_NO_SEND_TESTS=1`
 skips it for one run of any of them.
 
+A send whose own push is refused makes its commit twice, once itself and once in the sync it falls
+back to, so the gate runs twice in one run. The second pass reuses the first one's verdict, and a
+hold already said in the run is not said or notified again (`SEND_GATE_TOLD`), so one save gives
+one sentence and one notification.
+
 A hook held back in a catch up is not reverted by that catch up's apply: the payload keeps the
 shared copy and this Mac's file differs from it, which the apply reads as an edit this Mac has not
 sent (`locally_ahead_paths`), exactly as for an edit the secret scan refused.

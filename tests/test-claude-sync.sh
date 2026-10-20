@@ -7104,7 +7104,7 @@ check "#1403 a typed push does not publish a hook whose suite fails either" \
 check "#1403 and it says so" "line_has \"\$out_sp_push\" 'NOT publishing' 'spdemo\.sh'"
 check "#1403 and it closes by naming what waits, not by saying nothing changed" \
   "line_has \"\$out_sp_push\" '^Nothing published' 'held back' 'hooks/spdemo\.sh' && out_lacks \"\$out_sp_push\" '^Nothing changed'"
-sp_hook spdemo 'spdemo changed for a typed push' 0
+# The red hook is left in place for the race below, whose catch up meets the gate a second time.
 
 # #1402 on the other path to a catch up: this Mac was level, so the send pushed directly, and the
 # shared repo moved between its fetch and its push. A pre-push hook in the clone makes that race
@@ -7134,6 +7134,11 @@ check "#1402 the race really did move the shared repo under the send" \
 check "#1402 a send whose own push lost a race still gets its edit there by catching up" \
   "sp_shared_has skills/own/SKILL.md 'A5, its push lost a race'"
 check "#1402 and reports it as sent" "grep -q '^SEND-OUTCOME sent' <<< \"\$out_sp5\""
+# The send's own commit and the catch up's both pass through the gate, and one held hook is one
+# sentence (and one notification), not one per pass.
+check "#1403 a hook held back by both passes of one send is said once" \
+  "[ \"\$(grep -c '^claude-sync: NOT publishing spdemo' <<< \"\$out_sp5\")\" = 1 ] && ! sp_shared_has hooks/spdemo.sh 'for a typed push'"
+sp_hook spdemo 'spdemo changed for a typed push' 0
 # The same race against a tip still being tested: the catch up sends on top of it (#1398).
 printf 'race two\n' > "$SPARM"
 mkskill "$SPHA/skills/own/SKILL.md" 'A6, lost a race to an untested commit'

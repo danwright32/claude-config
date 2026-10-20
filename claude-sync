@@ -9577,6 +9577,7 @@ send_hold_back_path(){   # $1 = path relative to the repo
   return 0
 }
 
+SEND_GATE_TOLD=""   # the holds this run has already said, one per line (claude-config#1403)
 send_hook_tests(){
   local f base suite out pairs rc=0 ran=0 reused=0 uncovered="" limit pid started now killed
   local digest verdict failed_suites="" timed_out_suites="" files p why
@@ -9802,6 +9803,18 @@ $suite
 "*) why="$name did not finish within SYNC_SEND_TESTS_TIMEOUT (${limit}s) here and was stopped with everything it had started" ;;
       esac
       note_held_back "$(printf '%s\n' "$files" | sed 's|^payload/||')"
+      # Said once per run. The gate is part of making a commit (claude-config#1403), and a send whose
+      # push is refused makes its commit twice, once itself and once in the sync it falls back to,
+      # so the same hold would otherwise be said, and notified, twice for one save.
+      local told_key
+      told_key="$suite|$why|$(printf '%s' "$files" | tr '\n' ' ')"
+      case "
+$SEND_GATE_TOLD
+" in *"
+$told_key
+"*) continue ;; esac
+      SEND_GATE_TOLD="$SEND_GATE_TOLD
+$told_key"
       echo "claude-sync: NOT publishing $(printf '%s\n' "$files" | sed 's|^payload/||; s|^hooks/||' | tr '\n' ' ')because $why, so nothing verified them. Everything else in this send went out normally. Run it to see why: $rerun. The edits are untouched in $CLAUDE_HOME and go out on the next send once it passes. Deliberate override for one run: SYNC_NO_SEND_TESTS=1 claude-sync send" >&2
       # The reason FIRST and the files as a count after it: the banner shows a line or two, and the
       # file list in front pushed the reason off it: on 2026-10-16 it showed 27 lesson file names and
