@@ -50,6 +50,9 @@ trap 'rm -rf "$TMPROOT"' EXIT
 # a folder of the suite's own instead, and none reads the machine (L2, L284). The default is one
 # that does not exist; the cases about the folder make one and name it.
 export FREE_SPACE_SYMBOL_CACHE="$TMPROOT/no-symbol-cache-here"
+# The same for Xcode's DerivedData, which the nudge sizes when it speaks (claude-config#1369): a
+# folder of the suite's own that does not exist, unless a case makes one and names it.
+export XCODE_DERIVED_DATA_ROOT="$TMPROOT/no-derived-data-here"
 
 GB=$((1024 * 1024 * 1024))
 T0=1757500000            # a fixed instant, so every span below is arithmetic rather than a race
@@ -488,6 +491,61 @@ check "but a materially worse answer is said again" \
 n_other="$(nudge "$((7 * GB))" "$((T0 + 180))" "$NS2" sess-other)"
 check "a different session is told as well, having heard nothing itself" \
   "$(grep -q 'GB free on' <<< "$n_other" && echo ok || echo "said: $n_other")"
+
+# When the warning speaks it says how much of Xcode's build cache belongs to project folders that are
+# gone, and hands over the command that clears them, which it never runs (claude-config#1369). The
+# count comes from derived-data-sweep.sh, the one copy of the orphan rule, not from a second reading
+# here (L370).
+DD_ROOT="$TMPROOT/nudge-derived-data"
+mkdir -p "$DD_ROOT/App-orphan" "$DD_ROOT/ModuleCache.noindex"
+cat > "$DD_ROOT/App-orphan/info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>WorkspacePath</key>
+	<string>$TMPROOT/removed-worktree/App.xcodeproj</string>
+</dict>
+</plist>
+PLIST
+NS_DD="$TMPROOT/ns-dd"; mkdir -p "$NS_DD"
+n_dd="$(payload sess-dd | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
+  FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"; n_dd_rc=$?
+check "a low disk notice says how many Xcode build caches are orphaned" \
+  "$(grep -qF 'Xcode build caches whose project folder is gone: 1 folder(s)' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
+check "and hands over the command that deletes them" \
+  "$(grep -qxF 'bash ~/.claude/hooks/derived-data-sweep.sh --delete' <<< "$n_dd" && echo ok || echo "said: $n_dd")"
+check "and deleted nothing itself" "$([ -d "$DD_ROOT/App-orphan" ] && echo ok || echo "the orphan was removed by a warning")"
+check "and still does not block the prompt" "$([ "$n_dd_rc" -eq 0 ] && echo ok || echo "exit $n_dd_rc")"
+# The whole count is bounded, not only the sizing inside it: reading every folder's info.plist forks
+# a reader per folder, so a DerivedData with hundreds of folders could otherwise carry the hook past
+# its 10 second timeout (a setting, not a measurement) and lose the free space warning with it.
+SLOW_SWEEP="$TMPROOT/slow-sweep.sh"
+printf '#!/usr/bin/env bash\nsleep 5\necho "should never be printed"\n' > "$SLOW_SWEEP"
+NS_SLOW="$TMPROOT/ns-slow"; mkdir -p "$NS_SLOW"
+slow_start="$(date +%s)"
+n_slow="$(payload sess-slow | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=1 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+slow_took=$(( $(date +%s) - slow_start ))
+check "a count that runs past its bound is stopped, and the warning still arrives" \
+  "$(grep -q 'GB free on' <<< "$n_slow" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow")"
+check "and the notice says the count did not finish rather than saying nothing" \
+  "$(grep -qF 'did not finish within 1s' <<< "$n_slow" && ! grep -qF 'should never be printed' <<< "$n_slow" && echo ok || echo "said: $n_slow")"
+# Zero turns the count off. Handed to perl's alarm it would mean no bound at all, the opposite of
+# what a zero reads as.
+NS_ZERO="$TMPROOT/ns-zero"; mkdir -p "$NS_ZERO"
+zero_start="$(date +%s)"
+n_zero="$(payload sess-zero | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_ZERO" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=0 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+zero_took=$(( $(date +%s) - zero_start ))
+check "a bound of 0 turns the count off rather than leaving it unbounded" \
+  "$(grep -q 'GB free on' <<< "$n_zero" && [ "$zero_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_zero" && echo ok || echo "took ${zero_took}s, said: $n_zero")"
+n_dd_fine="$(payload sess-dd-fine | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
+  FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+check "a disk with room says nothing about Xcode caches either" \
+  "$([ -z "$n_dd_fine" ] && echo ok || echo "said: $n_dd_fine")"
 
 # A check that could not run must reach the person too, or the one state where the warning matters
 # most is the one that says nothing (L98).
