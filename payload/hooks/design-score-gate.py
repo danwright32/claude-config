@@ -256,9 +256,7 @@ class Gate:
     def judge_milestone(self, repo, number, why):
         ms = self.gh.api("repos/%s/milestones/%d" % (repo, number), repo)
         ms_design = sg.read_mark(ms.get("description") or "", sg.MILESTONE_MARK)
-        issues = self.gh.api("repos/%s/issues?milestone=%d&state=all&per_page=100" % (repo, number), repo,
-                             paginate=True)
-        matches = [i for i in issues if not i.get("pull_request") and sg.is_match_issue(i)[0]]
+        matches = [i for i in sg.milestone_issues(self.gh, repo, number) if sg.is_match_issue(i)[0]]
         if ms_design is not None and not matches:
             raise Refuse("milestone %s (%s) is built from the settled design %s but holds no Match the settled "
                          "design issue, so whether it matches cannot be checked" % (number, ms.get("title"), ms_design))
