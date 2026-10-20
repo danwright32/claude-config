@@ -88,7 +88,7 @@ import {
   type ProposedIssue,
 } from './wake.ts'
 import { ENDED_SAID, MORNING_HEADING, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending, type MorningReview } from './morning.ts'
-import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge } from './nightheld.ts'
+import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldUntilWake, type HeldDelivery, type HeldMerge, type PutMorning } from './nightheld.ts'
 import { reportBase, reportTitle } from './reportname.ts'
 import { scopesAskedOffIn, triggersIn, type Trigger } from './triggers.ts'
 import { acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF } from './modes.ts'
@@ -153,6 +153,7 @@ const cleanupRef = { plugin: 'scope-modes', key: 'cleanup' } as const
 const writtenRef = { plugin: 'scope-modes', key: 'written' } as const
 const wakeHeldRef = { plugin: 'scope-modes', key: 'wakeHeld' } as const
 const nightSeenRef = { plugin: 'scope-modes', key: 'nightSeen' } as const
+const morningPutRef = { plugin: 'scope-modes', key: 'morningPut' } as const
 const morningUnansweredRef = { plugin: 'scope-modes', key: 'morningUnanswered' } as const
 
 // Where the last prompt came from, so the turn it started knows whether Dan wrote it on his phone.
@@ -1732,8 +1733,9 @@ const offerBacklog = async ($: EngineInterface, reading: SleepReading) => {
 
 const wakeHeldOf = async ($: EngineInterface): Promise<HeldDelivery[]> => (await $.state.get(wakeHeldRef)).value ?? []
 // What the waking session's own morning turn carries, while it has not gone in, so the minute does
-// not put the morning to Dan too and only what it carried is cleared once it does.
-let morningInFlight: HeldItem[] | null = null
+// not put the morning to Dan too and only what it carried is cleared once it does; with the night's
+// generation, so the morning is recorded as put by the night it was about (#1383).
+let morningInFlight: { generation: string | null; held: HeldItem[] } | null = null
 // One asking at a time: a minute's prompt that has not gone in yet is not asked again beside it.
 let askingMorning = false
 // This session's morning turn, its pickers counted while it runs (#1285): one left unanswered, or a
@@ -1817,23 +1819,54 @@ const setNight = async ($: EngineInterface, n: Night | null) => {
   // Whole, `unread` included, so a reload never turns notes that could not be read into none (lessons review).
   await $.state.set({ plugin: 'scope-modes', key: 'nightSeen' }, n ? { generation: n.generation, worker: n.worker, offers: n.offers, ...(n.unread !== undefined ? { unread: n.unread } : {}) } : null)
 }
-// A morning that went in: the night and what it carried are done, each written on its own, so one
-// write that fails never keeps the other from being done (lessons review). Throws the first failure.
-const markMorning = async ($: EngineInterface, carried: readonly HeldItem[]) => {
+// The last morning this session put to Dan (#1383), in memory and in $.state for a reload, as the
+// night is. Memory is set first, so no write that fails undoes it in this copy of the mod.
+let morningPut: PutMorning | null | undefined
+const putNow = async ($: EngineInterface): Promise<PutMorning | null> => {
+  if (morningPut === undefined) morningPut = (await $.state.get(morningPutRef)).value ?? null
+  return morningPut
+}
+// A morning that went in: recorded as put, and the night and what it carried done, each written on
+// its own, so one write that fails never keeps another from being done (lessons review). The record
+// of it as put is its own write (L561), so a reload reading a night whose clearing failed still
+// finds it put (#1383). Resolves to the first failure, and whether that record was written.
+const markMorning = async ($: EngineInterface, put: PutMorning, carried: readonly HeldItem[]): Promise<{ failed: unknown; recorded: boolean } | null> => {
+  morningPut = put
   const failed: unknown[] = []
+  let recorded = true
+  await $.state.set({ plugin: 'scope-modes', key: 'morningPut' }, put).catch(err => {
+    recorded = false
+    failed.push(err)
+  })
   await setNight($, null).catch(err => failed.push(err))
   await changeHeld($, held => without(held, carried)).catch(err => failed.push(err))
-  if (failed.length) throw failed[0]
+  return failed.length ? { failed: failed[0], recorded } : null
 }
-// The waking session's morning turn went in (or did not): the night and what it carried are done,
-// or kept for the minute. Memory is what this session reads, so a state write that fails after it
-// went in still marks them done here; only a reload, reading the older state, would put them to Dan
-// again, which repeats a morning rather than losing one.
-const morningDone = async ($: EngineInterface, entered: boolean) => {
-  const carried = morningInFlight
-  if (!carried) return
+// A mark that fails is said to Dan, once a morning, never only to the debug log (#1383). This copy of
+// the mod does not put that morning again, since what it put is kept in memory; only one with fresh
+// memory (a reload) could, and only when the record of it as put could not be written either.
+let markSaid: string | undefined
+const markMorningOrSay = async ($: EngineInterface, put: PutMorning, carried: readonly HeldItem[]) => {
+  const r = await markMorning($, put, carried)
+  if (!r) return
+  $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(r.failed)})${r.recorded ? '' : ', nor recorded as put, so a reload may put it to Dan again'}`, { to: 'debug' })
+  const key = JSON.stringify(put)
+  if (markSaid === key) return
+  markSaid = key
   try {
-    if (entered) await markMorning($, carried)
+    await $.ui.toast(`The morning summary went in, but this session could not record it as done (${msg(r.failed)}). It is not put to you again${r.recorded ? '' : ', unless this session reloads its mods, which may put it once more'}.`)
+  } catch (err) {
+    $.ui.log(`scope-modes: a morning that could not be marked done could not be said to Dan either (${msg(err)})`, { to: 'debug' })
+  }
+}
+// The waking session's morning turn went in (or did not): recorded as put, and the night and what
+// it carried done, or kept for the minute. Memory is what this session reads, so a state write that
+// fails after it went in still marks them done here, and is said (#1383).
+const morningDone = async ($: EngineInterface, entered: boolean) => {
+  const inFlight = morningInFlight
+  if (!inFlight) return
+  try {
+    if (entered) await markMorningOrSay($, { generation: inFlight.generation, calls: inFlight.held.map(h => h.call) }, inFlight.held)
   } finally {
     morningInFlight = null
   }
@@ -1859,6 +1892,15 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
     const seen = await nightNow($)
     const held = [...(await heldList($))]
     if (!seen && !held.length) return
+    // A morning this session already put (#1383): its night, or what it carried, left in $.state by a
+    // mark that failed and read by a copy of the mod with fresh memory. Never put again; only the
+    // mark is tried again.
+    const put = await putNow($)
+    if (put && alreadyPut(put, seen, held)) {
+      $.ui.log(`scope-modes: this session's morning${put.generation ? ` for ${put.generation}` : ''} was already put to Dan, so it is not put again; what it left unmarked is marked now`, { to: 'debug' })
+      await markMorningOrSay($, put, held)
+      return
+    }
     const m = await morningOf($, seen ?? { generation: null, worker: false, offers: false }, self, held)
     if (!m.anything) {
       await setNight($, null)
@@ -1872,11 +1914,7 @@ const morningAtMinute = async ($: EngineInterface, reading: SleepReading) => {
       $.ui.log(`scope-modes: this session's morning could not be put to Dan (${msg(err)}), so it is tried again at the next minute`, { to: 'debug' })
       return
     }
-    try {
-      await markMorning($, held)
-    } catch (err) {
-      $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' })
-    }
+    await markMorningOrSay($, { generation: seen?.generation ?? null, calls: held.map(h => h.call) }, held)
   } finally {
     askingMorning = false
   }
@@ -2253,7 +2291,7 @@ const wake = async ($: EngineInterface, fromPhone = false): Promise<Woke | null>
   // own asking. Noted as offering first, so a turn that never goes in leaves the minute to offer them.
   const night = endedNight(record, self)
   const held = [...(await heldList($))]
-  morningInFlight = held
+  morningInFlight = { generation: night.generation, held }
   try {
     await setNight($, night)
     const morning = await morningOf($, night, self, held)
@@ -3895,7 +3933,8 @@ export const register: Register = on => {
               $.ui.toast(`Sleep mode is off, but the morning summary and pickers could not start: ${msg(err)}. They are tried again within a minute.`)
             },
           )
-          .catch(err => $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' }))
+          // A mark that fails is said by morningDone itself (#1383); this is anything else that threw.
+          .catch(err => $.ui.log(`scope-modes: /wake's morning turn could not be settled (${msg(err)})`, { to: 'debug' }))
       })
     return woke.off ? { text: woke.said, context: [ackOn('wake')] } : { text: woke.said }
   })
@@ -4039,11 +4078,10 @@ export const register: Register = on => {
       }
       throw err
     }
-    // The prompt is in, so a mark that fails is logged, never thrown past a turn that started.
+    // The prompt is in, so nothing is thrown past a turn that started; a mark that fails is said by
+    // morningDone itself (#1383).
     if (carriesMorning)
-      await morningDone($, true).catch(err =>
-        $.ui.log(`scope-modes: this session's morning went in, but could not be marked done (${msg(err)}), so it may be put to Dan again`, { to: 'debug' }),
-      )
+      await morningDone($, true).catch(err => $.ui.log(`scope-modes: this session's morning went in, but could not be settled (${msg(err)})`, { to: 'debug' }))
     if (asking !== undefined) askedUp = asking
     if (askAgain) await setLeftUnanswered($, false)
     return entered
@@ -4404,15 +4442,18 @@ export const register: Register = on => {
     await $.state.set(cleanupRef, [] as ScopeModesCleanup[])
     await $.state.set(writtenRef, [] as string[])
     writeNoteSaid = false
-    // What was held overnight, and the night seen, are this session's (#1284, #1285), so a new session starts with none.
+    // What was held overnight, the night seen and the morning put are this session's (#1284, #1285, #1383), so a new session starts with none.
     heldNow = []
     heldLoaded = true
     morningInFlight = null
     nightSeen = null
+    morningPut = null
+    markSaid = undefined
     morningPickers = undefined
     morningLeftUnanswered = false
     await $.state.set(wakeHeldRef, [] as HeldDelivery[])
     await $.state.set(nightSeenRef, null)
+    await $.state.set(morningPutRef, null)
     await $.state.set(morningUnansweredRef, false)
     prSeen.clear()
     await $.state.set(placeRef, 'home')
