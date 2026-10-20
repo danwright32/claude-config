@@ -52,34 +52,11 @@ TREE = "a" * 40
 DESIGN = "docs/design/capacity.html"
 
 # --- one real score of a build that matches, from a capture written here ------------------------
-work = os.path.join(T, "app")
-os.makedirs(os.path.join(work, "docs", "design"))
-subprocess.run(["git", "init", "-q", work], check=True)
-design_html = ('<!doctype html><html><body>\n'
-               '<script type="application/json" id="decision-map">{"decisions": ['
-               '{"id": "D1", "decision": "Heading reads Team capacity", "requirement": "1"}]}</script>\n'
-               '<script type="application/json" id="design-frames">{"frames": [{"id": "f1", "width": 4}]}</script>\n'
-               '</body></html>\n').encode()
-with open(os.path.join(work, DESIGN), "wb") as fh:
-    fh.write(design_html)
-cap = os.path.join(T, "capture")
-os.makedirs(cap)
-sys.path.insert(0, SCORE_DIR)
-import pngio  # noqa: E402
+sys.path.insert(0, HERE)
+import score_fixture  # noqa: E402
 
-px = bytes([200, 180, 160, 255]) * 12
-pngio.write_png(os.path.join(cap, "f1-design.png"), 4, 3, px)
-pngio.write_png(os.path.join(cap, "f1-built.png"), 4, 3, px)
-with open(os.path.join(cap, "capture.json"), "w") as fh:
-    json.dump({"format": "design-capture", "version": 1, "platform": "web", "designFile": os.path.join(work, DESIGN),
-               "build": "http://127.0.0.1:3000/admin/capacity", "commit": HEAD, "dirty": False,
-               "frames": [{"id": "f1", "designImage": "f1-design.png", "builtImage": "f1-built.png",
-                           "checks": [{"id": "D1", "ok": True, "detail": ""}],
-                           "designChecks": [{"id": "D1", "ok": True, "detail": ""}]}]}, fh)
-proc = subprocess.run([sys.executable, SCORE, "score", cap], capture_output=True, text=True)
+work, design_html, MATCHED, proc, cap = score_fixture.make(T, commit=HEAD)
 check("control: the fixture build scores as matched", proc.returncode == 0, proc.stdout + proc.stderr)
-with open(os.path.join(cap, "score.json")) as fh:
-    MATCHED = json.load(fh)
 check("control: the score names the design by its path in the checkout", MATCHED.get("design") == DESIGN, MATCHED.get("design"))
 
 

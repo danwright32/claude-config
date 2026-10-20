@@ -453,6 +453,13 @@ refused, since `gh issue close` does the same readably. Anything it cannot read 
 what. There is no override: a difference Dan means to keep is a new round or an exception in his
 words.
 
+A close the gate cannot see, on GitHub's website or by a closing keyword in a commit pushed straight
+to the default branch, is undone afterwards: once a day `design-score-reopen.py` finds Match issues
+and design milestones closed below 100% (no score, an unreadable one, or one for other code than the
+close was made on), comments once on the Match issue with the score it read and the way to 100%, and
+reopens them. So score and post before closing anywhere; an exception Dan approves, recorded in the
+design file and scored, reads 100% and is left closed.
+
 ## Common mistakes
 
 1. Describing the options in a message and asking him to choose.
