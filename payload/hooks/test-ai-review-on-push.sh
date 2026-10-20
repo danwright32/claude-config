@@ -1073,7 +1073,11 @@ export function refund(entries) {
 }
 EOF
 printf 'export const gone = 1;\n' > "$PLACE/src/old.ts"
-P add src/ledger.ts src/old.ts; P commit -q -m seed
+# A file whose real lines begin with "-", as a Markdown list does: line 2 is the item, line 3 the
+# same words without the marker, so a quote of the item that is wrongly stripped lands on line 3.
+mkdir -p "$PLACE/docs"
+printf '# Steps\n- run the tests\nrun the tests\n' > "$PLACE/docs/list.md"
+P add src/ledger.ts src/old.ts docs/list.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
 place_out="$(python3 - "$RUNNER" "$PLACE" "$PLACE_SHA" <<'EOF'
@@ -1141,6 +1145,29 @@ one("a finding about a file not at the reviewed head keeps its number and says w
     "src/old.ts:1: gone is still imported elsewhere." + S + "\nQuote: export const gone = 1;",
     "src/old.ts:1: ", "src/old.ts is not a file at the reviewed head")
 
+# A quote copied from the diff keeps the leading marker of the diff (claude-config#1368). The quote
+# is tried exactly as given first, and only when that matches nothing is one leading + or - dropped
+# and the rest tried, because a real line can begin with either. A leading space needs nothing: the
+# quote is trimmed before it is compared.
+one("a quote copied from an added diff line with its leading + places on that line",
+    "src/ledger.ts:3: total is never checked for overflow." + S + "\nQuote: +    total += e.amount;",
+    "src/ledger.ts:5: ", None)
+one("a quote with a leading - that matches only once the marker is dropped places on that line",
+    "src/ledger.ts:13: refund subtracts where it should add." + S + "\nQuote: -    total -= e.amount;",
+    "src/ledger.ts:14: ", None)
+one("a quote with a leading + inside backticks places once the marker is dropped",
+    "src/ledger.ts:7: settle returns the raw total." + S + "\nQuote: `+  return total;`",
+    "src/ledger.ts:8: ", None)
+one("a quote of a line that really begins with - places by the exact form, not the nearer stripped one",
+    "docs/list.md:3: the step names no command." + S + "\nQuote: - run the tests",
+    "docs/list.md:2: ", None)
+one("a quote matching no line as given or without its marker keeps its number and says both were tried",
+    "src/ledger.ts:5: total is multiplied." + S + "\nQuote: + total *= e.amount;",
+    "src/ledger.ts:5: ", "matches no line of src/ledger.ts at the reviewed head, as given or without its leading +")
+one("a quote that is only a diff marker is never stripped to nothing and matched to a blank line",
+    "src/ledger.ts:3: something is wrong here." + S + "\nQuote: +",
+    "src/ledger.ts:3: ", "matches no line of src/ledger.ts")
+
 # Several findings at once: each takes its own quote, and the lines that are not findings stay.
 two, counts = m.place_findings(
     "src/ledger.ts:3: first." + S + "\nQuote: total += e.amount;\n"
@@ -1170,7 +1197,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 16 ] && ok || bad "the placement fixtures ran $place_ran of 16 cases"
+[ "$place_ran" -eq 22 ] && ok || bad "the placement fixtures ran $place_ran of 22 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
