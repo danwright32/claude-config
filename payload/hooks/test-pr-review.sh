@@ -422,7 +422,8 @@ check_not "and does not blame the state folder" "could be made in" "$out"
 # 3a3. each reason a read key cannot be issued is named, with the remedy that fits it (L11, L111):
 #      a missing tool is not fixed by re-running the review, and a stamp problem is not a tool.
 reset_state
-FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: minor]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
+# Major, as every fixture here that must BLOCK is: since #1356 minor findings are advisory and allow.
+FAKE_CLAUDE_OUT="App/Sync.swift:3: x (L1). Should be: y. [severity: major]" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA"
 NOSHA="$WORKDIR/noshasum"; mkdir -p "$NOSHA"
 for t in awk tr od git bash cat date mkdir rm grep sed basename dirname env head mv touch wc sort printf python3 claude gh \
@@ -824,7 +825,7 @@ check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$r
 # ===========================================================================================
 reset_state
 big="$WORKDIR/big.txt"; : > "$big"
-for i in $(seq 1 200); do printf 'App/Sync.swift:%d: finding number %d with enough words to be a realistic finding line about something (L1). Should be: fixed. [severity: minor]\n' "$i" "$i" >> "$big"; done
+for i in $(seq 1 200); do printf 'App/Sync.swift:%d: finding number %d with enough words to be a realistic finding line about something (L1). Should be: fixed. [severity: major]\n' "$i" "$i" >> "$big"; done
 FAKE_CLAUDE_OUT_FILE="$big" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA" || bad "the big review finished"
 out="$(printf '{"session_id":"n1","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" 2>/dev/null)"
@@ -1172,8 +1173,8 @@ GRP_SHA="$(G rev-parse HEAD)"
 GRP_BASE="$(G rev-parse main)"
 G checkout -q feat/sync
 GCAP=6000
-GF1='G1.swift:3: the first group finding (L1). Should be: x. [severity: minor]'
-GF2='G4.swift:5: the second group finding (L2). Should be: y. [severity: minor]'
+GF1='G1.swift:3: the first group finding (L1). Should be: x. [severity: major]'
+GF2='G4.swift:5: the second group finding (L2). Should be: y. [severity: major]'
 grp_parts(){ printf '%s/parts/%s-pr-%s.%s' "$AI_REVIEW_STATE_DIR" "$KEY" "$1" "${2:-t1}"; }
 grp_runs(){ ls -d "$AI_REVIEW_STATE_DIR/parts/$KEY-pr-$1".* 2>/dev/null | grep -c . || true; }
 out="$(PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT="$GF1" FAKE_GROUP_2_OUT="$GF2" prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
@@ -1348,9 +1349,9 @@ G add App/Hist.swift Docs/notes.md
 G commit -q -m "add hist"
 H_A="$(G rev-parse HEAD)"
 HF1='App/Hist.swift:2: the second line is wrong (L11). Should be: fixed. [severity: major]'
-HF2='App/Hist.swift:90: the ninetieth line is wrong (L12). Should be: fixed. [severity: minor]'
-HF3='Docs/notes.md:3: the third note is unclear (L21). Should be: clearer. [severity: minor]'
-HF4='README.md:1: the heading is wrong (L22). Should be: right. [severity: minor]'
+HF2='App/Hist.swift:90: the ninetieth line is wrong (L12). Should be: fixed. [severity: major]'
+HF3='Docs/notes.md:3: the third note is unclear (L21). Should be: clearer. [severity: major]'
+HF4='README.md:1: the heading is wrong (L22). Should be: right. [severity: major]'
 # Each with the line it means quoted under it, as the prompt asks since #1357, so each is placed at
 # the line it cites and stored as written.
 HQ='carrying enough text to give each file some weight'
@@ -1722,7 +1723,7 @@ printf 'carry line\n' > "$REPO/App/Carry.swift"
 G add App/Carry.swift App/Shared.swift
 G commit -q -m "the branch's change"
 C_A="$(G rev-parse HEAD)"
-CF_A='App/Carry.swift:1: the carry line is vague (L11). Should be: precise. [severity: minor]'
+CF_A='App/Carry.swift:1: the carry line is vague (L11). Should be: precise. [severity: major]'
 FAKE_CLAUDE_OUT="$CF_A" prr start --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry >/dev/null
 wait_final "$C_A" || bad "#1280 the first review finished"
 out="$(prr check --dir "$REPO" --sha "$C_A" --base-ref main --branch feat/carry)"
@@ -1738,7 +1739,7 @@ G checkout -q feat/carry
 G merge -q --no-edit main
 C_B="$(G rev-parse HEAD)"
 before="$(calls)"
-FAKE_CLAUDE_OUT='App/Carry.swift:1: A NEW WORDING POINT (L21). Should be: other words. [severity: minor]' prr start --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null
+FAKE_CLAUDE_OUT='App/Carry.swift:1: A NEW WORDING POINT (L21). Should be: other words. [severity: major]' prr start --dir "$REPO" --sha "$C_B" --base-ref main --branch feat/carry >/dev/null
 # Written at once, never left running: no pending marker, and a review file already there.
 [ -e "$(final_of "$C_B")" ] && [ ! -e "$(final_of "$C_B").pending" ] && ok || bad "#1280 its head has a review at once, with nothing left running"
 wait_final "$C_B" || bad "#1280 the carried review is there"
@@ -1832,9 +1833,9 @@ G commit -q -m "add ans"
 AN_A="$(G rev-parse HEAD)"
 AF='App/Ans.swift:14: syncNow swallows the network error and returns an empty list, so a failed fetch reads as no events (L10). Should be: throw the error to the caller. [severity: major]'
 AF2='App/Ans.swift:16: syncNow still swallows the network error and returns an empty list, so a failed fetch looks like no events at all (L10). Should be: rethrow it. [severity: major]'
-AB='App/Ans.swift:24: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
-AB2='App/Ans.swift:26: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
-AC='App/Ans.swift:16: the local name shadows a property of the type, so the closure captures the wrong value (L263). Should be: rename it. [severity: minor]'
+AB='App/Ans.swift:24: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: major]'
+AB2='App/Ans.swift:26: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: major]'
+AC='App/Ans.swift:16: the local name shadows a property of the type, so the closure captures the wrong value (L263). Should be: rename it. [severity: major]'
 ANSWER_A=$'Lessons review (head '"${AN_A:0:7}"$'):\n\n1. Ans.swift:14: not a defect. The caller reports the error, see Sync.swift.'
 # The pull request as gh pr view answers it: ans_json <comment>..., each "<association>|<when>|<body>".
 ans_json(){
@@ -1954,7 +1955,7 @@ claim_of(){ # claim_of <file> <kind>: a finding line at line 14 of that file
   case "$2" in
     first) printf '%s:14: fetchAll swallows the decoding error and returns an empty list, so a bad payload reads as no rows (L10). Should be: throw it. [severity: major]' "$1" ;;
     again) printf '%s:14: fetchAll still swallows the decoding error and returns an empty list, so a bad payload looks like no rows (L10). Should be: rethrow it. [severity: major]' "$1" ;;
-    other) printf '%s:14: the retry count is read from a constant the tests cannot change, so a test of the backoff waits for real (L524). Should be: inject it. [severity: minor]' "$1" ;;
+    other) printf '%s:14: the retry count is read from a constant the tests cannot change, so a test of the backoff waits for real (L524). Should be: inject it. [severity: major]' "$1" ;;
   esac
 }
 
@@ -2182,7 +2183,7 @@ check "#1357 and it says it was not placed" "quoted no line" "$out"
 # An approximate number is a finding (seen 2026-10-19 on a branch whose only finding was "~253").
 G commit -q --allow-empty -m "fourth head"
 PL_D="$(G rev-parse HEAD)"
-pl_start "$PL_D" 'App/Place.swift:~12: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
+pl_start "$PL_D" 'App/Place.swift:~12: the timeout constant is in milliseconds but the comment says seconds (L118). Should be: say milliseconds. [severity: major]'
 check_eq "#1357 a review whose only finding has an approximate number is a review" "ok" "$(meta_of_final "$PL_D" status)"
 check_eq "#1357 with that finding counted" "1" "$(meta_of_final "$PL_D" findings)"
 out="$(pl_check "$PL_D")"; rc=$?
@@ -2205,7 +2206,122 @@ runners_done || bad "#1357 a runner was still going at the end"
 G checkout -q feat/sync
 
 # ===========================================================================================
-# 19. The three cases #1340 left showing an answered finding as new (#1360): an answer in the older
+# 19. Minor findings are ADVISORY (claude-config#1356). In a judged sample of 60 round 1 findings,
+#     the major ones were real 7 times in 10 and the minor ones 26 times in 50, and 11 of the 12
+#     wrong ones were minor, yet each cost a fix, a review and a push. Dan, 2026-10-19: with ONLY
+#     minor findings the push or merge goes through and they are printed as advisory, with no read
+#     key; any major or critical finding still blocks as before, and a review with both lists the
+#     minor ones apart. A finding whose severity is missing or unreadable counts as major, so a
+#     format slip never waves one through.
+# ===========================================================================================
+AV_MINOR1='App/Sync.swift:1: the comment says seconds but the value is milliseconds (L118). Should be: say milliseconds. [severity: minor]'
+AV_MINOR2='README.md:3: the heading still names the old behaviour (L11). Should be: name the new one. [severity: minor]'
+AV_MAJOR='App/Sync.swift:2: deleteEvent swallows the error createEvent reports (L215). Should be: report it the same way. [severity: major]'
+AV_CRIT='App/Sync.swift:2: the token is written to the log (L222). Should be: never log it. [severity: critical]'
+AV_NONE='App/Sync.swift:3: the retry never ends (L524). Should be: bound it.'
+AV_ODD='App/Sync.swift:3: the retry never ends (L524). Should be: bound it. [severity: low]'
+AV_MID='App/Sync.swift:3: says [severity: minor] in passing (L1). Should be: x. [severity: major]'
+av_review(){ # av_review <findings count> <finding line>...: a finished review of HEAD_SHA holding them
+  local n="$1"; shift
+  mkdir -p "$AI_REVIEW_STATE_DIR"
+  { printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstarted=1\nfinished=%s\nstatus=ok\nkind=pr\nfindings=%s\n\n' "$HEAD_SHA" "$RANDOM$RANDOM" "$n"
+    [ "$#" -gt 0 ] && printf '%s\n' "$@"; } > "$(final_of "$HEAD_SHA")"
+}
+av_check(){ prr check --dir "$REPO" --sha "$HEAD_SHA" --branch feat/sync "$@"; }
+# The part of a message from the advisory heading on, and the part before it.
+av_after(){ awk '/Advisory, minor findings/ { on = 1 } on' <<<"$1"; }
+av_before(){ awk '/Advisory, minor findings/ { exit } { print }' <<<"$1"; }
+json_field(){ python3 -c 'import json,sys
+try:
+    v = json.loads(sys.stdin.read())
+except ValueError:
+    v = {}
+for k in sys.argv[1].split("."):
+    v = v.get(k, "") if isinstance(v, dict) else ""
+print(v)' "$1"; }
+av_pr(){ printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"; }
+
+# --- 19a. only minor findings: allowed, printed as advisory, no key, nothing recorded as read.
+reset_state; av_pr
+av_review 2 "$AV_MINOR1" "$AV_MINOR2"
+out="$(av_check)"; rc=$?
+check_eq "#1356 a review with only minor findings allows the merge" "0" "$rc"
+check "#1356 and prints them as advisory" "Advisory, minor findings" "$out"
+check "#1356 saying they need no fix round" "need no fix round" "$out"
+check "#1356 the first minor finding is shown" "$AV_MINOR1" "$(av_after "$out")"
+check "#1356 and the second" "$AV_MINOR2" "$(av_after "$out")"
+check_not "#1356 with no read key" "PR_REVIEW_READ=" "$out"
+check_not "#1356 and no refusal" "Refusing" "$out"
+[ -e "$(final_of "$HEAD_SHA").acknowledged" ] && bad "#1356 an advisory allow records nothing as read" || ok
+out="$(av_check --gate push)"; rc=$?
+check_eq "#1356 and allows a push the same way" "0" "$rc"
+check "#1356 in the push's words" "do not stop the push" "$out"
+# Through the merge gate, the advisory reaches the session as additionalContext and Dan as a
+# systemMessage: a PreToolUse hook's plain stdout on an allow reaches neither.
+gout="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1356 the merge gate allows a merge with only minor findings" "0" "$rc"
+check "#1356 handing the advisory to the session" "$AV_MINOR1" "$(json_field hookSpecificOutput.additionalContext <<<"$gout")"
+check_eq "#1356 as a PreToolUse output" "PreToolUse" "$(json_field hookSpecificOutput.hookEventName <<<"$gout")"
+check "#1356 and showing it to Dan" "$AV_MINOR2" "$(json_field systemMessage <<<"$gout")"
+check_eq "#1356 deciding nothing for the merge itself" "" "$(json_field hookSpecificOutput.permissionDecision <<<"$gout")"
+printf '%s' "$gout" | python3 "$DIR/lib/hook-output.py" --payload >/dev/null 2>&1 \
+  && ok || bad "#1356 the advisory allow is an output shape Claude Code accepts: $gout"
+# Control: a clean review's allow is printed as before, not as an advisory.
+av_review 0
+gout="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1356 control: a clean review allows" "0" "$rc"
+check "#1356 control: and says so in plain words" "pr-review-gate: The lessons review" "$gout"
+check_not "#1356 control: with no advisory" "Advisory" "$gout"
+
+# --- 19b. a major finding beside minor ones: refused, the major one to fix under the key and the
+#     minor ones apart as advisory; the key reads the review as a whole.
+reset_state; av_pr
+av_review 3 "$AV_MINOR1" "$AV_MAJOR" "$AV_MINOR2"
+out="$(av_check)"; rc=$?
+check_eq "#1356 a major finding beside minor ones still refuses" "1" "$rc"
+check "#1356 counting only the one to fix" "with 1 finding." "$out"
+check "#1356 the major one is shown to fix" "$AV_MAJOR" "$(av_before "$out")"
+check_not "#1356 above the advisory, no minor one" "$AV_MINOR1" "$(av_before "$out")"
+check "#1356 the minor ones are listed apart as advisory" "$AV_MINOR1" "$(av_after "$out")"
+check "#1356 both of them" "$AV_MINOR2" "$(av_after "$out")"
+check_not "#1356 and the major one is not among them" "$AV_MAJOR" "$(av_after "$out")"
+gout="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
+check_eq "#1356 the merge gate refuses it too" "2" "$rc"
+gk="$(key_in "$gout")"
+[ -n "$gk" ] && ok || bad "#1356 the refusal carries a read key: $gout"
+out="$(fire_gate "PR_REVIEW_READ=$gk gh pr merge 7 --squash")"; rc=$?
+check_eq "#1356 and the key covers the review as a whole" "0" "$rc"
+
+# --- 19c. critical, a missing severity, an unknown one, and minor named only mid line each block, as
+#     major, and a minor one beside them stays advisory.
+for c in "critical|$AV_CRIT" "no severity|$AV_NONE" "an unknown severity|$AV_ODD" "minor only mid line|$AV_MID"; do
+  reset_state
+  av_review 2 "$AV_MINOR1" "${c#*|}"
+  out="$(av_check)"; rc=$?
+  check_eq "#1356 a finding with ${c%%|*} still refuses" "1" "$rc"
+  check "#1356 and is shown to fix, with ${c%%|*}" "${c#*|}" "$(av_before "$out")"
+  check "#1356 the minor one beside it stays advisory, with ${c%%|*}" "$AV_MINOR1" "$(av_after "$out")"
+done
+# A count the review records that its minor lines do not account for is a finding with no line the
+# gate can read, which blocks rather than passing unread.
+reset_state
+av_review 2 "$AV_MINOR1"
+out="$(av_check)"; rc=$?
+check_eq "#1356 a recorded finding no line accounts for blocks" "1" "$rc"
+# A minor finding the runner could not place by its quote (#1357) carries the runner's own mark after
+# its severity; it is still the reviewer's minor finding, and stays advisory.
+reset_state
+av_review 1 "$AV_MINOR1 [review harness: not placed, it quoted no line, so line 1 is the reviewer's own number, unchecked]"
+out="$(av_check)"; rc=$?
+check_eq "#1356 a minor finding carrying the runner's placement mark stays advisory" "0" "$rc"
+check "#1356 and is shown with its mark" "review harness: not placed" "$(av_after "$out")"
+reset_state
+av_review 1 "$AV_MAJOR [review harness: not placed, it quoted no line, so line 2 is the reviewer's own number, unchecked]"
+out="$(av_check)"; rc=$?
+check_eq "#1356 control: a major finding carrying the same mark still blocks" "1" "$rc"
+
+# ===========================================================================================
+# 20. The three cases #1340 left showing an answered finding as new (#1360): an answer in the older
 #     form (naming <file>:<line>, quoting nothing) to a branch since REBASED, tied to this pull
 #     request by GitHub's record of the heads it was force pushed from; a quote naming a head this
 #     checkout never fetched (a rebase made on the other Mac), fetched by its full name from that
@@ -2230,7 +2346,7 @@ pushes_reads(){ local n; n="$(grep -c HeadRefForcePushedEvent "$FAKE_LOG/gh-call
 G remote set-url origin https://github.com/fixture/app.git
 G config url."$ORIGIN".insteadOf https://github.com/fixture/app.git
 
-# --- 19a. An answer in the older form, to a branch since rebased: the earlier review is stored here,
+# --- 20a. An answer in the older form, to a branch since rebased: the earlier review is stored here,
 # but the head it read shares nothing of the branch's own with this one, so only GitHub's record that
 # this pull request was force pushed from it ties the two together.
 reset_state
@@ -2292,7 +2408,7 @@ rw_start "$RO_D" feat/rebased-old 101 "$(claim_of App/Ro.swift other)"
 out="$(rw_check "$RO_D" feat/rebased-old 101)"
 check_eq "#1360 a finding no earlier head raised reads nothing from GitHub" "$before" "$(pushes_reads)"
 
-# --- 19b. A quote naming a head this checkout never fetched: the other Mac reviewed and answered
+# --- 20b. A quote naming a head this checkout never fetched: the other Mac reviewed and answered
 # it, then rewrote the branch and force pushed, so here only the rewritten head was ever fetched.
 reset_state
 OTHER="$WORKDIR/other"
@@ -2344,7 +2460,7 @@ check "#1360 naming the head the answer quoted it at" "${FA_A:0:7}" "$(answered_
 check "#1360 a different claim at the quoted lines is new" "$(claim_of App/Fa.swift other)" "$(new_of "$out")"
 G cat-file -e "$FA_A^{commit}" 2>/dev/null || bad "#1360 the quoted head was fetched by its full name"
 
-# --- 19c. An earlier pull request of ANOTHER head branch, which this one replaces and names.
+# --- 20c. An earlier pull request of ANOTHER head branch, which this one replaces and names.
 reset_state
 G checkout -q -b feat/renamed-old main
 seq 1 30 | sed 's/^/rn line /' > "$REPO/App/Rn.swift"
