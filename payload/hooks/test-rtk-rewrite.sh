@@ -317,6 +317,33 @@ for keep1408 in 'rtk tsc --noEmit' 'rtk prisma migrate status' 'rtk lint .' 'rtk
     && check "#1408 and $keep1408 is still rewritten" ok \
     || check "#1408 and $keep1408 is still rewritten" "out=$out1408"
 done
+# The same fault keyed on the SOURCE: a rewrite that drops the package RUNNER the command named.
+# rtk 0.31.0 rewrites `pnpm tsc --noEmit` to `rtk tsc --noEmit`, which runs `npx tsc --noEmit`
+# (its own -vvv says so), and `npx prisma ...` to `rtk prisma ...`, which runs a bare `prisma` from
+# PATH. Which program and version runs is then rtk's choice, not the command's, and none of it is
+# visible in the rewritten text. So every runner word in the command must survive into the rewrite.
+runner_refused() { # runner_refused <source> <rewrite>  -> "ok" when the hook passed through
+  printf '%s\n' "$2" > "$TMPROOT/rewrite"
+  local o; o="$(hook "$1")"
+  if [ -z "$o" ]; then echo ok; else echo "it rewrote to: $(printf '%s' "$o" | rewritten_to)"; fi
+}
+check "#1408 pnpm tsc does not lose pnpm to rtk tsc" "$(runner_refused 'pnpm tsc --noEmit' 'rtk tsc --noEmit')"
+check "#1408 nor npx tsc lose npx" "$(runner_refused 'npx tsc --noEmit' 'rtk tsc --noEmit')"
+check "#1408 nor npx prisma, which rtk runs as a bare prisma" "$(runner_refused 'npx prisma migrate status' 'rtk prisma migrate status')"
+check "#1408 nor npx eslint" "$(runner_refused 'npx eslint src/' 'rtk lint src/')"
+check "#1408 nor yarn" "$(runner_refused 'yarn tsc' 'rtk tsc')"
+check "#1408 nor bunx" "$(runner_refused 'bunx tsc --noEmit' 'rtk tsc --noEmit')"
+check "#1408 nor pnpm after cd &&" "$(runner_refused 'cd /repo && pnpm tsc --noEmit' 'cd /repo && rtk tsc --noEmit')"
+# The controls: a rewrite that KEEPS the runner, or a command that named none, is still rewritten,
+# and a runner word that is only an argument is carried through unchanged (L159).
+for pair1408 in 'tsc --noEmit|rtk tsc --noEmit' 'npm run build|rtk npm run build' 'pnpm list|rtk pnpm list' 'echo npm && git status|echo npm && rtk git status'; do
+  src1408="${pair1408%%|*}"; rw1408="${pair1408#*|}"
+  printf '%s\n' "$rw1408" > "$TMPROOT/rewrite"
+  out1408="$(hook "$src1408")"
+  [ "$(printf '%s' "$out1408" | rewritten_to)" = "$rw1408" ] \
+    && check "#1408 and [$src1408] is still rewritten to [$rw1408]" ok \
+    || check "#1408 and [$src1408] is still rewritten to [$rw1408]" "out=$out1408"
+done
 # The issue said foreground and background differed. The hook reads only the command, so a payload
 # asking for the background must get exactly the answer the same command gets in the foreground.
 printf 'rtk npx wrangler --version\n' > "$TMPROOT/rewrite"
@@ -591,12 +618,24 @@ else
   [ "$rc1408" -eq 3 ] \
     && check "#1408 and its failure keeps its own non zero exit code" ok \
     || check "#1408 and its failure keeps its own non zero exit code" "ran [$ran1408], exited $rc1408: $out1408e"
-  # The hook side control: an npx tool rtk DOES filter is still rewritten by the real rtk.
-  payload 'npx tsc --noEmit'
+  # The runner rule against the real rtk: these ARE rewritten by it (the control), and the hook
+  # passes them through because the rewrite drops the runner.
+  for src1408e in 'pnpm tsc --noEmit' 'npx tsc --noEmit'; do
+    ctl1408e="$(HOME="$FX1408/home" rtk rewrite "$src1408e" 2>/dev/null)"
+    [ "$ctl1408e" = 'rtk tsc --noEmit' ] \
+      || echo "note: this rtk now rewrites [$src1408e] to [$ctl1408e], so its runner check below proves less than it did."
+    payload "$src1408e"
+    sub1408e="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+    [ -z "$sub1408e" ] \
+      && check "#1408 the real rtk's rewrite of [$src1408e] is refused for dropping its runner" ok \
+      || check "#1408 the real rtk's rewrite of [$src1408e] is refused for dropping its runner" "got [$sub1408e]"
+  done
+  # The hook side control: tsc named with no runner is still rewritten by the real rtk.
+  payload 'tsc --noEmit'
   sub1408b="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
   [ "$sub1408b" = 'rtk tsc --noEmit' ] \
-    && check "#1408 and npx tsc is still rewritten by the real rtk" ok \
-    || check "#1408 and npx tsc is still rewritten by the real rtk" "got [$sub1408b]"
+    && check "#1408 and tsc with no runner is still rewritten by the real rtk" ok \
+    || check "#1408 and tsc with no runner is still rewritten by the real rtk" "got [$sub1408b]"
 fi
 
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----

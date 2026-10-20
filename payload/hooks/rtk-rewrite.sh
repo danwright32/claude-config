@@ -214,6 +214,34 @@ while read -r rtk_dest_sub rtk_dest_verb; do
   if rtk_refused_destination "$rtk_dest_sub" "$rtk_dest_verb"; then exit 0; fi
 done <<< "$rtk_invocations"
 
+# NEVER rewrite a command so that a package RUNNER it named disappears (claude-config#1408).
+#
+# The destination refusals above cannot see this one, because the fault is visible only against
+# the SOURCE. rtk 0.31.0 rewrites `pnpm tsc --noEmit` to `rtk tsc --noEmit`, which runs
+# `npx tsc --noEmit` (its own -vvv says so), and `npx prisma migrate status` to
+# `rtk prisma migrate status`, which runs a bare `prisma` from PATH. Which runner, and so which
+# program and version, then runs is rtk's choice rather than the command's, and nothing in the
+# rewritten text shows it. Where the project has no local copy, npx fetches whatever registry
+# package carries that name (`tsc` there is not TypeScript).
+#
+# rtk rewrites each part of a command separately and leaves every part it does not rewrite exactly
+# as written, so a runner word can only go missing from a part rtk rewrote. Counting each runner
+# word in both, with the same word breaks as the rtk scan above, therefore needs no alignment of
+# parts: fewer in the rewrite means a runner was dropped. A rewrite that keeps it
+# (`npm run build` to `rtk npm run build`) is untouched, and so is a command that named none.
+rtk_runner_words() { # rtk_runner_words <command>  -> "<word> <count>" per runner word present
+  printf '%s\n' "$1" | tr ';&|()`<>{}"'"'" '            ' | awk '
+    { for (i = 1; i <= NF; i++) if ($i ~ /^(npm|npx|pnpm|pnpx|yarn|bun|bunx)$/) n[$i]++ }
+    END { for (w in n) print w, n[w] }
+  '
+}
+rtk_runners_after="$(rtk_runner_words "$REWRITTEN")"
+while read -r rtk_runner rtk_runner_before; do
+  [ -n "$rtk_runner" ] || continue
+  rtk_runner_now="$(printf '%s\n' "$rtk_runners_after" | awk -v w="$rtk_runner" '$1 == w { print $2 }')"
+  if [ "${rtk_runner_now:-0}" -lt "$rtk_runner_before" ]; then exit 0; fi
+done <<< "$(rtk_runner_words "$CMD")"
+
 # NEVER rewrite a command in which an rtk invocation's OUTPUT is read by another program
 # (claude-config#1419).
 #
