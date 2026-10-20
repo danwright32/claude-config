@@ -6845,7 +6845,18 @@ ut_send(){   # $1 = the CI state of every commit -> the watcher send's output on
     SYNC_RECONCILE_RETRY=0 bash "$SCRIPT" send 2>&1 || true
 }
 ut_shared(){ git -C "$UTB" show "main:payload/skills/$1/SKILL.md" 2>/dev/null || true; }
+# Read into a variable and matched with case, never piped into grep -q, which can stop reading
+# before the producer is done (test-pipefail-shortcircuit.sh).
+ut_shared_has(){   # $1 = skill  $2 = text -> does the shared repo's copy hold it
+  local body; body="$(ut_shared "$1")"
+  case "$body" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
 ut_stuck(){ CLAUDE_HOME="$UTHA" SYNC_REPO="$UTA" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1 || true; }
+ut_stuck_sending_says(){   # $1 = text -> does the "sending" record's sentence hold it
+  local all line; all="$(ut_stuck)"
+  line="$(awk '/^sending\t/' <<< "$all")"
+  case "$line" in *"$1"*) return 0 ;; *) return 1 ;; esac
+}
 mkskill "$UTHA/skills/own/SKILL.md" 'A1'
 mkskill "$UTHB/skills/theirs/SKILL.md" 'B1'
 ut_sync A; ut_sync B; ut_sync A
@@ -6858,9 +6869,9 @@ check "#1398 the fixture leaves this Mac behind a commit it has not applied" \
 out_ut1="$(ut_send in_progress)"
 dbg "#1398 first send behind an untested tip: $out_ut1"
 check "#1398 a watcher send behind a tip still being tested gets this Mac's edit into the shared repo" \
-  "ut_shared own | grep -q 'A2, written while the tip is being tested'"
+  "ut_shared_has own 'A2, written while the tip is being tested'"
 check "#1398 on top of the other Mac's untested commit, which it does not revert" \
-  "ut_shared theirs | grep -q 'B2, still being tested'"
+  "ut_shared_has theirs 'B2, still being tested'"
 check "#1398 and the untested commit is NOT applied to this Mac" \
   "grep -q B1 '$UTHA/skills/theirs/SKILL.md'"
 check "#1398 nor checked out in the clone the watcher runs from" \
@@ -6878,7 +6889,7 @@ mkskill "$UTHA/skills/own/SKILL.md" 'A3'; ut_send in_progress >/dev/null
 mkskill "$UTHA/skills/own/SKILL.md" 'A4'; ut_send in_progress >/dev/null
 mkskill "$UTHA/skills/own/SKILL.md" 'A5, the latest'; out_ut5="$(ut_send in_progress)"
 check "#1398 every later edit made while the tip is untested goes out too" \
-  "ut_shared own | grep -q 'A5, the latest' && ut_shared theirs | grep -q 'B2, still being tested'"
+  "ut_shared_has own 'A5, the latest' && ut_shared_has theirs 'B2, still being tested'"
 check "#1398 and sending is never reported as stuck however many times that happens" \
   "! grep -q '^sending' <<< \"\$(ut_stuck)\""
 check "#1398 and nothing was notified about sending" "! grep -q 'has not sent' '$UTN'"
@@ -6889,6 +6900,15 @@ mkskill "$UTHA/skills/own/SKILL.md" 'A5, the latest'
 out_ut_old="$(SYNC_SEND_STUCK_AFTER=0 ut_send in_progress)"
 check "#1398 the clone is not reported as holding unsent work it has sent" \
   "! grep -q 'this clone has not sent' <<< \"\$out_ut_old\""
+# The control: the same clone with the record of what went up set aside says it at once, so the
+# check above is quiet because of the record and not because the check never runs (L1). Held off
+# rather than reconciled, since a reconcile would write the record straight back.
+mv "$UTA/.sent-over-untested" "$UTA/.sent-over-untested.aside"
+printf '1 %s %s %s unknown\n' "$(date +%s)" "$(date +%s)" "$(date +%s)" > "$UTA/.behind-skips"
+out_ut_ctl="$(SYNC_SEND_STUCK_AFTER=0 SYNC_RECONCILE_RETRY=3600 ut_send in_progress)"
+mv "$UTA/.sent-over-untested.aside" "$UTA/.sent-over-untested"; rm -f "$UTA/.behind-skips"
+check "#1398 without that record the same clone does report this clone has not sent" \
+  "grep -q 'this clone has not sent' <<< \"\$out_ut_ctl\""
 check "#1398 and the push it watches the verdict of is the one in the shared repo" \
   "[ \"\$(awk 'NR==1{print \$1}' '$UTA/.my-push')\" = \"\$(git -C '$UTB' rev-parse main)\" ]"
 check "#1398 while the clone itself still holds commits its record of the remote lacks" \
@@ -6901,7 +6921,7 @@ check "#1398 once the tests pass the watcher applies the commit it held back" \
 check "#1398 and the clone is level with the shared repo in both directions" \
   "[ \"\$(git -C '$UTA' rev-list --count HEAD...origin/main)\" = 0 ]"
 check "#1398 and this Mac's own edit is intact here and in the shared repo" \
-  "grep -q 'A5, the latest' '$UTHA/skills/own/SKILL.md' && ut_shared own | grep -q 'A5, the latest'"
+  "grep -q 'A5, the latest' '$UTHA/skills/own/SKILL.md' && ut_shared_has own 'A5, the latest'"
 check "#1398 with nothing reported as a dropped snapshot, since it was this Mac's own send" \
   "! grep -qi 'dropped' <<< \"\$out_ut_green\" && ! grep -qi 'dropped' '$UTN'"
 
@@ -6917,10 +6937,10 @@ check "#1398 over a tip that failed its tests nothing is sent" \
   "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ]"
 check "#1398 and that skip is counted" "[ -s '$UTA/.behind-skips' ]"
 check "#1398 and the stuck notice names the failed tests as the reason" \
-  "ut_stuck | grep '^sending' | grep -q 'failed its tests'"
+  "ut_stuck_sending_says 'failed its tests'"
 ut_send success >/dev/null
 check "#1398 and the next green tip clears it the ordinary way" \
-  "ut_shared own | grep -q 'A6, written over a red tip' && [ ! -e '$UTA/.behind-skips' ]"
+  "ut_shared_has own 'A6, written over a red tip' && [ ! -e '$UTA/.behind-skips' ]"
 
 # THE CASE IT MUST STILL REFUSE: this Mac changed a file the untested commits also change. Merging
 # the two is a decision nothing has tested, so it waits for the tests, and says that, never the
@@ -6934,15 +6954,15 @@ ut_tip="$(git -C "$UTB" rev-parse main)"
 out_ut_ov="$(ut_send in_progress)"
 dbg "#1398 overlapping send: $out_ut_ov"
 check "#1398 an edit to a file the untested commits also change is NOT sent over them" \
-  "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ] && ut_shared both | grep -q 'both, the other Mac'"
+  "[ \"\$(git -C '$UTB' rev-parse main)\" = '$ut_tip' ] && ut_shared_has both 'both, the other Mac'"
 check "#1398 and this Mac's edit is kept" "grep -q 'both, this Mac' '$UTHA/skills/both/SKILL.md'"
 check "#1398 and the skip is counted" "[ -s '$UTA/.behind-skips' ]"
 check "#1398 and the send says which file and why" \
-  "grep -q 'skills/both/SKILL.md' <<< \"\$out_ut_ov\" && grep -q 'still being tested' <<< \"\$out_ut_ov\""
+  "line_has \"\$out_ut_ov\" 'they touch payload/skills/both/SKILL\.md' 'still being tested'"
 check "#1398 and the stuck notice gives that reason, not the catch all" \
-  "ut_stuck | grep '^sending' | grep -q 'also change'"
-# Ten minutes into the stretch, because under a minute it says "just now" and a doubled word cannot
-# show (L1). Every one of these lines said "10 minutes ago ago" in the real log.
+  "ut_stuck_sending_says 'also change'"
+# Moved back into the stretch, because under a minute it says "just now" and a doubled word cannot
+# show (L1). The real log, read on 2026-10-20, said "ago ago" in every one of these lines.
 awk -v t="$(( $(date +%s) - 600 ))" 'NR==1{$2=t} {print}' "$UTA/.behind-skips" > "$UTA/.behind-skips.new" && mv "$UTA/.behind-skips.new" "$UTA/.behind-skips"
 out_ut_st="$(ut_stuck)"
 check "#1398 and it says how long once, not 'ago ago'" \
