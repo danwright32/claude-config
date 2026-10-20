@@ -207,7 +207,8 @@ done <<< "$rtk_invocations"
 # (`$(...)`, backticks, `<(...)`, `>(...)`). A group, subshell, loop or `if` holding an rtk
 # invocation counts as one command for its own pipe or redirect. Standard error alone (`2>/dev/null`) changes nothing
 # the next program reads, so it keeps the rewrite, and so do input redirects and here documents,
-# whose bodies are skipped rather than read as commands. A command it cannot balance, an unclosed
+# whose bodies are skipped rather than read as commands, except that an unquoted delimiter's body
+# holding a substitution with the word rtk in it is refused, since the shell expands it. A command it cannot balance, an unclosed
 # quote, a stray `)` or a case pattern, is refused rather than guessed at, which costs a token saving and cannot
 # cost the data (L98).
 rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to refuse
@@ -275,7 +276,9 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
         if (c == " " || c == "\t") { flushword(); i++; continue }
         if (c == "\n") {
           flushword(); endcmd(); i++
-          # Here document bodies are data, not commands: skip each one to its delimiter line.
+          # Here document bodies are data, not commands: skip each one to its delimiter line. With
+          # an UNQUOTED delimiter the shell still expands $(...) and backticks in the body, so a
+          # body line holding a substitution and the word rtk is a captured invocation, refused.
           for (k = 1; k <= hd_n; k++) {
             while (i <= n) {
               rest = substr(s, i); j = index(rest, "\n")
@@ -283,6 +286,7 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
               if (hd_dash[k]) sub(/^\t+/, "", line)
               i = j ? i + j : n + 1
               if (line == hd[k]) break
+              if (!hd_quoted[k] && line ~ /(\$\(|`)/ && line ~ /(^|[^A-Za-z0-9_-])rtk([^A-Za-z0-9_-]|$)/) bad = 1
             }
           }
           hd_n = 0
@@ -319,14 +323,14 @@ rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to r
             i += 2; dash = 0
             if (substr(s, i, 1) == "-") { dash = 1; i++ }
             while (substr(s, i, 1) == " " || substr(s, i, 1) == "\t") i++
-            delim = ""
+            delim = ""; quoted = 0
             while (i <= n) {
               d = substr(s, i, 1)
               if (d ~ /[ \t\n;|&<>()]/) break
-              if (d != "\"" && d != "'"'"'" && d != "\\") delim = delim d
+              if (d != "\"" && d != "'"'"'" && d != "\\") delim = delim d; else quoted = 1
               i++
             }
-            hd[++hd_n] = delim; hd_dash[hd_n] = dash
+            hd[++hd_n] = delim; hd_dash[hd_n] = dash; hd_quoted[hd_n] = quoted
             continue
           }
           i++; c2 = substr(s, i, 1); if (c2 == "&" || c2 == ">") i++

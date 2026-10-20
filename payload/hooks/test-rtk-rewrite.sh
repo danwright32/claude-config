@@ -296,9 +296,17 @@ out_318="$(hook 'git diff --quiet')"
 # ---------------------------------------------------------------------------
 check "#399 an rtk diff after cd && is refused" \
   "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f > f.md; rtk diff <(sed "s#a#b#g" f.md) g | cat; rtk git log --oneline -3')"
+# The shape above holds a redirect and a pipe on rtk invocations, which the #1419 rule refuses on
+# its own, so it no longer proves the DIFF refusal reaches past `cd &&`. The same command with
+# both taken out can be refused by nothing but the diff refusal (L159).
+check "#399 and the same command with no pipe or redirect is still refused for its rtk diff" \
+  "$(refused_to_rewrite 'cd /repo && rtk git show origin/main:f; rtk diff <(sed "s#a#b#g" f.md) g; rtk git log --oneline -3')"
 check "#399 an rtk diff after a semicolon is refused" "$(refused_to_rewrite 'rtk ls; rtk diff a b')"
 check "#399 an rtk diff behind an environment assignment is refused" "$(refused_to_rewrite 'LC_ALL=C rtk diff a b')"
 check "#399 an rtk diff inside a subshell is refused" "$(refused_to_rewrite '(cd /repo && rtk diff a b)')"
+# Since #1419 any rtk invocation captured by $(...) is refused whatever its destination, so this one
+# no longer isolates the diff refusal; the subshell check above is the one that proves the diff
+# refusal sees a nested invocation, and this stays as the shape that must be refused either way.
 check "#399 an rtk diff inside a command substitution is refused" "$(refused_to_rewrite 'echo "$(rtk diff a b)"')"
 check "#399 an rtk diff after || is refused" "$(refused_to_rewrite 'false || rtk diff a b')"
 check "#399 an rtk read after && is refused" "$(refused_to_rewrite 'cd /repo && rtk read Thing.swift')"
@@ -372,6 +380,8 @@ check "#1419 nor one inside a brace group that is redirected" "$(refused_to_rewr
 check "#1419 nor one inside a loop whose output is piped" "$(refused_to_rewrite 'for f in a b; do rtk grep x "$f"; done | cat')"
 check "#1419 nor one inside a conditional that is redirected" "$(refused_to_rewrite 'if true; then rtk ls; fi > out')"
 check "#1419 nor one in a case statement, whose patterns the scan does not parse" "$(refused_to_rewrite 'case x in a) rtk ls ;; esac')"
+check "#1419 nor one captured inside an unquoted here document, which the shell expands" \
+  "$(refused_to_rewrite "$(printf '%s\n' 'cat <<EOF' 'count: $(rtk grep -c x f)' 'EOF')")"
 # The class: the same predicate over every other destination, each measured to change piped output.
 check "#1419 the class: git log piped into wc" "$(refused_to_rewrite 'rtk git log | wc -l')"
 check "#1419 the class: git diff saved as a patch" "$(refused_to_rewrite 'rtk git diff > out.patch')"
