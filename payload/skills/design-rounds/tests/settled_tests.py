@@ -293,6 +293,77 @@ for n, (label, s, needle) in enumerate([
     rc, out, path = make("bad-term-%d" % n, s)
     check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
 
+# --- the design's requirements and its opening paragraph (claude-config#1401) -------------------------
+# Slate's Team capacity design, regenerated with make-settled, lost its Requirements list (which the
+# decision map's numbers point at) and its intro, because the spec had nowhere to hold them.
+import design_score  # noqa: E402
+
+INTRO = "For Sam's team leads, settled over three rounds and approved by Dan on 2026-10-19."
+REQS = [{"number": "1", "text": "Sam sees tomorrow's open calls by team."},
+        {"number": "2", "text": "Open calls stand out from booked ones <b>at a glance</b>."},
+        {"number": "6.4", "text": "History is kept for good."}]
+rc, out, rpath = make("requirements", spec(intro=INTRO, requirements=REQS))
+check("a spec with an intro and numbered requirements writes the settled design", rc == 0 and os.path.isfile(rpath), out)
+rsrc = open(rpath, encoding="utf-8").read() if os.path.isfile(rpath) else ""
+rbody = rsrc.split('<script type="application/json"')[0]
+check("the intro is the page's opening paragraph, under its title and ahead of everything else",
+      "<p>%s</p>" % html.escape(INTRO, quote=True) in rbody
+      and rbody.index("<h1>") < rbody.index(html.escape(INTRO, quote=True)) < rbody.index("<h2>"), rbody[:900])
+check("the requirements are listed under their own heading, ahead of the decisions that point at them",
+      "<h2>Requirements</h2>" in rbody and rbody.index("<h2>Requirements</h2>") < rbody.index("<h2>Decisions</h2>"), rbody[:1500])
+check("each requirement shows its own number, as the PRD numbers it, beside its sentence",
+      all("<strong>%s</strong> %s" % (r["number"], html.escape(r["text"], quote=True)) in rbody for r in REQS), rbody[:1500])
+check("a requirement's sentence is text, never markup", "<b>at a glance</b>" not in rsrc and "&lt;b&gt;at a glance" in rbody)
+d1 = re.search(r'<li id="D1">.*?</li>', rbody, re.S)
+check("a decision's owner reads as the requirement's sentence, not only its number",
+      d1 is not None and "Requirement 1: Sam sees tomorrow&#x27;s open calls by team. Checked on f1, f2" in d1.group(0),
+      d1.group(0) if d1 else rbody[:1500])
+d3 = re.search(r'<li id="D3">.*?</li>', rbody, re.S)
+check("and a decision with no code consequence still gives its reason", d3 is not None and "No code: already built." in d3.group(0),
+      d3.group(0) if d3 else "")
+rm = re.search(r'<script type="application/json" id="decision-map">(.*?)</script>', rsrc, re.S)
+check("the decision map carries the requirements, so the file alone resolves every number",
+      rm is not None and json.loads(rm.group(1)).get("requirements") == REQS, rm.group(1) if rm else rsrc[-800:])
+rc2 = subprocess.run([sys.executable, CHECK, rpath], capture_output=True, text=True)
+check("its decision map holds by check-decision-map.py's own rule", rc2.returncode == 0, rc2.stdout + rc2.stderr)
+try:
+    _raw, rdecisions, rframes, _x, _k = design_score.read_design(rpath)
+    check("the score still reads its decisions and frames", [d["id"] for d in rdecisions] == ["D1", "D2", "D3"]
+          and [f["id"] for f in rframes] == ["f1", "f2"], repr(rdecisions))
+except design_score.Unreadable as err:
+    check("the score still reads its decisions and frames", False, str(err))
+check("it says nothing about missing sentences when the list is given", "without their sentences" not in out, out)
+
+# Without the list, a decision's number is shown alone and the PRD holds the sentence: specs written
+# before #1401 keep working, and the page says nothing it was not given.
+rc, out, bare = make("no-requirements", spec())
+bsrc = open(bare, encoding="utf-8").read() if os.path.isfile(bare) else ""
+bm = re.search(r'<script type="application/json" id="decision-map">(.*?)</script>', bsrc, re.S)
+check("a spec with no requirements still writes, showing each owner by number alone",
+      rc == 0 and "Requirement 1. Checked on f1, f2" in bsrc and "<h2>Requirements</h2>" not in bsrc
+      and bm is not None and "requirements" not in json.loads(bm.group(1)), out)
+check("and says, without refusing, which numbers the page shows without their sentences",
+      "Requirement 1, 2" in out and "without their sentences" in out, out)
+check("a spec with no intro has no opening paragraph", "<h1>Team capacity</h1>\n<p class=\"dr-meta\">" in bsrc, bsrc[:600])
+
+for n, (label, s, needle) in enumerate([
+    ("a decision naming a requirement the list does not hold",
+     spec(requirements=[{"number": "1", "text": "a"}]), "Requirement 2"),
+    ("a requirement whose number is not text", spec(requirements=[{"number": 1, "text": "a"}]), "number"),
+    ("a requirement with no sentence", spec(requirements=[{"number": "1", "text": " "}]), "sentence"),
+    ("two requirements sharing a number",
+     spec(requirements=[{"number": "1", "text": "a"}, {"number": "1", "text": "b"}, {"number": "2", "text": "c"}]),
+     "share the number 1"),
+    ("an empty requirements list", spec(requirements=[]), "requirements"),
+    ("requirements that are not a list", spec(requirements={"1": "a"}), "requirements"),
+    ("an intro that is not text", spec(intro=["a"]), "intro"),
+    ("an intro with nothing in it", spec(intro="  "), "intro"),
+]):
+    rc, out, path = make("bad-req-%d" % n, s)
+    check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
+rc, out, _ = make("bad-req-unlisted", spec(requirements=[{"number": "1", "text": "a"}]))
+check("the refusal of an unlisted requirement names the decision that cites it", "D2" in out and "UNLISTED" in out, out)
+
 # --- in a real browser, where there is one ------------------------------------------------------------
 CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
