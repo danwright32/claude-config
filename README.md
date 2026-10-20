@@ -789,11 +789,12 @@ claude-config#1340 each is matched as strictly:
 - **Answers on an earlier pull request this one replaces.** Bidspoke #2491 replaced #2482, closed
   when the branch it was stacked on was deleted, and every round had been answered on #2482. A pull
   request this one names as `#N`, in its description (not a fork's) or in a comment by somebody with
-  write access, has its "Lessons review" comments read too when it is in this repository, has the
-  same head branch, and is no longer open; at most three, read only while some finding is still
-  unanswered, and `Closes #N` and its kin are never followed, since they name issues. Its comments
-  then answer by either rule above, saying on which pull request. One named that cannot be read is
-  said.
+  write access, has its "Lessons review" comments read too when it is in this repository and
+  either has the same head branch and is no longer open, or has another head branch and meets the
+  stricter conditions below (claude-config#1360); at most three, read only while some finding is
+  still unanswered, and `Closes #N` and its kin are never followed, since they name issues. Its
+  comments then answer by either rule above, saying on which pull request. One named that cannot be
+  read is said.
 
 Three more since claude-config#1360, each as strict, and each read made only for a finding nothing
 above answered and that it could answer (the same file and claim):
