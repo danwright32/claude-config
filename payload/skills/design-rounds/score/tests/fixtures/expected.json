@@ -1,0 +1,6 @@
+{
+ "about": "Each fixture's pixels as Pillow 12.2 decodes them (converted to RGBA, then sha256 of the bytes), recorded 2026-10-19 so the score's own PNG reader is checked against an independent decoder on files it did not write (claude-config#1364). chrome-rgb.png is a real headless Chrome 154 screenshot, 8 bit RGB using the Sub, Up and Paeth filters; the other two are Pillow's own palette and grey with alpha files made from it.",
+ "chrome-rgb.png": {"width": 160, "height": 96, "rgbaSha256": "4de8bbaaf47676512d30f8f3a35525af1d93af0cd0c9dc8c3657229c7634cc7f"},
+ "pillow-palette.png": {"width": 160, "height": 96, "rgbaSha256": "a5bcfa9058adf8a2ec4dc858d9eb65f5b2590cf2167af04b73c0f43a0baa4a4d"},
+ "pillow-grey-alpha.png": {"width": 160, "height": 96, "rgbaSha256": "4f4bc9244d4dc264bb273d13f673d6b84cccb2d34cfc71a1ac5b310cef68986e"}
+}
