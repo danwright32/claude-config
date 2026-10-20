@@ -194,6 +194,12 @@ esac
 # check-rtk-exit-fidelity.sh probes npx in both directions, so a substitute that starts running
 # some other program is found by the measurement and not only by this list (L96).
 if [ "$rtk_dest_sub" = "npx" ]; then return 0; fi
+
+# `rtk tsc` is refused whatever the source, since it always runs `npx tsc` (its -vvv says so), and
+# where TypeScript is not a local dependency npx can fetch the unrelated registry package called
+# tsc. A bare `tsc` named no runner, so the runner rule below cannot see that one is ADDED. Dan's
+# decision, 2026-10-20: "Leave tsc unrewritten".
+if [ "$rtk_dest_sub" = "tsc" ]; then return 0; fi
 if [ "$rtk_dest_sub" = "lint" ]; then
   case "$rtk_dest_verb" in
     ''|-*|*/*|*.*) ;;
