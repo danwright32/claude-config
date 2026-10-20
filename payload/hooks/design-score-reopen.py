@@ -12,6 +12,11 @@ about what 100% means, about a stale score, or about an exception Dan approved: 
 in the design file, the score skips what it names, and a score taken with it reads 100%, so a close
 made on purpose under one is left alone like any other close at 100%.
 
+CLOSED AS NOT PLANNED, the design was abandoned (Dan, 2026-10-20, claude-config#1405), and the
+close is left alone: a Match issue GitHub reports with state_reason not_planned is not judged, and a
+milestone whose Match issue is so closed is not either (the gate's judge_milestone skips it). Any
+other reason, or none, is a completed close and judged (score_github.closed_not_planned).
+
 ON THE CODE IT WAS CLOSED ON. A close by a commit is judged on that commit; any other close on the
 head of the default branch at the moment it was closed. Not today's head: main moving on after the
 close must not turn a close that was at 100% into one that was not.
@@ -101,7 +106,7 @@ class Checker:
         self.dry = dry_run
         self.said = []          # what Dan is told: every reopen and every failure
         self.failed = False
-        self.counts = {"repos": 0, "issues": 0, "milestones": 0, "reopened": 0}
+        self.counts = {"repos": 0, "issues": 0, "milestones": 0, "reopened": 0, "abandoned": 0}
 
     def say(self, line, failure=False):
         self.said.append(line)
@@ -167,7 +172,10 @@ class Checker:
                 # A mark that cannot be read still marks a Match issue: it goes to the judge, whose
                 # failure to read it is then said by name, never skipped as "not a Match issue".
                 is_match = True
-            if is_match:
+            if is_match and sg.closed_not_planned(issue):
+                # Closed as not planned: the design was abandoned, and the close stands (#1405).
+                self.counts["abandoned"] += 1
+            elif is_match:
                 complete = self.handle_issue(repo, issue) and complete
         for ms in milestones:
             if (ms.get("closed_at") or "") >= since:
@@ -333,8 +341,9 @@ def run(argv, github, now, out):
             _write(_since_path(state, repo), iso(started - OVERLAP) + "\n")
     c = checker.counts
     summary = ("%s: checked %d of %d repositories, judged %d closed Match issues and %d closed milestones, "
-               "reopened %d, %s." % (now, c["repos"], len(repos), c["issues"], c["milestones"], c["reopened"],
-                                     "with failures" if checker.failed else "no failures"))
+               "reopened %d, left %d closed as not planned, %s." % (
+                   now, c["repos"], len(repos), c["issues"], c["milestones"], c["reopened"], c["abandoned"],
+                   "with failures" if checker.failed else "no failures"))
     for line in checker.said:
         out.write(line + "\n")
     out.write(("Dry run, nothing written. " if dry else "") + summary + "\n")
