@@ -22,15 +22,17 @@ HEAD = "1" * 40
 WORDING = {"D1": "Heading reads Team capacity", "D2": "The total sits under the heading"}
 
 
-def make(root, name="app", decisions=("D1",), exception=False, failing=(), commit=HEAD):
-    """(checkout, the design's bytes, the score, the scorer's process) for a build of the design."""
+def make(root, name="app", decisions=("D1",), exception=False, failing=(), commit=HEAD, kind=None):
+    """(checkout, the design's bytes, the score, the scorer's process) for a build of the design. With
+    `kind`, the design's frames block names it (an email, or the terminal of claude-config#1413)."""
     work = os.path.join(root, name)
     os.makedirs(os.path.join(work, "docs", "design"))
     subprocess.run(["git", "init", "-q", work], check=True)
     rows = ", ".join('{"id": "%s", "decision": "%s", "requirement": "1"}' % (d, WORDING[d]) for d in decisions)
     html = ('<!doctype html><html><body>\n'
             '<script type="application/json" id="decision-map">{"decisions": [' + rows + ']}</script>\n'
-            '<script type="application/json" id="design-frames">{"frames": [{"id": "f1", "width": 4}]}</script>\n')
+            '<script type="application/json" id="design-frames">{"frames": [{"id": "f1", "width": 4}]%s}</script>\n'
+            % ((', "kind": %s' % json.dumps(kind)) if kind else ""))
     if exception:
         html += ('<script type="application/json" id="design-exceptions">{"exceptions": [{"id": "X1", '
                  '"decision": "%s", "words": "Leave the total where it is", "date": "2026-10-19", '
@@ -53,8 +55,9 @@ def make(root, name="app", decisions=("D1",), exception=False, failing=(), commi
                                "designChecks": [{"id": d, "ok": True, "detail": ""} for d in decisions]}]}, fh)
     proc = subprocess.run([sys.executable, SCORE, "score", cap], capture_output=True, text=True)
     # 0 matched and 1 not matched are both scores a test can use; 2 is no score at all, which is the
-    # fixture broken, never a reading to test against.
-    if proc.returncode not in (0, 1):
+    # fixture broken, never a reading to test against, except for a terminal design, whose picture half
+    # is unmeasured until a built mod screen can be captured (claude-config#1414).
+    if proc.returncode not in ((0, 1, 2) if kind == "terminal" else (0, 1)):
         raise RuntimeError("the fixture could not be scored (exit %d): %s" % (proc.returncode, proc.stdout + proc.stderr))
     with open(os.path.join(cap, "score.json")) as fh:
         score = json.load(fh)

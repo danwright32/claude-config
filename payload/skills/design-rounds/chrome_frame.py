@@ -32,6 +32,11 @@ adapter draws as a page of its own at the frame's width.
 A screen that has no product page around it (claude-config#1393) is drawn by no_page(<kind>) instead:
 an email, a document or a new product, the three kinds Dan allowed by name on 2026-10-20, each frame
 then the round's drawing alone at its own size, with no margin around it. Any other kind is refused.
+
+A Claude Code mod's design is drawn in the shared terminal of screens/, which is itself the mod's chrome
+(claude-config#1413): shared_screen(<name>) gives it, and each frame is the terminal window alone, the
+screen's script and stylesheet ahead of the round's (on_screen), as the switcher draws it. load_screen
+is the one reader of screens/ for the switcher and the settled design, so both draw the same terminal.
 """
 import base64
 import json
@@ -43,9 +48,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "score"))
 import pngio  # noqa: E402
-from design_file import NO_PAGE_KINDS, no_page_kinds  # noqa: E402
+from design_file import NO_PAGE_KINDS, SCREEN_KINDS, no_page_kinds  # noqa: E402
 
 ID = re.compile(r"^#([A-Za-z][\w-]*)$")
+
+SCREENS_DIR = os.path.join(HERE, "screens")
+
+TOP_LEVEL = re.compile(r"^(?:var|let|const|function|class)\s+([A-Za-z_$][\w$]*)", re.M)
 
 
 class ChromeError(Exception):
@@ -72,6 +81,125 @@ def no_page(kind):
                           % (kind, no_page_kinds()))
     return {"kind": "none", "page": kind, "line": NO_PAGE_KINDS[kind] + ".", "slot": None, "width": None,
             "height": None, "source": None}
+
+
+def top_level_names(source):
+    """The names a script declares at column 0, which is where a top level declaration sits
+    in every builder and screen this tool has met. A text match, not a parse."""
+    return sorted(set(TOP_LEVEL.findall(source)))
+
+
+def code_only(source):
+    """The script with its comments and its quoted strings blanked out. Approximate (a
+    regular expression literal holding a quote can fool it), which is enough to tell a
+    reference to a name from a sentence that happens to contain it."""
+    pattern = re.compile(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`""",
+                         re.S)
+    return pattern.sub(" ", source)
+
+
+def available_screens():
+    """The shared screens that ship beside this script: a name with both a .js and a .css
+    in screens/. Read from the directory rather than listed, so a screen added there is
+    offered, and named in the refusal below, without anybody editing a second list (L41)."""
+    if not os.path.isdir(SCREENS_DIR):
+        return []
+    names = set()
+    for entry in os.listdir(SCREENS_DIR):
+        stem, ext = os.path.splitext(entry)
+        if ext == ".js" and os.path.isfile(os.path.join(SCREENS_DIR, stem + ".css")):
+            names.add(stem)
+    return sorted(names)
+
+
+def _read_screen_file(path, what):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as err:
+        raise ChromeError("the %s file could not be read: %s (%s)" % (what, path, err))
+
+
+def screen_global(name, source):
+    """The ONE name a shared screen puts at the page's top level. A screen declaring more,
+    or none, is a fault in the screen rather than in the round, so it is refused as such."""
+    names = top_level_names(source)
+    if len(names) != 1:
+        raise ChromeError("the shared screen %s declares %s at the top level, and a screen must declare "
+                          "exactly one name so a builder's own top level names cannot replace its parts"
+                          % (name, ", ".join(names) if names else "nothing"))
+    return names[0]
+
+
+def load_screen(asked, builder, builder_name):
+    """The shared screen's script and stylesheet, or two empty strings for a round with none.
+
+    The one reader of screens/ for the switcher and the settled design (claude-config#1413), so a round
+    and its settled design are drawn in the same terminal. Three refusals, each one a page that would
+    otherwise throw at load, where the page can say only that the builder threw: a screen that does
+    not exist, a builder declaring the screen's own name (which replaces it for the whole page), and a
+    builder calling a screen its spec never asked for."""
+    if asked is not None and not isinstance(asked, str):
+        raise ChromeError('"screen" names one shared screen, as text, and this spec gives %s'
+                          % json.dumps(asked))
+    asked = (asked or "").strip()
+    screens = available_screens()
+    # First, so a misspelt screen is reported as that rather than as a builder using a screen
+    # its spec never asked for, which would send somebody to add a field they already wrote.
+    if asked and asked not in screens and asked not in NO_PAGE_KINDS:
+        raise ChromeError('the spec asks for the screen "%s". A round is drawn in one of the shared screens that '
+                          "ship with this tool (%s), or, with no product page around it, names its kind, one of: %s"
+                          % (asked, ", ".join(screens) if screens else "none", no_page_kinds()))
+
+    code = code_only(builder)
+    for name in screens:
+        if name == asked:
+            continue
+        other = screen_global(name, _read_screen_file(os.path.join(SCREENS_DIR, name + ".js"), "screen script"))
+        # Any mention in the CODE, not only Terminal.screen: every round so far wrote
+        # var T = Terminal. Strings and comments are left out, so copy reading "Terminal.app"
+        # is not mistaken for a call.
+        if re.search(r"(?<![\w$])%s(?![\w$])" % re.escape(other), code):
+            raise ChromeError('the builder %s calls %s, which is the %s screen, and the spec does not ask for '
+                              'it. Add "screen": "%s" to the spec so it is on the page.'
+                              % (builder_name, other, name, name))
+
+    if not asked or asked in NO_PAGE_KINDS:
+        return "", ""
+    script = _read_screen_file(os.path.join(SCREENS_DIR, asked + ".js"), "screen script")
+    styles = _read_screen_file(os.path.join(SCREENS_DIR, asked + ".css"), "screen stylesheet")
+    owned = screen_global(asked, script)
+    if owned in top_level_names(builder):
+        raise ChromeError("the builder %s declares %s at its top level, which is the name the %s screen "
+                          "ships under, so it would replace the screen for the whole page. Call it by "
+                          "another name. This is a text match on declarations at the start of a line."
+                          % (builder_name, owned, asked))
+    return script, styles
+
+
+def on_screen(screen_script, screen_styles, builder, styles):
+    """The round's builder and stylesheet with a shared screen ahead of them, as (builder, styles).
+
+    The screen goes FIRST in both: its script so the builder can call it the moment the builder
+    runs, its stylesheet so the round's own rules win wherever a round is varying part of the
+    screen's look. One composition for the switcher's page and the settled design's frames
+    (claude-config#1413), so the two draw the terminal alike."""
+    if not screen_script:
+        return builder, styles
+    return screen_script + "\n" + builder, screen_styles + "\n" + styles
+
+
+def shared_screen(name, builder, builder_name):
+    """A settled design drawn in a shared screen (claude-config#1413): the terminal, a Claude Code mod's
+    own chrome. Each frame is then the screen alone at the size its builder draws it, as the switcher
+    draws it, with the screen's script and stylesheet ahead of the round's. A screen the score does not
+    know (design_file.SCREEN_KINDS) is refused."""
+    if name not in SCREEN_KINDS:
+        raise ChromeError('a settled design is drawn in one of the shared screens %s, and the spec asks for "%s"'
+                          % (", ".join(SCREEN_KINDS), name))
+    script, styles = load_screen(name, builder, builder_name)
+    return {"kind": "screen", "page": name, "line": SCREEN_KINDS[name] + ".", "script": script,
+            "styles": styles, "slot": None, "width": None, "height": None, "source": None}
 
 
 def script_text(text):
@@ -168,6 +296,8 @@ BOOT = """(function () {
 
 def frame_document(chrome, builder, styles, variant, fixture=None):
     """The whole document for one option or frame: the captured chrome with the round drawn in it."""
+    if chrome["kind"] == "screen":
+        builder, styles = on_screen(chrome["script"], chrome["styles"], builder, styles)
     scripts = ""
     if fixture is not None:
         scripts += "<script>window.DESIGN_FIXTURE = %s;</script>\n" % script_text(json.dumps(fixture))
@@ -176,9 +306,10 @@ def frame_document(chrome, builder, styles, variant, fixture=None):
         "__SLOT__", json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot"))
     scripts += "<script>\n%s\n</script>\n" % boot
     style = "<style>\n%s\n</style>\n" % styles if styles else ""
-    if chrome["kind"] == "none":
+    if chrome["kind"] in ("none", "screen"):
         # Nothing around the round: its drawing is the body's first element, with no margin, so the
-        # frame is the email or the document at its own size, as the build draws it alone (#1393).
+        # frame is the email or the document at its own size, as the build draws it alone (#1393), or
+        # the terminal window at the size its builder gives it, which is itself the chrome (#1413).
         return ("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n<style>\nhtml, body { margin: 0; }\n</style>\n"
                 "%s</head><body><div id=\"dr-slot\"></div>\n%s</body></html>\n" % (style, scripts))
     if chrome["kind"] == "png":
