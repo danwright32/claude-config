@@ -1831,8 +1831,8 @@ nothing df can see says so. It exits 1 when any removal failed and 2 when it ref
 The rule itself lives in `hooks/lib/derived-data.sh`, lifted from Overture's tested
 `scripts/lib/derived-data.sh` (overture#2596, lesson L114) with its cases ported to
 `hooks/test-derived-data.sh`, so there is one copy of it. Overture's own reclaim script still
-carries its copy until it is pointed at this one, a change in the Overture repository that #1369
-stays open for.
+carries its copy until it is pointed at this one; #1369 shipped the shared copy and closed, and that
+change in the Overture repository is overture#4688.
 
 The sweep deletes on its own when the low free space warning fires: Dan's decision on #1369,
 2026-10-20 (L9). When `hooks/free-space-nudge.sh` speaks it runs `derived-data-sweep.sh --start`,

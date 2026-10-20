@@ -22,7 +22,8 @@ The spec, with paths resolved against the spec file's own directory:
       "builder":     "builder.js",                defines buildScreen(variant)
       "styles":      "screen.css",                optional, inlined
       "chrome":      {...},                       the product's captured chrome, required
-                                                  unless "screen" names the shared one
+                                                  unless "screen" names the shared one or a
+                                                  kind with no product page around it
       "fixture":     "fixture.json",              optional, the data, as window.DESIGN_FIXTURE
       "screen":      "terminal",                  optional, a shared screen from screens/, or the
                                                   kind of a screen with no product page around it:
@@ -41,7 +42,8 @@ hand: each option is then its own document, the captured page with the round dra
 slot, shown in an iframe at the width it was captured at, so its own media queries answer to
 that width and nothing in the builder can collide with this page. buildScreen(variant) then
 returns what goes in the slot. A spec naming no captured chrome is refused, unless it asks for
-a shared screen (the terminal), which is itself the chrome and is drawn on this page.
+a shared screen (the terminal), which is itself the chrome and is drawn on this page, or names
+one of the kinds below.
 
 A SCREEN WITH NO PRODUCT PAGE AROUND IT (Dan, 2026-10-20, claude-config#1393: "allow named kinds"): an
 email, a document (a PDF, an invoice export) or a new product whose page does not exist yet names its
