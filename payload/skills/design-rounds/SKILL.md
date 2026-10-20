@@ -315,6 +315,47 @@ hosted URL, fonts and assets embedded so it renders identically with no network.
    page against every frame of the design at the frame's own width and list every
    difference, which finds drift on the decisions that did have owners.
 
+## Scoring the build against the settled design
+
+Dan, 2026-10-19: "you'd know you're done not when all issues are completed but instead when the
+match up score is equal to each other so the designs are exactly alike" (claude-config#1364). The
+build is scored against the settled file on two halves, and it matches only when BOTH are 100%:
+
+- **Decisions.** Each decision in the map is checked by a written, automated check run against the
+  built page, and is met only when it passes on every frame it is checked on. The map is what is
+  counted, never the checks, so a decision with no check reads `UNCHECKED` and is not met. A
+  decision too visual for a check says `"verify": "picture"` in the map and rests on the picture
+  half; one another test proves says `"verify": "elsewhere"` and `"provenBy"`. Both are listed on
+  every score and left out of the count.
+- **Pictures.** Every frame, drawn at its own width, beside the build drawing the same committed
+  fixture data. A pixel matches when no channel differs by more than 8 out of 255 (Slate's trial,
+  #3934: 8 absorbs rounding, while 24 let a blank white page match a beige one at 97%). Area only
+  one side has counts as different, and a frame is 100% only when every pixel matches.
+
+The settled file therefore carries two more blocks beside the decision map: `design-frames`, every
+frame with its id, title and width in pixels (and a height when the frame is a fixed size rather than
+a full page), and, once Dan approves one, `design-exceptions`. An exception is how a deliberate
+difference reaches 100% without a new round: it names one decision, one frame, or a region of one
+frame, with Dan's own words, the date and where he said them, and the score skips it and lists it
+every time. Nothing else excuses a difference.
+
+A platform adapter draws both sides and leaves a capture (the pictures and the check results) in a
+folder; the score reads it:
+
+```bash
+python3 ~/.claude/skills/design-rounds/score/design_score.py score <capture folder>
+python3 ~/.claude/skills/design-rounds/score/design_score.py show <capture folder>/score.json
+```
+
+It prints both halves, every unmet or unchecked decision, every frame's percentage, and the
+exceptions it skipped, and writes `score.json` (the one score format, the same for web and SwiftUI)
+and a `<frame>-diff.png` per frame, differences in red. Exit 0 is matched, 1 not matched yet, and 2
+no score: a capture or design it cannot read, a frame with no picture, a design picture not drawn at
+its frame's width, a check that threw, a check the design itself fails (so the check is wrong, not
+the build), or nothing left to measure. Unmeasured is never 100%. The capture's shape is at the top
+of `design_score.py`. It reads PNGs with the standard library alone, so it runs the same on both Macs
+and on CI: two 1280 by 2000 frames scored in about 7 seconds on 2026-10-19.
+
 ## Common mistakes
 
 1. Describing the options in a message and asking him to choose.
