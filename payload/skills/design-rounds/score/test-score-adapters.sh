@@ -34,13 +34,17 @@ said() { grep -q -- "$1" "$2"; }
 
 # --- 1. the web adapter's logic, against a stand in browser -----------------------------------------
 if command -v node >/dev/null 2>&1; then
-  node --test "$SKILL/score/tests/capture_web.test.mjs" > "$T/node.out" 2>&1
+  # The TAP reporter by name: node's default reporter differs by version and by whether the output is
+  # a terminal (CI's node printed no "# pass" line at all), and its counts are what is read here. The
+  # exit code is read as well, never the counts alone (L184).
+  node --test --test-reporter=tap "$SKILL/score/tests/capture_web.test.mjs" > "$T/node.out" 2>&1
+  node_rc=$?
   n_pass="$(sed -n 's/^# pass \([0-9]*\)$/\1/p' "$T/node.out")"
   n_fail="$(sed -n 's/^# fail \([0-9]*\)$/\1/p' "$T/node.out")"
-  if [ -n "$n_pass" ] && [ "${n_fail:-1}" = 0 ] && [ "$n_pass" -gt 0 ]; then
+  if [ "$node_rc" -eq 0 ] && [ -n "$n_pass" ] && [ "${n_fail:-1}" = 0 ] && [ "$n_pass" -gt 0 ]; then
     pass=$((pass + n_pass))
   else
-    bad "the web adapter's node tests (passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(grep -E '^not ok|Error|assert' "$T/node.out")"
+    bad "the web adapter's node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
   fi
 else
   echo "UNMEASURED: node is not on PATH, so the web adapter's logic was not tested"
