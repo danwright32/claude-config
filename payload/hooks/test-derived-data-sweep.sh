@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for derived-data-sweep.sh, the command that lists Xcode build caches whose project folder is
-# gone and deletes them only when told to (claude-config#1369).
+# gone and deletes them when told to with --delete, or on its own through --start when the low free
+# space warning fires (claude-config#1369).
 #
 # Deleting on its own happens only through --start, which the low free space warning runs (Dan's
 # decision on #1369, 2026-10-20, L9), so the promise held here first is still that a plain run
