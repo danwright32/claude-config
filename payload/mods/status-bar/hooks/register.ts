@@ -59,6 +59,10 @@ let jobsNoted = false
 let agents: QuietAgent[] = []
 let agentsNoted = false
 let context: number | undefined
+// Set by a compaction of this conversation that ran, and cleared by the next measure carrying a
+// context figure: until then usage() may answer the conversation the compaction replaced, so its
+// reading is not taken (#1421).
+let usageStale = false
 let toastedFor: number | null = null
 let shownLook = ''
 let shownCompact = ''
@@ -332,11 +336,14 @@ const read = async ($: EngineInterface) => {
     await readPr($, root)
   }
   await readJobs($)
-  try {
-    const p = (await $.session.usage()).context.percent
-    if (typeof p === 'number') context = p
-  } catch {
-    // The next measurement brings it.
+  // Not asked at all after a compaction until a measure has brought the new conversation's figure.
+  if (!usageStale) {
+    try {
+      const p = (await $.session.usage()).context.percent
+      if (typeof p === 'number' && !usageStale) context = p
+    } catch {
+      // The next measurement brings it.
+    }
   }
   await warnCache($)
   await publish()
@@ -357,6 +364,14 @@ const cacheReplaced = async ($: EngineInterface) => {
   await $.state.set(cacheRef, null)
   toastedFor = null
   await cacheMoved($)
+}
+
+// A compaction of this conversation that ran: the context reading belonged to the conversation it
+// replaced, so it goes with the cache clock, and the band is redrawn without it (#1421).
+const conversationCompacted = async ($: EngineInterface) => {
+  context = undefined
+  usageStale = true
+  await cacheReplaced($)
 }
 
 export const register: Register = on => {
@@ -475,13 +490,16 @@ export const register: Register = on => {
     const r = await next(e)
     const skipped = typeof (r as { skip?: unknown } | undefined)?.skip === 'string'
     if (interactive && e.agentId === undefined && e.trigger !== 'precompute' && !skipped) {
-      await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
+      await conversationCompacted($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
     }
     return r
   })
 
   on('session.measure', async ($, e, next) => {
-    if (typeof e.context.percent === 'number') context = e.context.percent
+    if (typeof e.context.percent === 'number') {
+      context = e.context.percent
+      usageStale = false
+    }
     await publish()
     return next(e)
   })
@@ -518,16 +536,17 @@ export const register: Register = on => {
       if (writtenId === e.sessionId) writtenId = undefined
     }
     // A /clear starts a new conversation, whose cache starts cold, and ends any turn. A Compact queued
-    // for the conversation it ended is dropped with it (#1278).
+    // for the conversation it ended is dropped with it (#1278), and so is that conversation's context
+    // reading, as after a compaction (#1421).
     if (e.reason === 'clear') {
       await $.state.set(cacheRef, null)
       toastedFor = null
       turnRunning = false
-      if (compactQueued) {
-        compactQueued = false
-        // Taken off the band now, not at the next tick, so it never claims a compact that will not run.
-        await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
-      }
+      compactQueued = false
+      context = undefined
+      usageStale = true
+      // Taken off the band now, not at the next tick, so it never claims a compact that will not run.
+      await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
     }
     return next(e)
   })
@@ -548,5 +567,5 @@ const compactNow = async ($: EngineInterface) => {
   }
   // Reset here as well: this mod's own call does not pass through its own session.compact hook
   // (the engine skips the calling plugin, measured in the tests), and resetting twice changes nothing.
-  await cacheReplaced($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
+  await conversationCompacted($).catch(err => $.ui.log(`status-bar: could not reset the cache clock after compacting: ${msg(err)}`, { to: 'debug' }))
 }

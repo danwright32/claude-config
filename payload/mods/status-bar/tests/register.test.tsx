@@ -810,6 +810,97 @@ test('a compaction from anywhere else resets it too; one that is skipped, a suba
   expect(cacheIn(files)).toBeNull()
 })
 
+// #1421, Dan 2026-10-20: the band read "ctx 75% [ Compact ]" half an hour after the conversation had
+// been compacted automatically, and pressing it toasted "Compact did not run: Not enough messages to
+// compact." The reading was the conversation's from before the compaction, and no request had come
+// since to replace it. A compaction that runs takes the reading with it, and a usage() that still
+// answers the old figure is not believed until a measure brings a new one.
+test('a compaction that runs takes the context reading with it until a new one is measured (#1421)', withKit, async ($, on) => {
+  const { clock, w } = world(on)
+  w.usage = 75
+  await start($, clock)
+  await measure($, 75)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await $.session.compact(compactEvent('auto'))
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
+  // No request follows, and the periodic reading still hears 75 from usage().
+  await clock.advance(MIN)
+  expect(await ui.find({ type: 'Button', key: 'status-bar:compact' })).toBeUndefined()
+  expect(await shown(ui as never)).toBe('engine band')
+  // The first request after the compaction measures the small conversation.
+  w.usage = 9
+  await measure($, 9)
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('engine band')
+  // And a conversation grown full again is offered Compact again.
+  w.usage = 75
+  await measure($, 75)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await ui.unmount()
+})
+
+test('pressing Compact takes the context reading with it too: the row does not come back from usage() (#1421)', withKit, async ($, on) => {
+  const { clock, compacts, w } = world(on)
+  w.usage = 75
+  await start($, clock)
+  await measure($, 75)
+  const ui = await $.ui.mount(band)
+  await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(await shown(ui as never)).toBe('engine band')
+  await clock.advance(MIN)
+  expect(await ui.find({ type: 'Button', key: 'status-bar:compact' })).toBeUndefined()
+  w.usage = 9
+  await measure($, 9)
+  expect(await shown(ui as never)).toBe('engine band')
+  w.usage = 75
+  await measure($, 75)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await ui.unmount()
+})
+
+test('a /clear takes the context reading with it too, as a compaction does (#1421)', withKit, async ($, on) => {
+  const { clock, w } = world(on)
+  w.usage = 75
+  await start($, clock)
+  await measure($, 75)
+  const ui = await $.ui.mount(band)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('engine band')
+  w.usage = 80
+  await measure($, 80)
+  expect(await shown(ui as never)).toBe('ctx 80% ')
+  await ui.unmount()
+})
+
+test('a compaction that is skipped, a subagent one or a precompute leaves the context reading and its row (#1421)', withKit, async ($, on) => {
+  const { clock, toasts, w } = world(on)
+  w.usage = 75
+  await start($, clock)
+  await measure($, 75)
+  const ui = await $.ui.mount(band)
+  await $.session.compact(compactEvent('auto', { agentId: 'sub-1' }))
+  await $.session.compact(compactEvent('precompute'))
+  w.compact = () => ({ skip: 'Not enough messages to compact.' })
+  await $.session.compact(compactEvent('manual'))
+  await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('ctx 75% ')
+  await ui.unmount()
+})
+
 // #697: an unpushed count that cannot be read is never a zero (L215). The commits keep their place
 // with the age of the last reading, as a PR whose refresh failed does, and the failure is said once
 // in the debug log. A folder that is no repository, or one with no commits yet, has nothing to push.
