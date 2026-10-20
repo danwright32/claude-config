@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldAtWake, heldUntilWake } from '../hooks/nightheld.ts'
+import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldAtWake, heldUntilWake } from '../hooks/nightheld.ts'
 
 // #1284: while asleep nothing is handed to Dan, in any session; what a session would have delivered
 // is held and delivered when sleep mode ends, so every session reports at the same moment.
@@ -82,5 +82,34 @@ describe('heldAtWake: what a session is told to deliver when sleep mode ends', (
   })
   test('none of it uses a dash as punctuation', () => {
     expect(heldAtWake([{ label: 'Publish a.html', call: 'x' }]) + ASLEEP_DELIVERY + heldUntilWake('x').deny).not.toMatch(DASHES)
+  })
+})
+
+// #1383: a morning that went in is recorded as put, so a copy of the mod with fresh memory, reading a
+// night or held calls its mark could not clear, does not put the same morning to Dan again.
+describe('alreadyPut: whether this session already put the morning it is about to put', () => {
+  const put = { generation: 'g0', calls: ['gh pr merge 12 --squash'] }
+  const night = (generation: string | null) => ({ generation })
+  const held = (...calls: string[]) => calls.map(call => ({ label: 'x', call }))
+  test('nothing recorded as put: put it', () => {
+    expect(alreadyPut(null, night('g0'), [])).toBe(false)
+  })
+  test('the same night, carrying nothing it did not carry: already put', () => {
+    expect(alreadyPut(put, night('g0'), held('gh pr merge 12 --squash'))).toBe(true)
+    expect(alreadyPut(put, night('g0'), [])).toBe(true)
+  })
+  test('a new night is put, whatever the last one carried', () => {
+    expect(alreadyPut(put, night('g1'), [])).toBe(false)
+  })
+  test('a call held that the put morning did not carry is put', () => {
+    expect(alreadyPut(put, night('g0'), held('gh pr merge 13 --squash'))).toBe(false)
+    expect(alreadyPut(put, null, held('gh pr merge 13 --squash'))).toBe(false)
+  })
+  test('with the night already cleared, what the put morning carried is not put again on its own', () => {
+    expect(alreadyPut(put, null, held('gh pr merge 12 --squash'))).toBe(true)
+  })
+  test('a night naming no generation counts as put only after one that named none', () => {
+    expect(alreadyPut({ generation: null, calls: [] }, night(null), [])).toBe(true)
+    expect(alreadyPut(put, night(null), [])).toBe(false)
   })
 })
