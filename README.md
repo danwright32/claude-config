@@ -1929,6 +1929,27 @@ refuses (fail closed), and there is no override. Not seen by it: a close in GitH
 closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
 holds it, against a fake gh.
 
+**A close the gate could not see is reopened the next day** (#1386). `hooks/design-score-reopen.py`
+reads every repo the repo-digest lists (repos.json and repos-weekly.json, live) for Match issues and
+milestones closed since its last complete run of that repo (the first run reads from 2026-10-01, before
+any Match issue existed), and judges each with the gate's own judge, loaded rather than copied, on the
+code it was closed on: the commit that closed it, or the default branch's head at the moment of the
+close, never today's head. A close below 100%, with no score, an unreadable score or a score for other
+code, gets one comment on the Match issue (the score read, and the way to 100%: score and post, a new
+design round, or an exception Dan approves in the design file) and is reopened; a closed milestone is
+reopened and its comment goes on its Match issue. The comment carries a mark naming that close and is
+written before the reopen, so a run that dies between the two, or the same run on both Macs, comments
+once; a close made again after the reopen is a new close. A close at 100%, an exception included, is
+left alone. It runs from `hooks/design-score-reopen.sh`, a SessionStart hook that starts it detached at
+most once every 20 hours on each Mac and says at the next session start what it reopened or could not
+read (a repo, a list or a reopen that failed is said by name, and that repo is read again next run); a
+run that started and never recorded finishing is said too. It runs there rather than as a launch agent
+(a copy each Mac must install, L423) or a workflow per repo (set up per repo, billed in private ones):
+nothing to install, Dan's own gh accounts, no cost; the trade is that a close waits for the next
+session start. Records and the log are in `~/.claude/state/design-score-reopen/`. A dry run that writes
+nothing: `python3 ~/.claude/hooks/design-score-reopen.py --dry-run`. `test-design-score-reopen.sh`
+holds it, against a fake GitHub that remembers what is written to it.
+
 **Two adapters write the capture.** `score/capture-web.mjs` (web) draws each frame of the settled
 file (the document its `designFrameDocument(<id>)` gives, as a page of its own) and the app's
 fixture route (the page with `?frame=<id>`) at the

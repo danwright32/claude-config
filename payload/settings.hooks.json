@@ -316,6 +316,11 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/feature-discovery-nudge.sh",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/design-score-reopen.sh",
+            "timeout": 5
           }
         ]
       }
