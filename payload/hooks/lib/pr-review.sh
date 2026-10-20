@@ -102,11 +102,14 @@
 # answered points again, so the gate itself lists a finding as answered, and does not count it,
 # when it repeats one an earlier review raised and a "Lessons review" comment answered, by a strict
 # rule (claude-config#1338, answered_findings and lib/review-answered.py), or one such a comment
-# quotes, on either Mac, on this pull request or an earlier one it names (claude-config#1340).
+# quotes, on either Mac, on this pull request or an earlier one it names (claude-config#1340), also
+# after a rebase, at a head never fetched here, or on a replaced pull request of another branch,
+# through GitHub's record of the heads it was force pushed from (claude-config#1360).
 #
 # Environment: AI_REVIEW_STATE_DIR (shared with the push review), PR_REVIEW_DEADLINE_SECONDS,
 # PR_REVIEW_MAX_BYTES, PR_REVIEW_MAX_GROUPS, PR_REVIEW_HISTORY_MAX_BYTES, AI_REVIEW_MODEL,
-# AI_REVIEW_LESSONS_DIR, PR_REVIEW_PR_READ_TRIES, PR_REVIEW_PR_READ_WAIT, PR_REVIEW_SLEEP.
+# AI_REVIEW_LESSONS_DIR, PR_REVIEW_PR_READ_TRIES, PR_REVIEW_PR_READ_WAIT, PR_REVIEW_SLEEP,
+# PR_REVIEW_NET_BUDGET.
 
 set -uo pipefail
 
@@ -142,6 +145,12 @@ case "$PRR_PR_TRIES" in ''|*[!0-9]*|0) PRR_PR_TRIES=3 ;; esac
 PRR_PR_WAIT="${PR_REVIEW_PR_READ_WAIT:-2}"
 case "$PRR_PR_WAIT" in ''|*[!0-9]*) PRR_PR_WAIT=2 ;; esac
 PRR_PR_READ_BUDGET=15
+# Every network step review-answered.py takes for one check, in seconds all told (claude-config#1360):
+# one GraphQL read of the pull request's force pushes and at most three fetches of a quoted head. Set,
+# not measured: the merge gate runs under the hook timeout settings.hooks.json sets for it, and the
+# reads of the pull request above take their own budget out of the same.
+PRR_NET_BUDGET="${PR_REVIEW_NET_BUDGET:-15}"
+case "$PRR_NET_BUDGET" in ''|*[!0-9]*) PRR_NET_BUDGET=15 ;; esac
 PRR_SLEEP="${PR_REVIEW_SLEEP:-sleep}"
 PRR_SHOW_LINES=20
 PRR_LINE_CHARS=300
@@ -429,34 +438,47 @@ line_since() {   # $1 = earlier head, $2 = path, $3 = cited line -> what happene
 # heads' merge base is not an ancestor of the base this head's review read from. A branch name
 # reused later starts again from the base, so it shares nothing and is still not this history. A
 # REBASED branch shares nothing of its own either; an answer to it is matched through the finding
-# it quotes instead (answered_findings).
+# it quotes instead (answered_findings), or, since #1360, through GitHub's record of the heads this
+# pull request was force pushed from, which only the check reads and only for a finding nothing else
+# answered (review-answered.py). So the check alone asks for the reviews this rule leaves out:
+#
+# $1, when not empty, is more branch labels whose reviews count too, space separated: the head branch
+# of an earlier pull request of another name that this one replaces (#1360, answered_findings), held
+# to the same rule. $2 = "unlinked" prints instead the reviews of those labels the rule leaves out,
+# whose head is held here, in the same shape: the ones GitHub's record may tie to this pull request.
 earlier_rows() {
   [ -n "$full_sha" ] && [ "$branch_known" = 1 ] || return 0
-  local f rows fin s rf st d m ranked="" own_base="${mb:-}"
+  local f rows fin s rf st d m ranked="" own_base="${mb:-}" labels="$branch${1:+ $1}" mode="${2:-}" linked
   [ -n "$own_base" ] || own_base="$(meta_of "$final" base 2>/dev/null)"
   git cat-file -e "$own_base^{commit}" 2>/dev/null || own_base=""
   local -a files=()
   for f in "$AR_STATE_DIR/$key-pr-"*.txt; do [ -e "$f" ] && files+=("$f"); done
   [ "${#files[@]}" -gt 0 ] || return 0
   # One awk over every review's header: finished, head, file and start of each finished review of
-  # this branch label that returned a review.
-  rows="$(awk -v br="$branch" '
+  # these branch labels that returned a review.
+  rows="$(awk -v brs=" $labels " '
     FNR == 1 { b = ""; s = ""; st = ""; fin = 0; sta = 0 }
     /^branch=/ { b = substr($0, 8) } /^sha=/ { s = substr($0, 5) }
     /^status=/ { st = substr($0, 8) } /^finished=/ { fin = substr($0, 10) + 0 }
     /^started=/ { sta = substr($0, 9) + 0 }
-    /^$/ { if (b == br && st == "ok") printf "%s\t%s\t%s\t%s\n", fin, s, FILENAME, sta; nextfile }' "${files[@]}" 2>/dev/null)"
+    /^$/ { if (b != "" && index(brs, " " b " ") && st == "ok") printf "%s\t%s\t%s\t%s\n", fin, s, FILENAME, sta; nextfile }' "${files[@]}" 2>/dev/null)"
   # Newest first means the head NEAREST this one, counted in commits, never the finish stamp: on CI
   # (2026-10-13, PR #1109) two reviews finished in the same second, the tie went by sha, and the
   # newer review was the one the cap left out. The stamp only breaks a tie in distance.
   while IFS=$'\t' read -r fin s rf st; do
     [ -n "$s" ] && [ "$s" != "$full_sha" ] || continue
+    linked=1
     if ! git merge-base --is-ancestor "$s" "$full_sha" 2>/dev/null; then
-      [ -n "$own_base" ] || continue
-      m="$(git merge-base "$s" "$full_sha" 2>/dev/null)"
-      [ -n "$m" ] || continue
-      git merge-base --is-ancestor "$m" "$own_base" 2>/dev/null && continue
+      m=""
+      [ -n "$own_base" ] && m="$(git merge-base "$s" "$full_sha" 2>/dev/null)"
+      if [ -z "$m" ] || git merge-base --is-ancestor "$m" "$own_base" 2>/dev/null; then linked=0; fi
     fi
+    if [ "$mode" = unlinked ]; then
+      [ "$linked" = 0 ] && git cat-file -e "$s^{commit}" 2>/dev/null \
+        && ranked="$ranked"0$'\t'"$fin"$'\t'"$s"$'\t'"$rf"$'\t'"$st"$'\n'
+      continue
+    fi
+    [ "$linked" = 1 ] || continue
     d="$(git rev-list --count "$s..$full_sha" 2>/dev/null)"
     case "$d" in ''|*[!0-9]*) continue ;; esac
     ranked="$ranked$d"$'\t'"$fin"$'\t'"$s"$'\t'"$rf"$'\t'"$st"$'\n'
@@ -568,7 +590,8 @@ ROWS
 prr_pr_read() {   # a reader in mt_retry_read's terms: sets prr_pr_env, prr_pr_err and prr_pr_tries
   local rc
   prr_pr_tries=$((prr_pr_tries + 1))
-  prr_pr_env="$(mt_pr_view "$prr_pr_sel" "number,url,state,headRefName,isCrossRepository,body,comments" "$prr_pr_slug" "")"
+  # prr_pr_more: further fields one caller asks for (answered_findings: an earlier pull request's files).
+  prr_pr_env="$(mt_pr_view "$prr_pr_sel" "number,url,state,headRefName,isCrossRepository,body,comments${prr_pr_more:+,$prr_pr_more}" "$prr_pr_slug" "")"
   mt_view_class "$prr_pr_env"; rc=$?
   prr_pr_err="$MT_VIEW_ERR"
   return "$rc"
@@ -1136,6 +1159,20 @@ remedy() {
 #     open, has its "Lessons review" comments read too, at most three such, and only while some
 #     finding is still unanswered.
 #
+# And three that left (claude-config#1360), each held to the same conditions, each read made only
+# while some finding is still unanswered:
+#   - an answer in the OLDER FORM (naming <file>:<line>, quoting nothing) to a branch since REBASED:
+#     the review before the rebase shares nothing of the branch's own with this head, so
+#     earlier_rows leaves it out; review-answered.py counts it after all when GitHub records this
+#     pull request was force pushed from its head, in one GraphQL read;
+#   - a quote naming a head this checkout NEVER FETCHED (a rebase made on the other Mac): the same
+#     record gives that head's full name, and it is fetched, bounded by PRR_NET_BUDGET;
+#   - an earlier pull request of ANOTHER head branch this one names: followed only when it was
+#     closed without merging and its files overlap this one's, and its reviews on this Mac count
+#     under earlier_rows' rule. A merged one is a predecessor, whose answers may hand a point on to
+#     this very pull request, so it is never followed.
+# A read or fetch that fails leaves the finding new and is said in ans_note.
+#
 # The pull request is read afresh at the check, not from the review's start, because the answer to
 # the previous head is often written after this head's review began. Since #1340 it is read for
 # every review with findings, once per check, since an answer quoting one can come from either Mac;
@@ -1198,12 +1235,23 @@ answered_findings() {
   answer_comments "$this_env" "" > "$tmp/comments" \
     || { ans_note="($cannot: the pull request's comments could not be parsed, so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
   out="$(answered_run "$tmp")" || { ans_note="($cannot: $(tail -n 1 "$tmp/err" 2>/dev/null), so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
-  # An earlier pull request this one names, read only while some finding is still unanswered.
+  # Everything after this is read only while some finding is still unanswered.
   total="$(awk 'found && /^[^ :]+:[0-9]+: / { n++ } /^$/ { found = 1 } END { print n + 0 }' "$final")"
-  got="$(printf '%s' "$out" | grep -c . || true)"
-  if [ "${got:-0}" -lt "$total" ] && [ -n "$this_head" ]; then
-    refs="$(pr_references "$this_env" "$this_num")"
-    local added=0 rnote=""
+  got="$(answered_count "$out")"
+  if [ "$got" -lt "$total" ]; then
+    local added=0 rnote="" labels="" own_base mine="[]" prr_pr_more=files
+    # An earlier pull request this one names. Of the same head branch, any that is no longer open
+    # (#1340). Of ANOTHER head branch (#1360) only one closed WITHOUT merging whose files overlap this
+    # one's: a pull request that merged is a predecessor, not one this replaces, and an answer there
+    # may hand the point on to the very pull request now asking, where it must then be new. A
+    # replaced one never landed, so its answers are about this same work.
+    own_base="$(meta_of "$final" base 2>/dev/null)"
+    if [ -n "$own_base" ]; then
+      mine="$(git diff --name-only --no-renames "$own_base" "$full_sha" 2>/dev/null | jq -R . | jq -sc . 2>/dev/null)" || mine="[]"
+      [ -n "$mine" ] || mine="[]"
+    fi
+    refs=""
+    [ -n "$this_head" ] && refs="$(pr_references "$this_env" "$this_num")"
     for ref in $refs; do
       prr_pr_tries=0; prr_pr_err=""
       pr_fetch "$ref"; rc=$?
@@ -1213,16 +1261,34 @@ answered_findings() {
           || rnote="$rnote${rnote:+; }#$ref could not be read (${prr_pr_err:-gh gave no reason})"
         continue
       fi
-      [ "$(printf '%s' "$prr_pr_env" | jq -r --arg n "$ref" --arg h "$this_head" '
-        (.view.number | tostring) == $n and (.view.state // "OPEN") != "OPEN"
-        and .view.isCrossRepository == false and (.view.headRefName // "") == $h' 2>/dev/null)" = true ] || continue
+      [ "$(printf '%s' "$prr_pr_env" | jq -r --arg n "$ref" --arg h "$this_head" --argjson mine "$mine" '
+        (.view.headRefName // "") as $rh
+        | (.view.number | tostring) == $n and .view.isCrossRepository == false and $rh != ""
+          and (if $rh == $h then (.view.state // "OPEN") != "OPEN"
+               else (.view.state // "") == "CLOSED"
+                    and ([(.view.files // [])[] | .path] as $theirs | [$mine[] as $p | $theirs[] | select(. == $p)] | length > 0) end)' 2>/dev/null)" = true ] || continue
       answer_comments "$prr_pr_env" "$ref" > "$tmp/more" 2>/dev/null || continue
       jq -s 'add' "$tmp/comments" "$tmp/more" > "$tmp/all" 2>/dev/null && mv -f "$tmp/all" "$tmp/comments" && added=1
+      # Its own reviews on this Mac, labelled with its head branch, count as this pull request's
+      # history by the same rule (earlier_rows), so an answer there naming a line can be matched.
+      s="$(printf '%s' "$prr_pr_env" | jq -r '.view.headRefName // ""' 2>/dev/null)"
+      case "$s" in ''|"$this_head"|*[[:space:]]*) ;; *) labels="$labels${labels:+ }$s" ;; esac
     done
-    if [ "$added" = 1 ]; then
-      out="$(answered_run "$tmp")" || { ans_note="($cannot: $(tail -n 1 "$tmp/err" 2>/dev/null), so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
+    if [ -n "$labels" ]; then
+      earlier_rows "$labels" | awk -F '\t' 'NF >= 5 { print $3 "\t" $5 "\t" $4 }' > "$tmp/earlier"
     fi
     [ -n "$rnote" ] && ans_note="(An earlier pull request this one names could not be read, so an answer written there was not looked for: $rnote.)"
+    # Then GitHub's record of the heads this pull request was force pushed from (#1360), which
+    # review-answered.py reads only for a finding still unanswered that a review left out by
+    # earlier_rows, or a quote naming a head this checkout does not hold, could answer.
+    earlier_rows "$labels" unlinked | awk -F '\t' 'NF >= 5 { print $3 "\t" $5 "\t" $4 }' > "$tmp/unlinked"
+    local acct
+    acct="$(printf '%s' "$this_env" | jq -r '.account // ""' 2>/dev/null)"
+    out="$(answered_run "$tmp" --unlinked "$tmp/unlinked" --pr "$this_num" --slug "$prr_pr_slug" \
+      --account "$acct" --base "$own_base" --net-budget "$PRR_NET_BUDGET")" \
+      || { ans_note="($cannot: $(tail -n 1 "$tmp/err" 2>/dev/null), so every finding counts as new.)"; rm -rf "$tmp"; return 0; }
+    s="$(printf '%s\n' "$out" | awk -F '\t' '$1 == "note" { printf "%s%s", (n++ ? " " : ""), $2 }')"
+    [ -n "$s" ] && ans_note="${ans_note:+$ans_note }($s)"
   fi
   rm -rf "$tmp"
   while IFS=$'\t' read -r i s who at on how; do
@@ -1250,8 +1316,16 @@ answer_comments() {
 }
 
 # review-answered.py over the files in $1, with the comments gathered so far. Prints what it printed.
-answered_run() {
-  python3 "$PRR_LIB/review-answered.py" --repo "$top" --head "$full_sha" --review "$final" --earlier "$1/earlier" --comments "$1/comments" 2>"$1/err"
+answered_run() {   # $1 = the folder, then any further arguments review-answered.py takes
+  python3 "$PRR_LIB/review-answered.py" --repo "$top" --head "$full_sha" --review "$final" --earlier "$1/earlier" --comments "$1/comments" "${@:2}" 2>"$1/err"
+}
+
+# How many findings review-answered.py's output ($1) called answered: its numbered lines, never its
+# notes. grep -c prints 0 and fails on none, so nothing is added after it.
+answered_count() {
+  local n
+  n="$(printf '%s\n' "$1" | grep -c $'^[0-9][0-9]*\t')"
+  printf '%s' "${n:-0}"
 }
 
 # The earlier pull requests a pull request ($1, as pr_fetch read it; $2 its own number) names, at

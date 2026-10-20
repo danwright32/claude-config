@@ -782,8 +782,8 @@ claude-config#1340 each is matched as strictly:
   largely the same claim (0.35; a quote the refusal cut, ending `...`, against this finding cut
   alike), and a comment by somebody with write access whose first line names the lessons review.
   A line not beginning `> ` is prose and is never matched, so an answer's own words are not taken
-  for a finding; an answer naming no head, or a head this checkout has never had, matches nothing.
-  Since an answer like that can come from either Mac, the pull request is read at the check for
+  for a finding; an answer naming no head matches nothing, and one naming a head this checkout has
+  never had is fetched first (below). Since an answer like that can come from either Mac, the pull request is read at the check for
   every review with findings, once, not only when this Mac holds a candidate; no pull request yet
   (a push before one is opened) says nothing.
 - **Answers on an earlier pull request this one replaces.** Bidspoke #2491 replaced #2482, closed
@@ -792,12 +792,35 @@ claude-config#1340 each is matched as strictly:
   write access, has its "Lessons review" comments read too when it is in this repository, has the
   same head branch, and is no longer open; at most three, read only while some finding is still
   unanswered, and `Closes #N` and its kin are never followed, since they name issues. Its comments
-  then answer by either rule above, saying on which pull request. A pull request of another branch
-  name is not followed; one named that cannot be read is said.
+  then answer by either rule above, saying on which pull request. One named that cannot be read is
+  said.
 
-Two gaps remain, each still shown as new: an answer in the older form (naming `<file name>:<line>`
-without quoting the finding) to a branch since rebased, and a quote naming a head this checkout has
-never fetched, which is what a branch rebased on the other Mac leaves.
+Three more since claude-config#1360, each as strict, and each read made only for a finding nothing
+above answered and that it could answer (the same file and claim):
+
+- **An answer in the older form to a branch since rebased.** An answer naming `<file name>:<line>`
+  without quoting the finding needs this Mac's copy of it, and after a rebase the review that raised
+  it shares nothing of the branch's own with this head, so it is not counted as this pull request's
+  history. GitHub records the heads a pull request was force pushed from (its
+  `HeadRefForcePushedEvent`s), which tied 17 of the 26 such earlier heads measured for #1340 to their
+  pull request. So the check reads that record, once, in one GraphQL call, and a review of one of
+  those heads (or of an ancestor of one held here, not already in the base) is matched by the rule
+  above.
+- **A quote naming a head this checkout never fetched**, which is what a branch rebased on the other
+  Mac leaves. git fetches a commit only by its full name, and the quote gives seven characters, so
+  the same record supplies it: a name that begins exactly one head this pull request was force
+  pushed from is that head, fetched from origin by its full name (GitHub serves a head force pushed
+  away by its name for a while), then matched as any quote.
+- **An earlier pull request of another head branch.** Followed only when this one names it as
+  above, it was closed without merging, and its files overlap this one's. A merged pull request is
+  a predecessor, not one this replaces, and an answer there may hand the point on to the very pull
+  request now asking, where it must then be new. Its reviews on this
+  Mac, labelled with its branch, count as this pull request's history by the same rule, so an
+  answer there in the older form is matched too.
+
+The GraphQL read and at most three fetches share one time budget, `PR_REVIEW_NET_BUDGET`. When
+either fails, or a quoted head is not one GitHub records for this pull request, the finding stays
+new and the refusal says why.
 
 A pull request the merge gate sends back for being behind its base (`block-red-merge.sh`, #766) can
 be updated, waited on and merged in one step, run in the background from a checkout of the
