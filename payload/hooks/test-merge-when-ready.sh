@@ -924,6 +924,21 @@ check "#1358 showing the request in its log" "Step back: this is round 3 of" "$o
 check "#1358 with the finding" "the retry loop has no bound" "$out"
 check "#1358 and the helper's own stop line asks for the step back" "step back and reconsider the approach" "$(grep 'Stopped:' <<<"$out")"
 check_eq "#1358 nothing merged" "0" "$(count gh-calls 'pr merge')"
+# A finding that only QUOTES the words, mid line, is not a request to step back.
+QUOTED='Refusing to merge until these are read: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding.
+lib/x.sh:3: the check matches "Step back:" anywhere in the text (L11). Should be: match it at the start of a line. [severity: major]'
+cat > "$STUBS/pr-review-quoted.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$QUOTED'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-quoted.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-quoted.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1358 a finding quoting the words still stops the helper" "1" "$rc"
+check_not "#1358 but its stop line does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
 # Control: an ordinary refusal's stop line is as before.
 fresh "$OLD" 0 "$GREEN"
 printf '1\n' > "$ST/review-answers"
