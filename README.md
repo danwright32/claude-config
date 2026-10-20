@@ -529,7 +529,7 @@ requirement on it. Measured 2026-08-31: commit `f094409` pushed a 41 line change
 `hooks/lib/issue-spool.sh` with no test at all, and nothing reported it.
 
 The gate runs where this Mac's edits become a commit, so every way they leave runs it: a send, the
-sync a behind send catches up with, the commit #1398 builds on a shared commit still being tested, a
+sync a behind send catches up with, the commit built on a shared commit whose tests have not finished (#1398), a
 sync or a push typed by hand, and a merge of rule files being published. Until #1403 only a send's
 direct path ran it, so a hook edited while this Mac was behind went out with the catch up and no
 suite run here. A held back hook stays untouched in `~/.claude` through the catch up's apply too,

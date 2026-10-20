@@ -86,7 +86,8 @@ A send has two ways into a sync: it finds this Mac behind and catches up first (
 push is refused because the shared repo moved after it looked. Either way the sync stages, commits
 and pushes this Mac's edits itself. The behind send then fell through to its own commit, found
 everything already gone, and reported `nothing`; the refused send reported nothing at all, or only
-the CI gate's "still being tested" when #1398's path had just sent on top of that commit. From
+the CI gate's line about the shared commit's tests, after the send over an untested commit (shipped
+in #1398) had put this Mac's edit on top of it. From
 2026-10-18 to 2026-10-20 one Mac's log showed receives between skipped sends and not one `sent`.
 
 **The sync says what it did with this Mac's work, and the send reports that.** At its push step the
