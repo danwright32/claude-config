@@ -3276,6 +3276,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L1028. Every outbound call made inside a function the platform kills at a hard deadline needs its own timeout well inside that deadline, because a kill skips every catch block and the failure alert it holds, so a dependency that hangs goes silent while one that refuses pages.** (nursedex#1218, 2026-10-20)
+  SHORT: An outbound call in a function killed at a hard deadline needs its own shorter timeout, or a hang skips the catch and its alert.
 - **L771. A timeout built by racing the work against a timer fails with the timer's own error, so
   anything the work attached to its error (the request it sent, its logs, its cause) is lost on
   exactly the slow path; attach that context where the timer fires, or record it before the call
