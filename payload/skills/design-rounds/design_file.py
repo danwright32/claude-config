@@ -5,8 +5,8 @@ form <script type="application/json" id="NAME">...</script>: the decision map (c
 #1290), and the frames and Dan's exceptions the design match score reads (score/design_score.py).
 Each tool reading its own block with its own parser would be two readers of one file that could
 disagree about where a block ends, so both use this one. It also holds the kinds of design drawn with
-no product page around it, which the frames block may name, for the same reason: one list, read by
-the tools that write that block and the score that reads it.
+no product page around it, and the shared screens a design may be drawn in, which the frames block may
+name, for the same reason: one list, read by the tools that write that block and the score that reads it.
 """
 from html.parser import HTMLParser
 
@@ -26,6 +26,24 @@ NO_PAGE_KINDS = {
 def no_page_kinds():
     """The allowed kinds as one readable list, for every refusal to name."""
     return ", ".join(NO_PAGE_KINDS)
+
+
+# The shared screens a SETTLED design may be drawn in (claude-config#1413), each with its plain line. The
+# terminal is itself a Claude Code mod's chrome, so a mod's rounds are drawn in it (the switcher's
+# "screen": "terminal", #1384) and so is its settled design. The switcher offers whatever screens/ holds;
+# the score is copied into apps without screens/, so the kinds a frames block may name are listed here,
+# and a screen added to screens/ reaches a settled design only once it is added here too.
+SCREEN_KINDS = {
+    "terminal": "The Claude Code terminal, which is itself the chrome of a mod",
+}
+
+# Every kind a settled design's frames block may name, and what make-settled.py accepts in "screen".
+FRAME_KINDS = dict(NO_PAGE_KINDS, **SCREEN_KINDS)
+
+
+def frame_kinds():
+    """Every kind a frames block may name, as one readable list, for every refusal to name."""
+    return ", ".join(FRAME_KINDS)
 
 
 class BlockFinder(HTMLParser):
