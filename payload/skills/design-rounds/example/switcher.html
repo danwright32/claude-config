@@ -51,10 +51,6 @@
   .dr-hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
 </style>
 <style>
-.win { width: 520px; background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 8px; overflow: hidden; }
-.hd { padding: 10px 14px; background: #F1ECE7; font-weight: 600; }
-.row { padding: 9px 14px; border-top: 1px solid #EDE7E1; font-variant-numeric: tabular-nums; }
-.row.tight { padding: 4px 14px; }
 
 </style>
 </head>
@@ -71,21 +67,79 @@
   straight to it, unless the design on the stage wants that key for itself.</p>
 </div>
 <script>
+/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
+   the captured page with the round's builder drawing into its slot, in an iframe of its own. */
+var DR_TEMPLATE = "<!doctype html>\n<!-- The demo invoice app's page, standing as this example's product. A real round saves its own product's page with capture-chrome.js. -->\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invoices<\/title>\n<style>\n  html, body { margin: 0; background: #F4F1ED; color: #1B1613; font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }\n  header { display: flex; align-items: center; height: 44px; padding: 0 16px; background: #1B1613; color: #FBFAF8; font-weight: 600; }\n  main { padding: 16px; }\n<\/style><style>\n.list { width: 520px; background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 8px; overflow: hidden; }\n.row { padding: 9px 14px; border-top: 1px solid #EDE7E1; font-variant-numeric: tabular-nums; }\n.row:first-child { border-top: 0; }\n.row.tight { padding: 4px 14px; }\n\n<\/style>\n<\/head>\n<body><header>Invoices<\/header><main id=\"main\"><\/main><script>window.DESIGN_FIXTURE = {\"invoices\": [{\"client\": \"Client 1\", \"date\": \"Oct 1\", \"amount\": 250}, {\"client\": \"Client 2\", \"date\": \"Oct 2\", \"amount\": 500}, {\"client\": \"Client 3\", \"date\": \"Oct 3\", \"amount\": 750}, {\"client\": \"Client 4\", \"date\": \"Oct 4\", \"amount\": 1000}]};<\/script>\n<script>\n// Draws only what goes in the product's slot: the chrome around it (the header) is the product's\n// own, captured in chrome.html, and the rows come from the round's fixture.\nfunction buildScreen(variant) {\n  var list = document.createElement(\"div\");\n  list.className = \"list\";\n  window.DESIGN_FIXTURE.invoices.forEach(function (invoice) {\n    var row = document.createElement(\"div\");\n    row.className = \"row \" + (variant.density || \"normal\");\n    row.textContent = invoice.client + \"   \" + invoice.date + \"   $\" + invoice.amount;\n    list.append(row);\n  });\n  return list;\n}\n\n<\/script>\n<script>\n(function () {\n  \"use strict\";\n  var V = \"__DR_VARIANT__\";\n  var slot = document.getElementById(\"main\");\n  var report = { built: false, why: \"\" };\n  /* A slot the captured page's text names but its document does not hold (an id inside a comment)\n     is said as that, never as the builder throwing (lessons review of #1364). */\n  if (!slot) {\n    window.DR_FRAME = { built: false, noSlot: true, why: \"the captured page holds no element \" + \"main\" };\n    return;\n  }\n  try {\n    var node = buildScreen(V);\n    if (!node || !node.nodeType) throw new Error(\"buildScreen returned no element\");\n    slot.replaceChildren(node);\n    report.built = true;\n  } catch (err) {\n    report.why = String(err && err.message ? err.message : err);\n  }\n  window.DR_FRAME = report;\n  if (report.built && typeof screenShown === \"function\") {\n    try { screenShown(V, slot.firstElementChild); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }\n  }\n  /* A key pressed while this frame has the focus goes to the page around it, unless the design took\n     it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */\n  document.addEventListener(\"keydown\", function (event) {\n    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;\n    var t = event.target;\n    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(t.tagName || \"\"))) return;\n    if (window.parent && window.parent !== window) window.parent.postMessage({ drKey: event.key }, \"*\");\n  });\n})();\n<\/script>\n<\/body><\/html>\n";
+var DR_OPTION_VARIANTS = {"1": "{\"key\": \"1\", \"name\": \"Normal\", \"why\": \"The comfortable height, which fits eight rows in the window.\", \"measured\": \"29px per row.\", \"density\": \"normal\"}", "2": "{\"key\": \"2\", \"name\": \"Tight\", \"why\": \"Four pixels off the padding, which is what buys the other three rows.\", \"measured\": \"19px per row.\", \"density\": \"tight\"}"};
+var DR_WIDTH = 640;
+var DR_HEIGHT = 0;
+var DR_SLOT = "main";
+var DR_SEEN = {};
 function buildScreen(variant) {
-  var win = document.createElement("div");
-  win.className = "win " + variant.key;
-  var head = document.createElement("div");
-  head.className = "hd";
-  head.textContent = "Invoices";
-  win.append(head);
-  for (var i = 1; i <= 4; i++) {
-    var row = document.createElement("div");
-    row.className = "row " + (variant.density || "normal");
-    row.textContent = "Client " + i + "   Oct " + i + "   $" + (i * 250);
-    win.append(row);
-  }
-  return win;
+  var frame = document.createElement("iframe");
+  frame.title = variant.name;
+  frame.setAttribute("data-dr-option", variant.key);
+  /* No display set here: an inline display would beat the hidden attribute show() sets, and the stage
+     lays its children out itself (lessons review of #1364). */
+  frame.style.cssText = "border:0;background:#fff;width:" + DR_WIDTH + "px;height:" + (DR_HEIGHT || 480) + "px";
+  frame.addEventListener("load", function () { drLoaded(frame, variant); });
+  frame.srcdoc = DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_OPTION_VARIANTS[variant.key]);
+  return frame;
 }
+/* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
+   options drawing the same thing are said, as the page says it for a round with no captured chrome. */
+/* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
+   again each time it is shown: the page calls screenShown after every switch, as it does for any
+   builder, and the frame's own load calls it too. */
+function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
+  var doc = frame.contentDocument;
+  /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
+     so a short screen would keep whatever height its frame started at. */
+  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+}
+function drLoaded(frame, variant) {
+  var doc = frame.contentDocument;
+  var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
+  screenShown(variant, frame);
+  if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
+  var slot = doc && doc.getElementById(DR_SLOT);
+  DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? slot.innerHTML : null };
+  if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
+}
+function drVerdict() {
+  var said = [];
+  var marks = {};
+  Object.keys(DR_SEEN).forEach(function (key) {
+    var seen = DR_SEEN[key];
+    if (seen.noSlot) {
+      said.push(seen.name + " has nowhere to draw: its captured chrome holds no element #" + DR_SLOT + ", so nothing of the round is on it. Capture the chrome again, or name its slot.");
+      return;
+    }
+    if (!seen.report.built) {
+      said.push("The builder threw when it drew " + seen.name + ": " + seen.report.why + ". That option shows its captured chrome with nothing in it.");
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(marks, seen.drawn)) {
+      said.push(marks[seen.drawn] + " and " + seen.name + " draw the same picture. That is what a round whose options do not differ looks like. Check the builder actually reads its argument before reading anything into this round.");
+    } else {
+      marks[seen.drawn] = seen.name;
+    }
+  });
+  var page = document.querySelector(".dr-frame");
+  said.forEach(function (text) {
+    var strip = document.createElement("p");
+    strip.className = "dr-sameness";
+    strip.textContent = text;
+    page.insertBefore(strip, page.firstChild);
+  });
+}
+/* A key pressed inside an option's frame comes here, so the arrows and jump keys work wherever the
+   focus is; the frame already left alone a key the design took or one typed into a field. */
+window.addEventListener("message", function (event) {
+  if (event.data && typeof event.data.drKey === "string") {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: event.data.drKey, bubbles: true }));
+  }
+});
 
 </script>
 <script>
@@ -122,6 +176,10 @@ function buildScreen(variant) {
     "density": "tight"
   }
 ];
+  /* With a captured chrome every option is an iframe, and an iframe taken out of the page reloads
+     when it is put back, losing its scroll and anything clicked open. So those options all stay in
+     the stage, one shown at a time (claude-config#1364). */
+  var KEEP_ALL = true;
 
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -151,10 +209,20 @@ function buildScreen(variant) {
        for each option exactly once, and the same element is moved onto the stage every
        time that option is chosen. The fallback covers the one case where drawAll could not
        finish, so a page whose builder threw is still usable rather than blank. */
-    var outgoing = stage.firstElementChild;
-    var kept = outgoing ? scrolled(outgoing) : [];
     var incoming = built[current] || buildScreen(variant);
-    stage.replaceChildren(incoming);
+    var kept = [];
+    if (KEEP_ALL) {
+      built[current] = incoming;
+      built.forEach(function (node, position) {
+        if (!node) return;
+        if (node.parentNode !== stage) stage.append(node);
+        node.hidden = position !== current;
+      });
+    } else {
+      var outgoing = stage.firstElementChild;
+      kept = outgoing ? scrolled(outgoing) : [];
+      stage.replaceChildren(incoming);
+    }
     /* A browser resets the scroll of an element taken out of the document, so every scrolling
        region came back at the top on a switch, and a round about anything below the fold could not
        be compared in place (claude-config#1206). The positions the outgoing screen was scrolled to

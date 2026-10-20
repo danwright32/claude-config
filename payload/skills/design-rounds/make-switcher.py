@@ -587,7 +587,9 @@ function buildScreen(variant) {
    builder, and the frame's own load calls it too. */
 function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
   var doc = frame.contentDocument;
-  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = doc.documentElement.scrollHeight + "px";
+  /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
+     so a short screen would keep whatever height its frame started at. */
+  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
 }
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
