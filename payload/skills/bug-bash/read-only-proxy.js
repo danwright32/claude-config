@@ -37,6 +37,9 @@
 // is removed as it stops, so the file never names a dead process. A site that has not answered
 // within the upstream deadline (--upstream-timeout-ms, 30 s by default) is answered 504, and an
 // upstream request is dropped when the browser that asked for it goes away (L110).
+// It will not start (exit 3) while a live proxy answers for the same --state directory, and not
+// (exit 4) while one may be live there but this Mac could not open a connection to ask it, out of
+// local ports or file handles (#1370).
 
 'use strict'
 const http = require('http')
@@ -96,7 +99,13 @@ async function claimStateDir() {
     } catch (e) {
       alive = e.code === 'EPERM'
     }
-    const answers = alive && (await proxyAnswers(prior.proxy, 2000).then(() => true, () => false))
+    // A Mac out of local ports cannot ask at all, which says nothing about the proxy (#1370): taken
+    // for a dead one, its proxy.json would be removed and a second proxy started beside it.
+    const answers = alive && (await proxyAnswers(prior.proxy, 2000).then(() => true, e => (e.local ? e : false)))
+    if (answers instanceof Error) {
+      console.error(`read-only-proxy: not starting for ${stateDir}: a proxy may already be running there (pid ${pid}), and it could not be asked. ${answers.message.replace(/^explorer-browser: /, '')}`)
+      process.exit(4)
+    }
     if (answers) {
       console.error(`read-only-proxy: a proxy is already running for ${stateDir} (pid ${pid}, ${prior.proxy}); stop it or use another --state directory.`)
       process.exit(3)
