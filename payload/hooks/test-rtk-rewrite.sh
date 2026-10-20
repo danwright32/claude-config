@@ -415,6 +415,8 @@ check "#1419 nor is a shift in arithmetic inside double quotes" \
 check "#1419 an rtk invocation captured inside arithmetic is refused" \
   "$(refused_to_rewrite 'echo $(( $(rtk grep -c x f) + 1 ))')"
 check "#1419 and inside a bare (( )) command" "$(refused_to_rewrite '(( n = $(rtk grep -c x f) ))')"
+check "#1419 nested subshells opening with (( are not mistaken for arithmetic" \
+  "$(refused_to_rewrite '((cd d && rtk grep x f) | cat)')"
 check "#1419 arithmetic with no rtk in it keeps the rewrite beside it" "$(kept_as 'echo $((1<<2)); rtk grep x f')"
 check "#1419 a loop whose output is not piped keeps it" "$(kept_as 'for f in a b; do rtk ls "$f"; done')"
 check "#1419 a word like done as an argument is not read as closing anything" "$(kept_as 'rtk git commit -m done')"
