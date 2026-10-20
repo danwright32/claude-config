@@ -172,6 +172,41 @@ case " diff find " in
   *" $rtk_dest_sub "*) return 0 ;;
 esac
 
+# NEVER rewrite into a destination that runs a DIFFERENT PROGRAM than the one named
+# (claude-config#1408).
+#
+# On 2026-10-20 a background `cd "<checkout>" && npx wrangler kv key list --namespace-id <id>
+# --remote --config ...` printed "npm error Missing script: wrangler" and never ran wrangler. rtk
+# 0.31.0 rewrites any `npx <tool>` it has no dedicated filter for into `rtk npx <tool>`, and
+# `rtk npx` runs that as `npm <tool> <args>`, an npm SCRIPT lookup (its own -vvv prints "Running:
+# npm wrangler ..."). Measured the same day against a local bin exiting 3: `npx probe --version`
+# became `npm probe --version`, which printed npm's own version and EXITED 0, so a failure read as
+# a success; `npx probe check` exited 1 on the missing script where the real one passed; and
+# `rtk npx next dev` ran `npx next build`. Every npx tool rtk does filter (tsc, eslint, prisma,
+# prettier, next build, vitest) is rewritten to its own subcommand, so `rtk npx` is only ever
+# reached by the tools it then misroutes, and the whole destination is refused.
+#
+# `rtk lint` has the same fault in one shape. Its first argument names the LINTER whenever it is a
+# bare word, so `eslint src` became `rtk lint src`, which ran `npx src`: a registry package called
+# src, run in place of eslint. A first argument that is a flag or holds a `/` or `.` (`rtk lint .`,
+# `rtk lint src/`, `rtk lint --fix src`) was measured to run eslint, and keeps its rewrite.
+#
+# check-rtk-exit-fidelity.sh probes npx in both directions, so a substitute that starts running
+# some other program is found by the measurement and not only by this list (L96).
+if [ "$rtk_dest_sub" = "npx" ]; then return 0; fi
+
+# `rtk tsc` is refused whatever the source, since it always runs `npx tsc` (its -vvv says so), and
+# where TypeScript is not a local dependency npx can fetch the unrelated registry package called
+# tsc. A bare `tsc` named no runner, so the runner rule below cannot see that one is ADDED. Dan's
+# decision, 2026-10-20: "Leave tsc unrewritten".
+if [ "$rtk_dest_sub" = "tsc" ]; then return 0; fi
+if [ "$rtk_dest_sub" = "lint" ]; then
+  case "$rtk_dest_verb" in
+    ''|-*|*/*|*.*) ;;
+    *) return 0 ;;
+  esac
+fi
+
 return 1
 }
 
@@ -184,6 +219,34 @@ while read -r rtk_dest_sub rtk_dest_verb; do
   [ -n "$rtk_dest_sub" ] || continue
   if rtk_refused_destination "$rtk_dest_sub" "$rtk_dest_verb"; then exit 0; fi
 done <<< "$rtk_invocations"
+
+# NEVER rewrite a command so that a package RUNNER it named disappears (claude-config#1408).
+#
+# The destination refusals above cannot see this one, because the fault is visible only against
+# the SOURCE. rtk 0.31.0 rewrites `pnpm tsc --noEmit` to `rtk tsc --noEmit`, which runs
+# `npx tsc --noEmit` (its own -vvv says so), and `npx prisma migrate status` to
+# `rtk prisma migrate status`, which runs a bare `prisma` from PATH. Which runner, and so which
+# program and version, then runs is rtk's choice rather than the command's, and nothing in the
+# rewritten text shows it. Where the project has no local copy, npx fetches whatever registry
+# package carries that name (`tsc` there is not TypeScript).
+#
+# rtk rewrites each part of a command separately and leaves every part it does not rewrite exactly
+# as written, so a runner word can only go missing from a part rtk rewrote. Counting each runner
+# word in both, with the same word breaks as the rtk scan above, therefore needs no alignment of
+# parts: fewer in the rewrite means a runner was dropped. A rewrite that keeps it
+# (`npm run build` to `rtk npm run build`) is untouched, and so is a command that named none.
+rtk_runner_words() { # rtk_runner_words <command>  -> "<word> <count>" per runner word present
+  printf '%s\n' "$1" | tr ';&|()`<>{}"'"'" '            ' | awk '
+    { for (i = 1; i <= NF; i++) if ($i ~ /^(npm|npx|pnpm|pnpx|yarn|bun|bunx)$/) n[$i]++ }
+    END { for (w in n) print w, n[w] }
+  '
+}
+rtk_runners_after="$(rtk_runner_words "$REWRITTEN")"
+while read -r rtk_runner rtk_runner_before; do
+  [ -n "$rtk_runner" ] || continue
+  rtk_runner_now="$(printf '%s\n' "$rtk_runners_after" | awk -v w="$rtk_runner" '$1 == w { print $2 }')"
+  if [ "${rtk_runner_now:-0}" -lt "$rtk_runner_before" ]; then exit 0; fi
+done <<< "$(rtk_runner_words "$CMD")"
 
 # NEVER rewrite a command in which an rtk invocation's OUTPUT is read by another program
 # (claude-config#1419).
