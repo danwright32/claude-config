@@ -172,6 +172,35 @@ case " diff find " in
   *" $rtk_dest_sub "*) return 0 ;;
 esac
 
+# NEVER rewrite into a destination that runs a DIFFERENT PROGRAM than the one named
+# (claude-config#1408).
+#
+# On 2026-10-20 a background `cd "<checkout>" && npx wrangler kv key list --namespace-id <id>
+# --remote --config ...` printed "npm error Missing script: wrangler" and never ran wrangler. rtk
+# 0.31.0 rewrites any `npx <tool>` it has no dedicated filter for into `rtk npx <tool>`, and
+# `rtk npx` runs that as `npm <tool> <args>`, an npm SCRIPT lookup (its own -vvv prints "Running:
+# npm wrangler ..."). Measured the same day against a local bin exiting 3: `npx probe --version`
+# became `npm probe --version`, which printed npm's own version and EXITED 0, so a failure read as
+# a success; `npx probe check` exited 1 on the missing script where the real one passed; and
+# `rtk npx next dev` ran `npx next build`. Every npx tool rtk does filter (tsc, eslint, prisma,
+# prettier, next build, vitest) is rewritten to its own subcommand, so `rtk npx` is only ever
+# reached by the tools it then misroutes, and the whole destination is refused.
+#
+# `rtk lint` has the same fault in one shape. Its first argument names the LINTER whenever it is a
+# bare word, so `eslint src` became `rtk lint src`, which ran `npx src`: a registry package called
+# src, run in place of eslint. A first argument that is a flag or holds a `/` or `.` (`rtk lint .`,
+# `rtk lint src/`, `rtk lint --fix src`) was measured to run eslint, and keeps its rewrite.
+#
+# check-rtk-exit-fidelity.sh probes npx in both directions, so a substitute that starts running
+# some other program is found by the measurement and not only by this list (L96).
+if [ "$rtk_dest_sub" = "npx" ]; then return 0; fi
+if [ "$rtk_dest_sub" = "lint" ]; then
+  case "$rtk_dest_verb" in
+    ''|-*|*/*|*.*) ;;
+    *) return 0 ;;
+  esac
+fi
+
 return 1
 }
 
