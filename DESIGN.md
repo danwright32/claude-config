@@ -911,6 +911,58 @@ If CI becomes slow enough that the wait costs more than the exposure, or the red
 enough that there is nothing to protect against, this is the trade to look at again. Re-measure
 those two numbers rather than re-reading this paragraph.
 
+Re-measured 2026-10-20 for #1398: the last 30 runs on main took 11 to 17 minutes each, not four,
+and a commit landed about every 20 minutes. The trade for what is RECEIVED was left as it is: a
+quarter hour's wait on config arriving is still small against a red commit installing itself.
+What the slower runs broke was SENDING, which the gate was never meant to hold, and that is the
+next section.
+
+### The gate holds back what is received, never what is sent (#1398)
+
+Found 2026-10-20. A watcher send that finds this Mac behind runs a sync to catch up, and that sync
+meets the gate. Every way the tool had of getting a push on top of the shared head went through
+taking the head in, so while the head was still being tested nothing this Mac changed could leave
+it. With runs of 15 to 17 minutes and a commit every 20, the head was being tested most of the
+time: the watcher's log holds 64 skipped sends from 2026-10-18 to 2026-10-20, every one that gave a
+reason giving "still being tested", and not one send. A sync typed by hand is not gated, which is
+why one cleared it every time, and why the stuck notice's "run claude-sync sync" always worked.
+
+**The rule.** When the head is only still being tested (a run in progress, or none created yet
+inside `SYNC_CI_GRACE`), this Mac's own commits are sent ON TOP of it without it being taken in. The
+commit is built with `git merge-tree --write-tree` from the objects alone and pushed as a fast
+forward, so neither the clone (which is also the copy of this tool the watcher runs) nor `~/.claude`
+ever holds the untested head. It is taken in later by the same gate, once its tests pass, and at
+that point this clone's commits are moved onto the commit they became, so the pull replays only
+what is newer.
+
+**Only where the two sides changed different files.** The result is then the head's tree with this
+Mac's files laid over it, and there is no merge decision in it for any test to have missed. Where
+both changed one file, the send waits for the tests and names the file. That is the one case left
+where a typed sync does something the watcher will not, and the reason is the gate's own: a merge
+of two untested edits is exactly what the gate exists to keep off this Mac until something has
+judged it.
+
+**Not over a head that failed, was cancelled, or cannot be read.** Nothing here would install it
+either, but the commit sent on top carries the failure, and `report_own_push_verdict` would then tell
+this Mac its own push failed its tests, which would be false. Those keep counting skips, and the
+stuck notice now says which of them it is.
+
+**Measured from what already went up.** The second edit to one file while the head is still being
+tested would otherwise read as overlapping the first, because the shared repo holds the first and
+the comparison started from before it. `.sent-over-untested` records the last local commit sent and
+what it became, and the next send compares from there.
+
+**Rejected:**
+
+- *Reconciling to the newest commit whose tests passed and sending from there.* A push has to sit on
+  top of the head, so a send from an older commit is refused by git however green that commit is.
+- *Waiting inside the send for the run to finish.* The send holds the sync lock, and a typed pull
+  would then wait up to a quarter of an hour behind it for a verdict that does not concern it.
+- *Retrying the reconcile more often.* Once commits land faster than a run finishes, there is no
+  moment at which the head is green to be caught, so no retry interval can work.
+- *Dropping the gate on the watcher's receive.* That is what #221 decided against, and nothing in
+  this case is evidence about the exposure it weighs.
+
 **A commit with no check at all** is not a failure, it is nothing to fail, and it is applied
 (Dan, 2026-09-03). The catch is that "no run yet" and "no run ever" are the same empty answer for
 the first minute of a commit's life, and reading the young one as green would defeat this gate in
