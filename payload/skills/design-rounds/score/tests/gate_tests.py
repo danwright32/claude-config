@@ -307,7 +307,12 @@ for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
             "gh issue close 9 &> log.txt",
             "gh api 2>/dev/null -X PATCH repos/acme/widgets/issues/9 -f state=closed",
             "gh api > out.json -X PATCH repos/acme/widgets/issues/9 -f state=closed",
-            "gh issue close 9 --comment -h"]:
+            "gh issue close 9 --comment -h",
+            # A flag's quoted value that starts like a redirection is that value, never dropped, or
+            # the flag takes the next word, the endpoint, as its value (lessons review of #1406).
+            "gh api -X PATCH -f '>x' repos/acme/widgets/issues/9 -f state=closed",
+            "gh api -X PATCH --field '2>&1' repos/acme/widgets/issues/9 -f state=closed",
+            "gh issue close --comment '>note' 9"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r is judged" % cmd, "below 100%" in reason, out)

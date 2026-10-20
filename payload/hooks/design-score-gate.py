@@ -142,13 +142,18 @@ GH_NOT_PLANNED = "not planned"
 REDIRECT = re.compile(r"^(\d*|&)(>>?|<<?<?|>&|<&|>\|)(.*)$")
 
 
-def _drop_redirects(words):
+def _drop_redirects(words, with_value):
     """The words with every shell redirection taken out: `2>&1`, `>out`, `&> log`, `< in`. The
-    shell reads them, never gh, so none is an issue, an endpoint or a flag's value. An operator
-    standing alone takes the next word, its target, with it. A quoted argument that starts with one
-    is dropped too: that only ever leaves less to read, and reading less refuses."""
+    shell reads them, never gh, so none is an issue or an endpoint. An operator standing alone takes
+    the next word, its target, with it. A flag's value is kept whatever it starts with: the quotes
+    are gone by now, so `-f '>x'` reads like a redirection, and dropping it would hand the flag the
+    next word, the endpoint, as its value (lessons review of #1406)."""
     out, i = [], 0
     while i < len(words):
+        if words[i] in with_value and "=" not in words[i] and i + 1 < len(words):
+            out += words[i:i + 2]
+            i += 2
+            continue
         m = REDIRECT.match(words[i])
         if m:
             i += 1 if m.group(3) else 2
@@ -201,10 +206,10 @@ def targets(command, cwd):
         if found_gh is None:
             continue
         sub, act, front, after = found_gh
-        after = _drop_redirects(list(after))
-        words = _drop_redirects(list(front)) + after
-        if sub in ("issue", "api") and _asks_help(words, ISSUE_FLAGS_WITH_VALUE if sub == "issue"
-                                                  else API_FLAGS_WITH_VALUE):
+        with_value = ISSUE_FLAGS_WITH_VALUE if sub == "issue" else API_FLAGS_WITH_VALUE
+        after = _drop_redirects(list(after), with_value)
+        words = _drop_redirects(list(front), with_value | {"-R", "--repo"}) + after
+        if sub in ("issue", "api") and _asks_help(words, with_value):
             continue          # gh prints its usage and closes nothing
         here = os.path.join(cwd, d) if d and not os.path.isabs(d) else (d or cwd)
         default_repo = _flag_value(words, ["-R", "--repo"]) or os.environ.get("GH_REPO") or remote_slug(here)
