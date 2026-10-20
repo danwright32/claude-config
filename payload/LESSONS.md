@@ -8752,6 +8752,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L793. When a scheduler decides to start a job from readings it took itself, and the job checks the same rule again before acting, hand the job those readings, because a job that re-decides from only its own fresher but thinner evidence refuses what the scheduler approved and the work silently waits for the next fallback.**
+  (project-enrollment-tracker#1758, 2026-10-20)
+  SHORT: A job that rechecks the rule its scheduler applied must receive the scheduler's readings, or it refuses on thinner evidence and waits.
 - **L792. A rule that counts a problem across runs, toward a page or an all clear, must count only the runs that actually checked it, because a subject checked by a slower sweep is absent from the runs between, which read as recovery and flap the page, or break the run of reports so it never pages.**
   (bidspoke#2538, 2026-10-20)
   SHORT: A count toward a page or all clear counts only runs that checked the subject; a slower sweep's gaps read as recovery or break the streak.
