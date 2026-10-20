@@ -392,6 +392,8 @@ def main(argv):
     ap.add_argument("--deadline", type=int, required=True)
     ap.add_argument("--kind", default="push", choices=("push", "pr"))
     ap.add_argument("--base", default="")
+    # A later round of a pull request review that reads only what changed since this head (#1358).
+    ap.add_argument("--since", default="")
     ap.add_argument("--scope-file", default="")
     ap.add_argument("--name", default="")
     ap.add_argument("--started", type=int, required=True)
@@ -411,6 +413,8 @@ def main(argv):
     if a.kind == "pr":
         meta["kind"] = "pr"
         meta["base"] = a.base
+        if a.since:
+            meta["since"] = a.since
         meta["findings"] = ""
 
     status, body = "error", ""
