@@ -485,6 +485,30 @@ out="$(fire_push "git push -u origin feat/sync")"; rc=$?
 check_eq "#1356 a major finding beside a minor one still holds the push" "2" "$rc"
 check "#1356 listing the minor one apart as advisory" "Advisory, minor findings" "$out"
 
+# After three rounds of findings, step back (claude-config#1358): the third push whose review's
+# findings stop it carries, in the push gate's own refusal, the request to step back and reconsider
+# the approach, with the findings and their key as before. Each round here is a real review of a new
+# head, started by the push and waited for, never a hand written file.
+G checkout -q feat/sync
+reset_state
+printf 'func roundOne() {}\n' >> "$REPO/App/Sync.swift"; G commit -q -am "round one"
+out="$(FAKE_SLEEP_WAITS=1 fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#1358 the first push with findings is refused" "2" "$rc"
+check_not "#1358 without asking to step back" "Step back" "$out"
+printf 'func roundTwo() {}\n' >> "$REPO/App/Sync.swift"; G commit -q -am "round two"
+out="$(FAKE_SLEEP_WAITS=1 fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#1358 the second is refused" "2" "$rc"
+check_not "#1358 still without asking to step back" "Step back" "$out"
+printf 'func roundThree() {}\n' >> "$REPO/App/Sync.swift"; G commit -q -am "round three"
+out="$(FAKE_SLEEP_WAITS=1 fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#1358 the third is refused as a round always is" "2" "$rc"
+check "#1358 and the push gate's refusal asks to step back" "Step back: this is round 3 of" "$out"
+check "#1358 to reconsider the approach" "reconsider the approach" "$out"
+pk="$(key_in "$out")"
+[ -n "$pk" ] && ok || bad "#1358 the refusal still names a read key: $out"
+out="$(fire_push "PR_REVIEW_READ=$pk git push -u origin feat/sync")"; rc=$?
+check_eq "#1358 and the key still lets the push through: no new block" "0" "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

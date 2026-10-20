@@ -472,6 +472,14 @@ while :; do
     0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; } ;;
     3) waiting="${waiting:+$waiting, }lessons review still running" ;;
     *) printf '%s\n' "$rev_out"
+       # After three rounds of findings the review asks to step back (claude-config#1358), and this
+       # line asks the same rather than for the one finding at a time fix the review is asking to end.
+       # The words are AR_STEP_BACK_LEAD, defined once in lib/ai-review-common.sh.
+       [ -n "${AR_STEP_BACK_LEAD:-}" ] || . "$MWR_LIB/ai-review-common.sh" 2>/dev/null
+       case "$rev_out" in
+         *"${AR_STEP_BACK_LEAD:-Step back:}"*)
+           stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above), and asks to step back and reconsider the approach: read this round's findings with the earlier rounds' as one group before changing anything, rather than fixing one finding at a time. Then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . Nothing was merged." ;;
+       esac
        stop 1 "Stopped: the lessons review of #$pr at ${head:0:7} refused (above). If it has findings, read them, fix what is real or say why not, then run: PR_REVIEW_READ=<key> $SELF $pr --repo $slug${flags[*]:+ ${flags[*]}} . Nothing was merged." ;;
   esac
 

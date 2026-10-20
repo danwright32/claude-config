@@ -900,6 +900,36 @@ check_eq "#1356 exactly one merge" "1" "$(count gh-calls 'pr merge')"
 check "#1356 the advisory is shown in its log" "App/x.swift:1: the comment says seconds" "$out"
 check_eq "#1356 once" "1" "$(grep -c 'App/x.swift:1: the comment says seconds' <<<"$out")"
 
+# =================================================================================================
+# 15. After three rounds of findings the review asks to step back (claude-config#1358). The helper
+#     shows that refusal in full, and its own stop line asks for the step back too, rather than only
+#     to fix what is real, which is the one finding at a time habit the review is asking to break.
+# =================================================================================================
+STEP='Refusing to merge until these are read: the lessons review of the whole branch repo feat/x at abc1234 finished (2m 01s) with 1 finding.
+    PR_REVIEW_READ=0123abcd <the merge command>
+Step back: this is round 3 of lessons review findings on this pull request. Stop fixing findings one at a time and reconsider the approach.
+App/x.swift:2: the retry loop has no bound (L524). Should be: bound it. [severity: major]'
+cat > "$STUBS/pr-review-step-back.sh" <<EOS
+#!/usr/bin/env bash
+case "\$1" in
+  start) exit 0 ;;
+  check) printf '%s\n' '$STEP'; exit 1 ;;
+esac
+EOS
+chmod +x "$STUBS/pr-review-step-back.sh"
+fresh "$OLD" 0 "$GREEN"
+out="$(MWR_REVIEW_LIB="$STUBS/pr-review-step-back.sh" run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1358 a refusal asking to step back stops the helper" "1" "$rc"
+check "#1358 showing the request in its log" "Step back: this is round 3 of" "$out"
+check "#1358 with the finding" "the retry loop has no bound" "$out"
+check "#1358 and the helper's own stop line asks for the step back" "step back and reconsider the approach" "$(grep 'Stopped:' <<<"$out")"
+check_eq "#1358 nothing merged" "0" "$(count gh-calls 'pr merge')"
+# Control: an ordinary refusal's stop line is as before.
+fresh "$OLD" 0 "$GREEN"
+printf '1\n' > "$ST/review-answers"
+out="$(run 7 --squash)"; rc=$?
+check_not "#1358 control: an ordinary refusal does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

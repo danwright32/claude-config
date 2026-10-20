@@ -311,6 +311,37 @@ out="$(FAKE_FAIL_ONCE="$WORK/fail-once" score run --only invented-retry --repeat
 check "a case with one of its repeats failed says so" "unmeasured: invented-retry (1 of 2 reviews failed: error)" "$out"
 check "and is scored on the review that succeeded" "catch rate: 1 of 2 real defects caught (50%)" "$out"
 
+# --- 10. a review that read only what changed since the last reviewed head (claude-config#1358) ---
+# After three rounds of findings a review's input lists every file of the branch, marks the ones it
+# does not show as read by the earlier reviews, and says it is narrowed. A case taken from such an
+# input is scored like any other, and the check names an item on a file it does not show, since no
+# review of that input could find it there.
+mkdir -p "$WORK/narrow/invented-narrowed"
+{ printf '===== FILES THIS PUSH CHANGED: the complete list, 2 file(s), from 4444444..5555555 =====\n'
+  printf 'A\treport/send.sh\t(changed, shown below)\n'
+  printf 'A\treport/old.sh\t(changed by this branch before 3333333 and not since, so read by the earlier reviews: not shown below)\n'
+  printf '===== END OF FILE LIST =====\n\n'
+  printf '===== THIS REVIEW READS ONLY WHAT CHANGED SINCE 3333333: earlier reviews of this pull request read the whole branch up to 3333333 and returned findings in 3 rounds, so this review is given only the changes made since then, below. =====\n\n'
+  awk 'past { print } /END OF FILE LIST/ { past = 1 }' "$SAMPLE/invented-retry/input.diff"
+} > "$WORK/narrow/invented-narrowed/input.diff"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"] = [i for i in c["items"] if i["id"] == "d1"]
+json.dump(c, open(sys.argv[2], "w"))' "$SAMPLE/invented-retry/case.json" "$WORK/narrow/invented-narrowed/case.json"
+out="$(score check --cases "$WORK/narrow")"; rc=$?
+check_rc "#1358 a case in the narrowed shape checks clean" 0 "$rc"
+rm -f "$FAKE_DIR/answers/"*
+answer narrowed "THIS REVIEW READS ONLY WHAT CHANGED SINCE" "$RETRY_GOOD"
+out="$(score run --all --cases "$WORK/narrow" --results-dir "$WORK/narrow-results")"
+check "#1358 and is scored like any other" "catch rate: 1 of 1 real defects caught (100%)" "$out"
+python3 -c 'import json, sys
+c = json.load(open(sys.argv[1]))
+c["items"].append({"id": "d9", "verdict": "real", "file": "report/old.sh", "line": 2})
+json.dump(c, open(sys.argv[1], "w"))' "$WORK/narrow/invented-narrowed/case.json"
+out="$(score check --cases "$WORK/narrow")"; rc=$?
+check "#1358 an item on a file the narrowed input does not show is named" "report/old.sh" "$out"
+check_rc "#1358 and fails the check" 1 "$rc"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
