@@ -183,6 +183,11 @@ check "--summary names the command that deletes them" "$(has "$OUT" "bash ~/.cla
 check "--summary deletes nothing" \
   "$(missing=""; for n in App-orphan App-orphan-two App-fresh App-building; do [ -d "$ROOT4/$n" ] || missing="$missing $n"; done; [ -z "$missing" ] && echo ok || echo "gone:$missing")"
 
+# A sizing bound of 0 skips the sizing rather than handing perl `alarm 0`, which means no bound.
+OUT="$(XCODE_DERIVED_DATA_ROOT="$ROOT4" DERIVED_DATA_SUMMARY_SECONDS=0 bash "$SWEEP" --summary 2>&1)"
+check "--summary with a sizing bound of 0 counts without sizing, and says so" \
+  "$(has "$OUT" "4 folder(s), not sized (DERIVED_DATA_SUMMARY_SECONDS is 0)")"
+
 ROOT5="$TMP_ROOT/dd-clean"
 mkdir -p "$ROOT5"; mkdir -p "$TMP_ROOT/live-checkout/App.xcodeproj"
 make_folder "$ROOT5" "App-live" "$TMP_ROOT/live-checkout/App.xcodeproj" >/dev/null

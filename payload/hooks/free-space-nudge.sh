@@ -103,7 +103,8 @@ echo "$answer"
 SWEEP="${FREE_SPACE_DERIVED_DATA_SWEEP:-$DIR/derived-data-sweep.sh}"
 SWEEP_SECONDS="${FREE_SPACE_DERIVED_DATA_SECONDS:-6}"
 case "$SWEEP_SECONDS" in ''|*[!0-9]*) SWEEP_SECONDS=6 ;; esac
-if [ -f "$SWEEP" ]; then
+# 0 turns the count off. perl's `alarm 0` would cancel the bound instead, leaving it unbounded.
+if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
   sweep_rc=0
   derived="$(perl -e '
     my $t = shift @ARGV;

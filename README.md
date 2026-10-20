@@ -1816,7 +1816,8 @@ they hold, and names the listing and deleting commands without running either. S
 after `DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size; the
 whole count stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), its process group killed,
 and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout
-(all three are settings, not measurements), so the free space warning itself always arrives. The disk-full skill's step 6 runs the listing.
+(all three are settings, not measurements), so the free space warning itself always arrives. A
+bound of 0 turns that step off (no sizing, or no count) rather than leaving it unbounded. The disk-full skill's step 6 runs the listing.
 
 ## Branches and agent worktrees that already shipped
 

@@ -532,6 +532,16 @@ check "a count that runs past its bound is stopped, and the warning still arrive
   "$(grep -q 'GB free on' <<< "$n_slow" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow")"
 check "and the notice says the count did not finish rather than saying nothing" \
   "$(grep -qF 'did not finish within 1s' <<< "$n_slow" && ! grep -qF 'should never be printed' <<< "$n_slow" && echo ok || echo "said: $n_slow")"
+# Zero turns the count off. Handed to perl's alarm it would mean no bound at all, the opposite of
+# what a zero reads as.
+NS_ZERO="$TMPROOT/ns-zero"; mkdir -p "$NS_ZERO"
+zero_start="$(date +%s)"
+n_zero="$(payload sess-zero | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_ZERO" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=0 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+zero_took=$(( $(date +%s) - zero_start ))
+check "a bound of 0 turns the count off rather than leaving it unbounded" \
+  "$(grep -q 'GB free on' <<< "$n_zero" && [ "$zero_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_zero" && echo ok || echo "took ${zero_took}s, said: $n_zero")"
 n_dd_fine="$(payload sess-dd-fine | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
   FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
 check "a disk with room says nothing about Xcode caches either" \

@@ -44,7 +44,7 @@
 #   DERIVED_DATA_PS                the process list program, default ps (lib/derived-data.sh)
 #   DERIVED_DATA_DF_VOLUME         the volume df measures for --delete (default the data volume)
 #   DERIVED_DATA_SUMMARY_SECONDS   how long --summary may spend sizing, default 4, so the prompt hook
-#                                  carrying it stays inside its 10 second timeout
+#                                  carrying it stays inside its 10 second timeout; 0 skips sizing
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,8 +147,12 @@ if [ "$MODE" = summary ]; then
     echo "No Xcode build cache is orphaned ($checked folder(s) checked)."
     exit 0
   fi
-  total="$(bounded_total_kib "$SUMMARY_SECONDS" "${orphans[@]}")"
-  if [ -n "$total" ]; then
+  # 0 skips the sizing: handed to perl's alarm it would mean no bound at all.
+  total=""
+  [ "$SUMMARY_SECONDS" -gt 0 ] && total="$(bounded_total_kib "$SUMMARY_SECONDS" "${orphans[@]}")"
+  if [ "$SUMMARY_SECONDS" -eq 0 ]; then
+    size_words="not sized (DERIVED_DATA_SUMMARY_SECONDS is 0)"
+  elif [ -n "$total" ]; then
     size_words="about $(human_size "$total") by du, an upper bound on what deleting them frees"
   else
     size_words="sizing them did not finish within ${SUMMARY_SECONDS}s, so how much they hold is not known here"
