@@ -205,7 +205,10 @@ subprocess.run(["git", "-C", work, "remote", "add", "origin", "https://github.co
 
 # 1. Commands that close nothing are let through without a word to GitHub.
 routes()
-for cmd in ["git status", "gh issue view 9", "echo 'gh issue close 9'", "gh pr view 12 --json closingIssuesReferences"]:
+# Asking gh for help closes nothing, a redirection or not (builder finding on #1394).
+for cmd in ["git status", "gh issue view 9", "echo 'gh issue close 9'", "gh pr view 12 --json closingIssuesReferences",
+            "gh issue close --help", "gh issue close --help 2>&1", "gh issue close 9 -h",
+            "gh issue close -h > help.txt", "gh api repos/acme/widgets/issues/9 -X PATCH -f state=closed --help"]:
     rc, reason, out = gate(cmd)
     check("%r is let through" % cmd, rc == 0 and not reason, out)
 check("and GitHub is not asked about any of them", calls() == [], calls())
@@ -294,10 +297,23 @@ for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
             "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed",
             "gh api repos/{owner}/{repo}/issues/9 --method PATCH --field state=closed",
             "gh api repos/acme/widgets/issues/9 -X PATCH --input body.json",
-            "cd /tmp && gh issue close 9 -R acme/widgets"]:
+            "cd /tmp && gh issue close 9 -R acme/widgets",
+            # A redirection is the shell's, never gh's issue or endpoint, and help passed as a
+            # flag's value is that value, not a request for help.
+            "gh issue close 9 2>&1",
+            "gh issue close 9 >/tmp/out.txt 2>&1",
+            "gh issue close 9 > out.txt",
+            "gh issue close 2>/dev/null 9",
+            "gh issue close 9 &> log.txt",
+            "gh api 2>/dev/null -X PATCH repos/acme/widgets/issues/9 -f state=closed",
+            "gh api > out.json -X PATCH repos/acme/widgets/issues/9 -f state=closed",
+            "gh issue close 9 --comment -h"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r is judged" % cmd, "below 100%" in reason, out)
+routes()
+rc, reason, out = gate("gh issue close 2>&1")
+check("a close naming no issue beside a redirection is refused as naming none", "names no issue" in reason, out)
 routes(comments=[comment(NOT_MATCHED)])
 rc, reason, out = gate("gh api repos/acme/widgets/issues/9 -X PATCH -f title=renamed")
 check("editing a Match issue's title is not a close", not reason, out)

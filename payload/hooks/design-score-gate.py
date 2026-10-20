@@ -14,6 +14,9 @@ read, because a gate that knows one spelling is dodged by the next (L247, L450):
   gh pr merge (and merge-when-ready.sh, which asks this gate) of a pull request whose closing
                     keywords name a Match issue    judged at the pull request's head
 
+A shell redirection (`2>&1`, `>out`, `< in`) is the shell's and never read as an issue or an
+endpoint, and a command asking gh for its help (`--help`, `-h`) closes nothing and passes.
+
 Two closes never pass through here: one on GitHub's website, and a closing keyword in a commit pushed
 straight to the default branch. design-score-reopen.py finds those afterwards and reopens them, with
 this file's Gate as its judge (claude-config#1386), so the two cannot disagree about what 100% means.
@@ -136,6 +139,39 @@ def _flag_values(words, names, with_value):
 GH_NOT_PLANNED = "not planned"
 
 
+REDIRECT = re.compile(r"^(\d*|&)(>>?|<<?<?|>&|<&|>\|)(.*)$")
+
+
+def _drop_redirects(words):
+    """The words with every shell redirection taken out: `2>&1`, `>out`, `&> log`, `< in`. The
+    shell reads them, never gh, so none is an issue, an endpoint or a flag's value. An operator
+    standing alone takes the next word, its target, with it. A quoted argument that starts with one
+    is dropped too: that only ever leaves less to read, and reading less refuses."""
+    out, i = [], 0
+    while i < len(words):
+        m = REDIRECT.match(words[i])
+        if m:
+            i += 1 if m.group(3) else 2
+            continue
+        out.append(words[i])
+        i += 1
+    return out
+
+
+def _asks_help(words, with_value):
+    """True when gh is asked for its help (--help or -h as a flag, never as another flag's value),
+    which prints the usage and closes nothing."""
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w == "--":
+            return False
+        if w in ("--help", "-h"):
+            return True
+        i += 2 if (w in with_value and "=" not in w) else 1
+    return False
+
+
 def _positionals(words, with_value):
     out, i = [], 0
     while i < len(words):
@@ -165,7 +201,11 @@ def targets(command, cwd):
         if found_gh is None:
             continue
         sub, act, front, after = found_gh
-        words = list(front) + list(after)
+        after = _drop_redirects(list(after))
+        words = _drop_redirects(list(front)) + after
+        if sub in ("issue", "api") and _asks_help(words, ISSUE_FLAGS_WITH_VALUE if sub == "issue"
+                                                  else API_FLAGS_WITH_VALUE):
+            continue          # gh prints its usage and closes nothing
         here = os.path.join(cwd, d) if d and not os.path.isabs(d) else (d or cwd)
         default_repo = _flag_value(words, ["-R", "--repo"]) or os.environ.get("GH_REPO") or remote_slug(here)
         if sub == "issue" and act in ("close", "delete", "transfer"):
