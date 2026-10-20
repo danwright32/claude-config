@@ -75,7 +75,7 @@ def score_comment(score, at="2026-10-19T20:00:00Z"):
 
 
 def world(comments=None, design=design_bytes, issue_state="closed", commit_id=None, milestone_state="open",
-          ms_closed_at=None):
+          ms_closed_at=None, state_reason=None):
     w = fake_world.World()
     r = w.repo(REPO)
     r.commits = {HEAD: TREE, LATER: LATER_TREE}
@@ -85,6 +85,8 @@ def world(comments=None, design=design_bytes, issue_state="closed", commit_id=No
     r.issues[9] = {"number": 9, "title": "Match the settled design", "state": issue_state,
                    "closed_at": CLOSED_AT if issue_state == "closed" else None, "updated_at": CLOSED_AT,
                    "body": "The last step.\n\n" + sg.mark(sg.ISSUE_MARK, DESIGN), "milestone": {"number": 3}}
+    if state_reason is not None:
+        r.issues[9]["state_reason"] = state_reason
     r.issues[5] = {"number": 5, "title": "Phase 1: the page", "state": "closed", "closed_at": CLOSED_AT,
                    "updated_at": CLOSED_AT, "body": "Builds Requirement 1.", "milestone": {"number": 3}}
     r.comments[9] = list(comments if comments is not None else [score_comment(MATCHED)])
@@ -200,6 +202,39 @@ w.repo(REPO).milestones[3]["description"] = "No design here."
 del w.repo(REPO).issues[9]
 rc, out, _ = run(w)
 check("a milestone with no design is left alone", w.writes() == [], out)
+
+# 8b. Closed as not planned, the design was abandoned, and the close is left alone below 100%
+# (Dan, 2026-10-20, claude-config#1405). Any other reason, or none GitHub gave, is a completed close.
+w = world(comments=[score_comment(BELOW)], state_reason="not_planned")
+rc, out, _ = run(w)
+check("a Match issue closed as not planned below 100% is left closed",
+      rc == 0 and w.repo(REPO).issues[9]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
+check("and the run says it was left as abandoned", "left 1 closed as not planned" in out, out)
+for reason in ("completed", "duplicate", "reopened", ""):
+    w = world(comments=[score_comment(BELOW)], state_reason=reason)
+    rc, out, _ = run(w)
+    check("a Match issue closed below 100%% with the reason %r is reopened" % reason,
+          w.repo(REPO).issues[9]["state"] == "open" and len(posted(w)) == 1, out)
+w = world(comments=[score_comment(BELOW)], state_reason="not_planned", issue_state="closed",
+          milestone_state="closed", ms_closed_at=CLOSED_AT)
+rc, out, _ = run(w)
+check("a design milestone whose Match issue was closed as not planned is left closed below 100%",
+      w.repo(REPO).milestones[3]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
+w = world(comments=[score_comment(BELOW)], state_reason="completed", issue_state="closed",
+          milestone_state="closed", ms_closed_at=CLOSED_AT)
+rc, out, _ = run(w)
+check("a design milestone whose Match issue was closed as completed below 100% is reopened",
+      w.repo(REPO).milestones[3]["state"] == "open", out)
+
+# 8c. An issue that only quotes the mark, documenting it, is not a Match issue (claude-config#1394).
+w = world()
+w.repo(REPO).issues[7] = {"number": 7, "title": "Document the design score mark", "state": "closed",
+                          "closed_at": CLOSED_AT, "updated_at": CLOSED_AT,
+                          "body": "The gate reads `%s`." % sg.mark(sg.ISSUE_MARK, DESIGN)}
+rc, out, _ = run(w)
+check("a closed issue only quoting the mark is left alone, unjudged",
+      rc == 0 and w.writes() == [] and w.repo(REPO).issues[7]["state"] == "closed"
+      and "judged 1 closed Match issues" in out, out)
 
 # 9. A repository that cannot be read is reported, never skipped in silence; the others still run.
 w = world(comments=[score_comment(BELOW)])
