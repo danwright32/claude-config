@@ -89,8 +89,13 @@ offered three shortcuts that did nothing, while the round before it had working 
 python3 ~/.claude/skills/design-rounds/make-switcher.py spec.json switcher.html
 ```
 
-The spec names the round, the builder, and the options. Run the script with no
-arguments for the exact shape, and see `example/` for a working one.
+The spec names the round, the builder, the options, and the product's captured `chrome`
+(below, "No stand ins"), with the round's `fixture` when it has one. Run the script with no
+arguments for the exact shape, and see `example/` for a working one. A spec naming no
+captured chrome is refused, writing nothing, unless it asks for the shared terminal screen.
+Each option is then the captured page with the round drawn into its slot, in an iframe of
+its own at the width it was captured at, every option kept in the stage so switching never
+reloads one, and a key pressed inside an option still switches.
 
 **A round's files go in this session's scratchpad**, under `<issue number>/round<N>/`: the
 builder, the stylesheet, the spec, the switcher and its picker file. They are working files for
@@ -418,7 +423,7 @@ on the local machine, never in a deployment).
 
 - **Web**: `node ~/.claude/skills/design-rounds/score/capture-web.mjs --design <settled.html> --build
   <the page's local URL> --out <capture folder> [--fixture <fixture.json>] [--storage <signed in
-  state.json>]`, run from the app's checkout, whose own Playwright it uses. It asks the settled file
+  state.json>]`, run from the app's checkout. It asks the settled file
   for each frame's whole document (`designFrameDocument(<id>)`, which the settled file gives) and
   draws it as a page of its own, and opens the app's page with `?frame=<id>`, each at the frame's
   width, screenshots both in one Chrome with deterministic rasterisation, runs the
@@ -435,6 +440,42 @@ on the local machine, never in a deployment).
   Measured 2026-10-19: a SwiftUI view of two colour bands matched Chrome's drawing of the same HTML
   at 100%, and the same view 15 levels off did not. Swift checks cannot run on the HTML design, so a
   SwiftUI score says its checks have no positive control.
+
+**Which Playwright draws.** `capture-web.mjs` uses, in order: the app's own (resolved from its
+checkout, as Slate has), the package `DESIGN_SCORE_PLAYWRIGHT` names (one naming nothing is refused),
+then the one shared install on this Mac. With none it exits 2 naming the install command, so the
+design side is never skipped. The capture records which one drew. The Mac apps have no
+`node_modules`, so they use the shared install (Dan, 2026-10-20: one per Mac, outside the app
+repositories):
+
+```bash
+bash ~/.claude/skills/design-rounds/score/install-playwright.sh
+```
+
+It installs the Playwright version `score/shared-playwright.json` pins, and its headless Chromium,
+under `~/.local/share/design-score/playwright` (outside `~/.claude`, so the sync never carries it),
+never prompts, installs nothing when it is already usable, and prints the path to export. About 216 MB
+installed, plus npm's 38 MB download cache, measured 2026-10-20. `--check` says whether it is usable
+and installs nothing.
+
+**A copy for an app's CI.** An app whose CI should run the score (Slate, Dan 2026-10-20) keeps the
+tools in its own repository, since its CI has no `~/.claude`:
+
+```bash
+python3 ~/.claude/skills/design-rounds/score/vendor-score.py copy <app folder for the copy>
+python3 <app folder for the copy>/vendor-score.py check <app folder for the copy>
+```
+
+`copy` writes the score's files flat in one folder (`capture-web.mjs`, `design_score.py` and its
+helpers, `design_file.py`, the shared Playwright's settings and `vendor-score.py` itself) and
+`vendor-manifest.json`, each file's hash as claude-config had it. `check` compares the folder with its
+manifest everywhere, CI included, which catches a hand edit, a missing file or a stranger in the
+folder; and, wherever claude-config's copy is on disk (`~/.claude`, or `--against <score folder>`),
+with that too, which catches claude-config having moved on. In CI it says it did not compare with
+claude-config rather than claiming to. Exit 0 matches, 1 drift (each file named, and the command that
+refreshes the copy), 2 could not check. CI never fetches claude-config to compare, since every change
+to the score here would then fail the app's next unrelated pull request; refreshing is a deliberate
+change made on a Mac.
 
 **Done is 100%, and a hook holds it.** Every pull request in a design milestone posts the current
 score, on itself and on the milestone's "Match the settled design" issue:

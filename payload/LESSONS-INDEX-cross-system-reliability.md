@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L792. A count toward a page or all clear counts only runs that checked the subject; a slower sweep's gaps read as recovery or break the streak.
 - L789. A job gated with always() to tolerate a skipped predecessor also tolerates a failed one, so refuse a failed or cancelled predecessor by name.
 - L788. A check reading another system's status must wait out its lag on a readable not finished or not listed, refusing at once only on a real failure.
 - L787. A sync skipping records you wrote elsewhere must still compare them to your copy, or a person editing them there drifts the two silently.
