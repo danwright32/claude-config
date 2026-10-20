@@ -38,9 +38,16 @@ EOF
 chmod +x "$WORK/bin/gh"
 export PATH="$WORK/bin:$PATH"
 
-NOW="$(date +%s)000"
+# The clock is read ONCE, and everything the night is judged by comes from that one reading. The
+# report counts an issue as closed tonight only up to NOW, so a closedAt taken from a second read
+# of the clock fell a second past the night's end whenever the second ticked between the two, which
+# load makes likely (#1391: 9 of 96 runs failed with 24 copies at once). test-sleep-claim-notes-clock.sh
+# runs this suite on a clock that moves a second on every read, so a second read cannot creep back.
+NOW_S="$(date +%s)"
+NOW="${NOW_S}000"
 export SLEEP_NOW_MS="$NOW"
-printf '[{"number":21,"title":"Issue 21","closedAt":"%s","stateReason":"COMPLETED"}]' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$WORK/closed.json"
+closed_at="$(python3 -c 'import sys, time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(sys.argv[1]))))' "$NOW_S")"
+printf '[{"number":21,"title":"Issue 21","closedAt":"%s","stateReason":"COMPLETED"}]' "$closed_at" > "$WORK/closed.json"
 export SLEEP_REPORT_NOW_MS="$NOW"
 
 git -c init.defaultBranch=main init -q "$WORK/repo"
