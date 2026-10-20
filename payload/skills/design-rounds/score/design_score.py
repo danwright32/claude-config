@@ -406,6 +406,14 @@ def score_capture(folder):
                               % (fid, side, json.dumps(r)[:120]))
                     continue
                 did = r["id"]
+                where = "design" if side == "designChecks" else "built"
+                if did not in by_id and r.get("threw"):
+                    # The adapter's one entry for checks it could not load into the page at all (a
+                    # page whose policy refused them, #1411): said as itself, never as the map and the
+                    # checks disagreeing (L11).
+                    no.append("frame %s: nothing was checked on the %s side: %s"
+                              % (fid, where, str(r.get("detail") or "no detail")))
+                    continue
                 if did not in by_id:
                     no.append("frame %s: a check is for %s, which the decision map does not hold; the checks and "
                               "the map disagree about what was decided" % (fid, did))
@@ -415,7 +423,7 @@ def score_capture(folder):
                 detail = str(r.get("detail") or "")
                 if r.get("threw"):
                     no.append("frame %s: the check for %s threw (%s) on the %s side, so it measured nothing"
-                              % (fid, did, detail or "no detail", "design" if side == "designChecks" else "built"))
+                              % (fid, did, detail or "no detail", where))
                     continue
                 if side == "designChecks":
                     if not r["ok"]:

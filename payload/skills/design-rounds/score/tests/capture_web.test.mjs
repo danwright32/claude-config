@@ -27,7 +27,9 @@ function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverR
       },
       setContent: async (doc) => { me.content = doc; },
       mouse: { move: async () => {} },
-      evaluate: async (_fn, arg) => {
+      evaluate: async (fn, arg) => {
+        // The checks file, evaluated as source; a script tag is refused, as a strict policy refuses it.
+        if (typeof fn === "string") { me.scripts.push(fn); return undefined; }
         if (arg && typeof arg === "object" && "frame" in arg) {
           return checks ? checks(arg.frame, me.content !== null ? "design" : "built") : [];
         }
@@ -41,7 +43,7 @@ function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverR
         if (neverReady) throw Object.assign(new Error(`Timeout ${opts && opts.timeout}ms exceeded waiting for ${selector}`), { name: "TimeoutError" });
       },
       screenshot: async (opts) => { me.shots.push(opts); me.steps.push("shot"); return PNG; },
-      addScriptTag: async (s) => { me.scripts.push(s.content); },
+      addScriptTag: async () => { throw new Error("page.addScriptTag: Executing inline script violates the following Content Security Policy directive 'script-src 'self''"); },
       addStyleTag: async () => {},
       setViewportSize: async (v) => { me.viewport = v; },
       close: async () => { me.closed = true; },
@@ -201,11 +203,27 @@ test("design only draws the design's side and leaves the build to the platform's
 });
 
 test("a checks file that cannot be run is one result that threw, never an empty pass", async () => {
-  const page = { addScriptTag: async () => { throw new Error("SyntaxError: Unexpected token"); } };
+  const page = { evaluate: async () => { throw new Error("SyntaxError: Unexpected token"); } };
   const r = await runChecks(page, "window.DESIGN_CHECKS = [", "f1", null);
   assert.equal(r.length, 1);
   assert.equal(r[0].threw, true);
   assert.match(r[0].detail, /could not be run/);
+});
+
+test("the checks load on a page whose policy refuses inline scripts, never through a script tag (#1411)", async () => {
+  const loaded = [];
+  const page = {
+    addScriptTag: async () => { throw new Error("Executing inline script violates the following Content Security Policy directive 'script-src 'self''"); },
+    evaluate: async (fn, arg) => {
+      if (typeof fn === "string") { loaded.push(fn); return undefined; }
+      return [{ id: "D1", ok: true, detail: "", frame: arg.frame }];
+    },
+  };
+  const r = await runChecks(page, "window.DESIGN_CHECKS = [] // a last line comment", "f1", null);
+  assert.deepEqual(r, [{ id: "D1", ok: true, detail: "", frame: "f1" }]);
+  assert.equal(loaded.length, 1);
+  // Evaluated as the file's own source, so its last line comment cannot swallow anything added after it.
+  assert.ok(loaded[0].startsWith("window.DESIGN_CHECKS = [] // a last line comment\n"));
 });
 
 // --- which Playwright draws the design (claude-config#1385) ------------------------------------------
