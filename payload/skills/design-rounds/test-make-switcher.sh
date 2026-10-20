@@ -1548,6 +1548,7 @@ harness = """
 setTimeout(function () {
   var heads = [document.querySelector(".dr-readout h2").textContent];
   var frames = document.querySelectorAll("#dr-stage iframe");
+  var firstHeight = frames[0].getBoundingClientRect().height;
   var slots = Array.prototype.map.call(frames, function (f) {
     var slot = f.contentDocument && f.contentDocument.getElementById("main");
     return (getComputedStyle(f).display === "none" ? "hidden:" : "shown:") + (slot ? slot.textContent : "none");
@@ -1556,6 +1557,7 @@ setTimeout(function () {
   setTimeout(function () {
     heads.push(document.querySelector(".dr-readout h2").textContent);
     heads.push(frames[1].getBoundingClientRect().height > 20 ? "tall" : "flat:" + frames[1].style.height);
+    heads.push(firstHeight > 20 && firstHeight < 300 ? "fitted" : "unfitted:" + firstHeight);
     var strips = Array.prototype.map.call(document.querySelectorAll(".dr-sameness"), function (p) { return p.textContent; });
     var out = document.createElement("pre"); out.id = "PROBE";
     out.textContent = heads.join(",") + "|" + slots.join(",") + "|" + strips.join(" / ");
@@ -1576,7 +1578,7 @@ if [[ ! -x "$CHROME" ]]; then
 else
   got="$(chrome_probe "$NS/out.html")"
   check_eq "every option is drawn into the captured page's slot, one shown, and a key pressed inside it switches" \
-    "Espresso,Ink,tall|shown:Espresso,hidden:Ink|" "$got"
+    "Espresso,Ink,tall,fitted|shown:Espresso,hidden:Ink|" "$got"
   printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = "same"; return d; }\n' > "$NS/builder.js"
   run "$NS/spec.json" "$NS/same.html" >/dev/null
   got="$(chrome_probe "$NS/same.html")"
@@ -1610,6 +1612,26 @@ spec "$NS/bad-fixture-spec.json" "$TWO" '{"fixture": "bad-fixture.json", "chrome
 out="$(run "$NS/bad-fixture-spec.json" "$NS/bad-fixture.html")"; rc=$?
 check_eq "a round fixture that is not JSON is refused" "2" "$rc"
 check "and named" "bad-fixture.json is not JSON" "$out"
+
+# The committed example draws in its product's captured chrome: the header is the product's, and the
+# rows come from the example's fixture (claude-config#1364).
+check "the example names a captured chrome" '"captured": "chrome.html"' "$(cat "$DIR/example/spec.json")"
+if [[ -x "$CHROME" ]]; then
+  python3 - "$DIR/example/switcher.html" "$TMP/example-probe.html" <<'PY'
+import sys
+page = open(sys.argv[1]).read()
+probe = """<script>setTimeout(function () {
+  var out = Array.prototype.map.call(document.querySelectorAll("#dr-stage iframe"), function (f) {
+    var d = f.contentDocument; return d.querySelector("header").textContent + ":" + d.querySelectorAll("#main .row").length;
+  });
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join(","); document.body.append(pre);
+}, 800);</script>"""
+open(sys.argv[2], "w").write(page.replace("</body>", probe + "</body>"))
+PY
+  ex="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 --dump-dom "file://$TMP/example-probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")')"
+  check_eq "the committed example draws its fixture's four rows inside the captured header, in both options" "Invoices:4,Invoices:4" "$ex"
+fi
 
 # --- the committed terminal example is what the tool produces today ---
 
