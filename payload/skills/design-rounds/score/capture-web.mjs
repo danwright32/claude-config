@@ -192,7 +192,10 @@ export async function capture(o, browser, frames, deps = {}) {
       // Its content, never its loading placeholder: waited on as a condition, not a time (L290).
       if (!err && o.ready) {
         err = await bpage.waitForSelector(o.ready, { timeout: READY_TIMEOUT_MS }).then(() => null,
-          () => `the page never showed ${o.ready} within ${Math.round(READY_TIMEOUT_MS / 1000)}s`);
+          (e) => e && e.name === "TimeoutError"
+            ? `the page never showed ${o.ready} within ${Math.round(READY_TIMEOUT_MS / 1000)}s`
+            // A bad selector or a page that crashed is said as itself, never as a slow page (L11).
+            : `waiting for ${o.ready} failed: ${String(e).split("\n")[0]}`);
       }
       if (err) {
         row.builtError = err;

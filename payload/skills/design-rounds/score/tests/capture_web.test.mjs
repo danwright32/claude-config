@@ -37,7 +37,8 @@ function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverR
       waitForSelector: async (selector, opts) => {
         me.waited.push([selector, opts && opts.timeout]);
         me.steps.push("ready");
-        if (neverReady) throw new Error(`Timeout ${opts && opts.timeout}ms exceeded waiting for ${selector}`);
+        if (neverReady === "crash") throw new Error("Target page, context or browser has been closed");
+        if (neverReady) throw Object.assign(new Error(`Timeout ${opts && opts.timeout}ms exceeded waiting for ${selector}`), { name: "TimeoutError" });
       },
       screenshot: async (opts) => { me.shots.push(opts); me.steps.push("shot"); return PNG; },
       addScriptTag: async (s) => { me.scripts.push(s.content); },
@@ -147,6 +148,15 @@ test("a built page that never shows its --ready content is recorded by frame as 
   }
   assert.deepEqual(drawn(b)[1].shots, [], "no picture of a page that is not there yet");
   assert.ok(!existsSync(join(dir, "cap", "f1-built.png")));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a wait for --ready that fails for another reason says that reason, never that the page was slow", async () => {
+  const dir = setup();
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap"), ready: "main [data-tc]" },
+    fakeBrowser({ neverReady: "crash" }), FRAMES, { gitState: GIT });
+  assert.match(cap.frames[0].builtError, /waiting for main \[data-tc\] failed: .*has been closed/);
+  assert.doesNotMatch(cap.frames[0].builtError, /never showed/);
   rmSync(dir, { recursive: true, force: true });
 });
 
