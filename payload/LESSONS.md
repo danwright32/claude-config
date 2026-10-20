@@ -8752,6 +8752,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L792. A rule that counts a problem across runs, toward a page or an all clear, must count only the runs that actually checked it, because a subject checked by a slower sweep is absent from the runs between, which read as recovery and flap the page, or break the run of reports so it never pages.**
+  (bidspoke#2538, 2026-10-20)
+  SHORT: A count toward a page or all clear counts only runs that checked the subject; a slower sweep's gaps read as recovery or break the streak.
 - **L789. A pipeline job that must follow another but tolerate it being skipped is gated with always(), which also tolerates the other one FAILING, so its condition must refuse a failed or cancelled predecessor by name, or a later step ships against an earlier one that never landed.**
   (Try-Pennie/bidspoke#2510, 2026-10-19)
   SHORT: A job gated with always() to tolerate a skipped predecessor also tolerates a failed one, so refuse a failed or cancelled predecessor by name.
