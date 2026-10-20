@@ -397,6 +397,12 @@ def score_capture(folder):
         s["notes"].append("checks not run against the design on %s, so they have no positive control"
                           % ", ".join(sorted(control_missing)))
 
+    for d in decisions:
+        shown = d.get("frames")
+        if shown is not None and (not isinstance(shown, list) or any(f not in declared for f in shown)):
+            no.append("%s says it shows on the frames %s, and the design declares %s"
+                      % (d["id"], json.dumps(shown), ", ".join(declared)))
+
     rows = []
     met = of = 0
     for d in decisions:
@@ -426,9 +432,16 @@ def score_capture(folder):
             got = results.get(did, [])
             row["frames"] = [g[0] for g in got]
             fails = [g for g in got if not g[1]]
+            # The frames the map says it shows on, each needing its check (a frame Dan excepted aside),
+            # so a check run on one frame never stands for the others (the settled design, #1364).
+            unchecked_on = [f for f in (d.get("frames") or [])
+                            if f not in row["frames"] and f not in excepted_frames]
             if not got:
                 row["status"] = "unchecked"
                 row["detail"] = "no check ran for it on any frame"
+            elif unchecked_on:
+                row["status"] = "unchecked"
+                row["detail"] = "no check ran for it on %s, where the map says it shows" % ", ".join(unchecked_on)
             elif fails:
                 row["status"] = "unmet"
                 row["detail"] = "; ".join("%s: %s" % (g[0], g[2] or "failed") for g in fails)

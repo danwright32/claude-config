@@ -1938,7 +1938,22 @@ app's UI test target: after `capture-web.mjs --design-only` draws the design's s
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
 `test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
 Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
-purpose (about 24 seconds, 2026-10-19); elsewhere those two say UNMEASURED.
+purpose; elsewhere those two say UNMEASURED. It also runs the whole
+chain: a settled file `make-settled.py` wrote, against an app drawing the same fixture in the same
+chrome, at 100%, and failing the decision when the app's heading changes. All of it took 27 seconds
+on this Mac on 2026-10-20.
+
+**The settled design is written, never assembled** (`payload/skills/design-rounds/make-settled.py`).
+From the round's builder, the product's captured chrome (`capture-chrome.js` saves a page with its
+stylesheets, fonts and images inlined and its scripts removed; a native app's is a screenshot),
+the committed fixture, the frames, the decisions and Dan's exceptions, it writes the one file the
+build is scored against: each frame drawn in the real chrome, `designFrameDocument(<id>)` for the
+adapters, and the decision map, frames and exceptions blocks. It refuses a chrome that was not
+captured (Dan, 2026-10-19: "No stand ins"), a checked decision with no sentence saying what the check
+asserts or no frames it shows on, a decision with no owner, and an exception without Dan's words, a
+date and where he said them. The score counts a decision as met only once its check has run on every
+frame the map says it shows on. `test-make-settled.sh` holds both, reading the file in Chrome where
+there is one.
 
 ## Mods
 

@@ -345,6 +345,39 @@ rc, out, data = score(make("unchecked", add_unchecked))
 check("a decision in the map with no check counts against the score", rc == 1 and "decisions  2 of 3 met" in out, out)
 check("and is named as having no check", "UNCHECKED D3" in out, out)
 
+# 5b. A decision the map says shows on several frames is checked on every one of them, or it is not
+# met: a check run on one frame of the two would otherwise stand for both (#1364, the settled design).
+def shown_on_both(s):
+    s["map"]["decisions"][1]["frames"] = ["f1", "f2"]
+
+
+rc, out, data = score(make("frames-missing", shown_on_both))
+check("a decision checked on only one of the frames the map names is not met", rc == 1 and "decisions  1 of 2 met" in out, out)
+check("and names the frame its check did not run on", "UNCHECKED D2" in out and "f2" in out, out)
+
+
+def shown_and_checked(s):
+    shown_on_both(s)
+    s["capture"]["frames"][1]["checks"].append({"id": "D2", "ok": True, "detail": ""})
+    s["capture"]["frames"][1]["designChecks"].append({"id": "D2", "ok": True, "detail": ""})
+
+
+rc, out, data = score(make("frames-all", shown_and_checked))
+check("checked on every frame the map names, it is met", rc == 0, out)
+
+
+def shown_but_frame_excepted(s):
+    shown_on_both(s)
+    s["images"]["f2"] = (rgba_image(FW, FH, DARK), (FW, FH), rgba_image(FW, FH, LIGHT), (FW, FH))
+    s["exceptions"] = {"exceptions": [{"id": "X1", "frame": "f2", "words": "the dark frame can wait", "date": "2026-10-19",
+                                       "source": "https://github.com/Try-Pennie/slate/issues/3941#issuecomment-2"}]}
+
+
+rc, out, data = score(make("frames-excepted", shown_but_frame_excepted))
+check("a frame Dan excepted is not asked for a check", rc == 0, out)
+rc, out, _ = score(make("frames-unknown", lambda s: s["map"]["decisions"][0].__setitem__("frames", ["f1", "f7"])))
+check("a decision naming a frame the design does not declare is no score", rc == 2 and "f7" in out, out)
+
 # 6. A decision too visual for a check rests on the picture half; one proven elsewhere says where.
 def add_verify(s):
     s["map"]["decisions"].append({"id": "D3", "decision": "The bars are sky", "requirement": "5", "verify": "picture"})

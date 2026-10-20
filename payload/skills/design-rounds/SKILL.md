@@ -273,10 +273,65 @@ Ask it exactly like this, one question in one AskUserQuestion call:
   design is settled only once he has seen that round, never straight away.
 - Then write the deliverable below. Look changing edits on that issue now go through.
 
+## No stand ins: draw inside the product's real chrome
+
+Dan, 2026-10-19: "No stand ins." A round draws the product's real header, sidebar and controls
+(selects, inputs, buttons as they ship), never a copy drawn by hand beside the part being decided,
+so nothing in a round is masked and the settled design can be scored against the build pixel for
+pixel. A hand drawn copy drifts from the product, and a design that differs from the product
+outside the part being decided can never reach 100%.
+
+So capture the chrome before round one, in the main session (a subagent never drives the browser):
+open the product's page at the width the round is drawn at, signed in as the person the screen is
+for, and run `capture-chrome.js` (beside this skill) with Playwright's `browser_evaluate`. It answers
+with the page as one self contained document, every stylesheet, font and image inlined and every
+script taken out, and names anything it could not inline in its first comment. Save it beside the
+round as `chrome.html`. A native app's chrome is a screenshot of its real window, `chrome.png`. Name
+it in the spec, with where it came from and where the round draws:
+
+```json
+"chrome": {"captured": "chrome.html", "from": "<the URL, who was signed in, the date>",
+           "slot": "#main", "width": 1280}
+```
+
+(for a picture, `"slot": [x, y, width, height]` in its pixels). The round's builder then draws only
+what goes in the slot, with the product's own classes and controls. A round about a Claude Code mod
+asks for `"screen": "terminal"` instead, the terminal that ships with the tool.
+
 ## The deliverable
 
 The settled design is ONE self contained file committed in the repo: no build step, no
-hosted URL, fonts and assets embedded so it renders identically with no network.
+hosted URL, fonts and assets embedded so it renders identically with no network. It is
+WRITTEN by `make-settled.py` from the round's own builder, the captured chrome and the
+committed fixture, never assembled by hand from the switcher:
+
+```bash
+python3 ~/.claude/skills/design-rounds/make-settled.py settled.json docs/design/<name>.html
+```
+
+`settled.json` names the chrome, builder, styles and fixture as the rounds did, then every frame
+(`id`, `title`, `width`, an optional fixed `height`, and the `variant` its builder is handed), every
+decision, and Dan's exceptions; `make-settled.py` run with no arguments prints the shape. The fixture
+is the data the frames are drawn from, committed in the app's repository, and the built page renders
+the same file in a development only preview, so both sides of the score draw the same data. Each
+decision is written so its check can be authored from it: what it is, why, its owner (`requirement`
+or `noCode`), how it is verified (`"verify": "check"`, the default, with `"check"`, the one sentence
+the check asserts, and `"frames"`, every frame it shows on; or `"picture"`; or `"elsewhere"` with
+`"provenBy"`). The file gives `designFrameDocument(<id>)`, each frame's whole document, which the
+score's web adapter draws as a page of its own. It refuses, writing nothing, a chrome that was not
+captured, a frame with no width or variant, a checked decision with no check sentence or no frame, a
+decision on a frame the design does not hold, a decision with no owner, and an exception without
+Dan's words, a date and where he said them.
+
+The checks themselves go beside the file as `<name>.checks.js`, one per checked decision, written
+from those sentences (the score's adapters section below says what a check reads).
+
+**Exceptions live in the file, in Dan's words.** When a difference between the build and the design
+is one Dan means to keep, ask him with a picker whether to settle it with a new round or as an
+exception. Only on his choice of an exception, add it to `settled.json`'s `exceptions`: the decision,
+the frame or the region of a frame it covers, his words quoted exactly, the date, and where he said
+them (the issue comment, or this session's link), then write the file again. The score skips it and
+lists it every time; nothing else excuses a difference.
 
 1. Its decision record lives inside it, each decision with its reason.
 2. **Strip the switcher out of it.** The committed file is the design, not the chooser it
