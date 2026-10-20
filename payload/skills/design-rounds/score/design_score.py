@@ -3,6 +3,7 @@
 
     python3 design_score.py score <capture folder>     score a capture, write score.json, print it
     python3 design_score.py show <score.json>          print a score file, after checking it holds
+    python3 design_score.py frames <settled design>    the frames it declares, as JSON, for an adapter
     python3 design_score.py post <score.json> --repo <owner/name> --pr <number>
                                                        post it on the pull request and on its
                                                        milestone's Match the settled design issue
@@ -113,8 +114,9 @@ def _load_json(path, what):
         raise Unreadable("%s %s is not JSON (%s)" % (what, path, err))
 
 
-def read_design(path):
-    """The design's decision map, frames and exceptions, each checked for shape."""
+def read_design(path, frames_only=False):
+    """The design's decision map, frames and exceptions, each checked for shape; with frames_only,
+    the frames alone."""
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
@@ -137,19 +139,6 @@ def read_design(path):
         except ValueError as err:
             raise Unreadable("the %s block in %s is not JSON (%s)" % (block_id, path, err))
 
-    dmap = one("decision-map", True)
-    decisions = dmap.get("decisions") if isinstance(dmap, dict) else None
-    if not isinstance(decisions, list) or not decisions:
-        raise Unreadable("the decision-map block in %s lists no decisions" % path)
-    seen = set()
-    for n, d in enumerate(decisions, 1):
-        did = d.get("id") if isinstance(d, dict) else None
-        if not isinstance(did, str) or not did.strip():
-            raise Unreadable("decision %d in the decision-map block has no id" % n)
-        if did in seen:
-            raise Unreadable("two decisions in the decision-map block share the id %s" % did)
-        seen.add(did)
-
     fblock = one("design-frames", True)
     frames = fblock.get("frames") if isinstance(fblock, dict) else None
     if not isinstance(frames, list) or not frames:
@@ -168,6 +157,24 @@ def read_design(path):
         h = f.get("height")
         if h is not None and (not isinstance(h, int) or isinstance(h, bool) or h <= 0):
             raise Unreadable("frame %s in the design-frames block has a height that is not a number of pixels" % fid)
+
+    # An adapter asks for the frames alone (`frames`), and a design whose map is still being written
+    # can already be drawn.
+    if frames_only:
+        return raw, None, frames, None
+
+    dmap = one("decision-map", True)
+    decisions = dmap.get("decisions") if isinstance(dmap, dict) else None
+    if not isinstance(decisions, list) or not decisions:
+        raise Unreadable("the decision-map block in %s lists no decisions" % path)
+    seen = set()
+    for n, d in enumerate(decisions, 1):
+        did = d.get("id") if isinstance(d, dict) else None
+        if not isinstance(did, str) or not did.strip():
+            raise Unreadable("decision %d in the decision-map block has no id" % n)
+        if did in seen:
+            raise Unreadable("two decisions in the decision-map block share the id %s" % did)
+        seen.add(did)
 
     eblock = one("design-exceptions", False)
     exceptions = []
@@ -603,7 +610,7 @@ def main(argv):
 
 
 USAGE = ("usage: design_score.py score <capture folder> | show <score.json> | "
-         "post <score.json> --repo <owner/name> --pr <number>")
+         "post <score.json> --repo <owner/name> --pr <number> | frames <settled design>")
 
 
 def post(score_path, repo, pr):
@@ -668,6 +675,16 @@ def post(score_path, repo, pr):
 def _main(argv):
     if len(argv) == 7 and argv[1] == "post" and argv[3] == "--repo" and argv[5] == "--pr":
         return post(argv[2], argv[4], argv[6])
+    if len(argv) == 3 and argv[1] == "frames":
+        # The frames a platform adapter draws, read by this one reader so the adapters and the score
+        # never disagree about which frames a design has or how wide each is (claude-config#1364).
+        try:
+            _raw, _decisions, frames, _exceptions = read_design(argv[2], frames_only=True)
+        except Unreadable as err:
+            print("design-score: could not read the frames: %s" % err)
+            return 2
+        print(json.dumps({"frames": frames}))
+        return 0
     if len(argv) != 3 or argv[1] not in ("score", "show"):
         print(__doc__.strip().split("\n\n")[0])
         print(USAGE)

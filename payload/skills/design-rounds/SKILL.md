@@ -356,6 +356,31 @@ the build), or nothing left to measure. Unmeasured is never 100%. The capture's 
 of `design_score.py`. It reads PNGs with the standard library alone, so it runs the same on both Macs
 and on CI: two 1280 by 2000 frames scored in about 7 seconds on 2026-10-19.
 
+**The two adapters.** Both draw the same data on both sides: the design's fixture, committed in the
+app's repository, which the settled file's frames are drawn from and which the app renders in a
+development only preview (Slate's `?frame=` route on the page itself, honoured only under a dev flag
+on the local machine, never in a deployment).
+
+- **Web**: `node ~/.claude/skills/design-rounds/score/capture-web.mjs --design <settled.html> --build
+  <the page's local URL> --out <capture folder> [--fixture <fixture.json>] [--storage <signed in
+  state.json>]`, run from the app's checkout, whose own Playwright it uses. It asks the settled file
+  for each frame's whole document (`designFrameDocument(<id>)`, which the settled file gives) and
+  draws it as a page of its own, and opens the app's page with `?frame=<id>`, each at the frame's
+  width, screenshots both in one Chrome with deterministic rasterisation, runs the
+  decision checks on both, writes the capture and scores it. The checks are `<design>.checks.js`
+  beside the design: `window.DESIGN_CHECKS = [{id, frames, check(doc, ctx) -> {ok, detail}}]`, one
+  per decision verified by a check, reading only what both sides share (text, roles, data
+  attributes, computed colours), never a styling class. `--perturb '<css>'` changes the built side on
+  purpose, the negative control.
+- **SwiftUI**: `node capture-web.mjs --design <settled.html> --out <folder> --design-only` draws the
+  design's side; then a snapshot test in the app's UI test target, using
+  `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (copied into that target), renders the
+  real view for each frame from the fixture at the frame's size, scale 1, in sRGB, with its decision
+  checks written in Swift, and fills in the same capture; `design_score.py score <folder>` scores it.
+  Measured 2026-10-19: a SwiftUI view of two colour bands matched Chrome's drawing of the same HTML
+  at 100%, and the same view 15 levels off did not. Swift checks cannot run on the HTML design, so a
+  SwiftUI score says its checks have no positive control.
+
 **Done is 100%, and a hook holds it.** Every pull request in a design milestone posts the current
 score, on itself and on the milestone's "Match the settled design" issue:
 
