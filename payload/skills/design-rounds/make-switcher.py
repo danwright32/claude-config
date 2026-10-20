@@ -585,7 +585,7 @@ function buildScreen(variant) {
 /* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
    again each time it is shown: the page calls screenShown after every switch, as it does for any
    builder, and the frame's own load calls it too. */
-function screenShown(variant, frame) {
+function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
   var doc = frame.contentDocument;
   if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = doc.documentElement.scrollHeight + "px";
 }
