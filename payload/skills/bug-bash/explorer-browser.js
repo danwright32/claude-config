@@ -30,21 +30,65 @@ const isRead = method => READS.has(String(method).toUpperCase())
 
 const HEALTH = '/__bug-bash-proxy__/health'
 const MARK = 'bug-bash-read-only'
+
+// Errors that say THIS MAC could not open a connection (out of local ports, as on 2026-10-19 at a
+// load average of 71, or out of file handles), not that nothing listens there (#1370). A refused
+// connection (ECONNREFUSED) is not one of them: that is a proxy that is not up.
+const LOCAL_CONNECT_ERRORS = new Set(['EADDRNOTAVAIL', 'EADDRINUSE', 'EMFILE', 'ENFILE', 'ENOBUFS', 'EAGAIN'])
+/** Whether a connection error came from this Mac's own shortage rather than from the far end. */
+const isLocalConnectError = e => !!e && LOCAL_CONNECT_ERRORS.has(e.code)
+// A local shortage often clears in a moment, so a check meeting one is tried again after each of
+// these waits before it gives up. The wait goes through module.exports.sleep, which the tests
+// replace so they never wait for real (L524).
+const RETRY_DELAYS_MS = [100, 400, 1600]
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+async function retryLocal(attempt) {
+  for (let i = 0; ; i++) {
+    try {
+      return await attempt()
+    } catch (e) {
+      if (!e.local || i >= RETRY_DELAYS_MS.length) throw e
+      await module.exports.sleep(RETRY_DELAYS_MS[i])
+    }
+  }
+}
+// The refusal for a check this Mac could not make: marked local, so a caller tells it apart from a
+// proxy that is missing, and worded so nobody is sent to start a proxy that may well be running.
+const localError = (proxy, e) =>
+  Object.assign(
+    new Error(`explorer-browser: could not check the read only proxy at ${proxy}: this Mac could not open a connection to it (${e.message}), so whether it is up was not judged. The Mac is out of local ports or file handles, usually from many test runs at once; try again when it is less busy, without restarting the proxy.`),
+    { local: true, code: e.code }
+  )
+// The proxy's address, refused unless it is a local http one (the one rule the guard shares, L263).
+function proxyUrl(proxy, pathname) {
+  let url
+  try {
+    url = new URL(pathname, proxy)
+  } catch {
+    throw new Error(`explorer-browser: ${proxy} is not a proxy URL; give the "proxy" value from the read only proxy's proxy.json.`)
+  }
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error(`explorer-browser: ${proxy} is not a local http proxy; the read only proxy listens on 127.0.0.1.`)
+  }
+  return url
+}
+
 /**
  * Resolves with the proxy's health answer ({ proxy, pid, egid, egress }) when `proxy` is the bug
- * bash read only proxy and answering; rejects naming why not.
+ * bash read only proxy and answering; rejects naming why not. A rejection because this Mac could
+ * not open the connection at all, after the retries, carries `local: true`.
  */
 function proxyAnswers(proxy, timeoutMs = 3000) {
+  let url
+  try {
+    url = proxyUrl(proxy, HEALTH)
+  } catch (e) {
+    return Promise.reject(e)
+  }
+  return retryLocal(() => healthOnce(proxy, url, timeoutMs))
+}
+function healthOnce(proxy, url, timeoutMs) {
   return new Promise((resolve, reject) => {
-    let url
-    try {
-      url = new URL(HEALTH, proxy)
-    } catch {
-      return reject(new Error(`explorer-browser: ${proxy} is not a proxy URL; give the "proxy" value from the read only proxy's proxy.json.`))
-    }
-    if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
-      return reject(new Error(`explorer-browser: ${proxy} is not a local http proxy; the read only proxy listens on 127.0.0.1.`))
-    }
     const req = http.get(url, res => {
       let body = ''
       res.setEncoding('utf8')
@@ -59,8 +103,49 @@ function proxyAnswers(proxy, timeoutMs = 3000) {
       })
     })
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)))
-    req.on('error', e => reject(new Error(`explorer-browser: the read only proxy at ${proxy} is not answering (${e.message}). Start read-only-proxy.js first.`)))
+    req.on('error', e =>
+      reject(isLocalConnectError(e) ? localError(proxy, e) : new Error(`explorer-browser: the read only proxy at ${proxy} is not answering (${e.message}). Start read-only-proxy.js first.`))
+    )
   })
+}
+
+/**
+ * Whether the proxy refuses a write sent through it: a POST to a name that resolves nowhere
+ * (.invalid), so a proxy that forwarded it would reach nothing. Resolves true only for the proxy's
+ * own refusal (405, x-bug-bash-proxy: refused), false for any other answer or none. Like
+ * proxyAnswers, a rejection because this Mac could not open the connection carries `local: true`.
+ */
+function proxyRefusesWrite(proxy, timeoutMs = 5000) {
+  let url
+  try {
+    url = proxyUrl(proxy, '/')
+  } catch (e) {
+    return Promise.reject(e)
+  }
+  return retryLocal(
+    () =>
+      new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: url.hostname.replace(/^\[|\]$/g, ''), port: url.port || 80, method: 'POST', path: 'http://bug-bash-probe.invalid/write', headers: { host: 'bug-bash-probe.invalid', 'content-type': 'text/plain' } },
+          res => {
+            res.resume()
+            resolve(res.statusCode === 405 && res.headers['x-bug-bash-proxy'] === 'refused')
+          }
+        )
+        req.setTimeout(timeoutMs, () => req.destroy(new Error(`no answer within ${timeoutMs} ms`)))
+        req.on('error', e => (isLocalConnectError(e) ? reject(localError(proxy, e)) : resolve(false)))
+        req.end('probe')
+      })
+  )
+}
+
+/**
+ * What target-guard.sh needs to know of a proxy before a read only run, asked in one place: its
+ * health answer and whether it refuses a write. Rejects as the two checks do.
+ */
+async function checkProxy(proxy) {
+  const said = await proxyAnswers(proxy)
+  return { pid: said.pid, egid: said.egid, egress: said.egress, refusesWrite: await proxyRefusesWrite(proxy) }
 }
 
 async function launch({ chromium, readOnly = false, headless = true, proxy = process.env.BUG_BASH_PROXY } = {}) {
@@ -95,4 +180,4 @@ async function launch({ chromium, readOnly = false, headless = true, proxy = pro
   return { context, close: () => browser.close() }
 }
 
-module.exports = { launch, isRead, proxyAnswers, MARK, HEALTH }
+module.exports = { launch, isRead, proxyAnswers, proxyRefusesWrite, checkProxy, isLocalConnectError, sleep, MARK, HEALTH }
