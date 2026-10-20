@@ -583,16 +583,16 @@ function buildScreen(variant) {
 /* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
    options drawing the same thing are said, as the page says it for a round with no captured chrome. */
 /* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
-   again each time it is shown; the page calls this after every switch. */
-function drFit(frame) {
+   again each time it is shown: the page calls screenShown after every switch, as it does for any
+   builder, and the frame's own load calls it too. */
+function screenShown(variant, frame) {
   var doc = frame.contentDocument;
   if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = doc.documentElement.scrollHeight + "px";
 }
-function screenShown(variant, frame) { drFit(frame); }
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
   var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
-  drFit(frame);
+  screenShown(variant, frame);
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
   DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? slot.innerHTML : null };
