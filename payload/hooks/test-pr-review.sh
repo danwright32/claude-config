@@ -110,6 +110,14 @@ cat > "$FAKEBIN/gh" <<'EOS'
 printf '%s\n' "$*" >> "$FAKE_LOG/gh-calls"
 case "$*" in
   "auth status"*) exit 0 ;;
+  # The heads a pull request was force pushed from (claude-config#1360): FAKE_LOG/pushes-<n>.json,
+  # else none, or the error FAKE_PUSHES_FAIL names.
+  "api graphql"*HeadRefForcePushedEvent*)
+    [ -n "${FAKE_PUSHES_FAIL:-}" ] && { printf '%s\n' "$FAKE_PUSHES_FAIL" >&2; exit 1; }
+    n=""
+    for a in "$@"; do case "$a" in number=*) [ -n "$n" ] || n="${a#number=}" ;; esac; done
+    [ -f "$FAKE_LOG/pushes-$n.json" ] && { cat "$FAKE_LOG/pushes-$n.json"; exit 0; }
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"timelineItems":{"nodes":[]}}}}}'; exit 0 ;;
   # Which pull request a GraphQL merge's node is (claude-config#1181): FAKE_NODE_JSON, or the error
   # FAKE_NODE_FAIL names.
   "api graphql"*) [ -n "${FAKE_NODE_FAIL:-}" ] && { printf '%s\n' "$FAKE_NODE_FAIL" >&2; exit 1; }
@@ -1925,14 +1933,16 @@ G checkout -q feat/sync
 # pr_json <number> <state> <head branch> <description> [<association>|<when>|<body>]...
 pr_json(){
   python3 - "$@" > "$FAKE_LOG/pr-view-$1.json" <<'PY'
-import json, sys
+import json, os, sys
 def comment(c):
     assoc, when, body = c.split("|", 2)
     who = "danwright32" if assoc != "NONE" else "stranger"
     return {"author": {"login": who}, "authorAssociation": assoc, "createdAt": when, "body": body}
 n, state, head, body = sys.argv[1:5]
+# PRJ_FILES: the files it changed, comma separated (claude-config#1360), as gh's files field lists them.
+files = [{"path": p} for p in os.environ.get("PRJ_FILES", "").split(",") if p]
 print(json.dumps({"number": int(n), "state": state, "headRefName": head, "baseRefName": "main",
-  "headRefOid": "", "isCrossRepository": False, "body": body,
+  "headRefOid": "", "isCrossRepository": False, "body": body, "files": files,
   "comments": [comment(c) for c in sys.argv[5:]]}))
 PY
 }
@@ -2309,6 +2319,189 @@ reset_state
 av_review 1 "$AV_MAJOR [review harness: not placed, it quoted no line, so line 2 is the reviewer's own number, unchecked]"
 out="$(av_check)"; rc=$?
 check_eq "#1356 control: a major finding carrying the same mark still blocks" "1" "$rc"
+
+# ===========================================================================================
+# 20. The three cases #1340 left showing an answered finding as new (#1360): an answer in the older
+#     form (naming <file>:<line>, quoting nothing) to a branch since REBASED, tied to this pull
+#     request by GitHub's record of the heads it was force pushed from; a quote naming a head this
+#     checkout never fetched (a rebase made on the other Mac), fetched by its full name from that
+#     same record; and an earlier pull request of ANOTHER head branch, followed only when this one
+#     names it, it was closed without merging, and its files overlap this one's. Every match is as
+#     strict as #1338's, and a read that fails leaves the finding new, saying why. The extra reads
+#     are made only for a finding nothing else answered. Content invented, in the real records' shape.
+# ===========================================================================================
+# pushes_json <pr> <before> <after>...: the force pushes GitHub records for that pull request.
+pushes_json(){
+  python3 - "$@" > "$FAKE_LOG/pushes-$1.json" <<'PY'
+import json, sys
+s = sys.argv[2:]
+nodes = [{"beforeCommit": {"oid": s[i]}, "afterCommit": {"oid": s[i + 1]}} for i in range(0, len(s) - 1, 2)]
+print(json.dumps({"data": {"repository": {"pullRequest": {"timelineItems": {"nodes": nodes}}}}}))
+PY
+}
+# grep -c prints 0 AND fails on no match, so a fallback after || would print a second 0.
+pushes_reads(){ local n; n="$(grep -c HeadRefForcePushedEvent "$FAKE_LOG/gh-calls" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+# The pull request's repository is read from origin's URL, so origin is named as a GitHub repository
+# here and git is told where that really is (insteadOf), which a fetch by full name then goes to.
+G remote set-url origin https://github.com/fixture/app.git
+G config url."$ORIGIN".insteadOf https://github.com/fixture/app.git
+
+# --- 20a. An answer in the older form, to a branch since rebased: the earlier review is stored here,
+# but the head it read shares nothing of the branch's own with this one, so only GitHub's record that
+# this pull request was force pushed from it ties the two together.
+reset_state
+G checkout -q -b feat/rebased-old main
+seq 1 30 | sed 's/^/ro line /' > "$REPO/App/Ro.swift"
+G add App/Ro.swift
+G commit -q -m "add ro"
+RO_A="$(G rev-parse HEAD)"
+rw_start "$RO_A" feat/rebased-old 101 "$(claim_of App/Ro.swift first)"
+G checkout -q main
+printf 'main again\n' > "$REPO/Main2.txt"
+G add Main2.txt
+G commit -q -m "main moves on again"
+G checkout -q feat/rebased-old
+G rebase -q main
+RO_B="$(G rev-parse HEAD)"
+G merge-base --is-ancestor "$RO_A" "$RO_B" && bad "#1360 fixture: the rebased head must not descend from the earlier one"
+RO_ANSWER="OWNER|2099-01-01T10:00:00Z|Lessons review (head ${RO_A:0:7}):"$'\n\n'"1. Ro.swift:14: not a defect. The caller logs the error, see Log.swift."
+pr_json 101 OPEN feat/rebased-old "Adds ro." "$RO_ANSWER"
+rw_start "$RO_B" feat/rebased-old 101 "$(claim_of App/Ro.swift again)"$'\n'"$(claim_of App/Ro.swift other)"
+# Control first: GitHub records no force push from that head for THIS pull request, only for another.
+pushes_json 102 "$RO_A" "$RO_B"
+out="$(rw_check "$RO_B" feat/rebased-old 101)"; rc=$?
+check_eq "#1360 a force push recorded for another pull request ties nothing to this one" "1" "$rc"
+check_not "#1360 so the older form answer to the head before the rebase answers nothing" "not counted" "$out"
+rm -f "$FAKE_LOG/pushes-102.json"
+pushes_json 101 "$RO_A" "$RO_B"
+out="$(FAKE_PUSHES_FAIL='HTTP 502: Bad Gateway (https://api.github.com/graphql)' rw_check "$RO_B" feat/rebased-old 101)"; rc=$?
+check_eq "#1360 when GitHub's record of the force pushes cannot be read nothing is taken as answered" "1" "$rc"
+check_not "#1360 so nothing is called answered" "not counted" "$out"
+check "#1360 saying why" "HTTP 502: Bad Gateway" "$out"
+check "#1360 and what it means" "force pushed from could not be read" "$out"
+before="$(pushes_reads)"
+out="$(rw_check "$RO_B" feat/rebased-old 101)"; rc=$?
+check_eq "#1360 a rebased branch with a new finding beside the answered one still refuses" "1" "$rc"
+check "#1360 the repeat of a finding answered in the older form before the rebase is shown as answered" "$(claim_of App/Ro.swift again)" "$(answered_of "$out")"
+check_not "#1360 and not among the new" "$(claim_of App/Ro.swift again)" "$(new_of "$out")"
+check "#1360 naming the review of the head before the rebase" "the review of ${RO_A:0:7}" "$(answered_of "$out")"
+check "#1360 a different claim at the same lines is new" "$(claim_of App/Ro.swift other)" "$(new_of "$out")"
+check_eq "#1360 GitHub's record of the force pushes is read once" "$((before + 1))" "$(pushes_reads)"
+# Controls: a stranger's answer, and the lines changed since, each leave it new.
+pr_json 101 OPEN feat/rebased-old "Adds ro." "NONE|2099-01-01T10:00:00Z|Lessons review (head ${RO_A:0:7}):"$'\n\n'"1. Ro.swift:14: not a defect."
+out="$(rw_check "$RO_B" feat/rebased-old 101)"
+check_not "#1360 an older form answer by somebody without write access answers nothing after a rebase" "not counted" "$out"
+pr_json 101 OPEN feat/rebased-old "Adds ro." "$RO_ANSWER"
+awk 'NR == 14 { print "ro line 14 rewritten"; next } { print }' "$REPO/App/Ro.swift" > "$WORKDIR/ro.tmp" && mv "$WORKDIR/ro.tmp" "$REPO/App/Ro.swift"
+G commit -q -am "rewrite the answered line"
+RO_C="$(G rev-parse HEAD)"
+rw_start "$RO_C" feat/rebased-old 101 "$(claim_of App/Ro.swift again)"
+out="$(rw_check "$RO_C" feat/rebased-old 101)"; rc=$?
+check_eq "#1360 a repeat at lines changed since the head before the rebase is new" "1" "$rc"
+check_not "#1360 and is not called answered" "not counted" "$out"
+# Only for a finding nothing else answered and that the read could answer: a different claim, which
+# no review before the rebase raised, reads nothing from GitHub.
+before="$(pushes_reads)"
+G commit -q --allow-empty -m "another head"
+RO_D="$(G rev-parse HEAD)"
+rw_start "$RO_D" feat/rebased-old 101 "$(claim_of App/Ro.swift other)"
+out="$(rw_check "$RO_D" feat/rebased-old 101)"
+check_eq "#1360 a finding no earlier head raised reads nothing from GitHub" "$before" "$(pushes_reads)"
+
+# --- 20b. A quote naming a head this checkout never fetched: the other Mac reviewed and answered
+# it, then rewrote the branch and force pushed, so here only the rewritten head was ever fetched.
+reset_state
+OTHER="$WORKDIR/other"
+git clone -q --no-local "$ORIGIN" "$OTHER" 2>/dev/null
+O(){ git -C "$OTHER" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+O checkout -q -b feat/far origin/main
+seq 1 30 | sed 's/^/fa line /' > "$OTHER/App/Fa.swift"
+O add App/Fa.swift
+O commit -q -m "add fa"
+FA_A="$(O rev-parse HEAD)"
+O push -q origin feat/far 2>/dev/null
+O commit -q --amend -m "add fa, reworded"
+FA_B="$(O rev-parse HEAD)"
+O push -q -f origin feat/far 2>/dev/null
+G fetch -q origin feat/far:refs/remotes/origin/feat/far
+G checkout -q -b feat/far origin/feat/far
+G cat-file -e "$FA_A^{commit}" 2>/dev/null && bad "#1360 fixture: this checkout must not hold the head the other Mac answered at"
+FA_ANSWER="OWNER|2099-01-01T10:00:00Z|Lessons review at ${FA_A:0:7}, from the review on the work MacBook:"$'\n\n'"> $(claim_of App/Fa.swift first)"$'\n\n'"Not a defect: the caller logs it."
+pr_json 103 OPEN feat/far "Adds fa." "$FA_ANSWER"
+rw_start "$FA_B" feat/far 103 "$(claim_of App/Fa.swift again)"$'\n'"$(claim_of App/Fa.swift other)"
+# Controls first, while the head is still not here. GitHub records it for another pull request only:
+pushes_json 104 "$FA_A" "$FA_B"
+out="$(rw_check "$FA_B" feat/far 103)"; rc=$?
+check_eq "#1360 a quoted head GitHub records only for another pull request answers nothing" "1" "$rc"
+check_not "#1360 so nothing is called answered" "not counted" "$out"
+check "#1360 saying the quoted head could not be read" "${FA_A:0:7}" "$out"
+check "#1360 and why" "does not record as a head this pull request was force pushed from" "$out"
+rm -f "$FAKE_LOG/pushes-104.json"
+pushes_json 103 "$FA_A" "$FA_B"
+out="$(FAKE_PUSHES_FAIL='HTTP 401: Bad credentials (https://api.github.com/graphql)' rw_check "$FA_B" feat/far 103)"; rc=$?
+check_eq "#1360 when the force pushes cannot be read a quote of an unfetched head answers nothing" "1" "$rc"
+check "#1360 saying why" "HTTP 401: Bad credentials" "$out"
+# The fetch itself failing: git allowed no transport origin's really uses, for this one check (the
+# repository's own name, which the review is filed under, stays as it was).
+out="$(GIT_ALLOW_PROTOCOL=ext rw_check "$FA_B" feat/far 103)"; rc=$?
+check_eq "#1360 when the quoted head cannot be fetched the finding is new" "1" "$rc"
+check_not "#1360 so nothing is called answered" "not counted" "$out"
+check "#1360 saying it could not be fetched" "could not be fetched" "$out"
+pr_json 103 OPEN feat/far "Adds fa." "NONE|2099-01-01T10:00:00Z|Lessons review at ${FA_A:0:7}:"$'\n\n'"> $(claim_of App/Fa.swift first)"$'\n\n'"Not a defect."
+out="$(rw_check "$FA_B" feat/far 103)"
+check_not "#1360 a stranger's quote of an unfetched head answers nothing" "not counted" "$out"
+G cat-file -e "$FA_A^{commit}" 2>/dev/null && bad "#1360 a stranger's quote fetched nothing"
+pr_json 103 OPEN feat/far "Adds fa." "$FA_ANSWER"
+out="$(rw_check "$FA_B" feat/far 103)"; rc=$?
+check_eq "#1360 with a new finding beside the one quoted at an unfetched head the merge still refuses" "1" "$rc"
+check "#1360 a finding quoted at a head this checkout never fetched is shown as answered" "$(claim_of App/Fa.swift again)" "$(answered_of "$out")"
+check_not "#1360 and not among the new" "$(claim_of App/Fa.swift again)" "$(new_of "$out")"
+check "#1360 naming the head the answer quoted it at" "${FA_A:0:7}" "$(answered_of "$out")"
+check "#1360 a different claim at the quoted lines is new" "$(claim_of App/Fa.swift other)" "$(new_of "$out")"
+G cat-file -e "$FA_A^{commit}" 2>/dev/null || bad "#1360 the quoted head was fetched by its full name"
+
+# --- 20c. An earlier pull request of ANOTHER head branch, which this one replaces and names.
+reset_state
+G checkout -q -b feat/renamed-old main
+seq 1 30 | sed 's/^/rn line /' > "$REPO/App/Rn.swift"
+G add App/Rn.swift
+G commit -q -m "add rn"
+RN_A="$(G rev-parse HEAD)"
+rw_start "$RN_A" feat/renamed-old 97 "$(claim_of App/Rn.swift first)"
+G checkout -q -b feat/renamed-new
+printf 'renamed\n' > "$REPO/App/Renamed.txt"
+G add App/Renamed.txt
+G commit -q -m "renamed"
+RN_B="$(G rev-parse HEAD)"
+RN_ANSWER="OWNER|2099-01-01T10:00:00Z|Lessons review (head ${RN_A:0:7}):"$'\n\n'"1. Rn.swift:14: not a defect. The caller logs the error, see Log.swift."
+pr_json 96 OPEN feat/renamed-new "Replaces #97, closed when its branch was renamed. Closes #5."
+PRJ_FILES=App/Rn.swift pr_json 97 CLOSED feat/renamed-old "The first try." "$RN_ANSWER"
+rw_start "$RN_B" feat/renamed-new 96 "$(claim_of App/Rn.swift again)"$'\n'"$(claim_of App/Rn.swift other)"
+out="$(rw_check "$RN_B" feat/renamed-new 96)"; rc=$?
+check_eq "#1360 with a new finding beside one answered on a replaced pull request of another branch, still refused" "1" "$rc"
+check "#1360 a finding answered on the earlier pull request of another branch this one names is shown as answered" "$(claim_of App/Rn.swift again)" "$(answered_of "$out")"
+check_not "#1360 and not among the new" "$(claim_of App/Rn.swift again)" "$(new_of "$out")"
+check "#1360 saying on which pull request" "on #97" "$(answered_of "$out")"
+check "#1360 a different claim at the same lines is new" "$(claim_of App/Rn.swift other)" "$(new_of "$out")"
+# Controls: merged (a predecessor, whose answers may defer to this very pull request), files that do
+# not overlap, still open, or named only as the issue it closes: each answers nothing.
+PRJ_FILES=App/Rn.swift pr_json 97 MERGED feat/renamed-old "The first try." "$RN_ANSWER"
+out="$(rw_check "$RN_B" feat/renamed-new 96)"
+check_not "#1360 a named pull request of another branch that merged answers nothing" "not counted" "$out"
+PRJ_FILES=App/Else.swift pr_json 97 CLOSED feat/renamed-old "The first try." "$RN_ANSWER"
+out="$(rw_check "$RN_B" feat/renamed-new 96)"
+check_not "#1360 a named pull request of another branch whose files do not overlap answers nothing" "not counted" "$out"
+PRJ_FILES=App/Rn.swift pr_json 97 OPEN feat/renamed-old "The first try." "$RN_ANSWER"
+out="$(rw_check "$RN_B" feat/renamed-new 96)"
+check_not "#1360 a named pull request of another branch still open answers nothing" "not counted" "$out"
+PRJ_FILES=App/Rn.swift pr_json 97 CLOSED feat/renamed-old "The first try." "$RN_ANSWER"
+pr_json 96 OPEN feat/renamed-new "Adds rn again. Closes #97."
+out="$(rw_check "$RN_B" feat/renamed-new 96)"
+check_not "#1360 a pull request of another branch named only as what this one closes answers nothing" "not counted" "$out"
+runners_done || bad "#1360 a runner was still going at the end"
+G config --unset url."$ORIGIN".insteadOf
+G remote set-url origin "$ORIGIN"
+G checkout -q feat/sync
 
 echo
 echo "passed: $pass, failed: $fail"
