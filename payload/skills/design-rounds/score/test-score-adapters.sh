@@ -128,6 +128,70 @@ else
   if [ "$rc" -eq 2 ] && said "answered no {ok, detail}" "$T/web-silent.log"; then ok; else bad "a check that answers nothing is no score, said as such (rc=$rc)" "$(cat "$T/web-silent.log")"; fi
 fi
 
+# --- 3b. the whole chain: a settled file make-settled.py wrote, and an app drawing the same fixture ----
+# The design side is make-settled.py's own output, drawn inside a captured chrome; the build is the same
+# chrome page running the same builder from the same fixture, as an app's fixture preview would, picking
+# its frame from ?frame=<id>. Scored at 100%, then with the build's heading changed (the decision fails).
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled file was not scored end to end"
+  unmeasured=$((unmeasured + 1))
+else
+  CH="$T/chain"
+  mkdir -p "$CH"
+  cat > "$CH/chrome.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 40px; background: #14213d; color: #fff; padding: 8px; } main { padding: 12px; }</style>
+</head><body><header>App</header><main id="main"></main></body></html>
+HTML
+  cat > "$CH/builder.js" <<'JS'
+function buildScreen(variant) {
+  var box = document.createElement("div");
+  var h = document.createElement("h1");
+  h.textContent = window.HEADING || "Team capacity";
+  var p = document.createElement("p");
+  p.textContent = variant.day + ": " + window.DESIGN_FIXTURE.open[variant.day] + " calls open";
+  box.append(h, p);
+  return box;
+}
+JS
+  printf '{"open": {"Tue": 42, "Wed": 17}}\n' > "$CH/fixture.json"
+  cat > "$CH/settled.json" <<'JSON'
+{"title": "Chain", "builder": "builder.js", "fixture": "fixture.json",
+ "chrome": {"captured": "chrome.html", "from": "the fixture app, 2026-10-19", "slot": "#main", "width": 600},
+ "frames": [{"id": "f1", "title": "Tuesday", "width": 600, "height": 200, "variant": {"day": "Tue"}},
+            {"id": "f2", "title": "Wednesday", "width": 600, "height": 200, "variant": {"day": "Wed"}}],
+ "decisions": [{"id": "D1", "decision": "The heading reads Team capacity", "requirement": "1",
+                "frames": ["f1", "f2"], "check": "the h1 reads Team capacity"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function (doc) { var h = doc.querySelector('h1'); return {ok: !!h && h.textContent === 'Team capacity', detail: h ? h.textContent : 'no heading'}; }}];" > "$CH/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$CH/settled.json" "$CH/settled.html" > "$CH/make.log" 2>&1 \
+    || bad "make-settled.py writes the chain's settled design" "$(cat "$CH/make.log")"
+  # The app: the same chrome, the same builder and fixture, the frame chosen by ?frame=<id>.
+  build_app() {  # build_app <heading>
+    python3 - "$CH" "$1" <<'PY'
+import json, sys
+ch, heading = sys.argv[1], sys.argv[2]
+page = open(ch + "/chrome.html").read()
+script = ("<script>window.DESIGN_FIXTURE = %s; window.HEADING = %s;</script><script>%s</script>"
+          "<script>var V = {f1: {day: 'Tue'}, f2: {day: 'Wed'}}[new URLSearchParams(location.search).get('frame')];"
+          "document.getElementById('main').replaceChildren(buildScreen(V));</script>"
+          % (open(ch + "/fixture.json").read(), json.dumps(heading), open(ch + "/builder.js").read()))
+open(ch + "/app/index.html", "w").write(page.replace("</body>", script + "</body>"))
+PY
+  }
+  mkdir -p "$CH/app"
+  build_app "Team capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/match" --channel chrome --repo "$APP" > "$CH/match.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$CH/match.log"; then ok; else bad "a settled file make-settled.py wrote, against an app drawing the same fixture, scores 100% on both halves (rc=$rc)" "$(cat "$CH/match.log")"; fi
+  build_app "Capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/off" --channel chrome --repo "$APP" > "$CH/off.log" 2>&1; rc=$?
+  if [ "$rc" -eq 1 ] && said "UNMET D1" "$CH/off.log" && said "Capacity" "$CH/off.log"; then ok; else bad "the same app with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$CH/off.log")"; fi
+fi
+
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
 if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
   echo "UNMEASURED: no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"
