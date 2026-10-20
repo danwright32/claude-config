@@ -2023,6 +2023,19 @@ date and where he said them. The score counts a decision as met only once its ch
 frame the map says it shows on. `test-make-settled.sh` holds both, reading the file in Chrome where
 there is one.
 
+**A screen with no product page around it names its kind** (#1393, Dan's sign off on 2026-10-20:
+"allow named kinds"). An email, a document (a PDF, an invoice export) or a new product whose page does
+not exist yet sets `"screen"` to `email`, `document` or `new-product`, where a mod round sets
+`terminal`, in place of a captured chrome. The switcher then draws each option alone at the round's
+`"width"` and says the kind in one plain line; `make-settled.py` draws each frame alone at its own
+width and records `"kind"` in the `design-frames` block; the score reads it, records it in the score
+file and says it in its report, and scores the frames like any others, so the close gate needs nothing
+new. The three kinds live in one list, `NO_PAGE_KINDS` in `design_file.py`, which all three read. Any
+other kind is refused naming the three, and a kind beside a captured chrome is refused rather than
+either winning. `test-make-switcher.sh`, `test-make-settled.sh`, `test-design-score.sh` and
+`test-score-adapters.sh` (an email scored end to end in Chrome, at 100% and then with its heading
+changed) hold it.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in

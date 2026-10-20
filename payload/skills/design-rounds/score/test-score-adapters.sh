@@ -197,6 +197,67 @@ PY
   if [ "$rc" -eq 1 ] && said "UNMET D1" "$CH/off.log" && said "Capacity" "$CH/off.log"; then ok; else bad "the same app with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$CH/off.log")"; fi
 fi
 
+# --- 3c. the same chain for a design with no product page around it (claude-config#1393) ---------------
+# An email: make-settled.py draws each frame at its own width with nothing around it, the app's fixture
+# route draws the email alone, and the score is 100% on both halves, the close gate's own reader of a
+# score file holds it, and a changed heading fails the decision. Nothing reads the missing page as a
+# stand in.
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled email was not scored end to end"
+  unmeasured=$((unmeasured + 1))
+else
+  EM="$T/email"
+  mkdir -p "$EM/app"
+  cat > "$EM/builder.js" <<'JS'
+function buildScreen(variant) {
+  var box = document.createElement("div");
+  box.style.cssText = "width: 600px; padding: 16px; box-sizing: border-box; background: #f6efe3; font: 16px/1.4 Helvetica, Arial, sans-serif";
+  var h = document.createElement("h1");
+  h.textContent = window.HEADING || "Your invoice";
+  var p = document.createElement("p");
+  p.textContent = variant.who + " owes " + window.DESIGN_FIXTURE.owed[variant.who];
+  box.append(h, p);
+  return box;
+}
+JS
+  printf '{"owed": {"Sam": "$120", "Ana": "$45"}}\n' > "$EM/fixture.json"
+  cat > "$EM/settled.json" <<'JSON'
+{"title": "Invoice email", "builder": "builder.js", "fixture": "fixture.json", "screen": "email",
+ "frames": [{"id": "f1", "title": "Sam", "width": 600, "height": 200, "variant": {"who": "Sam"}},
+            {"id": "f2", "title": "Ana", "width": 600, "variant": {"who": "Ana"}}],
+ "decisions": [{"id": "D1", "decision": "The heading reads Your invoice", "requirement": "1",
+                "frames": ["f1", "f2"], "check": "the h1 reads Your invoice"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function (doc) { var h = doc.querySelector('h1'); return {ok: !!h && h.textContent === 'Your invoice', detail: h ? h.textContent : 'no heading'}; }}];" > "$EM/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$EM/settled.json" "$EM/settled.html" > "$EM/make.log" 2>&1 \
+    || bad "make-settled.py writes a settled email" "$(cat "$EM/make.log")"
+  # The app's fixture route: the email alone, as the app sends it, the frame chosen by ?frame=<id>.
+  email_app() {  # email_app <heading>
+    python3 - "$EM" "$1" <<'PY'
+import json, sys
+em, heading = sys.argv[1], sys.argv[2]
+page = ("<!doctype html><html><head><meta charset=\"utf-8\"><style>html, body { margin: 0; }</style></head><body>"
+        "<script>window.DESIGN_FIXTURE = %s; window.HEADING = %s;</script><script>%s</script>"
+        "<script>var V = {f1: {who: 'Sam'}, f2: {who: 'Ana'}}[new URLSearchParams(location.search).get('frame')];"
+        "document.body.append(buildScreen(V));</script></body></html>"
+        % (open(em + "/fixture.json").read(), json.dumps(heading), open(em + "/builder.js").read()))
+open(em + "/app/index.html", "w").write(page)
+PY
+  }
+  email_app "Your invoice"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$EM/settled.html" --build "file://$EM/app/index.html" \
+    --fixture "$EM/fixture.json" --out "$EM/match" --channel chrome --repo "$APP" > "$EM/match.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$EM/match.log" && said "an email, with no product page around it" "$EM/match.log"; then ok; else bad "a settled email, against an app drawing the same email alone, scores 100% on both halves and says it is an email (rc=$rc)" "$(cat "$EM/match.log")"; fi
+  if python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import pngio; w,h,_=pngio.read_png(sys.argv[2]); sys.exit(0 if (w,h)==(600,200) else 1)' "$HERE" "$EM/match/f1-design.png" 2>/dev/null; then ok; else bad "an email frame declaring 600 by 200 is drawn at exactly that size"; fi
+  python3 "$SCORE" show "$EM/match/score.json" > "$EM/show.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "matched" and not p and s.get("kind") == "email" else 1)' "$HERE" "$EM/match/score.json"; then ok; else bad "the close gate's reader of a score file holds the email's score as matched (rc=$rc)" "$(cat "$EM/show.log")"; fi
+  email_app "Invoice"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$EM/settled.html" --build "file://$EM/app/index.html" \
+    --fixture "$EM/fixture.json" --out "$EM/off" --channel chrome --repo "$APP" > "$EM/off.log" 2>&1; rc=$?
+  if [ "$rc" -eq 1 ] && said "UNMET D1" "$EM/off.log" && said "Invoice" "$EM/off.log"; then ok; else bad "the same email with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$EM/off.log")"; fi
+fi
+
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
 if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
   echo "UNMEASURED: no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"
