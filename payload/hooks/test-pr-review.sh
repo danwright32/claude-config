@@ -214,6 +214,15 @@ reset_state(){
   rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"
 }
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }
+# A check's output in two parts: the findings shown as answered (#1338), and what comes before them.
+# The answered part opens with one of two wordings, "not counted" beside new findings, or "so none is
+# new" when every finding was answered. A control saying nothing was answered must read both. Until
+# #1361 the controls looked only for "not counted", so a control whose only finding was wrongly
+# answered still passed it: seen with a condition removed from a copy of the library, where only the
+# exit code check beside it failed.
+answered_of(){ awk '/not counted|so none is new/ { on = 1 } on' <<<"$1"; }
+new_of(){ awk '/not counted|so none is new/ { exit } { print }' <<<"$1"; }
+none_answered(){ check_eq "$1" "" "$(answered_of "$2")"; } # none_answered <name> <check output>
 
 # ===========================================================================================
 # 1. Recognising `gh pr create` in command position, never a mention of it (L673).
@@ -1842,7 +1851,7 @@ ans_start "$AN_A" "$AF"$'\n'"$AB"
 before="$(pr_reads)"
 out="$(ans_check "$AN_A")"; rc=$?
 check_eq "#1338 the first review's findings refuse as before" "1" "$rc"
-check_not "#1338 with nothing called answered" "not counted" "$out"
+none_answered "#1338 with nothing called answered" "$out"
 # Since #1340 an answer can carry the finding it answers (quoted), from either Mac, so a review with
 # findings reads the pull request at the check even when nothing on this Mac repeats: once.
 check_eq "#1340 a review with findings reads the pull request once at the check, for an answer quoting one" "$((before + 1))" "$(pr_reads)"
@@ -1859,8 +1868,8 @@ check_eq "#1338 with new findings beside an answered one the merge is still refu
 check "#1338 counting only the new ones" "s) with 2 findings. Here they are" "$out"
 check "#1338 a finding not answered by a lessons review comment is new" "$AB2" "$out"
 check "#1338 a different claim at the answered lines is new" "$AC" "$out"
-answered_part="$(awk '/not counted/ { on = 1 } on' <<<"$out")"
-new_part="$(awk '/not counted/ { exit } { print }' <<<"$out")"
+answered_part="$(answered_of "$out")"
+new_part="$(new_of "$out")"
 check "#1338 the repeat of an answered finding is shown as answered" "$AF2" "$answered_part"
 check_not "#1338 and not among the new" "$AF2" "$new_part"
 check "#1338 naming the review that raised it first" "the review of ${AN_A:0:7}" "$answered_part"
@@ -1900,7 +1909,7 @@ AN_D="$(G rev-parse HEAD)"
 ans_start "$AN_D" "$AF2"
 out="$(ans_check "$AN_D")"; rc=$?
 check_eq "#1338 a repeat at lines changed since the answer is new" "1" "$rc"
-check_not "#1338 and is not called answered" "not counted" "$out"
+none_answered "#1338 and is not called answered" "$out"
 runners_done || bad "#1338 a runner was still going at the end"
 G checkout -q feat/sync
 
@@ -1938,8 +1947,6 @@ claim_of(){ # claim_of <file> <kind>: a finding line at line 14 of that file
     other) printf '%s:14: the retry count is read from a constant the tests cannot change, so a test of the backoff waits for real (L524). Should be: inject it. [severity: minor]' "$1" ;;
   esac
 }
-answered_of(){ awk '/not counted|so none is new/ { on = 1 } on' <<<"$1"; }
-new_of(){ awk '/not counted|so none is new/ { exit } { print }' <<<"$1"; }
 
 # --- 18a. An AMENDED branch: the earlier head shares a commit of the branch's own with this one,
 # so it is the same pull request's history though no longer an ancestor. The answer is the #1338
@@ -1981,7 +1988,7 @@ pr_json 91 OPEN feat/amended "Adds rw." \
 rw_start "$RW_B" feat/amended 91 "$(claim_of App/Rw.swift again)"
 out="$(rw_check "$RW_B" feat/amended 91)"; rc=$?
 check_eq "#1340 a review of a reused branch name sharing only the base answers nothing" "1" "$rc"
-check_not "#1340 so nothing is called answered" "not counted" "$out"
+none_answered "#1340 so nothing is called answered" "$out"
 
 # --- 18b. A REBASED branch sharing nothing of its own with the earlier head, answered in the new
 # way the refusal asks for: the finding quoted on a line beginning "> ", the head it was raised at
@@ -2041,19 +2048,19 @@ check "#1340 counting only the new one" "with 1 finding. Here" "$out"
 pr_json 93 OPEN feat/elsewhere "Adds el." \
   "NONE|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
 out="$(rw_check "$EL_B" feat/elsewhere 93)"
-check_not "#1340 a quote by somebody without write access answers nothing" "not counted" "$out"
+none_answered "#1340 a quote by somebody without write access answers nothing" "$out"
 pr_json 93 OPEN feat/elsewhere "Adds el." \
   "OWNER|2099-01-01T10:00:00Z|About the review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
 out="$(rw_check "$EL_B" feat/elsewhere 93)"
-check_not "#1340 a quote in a comment whose first line does not name the lessons review answers nothing" "not counted" "$out"
+none_answered "#1340 a quote in a comment whose first line does not name the lessons review answers nothing" "$out"
 pr_json 93 OPEN feat/elsewhere "Adds el." \
   "OWNER|2099-01-01T10:00:00Z|Lessons review:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
 out="$(rw_check "$EL_B" feat/elsewhere 93)"
-check_not "#1340 a quote naming no head it was raised at answers nothing" "not counted" "$out"
+none_answered "#1340 a quote naming no head it was raised at answers nothing" "$out"
 pr_json 93 OPEN feat/elsewhere "Adds el." \
   "OWNER|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/Other.swift first)"$'\n\n'"Not a defect."
 out="$(rw_check "$EL_B" feat/elsewhere 93)"
-check_not "#1340 a quote of another file answers nothing" "not counted" "$out"
+none_answered "#1340 a quote of another file answers nothing" "$out"
 pr_json 93 OPEN feat/elsewhere "Adds el." \
   "OWNER|2099-01-01T10:00:00Z|Lessons review at ${EL_A:0:7}:"$'\n\n'"> $(claim_of App/El.swift first)"$'\n\n'"Not a defect."
 awk 'NR == 15 { print "el line 15 rewritten"; next } { print }' "$REPO/App/El.swift" > "$WORKDIR/el.tmp" && mv "$WORKDIR/el.tmp" "$REPO/App/El.swift"
@@ -2062,7 +2069,7 @@ EL_C="$(G rev-parse HEAD)"
 rw_start "$EL_C" feat/elsewhere 93 "$(claim_of App/El.swift again)"
 out="$(rw_check "$EL_C" feat/elsewhere 93)"; rc=$?
 check_eq "#1340 a quoted finding whose lines changed since the head it names is new" "1" "$rc"
-check_not "#1340 and is not called answered" "not counted" "$out"
+none_answered "#1340 and is not called answered" "$out"
 
 # --- 18d. Answers written on an EARLIER pull request of the same branch, which this one replaces
 # and names (Bidspoke #2491 named #2482, where the rounds had been answered).
@@ -2090,14 +2097,14 @@ check "#1340 a different claim at the same lines is new" "$(claim_of App/Rp.swif
 # not name answers nothing.
 pr_json 94 CLOSED feat/somebody-else "The first try." "$RP_ANSWER"
 out="$(rw_check "$RP_B" feat/replaced 95)"
-check_not "#1340 a named pull request of another branch answers nothing" "not counted" "$out"
+none_answered "#1340 a named pull request of another branch answers nothing" "$out"
 pr_json 94 OPEN feat/replaced "The first try." "$RP_ANSWER"
 out="$(rw_check "$RP_B" feat/replaced 95)"
-check_not "#1340 a named pull request still open answers nothing" "not counted" "$out"
+none_answered "#1340 a named pull request still open answers nothing" "$out"
 pr_json 94 CLOSED feat/replaced "The first try." "$RP_ANSWER"
 pr_json 95 OPEN feat/replaced "Adds rp. Closes #5."
 out="$(rw_check "$RP_B" feat/replaced 95)"
-check_not "#1340 an earlier pull request this one does not name answers nothing" "not counted" "$out"
+none_answered "#1340 an earlier pull request this one does not name answers nothing" "$out"
 runners_done || bad "#1340 a runner was still going at the end"
 G checkout -q feat/sync
 
