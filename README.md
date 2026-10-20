@@ -621,6 +621,31 @@ advisory, the push and merge gates hand it over as JSON (`mt_review_allowed` in
 PreToolUse hook's plain output on an allow reaches neither; `merge-when-ready.sh` prints it in its
 log. The stored review is unchanged, so the report and every later review still see the minor ones.
 
+After three rounds of findings, step back (claude-config#1358). A review runs on every commit, push
+and pull request update with no limit on rounds, and measured on 2026-10-19 over 704 branches, 18%
+ran five or more rounds with findings, 25 ran ten or more, and about a third of later round findings
+restated an earlier round's. So from the third round, the refusal also says `Step back:` and asks
+the agent to stop fixing findings one at a time, read the round's findings with the earlier rounds'
+as one group, and reconsider the approach, naming the earlier rounds and where their findings are.
+It is guidance on top of the refusal, never another block: the read key lets the push or merge
+through exactly as before. `merge-when-ready.sh` prints that refusal and its own stop line then asks
+for the step back too. A round is a review whose findings stopped a push or merge. Dan decided on
+2026-10-19 that a clean review is not a round; a review whose new findings were all minor (advisory)
+or all already answered stopped nothing either, so it is not a round, and nor is a review never
+checked. The check records each round beside its review (`<review>.round`, keyed to the review's
+finish, with the pull request's number when known). The rounds counted are this pull request's: the
+earlier reviews of it on this Mac (the heads this one descends from, or shares a commit of its own
+with), so a branch name used again starts from none, and any review recorded under the same pull
+request number, so a rebase does not start the count again. A review carried to a later head
+(below) is the round it was carried from. A review started after three rounds reads only what
+changed since the last reviewed head: the files this branch changes that differ from that head,
+diffed from it, with their full text, the complete file list still naming every file of the branch
+(those not shown marked as read by the earlier reviews), and every earlier finding still given as
+history. Its review file records `since=<head>` and every verdict on it says what it read. The whole
+branch is read instead, saying why, when the last reviewed head is not an ancestor (a rebase or an
+amend), when nothing in the branch's files changed since it, or when the changes since it are over
+the size cap. Only this Mac's reviews are counted, since each Mac keeps its own.
+
 Every gate judges ONE repository, and every merge gate ONE pull request, per command, so a command
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one

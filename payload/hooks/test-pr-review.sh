@@ -2503,6 +2503,173 @@ G config --unset url."$ORIGIN".insteadOf
 G remote set-url origin "$ORIGIN"
 G checkout -q feat/sync
 
+# ===========================================================================================
+# 21. After three rounds of findings, step back (claude-config#1358). Measured 2026-10-19 over 704
+#     branches: 18% ran five or more review rounds with findings, 25 ran ten or more, and about a
+#     third of later round findings restated an earlier round's. Dan, 2026-10-19: count only the
+#     rounds that returned findings; a clean review is not a round. Nor is a review whose findings
+#     stopped nothing: all minor (advisory, #1356) or all already answered (#1338). On the third
+#     round the refusal asks the agent to step back and reconsider the approach, and from then on a
+#     review reads only what changed since the last reviewed head, still given the earlier findings
+#     as history. A head that does not descend from the last reviewed one is read whole, saying so.
+#     Content invented.
+# ===========================================================================================
+reset_state
+G checkout -q -b feat/rounds main
+ROUNDS_MAIN="$(G rev-parse main)"
+seq 1 30 | sed 's/^/rounds line /' > "$REPO/App/Rounds.swift"
+mkdir -p "$REPO/Docs"
+printf 'early note one\nearly note two\n' > "$REPO/Docs/Early.md"
+G add App/Rounds.swift Docs/Early.md
+G commit -q -m "add rounds"
+RF1='App/Rounds.swift:5: the fifth line swallows the decoding error (L10). Should be: throw it. [severity: major]'
+RF2='App/Rounds.swift:12: the twelfth line hides a failed save (L11). Should be: say it failed. [severity: major]'
+RF3='App/Rounds.swift:25: the retry loop has no bound (L524). Should be: bound it. [severity: major]'
+RF4='App/Rounds.swift:18: the eighteenth line copies the twelfth (L30). Should be: share one helper. [severity: major]'
+RMIN='App/Rounds.swift:8: the comment says seconds (L118). Should be: say milliseconds. [severity: minor]'
+rq(){ printf '%s\nQuote: rounds line %s' "$1" "$2"; } # a finding with the line it means quoted (#1357)
+# The open pull request #<n> of feat/rounds, read by branch and by number: rd_pr <n> [<association>|<when>|<body>]...
+rd_pr(){ local n="$1"; shift; pr_json "$n" OPEN feat/rounds "Rounds." "$@"; cp "$FAKE_LOG/pr-view-$n.json" "$FAKE_LOG/pr-view.json"; }
+rd_next(){ printf 'appended in round %s\n' "$1" >> "$REPO/App/Rounds.swift"; G commit -q -am "round $1"; }
+rd_start(){ # rd_start <head> <findings> [start flags]: that head's review, waited for; what start said is in rd-start.out
+  local h="$1" f="$2"; shift 2
+  FAKE_CLAUDE_OUT="$f" prr start --dir "$REPO" --sha "$h" --base-ref main --branch feat/rounds "$@" > "$WORKDIR/rd-start.out"
+  wait_final "$h" || bad "#1358 the review of ${h:0:7} finished"
+}
+# As the push gate asks: the branch only, so the pull request is found by it.
+rd_check(){ prr check --dir "$REPO" --sha "$1" --base-ref main --branch feat/rounds --gate push; }
+step_of(){ grep -F 'Step back' <<<"$1"; }
+list_of(){ awk '/FILES THIS PUSH CHANGED/ { on = 1 } on { print } /END OF FILE LIST/ { exit }' <<<"$1"; }
+ANS_R1="OWNER|2099-01-01T10:00:00Z|Lessons review (head HEADR1):"$'\n\n'"1. Rounds.swift:5: not a defect, the caller reports it."
+
+rd_pr 91
+R1="$(G rev-parse HEAD)"
+rd_start "$R1" "$(rq "$RF1" 5)"
+out="$(rd_check "$R1")"; rc=$?
+check_eq "#1358 round 1 refuses on its finding as before" "1" "$rc"
+check_not "#1358 and does not ask to step back" "Step back" "$out"
+rd_next 2; R2="$(G rev-parse HEAD)"
+rd_start "$R2" "No issues found."
+out="$(rd_check "$R2")"; rc=$?
+check_eq "#1358 a clean review allows" "0" "$rc"
+rd_next 3; R3="$(G rev-parse HEAD)"
+rd_start "$R3" "$(rq "$RMIN" 8)"
+out="$(rd_check "$R3")"; rc=$?
+check_eq "#1358 a review with only minor findings allows" "0" "$rc"
+check "#1358 (produced: as advisory)" "Advisory, minor findings" "$out"
+rd_pr 91 "${ANS_R1/HEADR1/${R1:0:7}}"
+rd_next 4; R4="$(G rev-parse HEAD)"
+rd_start "$R4" "$(rq "$RF1" 5)"
+out="$(rd_check "$R4")"; rc=$?
+check_eq "#1358 a review whose only finding was answered allows" "0" "$rc"
+check "#1358 (produced: as answered)" "so none is new" "$out"
+rd_next 5; R5="$(G rev-parse HEAD)"
+rd_start "$R5" "$(rq "$RF2" 12)"
+out="$(rd_check "$R5")"; rc=$?
+check_eq "#1358 round 2 refuses" "1" "$rc"
+check_not "#1358 a clean, a minor only and an answered only review are not rounds, so round 2 does not ask to step back" "Step back" "$out"
+rd_next 6; R6="$(G rev-parse HEAD)"
+rd_start "$R6" "$(rq "$RF3" 25)"
+s6in="$(cat "$FAKE_LOG/stdin")"
+check "#1358 the third round's review still reads the whole branch" "+++ b/Docs/Early.md" "$s6in"
+check_not "#1358 not only the change since the last reviewed head" "ONLY WHAT CHANGED SINCE" "$s6in"
+out="$(rd_check "$R6")"; rc=$?
+check_eq "#1358 round 3 refuses exactly as a round always has" "1" "$rc"
+check "#1358 and asks to step back" "Step back" "$out"
+check "#1358 naming the round" "round 3 of" "$(step_of "$out")"
+check "#1358 and reconsider the approach" "reconsider the approach" "$(step_of "$out")"
+check "#1358 naming the first round" "${R1:0:7}" "$(step_of "$out")"
+check "#1358 and the second" "${R5:0:7}" "$(step_of "$out")"
+for h in "$R2" "$R3" "$R4"; do
+  check_not "#1358 a review that stopped nothing is not named as a round: ${h:0:7}" "${h:0:7}" "$(step_of "$out")"
+done
+check "#1358 the findings to fix are still shown" "the retry loop has no bound" "$out"
+rk="$(key_in "$out")"
+[ -n "$rk" ] && ok || bad "#1358 the refusal still carries its read key: $out"
+out="$(rd_check "$R6")"
+check "#1358 checking the same review again is the same round, not a fourth" "round 3 of" "$(step_of "$out")"
+out="$(PR_REVIEW_READ="$(key_in "$out")" rd_check "$R6")"; rc=$?
+check_eq "#1358 the read key still lets it through: stepping back is guidance, never a new block" "0" "$rc"
+
+# Round 4 reads only what changed since the last reviewed head, with the history still given.
+rd_next 7; R7="$(G rev-parse HEAD)"
+rd_start "$R7" "$(rq "$RF4" 18)"
+sout="$(cat "$WORKDIR/rd-start.out")"
+s7in="$(cat "$FAKE_LOG/stdin")"
+check "#1358 the fourth round's review reads only the changes since the last reviewed head" "the changes since ${R6:0:7}" "$sout"
+check "#1358 its input says so" "ONLY WHAT CHANGED SINCE ${R6:0:7}" "$s7in"
+check "#1358 and is given that change" "+appended in round 7" "$s7in"
+check_not "#1358 and not a change an earlier round read" "+appended in round 6" "$s7in"
+check_not "#1358 nor a file only an earlier round changed" "+++ b/Docs/Early.md" "$s7in"
+check "#1358 which the file list still names, as read by the earlier reviews" "Docs/Early.md"$'\t'"(changed by this branch before ${R6:0:7}" "$(list_of "$s7in")"
+check "#1358 the earlier findings are still given as history" "EARLIER REVIEWS OF THIS PULL REQUEST" "$s7in"
+check "#1358 with what the third round raised" "the retry loop has no bound" "$s7in"
+check "#1358 and what the first raised" "the fifth line swallows the decoding error" "$s7in"
+check_eq "#1358 the review records the head it read from" "$R6" "$(meta "$(final_of "$R7")" since)"
+check_eq "#1358 and the branch's base, which it and the earlier rounds cover together" "$(G merge-base main "$R7")" "$(meta "$(final_of "$R7")" base)"
+out="$(rd_check "$R7")"; rc=$?
+check_eq "#1358 round 4 refuses on its finding" "1" "$rc"
+check "#1358 and asks to step back again" "round 4 of" "$(step_of "$out")"
+check "#1358 saying what this review read" "the changes since ${R6:0:7}" "$out"
+check_not "#1358 never claiming the whole branch" "review of the whole branch" "$out"
+check "#1358 the finding it raised is shown" "the eighteenth line copies the twelfth" "$out"
+
+# The answered match works on a narrowed review: a finding answered on the third round, raised
+# again, is shown as answered.
+rd_pr 91 "${ANS_R1/HEADR1/${R1:0:7}}" "OWNER|2099-01-01T11:00:00Z|Lessons review (head ${R6:0:7}):"$'\n\n'"1. Rounds.swift:25: bounded by the caller's own timeout."
+rd_next 8; R8="$(G rev-parse HEAD)"
+rd_start "$R8" "$(rq "$RF3" 25)"
+check "#1358 (produced: the fifth review is narrowed too)" "ONLY WHAT CHANGED SINCE ${R7:0:7}" "$(cat "$FAKE_LOG/stdin")"
+out="$(rd_check "$R8")"; rc=$?
+check_eq "#1358 a narrowed review whose only finding was answered allows" "0" "$rc"
+check "#1358 showing it as answered" "so none is new" "$out"
+
+# Nothing in the branch's files changed since the last reviewed head: the whole branch is read, saying so.
+G commit -q --allow-empty -m "only words"
+R9="$(G rev-parse HEAD)"
+rd_start "$R9" "No issues found."
+check "#1358 nothing changed since the last reviewed head: the whole branch is read, saying why" "nothing in the files this branch changes is different from ${R8:0:7}" "$(cat "$WORKDIR/rd-start.out")"
+check "#1358 (whole: a file only an earlier round changed is shown)" "+++ b/Docs/Early.md" "$(cat "$FAKE_LOG/stdin")"
+check_eq "#1358 and no narrowing is recorded" "" "$(meta "$(final_of "$R9")" since)"
+
+# A rebased branch: the last reviewed head is no longer an ancestor, so the whole branch is read,
+# saying so; the rounds before the rebase still count, found by the pull request's number.
+G checkout -q main
+printf '# fixture moved for the rebase\n' > "$REPO/README.md"
+G commit -q -am "main moves before the rebase"
+G checkout -q feat/rounds
+G rebase -q main
+RB="$(G rev-parse HEAD)"
+rd_start "$RB" "$(rq "$RF4" 18)" --pr 91
+sout="$(cat "$WORKDIR/rd-start.out")"
+sbin="$(cat "$FAKE_LOG/stdin")"
+check "#1358 a rebased branch's review says it reads the whole branch" "is not an ancestor of ${RB:0:7}" "$sout"
+check "#1358 and why" "rebased or amended" "$sout"
+check "#1358 (whole: a file only an earlier round changed is shown again)" "+++ b/Docs/Early.md" "$sbin"
+check_not "#1358 not only the change since" "ONLY WHAT CHANGED SINCE" "$sbin"
+check_eq "#1358 and no narrowing is recorded" "" "$(meta "$(final_of "$RB")" since)"
+out="$(rd_check "$RB")"; rc=$?
+check_eq "#1358 the rebased head's finding refuses" "1" "$rc"
+check "#1358 the rounds before the rebase still count" "round 5 of" "$(step_of "$out")"
+
+# A branch name used again by another pull request does not inherit its rounds.
+G checkout -q main
+G branch -q -D feat/rounds
+G checkout -q -b feat/rounds main
+seq 1 30 | sed 's/^/rounds line /' > "$REPO/App/Rounds.swift"
+G add App/Rounds.swift
+G commit -q -m "rounds again"
+RN="$(G rev-parse HEAD)"
+rd_pr 95
+rd_start "$RN" "$(rq "$RF1" 5)"
+out="$(rd_check "$RN")"; rc=$?
+check_eq "#1358 control: the reused name's finding refuses" "1" "$rc"
+check_not "#1358 a branch name used again does not inherit another pull request's rounds" "Step back" "$out"
+check_not "#1358 nor is its review narrowed" "ONLY WHAT CHANGED SINCE" "$(cat "$FAKE_LOG/stdin")"
+runners_done || bad "#1358 a runner was still going at the end"
+G checkout -q feat/sync
+G branch -f main "$ROUNDS_MAIN"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
