@@ -1036,6 +1036,167 @@ done <<< "$premise_out"
 # Counted, so a runner that crashed on import and printed nothing reads as a failure, never a pass.
 [ "$premise_ran" -eq 22 ] && ok || bad "the premise mark fixtures ran $premise_ran of 22 cases"
 
+# ===========================================================================
+# 12. A finding is placed by the line it QUOTES, never by the number it cites (claude-config#1357).
+# In a hand judged sample of 60 lessons review findings on 2026-10-19, 44 cited the wrong line,
+# usually a blank line, a lone brace or a neighbour within about 20 lines of the real one, and
+# everything keyed on file and line (the earlier review history, the answered findings match) was
+# misled by it. So the reviewer quotes the line it means on a "Quote:" line under each finding, and
+# the runner moves the finding to the line of the file at the reviewed head that matches the quote,
+# the occurrence nearest the cited number when it is there more than once. A finding it cannot
+# place (no quote, a quote matching nothing, a file not at the head) keeps its number and SAYS it
+# was not placed, so a guess never reads as a checked line. A number written "~N", the reviewer's
+# own way of saying it is approximate, is a finding like any other (it was refused as unparsed on
+# 2026-10-19, blocking a push whose only finding was real). The code is invented.
+# ===========================================================================
+PLACE="$WORKDIR/place"
+mkdir -p "$PLACE/src"
+git init -q "$PLACE"
+P(){ git -C "$PLACE" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+cat > "$PLACE/src/ledger.ts" <<'EOF'
+export function settle(entries) {
+  let total = 0;
+
+  for (const e of entries) {
+    total += e.amount;
+  }
+
+  return total;
+}
+
+export function refund(entries) {
+  let total = 0;
+  for (const e of entries) {
+    total -= e.amount;
+  }
+  return total;
+}
+EOF
+printf 'export const gone = 1;\n' > "$PLACE/src/old.ts"
+P add src/ledger.ts src/old.ts; P commit -q -m seed
+P rm -q src/old.ts; P commit -q -m "remove old"
+PLACE_SHA="$(P rev-parse HEAD)"
+place_out="$(python3 - "$RUNNER" "$PLACE" "$PLACE_SHA" <<'EOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+repo, sha = sys.argv[2], sys.argv[3]
+
+S = " Should be: fix it. [severity: major]"
+def one(name, answer, want_line, want_mark):
+    """want_line: the location the finding must start with; want_mark: a phrase the line must
+    carry, or None for no harness mark at all."""
+    text, counts = m.place_findings(answer, repo, sha)
+    lines = [l for l in text.splitlines() if m.FINDING.match(l)]
+    problems = []
+    if len(lines) != 1:
+        problems.append(f"{len(lines)} finding lines")
+    elif not lines[0].startswith(want_line):
+        problems.append(f"placed at {lines[0].split(' ')[0]}")
+    if lines and want_mark is None and "[review harness:" in lines[0]:
+        problems.append("marked though placed")
+    if lines and want_mark is not None and want_mark not in lines[0]:
+        problems.append(f"missing the mark {want_mark!r}")
+    if "Quote:" in text:
+        problems.append("a Quote line was left in the stored text")
+    if "~" in (lines[0].split(" ")[0] if lines else ""):
+        problems.append("the approximate marker was kept in the location")
+    print(("FAIL\t" + name + ": " + "; ".join(problems) + " | " + repr(text)) if problems else ("PASS\t" + name))
+
+one("a finding citing a blank line moves to the line it quotes",
+    "src/ledger.ts:3: total is never checked for overflow." + S + "\nQuote: total += e.amount;",
+    "src/ledger.ts:5: ", None)
+one("a finding citing a lone brace moves to the line it quotes",
+    "src/ledger.ts:6: the loop reads entries without a null check." + S + "\nQuote: for (const e of entries) {",
+    "src/ledger.ts:4: ", None)
+one("a quote at the cited line leaves it where it is, unmarked",
+    "src/ledger.ts:14: refund subtracts where it should add." + S + "\nQuote: total -= e.amount;",
+    "src/ledger.ts:14: ", None)
+one("a quote found twice goes to the occurrence nearest the cited line, the later one",
+    "src/ledger.ts:15: refund returns a negative total." + S + "\nQuote: return total;",
+    "src/ledger.ts:16: ", None)
+one("a quote found twice goes to the nearest occurrence even when it is not the first",
+    "src/ledger.ts:9: total starts at zero for refunds too." + S + "\nQuote: let total = 0;",
+    "src/ledger.ts:12: ", None)
+one("spacing inside and around the quote is not held against it",
+    "src/ledger.ts:3: total is never checked." + S + "\nQuote:    total   +=  e.amount;   ",
+    "src/ledger.ts:5: ", None)
+one("a quote wrapped in backticks is read without them",
+    "src/ledger.ts:7: settle returns the raw total." + S + "\nQuote: `return total;`",
+    "src/ledger.ts:8: ", None)
+one("a quote matching no line keeps the cited number and says so",
+    "src/ledger.ts:5: total is multiplied." + S + "\nQuote: total *= e.amount;",
+    "src/ledger.ts:5: ", "matches no line of src/ledger.ts")
+one("a finding with no quote is kept, at its number, marked as not placed",
+    "src/ledger.ts:5: total is never checked." + S,
+    "src/ledger.ts:5: ", "quoted no line")
+one("an approximate number is read and placed by its quote",
+    "src/ledger.ts:~3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "src/ledger.ts:5: ", None)
+one("an approximate number with no quote is kept as a plain number, marked as not placed",
+    "src/ledger.ts:~14: refund subtracts." + S,
+    "src/ledger.ts:14: ", "quoted no line")
+one("a finding about a file not at the reviewed head keeps its number and says why",
+    "src/old.ts:1: gone is still imported elsewhere." + S + "\nQuote: export const gone = 1;",
+    "src/old.ts:1: ", "src/old.ts is not a file at the reviewed head")
+
+# Several findings at once: each takes its own quote, and the lines that are not findings stay.
+two, counts = m.place_findings(
+    "src/ledger.ts:3: first." + S + "\nQuote: total += e.amount;\n"
+    "src/ledger.ts:1: second." + S + "\n"
+    "src/ledger.ts:14: third." + S + "\nQuote: return total;", repo, sha)
+got = [l.split(" ")[0] for l in two.splitlines() if m.FINDING.match(l)]
+print("PASS\tthree findings each placed by their own quote" if got == ["src/ledger.ts:5:", "src/ledger.ts:1:", "src/ledger.ts:16:"]
+      else f"FAIL\tthree findings each placed by their own quote: {got} | {two!r}")
+print("PASS\tthe counts say how many were placed and how many not" if counts == {"placed": 2, "unplaced": 1}
+      else f"FAIL\tthe counts say how many were placed and how many not: {counts}")
+# The approximate marker is a finding to the parse the runner gates on, so an answer whose only
+# finding is approximate is a review, not "unparsed".
+n = m.count_findings("src/ledger.ts:~253: total is never checked." + S)
+print("PASS\tan approximate finding is counted" if n == 1 else f"FAIL\tan approximate finding is counted: {n}")
+# A head the runner cannot read places nothing and says so on every finding, never guessing.
+text, counts = m.place_findings("src/ledger.ts:3: x." + S + "\nQuote: total += e.amount;", repo, "0" * 40)
+print("PASS\ta head that cannot be read leaves the finding at its number, marked" if
+      text.startswith("src/ledger.ts:3: ") and "could not be read" in text and counts == {"placed": 0, "unplaced": 1}
+      else f"FAIL\ta head that cannot be read leaves the finding at its number, marked: {counts} | {text!r}")
+EOF
+)"
+place_ran=0
+while IFS=$'\t' read -r verdict rest; do
+  case "$verdict" in
+    PASS) ok; place_ran=$((place_ran + 1)) ;;
+    FAIL) bad "placement: $rest"; place_ran=$((place_ran + 1)) ;;
+    *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
+  esac
+done <<< "$place_out"
+[ "$place_ran" -eq 16 ] && ok || bad "the placement fixtures ran $place_ran of 16 cases"
+
+# End to end, through the hook and the detached runner: the stored review holds the placed line and
+# no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
+cat > "$REPO/src/placed.ts" <<'EOF'
+export function total(xs) {
+
+  return xs.reduce((a, b) => a + b);
+}
+EOF
+G add src/placed.ts; G commit -q -m placed
+G push -q origin main 2>/dev/null
+SHA_PLACED="$(G rev-parse HEAD)"
+FAKE_CLAUDE_OUT='src/placed.ts:2: reduce with no initial value throws on an empty list. Should be: pass 0. [severity: major]
+Quote: return xs.reduce((a, b) => a + b);
+src/placed.ts:~1: total has no type for xs. Should be: type it. [severity: minor]' \
+  fire_push "git push origin main" 0
+wait_for_final "$SHA_PLACED" 20 && ok || bad "the placement review finishes"
+placed_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_PLACED".txt )
+placed_body="$(cat "${placed_final[0]:-/dev/null}" 2>/dev/null)"
+check "the stored review is a review, not unparsed" "status=ok" "$placed_body"
+check "the finding citing a blank line is stored at the line it quoted" "src/placed.ts:3: reduce with no initial value" "$placed_body"
+check_not "and its Quote line is not stored" "Quote:" "$placed_body"
+check "the approximate finding with no quote is stored at its number" "src/placed.ts:1: total has no type" "$placed_body"
+check "marked as not placed" "quoted no line" "$placed_body"
+check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$placed_body"
+
 echo
 echo "passed: $pass, failed: $fail"
 echo "SUITE-RESULT passed=$pass failed=$fail"
