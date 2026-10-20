@@ -200,6 +200,12 @@ def check_exceptions(exceptions, decisions, frames):
         if has_d == has_f:
             problems.append("exception %s must name exactly one decision or one frame" % xid)
             continue
+        named = x["decision"] if has_d else x["frame"]
+        if not isinstance(named, str):
+            problems.append("exception %s names its %s as %s; write the %s's id as text"
+                            % (xid, "decision" if has_d else "frame", json.dumps(named)[:80],
+                               "decision" if has_d else "frame"))
+            continue
         if has_d:
             if x["decision"] not in ids:
                 problems.append("exception %s names the decision %s, which the decision map does not hold"
@@ -589,6 +595,16 @@ EXIT = {"matched": 0, "not-matched": 1, "unmeasured": 2}
 
 
 def main(argv):
+    # A fault in the score itself is no score, exit 2: left to python it exits 1, which is the code
+    # for "not matched yet" and would read as a measurement (lessons review of stage 1, L11).
+    try:
+        return _main(argv)
+    except Exception as err:  # noqa: BLE001
+        print("design-score: could not score: the score itself failed (%s: %s)" % (type(err).__name__, err))
+        return 2
+
+
+def _main(argv):
     if len(argv) != 3 or argv[1] not in ("score", "show"):
         print(__doc__.strip().split("\n\n")[0])
         print("usage: design_score.py score <capture folder> | show <score.json>")

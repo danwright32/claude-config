@@ -455,7 +455,9 @@ for n, (label, bad) in enumerate([("names no decision or frame", {}),
                    ("names a decision the map does not hold", {"decision": "D7"}),
                    ("names a frame the design does not declare", {"frame": "f7"}),
                    ("gives a region without a frame", {"decision": "D1", "region": [0, 0, 1, 1]}),
-                   ("gives a region outside its frame", {"frame": "f1", "region": [30, 20, 20, 20]})]):
+                   ("gives a region outside its frame", {"frame": "f1", "region": [30, 20, 20, 20]}),
+                   ("names its decision as a list rather than an id", {"decision": ["D1"]}),
+                   ("names its frame as an object rather than an id", {"frame": {"id": "f1"}})]):
     rc, out, _ = score(make("exc-bad-%d" % n, lambda s, bad=bad: s.__setitem__(
         "exceptions", {"exceptions": [dict(EXC, **bad)]})))
     check("an exception that %s is no score" % label, rc == 2 and "X1" in out, out)
@@ -467,6 +469,17 @@ for field in ("words", "date", "source"):
 rc, out, _ = score(make("exc-all-frames", lambda s: s.__setitem__("exceptions", {"exceptions": [
     dict(EXC, frame="f1"), dict(EXC, id="X2", frame="f2")]})))
 check("excepting every frame leaves nothing to compare, so no score", rc == 2 and "no frame" in out, out)
+
+# A fault inside the score itself is no score (exit 2), never python's exit 1, which reads as
+# "not matched yet" (lessons review of stage 1).
+crash = subprocess.run([sys.executable, "-c", (
+    "import sys; sys.path.insert(0, %r); import design_score as d\n"
+    "def boom(folder): raise TypeError('a fault in the score')\n"
+    "d.score_capture = boom\n"
+    "sys.exit(d.main(['design_score.py', 'score', %r]))") % (SCORE_DIR, T)], capture_output=True, text=True)
+check("a fault inside the score exits 2, saying it could not score",
+      crash.returncode == 2 and "could not score" in crash.stdout and "a fault in the score" in crash.stdout,
+      "rc=%d %s %s" % (crash.returncode, crash.stdout, crash.stderr))
 
 # 10. show prints the two scores from a score file, and refuses one that contradicts itself.
 d = make("show", fail_d1_on_f2)
