@@ -28,6 +28,11 @@ passed = failed = 0
 html_unescape = html.unescape
 
 
+def text_of(markup):
+    """What a reader sees of a fragment of the page: its tags taken out and its entities read."""
+    return html.unescape(re.sub(r"<[^>]+>", "", markup))
+
+
 def check(name, ok, detail=""):
     global passed, failed
     if ok:
@@ -315,16 +320,23 @@ check("each requirement shows its own number, as the PRD numbers it, beside its 
       all("<strong>%s</strong> %s" % (r["number"], html.escape(r["text"], quote=True)) in rbody for r in REQS), rbody[:1500])
 check("a requirement's sentence is text, never markup", "<b>at a glance</b>" not in rsrc and "&lt;b&gt;at a glance" in rbody)
 d1 = re.search(r'<li id="D1">.*?</li>', rbody, re.S)
-check("a decision's owner reads as the requirement's sentence, not only its number",
-      d1 is not None and "Requirement 1: Sam sees tomorrow&#x27;s open calls by team. Checked on f1, f2" in d1.group(0),
-      d1.group(0) if d1 else rbody[:1500])
+# Dan, 2026-10-20, on claude-config#1429 (picker answer "Number linked to the list"): a decision shows
+# its requirement's number as a link to the list, and the sentence is on the page once, in the list.
+# This replaces #1401's "Requirement 1: the sentence" on every decision line.
+check("a decision's owner is its requirement's number, linked to the list, with the sentence left to the list",
+      d1 is not None and "Requirement 1. Checked on f1, f2" in text_of(d1.group(0))
+      and "Sam sees" not in d1.group(0), d1.group(0) if d1 else rbody[:1500])
+for r in REQS:
+    check("requirement %s's sentence is on the page exactly once" % r["number"],
+          rbody.count(html.escape(r["text"], quote=True)) == 1, rbody[:2000])
 d3 = re.search(r'<li id="D3">.*?</li>', rbody, re.S)
 rc, out, qpath = make("requirements-question", spec(requirements=[
     {"number": "1", "text": "Can Sam see tomorrow's open calls?"}, {"number": "2", "text": "Open calls stand out!"}]))
 qsrc = open(qpath, encoding="utf-8").read() if os.path.isfile(qpath) else ""
-check("a requirement ending in a question or exclamation mark keeps its own mark, with no full stop after it",
-      "open calls? Checked on f1, f2" in qsrc and "stand out! Held by the picture half." in qsrc and "?." not in qsrc
-      and "!." not in qsrc, out + qsrc[:1200])
+qbody = qsrc.split('<script type="application/json"')[0]
+check("a requirement ending in a question or exclamation mark is listed with its own mark, once",
+      qbody.count("open calls?") == 1 and qbody.count("stand out!") == 1 and "?." not in qbody and "!." not in qbody,
+      out + qbody[:1200])
 check("and a decision with no code consequence still gives its reason", d3 is not None and "No code: already built." in d3.group(0),
       d3.group(0) if d3 else "")
 rm = re.search(r'<script type="application/json" id="decision-map">(.*?)</script>', rsrc, re.S)
@@ -370,6 +382,107 @@ for n, (label, s, needle) in enumerate([
 rc, out, _ = make("bad-req-unlisted", spec(requirements=[{"number": "1", "text": "a"}]))
 check("the refusal of an unlisted requirement names the decision that cites it", "D2" in out and "UNLISTED" in out, out)
 
+
+# --- a decision's reason, its owner, and the page in both schemes (claude-config#1426, #1429) ----------
+# The #1401 builder's screenshots read "Dan chose it in round 1 Requirement 6.1: ..." run together: the
+# reason had no full stop before the muted owner. And the page had fixed light colours, though Dan reads
+# it in both schemes.
+def decision_text(src, did):
+    m = re.search(r'<li id="%s">.*?</li>' % re.escape(did), src, re.S)
+    return text_of(m.group(0)) if m else ""
+
+
+check("a decision's reason ends its sentence before its owner begins, with a requirements list",
+      "Sam's word for it. Requirement 1. Checked" in decision_text(rbody, "D1"), decision_text(rbody, "D1"))
+check("and without one", "Sam's word for it. Requirement 1. Checked" in decision_text(bsrc, "D1"), decision_text(bsrc, "D1"))
+rc, out, mpath = make("marks", spec(decisions=[
+    {"id": "D1", "decision": "The page is called Team capacity.", "why": "Is it Sam's word?", "requirement": "1",
+     "frames": ["f1"], "check": "main h1 reads Team capacity"},
+    {"id": "D2", "decision": "Open calls are sky", "why": "They stand out.", "noCode": "drawn only", "verify": "picture"}]))
+msrc = open(mpath, encoding="utf-8").read() if os.path.isfile(mpath) else ""
+check("a reason or decision that already ends a sentence keeps its own mark, never doubled",
+      "Team capacity. Is it Sam's word? Requirement 1." in decision_text(msrc, "D1")
+      and "They stand out. No code: drawn only." in decision_text(msrc, "D2"), out + decision_text(msrc, "D1"))
+check("and no decision line has two marks in a row",
+      not re.search(r"[.?!]\.", decision_text(msrc, "D1") + decision_text(msrc, "D2")),
+      decision_text(msrc, "D1") + " | " + decision_text(msrc, "D2"))
+check("a page with no requirements list shows a decision's number alone, linking nowhere",
+      "<a " not in re.search(r'<ol class="dr-decisions">.*?</ol>', bsrc, re.S).group(0), bsrc[:1500])
+
+
+def anchors(src):
+    """{number: id} for each listed requirement, and every id the page's markup holds."""
+    body = src.split('<script type="application/json"')[0]
+    listed = re.search(r'<ul class="dr-requirements">(.*?)</ul>', body, re.S)
+    found = {}
+    for rid, number in re.findall(r'<li id="([^"]+)"[^>]*><strong>(.*?)</strong>', listed.group(1) if listed else ""):
+        found[html.unescape(number)] = rid
+    return found, re.findall(r'\bid="([^"]+)"', body)
+
+
+rfound, rids = anchors(rsrc)
+check("each listed requirement carries an anchor", sorted(rfound) == sorted(r["number"] for r in REQS), repr(rfound))
+for d in ("D1", "D2"):
+    m = re.search(r'<li id="%s">.*?</li>' % d, rbody, re.S)
+    link = re.search(r'<a href="#([^"]+)">Requirement ([^<]+)</a>', m.group(0)) if m else None
+    check("decision %s links its requirement's number to that requirement's entry in the list" % d,
+          link is not None and rfound.get(html.unescape(link.group(2))) == link.group(1), m.group(0) if m else rbody[:900])
+
+# Numbers are text exactly as the PRD writes them, so anchors are derived to be safe in a fragment and
+# unique on the page, whatever two numbers look like once their unsafe characters are replaced, and
+# whatever a decision happens to be called.
+ODD = [{"number": "6.4", "text": "Six point four"}, {"number": "6-4", "text": "Six dash four"},
+       {"number": "6 4", "text": "Six space four"}, {"number": "R 1/2", "text": "R one of two"},
+       {"number": "é1", "text": "Accented"}, {"number": "1", "text": "One"}]
+ODD_DECISIONS = [{"id": "req-1", "decision": "Named like an anchor", "requirement": "1", "verify": "picture"}] + [
+    {"id": "D%d" % n, "decision": "Cites %s" % r["number"], "requirement": r["number"], "verify": "picture"}
+    for n, r in enumerate(ODD)]
+rc, out, opath = make("odd-numbers", spec(requirements=ODD, decisions=ODD_DECISIONS))
+osrc = open(opath, encoding="utf-8").read() if os.path.isfile(opath) else ""
+ofound, oids = anchors(osrc)
+check("a page whose requirement numbers clash once made safe is written", rc == 0 and len(ofound) == len(ODD), out + repr(ofound))
+check("every requirement's anchor is safe in a fragment: a letter, then letters, digits, hyphens and underscores",
+      all(re.match(r"^[A-Za-z][A-Za-z0-9_-]*$", a) for a in ofound.values()), repr(ofound))
+check("and no two ids on the page are the same, a decision's included", len(oids) == len(set(oids)), repr(oids))
+obody = osrc.split('<script type="application/json"')[0]
+links = re.findall(r'<li id="([^"]+)">.*?<a href="#([^"]+)">Requirement ([^<]+)</a>', obody, re.S)
+check("each decision's link lands on the entry for the number it names",
+      len(links) == len(ODD_DECISIONS) and all(ofound.get(html.unescape(n)) == target for _d, target, n in links), repr(links))
+
+
+def schemes(css):
+    """The colour tokens the page defines for light (on :root) and for dark (under the media query)."""
+    light = re.search(r"(?<![\w-]):root\s*\{([^}]*)\}", css)
+    dark = re.search(r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{([^}]*)\}", css)
+    read = lambda block: dict(re.findall(r"(--dr-[\w-]+):\s*(#[0-9A-Fa-f]{6})\s*;", block.group(1))) if block else {}  # noqa: E731
+    return read(light), read(dark)
+
+
+def contrast(a, b):
+    def lum(h):
+        c = [int(h[i:i + 2], 16) / 255.0 for i in (1, 3, 5)]
+        c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+for label, page_src in (("a page with requirements", rsrc), ("a page without", bsrc)):
+    css = re.search(r"<style>(.*?)</style>", page_src, re.S).group(1)
+    light, dark = schemes(css)
+    check("%s defines its colours as tokens on :root, and every one again for the dark scheme" % label,
+          light and set(light) == set(dark), "light=%r dark=%r" % (light, dark))
+    rules = re.sub(r"@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{[^}]*\}\s*\}", "",
+                   re.sub(r"(?<![\w-]):root\s*\{[^}]*\}", "", css))
+    check("%s uses no colour outside its tokens, so nothing stays light in the dark scheme" % label,
+          not re.search(r"#[0-9A-Fa-f]{3,8}\b|rgb\(", rules) and "var(--dr-bg)" in rules, rules)
+    for scheme, tokens in (("light", light), ("dark", dark)):
+        for fg, bg in (("--dr-text", "--dr-bg"), ("--dr-muted", "--dr-bg"), ("--dr-link", "--dr-bg"),
+                       ("--dr-text", "--dr-target")):
+            ratio = contrast(tokens[fg], tokens[bg]) if fg in tokens and bg in tokens else 0
+            check("%s, %s: %s on %s reads at 4.5 to 1 or better" % (label, scheme, fg, bg), ratio >= 4.5,
+                  "%.2f" % ratio)
+
 # --- in a real browser, where there is one ------------------------------------------------------------
 CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
@@ -393,6 +506,43 @@ var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, designFrameDocument gives each frame's whole document and refuses an unknown one",
           proc.returncode == 0 and m and m.group(1) == "f1=slot,f2=slot,f9=refused", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
+
+    # A decision's requirement link, driven as a keyboard user drives it: it takes focus, its name read
+    # alone says what it is, and following it puts focus on the requirement it names, so a screen reader
+    # reads the sentence next (claude-config#1429). And the page's colours follow the scheme Chrome is
+    # told to prefer, given explicitly because left alone it follows the Mac's own (#1426).
+    lprobe = rsrc.replace("</body></html>", """<script>
+var link = document.querySelector('.dr-decisions a[href^="#"]'), out = [];
+link.focus();
+out.push(document.activeElement === link ? "focused" : "unfocused", link.tabIndex, link.textContent);
+window.addEventListener("hashchange", function () {
+  var target = document.getElementById(link.getAttribute("href").slice(1));
+  out.push(document.activeElement === target ? "landed" : "notlanded:" + document.activeElement.tagName,
+           target && target.closest(".dr-requirements") ? "inlist" : "elsewhere");
+  out.push(getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color);
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join("|"); document.body.append(pre);
+}, {once: true});
+link.click();
+</script></body></html>""")
+    with open(os.path.join(T, "lprobe.html"), "w", encoding="utf-8") as fh:
+        fh.write(lprobe)
+    seen = {}
+    for scheme, setting in (("light", "1"), ("dark", "0")):
+        proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                               "--blink-settings=preferredColorScheme=" + setting,
+                               "--dump-dom", "file://" + os.path.join(T, "lprobe.html")], capture_output=True, text=True,
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+        m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+        seen[scheme] = m.group(1).split("|") if m and proc.returncode == 0 else [
+            "rc=%d" % proc.returncode, proc.stdout[-500:] + proc.stderr[-500:]]
+    check("in Chrome, a decision's requirement link takes keyboard focus and is named by its own text",
+          seen["light"][:3] == ["focused", "0", "Requirement 1"], repr(seen["light"]))
+    check("and following it puts focus on that requirement in the list",
+          seen["light"][3:5] == ["landed", "inlist"], repr(seen["light"]))
+    light_bg, dark_bg = (seen[s][5] if len(seen[s]) > 6 else "" for s in ("light", "dark"))
+    lum = lambda rgb: sum(int(x) for x in re.findall(r"\d+", rgb)[:3])  # noqa: E731
+    check("in Chrome, the page is light when light is preferred and dark when dark is",
+          light_bg and dark_bg and lum(light_bg) > 600 and lum(dark_bg) < 150, repr(seen))
 
     # The email design's frame drawn for real, as the web adapter draws it: a document of its own whose
     # body holds the round's drawing and nothing else (claude-config#1393).

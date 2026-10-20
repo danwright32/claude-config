@@ -2087,10 +2087,12 @@ captured (Dan, 2026-10-19: "No stand ins"), a checked decision with no sentence 
 asserts or no frames it shows on, a decision with no owner, and an exception without Dan's words, a
 date and where he said them. A spec may also carry the design's opening paragraph (`"intro"`) and the
 PRD's numbered requirements (`"requirements"`, #1401): the page shows the intro under its title and
-lists the requirements, each decision's owner reads as its requirement's sentence, and the decision map
-carries the list, so `make-settled.py` and `check-decision-map.py` (`UNLISTED`) both refuse a decision
-naming a number it does not hold. A spec with neither writes the same bytes as before; without the list
-a decision's number is shown alone and the tool says which. The score counts a decision as met only once its check has run on every
+lists the requirements, each decision's owner is its requirement's number linked to its entry in the
+list, so the sentence is on the page once (#1429), and the decision map carries the list, so
+`make-settled.py` and `check-decision-map.py` (`UNLISTED`) both refuse a decision naming a number it
+does not hold. Without the list a decision's number is shown alone and the tool says which. The page
+follows the reader's light or dark scheme from colour tokens, and each decision's reason is closed as a
+sentence before its owner (#1426). The score counts a decision as met only once its check has run on every
 frame the map says it shows on. `test-make-settled.sh` holds both, reading the file in Chrome where
 there is one.
 

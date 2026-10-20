@@ -339,11 +339,14 @@ fields carry what a PRD opens with (claude-config#1401): `"intro"`, the design's
 (who it is for, how many rounds settled it, who approved it), shown under its title; and
 `"requirements"`, the PRD's numbered requirements as `[{"number": "6.4", "text": "the sentence"}]`,
 each number written as text exactly as the PRD numbers it. Given, the requirements are listed on the
-page, every decision's owner reads as its sentence (`Requirement 6.4: the sentence`), and the decision
-map carries the list, so a decision naming a number it does not hold is refused, naming the number,
-by `make-settled.py` and by `check-decision-map.py` (`UNLISTED`). Left out, a decision's number is
-shown alone, the PRD holds its sentence, and `make-settled.py` says which numbers it showed without
-one; a spec written without either field writes the same bytes it always did. The fixture
+page, each with an anchor, every decision's owner is `Requirement 6.4` linked to that entry, so the
+sentence is on the page once (Dan, 2026-10-20, claude-config#1429), and the decision map carries the
+list, so a decision naming a number it does not hold is refused, naming the number, by
+`make-settled.py` and by `check-decision-map.py` (`UNLISTED`). Left out, a decision's number is shown
+alone, the PRD holds its sentence, and `make-settled.py` says which numbers it showed without one.
+The page follows the reader's light or dark scheme, and a decision's reason is its own sentence ahead
+of its owner (claude-config#1426), so a settled file written before then changes when regenerated,
+though nothing the score or `check-decision-map.py` reads does. The fixture
 is the data the frames are drawn from, committed in the app's repository, and the built page renders
 the same file in a development only preview, so both sides of the score draw the same data. Each
 decision is written so its check can be authored from it: what it is, why, its owner (`requirement`
