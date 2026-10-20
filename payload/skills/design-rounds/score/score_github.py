@@ -10,6 +10,9 @@ the writer and the reader of a score comment cannot drift apart:
   <!-- design-score v1 -->                                           at the head of a score comment,
                                                                      the score file in a json block
 
+A mark counts only as the HTML comment itself, outside code (outside_code, claude-config#1394): an
+issue that documents a mark quotes it in backticks or a code block, and that marks nothing.
+
 GitHub is read through `gh`, as whichever logged in account can see the repository: the active
 one first, then each other, its token scoped to the one call and never switched (Dan runs sessions
 under several accounts at once). That walk is lib/merge-target.sh's mt_pr_view, written again here
@@ -36,10 +39,125 @@ def mark(kind, design):
     return "<!-- %s %s -->" % (kind, json.dumps({"design": design}))
 
 
+_QUOTE = re.compile(r"^(?: {0,3}>)")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_LIST_ITEM = re.compile(r"^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)")
+
+
+def _inline_outside_code(s):
+    """A paragraph with its code spans blanked out, read left to right as GitHub's markdown does: a
+    run of backticks opens a span closed by the next run of exactly as many, and one never closed is
+    plain text; an HTML comment that starts first is kept whole, backticks inside it and all."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        if s.startswith("<!--", i):
+            j = s.find("-->", i + 4)
+            if j < 0:
+                out.append(s[i:])
+                break
+            out.append(s[i:j + 3])
+            i = j + 3
+        elif s[i] == "\\" and i + 1 < n:
+            out.append(s[i:i + 2])
+            i += 2
+        elif s[i] == "`":
+            j = i
+            while j < n and s[j] == "`":
+                j += 1
+            run, k, close = s[i:j], j, -1
+            while True:
+                k = s.find(run, k)
+                if k < 0:
+                    break
+                end = k + len(run)
+                if s[k - 1] != "`" and (end >= n or s[end] != "`"):
+                    close = k
+                    break
+                while k < n and s[k] == "`":
+                    k += 1
+            if close < 0:
+                out.append(run)
+                i = j
+            else:
+                out.append(" ")
+                i = close + len(run)
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+def outside_code(text):
+    """What of a markdown body GitHub does NOT show as code (claude-config#1394). An issue that
+    documents a mark quotes it in inline code, a fenced block or an indented block, where GitHub
+    shows it as text, so it marks nothing; the real mark is an HTML comment, hidden, outside code.
+
+    Fenced blocks (``` or ~~~, inside a quote too, and one never closed runs to the end as it does
+    on GitHub) and indented blocks (four spaces or a tab, never inside a list item, where that
+    indent continues the item) are dropped; code spans are blanked; HTML blocks are kept as written.
+    Where this reading is unsure it keeps the text, so a doubtful mark is still read as a mark."""
+    chunks, para = [], []
+    fence, fence_depth, html, in_list, prev_blank = None, 0, False, False, True
+
+    def flush():
+        if para:
+            chunks.append(_inline_outside_code("\n".join(para)))
+            del para[:]
+
+    for raw in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line, depth = raw, 0
+        while _QUOTE.match(line):
+            line = _QUOTE.sub("", line, count=1)
+            line = line[1:] if line.startswith(" ") else line
+            depth += 1
+        if fence is not None:
+            if depth < fence_depth:
+                fence = None          # the quote holding the fence ended, and the fence with it
+            else:
+                if re.match(r"^ {0,3}%s{%d,}[ \t]*$" % (re.escape(fence[0]), len(fence)), line):
+                    fence = None
+                continue
+        if html:
+            chunks.append(line)
+            html = "-->" not in line
+            prev_blank = False
+            continue
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
+        if not expanded.strip():
+            flush()
+            prev_blank = True
+            continue
+        m = _FENCE.match(line)
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            flush()
+            fence, fence_depth, prev_blank = m.group(1), depth, False
+            continue
+        if indent >= 4 and not para and not in_list:
+            prev_blank = False        # an indented code block: dropped
+            continue
+        if _LIST_ITEM.match(line):
+            in_list = True
+        elif indent == 0 and prev_blank:
+            in_list = False
+        if indent < 4 and expanded.lstrip(" ").startswith("<!--"):
+            flush()
+            chunks.append(line)
+            html = "-->" not in line
+            prev_blank = False
+            continue
+        para.append(line)
+        prev_blank = False
+    flush()
+    return "\n".join(chunks)
+
+
 def read_mark(text, kind):
-    """The design path a body's mark of `kind` names, None when it has none. A mark that is not
-    readable JSON naming a design raises, since a broken mark must never read as no mark."""
-    for m in _MARK.finditer(text or ""):
+    """The design path a body's mark of `kind` names, None when it has none. Only the mark itself,
+    an HTML comment outside code, counts: one quoted in inline code or a code block is an example
+    of it (outside_code, claude-config#1394). A real mark that is not readable JSON naming a design
+    raises, since a broken mark must never read as no mark."""
+    for m in _MARK.finditer(outside_code(text or "")):
         if m.group(1) != kind:
             continue
         try:
@@ -59,6 +177,16 @@ def is_match_issue(issue):
     design = read_mark(issue.get("body") or "", ISSUE_MARK)
     titled = (issue.get("title") or "").strip().lower().startswith(MATCH_TITLE.lower())
     return (design is not None or titled), design
+
+
+NOT_PLANNED = "not_planned"
+
+
+def closed_not_planned(issue):
+    """True only when GitHub reports `issue` closed as not planned: its design was abandoned, so
+    neither the close gate nor the daily reopen check holds it to 100% (Dan, 2026-10-20,
+    claude-config#1405). Any other reason, none, or one this cannot read is a completed close."""
+    return issue.get("state") == "closed" and issue.get("state_reason") == NOT_PLANNED
 
 
 def milestone_issues(gh, repo, number):

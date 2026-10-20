@@ -14,6 +14,10 @@
 #     issue is judged at its head, and merge-when-ready.sh, which merges inside a script no hook
 #     sees, asks this gate as it asks the others (test-merge-when-ready.sh holds that).
 #
+# Two closes it lets through below 100%, both decided in the judge: an issue that only QUOTES the
+# mark in code to document it is not a Match issue (#1394), and a close as "not planned" means the
+# design was abandoned (Dan, 2026-10-20, #1405), as does a milestone whose Match issue was so closed.
+#
 # FAILS CLOSED. When a reader is missing, the merge cannot be read, or the judge ends any way but
 # cleanly, a command that may close something is refused with exit 2 and the reason on stderr
 # (Claude Code reads that as a refusal, and so does merge-when-ready.sh): an unchecked close may be
