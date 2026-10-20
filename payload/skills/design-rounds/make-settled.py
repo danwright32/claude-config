@@ -129,10 +129,16 @@ def main(argv):
     decisions = spec.get("decisions")
     if not isinstance(decisions, list) or not decisions:
         fail("the spec lists no decisions; a settled design always has some")
-    for d in decisions:
+    seen_ids = set()
+    for n, d in enumerate(decisions, 1):
         if not isinstance(d, dict):
-            fail("a decision is not an object")
-        did = d.get("id", "?")
+            fail("decision %d is not an object" % n)
+        did = d.get("id")
+        if not isinstance(did, str) or not did.strip():
+            fail("decision %d has no id, which its check and any exception name it by" % n)
+        if did in seen_ids:
+            fail("two decisions share the id %s" % did)
+        seen_ids.add(did)
         verify = d.get("verify", "check")
         shown = d.get("frames")
         if shown is not None and (not isinstance(shown, list) or any(x not in ids for x in shown)):

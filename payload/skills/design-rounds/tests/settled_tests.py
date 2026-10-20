@@ -171,6 +171,10 @@ for n, (label, s, needle) in enumerate([
         {"id": "D1", "decision": "x", "requirement": "1", "frames": ["f9"], "check": "y"}]), "f9"),
     ("a decision with no owner", spec(decisions=[
         {"id": "D1", "decision": "x", "frames": ["f1"], "check": "y"}]), "UNMAPPED D1"),
+    ("a decision with no id", spec(decisions=[{"decision": "x", "requirement": "1", "frames": ["f1"], "check": "y"}]), "no id"),
+    ("two decisions sharing an id", spec(decisions=[
+        {"id": "D1", "decision": "x", "requirement": "1", "frames": ["f1"], "check": "y"},
+        {"id": "D1", "decision": "z", "requirement": "1", "frames": ["f1"], "check": "y"}]), "share the id D1"),
     ("an exception without Dan's words", spec(exceptions=[
         {"id": "X1", "decision": "D1", "date": "2026-10-19", "source": "u"}]), "words"),
 ]):

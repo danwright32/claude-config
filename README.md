@@ -1938,9 +1938,10 @@ app's UI test target: after `capture-web.mjs --design-only` draws the design's s
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
 `test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
 Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
-purpose (about 24 seconds, 2026-10-19); elsewhere those two say UNMEASURED. It also runs the whole
+purpose; elsewhere those two say UNMEASURED. It also runs the whole
 chain: a settled file `make-settled.py` wrote, against an app drawing the same fixture in the same
-chrome, at 100%, and failing the decision when the app's heading changes.
+chrome, at 100%, and failing the decision when the app's heading changes. All of it took 27 seconds
+on this Mac on 2026-10-20.
 
 **The settled design is written, never assembled** (`payload/skills/design-rounds/make-settled.py`).
 From the round's builder, the product's captured chrome (`capture-chrome.js` saves a page with its

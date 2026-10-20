@@ -25,9 +25,9 @@ round's builder, and a few lines that put buildScreen(variant) into the slot. Ea
 its own, so it draws at its own width with its own media queries, and nothing in the round's builder
 can collide with the page around it.
 
-make-switcher.py draws each option this way in an iframe; make-settled.py draws each frame this way,
-and also as the whole page when the settled file is opened with ?frame=<id>, which is what the score's
-adapters screenshot.
+make-settled.py draws each frame of the settled design this way, in an iframe for the reader, and the
+settled file gives each frame's whole document from designFrameDocument(<id>), which the score's web
+adapter draws as a page of its own at the frame's width.
 """
 import base64
 import json
