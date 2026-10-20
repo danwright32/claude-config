@@ -104,6 +104,57 @@ check("match_issues: every page of the milestone, open and closed",
 check("milestone_issues: every issue, pull requests left out",
       [i["number"] for i in sg.milestone_issues(_listing, REPO, 3)] == [9, 5, 12])
 
+# --- the mark is the real HTML comment, never a quoted example of it (claude-config#1394) --------
+# An issue documenting the mark quotes it in inline code or a code block; GitHub shows that as text,
+# so it marks nothing. Only the comment itself, outside code, makes a Match issue.
+REAL = sg.mark(sg.ISSUE_MARK, DESIGN)
+QUOTED_BODIES = {
+    "inline backticks": "The gate reads `%s` in a Match issue's body." % REAL,
+    "double backticks": "The gate reads ``%s`` in a Match issue's body." % REAL,
+    "a fenced block": "The mark looks like:\n\n```\n%s\n```\n\nand nothing else." % REAL,
+    "a fenced block with a language": "Example:\n\n```html\n%s\n```" % REAL,
+    "a tilde fence": "Example:\n\n~~~\n%s\n~~~\n" % REAL,
+    "an indented code block": "Example:\n\n    %s\n\nDone." % REAL,
+    "a tab indented code block": "Example:\n\n\t%s\n" % REAL,
+    "a fence in a quote": "> Example:\n>\n> ```\n> %s\n> ```\n" % REAL,
+    "a fence that is never closed": "Example:\n\n```\n%s\n" % REAL,
+    "a broken mark in backticks": "Write `<!-- design-score-issue {...} -->` with the design's path.",
+}
+for name, body in QUOTED_BODIES.items():
+    try:
+        got = sg.read_mark(body, sg.ISSUE_MARK)
+    except sg.GitHubError as err:
+        got = "raised: %s" % err
+    check("read_mark: a mark quoted in %s is no mark" % name, got is None, got)
+REAL_BODIES = {
+    "on its own line, as create-milestone.sh writes it": "The last step.\n\n" + REAL,
+    "after a quoted example": "Looks like `%s`.\n\n%s" % (REAL, REAL),
+    "after a closed fence": "```\nexample\n```\n\n" + REAL,
+    "mid line after inline code": "See `design_score.py` here %s" % REAL,
+    "in a list item": "- the mark: %s" % REAL,
+    "in a quote": "> " + REAL,
+    "indented inside a list": "- item\n\n    " + REAL,
+    "with up to three spaces in front": "   " + REAL,
+    "after a lone backtick": "A ` stray backtick, then %s" % REAL,
+}
+for name, body in REAL_BODIES.items():
+    try:
+        got = sg.read_mark(body, sg.ISSUE_MARK)
+    except sg.GitHubError as err:
+        got = "raised: %s" % err
+    check("read_mark: the real mark %s is read" % name, got == DESIGN, got)
+try:
+    sg.read_mark("<!-- design-score-issue {nope} -->", sg.ISSUE_MARK)
+    check("read_mark: a real mark that is not JSON still raises", False, "no error")
+except sg.GitHubError:
+    check("read_mark: a real mark that is not JSON still raises", True)
+check("is_match_issue: an issue only quoting the mark is not a Match issue",
+      sg.is_match_issue({"title": "Document the mark", "body": QUOTED_BODIES["inline backticks"]}) == (False, None))
+check("is_match_issue: one titled as a Match issue still is, with no design",
+      sg.is_match_issue({"title": "Match the settled design", "body": QUOTED_BODIES["a fenced block"]}) == (True, None))
+check("read_mark: a milestone description only quoting its mark has none",
+      sg.read_mark("Example: `%s`" % sg.mark(sg.MILESTONE_MARK, DESIGN), sg.MILESTONE_MARK) is None)
+
 
 def routes(issue9=MATCH_ISSUE, comments=None, design_bytes=design_html, extra=(), trees=None, milestone=None,
            milestone_issues=None):
@@ -222,9 +273,20 @@ routes(extra=[{"args": ["api", "repos/%s/issues/9" % REPO], "rc": 1, "err": "err
 rc, reason, out = gate("gh issue close 9")
 check("an issue GitHub cannot be read about is refused, saying so", "could not be read" in reason, out)
 
+# 4b. An issue that only quotes the mark, documenting it, closes freely (claude-config#1394); the
+# real mark beside a quoted one is still read, and its issue below 100% still refused.
+for name in ("inline backticks", "a fenced block", "an indented code block"):
+    routes(issue9={"number": 9, "title": "Document the design score mark", "state": "open",
+                   "body": QUOTED_BODIES[name]}, comments=[])
+    rc, reason, out = gate("gh issue close 9")
+    check("an issue quoting the mark in %s closes freely" % name, rc == 0 and not reason, out)
+routes(issue9=dict(MATCH_ISSUE, body="Looks like `%s`.\n\n%s" % (REAL, REAL)), comments=[comment(NOT_MATCHED)])
+rc, reason, out = gate("gh issue close 9")
+check("a real Match issue that also quotes its mark is still refused below 100%", "below 100%" in reason, out)
+
 # 5. Every way of closing it from here is read.
 for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
-            "gh issue close 9 --repo acme/widgets --reason 'not planned'",
+            "gh issue close 9 --repo acme/widgets --reason completed",
             "gh -R acme/widgets issue close '#9' -c done",
             "rtk gh issue close 9",
             "gh issue delete 9 --yes",
@@ -239,6 +301,36 @@ for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
 routes(comments=[comment(NOT_MATCHED)])
 rc, reason, out = gate("gh api repos/acme/widgets/issues/9 -X PATCH -f title=renamed")
 check("editing a Match issue's title is not a close", not reason, out)
+
+# 5b. Closed as not planned, the design was abandoned, and that close is let through below 100%
+# (Dan, 2026-10-20, claude-config#1405). A reason this gate cannot read is a completed close.
+for cmd in ["gh issue close 9 --reason 'not planned'",
+            "gh issue close 9 -r \"not planned\"",
+            "gh issue close 9 --reason='not planned' --repo acme/widgets",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=not_planned",
+            "gh api repos/{owner}/{repo}/issues/9 --method PATCH --field state=closed --field state_reason=not_planned"]:
+    routes(comments=[comment(NOT_MATCHED)])
+    rc, reason, out = gate(cmd)
+    check("%r, abandoning the design, is let through below 100%%" % cmd, rc == 0 and not reason, out)
+for cmd in ["gh issue close 9 --reason completed",
+            "gh issue close 9 --reason 'Not Planned'",
+            "gh issue close 9 --reason duplicate --duplicate-of 5",
+            "gh issue close 9 --duplicate-of 5",
+            "gh issue close 9 --reason 'not planned' --duplicate-of 5",
+            "gh issue close 9 --reason 'not planned' --reason completed",
+            "gh issue close 9 --comment 'not planned'",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=completed",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=not_planned -f state_reason=completed",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed",
+            "gh api -X PATCH repos/acme/widgets/issues/9 --input body.json",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state_reason=not_planned --input body.json"]:
+    routes(comments=[comment(NOT_MATCHED)])
+    rc, reason, out = gate(cmd)
+    check("%r is judged as a completed close and refused below 100%%" % cmd, "below 100%" in reason, out)
+routes(comments=[comment(NOT_MATCHED)])
+rc, reason, out = gate("gh api graphql -f query='mutation { closeIssue(input: {issueId: \"I_1\", stateReason: NOT_PLANNED}) { issue { id } } }'")
+check("a GraphQL closeIssue is still refused, not planned or not: which issue it closes is not read",
+      "GraphQL" in reason, out)
 
 # 6. The milestone.
 MS = {"number": 3, "title": "Agent capacity", "description": "Sam's page.\n\n" + sg.mark(sg.MILESTONE_MARK, DESIGN)}
@@ -257,6 +349,23 @@ check("deleting a design milestone is judged as closing it", "holds no Match" in
 routes(milestone={"number": 3, "title": "Plain", "description": "no design"}, milestone_issues=[PLAIN_ISSUE])
 rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
 check("closing a milestone with no design is let through", not reason, out)
+routes(milestone={"number": 3, "title": "Docs", "description": "Quotes `%s`." % sg.mark(sg.MILESTONE_MARK, DESIGN)},
+       milestone_issues=[PLAIN_ISSUE])
+rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
+check("closing a milestone that only quotes the milestone mark is let through (#1394)", not reason, out)
+# A milestone has no close reason. Its design is abandoned when its Match issue was closed as not
+# planned, and then it closes below 100% (claude-config#1405); any other state of that issue is judged.
+ABANDONED = dict(MATCH_ISSUE, state="closed", state_reason="not_planned")
+routes(comments=[comment(NOT_MATCHED)], milestone=MS, milestone_issues=[PLAIN_ISSUE, ABANDONED])
+rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
+check("closing a milestone whose Match issue was closed as not planned is let through below 100%", not reason, out)
+for why, state in [("closed as completed", dict(MATCH_ISSUE, state="closed", state_reason="completed")),
+                   ("closed with no reason GitHub gave", dict(MATCH_ISSUE, state="closed")),
+                   ("closed as a duplicate", dict(MATCH_ISSUE, state="closed", state_reason="duplicate")),
+                   ("open but once not planned", dict(MATCH_ISSUE, state="open", state_reason="not_planned"))]:
+    routes(comments=[comment(NOT_MATCHED)], milestone=MS, milestone_issues=[PLAIN_ISSUE, state])
+    rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
+    check("closing a milestone whose Match issue is %s is refused below 100%%" % why, "below 100%" in reason, out)
 
 # 7. A merge whose closing keywords name the Match issue is judged at the pull request's head.
 PR_HEAD = "3" * 40

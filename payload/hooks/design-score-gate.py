@@ -18,9 +18,18 @@ Two closes never pass through here: one on GitHub's website, and a closing keywo
 straight to the default branch. design-score-reopen.py finds those afterwards and reopens them, with
 this file's Gate as its judge (claude-config#1386), so the two cannot disagree about what 100% means.
 
-A Match issue is one carrying the mark create-milestone.sh writes in its body, or one titled "Match
-the settled design" by hand. A milestone is a design milestone when its description carries the
-milestone mark or it holds a Match issue.
+A Match issue is one carrying the mark create-milestone.sh writes in its body, the HTML comment
+itself outside code (a mark quoted in backticks or a code block documents it and marks nothing,
+claude-config#1394; score_github.read_mark is the one reader), or one titled "Match the settled
+design" by hand. A milestone is a design milestone when its description carries the milestone mark
+or it holds a Match issue.
+
+CLOSED AS NOT PLANNED, the design was abandoned (Dan, 2026-10-20, claude-config#1405), and the
+close is let through below 100%: `gh issue close --reason "not planned"`, or a REST close sending
+state_reason=not_planned. Any other reason, two reasons, --duplicate-of, or a reason that cannot be
+read (an --input file) is judged as the completed close it may be; a GraphQL closeIssue is refused
+whatever its reason. A milestone has no close reason: its design is abandoned when its Match issue
+is closed as not planned, which is then not judged, so the milestone closes.
 
 THE SCORE is the newest score comment on the Match issue (`design_score.py post` writes them) whose
 commit has the same tree as the commit being closed on: the default branch's head, or the pull
@@ -98,6 +107,35 @@ def _flag_value(words, names):
     return None
 
 
+def _flag_values(words, names, with_value):
+    """Every value given to the flags `names`, in order, read past the other flags' values."""
+    out, i = [], 0
+    while i < len(words):
+        w = words[i]
+        if w == "--":
+            break
+        hit = False
+        for n in names:
+            if w == n and i + 1 < len(words):
+                out.append(words[i + 1])
+                hit = True
+            elif n.startswith("--") and w.startswith(n + "="):
+                out.append(w[len(n) + 1:])
+        if hit:
+            i += 2
+        elif w.startswith("-") and len(w) > 1 and w in with_value and "=" not in w:
+            i += 2
+        else:
+            i += 1
+    return out
+
+
+# The one reason a close of a Match issue below 100% is let through: not planned, the design
+# abandoned (Dan, 2026-10-20, claude-config#1405). Spelled exactly as gh and the REST API take it;
+# any other spelling, or a reason that cannot be read, is judged as the completed close it may be.
+GH_NOT_PLANNED = "not planned"
+
+
 def _positionals(words, with_value):
     out, i = [], 0
     while i < len(words):
@@ -135,6 +173,11 @@ def targets(command, cwd):
             if not pos:
                 raise Refuse("`gh issue %s` names no issue, so which issue it %s cannot be told" % (act, act))
             spec = pos[0]
+            if act == "close":
+                reasons = _flag_values(words, ["-r", "--reason"], ISSUE_FLAGS_WITH_VALUE)
+                duplicate = _flag_values(words, ["--duplicate-of"], ISSUE_FLAGS_WITH_VALUE)
+                if reasons and all(r == GH_NOT_PLANNED for r in reasons) and not duplicate:
+                    continue      # closed as not planned: the design abandoned, never judged
             m = ISSUE_URL.match(spec)
             if m:
                 found.append(("issue", m.group(1), int(m.group(2)), "gh issue %s" % act))
@@ -154,6 +197,8 @@ def targets(command, cwd):
                     fields.append(w.split("=", 1)[1])
             closes = any(re.match(r"^state=closed$", f) for f in fields)
             unread_input = _flag_value(list(after), ["--input"]) is not None
+            reasons = [f.split("=", 1)[1] for f in fields if f.startswith("state_reason=")]
+            not_planned = bool(reasons) and all(r == sg.NOT_PLANNED for r in reasons) and not unread_input
             if endpoint == "graphql":
                 if "closeIssue" in " ".join(after):
                     found.append(("graphql", default_repo, None, "gh api graphql closeIssue"))
@@ -161,6 +206,8 @@ def targets(command, cwd):
             ep = endpoint.replace("{owner}/{repo}", default_repo or "{owner}/{repo}").replace(":owner/:repo", default_repo or ":owner/:repo")
             mi = ISSUE_EP.match(ep)
             mm = MILESTONE_EP.match(ep)
+            if mi and not_planned:
+                continue          # closed as not planned: the design abandoned, never judged
             if mi and (closes or unread_input):
                 found.append(("issue", "%s/%s" % (mi.group(1), mi.group(2)), int(mi.group(3)), "gh api %s" % endpoint))
             elif mm and (closes or unread_input or method == "DELETE"):
@@ -271,6 +318,10 @@ class Gate:
             ref = self.default_head(repo)
             why = "%s, the head of %s" % (why, ref)
         for i in matches:
+            # A milestone has no close reason of its own. Its design is abandoned when its Match
+            # issue was closed as not planned, and that issue is then not held to 100% (#1405).
+            if sg.closed_not_planned(i):
+                continue
             self.judge_issue(repo, i["number"], ref, why)
 
     def judge_merge(self, pr, repo, directory):

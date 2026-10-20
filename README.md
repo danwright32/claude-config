@@ -1974,6 +1974,22 @@ refuses (fail closed), and there is no override. Not seen by it: a close in GitH
 closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
 holds it, against a fake gh.
 
+A Match issue is one whose body carries the mark itself, the HTML comment `create-milestone.sh`
+writes, outside code (#1394): an issue that documents the mark by quoting it in inline code, a fenced
+block or an indented block is not one, because GitHub shows a quoted mark as text. The one reader is
+`score_github.read_mark`, which the gate, the reopen check and `design_score.py post` all use; where
+its reading of the markdown is unsure it keeps the text, so a doubtful mark still counts. An issue
+titled "Match the settled design" is still one with no mark at all.
+
+**Closed as not planned, the design was abandoned** (Dan, 2026-10-20, #1405). The gate lets through
+`gh issue close <n> --reason "not planned"` and a REST close sending `state_reason=not_planned` on a
+Match issue below 100%. Any other reason, more than one reason, `--duplicate-of`, or a reason it
+cannot read (an `--input` file) is judged as a completed close; a GraphQL `closeIssue` is still
+refused, not planned or not, since which issue it closes is not read. A milestone has no close
+reason, so a design milestone is abandoned when its Match issue is closed as not planned: that issue
+is then not judged, and the milestone closes. Abandoning a design is Dan's decision, never a way past
+a refusal.
+
 **A close the gate could not see is reopened the next day** (#1386). `hooks/design-score-reopen.py`
 reads every repo the repo-digest lists (repos.json and repos-weekly.json, live) for Match issues and
 milestones closed since its last complete run of that repo (the first run reads from 2026-10-01, before
@@ -1985,7 +2001,9 @@ design round, or an exception Dan approves in the design file) and is reopened; 
 reopened and its comment goes on its Match issue. The comment carries a mark naming that close and is
 written before the reopen, so a run that dies between the two, or the same run on both Macs, comments
 once; a close made again after the reopen is a new close. A close at 100%, an exception included, is
-left alone. It runs from `hooks/design-score-reopen.sh`, a SessionStart hook that starts it detached at
+left alone, and so is a Match issue GitHub reports closed as not planned (`state_reason`
+`not_planned`), and a milestone whose Match issue is (#1405); any other reason, or none, is judged as
+completed. The run's summary counts what it left closed as not planned. It runs from `hooks/design-score-reopen.sh`, a SessionStart hook that starts it detached at
 most once every 20 hours on each Mac and says at the next session start what it reopened or could not
 read (a repo, a list or a reopen that failed is said by name, and that repo is read again next run); a
 run that started and never recorded finishing is said too. It runs there rather than as a launch agent
