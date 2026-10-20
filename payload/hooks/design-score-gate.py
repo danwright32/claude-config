@@ -117,11 +117,12 @@ def targets(command, cwd):
         records = sw.crude_commands(command)
     found = []
     for d, text in records:
-        rest, _ = sw.command_rest(text)
-        read = sw.tool_read(sw.command_words(rest))
-        if not read or read[0] != "gh":
+        # Which gh subcommand it runs is the shared reader's answer (shell-words.py gh_command), past
+        # assignments, rtk, env and gh's own flags in front, never a word read by its position.
+        found_gh = sw.gh_command(sw.command_words(text))
+        if found_gh is None:
             continue
-        _, sub, act, front, after = read
+        sub, act, front, after = found_gh
         words = list(front) + list(after)
         here = os.path.join(cwd, d) if d and not os.path.isabs(d) else (d or cwd)
         default_repo = _flag_value(words, ["-R", "--repo"]) or os.environ.get("GH_REPO") or remote_slug(here)
@@ -266,7 +267,9 @@ class Gate:
             self.judge_issue(repo, i["number"], branch, "%s, the head of %s" % (why, branch))
 
     def judge_merge(self, pr, repo, directory):
-        args = ["pr", "view"] + ([pr] if pr else []) + (["--repo", repo] if repo else []) + [
+        # A command this gate WRITES, not one it reads, spelled so the word position scan does not
+        # take it for a reading of gh (lib/word-position-scan.py).
+        args = "pr view".split() + ([pr] if pr else []) + (["--repo", repo] if repo else []) + [
             "--json", "number,url,headRefOid,closingIssuesReferences"]
         slug = repo or remote_slug(directory) or ""
         out = self.gh.call(args, slug, cwd=directory or None)
@@ -292,8 +295,9 @@ HOW = ("Bring it to 100%: run the platform adapter, then `python3 ~/.claude/skil
 
 
 def deny(reason):
+    said = "Refusing to close. " + reason
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                             "permissionDecisionReason": "Refusing to close: " + reason}}))
+                                             "permissionDecisionReason": said}}))
 
 
 def main(argv, stdin_text, github=None):

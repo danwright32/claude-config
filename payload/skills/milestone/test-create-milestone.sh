@@ -677,7 +677,7 @@ check "#1364 and says it is done at 100% on both halves" "100% on both halves" "
 check "#1364 and how the score is made" "design_score.py score" "$last_create"
 check "#1364 and that closing it below 100% is refused" "refuses to close" "$last_create"
 check "#1290 and carries the plan's priority and labels" "--label priority-p2 --label enhancement" "$last_create"
-first_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | head -n 1 | cut -d: -f1),$(grep -n '^issue create' "$TMP/calls.log" | sed -n 2p | cut -d: -f1)p" "$TMP/calls.log")"
+first_create="$(sed -n "$(grep -n '^issue create' "$TMP/calls.log" | sed -n 1p | cut -d: -f1),$(grep -n '^issue create' "$TMP/calls.log" | sed -n 2p | cut -d: -f1)p" "$TMP/calls.log")"
 check "#1364 every phase is told its pull request posts the current score" "design_score.py post" "$first_create"
 check "#1364 the milestone's description carries the design mark, so it is known as a design milestone" \
   'design-score-milestone' "$(cat "$TMP/calls.log")"
