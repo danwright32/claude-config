@@ -1,0 +1,17 @@
+# The commands rtk leaves alone on every Mac, one per line (claude-config#1427).
+#
+# A pull writes this list into `[hooks] exclude_commands` in rtk's own config on each Mac
+# (~/Library/Application Support/rtk/config.toml) and touches no other key there, and
+# `claude-sync status` and `verify` say when a Mac's installed list differs. Edit it here, never in
+# rtk's config, which the next pull puts back to this.
+#
+# The list the personal MacBook carried on 2026-10-20, when the work MacBook was found to carry none.
+# rtk 0.31.0 honours cat here but ignores head and tail, so rtk-rewrite.sh refuses every `rtk read`
+# itself; they stay listed so a later rtk that honours them reads the same intent.
+grep
+rg
+egrep
+fgrep
+cat
+head
+tail

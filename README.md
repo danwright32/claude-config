@@ -29,6 +29,16 @@ back.
   cost) and names it when this file has no effort for it, with the entry to add, so a newer model
   behind the alias is noticed rather than quietly running at its own default (#828). When the
   claude command cannot answer, status says it could not check, never that the model is fine.
+- `payload/rtk-exclude-commands.txt`: the commands rtk leaves alone on every Mac, one per line
+  (claude-config#1427). rtk keeps that list in its own config outside `~/.claude`
+  (`~/Library/Application Support/rtk/config.toml`, the path `rtk config` prints), so every pull
+  writes it there as `[hooks] exclude_commands`, replacing that one key and leaving every other
+  line of the file exactly as it was. The file as it was before the first write is kept beside it as
+  `config.toml.before-claude-sync`, never inside `~/.claude`. A file rtk cannot parse, or that cannot
+  be read, is never overwritten: the pull names it and carries on. With rtk not installed the pull
+  says so and changes nothing. `claude-sync status` names a Mac whose installed list differs, with
+  both lists and `claude-sync pull` as the remedy, and `claude-sync verify` fails on it. Edit the
+  list here, never in rtk's config, which the next pull puts back.
 - `payload/CLAUDE.md` and `payload/RTK.md` — your global rules files, synced verbatim (standing cross-project instructions travel here)
 
 Every mirrored file (hooks, skills, agents, commands) and the hooks fragment are stored with this
