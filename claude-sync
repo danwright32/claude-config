@@ -9108,11 +9108,13 @@ send_over_untested_tip(){   # $1 = branch. Always 0: what happened is said, and 
   fi
   # Built from objects, never checked out: the clone's files are the copy of this tool that runs,
   # and the copy of the config that is applied, and neither may become the untested head.
-  tree="$(git -C "$SYNC_REPO" merge-tree --write-tree --no-messages --merge-base="$base" "$up" "$head" 2>&1)" || rc=$?
-  tree="$(printf '%s\n' "$tree" | awk 'NR==1')"
+  # The whole answer is kept for the message, and only its first line is the tree, so a failure
+  # still quotes everything git said rather than an object id (L11).
+  err="$(git -C "$SYNC_REPO" merge-tree --write-tree --no-messages --merge-base="$base" "$up" "$head" 2>&1)" || rc=$?
+  tree="$(printf '%s\n' "$err" | awk 'NR==1')"
   case "$tree" in ''|*[!0-9a-f]*) rc=1 ;; esac
   if [ "$rc" -ne 0 ]; then
-    echo "claude-sync: this Mac's changes were not sent on top of the shared repo's newest commits, which are still being tested, because git could not combine the two without checking them out. git said: ${tree:-<no output>}" >&2
+    echo "claude-sync: this Mac's changes were not sent on top of the shared repo's newest commits, which are still being tested, because git could not combine the two without checking them out. git said: ${err:-<no output>}" >&2
     reconcile_outcome merge-refused
     return 0
   fi
