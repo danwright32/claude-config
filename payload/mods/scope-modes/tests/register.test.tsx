@@ -2915,6 +2915,147 @@ test('the session whose minute ends sleep at noon offers the night\'s proposals 
   expect(m).toContain('2.1 Parse a date with its zone.')
 })
 
+// #1383: on 2026-10-20 one session put the same morning to Dan three times, about a turn apart.
+// Measured here first: in one running copy of the mod a mark that fails repeats nothing, since the
+// night and what it carried are cleared in memory before they are written. What repeats it is a copy
+// with fresh memory (scope modes reloaded, which lands when the session goes idle) reading a night
+// its mark could not clear from $.state. So a morning that went in is recorded as put, in memory
+// first, which no failed write can undo, and in $.state by a write of its own, and a mark that fails
+// is said to Dan once, never only to the debug log.
+const ASLEEP_NIGHT = { generation: 'g0', worker: true, offers: false }
+// The writes of $.state, each by its key, and the keys refused while `refusing` holds any.
+const stateWrites = (on: On) => {
+  const s = { refusing: [] as string[], writes: [] as { key: string; value: unknown }[] }
+  on('state.set', async ($, e, next) => {
+    const { key, value } = e as { key: string; value: unknown }
+    if (s.refusing.includes(key)) return { deny: 'state store unavailable' } as never
+    s.writes.push({ key, value })
+    return next(e)
+  })
+  return s
+}
+// A copy of the mod loaded with fresh memory (a reload), as $.state stands: each key given here reads
+// as that value, the rest as $.state holds them.
+const reloadedWith = (on: On, values: Record<string, unknown>) =>
+  on('state.get', async ($, e, next) => {
+    const key = (e as { key: string }).key
+    return key in values ? ({ value: { value: values[key], version: 1 } } as never) : next(e)
+  })
+const MARK_SAID = /^The morning summary went in, but this session could not record it as done/
+
+test('a morning that went in but could not be marked done is put to Dan once, and the failure is said to him once (#1383)', withDeps, async ($, on) => {
+  const s = stateWrites(on)
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  s.refusing = ['nightSeen', 'wakeHeld']
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  await clock.advance(5 * MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  // Recorded as put by a write of its own, which went in, so a reload does not put it again either.
+  expect(s.writes.filter(x => x.key === 'morningPut').map(x => x.value)).toEqual([{ generation: 'g0', calls: [] }])
+  expect(w.toasts.filter(t => MARK_SAID.test(t))).toEqual([
+    "The morning summary went in, but this session could not record it as done (scope-modes: $.state.set: state store unavailable). It is not put to you again.",
+  ])
+})
+
+test('a morning that could not be recorded as put at all says a reload may put it once more, once (#1383)', withDeps, async ($, on) => {
+  const s = stateWrites(on)
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  s.refusing = ['nightSeen', 'wakeHeld', 'morningPut']
+  await clock.advance(MIN)
+  await clock.settle()
+  await clock.advance(5 * MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  expect(w.toasts.filter(t => MARK_SAID.test(t))).toEqual([
+    "The morning summary went in, but this session could not record it as done (scope-modes: $.state.set: state store unavailable). It is not put to you again, unless this session reloads its mods, which may put it once more.",
+  ])
+})
+
+test('a morning marked done says nothing more, and is recorded as put (#1383)', withDeps, async ($, on) => {
+  const s = stateWrites(on)
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  await clock.advance(3 * MIN)
+  expect(morningOf(w).length).toBe(1)
+  expect(w.toasts.filter(t => MARK_SAID.test(t))).toEqual([])
+  expect(s.writes.filter(x => x.key === 'nightSeen').at(-1)?.value).toBeNull()
+  expect(s.writes.filter(x => x.key === 'morningPut').map(x => x.value)).toEqual([{ generation: 'g0', calls: [] }])
+})
+
+test('reloaded with a night its mark could not clear, the mod puts that morning again unless it was recorded as put (#1383)', withDeps, async ($, on) => {
+  // The repeat itself, reproduced: fresh memory reads the night as unsent, and nothing says it went in.
+  const s = stateWrites(on)
+  reloadedWith(on, { nightSeen: ASLEEP_NIGHT })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  expect(s.writes.filter(x => x.key === 'morningPut').map(x => x.value)).toEqual([{ generation: 'g0', calls: [] }])
+})
+
+test('reloaded with a night recorded as put, the mod does not put its morning again, and clears the night it left (#1383)', withDeps, async ($, on) => {
+  const s = stateWrites(on)
+  reloadedWith(on, { nightSeen: ASLEEP_NIGHT, morningPut: { generation: 'g0', calls: [] } })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+  expect(s.writes.filter(x => x.key === 'nightSeen').map(x => x.value)).toEqual([null])
+  // What it held overnight, carried by that morning and left in $.state, is not put again on its own either.
+  expect(w.toasts).toEqual([])
+})
+
+test('reloaded with what a put morning carried still held, and the night already cleared, the mod does not put it again (#1383)', withDeps, async ($, on) => {
+  const call = 'gh pr merge 12 --squash'
+  reloadedWith(on, { nightSeen: null, wakeHeld: [{ label: 'merge a PR', call, why: 'o/r waits overnight' }], morningPut: { generation: 'g0', calls: [call] } })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  await clock.settle()
+  expect(morningOf(w)).toEqual([])
+})
+
+test("a new night's morning is still put after the last one was recorded as put (#1383)", withDeps, async ($, on) => {
+  reloadedWith(on, { morningPut: { generation: 'g0', calls: [] } })
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ generation: 'g1', workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+})
+
+test("/wake's own morning that could not be marked done is said once, and the minute does not put it again (#1383)", withDeps, async ($, on) => {
+  const s = stateWrites(on)
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }) } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  // Refused once the night is noted, so only the mark after the morning went in fails.
+  s.refusing = ['nightSeen', 'wakeHeld']
+  await clock.settle()
+  await clock.advance(5 * MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  expect(s.writes.filter(x => x.key === 'morningPut').map(x => x.value)).toEqual([{ generation: 'g0', calls: [] }])
+  expect(w.toasts.filter(t => MARK_SAID.test(t)).length).toBe(1)
+})
+
 test("/wake's own morning turn asks its own questions with the proposals, and a turn that fails is put to Dan by the minute, proposals included (#1285)", withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: `${PROPOSED}${myQuestion}\n` } })
   await start($ as never, clock)
