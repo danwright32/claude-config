@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that wait for Dan's decision, in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that run on Dan's decision (one, the Xcode build cache sweep, he has let the low space warning run on its own), in the order that finds the cause fastest.
 ---
 
 # disk-full
@@ -192,11 +192,21 @@ It groups every folder by what it decided: orphaned (the project path is gone, w
 modified date and the path it recorded), orphaned but kept because something in it was written in
 the last hour or a running `xcodebuild` names it, no `info.plist` (nothing can say whose it is, so
 never deleted), a project on a volume that is not mounted (an unplugged drive, never deleted), and
-still in use. The low space warning carries the same count when it fires.
+still in use.
 
-Deleting the orphans is Dan's decision, as every deletion is, and nothing runs it on its own. When
-Dan has said to, this removes only the orphans nothing is using, judging each again just before
-removing it, and reports the `df -m` gain beside the `du` figure:
+Dan decided on 2026-10-20 (#1369) that the orphans may be deleted on its own: when the low space
+warning fires it starts a sweep in the background that removes only the orphans nothing is using,
+and the next warning says what that sweep deleted, the `df` gain it measured, or that it failed. So
+if the warning has fired, read what the last sweep did before deleting anything by hand:
+
+```bash
+bash ~/.claude/hooks/derived-data-sweep.sh --last
+```
+
+On a Mac where Dan has set `FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0` the warning only counts them,
+and deleting is Dan's decision each time, as every deletion is. When Dan has said to, this removes
+only the orphans nothing is using, judging each again just before removing it, and reports the
+`df -m` gain beside the `du` figure:
 
 ```bash
 bash ~/.claude/hooks/derived-data-sweep.sh --delete
@@ -226,8 +236,8 @@ over the same interval (step 3 says why `du`'s growth alone can be no growth at 
 
 Everything above is read only on purpose, except two deleting commands: the clearing command in
 step 5, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 6, which
-runs only once Dan has decided to clear the orphaned Xcode caches it listed. Before removing
-anything:
+the low space warning runs on its own (Dan's decision of 2026-10-20) and which by hand runs only
+once Dan has decided to clear the orphaned Xcode caches it listed. Before removing anything:
 
 - Say what you propose to delete, how much you predict it frees, and what regenerates it. The
   prediction is a claim about `df`, not about `du`, which overstates anything holding clones or

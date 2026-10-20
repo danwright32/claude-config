@@ -138,6 +138,19 @@ unhanded_delete="$(awk '
 ' "$SKILL")"
 check "the command that deletes them is introduced as Dan's decision" \
   "$([ -z "$unhanded_delete" ] && grep -qF 'derived-data-sweep.sh --delete' <<< "$CODE" && echo ok || echo "not handed to Dan, or missing: $unhanded_delete")"
+# Since Dan's decision of 2026-10-20 the low space warning clears them on its own, so the skill has
+# to say so, hand over the command that reads what the last sweep did (run as written, L442), and
+# name the switch that turns it off on one Mac, or a reader takes step 6 for the only way they go.
+check "the skill says the low space warning clears them on its own, naming the off switch" \
+  "$(grep -qF 'FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0' "$SKILL" && grep -qi 'on its own' "$SKILL" && echo ok || echo "no paragraph names the automatic sweep and its off switch")"
+last_line="$(grep -m 1 -xF 'bash ~/.claude/hooks/derived-data-sweep.sh --last' <<< "$CODE")"
+check "a command block reads what the last automatic sweep did" \
+  "$([ -n "$last_line" ] && echo ok || echo "no block line is exactly: bash ~/.claude/hooks/derived-data-sweep.sh --last")"
+LS="$TMP/sweep-state"; mkdir -p "$LS"
+printf 'started=1\nfinished=2\nexit=1\norphans=3\ndeleted=2\nfailed=1\nlog=%s\n' "$LS/run-1.log" > "$LS/last-result"
+last_out="$(DERIVED_DATA_SWEEP_STATE_DIR="$LS" bash -c "${last_line//\~\/.claude\/hooks\//$HOOKS/}" 2>&1)"
+check "and that command, run as written, reports a failed sweep as failed" \
+  "$(grep -qF 'FAILED' <<< "$last_out" && grep -qF 'could not delete 1 of 3' <<< "$last_out" && echo ok || echo "said: $last_out")"
 
 echo ""
 echo "passed: $pass, failed: $fail"
