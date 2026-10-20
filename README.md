@@ -1860,16 +1860,35 @@ The rule itself lives in `hooks/lib/derived-data.sh`, lifted from Overture's tes
 carries its copy until it is pointed at this one, a change in the Overture repository that #1369
 stays open for.
 
-Nothing deletes on its own. Whether the sweep may is Dan's decision and has not been made (L9);
-#1369 holds the question. What runs automatically is the
-count: when the low free space warning (`hooks/free-space-nudge.sh`) speaks, it adds
-`derived-data-sweep.sh --summary`, which says how many folders are orphaned and roughly how much
-they hold, and names the listing and deleting commands without running either. Sizing them stops
-after `DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size; the
-whole count stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), its process group killed,
-and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout
-(all three are settings, not measurements), so the free space warning itself always arrives. A
-bound of 0 turns that step off (no sizing, or no count) rather than leaving it unbounded. The disk-full skill's step 6 runs the listing.
+The sweep deletes on its own when the low free space warning fires: Dan's decision on #1369,
+2026-10-20 (L9). When `hooks/free-space-nudge.sh` speaks it runs `derived-data-sweep.sh --start`,
+which takes an flock on `~/.claude/state/derived-data-sweep/lock` (never synced) and hands the
+work to a detached `--auto` in a session of its own, with its output in a log, so the hook returns
+at once and its 10 second timeout can neither wait on the deletion nor kill it. That sweep is
+`--delete` with every safeguard above: it removes only orphans nothing has written to in the last
+hour or is building with, and never touches a cache whose project is still on disk, on a volume
+that is not mounted, or that no `info.plist` attributes. The detached sweep inherits the lock, so a
+warning while one runs starts no second one and says so, and the kernel releases the lock however
+the sweep ends. What it did goes into `last-result` beside the lock (how many it deleted and could
+not delete, the `du` total, `df -m` before and after, its exit code, and its log, the newest five
+of which are kept), and the next warning reports it with `--last`: the space df measured as freed,
+a gain df could not see, a failure with its exit code, or a sweep that stopped before recording
+anything (an `in-progress` mark nobody holds the lock for). Run it by hand any time:
+`bash ~/.claude/hooks/derived-data-sweep.sh --last`.
+
+To turn the automatic delete off on one Mac, give Claude Code the environment variable
+`FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0`, for example in the `env` block of that Mac's own
+`~/.claude/settings.local.json`, which never syncs. The warning then says on every firing that it
+is off, and falls back to `derived-data-sweep.sh --summary`, which says how many folders are
+orphaned and roughly how much they hold and names the listing and deleting commands without
+running either. Any other value than 0 or 1 is said and treated as off. Sizing them stops after
+`DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size. The whole
+Xcode step of the warning (the count, or `--last` then `--start`, which gets only the time `--last`
+left) stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), the process group of a call that
+runs out killed, and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout (all three are settings,
+not measurements), so the free space warning itself always arrives. A bound of 0 turns that step
+off (no sizing, or no Xcode step at all) rather than leaving it unbounded. The disk-full skill's
+step 6 runs the listing and `--last`.
 
 ## Branches and agent worktrees that already shipped
 

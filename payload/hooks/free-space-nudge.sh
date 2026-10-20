@@ -86,27 +86,42 @@ printf '%s' "$key" > "$STATE" 2>/dev/null || true
 # sequence is long, it has to be ready before the disk is full, and a message is not where it can
 # live (L111: name an action that changes the state they are stuck in).
 echo "$answer"
-# How much of Xcode's build cache belongs to project folders that are gone (claude-config#1369): the
-# one leak that is measured rather than suspected, since every agent worktree starts a cache of its
-# own and nothing removes it. Counted by derived-data-sweep.sh, the one copy of the orphan rule, and
-# only LISTED: whether anything deletes them on its own is Dan's decision, not yet made (L9), so the
-# warning hands over the command and runs nothing. Asked only here, once the notice is going to be
-# said, because sizing them reads every file in them and must not cost every prompt.
+# Xcode's build caches whose project folder is gone (claude-config#1369): the one leak that is
+# measured rather than suspected, since every agent worktree starts a cache of its own and nothing
+# removes it. Which folders those are is decided by derived-data-sweep.sh, the one copy of the orphan
+# rule (L370). Asked only here, once the notice is going to be said, never on every prompt.
 #
-# The WHOLE count is bounded, by FREE_SPACE_DERIVED_DATA_SECONDS (default 6), not only the sizing the
-# sweep bounds itself: reading each folder's info.plist forks a reader per folder, and a hook killed
-# at its 10 second timeout would lose the free space warning with it (both are settings, not
-# measurements). The sweep runs in a process group of its own and the WHOLE group is killed when the
-# bound runs out: killing only the sweep left its children (du, the plist reader) holding this
+# CLEARED ON ITS OWN, by Dan's decision on #1369 (2026-10-20, L9): when this warning fires it starts
+# the sweep, which deletes only orphans nothing has written to in the last hour or is building with,
+# and keeps every cache whose project is still on disk, on a volume that is not mounted, or that no
+# info.plist attributes. It never deletes in this hook's own time: `--start` takes the sweep's lock
+# and hands the work to a detached process in a session of its own, so the hook returns at once and
+# its 10 second timeout can neither wait on the deletion nor kill it (L235, L240). A warning while a
+# sweep runs starts no second one. What the last sweep did, freed, failed or died partway, is read
+# back with `--last` the next time this speaks (L13, L98).
+#
+# FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0 turns the deletion off for one Mac; this then falls back to
+# the count and the commands (`--summary`). Any value but 0 or 1 is said and treated as off, so a
+# switch nobody can read never deletes (L50). Off is said every time this speaks, so it is never a
+# suppression nobody can find (L523).
+#
+# The whole Xcode step is bounded, by FREE_SPACE_DERIVED_DATA_SECONDS (default 6), shared by its
+# calls rather than given to each, and 0 turns the step off. The count reads each folder's info.plist and forks a reader per folder, and a
+# hook killed at its 10 second timeout would lose the free space warning with it (both are settings,
+# not measurements). The call runs in a process group of its own and the WHOLE group is killed when
+# the bound runs out: killing only the sweep left its children (du, the plist reader) holding this
 # capture open until they finished, which the suite caught as a 1 second bound taking 5 (L235,
-# L321). A count stopped by it says so rather than saying nothing (L98).
+# L321). A call stopped by it says so rather than saying nothing (L98).
 SWEEP="${FREE_SPACE_DERIVED_DATA_SWEEP:-$DIR/derived-data-sweep.sh}"
 SWEEP_SECONDS="${FREE_SPACE_DERIVED_DATA_SECONDS:-6}"
 case "$SWEEP_SECONDS" in ''|*[!0-9]*) SWEEP_SECONDS=6 ;; esac
-# 0 turns the count off. perl's `alarm 0` would cancel the bound instead, leaving it unbounded.
-if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
-  sweep_rc=0
-  derived="$(perl -e '
+AUTO_DELETE="${FREE_SPACE_DERIVED_DATA_AUTO_DELETE-1}"
+LIST_CMD="bash ~/.claude/hooks/derived-data-sweep.sh"
+
+bounded_sweep() {   # bounded_sweep <seconds> <args...> -> sets SWEEP_OUT and SWEEP_RC (124 when the bound ran out)
+  local seconds="$1"; shift
+  SWEEP_RC=0
+  SWEEP_OUT="$(perl -e '
     my $t = shift @ARGV;
     my $pid = fork();
     exit 127 unless defined $pid;
@@ -115,12 +130,56 @@ if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
     alarm $t;
     waitpid($pid, 0);
     alarm 0;
-    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$SWEEP_SECONDS" bash "$SWEEP" --summary 2>&1)" || sweep_rc=$?
-  if [ "$sweep_rc" -eq 124 ]; then
-    echo "Counting Xcode build caches whose project folder is gone did not finish within ${SWEEP_SECONDS}s, so how many there are is not known here. To list them: bash ~/.claude/hooks/derived-data-sweep.sh"
-  elif [ -n "$derived" ]; then
-    printf '%s\n' "$derived"
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$seconds" bash "$SWEEP" "$@" 2>&1)" || SWEEP_RC=$?
+}
+
+summary() {
+  bounded_sweep "$SWEEP_SECONDS" --summary
+  if [ "$SWEEP_RC" -eq 124 ]; then
+    echo "Counting Xcode build caches whose project folder is gone did not finish within ${SWEEP_SECONDS}s, so how many there are is not known here. To list them: $LIST_CMD"
+  elif [ -n "$SWEEP_OUT" ]; then
+    printf '%s\n' "$SWEEP_OUT"
   fi
+}
+
+# 0 turns the step off. perl's `alarm 0` would cancel the bound instead, leaving it unbounded.
+if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
+  case "$AUTO_DELETE" in
+    1)
+      # ONE budget for the whole step, never one per call: two calls each given the full bound would
+      # add up to twice it, 12 seconds at the default, past the hook's 10 second timeout (all three are
+      # settings, not measurements). --start gets only what --last left, and none left means it is not
+      # tried, which is said.
+      step_start="$(date +%s)"
+      bounded_sweep "$SWEEP_SECONDS" --last
+      if [ "$SWEEP_RC" -eq 124 ]; then
+        echo "Reading what the last automatic sweep of Xcode build caches did did not answer within ${SWEEP_SECONDS}s, so it is not known here. To see it: $LIST_CMD --last"
+      elif [ -n "$SWEEP_OUT" ]; then
+        printf '%s\n' "$SWEEP_OUT"
+      fi
+      left=$(( SWEEP_SECONDS - ($(date +%s) - step_start) ))
+      if [ "$left" -gt 0 ]; then
+        bounded_sweep "$left" --start
+      else
+        SWEEP_RC=-1
+      fi
+      case "$SWEEP_RC" in
+        -1) echo "Reading the last sweep's record used all ${SWEEP_SECONDS}s this warning allows, so no time was left to start a new sweep of Xcode build caches; the next warning tries again. To list them: $LIST_CMD" ;;
+        0)
+          echo "Started clearing Xcode build caches whose project folder is gone, in the background. It deletes only those nothing has written to in the last hour or is building with, and keeps any whose project is still on disk or on a drive that is not mounted. The next warning says what it freed, and so does: $LIST_CMD --last"
+          echo "To stop this deleting on its own on this Mac, set FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0 (the README's section on Xcode build caches says where)." ;;
+        75) echo "A sweep of Xcode build caches whose project folder is gone is already running, so this warning did not start another. The next warning says what it freed." ;;
+        3) ;;   # no DerivedData on this Mac: nothing to sweep and nothing to say
+        124) echo "Starting the automatic sweep of Xcode build caches did not answer within ${SWEEP_SECONDS}s, so whether it started is not known. To see: $LIST_CMD --last" ;;
+        *) echo "The automatic sweep of Xcode build caches could not be started (it exited $SWEEP_RC)${SWEEP_OUT:+: $SWEEP_OUT}. To list them: $LIST_CMD" ;;
+      esac ;;
+    0)
+      echo "Automatic deletion of orphaned Xcode build caches is off on this Mac (FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0)."
+      summary ;;
+    *)
+      echo "FREE_SPACE_DERIVED_DATA_AUTO_DELETE is set to '$AUTO_DELETE', which is neither 0 nor 1, so automatic deletion of orphaned Xcode build caches is off on this Mac."
+      summary ;;
+  esac
 fi
 echo "What to do about it is the disk-full skill, which holds the measured triage sequence. It takes readings before it names anything, because a static size cannot say what is filling the disk."
 exit 0
