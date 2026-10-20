@@ -7,6 +7,7 @@ import { repoQuestion } from '../hooks/mergedeploy.ts'
 import { goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
+import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
 import { ghArgs, mergeHelperArgs } from './mod-kit/hooks/gh.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { LINK_FIXTURES } from './mod-kit/tests/gh-fixtures.ts'
@@ -372,6 +373,12 @@ type Opts = {
   goals?: Record<string, string | null | { fails: string }>
   /** A hook beneath blocks every Stop, as Claude Code's /goal hook does while its condition does not hold (#1242). */
   goalHookBlocks?: boolean
+  /** The issues milestone-candidates.sh finds a proposal already is (#1389), by the title asked about: its CLOSE-MATCH. */
+  filedOnGitHub?: Record<string, { number: number; closed?: boolean }>
+  /** milestone-candidates.sh unable to read GitHub (#1389): its stderr, with exit 6. */
+  dupCheckFails?: string
+  /** What a `gh issue create` call prints, as gh does: the new issue's link (#1389). */
+  issueCreated?: string
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -421,6 +428,8 @@ const world = (on: On, o: Opts = {}) => {
     goalReads: [] as string[],
     /** How many Stops reached the hooks beneath the mod (#1242). */
     beneathStops: 0,
+    /** Every run of milestone-candidates.sh, its arguments after the script (#1389). */
+    dupChecks: [] as string[][],
   }
   const clock = mock.clock(on, { now: T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -626,6 +635,17 @@ const world = (on: On, o: Opts = {}) => {
       w.killed.push(a[0] as string)
       return ok()
     }
+    // The duplicate check the end of turn review files by (#1389): a close match for a title GitHub
+    // already holds, as milestone-candidates.sh prints it, nothing to report (exit 1), or a read
+    // that failed (exit 6).
+    if (cmd === 'bash' && a[0] === '/Users/x/.claude/skills/milestone/milestone-candidates.sh') {
+      w.dupChecks.push(a.slice(1))
+      if (o.dupCheckFails) return fail(6, o.dupCheckFails)
+      const like = a[a.indexOf('--like') + 1] as string
+      const found = o.filedOnGitHub?.[like]
+      if (!found) return { value: { exitCode: 1, stdout: `NO-CANDIDATES ${a[1]} has nothing like this.\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      return ok(`CANDIDATES-FOR ${a[1]}\nHOLDING-PEN Ungrouped open=3\nCLOSE-MATCH 0.900 #${found.number} ${like} [in: Ungrouped] [shares: total]${found.closed ? ' [closed]' : ''}\nCLOSE-MATCH-COUNT 1\n`)
+    }
     w.runs.push(argv)
     // A mod's own manifest touched so it loads again (#1281).
     if (cmd === 'touch') return o.touchFails ? fail(1, o.touchFails) : ok()
@@ -822,6 +842,7 @@ const world = (on: On, o: Opts = {}) => {
     const started = /\bgit (?:switch -c|checkout -b) (\S+)/.exec(command ?? '')
     if (started && !o.switchFails) o.branch = started[1]
     if (/\bpr create\b/.test(command ?? '') && o.created) return { result: { stdout: o.created, stderr: '' }, text: o.created } as never
+    if (/\bissue create\b/.test(command ?? '') && o.issueCreated) return { result: { stdout: o.issueCreated, stderr: '' }, text: o.issueCreated } as never
     return { result: 'ran', text: 'ran' } as never
   })
   on('ui.render', ($, e) => {
@@ -3202,6 +3223,176 @@ test("a claim that cannot be written offers nothing rather than risk offering tw
   await clock.settle()
   expect(w.prompts.filter(p => p.includes('Bid totals round twice'))).toEqual([])
   expect(w.logs.some(l => l.includes('could not be claimed') && l.includes('Operation not permitted'))).toBe(true)
+})
+
+// #1389: on 2026-10-20 an Overture session was handed four proposals as never put to Dan that had
+// been filed on 2026-10-09, and three of them had been filed twice, by two sessions seconds apart.
+// Each proposal is checked against GitHub before it is offered, claimed before it is filed, and
+// recorded as filed once it is, so it is offered and filed once.
+const BIDS_TITLE = 'Bid totals round twice'
+const BIDS_DIR = proposalPath(SLEEP, 'acme/bidspoke', BIDS_TITLE) as string
+const entriesOf = (w: { files: Record<string, string> }) =>
+  Object.entries(w.files).filter(([f]) => f.startsWith(`${BIDS_DIR}/`) && !f.slice(BIDS_DIR.length + 1).startsWith('.')).map(([, t]) => JSON.parse(t) as Record<string, unknown>)
+const FILE_BIDS = bash(`gh issue create --repo acme/bidspoke --title "${BIDS_TITLE}" --label bug --milestone Ungrouped --body "Seen in totals.ts."`)
+const offeredBids = (w: { prompts: string[] }) => w.prompts.filter(p => p.includes(`1.1 Acme/Bidspoke: ${BIDS_TITLE}`))
+
+test('a proposal GitHub already holds is shown as already filed with its number, and never offered (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, issueCreated: 'https://github.com/acme/bidspoke/issues/4651\n', filedOnGitHub: { [BIDS_TITLE]: { number: 4643 } }, files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w)).toEqual([])
+  const said = w.prompts.filter(p => p.includes(BIDS_TITLE))
+  expect(said.length).toBe(1)
+  expect(said[0]).toContain(`5.1 Acme/Bidspoke#4643: ${BIDS_TITLE}`)
+  expect(said[0]).not.toMatch(/were never put to Dan/)
+  // Asked of the repository named, open and closed since the night before the proposal's.
+  expect(w.dupChecks).toEqual([['acme/bidspoke', '--like', BIDS_TITLE, '--closed-since', '1969-12-31']])
+  // A close match only resembles: it is shown with its number for Dan to correct, never recorded as
+  // filed, so it hides nothing for good and never refuses a filing he asks for (lessons review).
+  expect(entriesOf(w)).toEqual([])
+  expect(await call($ as never, FILE_BIDS)).toBe('https://github.com/acme/bidspoke/issues/4651\n')
+})
+
+test("a session's own morning shows its repository's proposal already filed, and still offers the lessons (#1389)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { filedOnGitHub: { 'Date parse drops the zone': { number: 77, closed: true } }, files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [PROPOSED_AT]: PROPOSED } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).not.toContain('1.1 o/r: Date parse drops the zone')
+  expect(m).toContain('5.1 o/r#77: Date parse drops the zone')
+  expect(m).toContain('2.1 Parse a date with its zone.')
+  expect(m).not.toMatch(/No issue or lesson was proposed/)
+})
+
+test('a proposal another open session holds is not offered here, and is not filed here either (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, open: [{ sessionId: 's7' }], files: { [EARLIER]: `${BIDSPOKE}\n`, [`${BIDS_DIR}/1`]: JSON.stringify({ kind: 'claim', by: 's7', at: T0 - MIN }) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w)).toEqual([])
+  // GitHub is not asked about a proposal another session is offering.
+  expect(w.dupChecks).toEqual([])
+  // Dan picking it here too is refused, so the two sessions file it once.
+  const r = await call($ as never, FILE_BIDS)
+  expect(r).toMatch(/another open session is offering this overnight proposal/i)
+  expect(w.reached).not.toContain((FILE_BIDS as unknown as { command: string }).command)
+})
+
+test('two sessions offering one proposal file it once: the first records it filed, and the second is refused with its link (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, issueCreated: 'https://github.com/acme/bidspoke/issues/4650\n', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w).length).toBe(1)
+  // Claimed by this session when offered, before anything is filed.
+  expect(entriesOf(w)).toEqual([{ kind: 'claim', by: 's1', at: T0 + MIN }])
+  expect(await call($ as never, FILE_BIDS)).toBe('https://github.com/acme/bidspoke/issues/4650\n')
+  expect(entriesOf(w)).toContainEqual(expect.objectContaining({ kind: 'filed', by: 's1', url: 'https://github.com/acme/bidspoke/issues/4650', number: 4650 }))
+  // Picked again, here or in another session, it is refused with where it already is.
+  const again = await call($ as never, bash(`gh issue create -R acme/bidspoke -t "${BIDS_TITLE}" --body x`, 'c2'))
+  expect(again).toContain('https://github.com/acme/bidspoke/issues/4650')
+  expect(w.reached.filter(c => c.includes('issue create')).length).toBe(1)
+})
+
+for (const [why, claim] of [
+  ['whose session has closed', { kind: 'claim', by: 's5', at: T0 - MIN }],
+  ['older than a day, though its session is open', { kind: 'claim', by: 's7', at: T0 + MIN - CLAIM_MS }],
+] as const)
+  test(`a claim ${why} is offered again, and claimed anew (#1389)`, withDeps, async ($, on) => {
+    const { w, clock } = world(on, { ...IN_BIDSPOKE, open: [{ sessionId: 's7' }], files: { [EARLIER]: `${BIDSPOKE}\n`, [`${BIDS_DIR}/1`]: JSON.stringify(claim) } })
+    await start($ as never, clock)
+    await clock.advance(MIN)
+    await clock.settle()
+    expect(offeredBids(w).length).toBe(1)
+    expect(w.files[`${BIDS_DIR}/2`]).toBe(JSON.stringify({ kind: 'claim', by: 's1', at: T0 + MIN }))
+  })
+
+test('a proposal filed in one session is never offered on a later morning, and GitHub is not asked again (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, issueCreated: 'https://github.com/acme/bidspoke/issues/4650\n' })
+  await start($ as never, clock)
+  // Filed from the morning that offered it, recorded as filed.
+  w.files[`${BIDS_DIR}/1`] = JSON.stringify({ kind: 'claim', by: 's1', at: T0 })
+  await call($ as never, FILE_BIDS)
+  // A later night proposes it again, and this session's morning puts that night to Dan.
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'], generation: 'g1' })
+  w.files[`${SLEEP}/notes/g1.jsonl`] = `${BIDSPOKE}\n`
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).not.toContain(`1.1 Acme/Bidspoke: ${BIDS_TITLE}`)
+  expect(m).toContain(`5.1 Acme/Bidspoke#4650: ${BIDS_TITLE}`)
+  expect(w.dupChecks).toEqual([])
+})
+
+test('a proposal Dan leaves unselected in the picker is recorded declined, and a later night proposing it again shows it declined, never offered (#1389)', withDeps, async ($, on) => {
+  const SLOW = proposal({ kind: 'issue', repo: 'Acme/Bidspoke', title: 'Totals page is slow', priority: 'p3', labels: ['performance'], milestone: 'Ungrouped', text: 'Seen on big bids.' })
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, ask: '1.2 Totals page is slow', files: { [EARLIER]: `${BIDSPOKE}\n${SLOW}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w).length).toBe(1)
+  // Dan picks the second and leaves the first.
+  const pick = { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question: 'Which of these should be filed?', header: 'Issues', multiSelect: true, options: [{ label: `1.1 ${BIDS_TITLE}`, description: 'x' }, { label: '1.2 Totals page is slow', description: 'y' }] }] } as never
+  await call($ as never, pick)
+  expect(entriesOf(w)).toContainEqual({ kind: 'declined', by: 's1', at: T0 + MIN })
+  // A later night proposing it again shows it as declined, and neither offers it nor asks GitHub
+  // about it (that a declined entry never expires is proposals.test.ts's).
+  const checksBefore = w.dupChecks.length
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'], generation: 'g1' })
+  w.files[`${SLEEP}/notes/g1.jsonl`] = `${BIDSPOKE}\n`
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).not.toContain(`1.1 Acme/Bidspoke: ${BIDS_TITLE}`)
+  expect(m).toContain(`6.1 Acme/Bidspoke: ${BIDS_TITLE}`)
+  expect(w.dupChecks.length).toBe(checksBefore)
+})
+
+test('two offers in one session that both number a proposal 1.1 decline neither from a later answer, since it cannot say which was meant (#1389 lessons review)', withDeps, async ($, on) => {
+  const SLOW = proposal({ kind: 'issue', repo: 'Acme/Bidspoke', title: 'Totals page is slow', priority: 'p3', labels: ['performance'], milestone: 'Ungrouped', text: 'Seen on big bids.' })
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, ask: '1.2 Something else', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w).length).toBe(1)
+  // Before Dan answers the earlier picker, this session's own morning offers another 1.1.
+  w.files[CURRENT] = asleepRecord({ workers: ['s1'], generation: 'g1' })
+  w.files[`${SLEEP}/notes/g1.jsonl`] = `${SLOW}\n`
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)[0]).toContain('1.1 Acme/Bidspoke: Totals page is slow')
+  await call($ as never, { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question: 'Which of these should be filed?', header: 'Issues', multiSelect: true, options: [{ label: '1.1 Bid totals round twice', description: 'x' }, { label: '1.2 Something else', description: 'y' }] }] } as never)
+  const SLOW_DIR = proposalPath(SLEEP, 'acme/bidspoke', 'Totals page is slow') as string
+  const declinedAt = (dir: string) => Object.entries(w.files).filter(([f, t]) => f.startsWith(`${dir}/`) && t.includes('"declined"'))
+  expect(declinedAt(BIDS_DIR)).toEqual([])
+  expect(declinedAt(SLOW_DIR)).toEqual([])
+})
+
+test('a picker left unanswered records nothing as declined, so it is asked again (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, ask: '', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  await call($ as never, { tool: 'AskUserQuestion', tool_use_id: 'p1', questions: [{ question: 'Which of these should be filed?', header: 'Issues', multiSelect: true, options: [{ label: `1.1 ${BIDS_TITLE}`, description: 'x' }, { label: '1.2 Other', description: 'y' }] }] } as never)
+  expect(entriesOf(w).some(e => e.kind === 'declined')).toBe(false)
+})
+
+test('a duplicate check that cannot read GitHub still offers the proposal, saying so (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, dupCheckFails: 'Could not read the HOLDING PEN: HTTP 502', files: { [EARLIER]: `${BIDSPOKE}\n` } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(offeredBids(w).length).toBe(1)
+  expect(offeredBids(w)[0]).toMatch(/Whether these proposed issues were already filed could not be checked \(Could not read the HOLDING PEN: HTTP 502\)/)
+})
+
+test('an issue filed that no overnight proposal names is left alone (#1389)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { ...IN_BIDSPOKE, issueCreated: 'https://github.com/acme/bidspoke/issues/9\n' })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh issue create --repo acme/bidspoke --title "Something else" --body x'))).toBe('https://github.com/acme/bidspoke/issues/9\n')
+  expect(Object.keys(w.files).some(f => f.startsWith(`${SLEEP}/proposals/`))).toBe(false)
 })
 
 // #1287: one report per session with news, named night first, then the project, then the session.
