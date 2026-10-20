@@ -14,6 +14,10 @@ read, because a gate that knows one spelling is dodged by the next (L247, L450):
   gh pr merge (and merge-when-ready.sh, which asks this gate) of a pull request whose closing
                     keywords name a Match issue    judged at the pull request's head
 
+Two closes never pass through here: one on GitHub's website, and a closing keyword in a commit pushed
+straight to the default branch. design-score-reopen.py finds those afterwards and reopens them, with
+this file's Gate as its judge (claude-config#1386), so the two cannot disagree about what 100% means.
+
 A Match issue is one carrying the mark create-milestone.sh writes in its body, or one titled "Match
 the settled design" by hand. A milestone is a design milestone when its description carries the
 milestone mark or it holds a Match issue.
@@ -253,18 +257,21 @@ class Gate:
             raise Refuse("%s: the score at %s was measured against a different %s than the one at %s, so it does "
                          "not score this design. Score again. %s" % (label, url, design, sha[:7], HOW))
 
-    def judge_milestone(self, repo, number, why):
+    def judge_milestone(self, repo, number, why, ref=None):
+        """Refuses when milestone `number` is a design milestone whose Match issues do not match at
+        `ref`: the head of the default branch unless a commit is named (design-score-reopen.py names
+        the one the milestone was closed on)."""
         ms = self.gh.api("repos/%s/milestones/%d" % (repo, number), repo)
         ms_design = sg.read_mark(ms.get("description") or "", sg.MILESTONE_MARK)
-        issues = self.gh.api("repos/%s/issues?milestone=%d&state=all&per_page=100" % (repo, number), repo,
-                             paginate=True)
-        matches = [i for i in issues if not i.get("pull_request") and sg.is_match_issue(i)[0]]
+        matches = [i for i in sg.milestone_issues(self.gh, repo, number) if sg.is_match_issue(i)[0]]
         if ms_design is not None and not matches:
             raise Refuse("milestone %s (%s) is built from the settled design %s but holds no Match the settled "
                          "design issue, so whether it matches cannot be checked" % (number, ms.get("title"), ms_design))
-        branch = self.default_head(repo)
+        if ref is None:
+            ref = self.default_head(repo)
+            why = "%s, the head of %s" % (why, ref)
         for i in matches:
-            self.judge_issue(repo, i["number"], branch, "%s, the head of %s" % (why, branch))
+            self.judge_issue(repo, i["number"], ref, why)
 
     def judge_merge(self, pr, repo, directory):
         # A command this gate WRITES, not one it reads, spelled so the word position scan does not

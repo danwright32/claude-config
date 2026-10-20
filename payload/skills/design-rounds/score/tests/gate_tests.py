@@ -52,34 +52,11 @@ TREE = "a" * 40
 DESIGN = "docs/design/capacity.html"
 
 # --- one real score of a build that matches, from a capture written here ------------------------
-work = os.path.join(T, "app")
-os.makedirs(os.path.join(work, "docs", "design"))
-subprocess.run(["git", "init", "-q", work], check=True)
-design_html = ('<!doctype html><html><body>\n'
-               '<script type="application/json" id="decision-map">{"decisions": ['
-               '{"id": "D1", "decision": "Heading reads Team capacity", "requirement": "1"}]}</script>\n'
-               '<script type="application/json" id="design-frames">{"frames": [{"id": "f1", "width": 4}]}</script>\n'
-               '</body></html>\n').encode()
-with open(os.path.join(work, DESIGN), "wb") as fh:
-    fh.write(design_html)
-cap = os.path.join(T, "capture")
-os.makedirs(cap)
-sys.path.insert(0, SCORE_DIR)
-import pngio  # noqa: E402
+sys.path.insert(0, HERE)
+import score_fixture  # noqa: E402
 
-px = bytes([200, 180, 160, 255]) * 12
-pngio.write_png(os.path.join(cap, "f1-design.png"), 4, 3, px)
-pngio.write_png(os.path.join(cap, "f1-built.png"), 4, 3, px)
-with open(os.path.join(cap, "capture.json"), "w") as fh:
-    json.dump({"format": "design-capture", "version": 1, "platform": "web", "designFile": os.path.join(work, DESIGN),
-               "build": "http://127.0.0.1:3000/admin/capacity", "commit": HEAD, "dirty": False,
-               "frames": [{"id": "f1", "designImage": "f1-design.png", "builtImage": "f1-built.png",
-                           "checks": [{"id": "D1", "ok": True, "detail": ""}],
-                           "designChecks": [{"id": "D1", "ok": True, "detail": ""}]}]}, fh)
-proc = subprocess.run([sys.executable, SCORE, "score", cap], capture_output=True, text=True)
+work, design_html, MATCHED, proc, cap = score_fixture.make(T, commit=HEAD)
 check("control: the fixture build scores as matched", proc.returncode == 0, proc.stdout + proc.stderr)
-with open(os.path.join(cap, "score.json")) as fh:
-    MATCHED = json.load(fh)
 check("control: the score names the design by its path in the checkout", MATCHED.get("design") == DESIGN, MATCHED.get("design"))
 
 
@@ -103,6 +80,29 @@ def comment(score, at="2026-10-19T20:00:00Z", n=1):
 MATCH_ISSUE = {"number": 9, "title": "Match the settled design", "state": "open",
                "body": "The last step.\n\n" + sg.mark(sg.ISSUE_MARK, DESIGN)}
 PLAIN_ISSUE = {"number": 5, "title": "Phase 1: the page", "state": "open", "body": "Builds Requirement 1."}
+
+
+# --- the one reading of a milestone's Match issues (score_github.match_issues) -------------------
+class ListingGh:
+    """Answers the milestone listing only, and records what it was asked."""
+    def __init__(self, issues):
+        self.issues, self.asked = issues, []
+
+    def api(self, endpoint, repo, paginate=False):
+        self.asked.append((endpoint, repo, paginate))
+        return self.issues
+
+
+_listing = ListingGh([MATCH_ISSUE, PLAIN_ISSUE, dict(MATCH_ISSUE, number=11, pull_request={"url": "x"}),
+                      {"number": 12, "title": "Match the settled design", "state": "open",
+                       "body": sg.mark(sg.ISSUE_MARK, "docs/design/other.html")}])
+check("match_issues: only this design's Match issues, never a pull request or another design's",
+      [i["number"] for i in sg.match_issues(_listing, REPO, 3, DESIGN)] == [9],
+      [i["number"] for i in sg.match_issues(_listing, REPO, 3, DESIGN)])
+check("match_issues: every page of the milestone, open and closed",
+      _listing.asked[0] == ("repos/%s/issues?milestone=3&state=all&per_page=100" % REPO, REPO, True), _listing.asked)
+check("milestone_issues: every issue, pull requests left out",
+      [i["number"] for i in sg.milestone_issues(_listing, REPO, 3)] == [9, 5, 12])
 
 
 def routes(issue9=MATCH_ISSUE, comments=None, design_bytes=design_html, extra=(), trees=None, milestone=None,
