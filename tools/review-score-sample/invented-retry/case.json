@@ -1,0 +1,32 @@
+{
+  "note": "Invented for the public sample: no real code. Two real defects and one known wrong finding.",
+  "items": [
+    {
+      "id": "d1",
+      "verdict": "real",
+      "file": "report/send.sh",
+      "line": 6,
+      "quote": "curl -sf -T \"$1\" \"$REPORT_URL\" >/dev/null 2>&1 || true",
+      "keywords": ["|| true", "swallow", "always succeed", "never fail", "never retr", "masks", "hides"],
+      "claim": "The upload ends in || true, so it always succeeds: the retry never runs and a failed upload prints sent."
+    },
+    {
+      "id": "d2",
+      "verdict": "real",
+      "file": "report/send.sh",
+      "line": 17,
+      "quote": "sleep 5",
+      "keywords": ["sleep", "inject", "delay", "wait"],
+      "claim": "The retry waits a fixed five seconds with no way to shorten it, so every test that crosses it waits for real."
+    },
+    {
+      "id": "w1",
+      "verdict": "wrong",
+      "file": "report/send.sh",
+      "line": 11,
+      "quote": "",
+      "keywords": ["4 times", "four times", "off by one", "too many"],
+      "claim": "Claims the loop runs four times; with n from 0 and -lt 3 it runs three."
+    }
+  ]
+}
