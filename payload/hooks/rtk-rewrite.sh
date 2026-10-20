@@ -185,6 +185,201 @@ while read -r rtk_dest_sub rtk_dest_verb; do
   if rtk_refused_destination "$rtk_dest_sub" "$rtk_dest_verb"; then exit 0; fi
 done <<< "$rtk_invocations"
 
+# NEVER rewrite a command in which an rtk invocation's OUTPUT is read by another program
+# (claude-config#1419).
+#
+# rtk's output is a summary written for a person, and a pipe or a redirect hands it to a program
+# instead, which then works on the summary as if it were the data. On 2026-10-20
+# `grep "|first|" nsf-sep.txt | awk ... | sort | head -60 | cut -f2` drew a 31 line "sample" built
+# from rtk grep's header lines ("2 matches in 1F:", "[file] ... (2):", line number prefixes) with
+# no error, caught only because the counts looked wrong. Dan's decision on the issue, 2026-10-20:
+# "Leave grep unrewritten when its output is piped or redirected."
+#
+# The rule is about where the output GOES, so it holds for every destination, not grep alone.
+# Measured against rtk 0.31.0 the same day: `rtk git log | wc -l` counted 1 line where git gave 5,
+# `rtk git diff > p` wrote a stat summary in place of a patch, and `rtk ls | cat` and
+# `rtk git status | cat` both changed what the next command read. One predicate, one rule (L30).
+# A command whose output only the person reads keeps its rewrite and its token saving.
+#
+# The scan reads the rewritten command as the shell would, closely enough to tell a real pipe from
+# a quoted one (`grep "a|b" f` has no pipe), and treats as "read by a program": a pipe (`|`, `|&`),
+# any redirect of standard output (`>`, `>>`, `>|`, `1>`, `&>`, `>&2`), and capture by the shell
+# (`$(...)`, backticks, `<(...)`, `>(...)`). A group, subshell, loop or `if` holding an rtk
+# invocation counts as one command for its own pipe or redirect. Standard error alone (`2>/dev/null`) changes nothing
+# the next program reads, so it keeps the rewrite, and so do input redirects and here documents,
+# whose bodies are skipped rather than read as commands, except that an unquoted delimiter's body
+# holding a substitution with the word rtk in it is refused, since the shell expands it. A command it cannot balance, an unclosed
+# quote, a stray `)` or a case pattern, is refused rather than guessed at, which costs a token saving and cannot
+# cost the data (L98).
+rtk_output_read_by_program() { # rtk_output_read_by_program <command>  -> 0 to refuse
+  printf '%s' "$1" | awk '
+    { s = (NR > 1) ? s "\n" $0 : $0 }
+    function push(t) {
+      depth++; ctx[depth] = t; rtk[depth] = 0; out[depth] = 0; grp[depth] = 0
+      # A nested command starts its own words; a double quote only continues the current one.
+      if (t != "dq") { word = ""; inword = 0; wordq = 0; atcmd = 1 }
+    }
+    function endcmd() { if (rtk[depth] && out[depth]) bad = 1; rtk[depth] = 0; out[depth] = 0; atcmd = 1 }
+    function flushword(   k) {
+      if (inword && !wordq && word == "rtk") {
+        rtk[depth] = 1; grp[depth] = 1
+        for (k = 1; k <= depth; k++)
+          if (ctx[k] == "cmdsub" || ctx[k] == "procsub" || ctx[k] == "bt") bad = 1
+      }
+      # A loop or conditional is ONE command to the pipe or redirect after its closing word, so
+      # `for ...; do rtk ls; done | cat` is judged like a group.
+      if (inword && atcmd) {
+        if (!wordq && word ~ /^(for|while|until|if|case|select)$/) push("kw")
+        else if (!wordq && word ~ /^(done|fi|esac)$/ && ctx[depth] == "kw") { popgroup(); atcmd = 0 }
+        else if (!wordq && word ~ /^(do|then|else|elif|!|time|[A-Za-z_][A-Za-z0-9_]*=.*)$/) atcmd = 1
+        else atcmd = 0
+      } else if (inword) atcmd = 0
+      word = ""; inword = 0; wordq = 0
+    }
+    # Arithmetic opening at the "(" at position p: the position of its balancing ")", or 0 when it
+    # never balances. It is skipped whole rather than scanned, so a span holding the word rtk at all
+    # (`$(( $(rtk grep -c x f) + 1 ))`) is refused here.
+    function arith_end(p,   q, lvl, d, span) {
+      lvl = 0
+      for (q = p; q <= n; q++) {
+        d = substr(s, q, 1)
+        if (d == "(") lvl++
+        else if (d == ")") { lvl--; if (lvl == 0) break }
+      }
+      if (q > n) return 0
+      span = substr(s, p, q - p + 1)
+      # Any rtk word in the span refuses: inside real arithmetic it can only be a substitution, and
+      # `((rtk grep x f) | cat)` is nested subshells, not arithmetic, with a real pipe.
+      if (span ~ /(^|[^A-Za-z0-9_-])rtk([^A-Za-z0-9_-]|$)/) bad = 1
+      return q
+    }
+    function popgroup(   inner) {
+      inner = grp[depth]; endcmd(); depth--
+      if (inner) { rtk[depth] = 1; grp[depth] = 1 }
+    }
+    END {
+      n = length(s); i = 1; depth = 0; ctx[0] = "top"; bad = 0; hd_n = 0; atcmd = 1
+      while (i <= n && !bad) {
+        c = substr(s, i, 1); nx = substr(s, i + 1, 1)
+        if (ctx[depth] == "dq") {
+          if (c == "\\") { i += 2; continue }
+          if (c == "\"") { depth--; inword = 1; wordq = 1; i++; continue }
+          if (c == "$" && nx == "(" && substr(s, i + 2, 1) == "(") {
+            j = arith_end(i + 1); if (!j) { bad = 1; break }
+            i = j + 1; continue
+          }
+          if (c == "$" && nx == "(") { push("cmdsub"); i += 2; continue }
+          if (c == "`") { push("bt"); i++; continue }
+          i++; continue
+        }
+        if (c == "'"'"'") {
+          j = index(substr(s, i + 1), "'"'"'")
+          if (j == 0) { bad = 1; break }
+          i += j + 1; inword = 1; wordq = 1; continue
+        }
+        if (c == "\\") { inword = 1; wordq = 1; i += 2; continue }
+        if (c == "\"") { inword = 1; wordq = 1; push("dq"); i++; continue }
+        # Arithmetic, $((...)) or ((...)), whose << is a shift, not a here document.
+        if ((c == "$" && nx == "(" && substr(s, i + 2, 1) == "(") || (c == "(" && nx == "(" && !inword)) {
+          j = arith_end((c == "$") ? i + 1 : i); if (!j) { bad = 1; break }
+          inword = 1; wordq = 1; i = j + 1; continue
+        }
+        if (c == "$" && nx == "(") { flushword(); push("cmdsub"); i += 2; continue }
+        if (c == "$" && nx == "{") {
+          j = index(substr(s, i + 2), "}")
+          if (j == 0) { bad = 1; break }
+          inword = 1; wordq = 1; i += j + 2; continue
+        }
+        if (c == "`") {
+          flushword()
+          if (ctx[depth] == "bt") popgroup(); else push("bt")
+          i++; continue
+        }
+        if (c == "#" && !inword) {
+          while (i <= n && substr(s, i, 1) != "\n") i++
+          continue
+        }
+        if (c == " " || c == "\t") { flushword(); i++; continue }
+        if (c == "\n") {
+          flushword(); endcmd(); i++
+          # Here document bodies are data, not commands: skip each one to its delimiter line. With
+          # an UNQUOTED delimiter the shell still expands $(...) and backticks in the body, so a
+          # body line holding a substitution and the word rtk is a captured invocation, refused.
+          for (k = 1; k <= hd_n; k++) {
+            while (i <= n) {
+              rest = substr(s, i); j = index(rest, "\n")
+              line = j ? substr(rest, 1, j - 1) : rest
+              if (hd_dash[k]) sub(/^\t+/, "", line)
+              i = j ? i + j : n + 1
+              if (line == hd[k]) break
+              if (!hd_quoted[k] && line ~ /(\$\(|`)/ && line ~ /(^|[^A-Za-z0-9_-])rtk([^A-Za-z0-9_-]|$)/) bad = 1
+            }
+          }
+          hd_n = 0
+          continue
+        }
+        if (c == ";") { flushword(); endcmd(); i++; continue }
+        if (c == "&") {
+          flushword()
+          if (nx == "&") { endcmd(); i += 2; continue }
+          if (nx == ">") { out[depth] = 1; i += 2; if (substr(s, i, 1) == ">") i++; continue }
+          endcmd(); i++; continue
+        }
+        if (c == "|") {
+          flushword()
+          if (nx == "|") { endcmd(); i += 2; continue }
+          if (rtk[depth]) { bad = 1; break }
+          endcmd(); i++; if (substr(s, i, 1) == "&") i++
+          continue
+        }
+        if (c == ">") {
+          if (nx == "(") { flushword(); push("procsub"); i += 2; continue }
+          fd = 1
+          if (inword && !wordq && word ~ /^[0-9]+$/) { fd = word + 0; word = ""; inword = 0 } else flushword()
+          if (fd == 1) out[depth] = 1
+          i++; c2 = substr(s, i, 1)
+          if (c2 == ">" || c2 == "|" || c2 == "&") i++
+          continue
+        }
+        if (c == "<") {
+          if (nx == "(") { flushword(); push("procsub"); i += 2; continue }
+          flushword()
+          if (nx == "<" && substr(s, i + 2, 1) == "<") { i += 3; continue }
+          if (nx == "<") {
+            i += 2; dash = 0
+            if (substr(s, i, 1) == "-") { dash = 1; i++ }
+            while (substr(s, i, 1) == " " || substr(s, i, 1) == "\t") i++
+            delim = ""; quoted = 0
+            while (i <= n) {
+              d = substr(s, i, 1)
+              if (d ~ /[ \t\n;|&<>()]/) break
+              if (d != "\"" && d != "'"'"'" && d != "\\") delim = delim d; else quoted = 1
+              i++
+            }
+            hd[++hd_n] = delim; hd_dash[hd_n] = dash; hd_quoted[hd_n] = quoted
+            continue
+          }
+          i++; c2 = substr(s, i, 1); if (c2 == "&" || c2 == ">") i++
+          continue
+        }
+        if (c == "(") { flushword(); push("paren"); i++; continue }
+        if (c == ")") {
+          flushword()
+          # A `)` that closes nothing it can name (a case pattern, a stray) is not guessed at.
+          if (depth == 0 || ctx[depth] == "brace" || ctx[depth] == "bt" || ctx[depth] == "kw") { bad = 1; break }
+          popgroup(); i++; continue
+        }
+        if (c == "{" && !inword && (nx == " " || nx == "\t" || nx == "\n")) { push("brace"); i++; continue }
+        if (c == "}" && !inword && ctx[depth] == "brace") { popgroup(); i++; continue }
+        word = word c; inword = 1; i++
+      }
+      if (!bad) { flushword(); if (depth != 0) bad = 1; else endcmd() }
+      exit (bad ? 0 : 1)
+    }
+  '
+}
+if rtk_output_read_by_program "$REWRITTEN"; then exit 0; fi
+
 # No change: nothing to do.
 if [ "$CMD" = "$REWRITTEN" ]; then
   exit 0
