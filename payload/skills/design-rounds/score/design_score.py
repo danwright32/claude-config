@@ -70,6 +70,9 @@ import sys
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# No __pycache__ beside the helpers: an app keeps a checked copy of this folder (vendor-score.py), and
+# a folder the score itself wrote into would no longer match its manifest (claude-config#1385).
+sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import pngio  # noqa: E402

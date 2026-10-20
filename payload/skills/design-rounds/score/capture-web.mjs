@@ -33,16 +33,25 @@
 // reads only what both sides share (text, roles, data attributes, computed colours), never a styling
 // class, since the build draws with its own stylesheet.
 //
-// Playwright is the app's own: resolved from the app checkout (--repo, default the current folder),
-// or from DESIGN_SCORE_PLAYWRIGHT, a path to the playwright package. Nothing is installed here.
+// PLAYWRIGHT, in this order (claude-config#1385), and which one drew is recorded in the capture:
+//   1. the app's own, resolved from the app checkout (--repo, default the current folder), as Slate has;
+//   2. DESIGN_SCORE_PLAYWRIGHT, a path to a playwright package; one naming nothing is refused, never
+//      passed over for another;
+//   3. the one shared install on this Mac, where install-playwright.sh puts it (shared-playwright.json
+//      names the version and the folder under HOME, outside ~/.claude), with its Chromium beside it.
+// With none of them it exits 2 naming the install command, so the design side is never skipped and
+// an unmeasured score never reads as matched. Nothing is installed here.
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCORE = join(HERE, "design_score.py");
+const PIN_FILE = join(HERE, "shared-playwright.json");
+const INSTALLER = join(HERE, "install-playwright.sh");
 const DEFAULT_HEIGHT = 900;
 const DEFAULT_WIDTH = 1280;
 // Deterministic rasterisation, measured in Slate's trial (see above).
@@ -192,25 +201,70 @@ export async function capture(o, browser, frames, deps = {}) {
   const git = (deps.gitState || gitState)(resolve(o.repo || process.cwd()));
   const cap = {
     format: "design-capture", version: 1, platform: "web", designFile: design,
-    build: o.designOnly ? null : o.build, commit: git.commit, dirty: git.dirty,
+    build: o.designOnly ? null : o.build, commit: git.commit, dirty: git.dirty, playwright: o.playwright || null,
     capturedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"), frames: rows, notes,
   };
   writeFileSync(join(out, "capture.json"), JSON.stringify(cap, null, 1));
   return cap;
 }
 
-function loadPlaywright(repo) {
-  const from = process.env.DESIGN_SCORE_PLAYWRIGHT;
-  if (from) return createRequire(join(resolve(from), "package.json"))(resolve(from));
-  return createRequire(join(resolve(repo), "package.json"))("playwright");
+function realOrSame(p) { try { return realpathSync(p); } catch { return resolve(p); } }
+
+function packageVersion(dir) {
+  try { return JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version || null; } catch { return null; }
+}
+
+/**
+ * Which Playwright draws the design: the app's own, then DESIGN_SCORE_PLAYWRIGHT, then the shared
+ * install. Returns {from, path, version, browsersPath}; browsersPath is set only for the shared
+ * install, whose Chromium sits beside it rather than in Playwright's default cache. Throws, naming
+ * the install command, when there is none.
+ */
+export function findPlaywright({ repo, env = process.env, home = homedir() }) {
+  let pin;
+  try { pin = JSON.parse(readFileSync(PIN_FILE, "utf8")); } catch (e) {
+    throw new Error(`the shared Playwright's settings could not be read from ${PIN_FILE} (${String(e).split("\n")[0]})`);
+  }
+  const sharedRoot = join(home, pin.root);
+  const sharedPkg = join(sharedRoot, "node_modules", "playwright");
+  // Compared as real paths: node resolves a package through symlinks (macOS's /var is /private/var).
+  const found = (from, path) => ({ from, path, version: packageVersion(path),
+    browsersPath: realOrSame(path) === realOrSame(sharedPkg) ? join(sharedRoot, "browsers") : null });
+
+  let own = null;
+  try { own = dirname(createRequire(join(resolve(repo), "package.json")).resolve("playwright")); } catch { own = null; }
+  if (own) return found("app", own);
+
+  const named = env.DESIGN_SCORE_PLAYWRIGHT;
+  if (named) {
+    if (!existsSync(join(resolve(named), "package.json"))) {
+      throw new Error(`DESIGN_SCORE_PLAYWRIGHT names ${named}, which holds no Playwright package; point it at one, or unset it to use the shared install`);
+    }
+    return found("env", resolve(named));
+  }
+  if (existsSync(join(sharedPkg, "package.json"))) return found("shared", sharedPkg);
+
+  const installer = existsSync(INSTALLER) ? INSTALLER : "~/.claude/skills/design-rounds/score/install-playwright.sh";
+  throw new Error(`no Playwright to draw the design with: the app at ${resolve(repo)} has none, DESIGN_SCORE_PLAYWRIGHT is not set, and the shared install is not at ${sharedPkg}. Install it with: bash ${installer}`);
+}
+
+function loadPlaywright(found) {
+  // Read by Playwright when it loads, so it is set before the require.
+  if (found.browsersPath && !process.env.PLAYWRIGHT_BROWSERS_PATH) process.env.PLAYWRIGHT_BROWSERS_PATH = found.browsersPath;
+  return createRequire(join(found.path, "package.json"))(found.path);
 }
 
 async function main() {
   let o;
   try { o = parseArgs(process.argv); } catch (e) { console.error(`capture-web: ${e.message}`); return 2; }
   let pw;
-  try { pw = loadPlaywright(o.repo || process.cwd()); } catch (e) {
-    console.error(`capture-web: could not score: Playwright could not be loaded from ${o.repo || process.cwd()} (${String(e).split("\n")[0]}). Run it from the app's checkout, or set DESIGN_SCORE_PLAYWRIGHT.`);
+  try {
+    const found = findPlaywright({ repo: o.repo || process.cwd() });
+    pw = loadPlaywright(found);
+    o.playwright = { from: found.from, path: found.path, version: found.version };
+    console.error(`capture-web: drawing with Playwright ${found.version || "(version unknown)"}, the ${{ app: "app's own", env: "one DESIGN_SCORE_PLAYWRIGHT names", shared: "shared install" }[found.from]}, at ${found.path}`);
+  } catch (e) {
+    console.error(`capture-web: could not score: ${String(e.message || e).split("\n")[0]}`);
     return 2;
   }
   const frames = designFrames(o.design);
@@ -228,7 +282,10 @@ async function main() {
   return s.status === null ? 2 : s.status;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Run directly, as opposed to imported by the tests. Compared as real paths: node gives
+// import.meta.url the script's real path but argv[1] the path as typed, so through a symlink (macOS's
+// /var is /private/var) a plain comparison never matched and the adapter exited 0 having drawn nothing.
+if (process.argv[1] && realOrSame(resolve(process.argv[1])) === realOrSame(fileURLToPath(import.meta.url))) {
   // Anything unexpected is no score, exit 2: left to node it exits 1, which reads as "not matched yet".
   main().then((code) => process.exit(code), (e) => { console.error(`capture-web: could not score: ${String(e)}`); process.exit(2); });
 }
