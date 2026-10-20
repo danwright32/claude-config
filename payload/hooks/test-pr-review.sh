@@ -872,6 +872,15 @@ printf 'failed\tHTTP 401\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread"
 touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread"
 printf '{"session_id":"n4","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
 [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.prread" ] && ok || bad "#1168 a pull request read record older than 14 days is swept with its review"
+# And a push's acknowledgement (#599), which check --gate push writes beside the review (#1388).
+# A recent one is kept: a later push still reads it.
+printf 'finished=1\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.push-acknowledged"
+touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.push-acknowledged"
+printf 'finished=1\n' > "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged"
+printf '{"session_id":"n5","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+[ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement older than 14 days is swept with its review"
+[ -e "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement newer than 14 days is kept"
+rm -f "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged"
 
 # ===========================================================================================
 # 7. A push to a branch with an OPEN pull request starts the review of the new head
