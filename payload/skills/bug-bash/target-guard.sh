@@ -31,7 +31,10 @@
 # to stderr with its reason and a distinct exit code: 2 usage, 3 remote without read only, 4 dev
 # server, 5 nothing answering, 6 a redirect chain longer than six hops, 7 a read only run with no
 # working read only proxy, 8 a read only run against a deployment whose egress rule could not be
-# loaded or is not in force (a rule it loaded is taken away again before it exits 8).
+# loaded or is not in force (a rule it loaded is taken away again before it exits 8),
+# 9 a read only run whose proxy this Mac could not open a connection to, out of local ports or file
+# handles, so the proxy was not judged (#1370): run the guard again once the Mac is less busy,
+# without restarting the proxy.
 # Text is matched through here strings, never `printf | grep -q`: under pipefail grep -q exiting on
 # its first match kills printf, and the pipeline then reads as no match (L183).
 set -uo pipefail
@@ -116,16 +119,23 @@ if [ "$read_only" -eq 1 ]; then
   fi
   launcher="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/explorer-browser.js"
   # Its answer also says which process it is, which group it runs in, and whether it was started
-  # for a deployment (--egress), for the egress rule below.
-  if ! facts="$(node -e 'require(process.argv[1]).proxyAnswers(process.argv[2]).then(b => { console.log([b.pid, b.egid, b.egress].join(" ")); process.exit(0) }, e => { console.log(e.message); process.exit(1) })' "$launcher" "$proxy" 2>&1)"; then
+  # for a deployment (--egress), for the egress rule below; and whether a write sent through it,
+  # to a name that resolves nowhere (.invalid), came back refused by the proxy itself, since a proxy
+  # that forwarded it would reach nothing. The launcher also says when this Mac could not open a
+  # connection to it at all, out of local ports or file handles (#1370): that judges nothing about
+  # the proxy, so it is a refusal of its own, 9, never read as a proxy that is missing.
+  facts="$(node -e 'require(process.argv[1]).checkProxy(process.argv[2]).then(b => { console.log([b.pid, b.egid, b.egress, b.refusesWrite].join(" ")); process.exit(0) }, e => { console.log(e.message); process.exit(e.local ? 3 : 1) })' "$launcher" "$proxy" 2>&1)"
+  checked=$?
+  if [ "$checked" -eq 3 ]; then
+    echo "target-guard: refusing a read only run for now: ${facts#explorer-browser: }" >&2
+    exit 9
+  fi
+  if [ "$checked" -ne 0 ]; then
     echo "target-guard: refusing a read only run: nothing at $proxy answers as the bug bash read only proxy (${facts#explorer-browser: }). $no_proxy_fix" >&2
     exit 7
   fi
-  read -r proxy_pid proxy_egid proxy_egress <<< "$facts"
-  # A write sent through it, to a name that resolves nowhere (.invalid), must come back refused by
-  # the proxy itself: a proxy that forwarded it would reach nothing.
-  probe="$(curl -s --noproxy '' --max-time 5 -o /dev/null -D - -x "$proxy" -X POST --data probe "http://bug-bash-probe.invalid/write" 2>/dev/null)"
-  if ! grep -Eq '^HTTP/[0-9.]+ 405' <<< "$probe" || ! grep -qi '^x-bug-bash-proxy: refused' <<< "$probe"; then
+  read -r proxy_pid proxy_egid proxy_egress refuses_write <<< "$facts"
+  if [ "${refuses_write:-}" != true ]; then
     echo "target-guard: refusing a read only run: the proxy at $proxy did not refuse a write sent through it. $no_proxy_fix" >&2
     exit 7
   fi

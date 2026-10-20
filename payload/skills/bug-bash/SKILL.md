@@ -52,7 +52,10 @@ Back mid flow; someone driving error paths (offline, expired session, double sub
        bash ~/.claude/skills/bug-bash/target-guard.sh --read-only --proxy "<proxy>" "<url>"
 
    The guard refuses (exit 7) unless that proxy answers and refuses a test write, then loads the
-   egress rule and refuses (exit 8, naming why) unless it is in force. It prints
+   egress rule and refuses (exit 8, naming why) unless it is in force. Exit 9 is different: this
+   Mac could not open a connection to the proxy at all (out of local ports or file handles, usually
+   from many test runs at once), so the proxy was not judged. Do not restart the proxy or report it
+   missing; wait until the machine is less busy and run the guard again. It prints
    `READ-ONLY <url> via <proxy>`; every explorer then gets `BUG_BASH_PROXY=<proxy>` and launches
    with `readOnly: true`, and every finding is at most a risk. `<run dir>/proxy/requests.log`
    lists what was forwarded and refused. Stop the proxy (the `pid` in proxy.json) when the run
