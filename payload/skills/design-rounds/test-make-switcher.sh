@@ -1356,12 +1356,12 @@ check_eq "nothing is written when the screen was not asked for" "0" "$([ -e "$TM
 # Its own control: copy that merely SAYS the word is not a call, so a round about a mod
 # that mentions Terminal.app in a string or a comment still builds without the screen.
 printf '// opens Terminal.app\nfunction buildScreen(variant) { var d = document.createElement("div"); d.textContent = "Open Terminal." + variant.name; return d; }\n' > "$TMP/says-builder.js"
-spec "$TMP/says.json" "$TERM_TWO" '{"builder":"says-builder.js"}'
+spec "$TMP/says.json" "$TERM_TWO" '{"builder":"says-builder.js","chrome":{"captured":"chrome.html","from":"the demo page","slot":"#main","width":640}}'
 run "$TMP/says.json" "$TMP/says.html" >/dev/null; check_eq "a builder that only mentions the word in copy still builds" "0" "$?"
 
-# The control for all three: an ordinary builder with no screen still builds (L159). The
-# fine spec from above is reused deliberately as the no screen case, on its own output path.
-run "$TMP/fine.json" "$TMP/fine-again.html" >/dev/null; check_eq "a round with no screen still builds" "0" "$?"
+# The control for all three: an ordinary builder with no screen still builds (L159), drawn in
+# captured chrome, since a round with neither is refused (claude-config#1364).
+run "$TMP/plain.json" "$TMP/fine-again.html" >/dev/null; check_eq "a round with no screen still builds" "0" "$?"
 
 # --- what the terminal actually draws, measured in a browser ---
 
@@ -1550,7 +1550,7 @@ setTimeout(function () {
   var frames = document.querySelectorAll("#dr-stage iframe");
   var slots = Array.prototype.map.call(frames, function (f) {
     var slot = f.contentDocument && f.contentDocument.getElementById("main");
-    return (f.hidden ? "hidden:" : "shown:") + (slot ? slot.textContent : "none");
+    return (getComputedStyle(f).display === "none" ? "hidden:" : "shown:") + (slot ? slot.textContent : "none");
   });
   frames[0].contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
   setTimeout(function () {

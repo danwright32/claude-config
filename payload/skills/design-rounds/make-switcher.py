@@ -572,7 +572,9 @@ function buildScreen(variant) {
   var frame = document.createElement("iframe");
   frame.title = variant.name;
   frame.setAttribute("data-dr-option", variant.key);
-  frame.style.cssText = "display:block;border:0;background:#fff;width:" + DR_WIDTH + "px;height:" + (DR_HEIGHT || 480) + "px";
+  /* No display set here: an inline display would beat the hidden attribute show() sets, and the stage
+     lays its children out itself (lessons review of #1364). */
+  frame.style.cssText = "border:0;background:#fff;width:" + DR_WIDTH + "px;height:" + (DR_HEIGHT || 480) + "px";
   frame.addEventListener("load", function () { drLoaded(frame, variant); });
   frame.srcdoc = DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_OPTION_VARIANTS[variant.key]);
   return frame;
@@ -585,7 +587,8 @@ function drLoaded(frame, variant) {
   if (!DR_HEIGHT && doc) frame.style.height = doc.documentElement.scrollHeight + "px";
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
-  DR_SEEN[variant.key] = { name: variant.name, report: report, drawn: report.built && slot ? slot.innerHTML : null };
+  if (report.built && !slot) report = { built: false, why: "its captured chrome has no element #" + DR_SLOT + " to draw into" };
+  DR_SEEN[variant.key] = { name: variant.name, report: report, drawn: report.built ? slot.innerHTML : null };
   if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
 }
 function drVerdict() {
