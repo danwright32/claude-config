@@ -1810,6 +1810,41 @@ the stop says UNMEASURED with the figures, since a suite starved of the processo
 from one that hangs; everywhere else, a figure that cannot be read included, it is the FAIL it
 always was, and says the load it was judged at (claude-config#1330).
 
+## Xcode build caches left behind by removed worktrees
+
+Xcode keeps one build cache per project path under `~/Library/Developer/Xcode/DerivedData`. Every
+agent worktree, scratch copy and temporary gate tree is a new path, so each starts a cache of its
+own (about 2.5 GB for Overture, 0.9 GB for Ovation), and nothing removes it when the path is
+deleted. On 2026-10-19 Daniels-MacBook-Pro-2 held 30 of them, about 48.6 GB (claude-config#1369).
+
+`hooks/derived-data-sweep.sh` lists them. With no argument it groups every folder by what the rule
+decided and deletes nothing: orphaned (the `WorkspacePath` its `info.plist` records no longer
+exists), orphaned but kept because something in it was written in the last
+`DERIVED_DATA_RECENT_MINUTES` (default 60) or a running `xcodebuild` names it, no `info.plist`
+(nothing can attribute it, never deleted), a project on a volume that is not mounted (never
+deleted), still in use, and the shared caches such as `ModuleCache.noindex` (never touched). Each
+orphan carries its size, last modified date and the path it recorded. `--delete` removes only the
+orphans nothing is using, judging each again just before removing it, and reports `df -m` before
+and after beside the `du` total, because `du` counts APFS clones in full; a delete that frees
+nothing df can see says so. It exits 1 when any removal failed and 2 when it refused.
+
+The rule itself lives in `hooks/lib/derived-data.sh`, lifted from Overture's tested
+`scripts/lib/derived-data.sh` (overture#2596, lesson L114) with its cases ported to
+`hooks/test-derived-data.sh`, so there is one copy of it. Overture's own reclaim script still
+carries its copy until it is pointed at this one, a change in the Overture repository that #1369
+stays open for.
+
+Nothing deletes on its own. Whether the sweep may is Dan's decision and has not been made (L9);
+#1369 holds the question. What runs automatically is the
+count: when the low free space warning (`hooks/free-space-nudge.sh`) speaks, it adds
+`derived-data-sweep.sh --summary`, which says how many folders are orphaned and roughly how much
+they hold, and names the listing and deleting commands without running either. Sizing them stops
+after `DERIVED_DATA_SUMMARY_SECONDS` (default 4), and then the count is given without a size; the
+whole count stops after `FREE_SPACE_DERIVED_DATA_SECONDS` (default 6), its process group killed,
+and then the notice says it did not finish. Both keep the prompt hook inside its 10 second timeout
+(all three are settings, not measurements), so the free space warning itself always arrives. A
+bound of 0 turns that step off (no sizing, or no count) rather than leaving it unbounded. The disk-full skill's step 6 runs the listing.
+
 ## Branches and agent worktrees that already shipped
 
 This repo squashes on merge, so a merged branch is never an ancestor of main and every local way of

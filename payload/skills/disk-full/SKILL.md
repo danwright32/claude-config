@@ -1,6 +1,6 @@
 ---
 name: disk-full
-description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from one clearing command for Dan to run, in the order that finds the cause fastest.
+description: Use when the Mac is out of disk space or close to it, when Bash calls start failing with ENOSPC or "cannot create temp file", when a hook fails for no apparent reason and the disk is suspect, or when the low free space warning fires. Holds the measured triage sequence, read only apart from two clearing commands that wait for Dan's decision, in the order that finds the cause fastest.
 ---
 
 # disk-full
@@ -157,8 +157,7 @@ sudo du -sh /System/Library/Caches/com.apple.coresymbolicationd
 
 It is a cache macOS rebuilds on demand, so clearing it costs only the time to symbolicate the next
 crash reports. Clearing it is Dan's call, as every deletion is, and only once the size above shows
-it is large. This is the one command in the sequence that deletes anything, and it is for Dan to
-run, never for Claude. The folder carries no SIP restricted flag, so `sudo` can empty it. `find
+it is large. This command is for Dan to run, never for Claude. The folder carries no SIP restricted flag, so `sudo` can empty it. `find
 -mindepth 1 -delete` empties it, hidden files included, and keeps the folder and its root only
 permissions; it needs no glob, which Dan's zsh would refuse before `sudo` ran because his user
 cannot list the folder:
@@ -178,6 +177,30 @@ du -x -d 1 -g ~/Library/Caches ~/Library/Containers ~/Library/Developer 2>/dev/n
 
 Xcode's `~/Library/Developer/Xcode/DerivedData` and `~/Library/Developer/CoreSimulator` are the two
 that reach tens of gigabytes without anybody noticing.
+
+DerivedData leaks for a known reason: Xcode keeps one build cache per project path, every agent
+worktree, scratch copy and temporary gate tree is a new path, and nothing removes the cache when the
+path is deleted. On 2026-10-19 that was 30 folders, about 48.6 GB, all keyed to paths that no longer
+existed. A `du` of the folder cannot tell those from caches still in use, so list them with the
+sweep, which reads each folder's recorded project path and deletes nothing:
+
+```bash
+bash ~/.claude/hooks/derived-data-sweep.sh
+```
+
+It groups every folder by what it decided: orphaned (the project path is gone, with size, last
+modified date and the path it recorded), orphaned but kept because something in it was written in
+the last hour or a running `xcodebuild` names it, no `info.plist` (nothing can say whose it is, so
+never deleted), a project on a volume that is not mounted (an unplugged drive, never deleted), and
+still in use. The low space warning carries the same count when it fires.
+
+Deleting the orphans is Dan's decision, as every deletion is, and nothing runs it on its own. When
+Dan has said to, this removes only the orphans nothing is using, judging each again just before
+removing it, and reports the `df -m` gain beside the `du` figure:
+
+```bash
+bash ~/.claude/hooks/derived-data-sweep.sh --delete
+```
 
 ### 7. Snapshots, which `du` cannot see at all
 
@@ -201,8 +224,10 @@ over the same interval (step 3 says why `du`'s growth alone can be no growth at 
 
 ## Deleting anything
 
-Everything above is read only on purpose, except the one clearing command in step 5, which is
-Dan's to run once he has seen the size. Before removing anything:
+Everything above is read only on purpose, except two deleting commands: the clearing command in
+step 5, which is Dan's to run once he has seen the size, and the sweep's `--delete` in step 6, which
+runs only once Dan has decided to clear the orphaned Xcode caches it listed. Before removing
+anything:
 
 - Say what you propose to delete, how much you predict it frees, and what regenerates it. The
   prediction is a claim about `df`, not about `du`, which overstates anything holding clones or

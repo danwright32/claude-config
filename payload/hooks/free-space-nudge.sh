@@ -86,5 +86,41 @@ printf '%s' "$key" > "$STATE" 2>/dev/null || true
 # sequence is long, it has to be ready before the disk is full, and a message is not where it can
 # live (L111: name an action that changes the state they are stuck in).
 echo "$answer"
+# How much of Xcode's build cache belongs to project folders that are gone (claude-config#1369): the
+# one leak that is measured rather than suspected, since every agent worktree starts a cache of its
+# own and nothing removes it. Counted by derived-data-sweep.sh, the one copy of the orphan rule, and
+# only LISTED: whether anything deletes them on its own is Dan's decision, not yet made (L9), so the
+# warning hands over the command and runs nothing. Asked only here, once the notice is going to be
+# said, because sizing them reads every file in them and must not cost every prompt.
+#
+# The WHOLE count is bounded, by FREE_SPACE_DERIVED_DATA_SECONDS (default 6), not only the sizing the
+# sweep bounds itself: reading each folder's info.plist forks a reader per folder, and a hook killed
+# at its 10 second timeout would lose the free space warning with it (both are settings, not
+# measurements). The sweep runs in a process group of its own and the WHOLE group is killed when the
+# bound runs out: killing only the sweep left its children (du, the plist reader) holding this
+# capture open until they finished, which the suite caught as a 1 second bound taking 5 (L235,
+# L321). A count stopped by it says so rather than saying nothing (L98).
+SWEEP="${FREE_SPACE_DERIVED_DATA_SWEEP:-$DIR/derived-data-sweep.sh}"
+SWEEP_SECONDS="${FREE_SPACE_DERIVED_DATA_SECONDS:-6}"
+case "$SWEEP_SECONDS" in ''|*[!0-9]*) SWEEP_SECONDS=6 ;; esac
+# 0 turns the count off. perl's `alarm 0` would cancel the bound instead, leaving it unbounded.
+if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
+  sweep_rc=0
+  derived="$(perl -e '
+    my $t = shift @ARGV;
+    my $pid = fork();
+    exit 127 unless defined $pid;
+    if ($pid == 0) { setpgrp(0, 0); exec @ARGV or exit 127; }
+    local $SIG{ALRM} = sub { kill "KILL", -$pid; waitpid($pid, 0); exit 124; };
+    alarm $t;
+    waitpid($pid, 0);
+    alarm 0;
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);' "$SWEEP_SECONDS" bash "$SWEEP" --summary 2>&1)" || sweep_rc=$?
+  if [ "$sweep_rc" -eq 124 ]; then
+    echo "Counting Xcode build caches whose project folder is gone did not finish within ${SWEEP_SECONDS}s, so how many there are is not known here. To list them: bash ~/.claude/hooks/derived-data-sweep.sh"
+  elif [ -n "$derived" ]; then
+    printf '%s\n' "$derived"
+  fi
+fi
 echo "What to do about it is the disk-full skill, which holds the measured triage sequence. It takes readings before it names anything, because a static size cannot say what is filling the disk."
 exit 0
