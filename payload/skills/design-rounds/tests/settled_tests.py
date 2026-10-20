@@ -515,14 +515,14 @@ var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out
 var link = document.querySelector('.dr-decisions a[href^="#"]'), out = [];
 link.focus();
 out.push(document.activeElement === link ? "focused" : "unfocused", link.tabIndex, link.textContent);
-link.click();
-setTimeout(function () {
+window.addEventListener("hashchange", function () {
   var target = document.getElementById(link.getAttribute("href").slice(1));
   out.push(document.activeElement === target ? "landed" : "notlanded:" + document.activeElement.tagName,
            target && target.closest(".dr-requirements") ? "inlist" : "elsewhere");
   out.push(getComputedStyle(document.body).backgroundColor, getComputedStyle(document.body).color);
   var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join("|"); document.body.append(pre);
-}, 200);
+}, {once: true});
+link.click();
 </script></body></html>""")
     with open(os.path.join(T, "lprobe.html"), "w", encoding="utf-8") as fh:
         fh.write(lprobe)
