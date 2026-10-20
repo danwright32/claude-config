@@ -45,6 +45,13 @@
 #   READ-TRUNCATED <n> at the limit          the read hit its cap, so every count that
 #                                            follows is about a subset of the backlog
 #   DUPLICATE-COUNT <n>                      reported apart from the sibling count
+#   READ-TRUNCATED-CLOSED <n> at the limit   the --closed-since read hit its cap, so the
+#                                            close matches saw a subset of what closed
+#   CLOSE-MATCH <score> #<num> <title> [in: <milestone>] [shares: <words>] [closed]
+#                                            an issue covering most of the idea: it may
+#                                            already be filed. [closed] only on one read
+#                                            by --closed-since. Ranks, never rules
+#   CLOSE-MATCH-COUNT <n>                    how many close matches are listed
 #   NO-CANDIDATES <repo>                     read fine, nothing to report (exit 1)
 #
 # Exit codes:
