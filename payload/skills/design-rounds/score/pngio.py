@@ -8,7 +8,7 @@ other filters are faster. A screenshot is read once per score.
 
 read_png(path) -> (width, height, rgba): every pixel as 8 bit RGBA bytes, row by row, whatever the
 file held (grey, grey with alpha, RGB, palette, RGBA; 8 or 16 bits, 16 kept to its high byte; a
-palette's tRNS alpha honoured). Anything it cannot read faithfully raises PngError naming the file
+palette's tRNS alpha, and a grey or RGB picture's tRNS colour key, honoured). Anything it cannot read faithfully raises PngError naming the file
 and why: an interlaced file, a bit depth below 8, a broken or truncated file. It never guesses.
 
 write_png(path, width, height, rgba): an 8 bit RGBA file, every row unfiltered.
@@ -143,9 +143,27 @@ def read_png(path):
                     raise PngError("%s: a pixel names palette entry %d of %d" % (path, index, len(table)))
                 out += table[index]
         return width, height, bytes(out)
+    # A colour key (tRNS on a grey or RGB picture) names the one sample value drawn transparent,
+    # compared at the file's full depth, before a 16 bit sample is cut to its high byte.
+    key = None
+    if trns is not None and colortype in (0, 2):
+        need = 2 if colortype == 0 else 6
+        if len(trns) != need:
+            raise PngError("%s: its tRNS chunk is %d bytes, and a colour type %d key is %d" % (path, len(trns), colortype, need))
+        values = struct.unpack(">%dH" % (need // 2), trns)
+        if depth == 16:
+            key = trns
+        elif all(v < 256 for v in values):
+            key = bytes(values)
+        # else a key above 255 matches no 8 bit pixel, so none is drawn transparent
     for row in rows:
+        keyed = None
+        if key:
+            step = len(key)
+            keyed = [row[i:i + step] == key for i in range(0, len(row), step)]
         if depth == 16:
             row = row[0::2]  # the high byte of every sample
+        alpha = bytes(0 if k else 255 for k in keyed) if keyed is not None else b"\xff" * width
         if colortype == 6:
             out += row
         elif colortype == 2:
@@ -153,14 +171,14 @@ def read_png(path):
             rgba[0::4] = row[0::3]
             rgba[1::4] = row[1::3]
             rgba[2::4] = row[2::3]
-            rgba[3::4] = b"\xff" * width
+            rgba[3::4] = alpha
             out += rgba
         elif colortype == 0:
             rgba = bytearray(width * 4)
             rgba[0::4] = row
             rgba[1::4] = row
             rgba[2::4] = row
-            rgba[3::4] = b"\xff" * width
+            rgba[3::4] = alpha
             out += rgba
         else:  # 4, grey with alpha
             rgba = bytearray(width * 4)

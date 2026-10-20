@@ -52,7 +52,7 @@ def _paeth(a, b, c):
     return b if pb <= pc else c
 
 
-def encode(w, h, samples, colortype=6, depth=8, filt=0, palette=None, interlace=0):
+def encode(w, h, samples, colortype=6, depth=8, filt=0, palette=None, interlace=0, trns=None):
     """samples: the raw sample bytes of every row, unfiltered, in the given colour type and depth."""
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colortype]
     bpp = max(1, channels * depth // 8)
@@ -75,6 +75,8 @@ def encode(w, h, samples, colortype=6, depth=8, filt=0, palette=None, interlace=
     png = b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, colortype, 0, 0, interlace))
     if palette is not None:
         png += _chunk(b"PLTE", bytes(palette))
+    if trns is not None:
+        png += _chunk(b"tRNS", bytes(trns))
     png += _chunk(b"IDAT", zlib.compress(bytes(out)))
     return png + _chunk(b"IEND", b"")
 
@@ -138,6 +140,20 @@ check("8 bit palette decodes",
 rgb16 = bytes(b for v in rgb for b in (v, 0x7F))
 write(os.path.join(T, "rgb16.png"), encode(W, H, rgb16, 2, 16, 4))
 check("16 bit RGB decodes to its high bytes", pngio.read_png(os.path.join(T, "rgb16.png")) == (W, H, want_rgb))
+
+# A colour key (tRNS on a grey or RGB picture) marks every pixel of that one value transparent, so
+# reading it as opaque would make the alpha channel lie (lessons review of stage 1).
+key_rgb = bytes([10, 20, 30, 40, 50, 60, 10, 20, 30])
+write(os.path.join(T, "rgb-key.png"), encode(3, 1, key_rgb, 2, 8, 0, trns=[0, 10, 0, 20, 0, 30]))
+check("an RGB colour key makes exactly the matching pixels transparent",
+      pngio.read_png(os.path.join(T, "rgb-key.png")) == (3, 1, bytes([10, 20, 30, 0, 40, 50, 60, 255, 10, 20, 30, 0])))
+write(os.path.join(T, "grey-key.png"), encode(3, 1, bytes([7, 8, 7]), 0, 8, 0, trns=[0, 8]))
+check("a grey colour key makes exactly the matching pixels transparent",
+      pngio.read_png(os.path.join(T, "grey-key.png")) == (3, 1, bytes([7, 7, 7, 255, 8, 8, 8, 0, 7, 7, 7, 255])))
+key16 = bytes([10, 1, 20, 2, 30, 3, 10, 1, 20, 2, 30, 4])
+write(os.path.join(T, "rgb16-key.png"), encode(2, 1, key16, 2, 16, 0, trns=[10, 1, 20, 2, 30, 3]))
+check("a 16 bit colour key compares all sixteen bits, not the high byte kept for the picture",
+      pngio.read_png(os.path.join(T, "rgb16-key.png")) == (2, 1, bytes([10, 20, 30, 0, 10, 20, 30, 255])))
 
 with open(os.path.join(HERE, "fixtures", "expected.json")) as fh:
     expected = json.load(fh)
