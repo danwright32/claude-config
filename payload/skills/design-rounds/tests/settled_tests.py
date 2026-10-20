@@ -210,9 +210,8 @@ for kind, words in [("document", "A document, with no product page around it."),
     check("a design declaring itself %s is written and says so" % kind,
           rc == 0 and words in open(path, encoding="utf-8").read(), out)
 for n, (label, s, needle) in enumerate([
-    ("a kind that is not allowed", spec(chrome=None, screen="postcard"), "email, document, new-product"),
+    ("a kind that is not allowed", spec(chrome=None, screen="postcard"), "email, document, new-product, terminal"),
     ("a kind beside a captured page", spec(screen="email"), "keep one"),
-    ("the shared terminal, which no settled design is drawn in", spec(chrome=None, screen="terminal"), "email, document, new-product"),
     ("no kind and no captured page", spec(chrome=None), "email, document, new-product"),
 ]):
     rc, out, path = make("bad-kind-%d" % n, s)
@@ -227,6 +226,72 @@ try:
     check("an unknown kind is refused by the drawing too", False, "accepted")
 except chrome_frame.ChromeError as err:
     check("an unknown kind is refused by the drawing too, naming the allowed ones", "email, document, new-product" in str(err), str(err))
+
+# --- a design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413) -----------
+# The terminal is itself a mod's chrome, so a mod's settled design names it in "screen" as its rounds
+# did, and each frame is drawn as the switcher draws the terminal: the shared screen's script and
+# stylesheet ahead of the round's own, the terminal window alone at the size its builder gives it.
+TERM_BUILDER = """function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({
+    title: "claude-config",
+    width: variant.width,
+    transcript: [T.user("keep going")],
+    band: [[T.amber(variant.lead), "  ", window.DESIGN_FIXTURE.room]]
+  });
+}
+"""
+write("term-builder.js", TERM_BUILDER)
+write("term-fixture.json", json.dumps({"room": "5h 12%, week 30%"}))
+TERM_FRAMES = [{"id": "t1", "title": "Laptop", "width": 640, "variant": {"width": 640, "lead": "Work has more room"}},
+               {"id": "t2", "title": "Wide", "width": 820, "height": 420, "variant": {"width": 820, "lead": "Work has more room"}}]
+TERM_DECISIONS = [{"id": "D1", "decision": "The band leads with Work has more room", "requirement": "1",
+                   "frames": ["t1", "t2"], "check": "the band's first line starts Work has more room"}]
+
+
+def term_spec(**changes):
+    return spec(**dict(dict(chrome=None, screen="terminal", styles=None, builder="term-builder.js",
+                            fixture="term-fixture.json", frames=TERM_FRAMES, decisions=TERM_DECISIONS,
+                            idioms=None), **changes))
+
+
+rc, out, term = make("terminal", term_spec())
+check("a design drawn in the shared terminal is written", rc == 0 and os.path.isfile(term), out)
+tsrc = open(term, encoding="utf-8").read() if os.path.isfile(term) else ""
+tm = re.search(r'<script type="application/json" id="design-frames">(.*?)</script>', tsrc, re.S)
+check("its frames block records the kind as terminal, for the score",
+      tm is not None and json.loads(tm.group(1)).get("kind") == "terminal", tm.group(1) if tm else tsrc[-800:])
+check("it says it is the terminal, where a design in chrome names its capture",
+      "The Claude Code terminal" in tsrc and "inside the product's real chrome" not in tsrc, tsrc[:900])
+fr = subprocess.run([sys.executable, SCORE, "frames", term], capture_output=True, text=True)
+check("the score reads its frames at their own sizes",
+      fr.returncode == 0 and [(f["id"], f["width"], f.get("height")) for f in json.loads(fr.stdout)["frames"]]
+      == [("t1", 640, None), ("t2", 820, 420)], fr.stdout + fr.stderr)
+rc2 = subprocess.run([sys.executable, CHECK, term], capture_output=True, text=True)
+check("and its decision map holds", rc2.returncode == 0, rc2.stdout + rc2.stderr)
+try:
+    tchrome = chrome_frame.shared_screen("terminal", TERM_BUILDER, "term-builder.js")
+    tdoc = chrome_frame.frame_document(tchrome, TERM_BUILDER, ".term-band { margin: 0; }", {"width": 640}, {"room": "x"})
+    check("a terminal frame document holds the shared terminal's script ahead of the round's builder, and its "
+          "stylesheet ahead of the round's, in the head",
+          # The round's own line, since the terminal's comments show a buildScreen of their own.
+          tdoc.index("var Terminal") < tdoc.index("width: variant.width") and tdoc.index(".term-window") < tdoc.index(
+              ".term-band { margin: 0; }") < tdoc.index("</head>"), tdoc[:600])
+    check("and draws the terminal alone, its slot the body's first element, with no margin",
+          re.search(r"<body>\s*<div id=\"dr-slot\"></div>", tdoc) is not None and "html, body { margin: 0; }" in tdoc, tdoc[:600])
+except Exception as err:  # noqa: BLE001
+    check("chrome_frame draws a terminal frame document", False, repr(err))
+for n, (label, s, needle) in enumerate([
+    ("the terminal beside a captured page", term_spec(chrome=CHROME), "keep one"),
+    ("a builder declaring Terminal itself, which would replace the shared screen",
+     term_spec(builder="term-own.js"), "declares Terminal at its top level"),
+    ("a builder calling the terminal in a design drawn in captured chrome",
+     spec(builder="term-builder.js", fixture="term-fixture.json"), '"screen": "terminal"'),
+]):
+    if n == 1:
+        write("term-own.js", "var Terminal = {};\n" + TERM_BUILDER)
+    rc, out, path = make("bad-term-%d" % n, s)
+    check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
 
 # --- in a real browser, where there is one ------------------------------------------------------------
 CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -274,6 +339,39 @@ document.body.append(f);
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, an email frame is drawn from the fixture with nothing around it and no margin",
           proc.returncode == 0 and m and m.group(1) == "bare|drawn|0", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
+
+    # Each terminal frame drawn for real, as the web adapter draws it: the dark terminal window alone,
+    # from the fixture, at exactly the frame's width, at the top left with nothing around it (#1413).
+    tprobe = tsrc.replace("</body></html>", """<script>
+var out = [], left = 2;
+[["t1", 640], ["t2", 820]].forEach(function (pair) {
+  var f = document.createElement("iframe");
+  f.style.cssText = "width:" + pair[1] + "px;height:500px;border:0";
+  f.onload = function () {
+    var d = f.contentDocument, slot = d.getElementById("dr-slot"), win = slot && slot.querySelector(".term-window");
+    var r = win ? win.getBoundingClientRect() : null;
+    out.push(pair[0] + ":" + [d.body.firstElementChild === slot ? "bare" : "around",
+             win ? "window" : "nowindow", r ? r.width + "x" + r.left + "," + r.top : "-",
+             win ? getComputedStyle(win).backgroundColor : "-",
+             slot && slot.textContent.indexOf("Work has more room  5h 12%, week 30%") >= 0 ? "drawn" : "notdrawn"].join("|"));
+    if (--left === 0) {
+      var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.sort().join(";"); document.body.append(pre);
+    }
+  };
+  f.srcdoc = designFrameDocument(pair[0]);
+  document.body.append(f);
+});
+</script></body></html>""")
+    with open(os.path.join(T, "tprobe.html"), "w", encoding="utf-8") as fh:
+        fh.write(tprobe)
+    proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                           "--dump-dom", "file://" + os.path.join(T, "tprobe.html")], capture_output=True, text=True,
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+    m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+    check("in Chrome, each terminal frame is the terminal window alone, drawn from the fixture at its own width",
+          proc.returncode == 0 and m and m.group(1) == ("t1:bare|window|640x0,0|rgb(27, 27, 29)|drawn;"
+                                                         "t2:bare|window|820x0,0|rgb(27, 27, 29)|drawn"),
+          (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
 
     # capture-chrome.js, run in a page as Playwright's browser_evaluate would: the page's own rules
     # inlined, its scripts taken out, and a stylesheet it cannot read NAMED, never silently dropped.

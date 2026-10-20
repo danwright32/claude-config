@@ -258,6 +258,46 @@ PY
   if [ "$rc" -eq 1 ] && said "UNMET D1" "$EM/off.log" && said "Invoice" "$EM/off.log"; then ok; else bad "the same email with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$EM/off.log")"; fi
 fi
 
+# --- 3d. a design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413) ---------
+# make-settled.py draws each frame as the switcher draws the terminal, the web adapter draws the design's
+# side at the frame's width and runs its checks on it, and the build's checks are filled in as a mod's own
+# test would fill them. Nothing yet captures a built mod screen (claude-config#1414), so the score is the
+# decision half and a picture half said to be unmeasured: no score, which the close gate's reader holds
+# as unmeasured, never as matched.
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
+  unmeasured=$((unmeasured + 1))
+else
+  TM="$T/terminal"
+  mkdir -p "$TM"
+  cat > "$TM/builder.js" <<'JS'
+function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({ title: "claude-config", width: variant.width, transcript: [T.user("keep going")],
+                    band: [[T.amber("Work has more room"), "  ", window.DESIGN_FIXTURE.room]] });
+}
+JS
+  printf '{"room": "5h 12%%, week 30%%"}\n' > "$TM/fixture.json"
+  cat > "$TM/settled.json" <<'JSON'
+{"title": "Account room band", "builder": "builder.js", "fixture": "fixture.json", "screen": "terminal",
+ "frames": [{"id": "t1", "title": "Laptop", "width": 640, "variant": {"width": 640}}],
+ "decisions": [{"id": "D1", "decision": "The band leads with Work has more room", "requirement": "1",
+                "frames": ["t1"], "check": "the band reads Work has more room"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['t1'], check: function (doc) { var b = doc.querySelector('.term-band'); return {ok: !!b && b.textContent.indexOf('Work has more room') === 0, detail: b ? b.textContent : 'no band'}; }}];" > "$TM/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$TM/settled.json" "$TM/settled.html" > "$TM/make.log" 2>&1 \
+    || bad "make-settled.py writes a settled terminal design" "$(cat "$TM/make.log")"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$TM/settled.html" --out "$TM/cap" --design-only \
+    --fixture "$TM/fixture.json" --channel chrome --repo "$APP" > "$TM/design.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; w,_,_=pngio.read_png(sys.argv[2] + "/t1-design.png"); c=json.load(open(sys.argv[2] + "/capture.json")); sys.exit(0 if w == 640 and [(r["id"], r["ok"]) for r in c["frames"][0]["designChecks"]] == [("D1", True)] else 1)' "$HERE" "$TM/cap" 2>/dev/null; then ok; else bad "the web adapter draws a terminal frame at its own width and its check passes on the design (rc=$rc)" "$(cat "$TM/design.log"; cat "$TM/cap/capture.json" 2>/dev/null)"; fi
+  # The build's side as a mod's own test would fill it: its checks, and no picture, since none can be taken.
+  python3 -c 'import json,sys; p=sys.argv[1] + "/capture.json"; c=json.load(open(p)); [f.update(checks=[{"id": "D1", "ok": True, "detail": ""}]) for f in c["frames"]]; c["build"]="the account room mod"; json.dump(c, open(p, "w"))' "$TM/cap"
+  python3 "$SCORE" score "$TM/cap" > "$TM/score.log" 2>&1; rc=$?
+  if [ "$rc" -eq 2 ] && said "decisions  1 of 1 met (100%)" "$TM/score.log" && said "the picture half of a terminal design is unmeasured" "$TM/score.log" && said "the Claude Code terminal" "$TM/score.log"; then ok; else bad "a terminal design scores its decision half and says its picture half is unmeasured, no score (rc=$rc)" "$(cat "$TM/score.log")"; fi
+  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "unmeasured" and not p and s.get("kind") == "terminal" else 1)' "$HERE" "$TM/cap/score.json"; then ok; else bad "the close gate's reader of a score file holds the terminal design's score as unmeasured" "$(cat "$TM/score.log")"; fi
+fi
+
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
 if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
   echo "UNMEASURED: no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"

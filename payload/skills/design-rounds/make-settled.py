@@ -23,6 +23,9 @@ The spec, with paths resolved against the spec's own folder:
       "screen":   "email" | "document" | "new-product",   in place of "chrome", for a design with no
                                          product page around it: each frame is drawn alone at its own
                                          width (claude-config#1393)
+                | "terminal",            for a Claude Code mod's design: each frame is the shared
+                                         terminal alone, drawn as the switcher draws it, at the size
+                                         its builder gives the window (claude-config#1413)
       "builder":  "builder.js",          buildScreen(variant), as in the rounds
       "styles":   "screen.css",          optional
       "fixture":  "../fixtures/team-capacity.json",   the committed data both sides draw
@@ -44,7 +47,9 @@ The spec, with paths resolved against the spec's own folder:
     }
 
 It writes NOTHING when it refuses, and refuses: a chrome that is not a captured one (no stand ins), a
-"screen" that is not one of the three kinds, or one named beside a captured chrome, a frame with no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
+"screen" that is not one of the three kinds or the terminal, or one named beside a captured chrome, a
+builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
+no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, and an exception without Dan's words, a date and where he said them. Exit 2 with the reason.
 """
@@ -95,27 +100,36 @@ def main(argv):
     # contradict each other, and picking either silently draws the frames against the other's intent:
     # bare when they belong in the product (the stand in this skill forbids), or in a page an email
     # never has (claude-config#1393, the same "keep one" the switcher says for the terminal).
+    # A mod's design names the shared terminal the same way, which is itself the mod's chrome
+    # (claude-config#1413), and is refused beside a captured page for the same reason.
     kind = spec.get("screen")
-    try:
-        if kind is not None:
-            if spec.get("chrome") is not None:
-                fail('the spec names the kind "%s", which has no product page around it, and a captured page as '
+    if kind is not None:
+        if not isinstance(kind, str) or kind not in design_file.FRAME_KINDS:
+            fail('the spec asks for the screen %s, and make-settled.py draws every frame inside the product\'s '
+                 "captured page, alone as one of the kinds with no product page around it, or in a shared "
+                 "screen, one of: %s" % (json.dumps(kind), design_file.frame_kinds()))
+        if spec.get("chrome") is not None:
+            if kind in design_file.SCREEN_KINDS:
+                fail('the spec asks for the shared screen "%s", which is its chrome, and names a captured page as '
                      "well; keep one" % kind)
-            if not isinstance(kind, str) or kind not in design_file.NO_PAGE_KINDS:
-                fail('the spec asks for the screen %s, and make-settled.py draws every frame inside the product\'s '
-                     "captured page, or alone as one of the kinds with no product page around it: %s"
-                     % (json.dumps(kind), design_file.no_page_kinds()))
-            chrome = chrome_frame.no_page(kind)
-        else:
-            chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
-    except chrome_frame.ChromeError as err:
-        fail(str(err))
+            fail('the spec names the kind "%s", which has no product page around it, and a captured page as '
+                 "well; keep one" % kind)
     builder_name = str(spec.get("builder", "")).strip()
     if not builder_name:
         fail('the spec names no "builder"')
     builder = read(os.path.join(base, builder_name), "builder")
     if "buildScreen" not in builder:
         fail("the builder %s does not define buildScreen" % builder_name)
+    try:
+        if kind in design_file.SCREEN_KINDS:
+            chrome = chrome_frame.shared_screen(kind, builder, builder_name)
+        else:
+            # The same reader as the switcher's, so a builder calling the terminal in a design that does
+            # not ask for it is refused here as it is in the rounds, never drawn as a builder that threw.
+            chrome_frame.load_screen(kind, builder, builder_name)
+            chrome = chrome_frame.no_page(kind) if kind is not None else chrome_frame.load_chrome(spec.get("chrome"), base)
+    except chrome_frame.ChromeError as err:
+        fail(str(err))
     styles = read(os.path.join(base, spec["styles"]), "styles") if spec.get("styles") else ""
     fixture_name = str(spec.get("fixture", "")).strip()
     if not fixture_name:
@@ -182,9 +196,10 @@ def main(argv):
     variants = {f["id"]: chrome_frame.script_text(json.dumps(f["variant"])) for f in frames}
     frames_block = {"frames": [dict({"id": f["id"], "title": f["title"], "width": f["width"]},
                                     **({"height": f["height"]} if f.get("height") else {})) for f in frames]}
-    if chrome["kind"] == "none":
+    if chrome["kind"] in ("none", "screen"):
         # Read by the score, which records and says it, so a 100% on an email is never read as a build
-        # drawn inside the product (claude-config#1393).
+        # drawn inside the product (claude-config#1393), and a terminal design's picture half is said to
+        # be unmeasured until a built mod screen can be captured (claude-config#1413).
         frames_block["kind"] = chrome["page"]
     page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants)
 
@@ -263,7 +278,7 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
        json.dumps(json.dumps(TOKEN)),
        json.dumps({f["id"]: bool(f.get("height")) for f in frames}))
     dmap = {"decisions": decisions}
-    if chrome["kind"] == "none":
+    if chrome["kind"] in ("none", "screen"):
         drawn = "%s Every frame is drawn at its own width" % e(chrome["line"])
     else:
         drawn = "Every frame is drawn inside the product's real chrome, captured from %s" % e(chrome["source"])
