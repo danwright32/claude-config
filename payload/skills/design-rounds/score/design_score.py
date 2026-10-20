@@ -281,11 +281,6 @@ def _git(directory, *args):
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def _verify(d):
-    v = d.get("verify", "check")
-    return v
-
-
 def score_capture(folder):
     """The score of the capture in `folder`, as the dict written to score.json."""
     s = {"format": SCORE_FORMAT, "version": VERSION, "verdict": "unmeasured", "unmeasured": [],
@@ -397,7 +392,7 @@ def score_capture(folder):
     for d in decisions:
         did = d["id"]
         row = {"id": did, "decision": d.get("decision", ""), "frames": []}
-        verify = _verify(d)
+        verify = d.get("verify", "check")
         if did in excepted_decisions:
             row["status"] = "excepted"
             row["detail"] = "exception %s" % excepted_decisions[did].get("id")
