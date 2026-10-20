@@ -327,6 +327,25 @@ S10="$TMP_ROOT/state-died"; mkdir -p "$S10"
 printf 'started=%s\nlog=%s\n' "$(( $(date +%s) - 600 ))" "$S10/run-1.log" > "$S10/in-progress"
 run_state "$ROOT" "$S10" --last
 check "--last says a sweep stopped before recording what it did" "$(has "$OUT" "stopped before recording")"
+# The next --start turns that mark into the record, so the death is still reported while the new
+# sweep runs, and not read as a record nobody can parse. The process list blocks until released, so
+# the new sweep is demonstrably still running when --last is asked.
+RELEASE10="$TMP_ROOT/release-10"
+sed "s|$RELEASE7|$RELEASE10|" "$BLOCKING_PS" > "$TMP_ROOT/blocking-ps-10"; chmod +x "$TMP_ROOT/blocking-ps-10"
+ROOT10="$TMP_ROOT/dd-after-death"; mkdir -p "$ROOT10"
+make_folder "$ROOT10" "After-orphan" "$TMP_ROOT/removed-after/App.xcodeproj" >/dev/null
+SAVED_PS="$FAKE_PS"; FAKE_PS="$TMP_ROOT/blocking-ps-10"
+run_state "$ROOT10" "$S10" --start
+start10_rc="$RC"
+run_state "$ROOT10" "$S10" --last
+died_out="$OUT"
+: > "$RELEASE10"
+FAKE_PS="$SAVED_PS"
+check "a --start after a sweep died starts a new one" "$(eq "$start10_rc" 0)"
+check "and while it runs, --last still says the earlier sweep stopped before recording" \
+  "$(has "$died_out" "stopped before recording")"
+check "rather than calling its record unreadable" "$(hasnt "$died_out" "could not be read")"
+check "the new sweep finishes" "$(wait_finished "$S10" && echo ok || echo "no finished record in $S10")"
 
 run_state "$ROOT" "$TMP_ROOT/state-direct" --auto
 check "--auto run by hand, without the lock --start takes, is refused with exit 2" "$(eq "$RC" 2)"

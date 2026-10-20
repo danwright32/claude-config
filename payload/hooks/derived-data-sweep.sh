@@ -159,12 +159,14 @@ last_report() {
     fi
   fi
   [ -e "$RECORD" ] || return 0
-  if ! read_record "$RECORD" || [ -z "$REC_exit" ]; then
-    echo "The record of the last automatic sweep of Xcode build caches, $RECORD, could not be read, so what it did is not known."
+  # A death recorded by --start carries no exit code (the sweep never wrote one), so it is read before
+  # the exit code is required, or every death would read as a record nobody can parse (L11).
+  if read_record "$RECORD" && [ "$REC_died" = 1 ]; then
+    echo "The last automatic sweep of Xcode build caches, started $(age_words "$((now - ${REC_started:-now}))"), stopped before recording what it did, so what it deleted is not known.$(log_words)"
     return 0
   fi
-  if [ "$REC_died" = 1 ]; then
-    echo "The last automatic sweep of Xcode build caches, started $(age_words "$((now - ${REC_started:-now}))"), stopped before recording what it did, so what it deleted is not known.$(log_words)"
+  if [ -z "$REC_exit" ]; then
+    echo "The record of the last automatic sweep of Xcode build caches, $RECORD, could not be read, so what it did is not known."
     return 0
   fi
   lead="The last automatic sweep of Xcode build caches, which finished $(age_words "$((now - ${REC_finished:-now}))"),"
