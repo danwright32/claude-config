@@ -92,7 +92,8 @@ python3 ~/.claude/skills/design-rounds/make-switcher.py spec.json switcher.html
 The spec names the round, the builder, the options, and the product's captured `chrome`
 (below, "No stand ins"), with the round's `fixture` when it has one. Run the script with no
 arguments for the exact shape, and see `example/` for a working one. A spec naming no
-captured chrome is refused, writing nothing, unless it asks for the shared terminal screen.
+captured chrome is refused, writing nothing, unless it asks for the shared terminal screen or
+names one of the three kinds of screen with no product page around it (below, "No stand ins").
 Each option is then the captured page with the round drawn into its slot, in an iframe of
 its own at the width it was captured at, every option kept in the stage so switching never
 reloads one, and a key pressed inside an option still switches.
@@ -303,6 +304,23 @@ it in the spec, with where it came from and where the round draws:
 what goes in the slot, with the product's own classes and controls. A round about a Claude Code mod
 asks for `"screen": "terminal"` instead, the terminal that ships with the tool.
 
+**A screen with no product page around it names its kind instead** (Dan, 2026-10-20, on #1393:
+"allow named kinds"). Three kinds, and only these: an email, a document (a PDF, an invoice export),
+and a new product whose page does not exist yet. The round names the kind in `"screen"`, where the
+terminal is named, and the width it is drawn at:
+
+```json
+{ "builder": "builder.js", "screen": "email", "width": 600, "variants": [ ... ] }
+```
+
+`"screen"` takes `"email"`, `"document"` or `"new-product"`. Each option is then the round's drawing
+alone, in a document of its own at that width with no margin, and the switcher says the kind in one
+plain line ("An email, with no product page around it."). Every other screen is drawn in the captured
+page. The tool refuses, writing nothing: any other kind, naming the three; a kind with no `"width"`;
+a `"width"` without a kind (a captured page's width is its own); and a kind beside a captured chrome,
+rather than letting either win, since each says the other is wrong. A screen that sits inside the
+product is never a kind: capture its page.
+
 ## The deliverable
 
 The settled design is ONE self contained file committed in the repo: no build step, no
@@ -323,8 +341,12 @@ decision is written so its check can be authored from it: what it is, why, its o
 or `noCode`), how it is verified (`"verify": "check"`, the default, with `"check"`, the one sentence
 the check asserts, and `"frames"`, every frame it shows on; or `"picture"`; or `"elsewhere"` with
 `"provenBy"`). The file gives `designFrameDocument(<id>)`, each frame's whole document, which the
-score's web adapter draws as a page of its own. It refuses, writing nothing, a chrome that was not
-captured, a frame with no width or variant, a checked decision with no check sentence or no frame, a
+score's web adapter draws as a page of its own. A design with no product page around it names its
+kind in `"screen"` in place of `"chrome"`, as its rounds did: each frame is drawn alone at its own
+width, the file says the kind where a design in chrome names its capture, and its `design-frames`
+block carries `"kind"`, which the score records in its score file and says in its report, so a 100%
+on an email is never read as a build drawn inside the product. It refuses, writing nothing, a chrome
+that was not captured, a kind that is not one of the three or one named beside a chrome, a frame with no width or variant, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, and an exception without
 Dan's words, a date and where he said them.
 

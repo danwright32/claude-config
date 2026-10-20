@@ -1857,8 +1857,8 @@ nothing df can see says so. It exits 1 when any removal failed and 2 when it ref
 The rule itself lives in `hooks/lib/derived-data.sh`, lifted from Overture's tested
 `scripts/lib/derived-data.sh` (overture#2596, lesson L114) with its cases ported to
 `hooks/test-derived-data.sh`, so there is one copy of it. Overture's own reclaim script still
-carries its copy until it is pointed at this one, a change in the Overture repository that #1369
-stays open for.
+carries its copy until it is pointed at this one; #1369 shipped the shared copy and closed, and that
+change in the Overture repository is overture#4688.
 
 The sweep deletes on its own when the low free space warning fires: Dan's decision on #1369,
 2026-10-20 (L9). When `hooks/free-space-nudge.sh` speaks it runs `derived-data-sweep.sh --start`,
@@ -2048,6 +2048,19 @@ asserts or no frames it shows on, a decision with no owner, and an exception wit
 date and where he said them. The score counts a decision as met only once its check has run on every
 frame the map says it shows on. `test-make-settled.sh` holds both, reading the file in Chrome where
 there is one.
+
+**A screen with no product page around it names its kind** (#1393, Dan's sign off on 2026-10-20:
+"allow named kinds"). An email, a document (a PDF, an invoice export) or a new product whose page does
+not exist yet sets `"screen"` to `email`, `document` or `new-product`, where a mod round sets
+`terminal`, in place of a captured chrome. The switcher then draws each option alone at the round's
+`"width"` and says the kind in one plain line; `make-settled.py` draws each frame alone at its own
+width and records `"kind"` in the `design-frames` block; the score reads it, records it in the score
+file and says it in its report, and scores the frames like any others, so the close gate needs nothing
+new. The three kinds live in one list, `NO_PAGE_KINDS` in `design_file.py`, which all three read. Any
+other kind is refused naming the three, and a kind beside a captured chrome is refused rather than
+either winning. `test-make-switcher.sh`, `test-make-settled.sh`, `test-design-score.sh` and
+`test-score-adapters.sh` (an email scored end to end in Chrome, at 100% and then with its heading
+changed) hold it.
 
 ## Mods
 

@@ -50,6 +50,8 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
   decision-map       {"decisions": [{"id", "decision", "requirement" | "noCode", "verify"?, "provenBy"?}]}
   design-frames      {"frames": [{"id": "f1", "title": "Tomorrow, light", "width": 1280, "height"?: 900}]}
                      no height: the full page, as tall as it draws
+                     "kind"?: "email" | "document" | "new-product", for a design drawn with no product
+                     page around it (claude-config#1393); recorded in the score and said in its report
   design-exceptions  {"exceptions": [{"id": "X1", "decision": "D7" | "frame": "f3", "region"?: [x, y, w, h],
                                       "words": "Dan's own words", "date": "YYYY-MM-DD",
                                       "source": "where he said it: an issue comment or session link"}]}
@@ -76,7 +78,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import pngio  # noqa: E402
-from design_file import find_blocks  # noqa: E402
+from design_file import NO_PAGE_KINDS, find_blocks, no_page_kinds  # noqa: E402
 
 # Out of 255 per channel. Measured in Slate's first trial of this score (#3934, 2026-10-19): with
 # both sides drawn by the same Chrome, 8 absorbs rounding, while 24 let a blank white page match
@@ -160,11 +162,17 @@ def read_design(path, frames_only=False):
         h = f.get("height")
         if h is not None and (not isinstance(h, int) or isinstance(h, bool) or h <= 0):
             raise Unreadable("frame %s in the design-frames block has a height that is not a number of pixels" % fid)
+    # A design with no product page around it names its kind (claude-config#1393). Only the kinds Dan
+    # allowed are read, so a design naming another is no score, never one scored as if it were allowed.
+    kind = fblock.get("kind")
+    if kind is not None and (not isinstance(kind, str) or kind not in NO_PAGE_KINDS):
+        raise Unreadable("the design-frames block in %s names the kind %s, and a design with no product page "
+                         "around it is one of: %s" % (path, json.dumps(kind), no_page_kinds()))
 
     # An adapter asks for the frames alone (`frames`), and a design whose map is still being written
     # can already be drawn.
     if frames_only:
-        return raw, None, frames, None
+        return raw, None, frames, None, kind
 
     dmap = one("decision-map", True)
     decisions = dmap.get("decisions") if isinstance(dmap, dict) else None
@@ -185,7 +193,7 @@ def read_design(path, frames_only=False):
         exceptions = eblock.get("exceptions") if isinstance(eblock, dict) else None
         if not isinstance(exceptions, list):
             raise Unreadable("the design-exceptions block in %s has no \"exceptions\" list" % path)
-    return raw, decisions, frames, exceptions
+    return raw, decisions, frames, exceptions, kind
 
 
 def check_exceptions(exceptions, decisions, frames):
@@ -299,7 +307,7 @@ def score_capture(folder):
     s = {"format": SCORE_FORMAT, "version": VERSION, "verdict": "unmeasured", "unmeasured": [],
          "scoredAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "tolerance": TOLERANCE,
          "platform": None, "build": None, "commit": None, "dirty": None, "capturedAt": None,
-         "design": None, "designFile": None, "designSha256": None,
+         "design": None, "designFile": None, "designSha256": None, "kind": None,
          "decisions": {"met": 0, "of": 0, "rows": []}, "pictures": {"score": 0, "frames": []},
          "exceptions": [], "notes": []}
     no = s["unmeasured"]
@@ -321,7 +329,8 @@ def score_capture(folder):
         s["designFile"] = design_file
         # The hash is of the file's bytes as committed, so the close gate can compare it with the
         # design file GitHub holds at the scored commit.
-        raw, decisions, frames, exceptions = read_design(design_file)
+        raw, decisions, frames, exceptions, kind = read_design(design_file)
+        s["kind"] = kind
         s["designSha256"] = hashlib.sha256(raw).hexdigest()
         top = _git(os.path.dirname(design_file), "rev-parse", "--show-toplevel")
         s["design"] = os.path.relpath(os.path.realpath(design_file), os.path.realpath(top)) if top else design_file
@@ -562,6 +571,9 @@ def render(s):
                                                           s.get("build") or "(no build named)", at))
     if s.get("dirty"):
         lines.append("  drawn from a checkout with uncommitted changes, so this score belongs to no commit")
+    if s.get("kind") in NO_PAGE_KINDS:
+        line = NO_PAGE_KINDS[s["kind"]]
+        lines.append("  kind       %s" % (line[0].lower() + line[1:]))
     dec = s["decisions"]
     rows = dec["rows"]
     if rows:
@@ -693,7 +705,7 @@ def _main(argv):
         # The frames a platform adapter draws, read by this one reader so the adapters and the score
         # never disagree about which frames a design has or how wide each is (claude-config#1364).
         try:
-            _raw, _decisions, frames, _exceptions = read_design(argv[2], frames_only=True)
+            _raw, _decisions, frames, _exceptions, _kind = read_design(argv[2], frames_only=True)
         except Unreadable as err:
             print("design-score: could not read the frames: %s" % err)
             return 2

@@ -186,6 +186,48 @@ rc, out, _ = make("with-exception", spec(exceptions=[
 check("an exception in Dan's words is kept and shown", rc == 0 and "the clock can differ, it&#x27;s live" in open(
     os.path.join(T, "with-exception.html"), encoding="utf-8").read(), out)
 
+# --- a design with no product page around it (claude-config#1393) ------------------------------------
+# Dan, 2026-10-20, on #1393: "allow named kinds". An email, a document or a new product names its kind
+# in "screen", as a round does, and every frame is drawn at its own width with nothing around it.
+rc, out, nopage = make("nopage", spec(chrome=None, screen="email"))
+check("a design declaring itself an email is written with no captured page", rc == 0 and os.path.isfile(nopage), out)
+nsrc = open(nopage, encoding="utf-8").read() if os.path.isfile(nopage) else ""
+check("it says what it is, plainly, where a design in chrome names its capture",
+      "An email, with no product page around it." in nsrc and "inside the product's real chrome" not in nsrc, nsrc[:900])
+fm = re.search(r'<script type="application/json" id="design-frames">(.*?)</script>', nsrc, re.S)
+check("its frames block records the kind for the score", fm is not None and json.loads(fm.group(1)).get("kind") == "email",
+      fm.group(1) if fm else nsrc[-800:])
+check("its frames carry no captured page", "<header>Slate</header>" not in nsrc and "the old page" not in nsrc)
+fr = subprocess.run([sys.executable, SCORE, "frames", nopage], capture_output=True, text=True)
+check("the score reads its frames at their own sizes",
+      fr.returncode == 0 and [(f["id"], f["width"], f.get("height")) for f in json.loads(fr.stdout)["frames"]]
+      == [("f1", 1280, None), ("f2", 390, 844)], fr.stdout + fr.stderr)
+rc2 = subprocess.run([sys.executable, CHECK, nopage], capture_output=True, text=True)
+check("and its decision map holds", rc2.returncode == 0, rc2.stdout + rc2.stderr)
+for kind, words in [("document", "A document, with no product page around it."),
+                    ("new-product", "A new product, whose page does not exist yet.")]:
+    rc, out, path = make("nopage-" + kind, spec(chrome=None, screen=kind))
+    check("a design declaring itself %s is written and says so" % kind,
+          rc == 0 and words in open(path, encoding="utf-8").read(), out)
+for n, (label, s, needle) in enumerate([
+    ("a kind that is not allowed", spec(chrome=None, screen="postcard"), "email, document, new-product"),
+    ("a kind beside a captured page", spec(screen="email"), "keep one"),
+    ("the shared terminal, which no settled design is drawn in", spec(chrome=None, screen="terminal"), "email, document, new-product"),
+    ("no kind and no captured page", spec(chrome=None), "email, document, new-product"),
+]):
+    rc, out, path = make("bad-kind-%d" % n, s)
+    check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
+nodoc = chrome_frame.frame_document(chrome_frame.no_page("email"), BUILDER, ".day { color: #3c98da; }",
+                                    {"day": "Tue"}, {"open": {"Tue": 42}})
+check("a no page frame document is the round's own drawing alone, its slot the body's first element",
+      re.search(r"<body>\s*<div id=\"dr-slot\"></div>", nodoc) is not None and nodoc.index(".day {") < nodoc.index("</head>")
+      and nodoc.index("function buildScreen") < nodoc.index("</body>"), nodoc[:600])
+try:
+    chrome_frame.no_page("postcard")
+    check("an unknown kind is refused by the drawing too", False, "accepted")
+except chrome_frame.ChromeError as err:
+    check("an unknown kind is refused by the drawing too, naming the allowed ones", "email, document, new-product" in str(err), str(err))
+
 # --- in a real browser, where there is one ------------------------------------------------------------
 CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
@@ -209,6 +251,29 @@ var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, designFrameDocument gives each frame's whole document and refuses an unknown one",
           proc.returncode == 0 and m and m.group(1) == "f1=slot,f2=slot,f9=refused", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
+
+    # The email design's frame drawn for real, as the web adapter draws it: a document of its own whose
+    # body holds the round's drawing and nothing else (claude-config#1393).
+    nprobe = nsrc.replace("</body></html>", """<script>
+var f = document.createElement("iframe");
+f.style.cssText = "width:390px;height:300px;border:0";
+f.onload = function () {
+  var d = f.contentDocument, slot = d.getElementById("dr-slot");
+  var out = [d.body.firstElementChild === slot ? "bare" : "around", slot ? (slot.textContent.indexOf("Wed: 17 calls open") >= 0 ? "drawn" : slot.textContent.slice(0, 40)) : "noslot",
+             String(d.body.getBoundingClientRect().left)];
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join("|"); document.body.append(pre);
+};
+f.srcdoc = designFrameDocument("f2");
+document.body.append(f);
+</script></body></html>""")
+    with open(os.path.join(T, "nprobe.html"), "w", encoding="utf-8") as fh:
+        fh.write(nprobe)
+    proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                           "--dump-dom", "file://" + os.path.join(T, "nprobe.html")], capture_output=True, text=True,
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+    m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+    check("in Chrome, an email frame is drawn from the fixture with nothing around it and no margin",
+          proc.returncode == 0 and m and m.group(1) == "bare|drawn|0", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
 
     # capture-chrome.js, run in a page as Playwright's browser_evaluate would: the page's own rules
     # inlined, its scripts taken out, and a stylesheet it cannot read NAMED, never silently dropped.
