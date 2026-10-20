@@ -137,6 +137,11 @@ run_install "$H5" "$T/h5.log" "$T/h5.out"; rc=$?
 kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
 if [ "$rc" -eq 2 ] && said "another install" "$T/h5.out" && [ ! -s "$T/h5.log" ]; then ok
 else bad "an install while another is running refuses, naming it, and installs nothing (rc=$rc)" "$(cat "$T/h5.out")"; fi
+# A lock whose pid is not written yet belongs to an install that has only just taken it: held, not dead.
+H7="$T/h7"; mkdir -p "$H7/$REL.lock"
+run_install "$H7" "$T/h7.log" "$T/h7.out"; rc=$?
+if [ "$rc" -eq 2 ] && said "another install" "$T/h7.out" && [ -d "$H7/$REL.lock" ] && [ ! -s "$T/h7.log" ]; then ok
+else bad "a lock with no pid written yet is held, never taken over (rc=$rc)" "$(cat "$T/h7.out")"; fi
 # The same lock left by an install that died is taken over.
 run_install "$H5" "$T/h5.log" "$T/h5b.out"; rc=$?
 if [ "$rc" -eq 0 ] && [ ! -e "$H5/$REL.lock" ]; then ok; else bad "a lock left by an install that died is taken over, and released at the end (rc=$rc)" "$(cat "$T/h5b.out")"; fi

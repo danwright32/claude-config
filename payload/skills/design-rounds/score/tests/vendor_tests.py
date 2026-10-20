@@ -123,6 +123,14 @@ if shutil.which("node"):
           p.returncode == 2 and "install-playwright.sh" in p.stderr, "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
 else:
     print("UNMEASURED: node is not on PATH, so the vendored capture-web.mjs was not loaded")
+# Running the score in the folder leaves nothing behind there (python writes __pycache__ beside a
+# module it imports unless told not to), so a CI job that scores and then checks still matches.
+p = subprocess.run([sys.executable, os.path.join(V, "design_score.py"), "frames", design],
+                   capture_output=True, text=True, env=ENV, cwd=T)
+rc, out = run("check", V)
+check("running the vendored score leaves the folder matching its manifest (no __pycache__)",
+      p.returncode == 0 and rc == 0 and not os.path.exists(os.path.join(V, "__pycache__")),
+      "rc=%d %s" % (rc, out))
 
 # 6. A hand edit to the copy is drift against the manifest, named, with the command to refresh it.
 with open(os.path.join(V, "design_score.py"), "a") as fh:

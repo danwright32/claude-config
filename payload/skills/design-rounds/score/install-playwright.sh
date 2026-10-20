@@ -97,10 +97,15 @@ fi
 echo "install-playwright: $why; installing."
 
 # One install at a time. mkdir is atomic; a lock whose install has died (its pid is gone) is taken over.
+# A lock with no pid yet is held: its install took it a moment ago and is about to write one.
 mkdir -p "$(dirname "$LOCK")"
 if ! mkdir "$LOCK" 2>/dev/null; then
   holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+  if [ -z "$holder" ]; then
+    echo "install-playwright: another install is starting (lock at $LOCK, its pid not written yet). Let it finish, then run this again; if none is running, remove $LOCK."
+    exit 2
+  fi
+  if kill -0 "$holder" 2>/dev/null; then
     echo "install-playwright: another install is running (pid $holder, lock at $LOCK). Let it finish, then run this again."
     exit 2
   fi
