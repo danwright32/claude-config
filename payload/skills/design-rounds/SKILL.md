@@ -334,7 +334,16 @@ python3 ~/.claude/skills/design-rounds/make-settled.py settled.json docs/design/
 
 `settled.json` names the chrome, builder, styles and fixture as the rounds did, then every frame
 (`id`, `title`, `width`, an optional fixed `height`, and the `variant` its builder is handed), every
-decision, and Dan's exceptions; `make-settled.py` run with no arguments prints the shape. The fixture
+decision, and Dan's exceptions; `make-settled.py` run with no arguments prints the shape. Two optional
+fields carry what a PRD opens with (claude-config#1401): `"intro"`, the design's opening paragraph
+(who it is for, how many rounds settled it, who approved it), shown under its title; and
+`"requirements"`, the PRD's numbered requirements as `[{"number": "6.4", "text": "the sentence"}]`,
+each number written as text exactly as the PRD numbers it. Given, the requirements are listed on the
+page, every decision's owner reads as its sentence (`Requirement 6.4: the sentence`), and the decision
+map carries the list, so a decision naming a number it does not hold is refused, naming the number,
+by `make-settled.py` and by `check-decision-map.py` (`UNLISTED`). Left out, a decision's number is
+shown alone, the PRD holds its sentence, and `make-settled.py` says which numbers it showed without
+one; a spec written without either field writes the same bytes it always did. The fixture
 is the data the frames are drawn from, committed in the app's repository, and the built page renders
 the same file in a development only preview, so both sides of the score draw the same data. Each
 decision is written so its check can be authored from it: what it is, why, its owner (`requirement`
@@ -354,8 +363,9 @@ and says its picture half is unmeasured, since nothing yet captures a built mod 
 terminal is drawn in (claude-config#1414): a terminal design is no score until then, and its Match
 issue stays open. It refuses, writing nothing, a chrome
 that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a checked decision with no check sentence or no frame, a
-decision on a frame the design does not hold, a decision with no owner, and an exception without
-Dan's words, a date and where he said them.
+decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
+requirements list that is empty or out of shape, a decision naming a requirement the list does not
+hold, and an exception without Dan's words, a date and where he said them.
 
 The checks themselves go beside the file as `<name>.checks.js`, one per checked decision, written
 from those sentences (the score's adapters section below says what a check reads).
@@ -396,7 +406,8 @@ lists it every time; nothing else excuses a difference.
 
    Run `python3 ~/.claude/skills/design-rounds/check-decision-map.py <the settled file>`
    before calling the deliverable done. It refuses (exit 1) a decision with neither, or both,
-   by name, and a map it cannot read is exit 2, never a pass. Who reads the map next: the
+   by name, and a decision naming a requirement the map's own `"requirements"` list does not
+   hold, when the map carries one; a map it cannot read is exit 2, never a pass. Who reads the map next: the
    planner. `/plan-council`, `/plan-lite` and `/milestone` put the settled file's path in
    their plan as `"design"`, and `create-milestone.sh` runs the same check with the plan,
    filing nothing while a decision has no requirement or a requirement has no issue naming it

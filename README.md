@@ -2063,7 +2063,12 @@ build is scored against: each frame drawn in the real chrome, `designFrameDocume
 adapters, and the decision map, frames and exceptions blocks. It refuses a chrome that was not
 captured (Dan, 2026-10-19: "No stand ins"), a checked decision with no sentence saying what the check
 asserts or no frames it shows on, a decision with no owner, and an exception without Dan's words, a
-date and where he said them. The score counts a decision as met only once its check has run on every
+date and where he said them. A spec may also carry the design's opening paragraph (`"intro"`) and the
+PRD's numbered requirements (`"requirements"`, #1401): the page shows the intro under its title and
+lists the requirements, each decision's owner reads as its requirement's sentence, and the decision map
+carries the list, so `make-settled.py` and `check-decision-map.py` (`UNLISTED`) both refuse a decision
+naming a number it does not hold. A spec with neither writes the same bytes as before; without the list
+a decision's number is shown alone and the tool says which. The score counts a decision as met only once its check has run on every
 frame the map says it shows on. `test-make-settled.sh` holds both, reading the file in Chrome where
 there is one.
 
