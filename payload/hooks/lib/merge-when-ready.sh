@@ -467,7 +467,8 @@ while :; do
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
   case "$rev_rc" in
     # An allow can carry findings that repeat ones already answered, listed as answered
-    # (claude-config#1338), so the verdict is shown, once each time it changes.
+    # (claude-config#1338), and minor findings, printed as advisory (claude-config#1356), so the
+    # verdict is shown, once each time it changes.
     0) [ -n "$rev_out" ] && [ "$rev_out" != "${rev_said:-}" ] && { printf '%s\n' "$rev_out"; rev_said="$rev_out"; } ;;
     3) waiting="${waiting:+$waiting, }lessons review still running" ;;
     *) printf '%s\n' "$rev_out"
