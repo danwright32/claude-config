@@ -92,6 +92,11 @@ if [ "$rc" -eq 2 ] && said "design-frames" "$T/frames-none.out"; then ok; else b
 # --- 3. the web adapter for real: a fixture design and build in Chrome, through Playwright ------------
 PW="${DESIGN_SCORE_PLAYWRIGHT:-}"
 if [ -z "$PW" ]; then
+  # The shared install install-playwright.sh makes (claude-config#1385), where this Mac has one.
+  shared="$HOME/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["root"])' "$HERE/shared-playwright.json")/node_modules/playwright"
+  [ -f "$shared/package.json" ] && PW="$shared"
+fi
+if [ -z "$PW" ]; then
   # The Playwright the browser tools install with npx, where this Mac has one.
   for cand in "$HOME"/.npm/_npx/*/node_modules/playwright; do
     [ -f "$cand/package.json" ] && { PW="$cand"; break; }

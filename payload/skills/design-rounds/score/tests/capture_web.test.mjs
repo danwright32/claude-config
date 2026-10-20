@@ -2,10 +2,15 @@
 // included) with no Playwright and no Chrome. The real browser run is in test-score-adapters.sh.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { capture, frameUrl, parseArgs, runChecks } from "../capture-web.mjs";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { capture, findPlaywright, frameUrl, parseArgs, runChecks } from "../capture-web.mjs";
+
+const SCORE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PIN = JSON.parse(readFileSync(join(SCORE_DIR, "shared-playwright.json"), "utf8"));
 
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 
@@ -143,4 +148,115 @@ test("a checks file that cannot be run is one result that threw, never an empty 
   assert.equal(r.length, 1);
   assert.equal(r[0].threw, true);
   assert.match(r[0].detail, /could not be run/);
+});
+
+// --- which Playwright draws the design (claude-config#1385) ------------------------------------------
+// A stand in package is enough here: the lookup only finds a folder, it never launches anything.
+function fakePlaywright(dir, version = "0.0.1-fake") {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "playwright", version, main: "index.js" }));
+  writeFileSync(join(dir, "index.js"), "module.exports = { chromium: {} };\n");
+  return dir;
+}
+function lookupWorld() {
+  const dir = mkdtempSync(join(tmpdir(), "capture-web-pw."));
+  const home = join(dir, "home");
+  const app = join(dir, "app");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(app, { recursive: true });
+  writeFileSync(join(app, "package.json"), "{}");
+  const shared = join(home, PIN.root, "node_modules", "playwright");
+  return { dir, home, app, shared };
+}
+
+test("the shared install lives outside ~/.claude, so the sync never carries it", () => {
+  assert.ok(!PIN.root.startsWith(".claude"), `the shared root is ${PIN.root}`);
+  assert.match(PIN.version, /^\d+\.\d+\.\d+$/, "the version is pinned exactly");
+});
+
+test("the app's own Playwright comes first, ahead of DESIGN_SCORE_PLAYWRIGHT and the shared install", () => {
+  const w = lookupWorld();
+  fakePlaywright(join(w.app, "node_modules", "playwright"), "1.0.0-app");
+  const named = fakePlaywright(join(w.dir, "named"));
+  fakePlaywright(w.shared);
+  const r = findPlaywright({ repo: w.app, env: { DESIGN_SCORE_PLAYWRIGHT: named }, home: w.home });
+  assert.equal(r.from, "app");
+  assert.equal(realpathSync(r.path), realpathSync(join(w.app, "node_modules", "playwright")));
+  assert.equal(r.version, "1.0.0-app");
+  assert.equal(r.browsersPath, null, "the app's own Playwright keeps its own browsers");
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("with no app Playwright, DESIGN_SCORE_PLAYWRIGHT is used ahead of the shared install", () => {
+  const w = lookupWorld();
+  const named = fakePlaywright(join(w.dir, "named"));
+  fakePlaywright(w.shared);
+  const r = findPlaywright({ repo: w.app, env: { DESIGN_SCORE_PLAYWRIGHT: named }, home: w.home });
+  assert.equal(r.from, "env");
+  assert.equal(r.path, named);
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("a DESIGN_SCORE_PLAYWRIGHT naming nothing is refused by name, never passed over for another", () => {
+  const w = lookupWorld();
+  fakePlaywright(w.shared);
+  assert.throws(() => findPlaywright({ repo: w.app, env: { DESIGN_SCORE_PLAYWRIGHT: join(w.dir, "gone") }, home: w.home }),
+    /DESIGN_SCORE_PLAYWRIGHT names .*gone/);
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("with nothing named, the shared install is used, with the browsers installed beside it", () => {
+  const w = lookupWorld();
+  fakePlaywright(w.shared, PIN.version);
+  const r = findPlaywright({ repo: w.app, env: {}, home: w.home });
+  assert.equal(r.from, "shared");
+  assert.equal(r.path, w.shared);
+  assert.equal(r.version, PIN.version);
+  assert.equal(r.browsersPath, join(w.home, PIN.root, "browsers"));
+  // The path the installer prints to export names the same install, and keeps its browsers.
+  const named = findPlaywright({ repo: w.app, env: { DESIGN_SCORE_PLAYWRIGHT: w.shared }, home: w.home });
+  assert.equal(named.from, "env");
+  assert.equal(named.browsersPath, join(w.home, PIN.root, "browsers"));
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("with no Playwright anywhere it fails, naming the install command, never skipping the design side", () => {
+  const w = lookupWorld();
+  assert.throws(() => findPlaywright({ repo: w.app, env: {}, home: w.home }),
+    (e) => /install-playwright\.sh/.test(e.message) && e.message.includes(w.shared));
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("run with no Playwright anywhere, the adapter exits 2 (no score) and writes no capture", () => {
+  const w = lookupWorld();
+  writeFileSync(join(w.dir, "settled.html"), "<!doctype html><p>design</p>");
+  const env = { ...process.env, HOME: w.home };
+  delete env.DESIGN_SCORE_PLAYWRIGHT;
+  const p = spawnSync(process.execPath, [join(SCORE_DIR, "capture-web.mjs"), "--design", join(w.dir, "settled.html"),
+    "--out", join(w.dir, "cap"), "--design-only", "--repo", w.app], { env, encoding: "utf8" });
+  assert.equal(p.status, 2, p.stdout + p.stderr);
+  assert.match(p.stderr, /install-playwright\.sh/);
+  assert.ok(!existsSync(join(w.dir, "cap", "capture.json")), "and no capture is written");
+  rmSync(w.dir, { recursive: true, force: true });
+});
+
+test("run through a symlinked path, the adapter still runs, never exiting 0 having done nothing", () => {
+  // Found 2026-10-20 (claude-config#1385): node gives the script's real path to import.meta.url but
+  // the path as typed to argv[1], so on macOS (/var is /private/var) the main guard never matched and
+  // the adapter exited 0 without drawing anything.
+  const dir = mkdtempSync(join(tmpdir(), "capture-web-link."));
+  symlinkSync(join(SCORE_DIR, "capture-web.mjs"), join(dir, "linked.mjs"));
+  const p = spawnSync(process.execPath, [join(dir, "linked.mjs")], { encoding: "utf8" });
+  assert.equal(p.status, 2, `exit ${p.status}: ${p.stdout}${p.stderr}`);
+  assert.match(p.stderr, /usage/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("the capture records which Playwright drew it", async () => {
+  const dir = setup();
+  const pw = { from: "shared", path: "/somewhere/node_modules/playwright", version: "1.2.3" };
+  const cap = await capture({ design: join(dir, "settled.html"), out: join(dir, "cap"), designOnly: true, playwright: pw }, fakeBrowser(), FRAMES, { gitState: GIT });
+  assert.deepEqual(cap.playwright, pw);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "cap", "capture.json"), "utf8")).playwright, pw);
+  rmSync(dir, { recursive: true, force: true });
 });
