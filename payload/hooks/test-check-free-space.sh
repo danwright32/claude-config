@@ -642,12 +642,23 @@ n_slow_auto="$(payload sess-slow-auto | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPAC
 slow_took=$(( $(date +%s) - slow_start ))
 check "a sweep script that hangs when asked to start is stopped, and the warning still arrives" \
   "$(grep -q 'GB free on' <<< "$n_slow_auto" && [ "$slow_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_slow_auto" && echo ok || echo "took ${slow_took}s, said: $n_slow_auto")"
-check "and the notice says starting it did not answer rather than claiming it started" \
+check "and the notice says reading the last sweep did not answer rather than saying nothing" \
   "$(grep -qF 'did not answer within 1s' <<< "$n_slow_auto" && ! grep -qF 'Started clearing' <<< "$n_slow_auto" && echo ok || echo "said: $n_slow_auto")"
+# A sweep script that answers --last at once but hangs on --start reaches the start's own bound.
+STALL_START="$TMPROOT/stall-start-sweep.sh"
+printf '#!/usr/bin/env bash\n[ "${1:-}" = --start ] && sleep 5\necho "should never be printed"\n' > "$STALL_START"
+NS_STALL="$TMPROOT/ns-stall"; mkdir -p "$NS_STALL"
+slow_start="$(date +%s)"
+n_stall="$(payload sess-stall | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_STALL" \
+  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$STALL_START" FREE_SPACE_DERIVED_DATA_SECONDS=2 \
+  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
+slow_took=$(( $(date +%s) - slow_start ))
+check "a start that hangs is stopped at the bound, and the notice says whether it started is not known" \
+  "$([ "$slow_took" -lt 5 ] && grep -qF 'Starting the automatic sweep of Xcode build caches did not answer within' <<< "$n_stall" && ! grep -qF 'Started clearing' <<< "$n_stall" && echo ok || echo "took ${slow_took}s, said: $n_stall")"
 # The bound is for the whole Xcode step, not for each call in it: reading the last result and
 # starting the next sweep are two calls, and two full bounds back to back (12 seconds at the default
-# of 6) would carry the hook past its 10 second timeout. With a 3 second bound and a sweep that
-# hangs, the step must end inside one bound, not two.
+# of 6) would carry the hook past its 10 second timeout (settings, not measurements). With a 3 second
+# bound and a sweep that hangs, the step must end inside one bound, not two.
 NS_SLOW_SUM="$TMPROOT/ns-slow-sum"; mkdir -p "$NS_SLOW_SUM"
 slow_start="$(date +%s)"
 n_slow_sum="$(payload sess-slow-sum | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW_SUM" \

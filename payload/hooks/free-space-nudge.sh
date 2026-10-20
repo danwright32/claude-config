@@ -147,8 +147,9 @@ if [ -f "$SWEEP" ] && [ "$SWEEP_SECONDS" -gt 0 ]; then
   case "$AUTO_DELETE" in
     1)
       # ONE budget for the whole step, never one per call: two calls each given the full bound would
-      # add up to twice it, 12 seconds at the default, past the hook's 10 second timeout. --start gets
-      # only what --last left, and none left means it is not tried, which is said.
+      # add up to twice it, 12 seconds at the default, past the hook's 10 second timeout (all three are
+      # settings, not measurements). --start gets only what --last left, and none left means it is not
+      # tried, which is said.
       step_start="$(date +%s)"
       bounded_sweep "$SWEEP_SECONDS" --last
       if [ "$SWEEP_RC" -eq 124 ]; then
