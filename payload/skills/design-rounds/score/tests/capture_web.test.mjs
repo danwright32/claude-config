@@ -15,10 +15,10 @@ const PIN = JSON.parse(readFileSync(join(SCORE_DIR, "shared-playwright.json"), "
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 
 /** A stand in browser: records every page's viewport, what it drew and its screenshot options. */
-function fakeBrowser({ failBuilt = null, checks = null, noFrames = false } = {}) {
+function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverReady = false } = {}) {
   const log = [];
   const page = (viewport) => {
-    const me = { viewport, url: null, content: null, shots: [], scripts: [] };
+    const me = { viewport, url: null, content: null, shots: [], scripts: [], waited: [], steps: [] };
     log.push(me);
     return {
       goto: async (url) => {
@@ -34,7 +34,13 @@ function fakeBrowser({ failBuilt = null, checks = null, noFrames = false } = {})
         if (typeof arg === "string") return `<!doctype html><p>frame ${arg}</p>`;
         return !noFrames;
       },
-      screenshot: async (opts) => { me.shots.push(opts); return PNG; },
+      waitForSelector: async (selector, opts) => {
+        me.waited.push([selector, opts && opts.timeout]);
+        me.steps.push("ready");
+        if (neverReady === "crash") throw new Error("Target page, context or browser has been closed");
+        if (neverReady) throw Object.assign(new Error(`Timeout ${opts && opts.timeout}ms exceeded waiting for ${selector}`), { name: "TimeoutError" });
+      },
+      screenshot: async (opts) => { me.shots.push(opts); me.steps.push("shot"); return PNG; },
       addScriptTag: async (s) => { me.scripts.push(s.content); },
       addStyleTag: async () => {},
       setViewportSize: async (v) => { me.viewport = v; },
@@ -107,6 +113,58 @@ test("a built page that cannot be loaded is recorded by frame, for the score to 
     fakeBrowser({ failBuilt: "net::ERR_CONNECTION_REFUSED at http://127.0.0.1:9/p" }), FRAMES, { gitState: GIT });
   assert.match(cap.frames[0].builtError, /ERR_CONNECTION_REFUSED/);
   assert.deepEqual(cap.frames[0].checks, []);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("--ready names what the built page shows once its content is there", () => {
+  assert.equal(parseArgs(["node", "x", "--design", "d.html", "--build", "http://h/p", "--out", "o", "--ready", "main [data-tc]"]).ready, "main [data-tc]");
+  assert.equal(parseArgs(["node", "x", "--design", "d.html", "--build", "http://h/p", "--out", "o"]).ready, undefined);
+});
+
+test("with --ready the built page is pictured only once it shows that, and the design side never waits", async () => {
+  // Slate's trial (Try-Pennie/slate#3947): a streamed page fired load before its content arrived on a
+  // slow runner, and CI pictured the loading placeholder, 12.9% where every run since reads 100%.
+  const dir = setup();
+  const b = fakeBrowser();
+  await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap"), ready: "main [data-tc]" }, b, FRAMES, { gitState: GIT });
+  const [d1, b1, d2, b2] = drawn(b);
+  assert.deepEqual([d1.waited, d2.waited], [[], []], "the design side is drawn from a document already whole");
+  for (const p of [b1, b2]) {
+    assert.equal(p.waited.length, 1);
+    assert.equal(p.waited[0][0], "main [data-tc]");
+    assert.ok(p.waited[0][1] > 0, "the wait is bounded");
+    assert.deepEqual(p.steps, ["ready", "shot"], "the wait comes before the picture");
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a built page that never shows its --ready content is recorded by frame as unloaded, never pictured", async () => {
+  const dir = setup();
+  const b = fakeBrowser({ neverReady: true, checks: () => [{ id: "D1", ok: true, detail: "" }] });
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap"), ready: "main [data-tc]" }, b, FRAMES, { gitState: GIT });
+  for (const f of cap.frames) {
+    assert.match(f.builtError, /never showed main \[data-tc\]/);
+    assert.deepEqual(f.checks, []);
+  }
+  assert.deepEqual(drawn(b)[1].shots, [], "no picture of a page that is not there yet");
+  assert.ok(!existsSync(join(dir, "cap", "f1-built.png")));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a wait for --ready that fails for another reason says that reason, never that the page was slow", async () => {
+  const dir = setup();
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap"), ready: "main [data-tc]" },
+    fakeBrowser({ neverReady: "crash" }), FRAMES, { gitState: GIT });
+  assert.match(cap.frames[0].builtError, /waiting for main \[data-tc\] failed: .*has been closed/);
+  assert.doesNotMatch(cap.frames[0].builtError, /never showed/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("without --ready nothing is waited on, as before", async () => {
+  const dir = setup();
+  const b = fakeBrowser();
+  await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap") }, b, FRAMES, { gitState: GIT });
+  assert.ok(drawn(b).every((p) => p.waited.length === 0));
   rmSync(dir, { recursive: true, force: true });
 });
 
