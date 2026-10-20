@@ -298,6 +298,73 @@ JSON
   if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "unmeasured" and not p and s.get("kind") == "terminal" else 1)' "$HERE" "$TM/cap/score.json"; then ok; else bad "the close gate's reader of a score file holds the terminal design's score as unmeasured" "$(cat "$TM/score.log")"; fi
 fi
 
+# --- 3e. a built page whose content security policy refuses inline scripts (claude-config#1411) --------
+# PET's built pages are served with script-src 'self', which refused the checks when they were added as
+# an inline script tag: every check threw and the score was no score. The same build is served here by a
+# small local server three ways: the policy as a header, the policy as a meta tag, and a stricter policy
+# (style-src 'self' too) under which the page carries an inline style the policy refuses. The first two
+# must score 100%. The third must ALSO score 100%, because a real browser never draws that refused style:
+# the scoring browser keeps the page's own policy rather than switching it off, so it draws what ships.
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  echo "UNMEASURED: no Playwright package, node or Chrome here, so a build under a content security policy was not scored"
+  unmeasured=$((unmeasured + 1))
+else
+  CS="$T/csp"
+  mkdir -p "$CS/site/header" "$CS/site/meta" "$CS/site/strict"
+  # The design's own style, as a file the strict policy allows, and inline for the other two.
+  sed -n '/<style>/,/<\/style>/p' "$T/design.html" | sed '1d;$d' > "$CS/site/strict/style.css"
+  STYLE_BLOCK="$(sed -n '/<style>/,/<\/style>/p' "$T/design.html")"
+  # The frame drawn from ?frame=<id> by a script from the page's own origin, which script-src 'self' allows.
+  cat > "$CS/site/draw.js" <<'JS'
+var frame = new URLSearchParams(location.search).get("frame");
+var red = document.documentElement.hasAttribute("data-refused-style") ? ' style="color: #ff0000"' : "";
+document.body.innerHTML = '<div class="band"></div><div class="card"><h1' + red + '>Team capacity</h1><p>' + frame + '</p></div>';
+JS
+  printf '<!doctype html>\n<html><head><meta charset="utf-8">%s</head><body><script src="/draw.js"></script></body></html>\n' "$STYLE_BLOCK" > "$CS/site/header/built.html"
+  printf '<!doctype html>\n<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="script-src '"'"'self'"'"'">%s</head><body><script src="/draw.js"></script></body></html>\n' "$STYLE_BLOCK" > "$CS/site/meta/built.html"
+  printf '<!doctype html>\n<html data-refused-style><head><meta charset="utf-8"><link rel="stylesheet" href="/strict/style.css"></head><body><script src="/draw.js"></script></body></html>\n' > "$CS/site/strict/built.html"
+  cat > "$CS/serve.py" <<'PY'
+import http.server, os, sys
+root, port_file = sys.argv[1], sys.argv[2]
+POLICY = {"/header/": "script-src 'self'", "/strict/": "script-src 'self'; style-src 'self'"}
+class H(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **k): super().__init__(*a, directory=root, **k)
+    def end_headers(self):
+        for prefix, policy in POLICY.items():
+            if self.path.startswith(prefix): self.send_header("Content-Security-Policy", policy)
+        super().end_headers()
+    def log_message(self, *a): pass
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+with open(port_file + ".tmp", "w") as f: f.write(str(s.server_address[1]))
+os.rename(port_file + ".tmp", port_file)
+s.serve_forever()
+PY
+  python3 "$CS/serve.py" "$CS/site" "$CS/port" > "$CS/serve.log" 2>&1 &
+  CSP_SERVER=$!
+  trap 'kill "$CSP_SERVER" 2>/dev/null; rm -rf "$T"' EXIT
+  # Waited on as a condition, the port file appearing, bounded by the suite's own deadline (L290).
+  for _ in $(seq 1 200); do [ -s "$CS/port" ] && break; kill -0 "$CSP_SERVER" 2>/dev/null || break; sleep 0.05; done
+  if [ ! -s "$CS/port" ]; then
+    bad "the local server for the content security policy builds starts" "$(cat "$CS/serve.log")"
+  else
+    BASE="http://127.0.0.1:$(cat "$CS/port")"
+    curl -s -D - -o /dev/null "$BASE/header/built.html" > "$CS/header.headers" 2>&1
+    if grep -qi "^content-security-policy: script-src 'self'" "$CS/header.headers"; then ok; else bad "the server sends the build its script-src 'self' policy, or nothing below measures it" "$(cat "$CS/header.headers")"; fi
+    for how in header meta strict; do
+      DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$T/design.html" --build "$BASE/$how/built.html" \
+        --out "$CS/$how" --channel chrome --repo "$APP" > "$CS/$how.log" 2>&1; rc=$?
+      case "$how" in
+        header) what="a build served with a script-src 'self' header, which refuses inline scripts, has its checks run and scores 100%" ;;
+        meta) what="a build carrying script-src 'self' in a meta tag has its checks run and scores 100%" ;;
+        strict) what="a build whose policy refuses its own inline red heading is drawn as a browser draws it, without the red, and scores 100%" ;;
+      esac
+      if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$CS/$how.log"; then ok; else bad "$what (rc=$rc)" "$(cat "$CS/$how.log")"; fi
+    done
+  fi
+  kill "$CSP_SERVER" 2>/dev/null
+  wait "$CSP_SERVER" 2>/dev/null
+fi
+
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
 if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
   echo "UNMEASURED: no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"

@@ -416,6 +416,16 @@ check("a check that threw is no score", rc == 2 and "threw" in out, out)
 rc, out, _ = score(make("stray", lambda s: s["capture"]["frames"][0]["checks"].append({"id": "D9", "ok": True, "detail": ""})))
 check("a check for a decision the map does not hold is no score", rc == 2 and "D9" in out, out)
 
+# Checks that could not be loaded into the page at all (a page whose policy refused them, #1411) come
+# back from the adapter as one entry for "checks" that threw. That is said as itself, with the reason,
+# never as the checks and the map disagreeing, which sent the reader looking in the wrong place.
+rc, out, _ = score(make("unloaded", lambda s: s["capture"]["frames"][0].__setitem__("checks", [
+    {"id": "checks", "ok": False, "threw": True,
+     "detail": "the checks could not be run: Error: Executing inline script violates the following Content Security Policy directive"}])))
+check("checks that could not be loaded are no score, saying why and on which side",
+      rc == 2 and "the checks could not be run: Error: Executing inline script" in out and "built side" in out, out)
+check("and are never said as the checks and the map disagreeing", "disagree" not in out, out)
+
 def no_control(s):
     for f in s["capture"]["frames"]:
         del f["designChecks"]
