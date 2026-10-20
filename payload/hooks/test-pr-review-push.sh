@@ -455,6 +455,36 @@ out="$(fire_merge "PR_REVIEW_READ=$mk gh pr merge 7 --squash && gh pr merge 8 --
 check_eq "a second merge, of another pull request, no longer goes through on the first one's key" "2" "$rc"
 check "and the refusal says the command merges more than one pull request" "more than one pull request" "$out"
 
+# Minor findings are advisory (claude-config#1356): a push whose review found only minor ones goes
+# through with no read key, and the findings reach the session as additionalContext and Dan as a
+# systemMessage, since a PreToolUse hook's plain stdout on an allow reaches neither. A major one
+# beside them still holds the push.
+PM1='App/Sync.swift:1: the comment says seconds but the value is milliseconds (L118). Should be: say milliseconds. [severity: minor]'
+PMJ='App/Sync.swift:2: deleteEvent swallows the error createEvent reports (L215). Should be: report it the same way. [severity: major]'
+json_field(){ python3 -c 'import json,sys
+try:
+    v = json.loads(sys.stdin.read())
+except ValueError:
+    v = {}
+for k in sys.argv[1].split("."):
+    v = v.get(k, "") if isinstance(v, dict) else ""
+print(v)' "$1"; }
+G checkout -q feat/sync
+HEAD_SHA="$(G rev-parse HEAD)"
+reset_state
+mkdir -p "$AI_REVIEW_STATE_DIR"
+printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstarted=1\nfinished=11\nstatus=ok\nkind=pr\nfindings=1\n\n%s\n' "$HEAD_SHA" "$PM1" > "$(final_of "$HEAD_SHA")"
+out="$(fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#1356 a push whose review found only minor findings is allowed" "0" "$rc"
+check "#1356 handing them to the session as advisory" "$PM1" "$(json_field hookSpecificOutput.additionalContext <<<"$out")"
+check "#1356 saying they need no fix round" "need no fix round" "$(json_field hookSpecificOutput.additionalContext <<<"$out")"
+check "#1356 and showing them to Dan" "$PM1" "$(json_field systemMessage <<<"$out")"
+check_not "#1356 with no read key" "PR_REVIEW_READ=" "$out"
+printf 'repo=repo\nbranch=feat/sync\nsha=%s\nstarted=1\nfinished=12\nstatus=ok\nkind=pr\nfindings=2\n\n%s\n%s\n' "$HEAD_SHA" "$PM1" "$PMJ" > "$(final_of "$HEAD_SHA")"
+out="$(fire_push "git push -u origin feat/sync")"; rc=$?
+check_eq "#1356 a major finding beside a minor one still holds the push" "2" "$rc"
+check "#1356 listing the minor one apart as advisory" "Advisory, minor findings" "$out"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
