@@ -16,10 +16,11 @@
 #
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
 # script, so before it merges this hands the EXACT merge command it is about to run to the same
-# gates, block-red-merge.sh, pr-review-gate.sh and require-changelog-tag.sh, as a hook payload, and
-# merges only when every one allows it. Green, up to date, pinned, reviewed and carrying its
-# changelog record are therefore judged by the one implementation of each rule, never by a second
-# copy here (L263, L370).
+# gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh and design-score-gate.sh,
+# as a hook payload, and merges only when every one allows it. Green, up to date, pinned, reviewed,
+# carrying its changelog record and, when it closes a Match the settled design issue, at 100% of its
+# design match score (#1364) are therefore judged by the one implementation of each rule, never by a
+# second copy here (L263, L370).
 #
 # EVERY merge gate, not a chosen few (claude-config#1178). This asked only the first two, so the
 # changelog record gate never saw a merge made here. Slate #3645 merged through it with no
@@ -94,7 +95,8 @@
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
 # MWR_HEARTBEAT_SECONDS (300), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
-# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_REVIEW_LIB.
+# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
+# MWR_REVIEW_LIB.
 
 set -uo pipefail
 
@@ -106,6 +108,7 @@ MWR_HOOKS="$(cd "$MWR_LIB/.." && pwd)"
 RED_GATE="${MWR_RED_GATE:-$MWR_HOOKS/block-red-merge.sh}"
 REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"
 CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
+DESIGN_GATE="${MWR_DESIGN_GATE:-$MWR_HOOKS/design-score-gate.sh}"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
@@ -491,6 +494,11 @@ while :; do
   fi
   if ! why="$(ask_gate "$CHANGELOG_GATE" "$cmd")"; then
     stop 1 "Stopped: require-changelog-tag.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  # A pull request whose closing keywords name a Match the settled design issue merges only at 100% on
+  # both halves of the design match score at this head (claude-config#1364).
+  if ! why="$(ask_gate "$DESIGN_GATE" "$cmd")"; then
+    stop 1 "Stopped: design-score-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?

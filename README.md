@@ -1812,6 +1812,21 @@ unmeasured build never reads as done. It needs only python3's standard library (
 `pngio.py`, is checked against Pillow's reading of a real Chrome screenshot). The design rounds
 skill describes the blocks the design file carries; `test-design-score.sh` holds it.
 
+**Closing is held at 100%.** `create-milestone.sh` ends a design milestone with "Match the settled
+design" (marked with the design's path in the app's checkout, as is the milestone's description) and
+tells every other issue its pull request posts the score with `design_score.py post`, which puts it
+on the pull request and on the Match issue. `hooks/design-score-gate.sh`, a PreToolUse Bash hook,
+refuses to close the Match issue or its milestone unless the newest score posted for the code being
+closed on (the default branch's head, or a merging pull request's head; a squash merge of the scored
+branch has the same tree) is matched on both halves, was drawn with nothing uncommitted and was
+measured against the design file as committed there. It reads `gh issue close`, `delete` and
+`transfer`, a REST close of the issue or the milestone, `gh pr merge` of a pull request whose
+closing keywords name it, and `merge-when-ready.sh`, which asks it as it asks every merge gate; a
+GraphQL `closeIssue` is refused outright. Anything it cannot read, its own judge failing included,
+refuses (fail closed), and there is no override. Not seen by it: a close in GitHub's web page, and a
+closing keyword in a commit pushed straight to the default branch. `test-design-score-gate.sh`
+holds it, against a fake gh.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in

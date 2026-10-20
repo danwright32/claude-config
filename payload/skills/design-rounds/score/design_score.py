@@ -3,6 +3,9 @@
 
     python3 design_score.py score <capture folder>     score a capture, write score.json, print it
     python3 design_score.py show <score.json>          print a score file, after checking it holds
+    python3 design_score.py post <score.json> --repo <owner/name> --pr <number>
+                                                       post it on the pull request and on its
+                                                       milestone's Match the settled design issue
 
 Dan, 2026-10-19: "you'd know you're done not when all issues are completed but instead when the
 match up score is equal to each other so the designs are exactly alike." A milestone built from a
@@ -599,10 +602,75 @@ def main(argv):
         return 2
 
 
+USAGE = ("usage: design_score.py score <capture folder> | show <score.json> | "
+         "post <score.json> --repo <owner/name> --pr <number>")
+
+
+def post(score_path, repo, pr):
+    """Posts a score on pull request `pr` and on its milestone's "Match the settled design" issue,
+    where the close gate reads it. Exit 0 posted on both, 1 posted on the pull request only (it is
+    in no milestone, or the milestone holds no Match issue for this design), 2 nothing posted, or a
+    comment GitHub refused."""
+    import tempfile
+    import score_github as sg
+    try:
+        s = _load_json(score_path, "the score file")
+    except Unreadable as err:
+        print("design-score post: nothing posted: %s" % err)
+        return 2
+    _verdict, problems = verify_score(s)
+    if problems:
+        print("design-score post: nothing posted: %s %s" % (score_path, "; ".join(problems)))
+        return 2
+    gh = sg.GitHub()
+    try:
+        view = json.loads(gh.call(["pr", "view", str(pr), "--repo", repo, "--json",
+                                   "number,url,headRefOid,milestone"], repo))
+    except (sg.GitHubError, ValueError) as err:
+        print("design-score post: nothing posted: pull request %s in %s could not be read (%s)" % (pr, repo, err))
+        return 2
+    head = view.get("headRefOid") or ""
+    note = ""
+    if s.get("commit") != head:
+        note = ("Measured at `%s`, which is not this pull request's head `%s`, so it does not count for "
+                "closing on this head." % ((s.get("commit") or "no commit")[:7], head[:7]))
+    fd, body_file = tempfile.mkstemp(suffix=".md")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(sg.score_comment(s, render(s), note))
+    try:
+        gh.call(["pr", "comment", str(pr), "--repo", repo, "--body-file", body_file], repo)
+        print("design-score post: posted on %s" % view.get("url"))
+        if note:
+            print("design-score post: " + note)
+        milestone = view.get("milestone") or {}
+        if not milestone.get("number"):
+            print("design-score post: NO MATCH ISSUE: pull request %s is in no milestone, so the score is on the "
+                  "pull request only, where the close gate does not read it" % pr)
+            return 1
+        issues = gh.api("repos/%s/issues?milestone=%d&state=all&per_page=100" % (repo, milestone["number"]),
+                        repo, paginate=True)
+        matches = [i for i in issues if not i.get("pull_request") and sg.is_match_issue(i)[1] == s.get("design")]
+        if not matches:
+            print("design-score post: NO MATCH ISSUE: milestone %s holds no Match the settled design issue for %s, "
+                  "so the score is on the pull request only" % (milestone.get("title"), s.get("design")))
+            return 1
+        for issue in matches:
+            gh.call(["issue", "comment", str(issue["number"]), "--repo", repo, "--body-file", body_file], repo)
+            print("design-score post: posted on %s#%d, where the close gate reads it" % (repo, issue["number"]))
+        return 0
+    except sg.GitHubError as err:
+        print("design-score post: posting failed: %s" % err)
+        return 2
+    finally:
+        os.unlink(body_file)
+
+
 def _main(argv):
+    if len(argv) == 7 and argv[1] == "post" and argv[3] == "--repo" and argv[5] == "--pr":
+        return post(argv[2], argv[4], argv[6])
     if len(argv) != 3 or argv[1] not in ("score", "show"):
         print(__doc__.strip().split("\n\n")[0])
-        print("usage: design_score.py score <capture folder> | show <score.json>")
+        print(USAGE)
         return 2
     if argv[1] == "score":
         folder = argv[2]
