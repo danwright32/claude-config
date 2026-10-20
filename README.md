@@ -1932,8 +1932,7 @@ holds it, against a fake gh.
 **Two adapters write the capture.** `score/capture-web.mjs` (web) draws each frame of the settled
 file (the document its `designFrameDocument(<id>)` gives, as a page of its own) and the app's
 fixture route (the page with `?frame=<id>`) at the
-frame's width in one Chrome, through the app's own Playwright, runs `<design>.checks.js` on both,
-and scores. `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (SwiftUI) is copied into an
+frame's width in one Chrome, runs `<design>.checks.js` on both, and scores. `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (SwiftUI) is copied into an
 app's UI test target: after `capture-web.mjs --design-only` draws the design's side, a snapshot test
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
 `test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
@@ -1942,6 +1941,35 @@ purpose; elsewhere those two say UNMEASURED. It also runs the whole
 chain: a settled file `make-settled.py` wrote, against an app drawing the same fixture in the same
 chrome, at 100%, and failing the decision when the app's heading changes. All of it took 27 seconds
 on this Mac on 2026-10-20.
+
+**One Playwright per Mac, and a copy for an app's CI** (claude-config#1385, Dan's decisions of
+2026-10-20). `capture-web.mjs` draws with the app's own Playwright first (Slate has one), then the
+package `DESIGN_SCORE_PLAYWRIGHT` names (refused if it names nothing, never passed over), then the one
+shared install on the Mac, and with none of them exits 2 naming the install command, so an unmeasured
+design side never reads as matched; the capture records which one drew. The Mac apps have no
+`node_modules` and use the shared install, which `score/install-playwright.sh` makes: the version
+`score/shared-playwright.json` pins and its headless Chromium, under
+`~/.local/share/design-score/playwright`, outside `~/.claude` so the sync never carries it. It never
+prompts, takes a lock a dead install's leftover does not hold, judges "installed" by launching the
+browser rather than by a marker, and prints the path to export; `--check` installs nothing. Measured
+on 2026-10-20 into a scratch home: 216 MB installed (18 MB package, 198 MB Chromium) plus npm's 38 MB
+download cache, six seconds on this Mac's connection, one second for a run that finds it usable.
+`test-shared-playwright.sh` holds it against a stand in npm whose browser launches only from where
+the installer was told to put it.
+
+Slate runs the score in its own CI, which has no `~/.claude`, so it keeps a copy: `score/vendor-score.py
+copy <folder>` writes the score's files flat into the app's folder with `vendor-manifest.json` (each
+file's sha256 as claude-config had it, and no path from the Mac), and `vendor-score.py check <folder>`,
+run from the copy, compares it two ways. Against its manifest always, which needs nothing but the
+folder and so runs in CI: a vendored file edited by hand, deleted or joined by a stranger, or a
+manifest missing a file the score needs, is drift. Against claude-config's current copy wherever one
+is on disk (`~/.claude/skills/design-rounds/score`, or `--against`), which is the only way to see
+claude-config having moved on, since the manifest was written from the same files; in CI it says it
+did not compare. CI does not fetch claude-config from GitHub to compare: every change to the score
+here would then fail the app's next unrelated pull request, and a check left red for a reason nobody
+on that pull request can fix stops being read (L538). Exit 0 matches, 1 drift (each file named, with
+the command that refreshes the copy), 2 could not check. `test-score-vendoring.sh` holds it, including
+the copy run on its own with no claude-config beside it.
 
 **The settled design is written, never assembled** (`payload/skills/design-rounds/make-settled.py`).
 From the round's builder, the product's captured chrome (`capture-chrome.js` saves a page with its
