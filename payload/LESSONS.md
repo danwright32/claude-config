@@ -3276,6 +3276,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
+  SHORT: An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.
 - **L1028. Every outbound call made inside a function the platform kills at a hard deadline needs its own timeout well inside that deadline, because a kill skips every catch block and the failure alert it holds, so a dependency that hangs goes silent while one that refuses pages.** (nursedex#1218, 2026-10-20)
   SHORT: An outbound call in a function killed at a hard deadline needs its own shorter timeout, or a hang skips the catch and its alert.
 - **L771. A timeout built by racing the work against a timer fails with the timer's own error, so
@@ -9979,6 +9981,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   instead of an error, so the step runs as though configured, so every secret a workflow names must
   be checked to exist, by a guard that fails the build rather than by the step that uses it.** (project-enrollment-tracker#1750, 2026-10-20)
   SHORT: A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
+- **L796. A recovery step that re-submits work into the same bounded queue it is waiting on must first ask that queue whether the work is already pending, because reading a queued item as a lost one fires a false alarm and adds a duplicate that lengthens the very delay it reported.** (project-enrollment-tracker#1825, 2026-10-21)
+  SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

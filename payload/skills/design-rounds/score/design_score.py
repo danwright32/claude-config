@@ -27,11 +27,13 @@ A deliberate difference reaches 100% only by a new design round, or by a named e
 approves, recorded in the design file in his words, which the score then skips and lists every time.
 
 THE CAPTURE is what a platform adapter (web: a Playwright screenshot of a fixture route; SwiftUI: a
-snapshot test) leaves in a folder, so the comparing and counting here are the same for both:
+snapshot test; terminal: a Claude Code mod's own band, from its committed fixture, drawn through the
+shared terminal in the design's window, capture-terminal.mjs) leaves in a folder, so the comparing and
+counting here are the same for all of them:
 
     capture.json
     {"format": "design-capture", "version": 1,
-     "platform": "web" | "swiftui",
+     "platform": "web" | "swiftui" | "terminal",
      "designFile": "/abs/path/docs/design/team-capacity.html",   (or relative to the folder)
      "build": "what was drawn: a URL, a test name",
      "commit": "<the build's git commit>", "dirty": false,      (uncommitted changes when drawn)
@@ -55,8 +57,9 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
                      "kind"?: "email" | "document" | "new-product", for a design drawn with no product
                      page around it (claude-config#1393); recorded in the score and said in its report
                      | "terminal", for a Claude Code mod's screen drawn in the shared terminal
-                     (claude-config#1413): its decisions are scored, and its picture half is said to be
-                     unmeasured, so it is no score, until a built mod screen can be captured (#1414)
+                     (claude-config#1413): its decisions are scored like any others, and its pictures
+                     are measured only from a capture the terminal adapter made (#1414); from any other
+                     capture its picture half is said to be unmeasured, so it is no score
   design-exceptions  {"exceptions": [{"id": "X1", "decision": "D7" | "frame": "f3", "region"?: [x, y, w, h],
                                       "words": "Dan's own words", "date": "YYYY-MM-DD",
                                       "source": "where he said it: an issue comment or session link"}]}
@@ -83,7 +86,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import pngio  # noqa: E402
-from design_file import FRAME_KINDS, find_blocks, frame_kinds  # noqa: E402
+from design_file import FRAME_KINDS, SCREEN_KINDS, find_blocks, frame_kinds  # noqa: E402
 
 # Out of 255 per channel. Measured in Slate's first trial of this score (#3934, 2026-10-19): with
 # both sides drawn by the same Chrome, 8 absorbs rounding, while 24 let a blank white page match
@@ -95,16 +98,35 @@ VERSION = 1
 VERIFY = ("check", "picture", "elsewhere")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-# The kinds of design whose picture half cannot be measured yet, each with the sentence the score says
-# for it. A terminal design is a Claude Code mod's screen (claude-config#1413): its design side draws, but
-# nothing captures a BUILT mod screen in the form its terminal is drawn in, so no picture of the build
-# exists to compare with, whatever a capture holds. Unmeasured is never 100%, so such a design scores
-# its decision half and stays below matched until claude-config#1414 gives it a capture.
-PICTURES_UNMEASURED = {
-    "terminal": ("the picture half of a terminal design is unmeasured: nothing yet captures a built Claude "
-                 "Code mod screen in the form the design's terminal is drawn in (claude-config#1414), so no "
-                 "frame has a picture of the build to compare with, and unmeasured is never 100%"),
-}
+# The kinds of design whose pictures only one adapter can measure, and the platform that adapter writes
+# into its capture. A terminal design is a Claude Code mod's screen (claude-config#1413): a picture of the
+# real terminal differs from the design's drawing everywhere (font rendering, window chrome), so its
+# build is pictured by the terminal adapter alone (capture-terminal.mjs, claude-config#1414), which draws
+# the mod's own band through the same shared terminal as the design. A capture made any other way holds
+# no picture of the build in that form, whatever images it carries, so its picture half is unmeasured,
+# and unmeasured is never 100%.
+PICTURES_ONLY_FROM = {"terminal": "terminal"}
+ADAPTER_NAMES = {"web": "the web adapter (capture-web.mjs)", "swiftui": "the SwiftUI adapter",
+                 "terminal": "the terminal adapter (capture-terminal.mjs)"}
+
+
+def pictures_unmeasured(kind, platform):
+    """Why a design of `kind` captured on `platform` has no picture half to measure, or None when it has."""
+    wanted = PICTURES_ONLY_FROM.get(kind)
+    if wanted is None or platform == wanted:
+        return None
+    return ("the picture half of a terminal design is unmeasured: it is measured only from a capture the terminal "
+            "adapter (capture-terminal.mjs) makes, drawing the mod's own band through the shared terminal the "
+            "design is drawn in (claude-config#1414), and this capture was made by %s, so no frame has a picture "
+            "of the build in that form, and unmeasured is never 100%%"
+            % ADAPTER_NAMES.get(platform, "an adapter naming the platform %s" % json.dumps(platform)))
+
+
+# Said on every score of a terminal adapter's capture: its built window is the design's own terminal with
+# the mod's band put in place of the design's, so nothing else in the window can differ.
+TERMINAL_NOTE = ("only the band is the build's: each built window is the design's own terminal with the mod's "
+                 "band, from its committed fixture, in place of the design's, so the title, transcript, prompt "
+                 "and status line are the design's on both sides, and the build's checks read the band alone")
 
 # Diff picture colours: a differing pixel, area only one side has, and an excepted region.
 RED = b"\xff\x00\x00\xff"
@@ -494,7 +516,16 @@ def score_capture(folder):
 
     # --- pictures ----------------------------------------------------------------------------
     pframes = []
-    unmeasurable = PICTURES_UNMEASURED.get(kind)
+    unmeasurable = pictures_unmeasured(kind, s["platform"])
+    if s["platform"] == "terminal":
+        if kind not in SCREEN_KINDS:
+            # The terminal adapter draws the mod's band into the design's own terminal window, so a design
+            # with no terminal window has nowhere it could have been drawn: said as itself (L11).
+            no.append("the capture was made by the terminal adapter, which draws a mod's band in the shared "
+                      "terminal, and this design is not drawn in the shared terminal (its design-frames block "
+                      "names the kind %s, not \"terminal\")" % json.dumps(kind))
+        else:
+            s["notes"].append(TERMINAL_NOTE)
     for f in frames:
         fid = f["id"]
         pf = {"id": fid, "title": f.get("title", ""), "width": f["width"], "height": f.get("height"),
@@ -575,9 +606,11 @@ def verify_score(s):
     try:
         if s["unmeasured"]:
             return "unmeasured", []
-        # A kind whose pictures this score never measures, read as measured, was not written by it.
-        if s.get("kind") in PICTURES_UNMEASURED:
-            return None, ["it scores a %s design as measured, and %s" % (s["kind"], PICTURES_UNMEASURED[s["kind"]])]
+        # A kind whose pictures this score measures only from one adapter's capture, read as measured
+        # from another's, was not written by it.
+        why = pictures_unmeasured(s.get("kind"), s.get("platform"))
+        if why:
+            return None, ["it scores a %s design as measured, and %s" % (s["kind"], why)]
         rows = s["decisions"]["rows"]
         counted = [r for r in rows if r["status"] in ("met", "unmet", "unchecked")]
         met = sum(1 for r in counted if r["status"] == "met")

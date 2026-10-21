@@ -261,6 +261,203 @@ wa "#1436 a write in a subshell's cd, then one after it" "/start/sub/a.md|/start
 wa "#1436 a write through a substitution lands nowhere the gate can tell" "NO" 'D=$(mktemp -d); echo x > "$D/b.md"'
 wa "#1436 tee writes land the same way" "/start/x/t.md" 'cd x; echo y | tee t.md'
 
+# ---------------------------------------------------------------------------
+# The fallback gh reader (claude-config#1449). gh_issue_scan.py carries a crude reader of gh of its
+# own, used only when lib/shell-words.py cannot be loaded, and the body file gate leans on it in
+# exactly that case, which nothing else runs. A copy of the scanner and the gate with no
+# lib/shell-words.py beside them runs it; the real file is never touched. Every shape below is read
+# by both copies and the two readings compared, then the gate is run from both copies and its
+# answers compared.
+# ---------------------------------------------------------------------------
+FB_TMP="$(mktemp -d)"
+trap 'rm -rf "$FB_TMP"' EXIT
+FB="$FB_TMP/hooks"
+mkdir -p "$FB/lib"
+cp "$DIR/gh_issue_scan.py" "$DIR/issue_field_gate.py" "$DIR/require-issue-fields.sh" "$FB/"
+cp "$DIR/lib/claude-session-line.sh" "$FB/lib/"
+# A shell-words.py that is there but fails to load is the other way onto the fallback.
+FB_BROKEN="$FB_TMP/broken"
+mkdir -p "$FB_BROKEN/lib"
+cp "$DIR/gh_issue_scan.py" "$FB_BROKEN/"
+printf 'raise RuntimeError("broken on purpose")\n' > "$FB_BROKEN/lib/shell-words.py"
+
+# The control: the copy really is on the fallback and the real one really is not, or every
+# comparison below compares the shared reader with itself and passes (L1).
+reader_of() { # reader_of <dir> -> shared or fallback
+  python3 - "$1/gh_issue_scan.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("scan_under_test", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+# Asked of gh_command itself: the scanner names the half loaded module _sw before loading it fails,
+# so whether _sw exists says nothing (seen 2026-10-21, when this control first read "shared" for both).
+print("fallback" if m.gh_command.__module__ == m.__name__ else "shared")
+PY
+}
+[ "$(reader_of "$DIR")" = "shared" ] && check "#1449 the real scanner reads gh with lib/shell-words.py" ok \
+  || check "#1449 the real scanner reads gh with lib/shell-words.py" "got $(reader_of "$DIR")"
+[ "$(reader_of "$FB")" = "fallback" ] && check "#1449 with lib/shell-words.py missing it uses its fallback" ok \
+  || check "#1449 with lib/shell-words.py missing it uses its fallback" "got $(reader_of "$FB")"
+[ "$(reader_of "$FB_BROKEN")" = "fallback" ] && check "#1449 with lib/shell-words.py failing to load it uses its fallback" ok \
+  || check "#1449 with lib/shell-words.py failing to load it uses its fallback" "got $(reader_of "$FB_BROKEN")"
+
+# The command shapes the shared reader is tested on above, and the shapes that put a flag of the
+# subcommand in front of its action, where a reader of only the words after the action misses it.
+FB_SHAPES=(
+  'gh issue create --title x --label bug'
+  'echo hi && gh issue create -t x'
+  "$(printf 'echo one\ngh issue create -t x\necho three')"
+  "$(printf 'gh issue create -t a \\\\\n  --label bug')"
+  "$(printf 'gh issue create -t a\ngh issue create -t b')"
+  'gh -R o/x issue create -t x'
+  'gh issue -R o/x create -t x'
+  'gh --repo=o/x issue create -t x'
+  'rtk gh issue create -t x'
+  'env GH_TOKEN=x gh issue create -t x'
+  'sudo -u dan gh issue create -t x'
+  'env GH_TOKEN="a b" gh issue create -t x'
+  'sudo env X="$(echo y z)" gh issue -R o/x create -t x'
+  'gh -R o/x issue --milestone M create -t "the title"'
+  'gh issue -m M create -t x'
+  'echo "run gh issue create when you are ready"'
+  "$(printf 'cat <<EOF\ngh issue create -t x\nEOF')"
+  'gh issue list && gh pr create -t x'
+  'gh issue create --help'
+  'gh issue create -h'
+  'gh issue create --web'
+  'gh issue create -w'
+  'gh issue create'
+  'gh issue create --milestone Ungrouped'
+  'gh issue create --milestone=Ungrouped'
+  'gh issue create -m Ungrouped'
+  'gh issue create -mUngrouped'
+  'gh issue create --label bug --label tech-debt'
+  'gh issue create --milestone'
+  'gh issue create --milestone --label bug'
+  'gh issue create --title "fixes #12 properly" --label bug'
+  "$(printf 'SKIP_MILESTONE_CHECK=1 gh issue create -t a\ngh issue create -t b')"
+  'FOO=1 BAR=2 gh issue create -t a'
+  'gh issue create --title "unbalanced'
+  ''
+  'cd x && gh issue create --body-file b.md'
+  'D=/v; gh issue create --body-file "$D/b.md"'
+  '(D=/v; cd /w); gh issue create --body-file "$D/b.md"'
+  'gh issue create --body-file ~/b.md'
+  'cd x && cd - && gh issue create --body-file b.md'
+  'pushd /a && pushd /b && popd && gh issue create --body-file b.md'
+  'gh issue create -t a; gh issue edit 1 -F b; gh issue comment 1 -F c; gh pr create -F d; gh pr edit 2 -F e; gh pr comment 2 -F f'
+  'gh pr merge 1 -F a; gh pr review 1 -F b; gh release create v1 -F c'
+  'rtk gh -R o/x pr create -F d'
+  'gh pr create --web -F d'
+  'gh issue --body-file b.md edit 5'
+  'gh pr -F b.md create -t t'
+  'gh -R o/x issue -F b.md comment 5'
+  'gh pr create -t issue -b edit'
+  'gh pr comment 5 --body "issue create" -F b.md'
+  'gh issue view 5 -t comment'
+  'gh release create v1 -t pr -n comment'
+)
+# Where the fallback reads MORE than the shared reader, which is its stated design: it does not know
+# which of gh's flags take a value, nor what runs a command, so it takes a gh it cannot place as one
+# that runs, and the gate asks rather than misses. Each is checked to read more, never less, and the
+# gate to refuse there, never to pass.
+FB_OVER_READ=(
+  'gh --title issue create -t x'
+  'echo gh issue create -t x'
+)
+
+fb_compare() { # fb_compare <shape>... -> one line per shape: SAME, MORE, or DIFF with both readings
+  python3 - "$DIR/gh_issue_scan.py" "$FB/gh_issue_scan.py" "$@" <<'PY'
+import importlib.util, sys
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+shared, fallback = load("scan_shared", sys.argv[1]), load("scan_fallback", sys.argv[2])
+
+def reading(m, cmd):
+    try:
+        found = m.scan_gh_in_context(cmd, "/start", {"HOME": "/h"}, m.BODY_FILE_COMMANDS)
+    except m.Unreadable as e:
+        return "UNREADABLE:%s" % e
+    return [(kind, args, envs, sorted(vars(place).items())) for kind, args, envs, place in found]
+
+for cmd in sys.argv[3:]:
+    a, b = reading(shared, cmd), reading(fallback, cmd)
+    if a == b:
+        print("SAME")
+    elif isinstance(a, list) and isinstance(b, list) and all(x in b for x in a) and len(b) > len(a):
+        print("MORE")
+    else:
+        print("DIFF shared=%r fallback=%r" % (a, b))
+PY
+}
+fb_lines=()
+while IFS= read -r line; do fb_lines+=("$line"); done < <(fb_compare "${FB_SHAPES[@]}")
+[ "${#fb_lines[@]}" -eq "${#FB_SHAPES[@]}" ] && check "#1449 every shape was read by both copies" ok \
+  || check "#1449 every shape was read by both copies" "${#fb_lines[@]} answers for ${#FB_SHAPES[@]} shapes"
+for k in "${!FB_SHAPES[@]}"; do
+  [ "${fb_lines[$k]:-}" = "SAME" ] && check "#1449 the fallback reads it as the shared reader does: ${FB_SHAPES[$k]}" ok \
+    || check "#1449 the fallback reads it as the shared reader does: ${FB_SHAPES[$k]}" "${fb_lines[$k]:-no answer}"
+done
+fb_lines=()
+while IFS= read -r line; do fb_lines+=("$line"); done < <(fb_compare "${FB_OVER_READ[@]}")
+for k in "${!FB_OVER_READ[@]}"; do
+  [ "${fb_lines[$k]:-}" = "MORE" ] && check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" ok \
+    || check "#1449 the fallback reads more here, never less: ${FB_OVER_READ[$k]}" "${fb_lines[$k]:-no answer}"
+done
+
+# The gate's answer from each copy: the whole output, so a refusal for a different reason is caught
+# as surely as a pass where the other refused.
+FB_EMPTY="$FB_TMP/empty.md"; : > "$FB_EMPTY"
+FB_PLAIN="$FB_TMP/plain.md"; printf 'a description\n' > "$FB_PLAIN"
+FB_ALL='--milestone Ungrouped --label priority-p2 --label bug --body "## Open questions
+
+None"'
+gate_from() { # gate_from <hooks dir> <command> -> the gate's output
+  printf '%s' "$2" | python3 -c 'import json, sys; json.dump({"tool_name": "Bash", "tool_input": {"command": sys.stdin.read()}}, sys.stdout)' \
+    | env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_BRIDGE_SESSION_ID bash "$1/require-issue-fields.sh" 2>&1
+}
+FB_GATE_SHAPES=(
+  "gh issue create --title T $FB_ALL"
+  'gh issue create --title T --label priority-p2 --label bug'
+  'gh -R o/x issue create --title T --label priority-p2 --label bug'
+  "gh -R o/x issue create --title T $FB_ALL"
+  'gh issue -m Ungrouped create --title T --label priority-p2 --label bug --body "## Open questions
+
+None"'
+  'gh -R o/x issue create --help'
+  "gh issue edit 5 --body-file $FB_EMPTY"
+  "gh issue --body-file $FB_EMPTY edit 5"
+  "gh -R o/x pr -F $FB_EMPTY create --title t"
+  "rtk gh -R o/x pr create --title t --body-file $FB_EMPTY"
+  "gh pr comment 5 -F $FB_EMPTY"
+  "gh pr create --title t --body-file $FB_PLAIN"
+  "gh issue --body-file $FB_PLAIN edit 5"
+  "gh pr merge 5 --squash --body-file $FB_EMPTY"
+  "gh pr create --help --body-file $FB_EMPTY"
+  "gh issue create --title t --body-file $FB_TMP/never-written.md $FB_ALL"
+  "gh pr create -t issue -b edit --body-file $FB_EMPTY"
+)
+for c in "${FB_GATE_SHAPES[@]}"; do
+  shared="$(gate_from "$DIR" "$c")"; fallback="$(gate_from "$FB" "$c")"
+  [ "$shared" = "$fallback" ] && check "#1449 the gate answers the same on the fallback: $c" ok \
+    || check "#1449 the gate answers the same on the fallback: $c" "shared [${shared:0:160}] fallback [${fallback:0:160}]"
+done
+# The positive control on the gate: the comparison above is only worth something if these shapes
+# include refusals as well as passes.
+[[ "$(gate_from "$FB" "gh issue --body-file $FB_EMPTY edit 5")" == *'"deny"'* ]] \
+  && check "#1449 the gate on the fallback refuses an empty body file written in front of the action" ok \
+  || check "#1449 the gate on the fallback refuses an empty body file written in front of the action" "it passed"
+for c in "${FB_OVER_READ[@]}"; do
+  [[ "$(gate_from "$FB" "$c")" == *'"deny"'* && "$(gate_from "$DIR" "$c")" != *'"deny"'* ]] \
+    && check "#1449 where the fallback reads more, the gate on it refuses: $c" ok \
+    || check "#1449 where the fallback reads more, the gate on it refuses: $c" "shared and fallback did not split refuse and pass"
+done
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

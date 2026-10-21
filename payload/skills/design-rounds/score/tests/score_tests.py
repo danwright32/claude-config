@@ -575,16 +575,20 @@ rc, out = run("frames", os.path.join(T, "postcard", "settled.html"))
 check("and its frames are not handed to an adapter either", rc == 2 and "postcard" in out, out)
 check("the refusal names the terminal among the kinds", "terminal" in out, out)
 
+
 # 12. A design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413). Its decision
-# half is scored like any other. Nothing yet captures a built mod screen in the form its terminal is drawn
-# in (claude-config#1414), so its picture half is unmeasured, said plainly, whatever pictures a capture
-# holds, and unmeasured is never 100%.
+# half is scored like any other. Its picture half is measured only from a capture the terminal adapter
+# made (capture-terminal.mjs, claude-config#1414), which draws the mod's own band through the same shared
+# terminal as the design: any other capture of it leaves the picture half unmeasured, said plainly,
+# whatever pictures it holds, and unmeasured is never 100%.
 rc, out, data = score(make("terminal", lambda s: s["frames"].__setitem__("kind", "terminal")))
-check("a terminal design is no score, exit 2, never matched", rc == 2 and "could not score" in out, out)
+check("a terminal design captured by the web adapter is no score, exit 2, never matched",
+      rc == 2 and "could not score" in out, out)
 check("its decision half is still scored", data and data["decisions"]["met"] == 2 and data["decisions"]["of"] == 2
       and "decisions  2 of 2 met (100%)" in out, out)
-check("its picture half is said plainly to be unmeasured, naming the missing capture",
-      "the picture half of a terminal design is unmeasured" in out and "claude-config#1414" in out, out)
+check("its picture half is said plainly to be unmeasured, naming the adapter that measures it",
+      "the picture half of a terminal design is unmeasured" in out and "capture-terminal.mjs" in out
+      and "the web adapter" in out, out)
 check("with no frame's picture measured, though the capture held both pictures",
       data and [f["status"] for f in data["pictures"]["frames"]] == ["unmeasured", "unmeasured"]
       and "pictures   " not in out, data and data["pictures"])
@@ -604,10 +608,60 @@ if forged:
 with open(os.path.join(T, "terminal", "forged.json"), "w") as fh:
     json.dump(forged, fh)
 rc, out = run("show", os.path.join(T, "terminal", "forged.json"))
-check("a terminal score file claiming its pictures were measured is no score", rc == 2 and "terminal" in out, out)
+check("a terminal score file claiming pictures measured without the terminal adapter's capture is no score",
+      rc == 2 and "terminal" in out and "capture-terminal.mjs" in out, out)
+check("and the close gate's reader refuses it too",
+      design_score.verify_score(forged)[0] is None, forged and design_score.verify_score(forged))
 rc, out = run("frames", os.path.join(T, "terminal", "settled.html"))
 check("its frames are handed to an adapter, which draws the design's side",
       rc == 0 and [f["id"] for f in json.loads(out)["frames"]] == ["f1", "f2"], out)
+
+
+# 13. The terminal adapter's capture (claude-config#1414): the mod's own band drawn through the shared
+# terminal, in the design's window, beside the design's frame. Its pictures are measured like any
+# others: a match is 100% on both halves, one pixel off is below it, and the score says that only the
+# band is the build's, since the rest of each window is the design's own on both sides.
+def by_terminal(sets_f1=()):
+    def m(s):
+        s["frames"]["kind"] = "terminal"
+        s["capture"]["platform"] = "terminal"
+        s["capture"]["build"] = "the status-bar mod's band, from mods/status-bar/tests/band.screen.json"
+        if sets_f1:
+            s["images"]["f1"] = (rgba_image(FW, FH, LIGHT), (FW, FH), rgba_image(FW, FH, LIGHT, sets_f1), (FW, FH))
+    return m
+
+
+rc, out, data = score(make("terminal-built", by_terminal()))
+check("a terminal design captured by the terminal adapter, matching, scores 100% on both halves, exit 0",
+      rc == 0 and "MATCHED: both halves are 100%" in out, out)
+check("its picture half is measured over every frame", "pictures   100% of pixels match over 2 frames" in out
+      and data and [f["status"] for f in data["pictures"]["frames"]] == ["measured", "measured"], out)
+check("it records the platform as the terminal", data and data.get("platform") == "terminal", data and data.get("platform"))
+check("it says the band is the build's and the rest of each window is the design's on both sides",
+      "only the band is the build's" in out, out)
+check("the close gate's reader holds it as matched",
+      data and design_score.verify_score(data) == ("matched", []), data and design_score.verify_score(data))
+rc, out = run("show", os.path.join(T, "terminal-built", "score.json"))
+check("show of that score file is matched", rc == 0 and "MATCHED" in out, out)
+rc, out, data = score(make("terminal-cell", by_terminal([(5, 6, (LIGHT[0] - 30, LIGHT[1], LIGHT[2], 255))])))
+check("the same capture with one pixel of the band drawn differently is below 100%, exit 1",
+      rc == 1 and "not matched yet" in out and "99.9% of pixels match" in out, out)
+check("and it names the frame that differs", "see f1-diff.png" in out, out)
+check("and the close gate's reader holds it as not matched",
+      data and design_score.verify_score(data) == ("not-matched", []), data and design_score.verify_score(data))
+rc, out, data = score(make("terminal-unbuilt", lambda s: (by_terminal()(s), s["capture"]["frames"][1].update(
+    builtError="the mod's band could not be drawn in the shared terminal: the colour success has no drawing there"))))
+check("a frame whose band the terminal adapter could not draw is no score, saying why",
+      rc == 2 and "the colour success has no drawing there" in out, out)
+
+
+def terminal_on_page(s):
+    s["capture"]["platform"] = "terminal"
+
+
+rc, out, data = score(make("terminal-not-terminal", terminal_on_page))
+check("a terminal adapter's capture of a design not drawn in the terminal is no score, saying so",
+      rc == 2 and "is not drawn in the shared terminal" in out, out)
 
 shutil.rmtree(T, ignore_errors=True)
 print()

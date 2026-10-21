@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L795. An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.
 - L1028. An outbound call in a function killed at a hard deadline needs its own shorter timeout, or a hang skips the catch and its alert.
 - L771. A timeout raced against the work throws the timer's error and drops what the work attached, so attach context where the timer fires.
 - L1027. Local dev and test servers must not report to production's error tracker, and alerts act only on production.
