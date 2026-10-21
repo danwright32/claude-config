@@ -48,16 +48,31 @@ try:
     _spec.loader.exec_module(_sw)
     gh_command = _sw.gh_command
 except Exception:
-    # With no reader, any command naming gh and one of the gated pairs runs it, the words after the
-    # action its own: the reading that sees more commands, never fewer, so a gate asks rather than misses.
+    # With no reader, any command naming gh runs it, and a gated subcommand and action anywhere after
+    # gh are the ones it runs: the reading that sees more commands, never fewer, so a gate asks rather
+    # than misses. It stands down only on a word gh would take as a different subcommand or action, one
+    # outside the gated pairs that no flag in front of it can be taking as a value. The flags written in
+    # front of the action are the action's own, as gh reads them (claude-config#1449: dropping them let
+    # `gh issue --body-file empty.md edit 5` past the body file rule, and refused `gh issue -m M create`).
     def gh_command(words):
-        if "gh" not in [w.split("/")[-1] for w in words]:  # gh-reader: the crude reading, when there is no other
+        names = [w.split("/")[-1] for w in words]
+        if "gh" not in names:  # gh-reader: the crude reading, when there is no other
             return None
-        for sub in sorted({s for s, _ in BODY_FILE_COMMANDS}):
-            rest = words[words.index(sub) + 1:] if sub in words else []  # gh-reader: the crude reading, when there is no other
-            acts = [k for k, w in enumerate(rest) if (sub, w) in BODY_FILE_COMMANDS]
-            if acts:  # the first action after the subcommand, so a title holding "comment" is not one
-                return (sub, rest[acts[0]], [], rest[acts[0] + 1:])
+        subs = {s for s, _ in BODY_FILE_COMMANDS}
+        front, sub, prev = [], None, ""
+        for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude reading, when there is no other
+            w = words[k]
+            if (sub, w) in BODY_FILE_COMMANDS:
+                return (sub, w, front, list(words[k + 1:]))
+            if sub is None and w in subs:
+                sub = w
+            elif w.startswith("-") and len(w) > 1:
+                front.append(w)
+            elif prev.startswith("-") and len(prev) > 1 and "=" not in prev and (prev.startswith("--") or len(prev) == 2):
+                front.append(w)  # the value of the flag before it
+            else:
+                return None  # a subcommand or action of gh's that no gate here reads
+            prev = w
         return None
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
