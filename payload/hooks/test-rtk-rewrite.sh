@@ -537,6 +537,27 @@ check "#1428 nor after cd &&" "$(refused_to_rewrite 'cd /repo && rtk gh issue li
 # (L159). Its bytes are pinned against the real rtk in the end to end check below.
 check "#1428 gh api keeps its rewrite" "$(kept_as 'rtk gh api repos/o/r/issues/1369')"
 check "#1428 and with --paginate and --jq" "$(kept_as "rtk gh api --paginate repos/o/r/issues --jq '.[].title'")"
+# Which gh subcommand runs is read by the one reading every gate shares (lib/push-scope.sh,
+# claude-config#1188), never by word position: gh takes flags in front of its subcommand, so the
+# third word is not always the subcommand. Each direction is held (L497).
+check "#1428 gh api with a flag in front of it is still gh api and keeps its rewrite" "$(kept_as 'rtk gh -R o/x api repos/o/x')"
+check "#1428 and an issue list with a flag in front of it is still refused" "$(refused_to_rewrite 'rtk gh --repo o/x issue list')"
+check "#1428 and so is one with rtk's own flag in front of gh" "$(refused_to_rewrite 'rtk -v gh issue list')"
+# Only what rtk runs is judged: a gh it left as written beside another rewrite costs that one nothing.
+check "#1428 a plain gh beside an rtk rewrite keeps that rewrite" "$(kept_as 'gh pr list --json number && rtk git status')"
+# Fail closed: with the shared reader gone, nothing can tell gh api from the rest, so an rtk gh is
+# not rewritten at all, while a rewrite with no gh in it still is (L42).
+NOLIB="$TMPROOT/nolib"; mkdir -p "$NOLIB"; cp "$H" "$NOLIB/rtk-rewrite.sh"
+printf 'rtk gh api repos/o/r\n' > "$TMPROOT/rewrite"; payload 'gh api repos/o/r'
+out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null)"
+[ -z "$out1428nl" ] \
+  && check "#1428 with no shared reader to ask, an rtk gh is not rewritten" ok \
+  || check "#1428 with no shared reader to ask, an rtk gh is not rewritten" "it rewrote to: $(printf '%s' "$out1428nl" | rewritten_to)"
+printf 'rtk git status\n' > "$TMPROOT/rewrite"; payload 'git status'
+out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+[ "$out1428nl" = 'rtk git status' ] \
+  && check "#1428 and a rewrite with no gh in it still goes through" ok \
+  || check "#1428 and a rewrite with no gh in it still goes through" "got [$out1428nl]"
 
 # ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
