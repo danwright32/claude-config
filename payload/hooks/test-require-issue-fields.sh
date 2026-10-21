@@ -654,9 +654,116 @@ says "#1416 and the first one too" "$U/i7.md" "gh issue create --title a --body-
 # Its own visible override, waiving only this rule.
 allows "#1416 the rule has its own visible override" "SKIP_BODY_FILE_CHECK=1 gh issue create --title t --body-file \"$U/i7.md\" $FC"
 denies "#1416 and that override waives nothing else" "SKIP_BODY_FILE_CHECK=1 gh issue create --title t --body-file \"$U/i7.md\" $P $C"
-# gh issue edit and gh pr create are not issue creates, and this gate has never judged them.
-allows "#1416 gh issue edit is not judged here" "gh issue edit 5 --body-file \"$U/i7.md\""
-allows "#1416 gh pr create is not judged here" "gh pr create --title t --body-file \"$U/i7.md\""
+
+# ---------------------------------------------------------------------------
+# The same body file reader on every gh command that posts a description or a comment from one
+# (claude-config#1435). gh refuses a missing file itself, but takes an empty one: gh issue edit and
+# gh pr edit then blank the description already there, gh pr create opens a pull request with none,
+# and a comment posts whatever the wrong file holds. Only the body file rule applies to them: the
+# milestone, priority, category, Open questions and session rules are about filing an issue.
+# ---------------------------------------------------------------------------
+PLAIN="$TMP_DIR/plain.md"
+printf 'a description with no Open questions section\n' > "$PLAIN"
+denies "#1435 gh issue edit through a variable this command never sets is refused" "gh issue edit 5 --body-file \"$U/i7.md\""
+denies "#1435 gh issue edit with an empty body file is refused" "gh issue edit 5 --body-file $EMPTYF"
+denies "#1435 gh pr create with an empty body file is refused" "gh pr create --title t --body-file $EMPTYF"
+denies "#1435 gh pr create through an unset variable is refused" "gh pr create --title t --body-file \"$U/i7.md\""
+denies "#1435 gh pr edit with -F naming an empty file is refused" "gh pr edit 5 -F $EMPTYF"
+# A missing file is gh's own to refuse on these: it stops with "no such file" before any request
+# (measured 2026-10-20 on gh 2.89.0, each of the six). Refusing it here too only refused commands that
+# write the file through a script the gate cannot read: 10 of about 1550 past ones.
+allows "#1435 a missing file is left to gh on these commands" "gh pr edit 5 -F $TMP_DIR/never-written.md"
+allows "#1435 so a body file a script in the same command writes passes" "python3 -c \"open('$TMP_DIR/script-1435.md', 'w').write('x')\" && gh issue edit 5 --body-file $TMP_DIR/script-1435.md"
+allows "#1435 a loop pattern no file matches at all is left to gh too" "for k in 1 2; do gh issue edit \$k --body-file \"$TMP_DIR/nothing-\$k.md\"; done"
+denies "#1435 but a loop pattern only empty files match is refused" "for k in e; do gh pr comment 5 -F \"$TMP_DIR/only-empty/\$k.md\"; done"
+denies "#1435 gh issue create still refuses a missing file (#1416)" "gh issue create --title t --body-file $TMP_DIR/never-written.md $FC"
+denies "#1435 gh issue comment with an empty body file is refused" "gh issue comment 5 --body-file $EMPTYF"
+denies "#1435 gh pr comment with an empty body file is refused" "gh pr comment 5 -F $BLANKF"
+denies "#1435 behind -R and rtk it is the same command" "rtk gh -R o/x pr create --title t --body-file $EMPTYF"
+says "#1435 the message names the command" "gh pr create" "gh pr create --title t --body-file $EMPTYF"
+says "#1435 and the path and why" "$EMPTYF is empty" "gh pr create --title t --body-file $EMPTYF"
+says "#1435 and the override for this rule" "SKIP_BODY_FILE_CHECK=1" "gh issue edit 5 --body-file $EMPTYF"
+omits "#1435 the issue rules never speak about an edit" "a milestone" "gh issue edit 5 --body-file $EMPTYF"
+omits "#1435 nor about a pull request" "Open questions" "gh pr create --title t --body-file $EMPTYF"
+omits "#1435 nor does it say an issue is being filed" "would file" "gh pr create --title t --body-file $EMPTYF"
+allows "#1435 a readable body file with no section and no session line passes on gh pr create" "gh pr create --title t --body-file $PLAIN"
+allows "#1435 and on gh issue edit" "gh issue edit 5 --body-file $PLAIN"
+allows "#1435 and on a comment" "gh pr comment 5 -F $PLAIN"
+allows "#1435 standard input is not a file" "printf 'b\n' | gh pr create --title t --body-file -"
+allows "#1435 a file the command writes from shown text is judged from the command" "cat > $TMP_DIR/pr-1435.md <<'EOF'
+a body
+EOF
+gh pr create --title t --body-file $TMP_DIR/pr-1435.md"
+allows "#1435 its own override" "SKIP_BODY_FILE_CHECK=1 gh pr create --title t --body-file $EMPTYF"
+allows "#1435 --help posts nothing" "gh pr create --help --body-file $EMPTYF"
+# An empty body is a legitimate value for these, or gh refuses one itself, so they are not judged.
+allows "#1435 gh pr merge's body file is a commit message, which may be empty" "gh pr merge 5 --squash --body-file $EMPTYF"
+allows "#1435 gh pr review refuses a blank comment itself" "gh pr review 5 --comment -F $EMPTYF"
+allows "#1435 gh release create's notes file is not judged" "gh release create v1 --notes-file $EMPTYF"
+# A create and a pull request in one command: one message, each rule named once.
+says "#1435 a create missing a milestone and a pr with an empty file: the milestone" "a milestone" "gh issue create --title t $P $C $Q && gh pr create --title t --body-file $EMPTYF"
+says "#1435 and the pr's file" "$EMPTYF is empty" "gh issue create --title t $P $C $Q && gh pr create --title t --body-file $EMPTYF"
+says "#1435 and names the pr" "gh pr create" "gh issue create --title t $P $C $Q && gh pr create --title t --body-file $EMPTYF"
+says "#1435 the issue's header names only what the issue misses, not the pr's file" "would file 1 issue missing a milestone. Every" "gh issue create --title t $P $C $Q && gh pr create --title t --body-file $EMPTYF"
+omits "#1435 an edit clause only where an edit is refused" "an edit would blank" "gh pr create --title t --body-file $EMPTYF"
+says "#1435 and there when one is" "an edit would blank the description already there" "gh pr edit 5 --body-file $EMPTYF"
+
+# ---------------------------------------------------------------------------
+# Four shapes the #1416 reader refused although the command works (claude-config#1436), each
+# narrowed where the command shows the answer, and still refused where it does not.
+# ---------------------------------------------------------------------------
+# 1. A loop's or function's value holding a /: the value may span directories.
+mkdir -p "$TMP_DIR/deep/a/b" "$TMP_DIR/only-empty/sub"
+cp "$GOOD" "$TMP_DIR/deep/a/x.md"
+cp "$GOOD" "$TMP_DIR/deep/a/b/y.md"
+: > "$TMP_DIR/only-empty/sub/e2.md"
+allows "#1436 a for loop value holding a / names a file one directory down" "for k in a/x; do gh issue create --title t --body-file \"$TMP_DIR/deep/\$k.md\" $FC; done"
+allows "#1436 two directories down" "for k in a/b/y; do gh issue create --title t --body-file \"$TMP_DIR/deep/\$k.md\" $FC; done"
+allows "#1436 a function's argument holding a /" "f() { gh issue create --title t --body-file \"$TMP_DIR/deep/\$1.md\" $FC; }
+f a/x"
+denies "#1436 a pattern only empty files match, at any depth, is still refused" "for k in e sub/e2; do gh issue create --title t --body-file \"$TMP_DIR/only-empty/\$k.md\" $FC; done"
+denies "#1436 a pattern nothing matches at any depth is still refused" "for k in a/q; do gh issue create --title t --body-file \"$TMP_DIR/deep/\$k.txt\" $FC; done"
+# 2. A variable the hook's environment does not hold: every Bash call starts from that same
+# environment (Claude Code's shell snapshot adds only PATH), so it is unset there too. Still refused,
+# and the reason says so and names the override on its own line.
+says "#1436 an unset variable's reason names a profile variable that is not exported" "without export" "gh issue create --title t --body-file \"$U/i7.md\" $FC"
+says "#1436 and the override, in the reason itself" "is set where the command runs, re-run with SKIP_BODY_FILE_CHECK=1" "gh issue create --title t --body-file \"$U/i7.md\" $FC"
+# 3. cd -, popd, and pushd are followed when the command itself shows where they go back to.
+PAYLOAD_CWD="/"
+allows "#1436 cd - after two cds goes back to the first" "cd $TMP_DIR && cd $TMP_DIR/sub && cd - && gh issue create --title t --body-file good.md $FC"
+denies "#1436 and a cd - to a directory without the file is refused" "cd $TMP_DIR/sub && cd $TMP_DIR && cd - && gh issue create --title t --body-file good.md $FC"
+allows "#1436 popd goes back to where pushd left" "cd $TMP_DIR && pushd sub && popd && gh issue create --title t --body-file good.md $FC"
+allows "#1436 two pushds and one popd" "pushd $TMP_DIR && pushd sub && popd && gh issue create --title t --body-file good.md $FC"
+denies "#1436 a popd with no pushd in this command is still refused" "popd && gh issue create --title t --body-file good.md $FC"
+says "#1436 and says which directory cannot be told" "cannot tell which directory" "popd && gh issue create --title t --body-file good.md $FC"
+denies "#1436 a cd to a substitution is still refused" "cd \"\$(git rev-parse --show-toplevel)\" && gh issue create --title t --body-file good.md $FC"
+# 4. A file written before a later cd is the file in the directory it was written from.
+PAYLOAD_CWD="$TMP_DIR"
+allows "#1436 a file written, then a cd, then read by a path back to it" "cat > fresh-1436.md <<'EOF'
+b
+
+## Open questions
+
+None
+EOF
+cd sub && gh issue create --title t --body-file ../fresh-1436.md $FC"
+denies "#1436 the same spelling read from another directory is a different file, and refused" "cat > fresh-1436.md <<'EOF'
+b
+
+## Open questions
+
+None
+EOF
+cd sub && gh issue create --title t --body-file fresh-1436.md $FC"
+allows "#1436 a write in a subshell's cd is read where it was written" "(cd sub && cat > fresh-1436b.md <<'EOF'
+b
+
+## Open questions
+
+None
+EOF
+) && gh issue create --title t --body-file sub/fresh-1436b.md $FC"
+PAYLOAD_CWD=""
 
 # The shared line maker, which the milestone and discussion scripts use too, so one spelling of the
 # line exists (L41).

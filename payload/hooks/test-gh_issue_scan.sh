@@ -60,6 +60,12 @@ elif mode == "titles":
     print("|".join(",".join(g.flag_values(a, "--title", "-t")) for a, _ in creates))
 elif mode == "env":
     print("|".join(",".join(e) for _, e in creates))
+elif mode == "found":
+    # Each gh command that posts a body from a file, as sub act (#1435).
+    print("|".join("%s %s" % kind for kind, _, _, _ in g.scan_gh_in_context(cmd, "/start", {}, g.BODY_FILE_COMMANDS)))
+elif mode == "writesat":
+    # Where each file the command writes lands, starting in /start (#1436).
+    print("|".join(p or "NO" for _, _, _, p in g.file_writes_in_context(cmd, "/start", {"HOME": "/h"})))
 elif mode == "bodyfile":
     # Where each create's --body-file resolves, starting in /start with only HOME=/h set (#1416).
     out = []
@@ -215,10 +221,45 @@ bf "a relative path is read against the starting directory" "/start/b.md" 'gh is
 bf "a cd moves it, relative to where the command is" "/start/x/b.md" 'cd x && gh issue create --body-file b.md'
 bf "a variable set earlier in the command is followed" "/v/b.md" 'D=/v; gh issue create --body-file "$D/b.md"'
 bf "each create sees only what came before it" '/start/b.md|/v/b.md' 'gh issue create --body-file "b.md"; D=/v; gh issue create -F "$D/b.md"'
-bf "a subshell's assignment and cd end with it" "NO:\$D is not set in this command (a variable set in an earlier Bash call is gone by this one)" '(D=/v; cd /w); gh issue create --body-file "$D/b.md"'
+bf "a subshell's assignment and cd end with it" "NO:\$D is not set in this command, nor in the environment every Bash call starts from (a variable set in an earlier Bash call, or in a shell profile without export, is gone by this one); if it is set where the command runs, re-run with SKIP_BODY_FILE_CHECK=1" '(D=/v; cd /w); gh issue create --body-file "$D/b.md"'
 bf "home comes from the environment given" "/h/b.md" 'gh issue create --body-file ~/b.md'
 bf "a substitution cannot be worked out" "NO:it holds an expansion the gate cannot work out without running the command" 'gh issue create --body-file "$(pwd)/b.md"'
 bf "cd - leaves a relative path unresolved" "NO:it is relative, and the gate cannot tell which directory the command is in" 'cd - && gh issue create --body-file b.md'
+# What cd -, pushd and popd go back to, when the command shows it (claude-config#1436).
+bf "#1436 cd - goes back to the directory before the last cd" "/start/b.md" 'cd x && cd - && gh issue create --body-file b.md'
+bf "#1436 cd - twice comes back again" "/start/x/b.md" 'cd x && cd - && cd - && gh issue create --body-file b.md'
+bf "#1436 popd goes back to before the pushd" "/start/b.md" 'pushd x && popd && gh issue create --body-file b.md'
+bf "#1436 the stack is a stack" "/a/b.md" 'pushd /a && pushd /b && popd && gh issue create --body-file b.md'
+bf "#1436 a pushd inside a subshell ends with it" "NO:it is relative, and the gate cannot tell which directory the command is in" '(pushd /a); popd && gh issue create --body-file b.md'
+bf "#1436 cd after a cd the gate cannot follow leaves cd - unknown" "NO:it is relative, and the gate cannot tell which directory the command is in" 'cd "$(pwd)/x" && cd /a && cd - && gh issue create --body-file b.md'
+bf "#1436 the unset variable's reason says why the environment cannot help" "NO:\$D is not set in this command, nor in the environment every Bash call starts from (a variable set in an earlier Bash call, or in a shell profile without export, is gone by this one); if it is set where the command runs, re-run with SKIP_BODY_FILE_CHECK=1" 'gh issue create --body-file "$D/b.md"'
+
+# Which gh commands post a body from a file (claude-config#1435): each one found, with its kind.
+fd() { # fd <description> <expected> <command>
+  local got; got="$(ask found "$3")"
+  [ "$got" = "$2" ] && check "$1" ok || check "$1" "got [$got], expected [$2]"
+}
+fd "#1435 an issue create, edit and comment, and a pr create, edit and comment are all found" \
+  "issue create|issue edit|issue comment|pr create|pr edit|pr comment" \
+  'gh issue create -t a; gh issue edit 1 -F b; gh issue comment 1 -F c; gh pr create -F d; gh pr edit 2 -F e; gh pr comment 2 -F f'
+fd "#1435 a merge, a review and a release are not" "" 'gh pr merge 1 -F a; gh pr review 1 -F b; gh release create v1 -F c'
+fd "#1435 behind rtk and -R" "pr create" 'rtk gh -R o/x pr create -F d'
+fd "#1435 --web hands the body to a person" "" 'gh pr create --web -F d'
+[ "$(ask count 'gh issue edit 1 -F b; gh pr create -F d')" = "0" ] \
+  && check "#1435 scan_creates still finds only issue creates" ok \
+  || check "#1435 scan_creates still finds only issue creates" "got $(ask count 'gh issue edit 1 -F b; gh pr create -F d')"
+
+# Where each write lands (claude-config#1436): the directory it was written from, not the create's.
+wa() { # wa <description> <expected> <command>
+  local got; got="$(ask writesat "$3")"
+  [ "$got" = "$2" ] && check "$1" ok || check "$1" "got [$got], expected [$2]"
+}
+wa "#1436 a write before a cd lands where it was written" "/start/b.md" "$(printf "cat > b.md <<'EOF'\nx\nEOF\ncd sub && gh issue create -F ../b.md")"
+wa "#1436 a write after a cd lands in that directory" "/start/sub/b.md" 'cd sub && echo x > b.md'
+wa "#1436 a write through a variable the command set" "/v/b.md" 'D=/v; echo x > "$D/b.md"'
+wa "#1436 a write in a subshell's cd, then one after it" "/start/sub/a.md|/start/b.md" '(cd sub && echo x > a.md) && echo y > b.md'
+wa "#1436 a write through a substitution lands nowhere the gate can tell" "NO" 'D=$(mktemp -d); echo x > "$D/b.md"'
+wa "#1436 tee writes land the same way" "/start/x/t.md" 'cd x; echo y | tee t.md'
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
