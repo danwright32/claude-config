@@ -142,6 +142,16 @@ MAC_CHROME = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.
 TEST_CHROME = MAC_CHROME if os.access(MAC_CHROME, os.X_OK) else next(
     (p for p in (shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")) if p),
     None)
+# ONE lookup for every block that opens a browser (claude-config#1452). The last block once kept a
+# second, at the Mac path only, so on CI's Linux runner, where Chrome is google-chrome on PATH, its
+# frames were never drawn and the suite said so as unmeasured on every run. Read from this file's own
+# source, so a block that finds Chrome its own way again fails here rather than quietly sitting out.
+with open(os.path.abspath(__file__), encoding="utf-8") as _fh:
+    _own = _fh.read()
+_lookups = len(re.findall(r'os\.environ\.get\(\s*"SETTLED_TEST_CHROME"', _own))
+_others = sorted(set(re.findall(r'HEADLESS_DOM_CHROME=(\w+)', _own)) - {"TEST_CHROME"})
+check("every block that opens a browser finds it through the one TEST_CHROME lookup",
+      _lookups == 1 and not _others, "SETTLED_TEST_CHROME read %d times; HEADLESS_DOM_CHROME also set from %s" % (_lookups, _others))
 
 
 def make(name, s, chrome=True):
@@ -584,10 +594,11 @@ for label, page_src in (("a page with requirements", rsrc), ("a page without", b
                   "%.2f" % ratio)
 
 # --- in a real browser, where there is one ------------------------------------------------------------
-CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+# Found by the same lookup as every other block (claude-config#1452): the Mac's Chrome, or one on
+# PATH, which is how CI's Linux runner has it.
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
-if not os.access(CHROME_APP, os.X_OK):
-    print("SUITE-PART-UNMEASURED no Chrome at %s, so the settled file's frames were not drawn in a browser" % CHROME_APP)
+if not TEST_CHROME:
+    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so the settled file's frames were not drawn in a browser" % MAC_CHROME)
 else:
     probe = src.replace("</body></html>", """<script>
 var out = [];
@@ -602,7 +613,7 @@ var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out
         fh.write(probe)
     proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--dump-dom",
                            "file://" + os.path.join(T, "probe.html")], capture_output=True, text=True,
-                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, designFrameDocument gives each frame's whole document and refuses an unknown one",
           proc.returncode == 0 and m and m.group(1) == "f1=slot,f2=slot,f9=refused", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
@@ -631,7 +642,7 @@ link.click();
         proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
                                "--blink-settings=preferredColorScheme=" + setting,
                                "--dump-dom", "file://" + os.path.join(T, "lprobe.html")], capture_output=True, text=True,
-                              env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
         m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
         seen[scheme] = m.group(1).split("|") if m and proc.returncode == 0 else [
             "rc=%d" % proc.returncode, proc.stdout[-500:] + proc.stderr[-500:]]
@@ -662,7 +673,7 @@ document.body.append(f);
         fh.write(nprobe)
     proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
                            "--dump-dom", "file://" + os.path.join(T, "nprobe.html")], capture_output=True, text=True,
-                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, an email frame is drawn from the fixture with nothing around it and no margin",
           proc.returncode == 0 and m and m.group(1) == "bare|drawn|0", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
@@ -693,7 +704,7 @@ var out = [], left = 2;
         fh.write(tprobe)
     proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
                            "--dump-dom", "file://" + os.path.join(T, "tprobe.html")], capture_output=True, text=True,
-                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, each terminal frame is the terminal window alone, drawn from the fixture at its own width",
           proc.returncode == 0 and m and m.group(1) == ("t1:bare|window|640x0,0|rgb(27, 27, 29)|drawn;"
@@ -714,7 +725,7 @@ run().then(function (doc) { var pre = document.createElement("pre"); pre.id = "P
     write("capture-probe.html", cap_page)
     proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
                            "--dump-dom", "file://" + os.path.join(T, "capture-probe.html")], capture_output=True, text=True,
-                          env=dict(os.environ, HEADLESS_DOM_CHROME=CHROME_APP, HEADLESS_DOM_DEADLINE="60"))
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     captured = html_unescape(m.group(1)) if m else ""
     check("capture-chrome.js gives a whole page with the page's own rules inlined",

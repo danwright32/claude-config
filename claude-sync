@@ -8663,6 +8663,23 @@ hook_suite_notrun_names(){   # $1 = the file holding the runner's output -> comm
   return 0
 }
 
+# The suites that RAN but could not measure part of themselves on this Mac, from the runner's own
+# "N SUITE(S) RAN WITH PARTS UNMEASURED" block (claude-config#1452, #1444). The verdict line keeps
+# its two exact shapes above, so it cannot say this, and a closing sentence built from it alone said
+# "all N of its suites" for a run that never drove a Chrome suite's browser checks (L98). Absent
+# block, nothing printed: unlike the could not run block there is no count in the verdict for it to
+# disagree with, and a runner from before #1444 printed no such block at all.
+hook_suite_partial(){   # $1 = the file holding the runner's output -> "<count>\t<names, space separated>", or nothing
+  local block n
+  block="$(grep -E '^[0-9]+ SUITE\(S\) RAN WITH PARTS UNMEASURED, so their passes do not cover them:' "$1" 2>/dev/null | tail -1 || true)"
+  [ -n "$block" ] || return 0
+  n="${block%% *}"
+  block="${block#*do not cover them:}"
+  block="$(printf '%s' "$block" | tr -s ' ' ' ' | sed 's/^ //; s/ $//')"
+  printf '%s\t%s' "$n" "${block:-the runner did not name them}"
+  return 0
+}
+
 hook_suite_coverage(){   # $1 = the file holding the runner's output -> "<ran>\t<notrun>", ? if unread
   local line
   line="$(grep -E '^ALL [0-9]+ SUITES PASSED$' "$1" 2>/dev/null | tail -1 || true)"
@@ -8840,14 +8857,36 @@ HSCOVEOF
     # session loads) was written into a scratch file and thrown away (L325). Capped at three, the
     # runner's own default, and joined so the closing line stays one line.
     suite_notes="$(sed -n 's/^[[:space:]]*note: //p' "$out" 2>/dev/null | awk 'NR <= 3' | awk 'NR > 1 { printf " | " } { printf "%s", $0 }')"
+    local partial_n='' partial_names=''
+    IFS="$(printf '\t')" read -r partial_n partial_names <<HSPARTEOF
+$(hook_suite_partial "$out")
+HSPARTEOF
+    case "$partial_n" in ''|*[!0-9]*|0) partial_n='' ;; esac
+    if [ "$ran" != '?' ] && [ "$notrun" -eq 0 ] && [ -n "$partial_n" ]; then
+      # Every suite ran, but not every part of them (claude-config#1452): "all N of its suites" is
+      # the reassuring reading this exists to refuse, so it is not said.
+      printf ', and the hook suite passed here, its %s suites ran, but %s of them ran with parts this Mac could not measure, so those parts are unverified here: %s' \
+        "$ran" "$partial_n" "$partial_names"
+      [ -n "$suite_notes" ] && printf '. The suite noted: %s' "${suite_notes%.}"
+      return 0
+    fi
     if [ "$ran" = '?' ]; then
       printf ', and the hook suite passed here, though its own report did not say how many of its suites ran, so how much of the suite that covers is unknown'
     elif [ "$notrun" -gt 0 ]; then
       # NAMED, not counted (claude-config#250). A count cannot say whether the ones that sat out
       # are trivial or cover the most important behaviour, and nothing can notice it growing.
+      # The names are worked out BEFORE the printf, never in a case inside a command substitution:
+      # bash 3.2, the /bin/bash on every Mac, reads the pattern's closing parenthesis as the end of
+      # the substitution and fails with a syntax error, so this clause printed no names at all and
+      # nothing checked the names until #1452 did.
+      local nrshown
+      case "$nrnames" in
+        ''|'?') nrshown='and the runner did not name them' ;;
+        *) nrshown="$(printf '%s' "$nrnames" | tr ',' ' ')" ;;
+      esac
       printf ', and the hook suite passed here, but only %s of its %s suites could run on this Mac, so %s are unverified here: %s' \
-        "$ran" "$(( ran + notrun ))" "$notrun" \
-        "$(case "$nrnames" in ''|'?') printf 'and the runner did not name them' ;; *) printf '%s' "$nrnames" | tr ',' ' ' ;; esac)"
+        "$ran" "$(( ran + notrun ))" "$notrun" "$nrshown"
+      [ -n "$partial_n" ] && printf ', and %s of them ran with parts this Mac could not measure: %s' "$partial_n" "$partial_names"
     else
       printf ', and the hook suite passed here, all %s of its suites' "$ran"
     fi

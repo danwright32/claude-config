@@ -15082,6 +15082,25 @@ check "#185 and does not claim the whole suite was covered" \
 check "#185 and records what could not run" \
   "[ \"\$(ht_field ran)\" = '6' ] && [ \"\$(ht_field notrun)\" = '4' ]"
 
+# Suites that RAN but could not measure part of themselves here (claude-config#1452). The runner
+# names them in its own block above the verdict (#1444), and the verdict keeps the shape read above,
+# so a sentence built from the verdict alone said "all 12 of its suites" for a run that drove none
+# of a Chrome suite's browser checks. The names come from the runner's block, the count with them.
+out_cvpu="$(ht_cover 0 "$(printf '2 SUITE(S) RAN WITH PARTS UNMEASURED, so their passes do not cover them: test-mods.sh test-make-settled.sh\n  Each one has unmeasured lines above.\n\nALL 12 SUITES PASSED')")"
+dbg "pull whose runner had suites with parts unmeasured: $out_cvpu"
+check "#1452 a pass with parts unmeasured names the suites they belong to" \
+  "line_has \"\$out_cvpu\" 'Pulled shared config' 'hook suite passed here' '2 of them ran with parts this Mac could not measure' 'test-mods.sh test-make-settled.sh'"
+check "#1452 and does not claim all of its suites when parts did not run" \
+  "! line_has \"\$out_cvpu\" 'Pulled shared config' 'all 12 of its suites'"
+# Both at once: suites that could not run AND suites with parts unmeasured are each said.
+out_cvpn="$(ht_cover 0 "$(printf '1 SUITE(S) RAN WITH PARTS UNMEASURED, so their passes do not cover them: test-mods.sh\n\n4 SUITE(S) COULD NOT RUN HERE: a.sh b.sh c.sh d.sh\n\nALL 6 SUITES THAT COULD RUN PASSED, and 4 could not run here')")"
+dbg "pull whose runner had both: $out_cvpn"
+check "#1452 suites that could not run and parts unmeasured are each named" \
+  "line_has \"\$out_cvpn\" 'Pulled shared config' 'only 6 of its 10 suites could run' 'a.sh b.sh c.sh d.sh' '1 of them ran with parts this Mac could not measure' 'test-mods.sh'"
+# The control: a run with no such block is still the whole suite, in the words above.
+check "#1452 and a run with every part measured still says all of its suites, and nothing about parts" \
+  "line_has \"\$out_cv1\" 'Pulled shared config' 'all 12 of its suites' && ! line_has \"\$out_cv1\" 'Pulled shared config' 'could not measure'"
+
 out_cv3="$(ht_cover 0 'the suite is happy, honestly')"
 dbg "pull whose runner said nothing this can count: $out_cv3"
 check "#185 a report this cannot read says the coverage is unknown" \

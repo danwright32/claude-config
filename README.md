@@ -1472,6 +1472,11 @@ says so any other way (a line whose first word is `UNMEASURED`, `UNMEASURED-SECT
 quoted and the agreed shape named, because every one of those spellings was once dropped and its
 suite read as a plain pass. `test-run-all-tests.sh` also reads every tracked `test-*.sh` and
 `*_tests.py` for such a print, so a branch that never runs on the machine at hand is caught too.
+A part that was not measured is counted as nothing: the same scan fails a suite that also passes a
+check declaring it (`check "<the part> could not be measured here" ok` alone on its line, or with
+the word in the check's name), while a check that TESTS a report of unmeasured, after `&&` or in a
+case arm, is a check like any other (#1452). A pull's closing sentence names the suites that ran
+with parts unmeasured, from the runner's block, and never says "all N of its suites" for them.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
