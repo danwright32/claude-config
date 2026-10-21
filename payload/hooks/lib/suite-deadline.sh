@@ -27,9 +27,10 @@
 #
 # It stops the suite once its wall clock passes the limit. It cannot simply signal it, and that is
 # the whole difficulty: bash defers a trapped signal until the foreground command returns, and the
-# suite this exists for is blocked in a foreground command that never returns. So it flags the suite
-# with USR1, stops it, kills the tree UNDER it (which is what ends the blocked command), and lets it
-# go again; the flag then runs, says why, and exits 124. A suite still alive after that is sent TERM
+# suite this exists for is blocked in a foreground command that never returns. So it stops the suite,
+# kills the tree UNDER it (which is what ends the blocked command), flags it with USR1, and lets it
+# go again; the flag then runs, says why, and exits 124. The flag comes after the kill so the kill
+# can never take what the flag's handler starts (claude-config#1454). A suite still alive after that is sent TERM
 # and finally KILL, because a deadline that can be ignored is not one (L110).
 #
 # And it takes the suite's children with it when the suite is stopped from outside. A handler for
@@ -155,6 +156,9 @@ suite_deadline_arm(){   # [$1] = the suite's own limit in seconds, when it is no
 # The watchdog itself, when this file is RUN rather than sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
   target="$2"; limit="$3"; started="$4"; poll="$5"; pidfile="${6:-}"
+  # Seconds a stopped suite is given at each step of the escalation below, what twenty polls were at
+  # the default poll of 2. Not tied to the poll, which tests shorten (claude-config#1454).
+  grace=40
   [ -n "$pidfile" ] && printf '%s\n' "$$" > "$pidfile"
   table(){ ps -axo pid=,ppid=,command= 2>/dev/null; }
   # "pid<TAB>command" for every descendant of $1, read from the process table on stdin.
@@ -175,17 +179,29 @@ if [ "${BASH_SOURCE[0]}" = "$0" ] && [ "${1:-}" = "--watch" ]; then
   known=""
   while kill -0 "$target" 2>/dev/null; do
     if [ $(( $(date +%s) - started )) -ge "$limit" ]; then
-      kill -USR1 "$target" 2>/dev/null
       # Stopped while its tree is walked, so it cannot start a replacement for what is killed
       # underneath it, which is the race lib/kill-tree.sh records (#174).
       kill -STOP "$target" 2>/dev/null
       bash "$_suite_deadline_dir/kill-tree.sh" "$target" 2>/dev/null
+      # Flagged only now, with its tree gone and itself still stopped, so the handler cannot start
+      # before the kill is over (claude-config#1454). Flagged first, as it was, a watchdog descheduled
+      # before its STOP (a loaded machine does that) let the handler start reading the load, and the
+      # kill took that reading: the figure came back unreadable and a stop that had to be UNMEASURED
+      # was a FAIL. Seen at a load average of 42, and 1 in 200 runs at 170. The signal waits, pending,
+      # and the handler runs as soon as the suite is let go and its killed command has returned.
+      kill -USR1 "$target" 2>/dev/null
       kill -CONT "$target" 2>/dev/null
-      n=0
-      while kill -0 "$target" 2>/dev/null && [ "$n" -lt 20 ]; do sleep "$poll"; n=$(( n + 1 )); done
+      # How long the flagged suite has to finish its handler before TERM, and then before KILL:
+      # SECONDS on the clock, never a count of polls (claude-config#1454). Twenty polls was 40
+      # seconds at the default poll and ONE second wherever a test shortened the poll to look
+      # quickly, so a handler slowed by load past a second was killed before it said anything (2 of
+      # 800 runs under load ended 143 with no line, measured 2026-10-21). A suite that finishes
+      # waits none of it.
+      grace_until=$(( $(date +%s) + grace ))
+      while kill -0 "$target" 2>/dev/null && [ "$(date +%s)" -lt "$grace_until" ]; do sleep "$poll"; done
       kill -TERM "$target" 2>/dev/null
-      n=0
-      while kill -0 "$target" 2>/dev/null && [ "$n" -lt 20 ]; do sleep "$poll"; n=$(( n + 1 )); done
+      grace_until=$(( $(date +%s) + grace ))
+      while kill -0 "$target" 2>/dev/null && [ "$(date +%s)" -lt "$grace_until" ]; do sleep "$poll"; done
       kill -KILL "$target" 2>/dev/null
       exit 0
     fi
