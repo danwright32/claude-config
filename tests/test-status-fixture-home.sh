@@ -115,6 +115,30 @@ check "seam: SYNC_LAUNCHAGENTS names the agents a fixture reads" has "$seam" "re
 check "seam: SYNC_CLONE_REGISTRY names the register a fixture reads" has "$seam" "test-planted-real-suite.sh"
 check "seam: the named launch agent is reported" has "$seam" "receive timer: every"
 
+# ---- 4. a pull under a fixture home reads no real register either (lessons review of #1457) ----
+# A pull reads the register too: report_other_clones_position measures every registered clone
+# against the remote, fetching in each, and report_clones_missing_commands reads each one's
+# claude-sync. Under a fixture home both are the real Mac's clones. The registered clone has no
+# .git, so a pull that reads the register says it "is not there any more", naming it.
+PREMOTE="$WORK/remote.git"; PCLONE="$WORK/pull-clone"; PHOME="$WORK/pull-home"
+git init -q --bare "$PREMOTE"
+git clone -q "$PREMOTE" "$PCLONE" 2>/dev/null
+mkdir -p "$PCLONE/payload" "$PHOME"
+printf 'x\n' > "$PCLONE/payload/marker.txt"
+git -C "$PCLONE" add payload/marker.txt
+git -C "$PCLONE" -c user.email=t@t -c user.name=t commit -q -m one
+git -C "$PCLONE" push -q origin HEAD 2>/dev/null
+git -C "$PCLONE" branch -q --set-upstream-to="origin/$(git -C "$PCLONE" symbolic-ref --short HEAD)" 2>/dev/null
+pull_as(){   # $1 = CLAUDE_HOME, any further arguments are extra environment
+  local home="$1"; shift
+  env -u SYNC_LAUNCHAGENTS -u SYNC_CLONE_REGISTRY -u SYNC_NO_GIT HOME="$FAKEHOME" CLAUDE_HOME="$home" SYNC_REPO="$PCLONE" \
+    SYNC_NO_HOOK_TESTS=1 SYNC_NO_LAUNCHCTL=1 SYNC_HOLD_FILE="$WORK/no-hold" SYNC_LOG_FILE="$WORK/sync-log" "$@" bash "$SCRIPT" pull 2>&1
+}
+pseam="$(pull_as "$PHOME" SYNC_CLONE_REGISTRY="$REGISTER")"
+check "pull, seam: SYNC_CLONE_REGISTRY names the register a fixture pull reads" has "$pseam" "the clone recorded at $REG_CLONE is not there any more"
+pfix="$(pull_as "$PHOME")"
+check "pull, fixture: no clone the real register names" lacks "$pfix" "$REG_CLONE"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

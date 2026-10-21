@@ -11177,26 +11177,32 @@ report_watcher_hold(){
 #
 # Silent when every clone has everything, because a line on every apply is the noise this exists to
 # prevent (L36). A clone it cannot read says so, which is not the same silence (L98, L11).
+# The register is read through clone_registry_to_read, as status reads it, so a pull or apply under
+# a fixture home reads no real clone (claude-config#1453).
 report_clones_missing_commands(){
-  local d
+  local d registry
+  registry="$(clone_registry_to_read)"
   command -v sc_report_missing >/dev/null 2>&1 || return 0
-  [ -f "$CLONE_REGISTRY" ] || return 0
+  [ -n "$registry" ] && [ -f "$registry" ] || return 0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     is_under_temp_dir "$d" && continue
     # The hooks as they now stand in the LIVE config, which is what will actually run, and the
     # commands measured against THIS tool, which is the one the config was built alongside.
     sc_report_missing "$CLAUDE_HOME/hooks" "${BASH_SOURCE[0]}" "$d/claude-sync" >&2
-  done < "$CLONE_REGISTRY"
+  done < "$registry"
   return 0
 }
 
+# Through clone_registry_to_read for the same reason: a fixture pull here once FETCHED in every real
+# clone the register named (claude-config#1453).
 report_other_clones_position(){
-  local up d head n line said=0 ck_refreshed ck_note
+  local up d head n line said=0 ck_refreshed ck_note registry
+  registry="$(clone_registry_to_read)"
   have_git || return 0
   up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
   [ -n "$up" ] || return 0
-  [ -f "$CLONE_REGISTRY" ] || return 0
+  [ -n "$registry" ] && [ -f "$registry" ] || return 0
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     [ "$d" = "$SYNC_REPO" ] && continue
@@ -11256,7 +11262,7 @@ report_other_clones_position(){
       other_clone_branch_notice "$d" "$br" "$head" "$n" "$up"
     fi
     said=1
-  done < "$CLONE_REGISTRY"
+  done < "$registry"
   return 0
 }
 
