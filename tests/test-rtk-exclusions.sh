@@ -33,6 +33,24 @@ lacks(){ ! grep -qF -- "$2" <<< "$1"; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/rtk-exclusions.XXXXXX")"
 trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 
+# status reads the machine as well as the fixture: the process table (suites left running, listed
+# by command line) and the scratch under the system temp directory. A fixture run must judge an
+# empty table and its own scratch, or what else is running decides the answer (claude-config#1445,
+# L463). Case 3c2 sets a table on purpose.
+export SYNC_PS_FIXTURE="$WORK/ps-none"; : > "$SYNC_PS_FIXTURE"
+export SYNC_SCRATCH_ROOT="$WORK/scratch-root"; mkdir -p "$SYNC_SCRATCH_ROOT"
+
+# Whether output says anything about the shared list, judged by what only the list's own code
+# prints: the status section's header, the list file every refusal and drift sentence names, the
+# pull's applied line, and its backup line. A bare "rtk" also matches a suite's file name in the
+# process table or another clone's hook suite record, which is the routine output of a busy Mac,
+# not a statement about the list (claude-config#1445).
+says_rtk_list(){
+  has "$1" "--- rtk's excluded commands ---" || has "$1" "rtk-exclude-commands.txt" \
+    || has "$1" "rtk config (" || has "$1" "rtk's config"
+}
+quiet_about_rtk_list(){ ! says_rtk_list "$1"; }
+
 WANT_FILE_TEXT='# Commands rtk leaves alone on every Mac (claude-config#1427).
 grep
 rg
@@ -85,7 +103,7 @@ check "fresh Mac: the pull succeeds" [ "$PULL_RC" -eq 0 ]
 check "fresh Mac: rtk's config file is created" [ -f "$C1" ]
 check "fresh Mac: it holds the list under [hooks]" grep -qxF '[hooks]' "$C1"
 check "fresh Mac: with the payload's commands" grep -qxF "$WANT_LINE" "$C1"
-check "fresh Mac: the pull says it wrote rtk's config" has "$out1" "rtk"
+check "fresh Mac: the pull says it wrote rtk's config" has "$out1" "rtk config ("
 check "fresh Mac: and names the commands" has "$out1" "grep, rg, cat"
 check "fresh Mac: no backup is made when there was no file to back up" [ ! -e "$C1.before-claude-sync" ]
 check "fresh Mac: nothing about rtk lands inside the Claude config" [ -z "$(find "$H1" -name '*rtk*' -o -name '*before-claude-sync*' | grep -v '/hooks/')" ]
@@ -125,7 +143,7 @@ grep_max_results = 200
 TOML
 cp "$C2" "$WORK/c2-original"
 status2="$(status "$H2" "$R2" "$WORK/stub2/rtk")"
-check "drift: status names rtk's excluded commands" has "$status2" "rtk"
+check "drift: status names rtk's excluded commands" has "$status2" "--- rtk's excluded commands ---"
 check "drift: status names what this Mac holds" has "$status2" "grep, tail"
 check "drift: status names what the shared list holds" has "$status2" "grep, rg, cat"
 check "drift: status names the remedy" has "$status2" "claude-sync pull"
@@ -139,7 +157,7 @@ check "existing config: every other key, comment and blank line is untouched" [ 
 check "existing config: the original is kept beside rtk's config, outside the Claude config" cmp -s "$C2.before-claude-sync" "$WORK/c2-original"
 check "existing config: the pull names the backup" has "$out2" "$C2.before-claude-sync"
 status2b="$(status "$H2" "$R2" "$WORK/stub2/rtk")"
-check "repaired: status says nothing about rtk once the lists agree" lacks "$status2b" "rtk"
+check "repaired: status says nothing about rtk once the lists agree" quiet_about_rtk_list "$status2b"
 
 # A later difference is repaired too, and the FIRST backup is never overwritten: it is the original.
 sed -i.tmp 's/^exclude_commands = .*/exclude_commands = ["head"]/' "$C2"; rm -f "$C2.tmp"
@@ -173,7 +191,21 @@ D3C="$(cfg_dir m3c)"; C3C="$D3C/config.toml"; mkdir -p "$D3C"; mkstub "$WORK/stu
 printf '[hooks]\nexclude_commands = ["tail"]\n' > "$C3C"
 pull "$H3C" "$R3C" "$WORK/stub3c/rtk"
 check "empty shared list: the installed list is emptied" grep -qxF 'exclude_commands = []' "$C3C"
-check "empty shared list: and then reads as agreeing" lacks "$(status "$H3C" "$R3C" "$WORK/stub3c/rtk")" "rtk"
+check "empty shared list: and then reads as agreeing" quiet_about_rtk_list "$(status "$H3C" "$R3C" "$WORK/stub3c/rtk")"
+
+# ---- 3c2. OTHER SECTIONS OF status MAY NAME rtk; only the list's own section is about the list. ----
+# claude-config#1445: in a full run at load 166 two "says nothing about rtk" checks failed because
+# status also lists this repo's suites left running, by command line, and a pile of them included
+# tests/test-rtk-exclusions.sh. A process table holding nine such roots (more than the eight a pile
+# starts at) is that machine, set rather than waited for.
+{
+  for p in 101 102 103 104 105 106 107 108 109; do
+    printf '%s 1 00:13 bash /x/claude-config/tests/test-rtk-exclusions.sh\n' "$p"
+  done
+} > "$WORK/ps-rtk-pile"
+pile2="$(SYNC_PS_FIXTURE="$WORK/ps-rtk-pile" CLAUDE_HOME="$H2" SYNC_REPO="$R2" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude" SYNC_NO_NOTIFY=1 SYNC_RTK_BIN="$WORK/stub2/rtk" bash "$SCRIPT" status 2>&1)"
+check "rtk suites piled up, control: status does list them by command line" has "$pile2" "tests/test-rtk-exclusions.sh"
+check "rtk suites piled up: the agreeing list is still not reported" quiet_about_rtk_list "$pile2"
 
 # ---- 3d. hooks SET AS A DOTTED KEY is not rewritten: a second definition would break rtk. ----
 H3D="$WORK/h3d"; mkdir -p "$H3D"
@@ -258,14 +290,14 @@ H8="$WORK/h8"; mkdir -p "$H8"
 C8="$(cfg_dir m8)/config.toml"; mkstub "$WORK/stub8" "$C8"
 pull "$H8" "$R8" "$WORK/stub8/rtk"; out8="$OUT"
 check "no shared list: nothing is written" [ ! -e "$C8" ]
-check "no shared list: nothing is said about rtk" lacks "$out8" "rtk"
+check "no shared list: nothing is said about rtk" quiet_about_rtk_list "$out8"
 
 # ---- 9. A FIXTURE HOME WITH NO rtk NAMED never reaches this Mac's real rtk config. ----
 # CLAUDE_HOME is not this user's ~/.claude, so the real rtk (and the real config it would report)
 # is out of bounds: the only way in is SYNC_RTK_BIN, named explicitly.
 H9="$WORK/h9"; mkdir -p "$H9"
 out9="$(CLAUDE_HOME="$H9" SYNC_REPO="$R1" SYNC_NO_GIT=1 SYNC_CLAUDE_BIN="$WORK/no-such-claude" SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1 bash "$SCRIPT" pull 2>&1)"
-check "fixture home: nothing is said about rtk" lacks "$out9" "rtk"
+check "fixture home: nothing is said about rtk" quiet_about_rtk_list "$out9"
 
 # ---- 10. verify FAILS while this Mac's list differs, naming the remedy, and passes once repaired. ----
 VB="$WORK/v-bare.git"; git init -q --bare -b main "$VB"
