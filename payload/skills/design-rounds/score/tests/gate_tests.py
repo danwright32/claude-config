@@ -333,34 +333,59 @@ routes(comments=[comment(NOT_MATCHED)])
 rc, reason, out = gate("gh api repos/acme/widgets/issues/9 -X PATCH -f title=renamed")
 check("editing a Match issue's title is not a close", not reason, out)
 
-# 5b. Closed as not planned, the design was abandoned, and that close is let through below 100%
-# (Dan, 2026-10-20, claude-config#1405). A reason this gate cannot read is a completed close.
+# 5b. Closed as not planned (Dan, 2026-10-20, claude-config#1405) or as a duplicate (Dan,
+# 2026-10-21, claude-config#1424), the design was abandoned, and that close is let through below
+# 100%. A reason this gate cannot read is a completed close.
 for cmd in ["gh issue close 9 --reason 'not planned'",
             "gh issue close 9 -r \"not planned\"",
             "gh issue close 9 --reason='not planned' --repo acme/widgets",
             "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=not_planned",
-            "gh api repos/{owner}/{repo}/issues/9 --method PATCH --field state=closed --field state_reason=not_planned"]:
+            "gh api repos/{owner}/{repo}/issues/9 --method PATCH --field state=closed --field state_reason=not_planned",
+            "gh issue close 9 --reason duplicate",
+            "gh issue close 9 -r duplicate",
+            "gh issue close 9 --reason=duplicate --repo acme/widgets",
+            "gh issue close 9 --duplicate-of 5",
+            "gh issue close 9 --duplicate-of=5",
+            "gh issue close 9 --duplicate-of https://github.com/acme/widgets/issues/5",
+            "gh issue close 9 --reason duplicate --duplicate-of 5",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=duplicate",
+            "gh api repos/{owner}/{repo}/issues/9 --method PATCH --field state=closed --field state_reason=duplicate"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r, abandoning the design, is let through below 100%%" % cmd, rc == 0 and not reason, out)
 for cmd in ["gh issue close 9 --reason completed",
             "gh issue close 9 --reason 'Not Planned'",
-            "gh issue close 9 --reason duplicate --duplicate-of 5",
-            "gh issue close 9 --duplicate-of 5",
+            # gh takes a reason in any case but closes as completed unless it is spelled exactly.
+            "gh issue close 9 --reason Duplicate",
+            "gh issue close 9 --reason DUPLICATE",
             "gh issue close 9 --reason 'not planned' --duplicate-of 5",
+            "gh issue close 9 --duplicate-of 5 --reason completed",
+            "gh issue close 9 --duplicate-of 5 --reason Duplicate",
+            "gh issue close 9 --reason duplicate --reason completed",
+            "gh issue close 9 --reason duplicate --reason 'not planned'",
+            "gh issue close 9 --duplicate-of ''",
+            "gh issue close 9 --comment duplicate",
             "gh issue close 9 --reason 'not planned' --reason completed",
             "gh issue close 9 --comment 'not planned'",
             "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=completed",
             "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=not_planned -f state_reason=completed",
             "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed",
             "gh api -X PATCH repos/acme/widgets/issues/9 --input body.json",
-            "gh api -X PATCH repos/acme/widgets/issues/9 -f state_reason=not_planned --input body.json"]:
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state_reason=not_planned --input body.json",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=Duplicate",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=duplicate -f state_reason=completed",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state=closed -f state_reason=duplicate -f state_reason=not_planned",
+            "gh api -X PATCH repos/acme/widgets/issues/9 -f state_reason=duplicate --input body.json"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r is judged as a completed close and refused below 100%%" % cmd, "below 100%" in reason, out)
 routes(comments=[comment(NOT_MATCHED)])
 rc, reason, out = gate("gh api graphql -f query='mutation { closeIssue(input: {issueId: \"I_1\", stateReason: NOT_PLANNED}) { issue { id } } }'")
 check("a GraphQL closeIssue is still refused, not planned or not: which issue it closes is not read",
+      "GraphQL" in reason, out)
+routes(comments=[comment(NOT_MATCHED)])
+rc, reason, out = gate("gh api graphql -f query='mutation { closeIssue(input: {issueId: \"I_1\", stateReason: DUPLICATE}) { issue { id } } }'")
+check("a GraphQL closeIssue as a duplicate is still refused: which issue it closes is not read",
       "GraphQL" in reason, out)
 
 # 6. The milestone.
@@ -385,15 +410,19 @@ routes(milestone={"number": 3, "title": "Docs", "description": "Quotes `%s`." % 
 rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
 check("closing a milestone that only quotes the milestone mark is let through (#1394)", not reason, out)
 # A milestone has no close reason. Its design is abandoned when its Match issue was closed as not
-# planned, and then it closes below 100% (claude-config#1405); any other state of that issue is judged.
-ABANDONED = dict(MATCH_ISSUE, state="closed", state_reason="not_planned")
-routes(comments=[comment(NOT_MATCHED)], milestone=MS, milestone_issues=[PLAIN_ISSUE, ABANDONED])
-rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
-check("closing a milestone whose Match issue was closed as not planned is let through below 100%", not reason, out)
+# planned (claude-config#1405) or as a duplicate (claude-config#1424), and then it closes below 100%;
+# any other state of that issue is judged.
+for why, abandoned in [("not planned", "not_planned"), ("a duplicate", "duplicate")]:
+    routes(comments=[comment(NOT_MATCHED)], milestone=MS,
+           milestone_issues=[PLAIN_ISSUE, dict(MATCH_ISSUE, state="closed", state_reason=abandoned)])
+    rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
+    check("closing a milestone whose Match issue was closed as %s is let through below 100%%" % why, not reason, out)
 for why, state in [("closed as completed", dict(MATCH_ISSUE, state="closed", state_reason="completed")),
                    ("closed with no reason GitHub gave", dict(MATCH_ISSUE, state="closed")),
-                   ("closed as a duplicate", dict(MATCH_ISSUE, state="closed", state_reason="duplicate")),
-                   ("open but once not planned", dict(MATCH_ISSUE, state="open", state_reason="not_planned"))]:
+                   ("closed as reopened", dict(MATCH_ISSUE, state="closed", state_reason="reopened")),
+                   ("closed as Duplicate in another case", dict(MATCH_ISSUE, state="closed", state_reason="Duplicate")),
+                   ("open but once not planned", dict(MATCH_ISSUE, state="open", state_reason="not_planned")),
+                   ("open but once a duplicate", dict(MATCH_ISSUE, state="open", state_reason="duplicate"))]:
     routes(comments=[comment(NOT_MATCHED)], milestone=MS, milestone_issues=[PLAIN_ISSUE, state])
     rc, reason, out = gate("gh api -X PATCH repos/acme/widgets/milestones/3 -f state=closed")
     check("closing a milestone whose Match issue is %s is refused below 100%%" % why, "below 100%" in reason, out)

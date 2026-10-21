@@ -581,16 +581,18 @@ words.
 
 The Match issue is the one whose body carries the mark itself, outside code; an issue quoting the
 mark in backticks or a code block to document it is not one (claude-config#1394). A design Dan
-abandons is closed as not planned, `gh issue close <n> --reason "not planned"`: the gate lets that
-through below 100%, and the milestone then closes too, since its Match issue is the record that the
-design was abandoned (claude-config#1405). That is his decision to make, never a way past a refusal.
+abandons is closed as not planned, `gh issue close <n> --reason "not planned"`, or as a duplicate,
+`gh issue close <n> --duplicate-of <m>` (or `--reason duplicate`): the gate lets either through
+below 100%, and the milestone then closes too, since its Match issue is the record that the design
+was abandoned (claude-config#1405, #1424). That is his decision to make, never a way past a refusal.
 
 A close the gate cannot see, on GitHub's website or by a closing keyword in a commit pushed straight
 to the default branch, is undone afterwards: once a day `design-score-reopen.py` finds Match issues
 and design milestones closed below 100% (no score, an unreadable one, or one for other code than the
 close was made on), comments once on the Match issue with the score it read and the way to 100%, and
 reopens them. So score and post before closing anywhere; an exception Dan approves, recorded in the
-design file and scored, reads 100% and is left closed, and so is a Match issue closed as not planned.
+design file and scored, reads 100% and is left closed, and so is a Match issue closed as not planned
+or as a duplicate.
 
 ## Common mistakes
 
