@@ -36,7 +36,9 @@ The spec, with paths resolved against the spec's own folder:
                                          width (claude-config#1393)
                 | "terminal",            for a Claude Code mod's design: each frame is the shared
                                          terminal alone, drawn as the switcher draws it, at the size
-                                         its builder gives the window (claude-config#1413)
+                                         its builder gives the window (claude-config#1413), which is
+                                         measured in Chrome and must be the frame's own "width"
+                                         (claude-config#1422; DESIGN_ROUNDS_CHROME names the Chrome)
       "builder":  "builder.js",          buildScreen(variant), as in the rounds
       "styles":   "screen.css",          optional
       "fixture":  "../fixtures/team-capacity.json",   the committed data both sides draw
@@ -60,7 +62,9 @@ The spec, with paths resolved against the spec's own folder:
 It writes NOTHING when it refuses, and refuses: a chrome that is not a captured one (no stand ins), a
 "screen" that is not one of the three kinds or the terminal, or one named beside a captured chrome, a
 builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
-no width or variant, a decision with no owner (check-decision-map.py's rule), a decision a
+no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a
+terminal frame whose window draws at a width other than the frame's own, that draws no window, or whose
+builder throws, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, an intro that is not text, a requirements list that is empty or not in the shape above (a
 number not written as text, a requirement with no sentence, two sharing a number), a decision naming a
@@ -135,9 +139,13 @@ def main(argv):
     builder = read(os.path.join(base, builder_name), "builder")
     if "buildScreen" not in builder:
         fail("the builder %s does not define buildScreen" % builder_name)
+    chrome_bin = None
     try:
         if kind in design_file.SCREEN_KINDS:
             chrome = chrome_frame.shared_screen(kind, builder, builder_name)
+            # Found now, so a machine with no Chrome is told before anything else is checked, while the
+            # windows themselves are measured last, on the page as it will be written (claude-config#1422).
+            chrome_bin = chrome_frame.find_chrome()
         else:
             # The same reader as the switcher's, so a builder calling the terminal in a design that does
             # not ask for it is refused here as it is in the rounds, never drawn as a builder that threw.
@@ -239,6 +247,18 @@ def main(argv):
     if check.returncode != 0:
         os.unlink(tmp)
         fail("the decision map does not hold:\n" + check.stdout + check.stderr)
+    # A terminal frame is scored at its declared width, and its window is drawn at the width its builder
+    # gives Terminal.screen, so each is drawn in Chrome from the page as written and the two held equal,
+    # as a captured picture's width is held to its own (claude-config#1422).
+    if chrome["kind"] == "screen":
+        try:
+            problems = chrome_frame.window_width_problems(
+                frames, chrome_frame.measure_screen_windows(page, frames, chrome_bin))
+        except chrome_frame.ChromeError as err:
+            problems = [str(err)]
+        if problems:
+            os.unlink(tmp)
+            fail("; ".join(problems))
     os.replace(tmp, out_path)
     print("SETTLED %s frames=%d decisions=%d exceptions=%d" % (out_path, len(frames), len(decisions), len(exceptions)))
     if requirements is None:
