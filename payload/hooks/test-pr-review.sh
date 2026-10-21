@@ -881,6 +881,21 @@ printf '{"session_id":"n5","cwd":"%s","hook_event_name":"UserPromptSubmit","prom
 [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement older than 14 days is swept with its review"
 [ -e "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged" ] && ok || bad "#1388 a push acknowledgement newer than 14 days is kept"
 rm -f "$AI_REVIEW_STATE_DIR/new-pr-abc.txt.push-acknowledged"
+# And what a review killed mid write leaves behind (#1430): the temporary file a review is written
+# to before its rename, and the inputs a run removes when it ends (the diff the runner reads, the
+# marks and code the left out pass builds). Each lives only while one run does, so one older than
+# 14 days is a crash's leftover; a recent one may belong to a run in flight and is kept.
+for kind in txt.tmp diff marks code; do
+  printf 'partial\n' > "$AI_REVIEW_STATE_DIR/old-pr-abc.$kind"
+  touch -t 202601010000 "$AI_REVIEW_STATE_DIR/old-pr-abc.$kind"
+  printf 'partial\n' > "$AI_REVIEW_STATE_DIR/new-pr-abc.$kind"
+done
+printf '{"session_id":"n6","cwd":"%s","hook_event_name":"UserPromptSubmit","prompt":"hi"}' "$REPO" | bash "$NUDGE" >/dev/null 2>&1
+for kind in txt.tmp diff marks code; do
+  [ ! -e "$AI_REVIEW_STATE_DIR/old-pr-abc.$kind" ] && ok || bad "#1430 a review's .$kind left behind more than 14 days ago is swept"
+  [ -e "$AI_REVIEW_STATE_DIR/new-pr-abc.$kind" ] && ok || bad "#1430 a review's .$kind newer than 14 days is kept"
+  rm -f "$AI_REVIEW_STATE_DIR/old-pr-abc.$kind" "$AI_REVIEW_STATE_DIR/new-pr-abc.$kind"
+done
 
 # ===========================================================================================
 # 7. A push to a branch with an OPEN pull request starts the review of the new head
