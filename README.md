@@ -474,7 +474,10 @@ config was verified. Clones are found two ways, both derived from what actually 
 from a list kept by hand: the launch agent plists name the script each background job runs, and
 every clone writes itself into `~/.claude-sync-clones` the first time it takes the lock. The second
 is what makes it work in both directions, since a launch agent only ever names the clone a
-background job runs from.
+background job runs from. Both belong to the Mac rather than to a config, so a run whose
+`CLAUDE_HOME` is anything other than your own `~/.claude` (every test fixture) reads neither unless
+`SYNC_LAUNCHAGENTS` or `SYNC_CLONE_REGISTRY` names one, and status then says the launch agents were
+not read rather than that none is installed (#1453).
 
 The verdict comes from the runner's exit code, never from a line of its output, and there are three
 outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it
