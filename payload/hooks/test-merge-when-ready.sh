@@ -67,8 +67,25 @@ case "$*" in
     lb="$(rd labels)"
     # cross holds true when the pull request's branch lives in a fork (claude-config#1337).
     cx="$(rd cross)"
-    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" \
-      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",isCrossRepository:$x,statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+    # fork-owner names the account a fork's branch lives under (claude-config#1458); acme otherwise.
+    fo="$(rd fork-owner)"
+    jq -nc --arg h "$(rd head)" --arg s "$state" --arg ms "$ms" --argjson r "$(rd rollup)" --argjson l "${lb:-[]}" --argjson x "${cx:-false}" --arg fo "${fo:-acme}" \
+      '{number:7,state:$s,headRefOid:$h,headRefName:"feat/x",baseRefName:"main",isCrossRepository:$x,headRepositoryOwner:{login:$fo},headRepository:{name:"widget"},statusCheckRollup:$r,mergeStateStatus:$ms,mergeable:"MERGEABLE",url:"https://github.com/acme/widget/pull/7",author:{login:"dwright-pennie"},labels:$l,body:""}'
+    ;;
+  # A fork's branch, read from the fork (claude-config#1458): fork-tip, or the head when unset.
+  "api repos/someone/widget/git/ref/heads/feat/x"*)
+    ft="$(rd fork-tip)"
+    printf '{"ref":"refs/heads/feat/x","object":{"sha":"%s","type":"commit"}}\n' "${ft:-$(rd head)}"
+    ;;
+  # Re-setting the pull request's own base to the one it has, the resync (claude-config#1458).
+  # resync-takes makes GitHub pick up the branch's tip at once, with that head's checks pending, as
+  # it did for Bidspoke #2577; without it the pull request keeps its stale head.
+  "api -X PATCH repos/acme/widget/pulls/7 "*)
+    printf '%s\n' "$(rd clock)" >> "$ST/resyncs"
+    if [ -e "$ST/resync-takes" ]; then
+      rd branch-tip > "$ST/head"; printf '%s' "$(rd rollup-after-resync)" > "$ST/rollup"
+    fi
+    printf '{"number":7,"base":{"ref":"main"}}\n'
     ;;
   # The merged pull request's branch and the pull requests stacked on it (claude-config#1337).
   # stacked holds the numbers of the open pull requests whose base is feat/x, one per line. Deleting
@@ -127,8 +144,16 @@ case "$*" in
     ;;
   "pr merge"*)
     pinned="$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')"
+    # GitHub refuses to merge a pull request whose head is not its branch's tip, whatever the pin
+    # (Bidspoke #2577, claude-config#1458).
+    bt="$(rd branch-tip)"
+    [ -n "$bt" ] && [ "$bt" != "$(rd head)" ] && { echo "GraphQL: Head branch is out of date. Review and try the merge again. (mergePullRequest)" >&2; exit 1; }
     [ "$pinned" = "$(rd head)" ] || { echo "Head branch was modified. Review and try the merge again." >&2; exit 1; }
     : > "$ST/merged"
+    # auto-delete: the repository deletes head branches itself once merged. tip-after-merge: a push
+    # lands on the branch just after the merge.
+    [ -e "$ST/auto-delete" ] && gone
+    [ -s "$ST/tip-after-merge" ] && cp "$ST/tip-after-merge" "$ST/branch-tip"
     # gh pr merge --delete-branch deletes the branch through the API as soon as the merge lands.
     case " $* " in *" --delete-branch "*|*" -d "*) gone ;; esac
     ;;
@@ -824,9 +849,10 @@ check_eq "#1337 a pull request still based on the branch after the move keeps it
 check_eq "#1337 judged by the list read again, not by the answer" "0" "$(count gh-calls 'X DELETE')"
 check "#1337 naming it" "#8" "$out"
 
-# The branch now holds commits the merge did not: never deleted.
+# The branch now holds commits the merge did not: never deleted. The push lands just after the
+# merge, since one landing before it is a head GitHub would refuse to merge (#1458, section 16).
 fresh "$OLD" 0 "$GREEN"
-printf '%s' "$NEW" > "$ST/branch-tip"
+printf '%s' "$NEW" > "$ST/tip-after-merge"
 out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a branch that moved past the merged head is left in place" "4" "$rc"
 check_eq "#1337 and not deleted" "0" "$(count gh-calls 'X DELETE')"
@@ -834,7 +860,7 @@ check "#1337 saying what it points at" "points at ${NEW:0:7}" "$out"
 
 # GitHub deleted it already (the repository deletes head branches itself): nothing left to do.
 fresh "$OLD" 0 "$GREEN"
-: > "$ST/branch-deleted"
+: > "$ST/auto-delete"
 out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a branch already gone is not an error" "0" "$rc"
 check_eq "#1337 and is not deleted again" "0" "$(count gh-calls 'X DELETE')"
@@ -843,7 +869,7 @@ check "#1337 saying so" "already deleted" "$out"
 # A 404 is also GitHub's answer for what the account cannot see, so it reads as deleted only when
 # the base branch, asked the same way, can be seen (a positive control, L248).
 fresh "$OLD" 0 "$GREEN"
-: > "$ST/branch-deleted"; : > "$ST/base-hidden"
+: > "$ST/auto-delete"; : > "$ST/base-hidden"
 out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a 404 GitHub also gives for the base is not read as deleted" "4" "$rc"
 check_not "#1337 and is not reported as deleted" "already deleted" "$out"
@@ -851,10 +877,10 @@ check "#1337 it says the branch was left in place" "branch feat/x was left in pl
 
 # A pull request from a fork: its branch is not in this repository, so nothing here deletes one.
 fresh "$OLD" 0 "$GREEN"
-printf 'true' > "$ST/cross"
+printf 'true' > "$ST/cross"; printf 'someone' > "$ST/fork-owner"
 out="$(run 7 --squash --delete-branch)"; rc=$?
 check_eq "#1337 a fork's pull request merges" "0" "$rc"
-check_eq "#1337 and no branch of this repository is read or deleted" "0 0" "$(count gh-calls 'git/ref') $(count gh-calls 'X DELETE')"
+check_eq "#1337 and no branch of this repository is read or deleted" "0 0" "$(count gh-calls 'repos/acme/widget/git/ref') $(count gh-calls 'X DELETE')"
 check "#1337 saying why" "fork" "$out"
 
 # The delete itself refused: merged, branch in place, said.
@@ -964,6 +990,127 @@ fresh "$OLD" 0 "$GREEN"
 printf '1\n' > "$ST/review-answers"
 out="$(run 7 --squash)"; rc=$?
 check_not "#1358 control: an ordinary refusal does not ask to step back" "step back" "$(grep 'Stopped:' <<<"$out")"
+
+# =================================================================================================
+# 16. GitHub's head for the pull request lags the branch's tip (claude-config#1458). On 2026-10-21
+#     Bidspoke #2577's head stayed at 30ff7b1 for over ten minutes after its branch was pushed to
+#     d854a1a (git ls-remote and the branches API both showed d854a1a), so the helper merged pinned
+#     to the old head and gh pr merge was refused twice with "Head branch is out of date". A no op
+#     re-set of the pull request's base made GitHub pick up d854a1a at once. The fake gh refuses a
+#     merge whose head is not the branch's tip the same way, and its base re-set resyncs the head
+#     only when the test says it takes.
+# =================================================================================================
+printf '%s' "$GREEN" > "$WORKDIR/green"
+# On each sleep while the pull request shows NEW, count; at the second, NEW's checks go green, so the
+# helper is seen waiting on the real head's checks before merging it.
+NEW_GOES_GREEN='if [ "$(cat "$ST/head")" = "'"$NEW"'" ]; then k=$(( $(cat "$ST/k" 2>/dev/null || echo 0) + 1 )); printf %s "$k" > "$ST/k"; [ "$k" -ge 2 ] && cp "'"$WORKDIR"'/green" "$ST/rollup"; fi'
+queue_new_goes_green(){ for _ in $(seq 1 12); do printf '%s\n' "$NEW_GOES_GREEN" >> "$ST/on-sleep"; done; }
+
+# Lagging from the first look, and the re-set of the base fixes it.
+fresh "$OLD" 0 "$GREEN"
+printf '%s' "$NEW" > "$ST/branch-tip"
+: > "$ST/resync-takes"; printf '%s' "$PENDING" > "$ST/rollup-after-resync"
+queue_new_goes_green
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a head lagging its branch is resynced and the branch's tip merged" "0" "$rc"
+check "#1458 it says GitHub still shows the old head while the branch has moved" "GitHub still shows it for #7, but branch feat/x is at ${NEW:0:7}" "$out"
+check_eq "#1458 the base is re-set once" "1" "$(count gh-calls 'X PATCH repos/acme/widget/pulls/7 ')"
+check "#1458 to the base it already has" "api -X PATCH repos/acme/widget/pulls/7 -f base=main" "$(cat "$ST/gh-calls")"
+check_eq "#1458 only after two minutes of waiting for GitHub to catch up on its own" "1000120" "$(cat "$ST/resyncs" 2>/dev/null)"
+check "#1458 and it says it did" "set again to main" "$out"
+check "#1458 then it waits on the real head's checks" "Head ${NEW:0:7}: waiting, checks still running" "$out"
+check_eq "#1458 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+check "#1458 pinned to the branch's tip" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+check_not "#1458 no gate is ever asked to merge the stale head" "--match-head-commit $OLD" "$(cat "$ST/red-gate-payloads" 2>/dev/null)"
+check_not "#1458 and no lessons review is started for it" "--sha $OLD" "$(cat "$ST/review-calls" 2>/dev/null)"
+check "#1458 the review started is the real head's" "start --dir $REPO --sha $NEW" "$(cat "$ST/review-calls" 2>/dev/null)"
+
+# GitHub catches up on its own inside the wait: no re-set at all.
+fresh "$OLD" 0 "$GREEN"
+printf '%s' "$NEW" > "$ST/branch-tip"
+printf '%s\n' "printf '%s' '$NEW' > \"\$ST/head\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a lag GitHub clears by itself ends in the merge" "0" "$rc"
+check_eq "#1458 with no re-set of the base" "0" "$(count gh-calls 'X PATCH')"
+check "#1458 of the branch's tip" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+check_eq "#1458 merged once" "1" "$(count gh-calls 'pr merge')"
+
+# The re-set does not take: it stops, bounded, saying so, and merges nothing.
+fresh "$OLD" 0 "$GREEN"
+printf '%s' "$NEW" > "$ST/branch-tip"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a resync that does not take stops it" "1" "$rc"
+check "#1458 saying GitHub still shows the old head" "Stopped: GitHub still shows head ${OLD:0:7} for #7, but branch feat/x is at ${NEW:0:7}" "$out"
+check "#1458 after the base was set again" "after its base was set again" "$out"
+check_eq "#1458 nothing is merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1458 the base was re-set once, never in a loop" "1" "$(count gh-calls 'X PATCH repos/acme/widget/pulls/7 ')"
+check_eq "#1458 and it gave up after two minutes before the re-set and two after" "240" "$(( $(cat "$ST/clock") - 1000000 ))"
+
+# The push lands while the helper waits on the old head's checks, and GitHub does not pick it up:
+# found at the merge, before any gate is asked, and the real head is waited on and merged.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "cp '$WORKDIR/green' \"\$ST/rollup\"; printf '%s' '$NEW' > \"\$ST/branch-tip\"" > "$ST/on-sleep"
+queue_new_goes_green
+: > "$ST/resync-takes"; printf '%s' "$PENDING" > "$ST/rollup-after-resync"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a lag that starts during the wait is resynced before the merge" "0" "$rc"
+check_eq "#1458 one merge" "1" "$(count gh-calls 'pr merge')"
+check "#1458 of the branch's tip" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+check_not "#1458 the gates were never asked about the stale head" "--match-head-commit $OLD" "$(cat "$ST/red-gate-payloads" 2>/dev/null)"
+check_eq "#1458 resynced once" "1" "$(count gh-calls 'X PATCH repos/acme/widget/pulls/7 ')"
+
+# Control: head and tip agree, so it behaves as before, with the tip read before the review starts
+# and again before the merge.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 control: a head that is its branch's tip merges at once" "0" "$rc"
+check_eq "#1458 control: with no re-set and no wait" "0 0" "$(count gh-calls 'X PATCH') $(count sleeps .)"
+check_not "#1458 control: and no word of a lag" "still shows" "$out"
+check_eq "#1458 control: the tip is read when the head is first seen and before the merge" "2" "$(count gh-calls 'git/ref/heads/feat/x')"
+tl="$(grep -n 'git/ref/heads/feat/x' "$ST/gh-calls" | tail -1 | cut -d: -f1)"; ml="$(line_of 'pr merge')"
+[ -n "$tl" ] && [ -n "$ml" ] && [ "$tl" -lt "$ml" ] && ok || bad "#1458 control: the tip is read before the merge (tip $tl, merge $ml)"
+check "#1458 the pull request read asks for the head's repository, for a fork's branch" "headRepositoryOwner" "$(grep -m1 'pr view' "$ST/gh-calls")"
+
+# The branch is not on GitHub while the pull request is open: no tip to confirm, so it stops.
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/branch-deleted"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 an open pull request whose branch is gone stops" "1" "$rc"
+check "#1458 saying the branch is not there" "branch feat/x of #7 is not on GitHub" "$out"
+check_eq "#1458 nothing merged, nothing re-set, no review started" "0 0 0" "$(count gh-calls 'pr merge') $(count gh-calls 'X PATCH') $(count review-calls '^start')"
+
+# A 404 GitHub also gives for the base: could not read, a different cause in its own words (L11).
+fresh "$OLD" 0 "$GREEN"
+: > "$ST/branch-deleted"; : > "$ST/base-hidden"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a branch GitHub will not show stops" "1" "$rc"
+check "#1458 saying it could not read the tip" "could not read the tip of branch feat/x" "$out"
+check_not "#1458 not claiming the branch is gone" "is not on GitHub" "$out"
+check_eq "#1458 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A tip read that fails in transit is asked again, through the injected sleep.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'read tcp: connection reset by peer' > "$ST/ref-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a tip read that fails once in transit still merges" "0" "$rc"
+check_eq "#1458 after one retry wait" "1" "$(count sleeps '^7$')"
+
+# A fork's branch is read from the fork, and a lag there is caught the same way.
+fresh "$OLD" 0 "$GREEN"
+printf 'true' > "$ST/cross"; printf 'someone' > "$ST/fork-owner"; printf '%s' "$NEW" > "$ST/fork-tip"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1458 a fork's pull request lagging its branch is not merged" "1" "$rc"
+check "#1458 its tip read from the fork" "api repos/someone/widget/git/ref/heads/feat/x" "$(cat "$ST/gh-calls")"
+check "#1458 and the stop names the fork's branch" "branch someone/widget:feat/x is at ${NEW:0:7}" "$out"
+check_eq "#1458 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The deadline still bounds a lag wait.
+fresh "$OLD" 0 "$GREEN"
+printf '%s' "$NEW" > "$ST/branch-tip"
+out="$(MWR_DEADLINE_SECONDS=60 run 7 --squash)"; rc=$?
+check_eq "#1458 a lag wait that reaches the deadline ends resumable" "3" "$rc"
+check "#1458 saying what it waited for" "Out of time" "$out"
+check_eq "#1458 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 echo
 echo "passed: $pass, failed: $fail"
