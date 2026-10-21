@@ -9981,6 +9981,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   instead of an error, so the step runs as though configured, so every secret a workflow names must
   be checked to exist, by a guard that fails the build rather than by the step that uses it.** (project-enrollment-tracker#1750, 2026-10-20)
   SHORT: A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
+- **L796. A recovery step that re-submits work into the same bounded queue it is waiting on must first ask that queue whether the work is already pending, because reading a queued item as a lost one fires a false alarm and adds a duplicate that lengthens the very delay it reported.** (project-enrollment-tracker#1825, 2026-10-21)
+  SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,
