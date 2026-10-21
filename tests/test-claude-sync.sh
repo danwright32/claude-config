@@ -15608,8 +15608,10 @@ check "#189 and comes back when the clone does" \
 
 # The default has to be per Mac and outside every clone, or the feature describes the wrong machine.
 # Read off the script rather than asserted from memory, so moving it has to move this too (L41).
+# Since #1470 the default is given to store_for_this_home, which uses it only for this user's own
+# ~/.claude, so that is the line read.
 check "#189 the register lives outside every clone by default" \
-  "grep -q 'CLONE_REGISTRY=\"\${SYNC_CLONE_REGISTRY:-\$HOME/.claude-sync-clones}\"' '$SCRIPT'"
+  "grep -q 'store_for_this_home \"\${SYNC_CLONE_REGISTRY:-}\" \"\$HOME/.claude-sync-clones\"' '$SCRIPT'"
 
 section "== one Mac's home path never travels inside a synced file (#87) =="
 # tok/detok existed, and were wired to settings.hooks.json alone. Every other payload file was
@@ -19949,8 +19951,14 @@ SUITE_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 # what it finds, so a seam left unset here means every mutating run in this suite reclaims the
 # operator's own scratch. The rule is "a default pointing at a store the machine shares", and
 # writing it as two patterns rather than one is what keeps that rule derived instead of a list.
+# And the third spelling, since #1470: a store that belongs to the Mac hands its seam and its real
+# default to store_for_this_home, which uses the default only for this user's own ~/.claude. A
+# fixture run that forgot one of those writes nothing real, but it also reads and writes nothing at
+# all where a test meant it to, so the suite still has to name each one.
 HOMESEAMS="$( { grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$HOME/' "$SCRIPT" 2>/dev/null \
                  | sed 's/^\${//; s/:-\$HOME\/$//'
+               grep -oE 'store_for_this_home "\$\{(SYNC|CLAUDE)_[A-Z_]+:-\}" "\$HOME/' "$SCRIPT" 2>/dev/null \
+                 | sed 's/^store_for_this_home "\${//; s/:-}" "\$HOME\/$//'
                grep -oE '\$\{(SYNC|CLAUDE)_[A-Z_]+:-\$\{TMPDIR' "$SCRIPT" 2>/dev/null \
                  | sed 's/^\${//; s/:-\${TMPDIR$//'; } | sort -u)"
 # The derivation has to find some, or this passes by reading nothing (L98, L1).
