@@ -147,6 +147,11 @@ grep -q 'contained: find-missing-path.*agrees' <<< "$out" \
 # fixed text and hands every `--json` field list to the REAL gh to validate, offline. An rtk gh that
 # exits 1 must now fail the run, and must be named.
 # ---------------------------------------------------------------------------
+# The probe's stub hands field lists to the REAL gh, so without one the probe is skipped and these
+# cases could only pass or fail on its absence: that is said, not judged (L411).
+if ! command -v gh >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED the passing gh probe (gh pr status): gh is not installed here, and its stub asks the real gh to validate field lists"
+else
 REFUSE="" LIE_gh=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
 [ "$rc" -eq 1 ] && check "an allowed rtk gh that fails where gh succeeds fails the run" ok \
   || check "an allowed rtk gh that fails where gh succeeds fails the run" "rc=$rc out=$out"
@@ -158,6 +163,7 @@ REFUSE="gh" LIE_gh=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
 grep -q 'contained: gh-pr-status-passes.*still needed' <<< "$out" \
   && check "with rtk gh refused, the passing gh probe still reports rtk's own lie" ok \
   || check "with rtk gh refused, the passing gh probe still reports rtk's own lie" "out=$out"
+fi
 
 # ---------------------------------------------------------------------------
 # Which tools the probe set actually reaches (claude-config#321).
