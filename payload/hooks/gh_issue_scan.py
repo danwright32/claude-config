@@ -8,8 +8,10 @@ gate needs it identically, so it lives here rather than as a second copy that
 drifts: a fix to the splitting logic must reach both gates at once.
 
 Every gate keeps its own rule and its own message. This module only answers "which
-creates are in this command, what flags do they carry, and was each one waived", and
-"which files does the command write, from text it shows" (file_writes, claude-config#1246).
+creates are in this command, what flags do they carry, and was each one waived", the same for
+the other gh commands that post a body from a file (scan_gh_in_context, claude-config#1435), and
+"which files does the command write, from text it shows, and where" (file_writes, claude-config#1246,
+file_writes_in_context, claude-config#1436).
 
 Both gates fail OPEN: anything unparseable is not ours to judge. These are
 completeness gates, not safety gates, and a false block on a command we merely
@@ -18,6 +20,7 @@ could not read would teach the override habit.
 
 import glob
 import importlib.util
+import itertools
 import os
 import re
 import shlex
@@ -28,6 +31,16 @@ import sys
 # written in front of the subcommand (`gh -R o/x issue create`, `gh issue -R o/x create`), which a
 # read of the first three words missed. Loaded by its path, beside this file, never by name.
 sys.dont_write_bytecode = True
+
+# The gh commands that post a description or a comment read from --body-file, each as (sub, act),
+# whose body file the gate reads (claude-config#1435). gh refuses a missing file itself, but posts an
+# empty one, which on an edit blanks the description already there. Left out on purpose: gh pr merge
+# (its body file is a commit message, which may be empty), gh pr review (gh refuses a blank comment
+# itself, and an approval may have none) and gh release (its notes file, which may be empty).
+CREATE = ("issue", "create")
+BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
+                      ("pr", "create"), ("pr", "edit"), ("pr", "comment")}
+
 try:
     _spec = importlib.util.spec_from_file_location(
         "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "shell-words.py"))
@@ -35,12 +48,16 @@ try:
     _spec.loader.exec_module(_sw)
     gh_command = _sw.gh_command
 except Exception:
-    # With no reader, any command naming gh, issue and create is a create, the words after create
-    # its own: the reading that sees more creates, never fewer, so a gate asks rather than misses.
+    # With no reader, any command naming gh and one of the gated pairs runs it, the words after the
+    # action its own: the reading that sees more commands, never fewer, so a gate asks rather than misses.
     def gh_command(words):
-        names = [w.split("/")[-1] for w in words]
-        if "gh" in names and "issue" in words and "create" in words:  # gh-reader: the crude reading, when there is no other
-            return ("issue", "create", [], words[words.index("create") + 1:])
+        if "gh" not in [w.split("/")[-1] for w in words]:  # gh-reader: the crude reading, when there is no other
+            return None
+        for sub in sorted({s for s, _ in BODY_FILE_COMMANDS}):
+            rest = words[words.index(sub) + 1:] if sub in words else []  # gh-reader: the crude reading, when there is no other
+            acts = [k for k, w in enumerate(rest) if (sub, w) in BODY_FILE_COMMANDS]
+            if acts:  # the first action after the subcommand, so a title holding "comment" is not one
+                return (sub, rest[acts[0]], [], rest[acts[0] + 1:])
         return None
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
@@ -183,21 +200,61 @@ def runtime_pattern(path):
     return "*".join(glob.escape(piece) for piece in path.split(RUNTIME))
 
 
+# How many directories down a value filled in as the command runs may reach (claude-config#1436): a
+# loop over `a/x b/y` fills one path segment with two. Bounded, because each level is another listing
+# and a value at the start of a path under home would otherwise walk the whole tree.
+RUNTIME_DEPTH = 3
+
+
+def runtime_patterns(path):
+    """The globs a path holding RUNTIME stands for, shallowest first: each RUNTIME as any run of
+    characters, then as runs spanning up to RUNTIME_DEPTH more directories between them all."""
+    pieces = [glob.escape(piece) for piece in path.split(RUNTIME)]
+    holes = len(pieces) - 1
+    for total in range(RUNTIME_DEPTH + 1):
+        for extra in itertools.product(range(total + 1), repeat=holes):
+            if sum(extra) == total:
+                out = pieces[0]
+                for k, piece in enumerate(pieces[1:]):
+                    out += "*" + "/*" * extra[k] + piece
+                yield out
+
+
 class Place:
     """Where a create runs: the variables the command set before it, and its working directory.
 
     vars maps a name to its value, or to None when it was set from something only running the
     command can tell (a substitution). cwd is None once a cd the gate cannot follow has run, or
     when the directory the command starts in was never given. environ is what the command starts with.
+    start is the directory the command starts in, so a reader can walk the command again from there
+    (file_writes_in_context). previous is where `cd -` goes back to and stack is pushd's, each None or
+    holding None where the command does not show it (claude-config#1436).
     """
 
-    def __init__(self, cwd, environ, variables=None):
+    def __init__(self, cwd, environ, variables=None, start=None, previous=None, stack=None):
         self.cwd = cwd
         self.environ = environ
         self.vars = dict(variables or {})
+        self.start = cwd if start is None else start
+        self.previous = previous
+        self.stack = list(stack or [])
 
     def copy(self):
-        return Place(self.cwd, self.environ, self.vars)
+        return Place(self.cwd, self.environ, self.vars, self.start, self.previous, self.stack)
+
+    def move(self, to):
+        """A cd: where it leaves the command, remembering where `cd -` goes back to."""
+        self.previous, self.cwd = self.cwd, to
+
+
+# Why a variable the command does not set is empty where it runs. The environment the hook is given is
+# the one every Bash call starts from: Claude Code's shell snapshot, sourced before each call, sets
+# PATH and no other variable (measured 2026-10-20), and a profile's exports reach Claude Code itself,
+# so the hook and the call both hold them. What neither holds is a variable a profile sets without
+# export, or one set in an earlier call, so the gate cannot learn it and refuses (claude-config#1436).
+UNSET = ("$%s is not set in this command, nor in the environment every Bash call starts from (a "
+         "variable set in an earlier Bash call, or in a shell profile without export, is gone by this "
+         "one); if it is set where the command runs, re-run with SKIP_BODY_FILE_CHECK=1")
 
 
 def _lookup(name, place):
@@ -209,8 +266,7 @@ def _lookup(name, place):
         return place.vars[name], None
     if name in place.environ:
         return place.environ[name], None
-    return None, ("$%s is not set in this command (a variable set in an earlier Bash call is gone by "
-                  "this one)" % name)
+    return None, UNSET % name
 
 
 def expand(word, place):
@@ -288,15 +344,25 @@ def _follow(place, words):
             if ASSIGNMENT.match(w):
                 _assign(place, w)
     elif name in CD_WORDS:
+        # cd - goes back to where the last cd in this command left; popd to where the last pushd did.
+        # Where the command shows neither (a first cd -, a popd with no pushd before it), cwd becomes
+        # None, so a later relative path is refused as unresolvable (claude-config#1436).
         targets = [w for w in rest if w == "-" or not w.startswith("-")]
-        if not targets:
-            place.cwd, _ = expand("~", place)
+        if name == "pushd" and (not targets or targets[0].startswith(("+", "-"))):
+            # Bare pushd swaps the top two, +N and -N rotate: none is worth following.
+            place.stack.append(place.cwd)
+            place.move(None)
+        elif name == "pushd":
+            place.stack.append(place.cwd)
+            place.move(resolve_path(targets[0], place)[0])
+        elif not targets:
+            place.move(expand("~", place)[0])
         elif targets[0] == "-":
-            place.cwd = None
+            place.move(place.previous)
         else:
-            place.cwd, _ = resolve_path(targets[0], place)
+            place.move(resolve_path(targets[0], place)[0])
     elif name == "popd":
-        place.cwd = None
+        place.move(place.stack.pop() if place.stack and not rest else None)
 
 
 def scan_creates(command):
@@ -319,13 +385,21 @@ def scan_creates(command):
 
 
 def scan_creates_in_context(command, cwd=None, environ=None):
-    """scan_creates, with the Place each create runs in as a third field (claude-config#1416).
+    """scan_creates, with the Place each create runs in as a third field (claude-config#1416)."""
+    return [(args, envs, place) for _, args, envs, place in scan_gh_in_context(command, cwd, environ, {CREATE})]
+
+
+def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE})):
+    """Every gh command of the given kinds, as (kind, args, envs, place), kind its (sub, act).
+
+    The walk scan_creates_in_context makes, for any gh command that names a body file
+    (BODY_FILE_COMMANDS, claude-config#1435), not only `gh issue create`.
 
     cwd is the directory the command starts in, None when unknown; environ the environment it starts
     with, empty when not given. Variables set by a segment of bare assignments or by export and its
     kin carry to later segments; an assignment in front of a command applies to that command only,
-    after the shell has expanded its arguments, so it does not reach them. A cd or pushd moves the
-    directory. Each lasts to the end of the subshell it was made in.
+    after the shell has expanded its arguments, so it does not reach them. A cd, pushd or popd moves
+    the directory. Each lasts to the end of the subshell it was made in.
     """
     if not command or not command.strip():
         return []
@@ -379,7 +453,7 @@ def scan_creates_in_context(command, cwd=None, environ=None):
             while j < len(tokens) and not _is_operator(tokens[j]):
                 j += 1
             found = gh_command(tokens[i:j])
-            if not found or tuple(found[:2]) != ("issue", "create"):
+            if not found or tuple(found[:2]) not in kinds:
                 _follow(place, tokens[i:j])
                 seg_env = []  # they applied to that command alone
                 i = j
@@ -389,9 +463,10 @@ def scan_creates_in_context(command, cwd=None, environ=None):
             # A command that files nothing is not a create. A live false positive on
             # 2026-07-30: `gh issue create --help` was blocked for having no category,
             # which is absurd and teaches exactly the override habit this exists to
-            # avoid. A gate that cries wolf gets ignored.
+            # avoid. A gate that cries wolf gets ignored. --web hands any of them to a
+            # browser form a person completes.
             if not any(a in NON_FILING_FLAGS for a in args):
-                creates.append((args, list(seg_env), place.copy()))
+                creates.append((tuple(found[:2]), args, list(seg_env), place.copy()))
             i = j
             at_head = True
             seg_env = []
@@ -496,6 +571,8 @@ def _stages(command):
     """Every pipeline in the command, as a list of stages, each a (words, redirects, heredocs) triple.
 
     redirects are (operator, target) pairs; heredocs the indexes of the bodies feeding that stage.
+    A subshell's opening and closing parenthesis are entries of their own, the strings "(" and ")",
+    in order among the pipelines, so a reader can tell where a cd inside one ends.
     Raises Unreadable when the command cannot be tokenized.
     """
     text, bodies = _cut_heredocs(command)
@@ -519,6 +596,7 @@ def _stages(command):
             if stages:
                 pipelines.append(stages)
             stages, stage = [], ([], [], [])
+            pipelines += [ch for ch in tok if ch in "()"]
         elif tok in ("|", "|&"):
             stages.append(stage)
             stage = ([], [], [])
@@ -574,20 +652,47 @@ def file_writes(command):
     comes from anything else (a script, a file, an expansion), which nothing here can read.
     Raises Unreadable when the command cannot be tokenized.
     """
+    return [(path, appends, shown) for path, appends, shown, _ in file_writes_in_context(command)]
+
+
+def file_writes_in_context(command, cwd=None, environ=None):
+    """file_writes, with where each write lands as a fourth field (claude-config#1436).
+
+    The landing is the absolute path the target names in the directory and with the variables the
+    command has at that write, read as scan_gh_in_context reads them, or None where the gate cannot
+    tell (a substitution, a cd it cannot follow). A file written before a later cd is the file where
+    it was written, not the one its spelling names after the cd. A cd in a pipeline of several stages
+    runs in a subshell of its own, so only a lone command's is followed.
+    """
     pipelines, bodies = _stages(command)
+    place = Place(cwd, environ if environ is not None else {})
+    subshells = []
     writes = []
     for stages in pipelines:
+        if stages == "(":
+            subshells.append(place.copy())
+            continue
+        if stages == ")":
+            place = subshells.pop() if subshells else place
+            continue
         fed = False  # the first stage reads whatever the command was started with
         for stage in stages:
             shown = _shown(stage, fed, bodies)
             name, rest = _name(stage[0])
+            targets = []
             if name == "tee":
                 appends = any(w in ("-a", "--append") for w in rest)
-                writes += [(w, appends, shown) for w in rest if not w.startswith("-")]
-            for op, target in stage[1]:
-                if ">" in op and not op.endswith("&"):
-                    writes.append((target, op.endswith(">>"), shown))
+                targets += [(w, appends) for w in rest if not w.startswith("-")]
+            targets += [(t, op.endswith(">>")) for op, t in stage[1] if ">" in op and not op.endswith("&")]
+            writes += [(t, appends, shown, resolve_path(t, place)[0]) for t, appends in targets]
             fed = shown
+        if len(stages) == 1:
+            words = stages[0][0]
+            if words and all(ASSIGNMENT.match(w) for w in words):
+                for w in words:
+                    _assign(place, w)  # assignments with no command after them last
+            else:
+                _follow(place, words)
     return writes
 
 
