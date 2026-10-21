@@ -207,6 +207,31 @@ if [ "$rtk_dest_sub" = "lint" ]; then
   esac
 fi
 
+# NEVER rewrite into a destination that REPLACES what a person reads with a summary that drops what
+# they act on (claude-config#1428).
+#
+# Measured 2026-10-20 against rtk 0.31.0 with HOME emptied, each command run plain and through rtk,
+# bytes compared. `rtk curl` (its help: "auto-JSON detection and schema output") gave back a 200
+# item array as `[{ number: int, ... }] (200)` and an issue body as `body: string[7210]`: every
+# value gone, nothing that parses, down to a 50 byte array, and HTML and text bodies cut to a
+# tenth. Since #1423 refuses a piped rtk, this is what a curl read DIRECTLY showed, and a session
+# reading it sees field names and no values.
+#
+# `rtk gh` reformats every subcommand but one. Issue and pr views drop labels, milestone,
+# assignees and reviewers (it asks gh for number,title,state,author,body,url and nothing more, and
+# the issue view came out LARGER than gh's own), issue and pr lists drop the labels column, which
+# carries the priority, and cut titles, run list drops branch and title, repo view drops the
+# README, pr diff is no longer a patch, and pr status EXITS 1 on "Unknown JSON field" where gh exits
+# 0. Each drops what a reader decides on, silently, so the whole destination is refused, writes
+# included, rather than a list of the shapes measured so far (L96).
+#
+# `rtk gh api` is the exception and keeps its rewrite: byte for byte identical, a 6MB paginated
+# array and a 4,219 character body included, and test-rtk-rewrite.sh pins those bytes through the
+# real rtk so a version that starts condensing it fails the suite. `gh ... --json` is not rewritten
+# by rtk 0.31.0 at all, and if a later one starts, it is refused here with the rest of `rtk gh`.
+if [ "$rtk_dest_sub" = "curl" ]; then return 0; fi
+if [ "$rtk_dest_sub" = "gh" ] && [ "$rtk_dest_verb" != "api" ]; then return 0; fi
+
 return 1
 }
 
