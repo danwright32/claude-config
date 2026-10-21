@@ -27,7 +27,7 @@ ADAPTER="$HERE/capture-web.mjs"
 SWIFT_HELPER="$HERE/swiftui/DesignScoreTests/DesignScoreCapture.swift"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-pass=0; fail=0; unmeasured=0
+pass=0; fail=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,30p' | sed 's/^/    /'; }
 said() { grep -q -- "$1" "$2"; }
@@ -47,8 +47,7 @@ if command -v node >/dev/null 2>&1; then
     bad "the web adapter's node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
   fi
 else
-  echo "UNMEASURED: node is not on PATH, so the web adapter's logic was not tested"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED node is not on PATH, so the web adapter's logic was not tested"
 fi
 
 # --- 2. the frames both adapters draw come from the score's own reader --------------------------------
@@ -110,8 +109,7 @@ cp "$T/design.html" "$APP/built.html"
 git -C "$APP" add built.html
 git -C "$APP" -c user.name=t -c user.email=t@t commit -q -m fixture
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Playwright package (set DESIGN_SCORE_PLAYWRIGHT), node or Chrome here, so the web adapter was not run in a real browser"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Playwright package (set DESIGN_SCORE_PLAYWRIGHT), node or Chrome here, so the web adapter was not run in a real browser"
 else
   run_web() {  # run_web <out> <extra args...>
     local out="$1"; shift
@@ -138,8 +136,7 @@ fi
 # chrome page running the same builder from the same fixture, as an app's fixture preview would, picking
 # its frame from ?frame=<id>. Scored at 100%, then with the build's heading changed (the decision fails).
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled file was not scored end to end"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled file was not scored end to end"
 else
   CH="$T/chain"
   mkdir -p "$CH"
@@ -203,8 +200,7 @@ fi
 # score file holds it, and a changed heading fails the decision. Nothing reads the missing page as a
 # stand in.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled email was not scored end to end"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled email was not scored end to end"
 else
   EM="$T/email"
   mkdir -p "$EM/app"
@@ -265,8 +261,7 @@ fi
 # decision half and a picture half said to be unmeasured: no score, which the close gate's reader holds
 # as unmeasured, never as matched.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
 else
   TM="$T/terminal"
   mkdir -p "$TM"
@@ -306,8 +301,7 @@ fi
 # must score 100%. The third must ALSO score 100%, because a real browser never draws that refused style:
 # the scoring browser keeps the page's own policy rather than switching it off, so it draws what ships.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Playwright package, node or Chrome here, so a build under a content security policy was not scored"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a build under a content security policy was not scored"
 else
   CS="$T/csp"
   mkdir -p "$CS/site/header" "$CS/site/meta" "$CS/site/strict"
@@ -367,8 +361,7 @@ fi
 
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
 if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
-  echo "UNMEASURED: no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"
 else
   PKG="$T/swift"
   mkdir -p "$PKG/Sources/DesignScore" "$PKG/Tests/DesignScoreTests"
@@ -427,6 +420,5 @@ fi
 
 echo
 echo "passed: $pass, failed: $fail"
-[ "$unmeasured" -gt 0 ] && echo "UNMEASURED-SECTIONS $unmeasured"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

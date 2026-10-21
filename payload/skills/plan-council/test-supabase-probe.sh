@@ -234,7 +234,7 @@ locked_check() { # locked_check <description> <path that should now be unreadabl
   if [ -d "$2" ]; then ls "$2" >/dev/null 2>&1 && readable=1; else cat "$2" >/dev/null 2>&1 && readable=1; fi
   if [ -n "$readable" ]; then
     unmeasured=$((unmeasured + 1))
-    echo "UNMEASURED: $1 (chmod 000 did not lock this user out of $2, so the walk could read it)"
+    echo "SUITE-PART-UNMEASURED $1 (chmod 000 did not lock this user out of $2, so the walk could read it)"
     return
   fi
   check "$1" "$([ "$RC" -eq 2 ] && grep -q 'could not tell' <<< "$OUT" && echo ok || echo "exit $RC, said: $OUT")"

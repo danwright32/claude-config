@@ -21,13 +21,13 @@ INSTALL="$HERE/install-playwright.sh"
 PIN="$HERE/shared-playwright.json"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-pass=0; fail=0; unmeasured=0
+pass=0; fail=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,30p' | sed 's/^/    /'; }
 said() { grep -q -- "$1" "$2"; }
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "UNMEASURED: node is not on PATH, so the installer (which needs node and npm) was not run"
+  echo "SUITE-PART-UNMEASURED node is not on PATH, so the installer (which needs node and npm) was not run"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 0
 fi
@@ -148,8 +148,7 @@ if [ "$rc" -eq 0 ] && [ ! -e "$H5/$REL.lock" ]; then ok; else bad "a lock left b
 
 # --- 8. no node: said by name --------------------------------------------------------------------------
 if PATH=/usr/bin:/bin command -v node >/dev/null 2>&1 || PATH=/usr/bin:/bin command -v npm >/dev/null 2>&1; then
-  echo "UNMEASURED: node or npm is in /usr/bin or /bin here, so a machine without them could not be stood in for"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED node or npm is in /usr/bin or /bin here, so a machine without them could not be stood in for"
 else
   HOME="$T/h6" PATH=/usr/bin:/bin bash "$INSTALL" < /dev/null > "$T/h6.out" 2>&1; rc=$?
   if [ "$rc" -eq 2 ] && said "node" "$T/h6.out"; then ok; else bad "with no node or npm it exits 2 naming what is missing (rc=$rc)" "$(cat "$T/h6.out")"; fi
@@ -157,6 +156,5 @@ fi
 
 echo
 echo "passed: $pass, failed: $fail"
-[ "$unmeasured" -gt 0 ] && echo "UNMEASURED-SECTIONS $unmeasured"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

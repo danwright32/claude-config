@@ -248,7 +248,7 @@ add_deadline_scanner(){   # $1 = repo  $2 = name  $3 = also print a FAIL line fi
 git ls-files '*.sh' >/dev/null
 echo "scanner $2 ran"
 [ $3 -eq 0 ] || echo "FAIL: scanner $2 found something"
-echo "UNMEASURED: test-$2.sh ran past its own wall clock of 600s and was stopped, at a load average of 30.12 on 12 cores (1 of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
+echo "STOPPED, UNMEASURED: test-$2.sh ran past its own wall clock of 600s and was stopped, at a load average of 30.12 on 12 cores (1 of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
 echo "  Run it again on its own on a quieter machine to judge it."
 echo "SUITE-DEADLINE-UNMEASURED stopped at its 600s wall clock at a load average of 30.12 on 12 cores, more than the machine has cores beyond its own share of 1"
 exit 124

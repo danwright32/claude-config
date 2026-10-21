@@ -435,7 +435,7 @@ if command -v zsh >/dev/null 2>&1; then
   has "and the note landed" "from zsh" "$(notes_of g5)"
   check_eq "a sleep-report.py in the caller's folder was never run" no "$([ -e "$WORK/sleep-report.py.ran" ] && echo yes || echo no)"
 else
-  echo "UNMEASURED: no zsh here, so sleep_note sourced from zsh is not exercised"
+  echo "SUITE-PART-UNMEASURED no zsh here, so sleep_note sourced from zsh is not exercised"
 fi
 
 # GitHub's reads together are bounded: past the bound each repo left is said as not read, never as nothing done.

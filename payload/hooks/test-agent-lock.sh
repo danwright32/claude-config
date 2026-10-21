@@ -93,7 +93,7 @@ real="$(unset AGENT_LOCK_BOOT_EPOCH; agent_lock_boot_epoch)"; rc=$?
 if [ "$rc" -eq 0 ]; then
   check_eq "the real boot time is a number in the past" yes "$([ "$real" -gt 0 ] && [ "$real" -le "$(date +%s)" ] && echo yes || echo no)"
 else
-  echo "UNMEASURED: neither sysctl kern.boottime nor /proc/stat gives a boot time here"
+  echo "SUITE-PART-UNMEASURED neither sysctl kern.boottime nor /proc/stat gives a boot time here"
 fi
 
 echo

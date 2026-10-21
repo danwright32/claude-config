@@ -330,10 +330,11 @@ TOTAL_WARN_SMALL_WINDOW=120000
 # off, a section added), because the growth of a different set says nothing about this one.
 #
 # The end point is the newest commit and the start is a commit's tree, so the reading is decided by
-# history alone and never by the clock (L713). A reading that cannot be made says UNMEASURED and why,
-# never a number (L460): no git history here and no checkout handed in, a set that took its current
-# shape fewer than GROWTH_MIN_DAYS ago, history that does not reach back, or an installed copy that
-# loads a different set from the checkout's history (a Mac with no core set loads the library).
+# history alone and never by the clock (L713). A reading that cannot be made says UNREAD and why,
+# never a number (L460), and the suite prints that as a SUITE-PART-UNMEASURED line (#1444): no git
+# history here and no checkout handed in, a set that took its current shape fewer than
+# GROWTH_MIN_DAYS ago, history that does not reach back, or an installed copy that loads a different
+# set from the checkout's history (a Mac with no core set loads the library).
 #
 # The 30 days and the 14 are CHOSEN: a re-rank moves the core at most once a month, so a window
 # shorter than a month can read a growing core as flat, and two weeks is the least history worth a
@@ -361,20 +362,20 @@ loaded_total_at() {  # $1 = repo  $2 = revision -> bytes of the set loaded at th
   done < <(LF_REPO="$1" LF_REV="$2" loaded_files)
   printf '%s' "$sum"
 }
-# One line: RATE <grown> <days> <newest date> | FLAT <days> <newest date> | UNMEASURED <why>.
+# One line: RATE <grown> <days> <newest date> | FLAT <days> <newest date> | UNREAD <why>.
 growth_reading() {  # $1 = payload directory
   local repo now_set head_set end start shape shape_at base days grown paths=() rel
   repo="$(growth_repo "$1")"
   if [ -z "$repo" ]; then
-    printf 'UNMEASURED %s has no git history and no checkout was handed in (RUN_ALL_TESTS_CHECKOUT), so how fast the set grows cannot be read' "$1"; return 0
+    printf 'UNREAD %s has no git history and no checkout was handed in (RUN_ALL_TESTS_CHECKOUT), so how fast the set grows cannot be read' "$1"; return 0
   fi
   now_set="$(PAYLOAD="$1" loaded_files | LC_ALL=C sort | tr '\n' ' ')"
   head_set="$(LF_REPO="$repo" LF_REV=HEAD loaded_files | LC_ALL=C sort | tr '\n' ' ')"
   if [ "$now_set" != "$head_set" ]; then
-    printf 'UNMEASURED this Mac loads %sand the checkout at %s loads %s, so the checkout'"'"'s history is not the history of this set' "$now_set" "$repo" "${head_set% }"; return 0
+    printf 'UNREAD this Mac loads %sand the checkout at %s loads %s, so the checkout'"'"'s history is not the history of this set' "$now_set" "$repo" "${head_set% }"; return 0
   fi
   end="$(git -C "$repo" log -1 --format=%ct HEAD 2>/dev/null)"
-  case "$end" in ''|*[!0-9]*) printf 'UNMEASURED the newest commit of %s has no readable date' "$repo"; return 0 ;; esac
+  case "$end" in ''|*[!0-9]*) printf 'UNREAD the newest commit of %s has no readable date' "$repo"; return 0 ;; esac
   while IFS= read -r rel; do paths+=("payload/$rel"); done < <(LF_REPO="$repo" LF_REV=HEAD loaded_files)
   # The newest commit that added or removed an import line in a loaded file: where this set began.
   shape="$(git -C "$repo" log -1 --format='%H %ct' -G'^@[^[:space:]]' HEAD -- "${paths[@]}" 2>/dev/null)"
@@ -387,11 +388,11 @@ growth_reading() {  # $1 = payload directory
   fi
   days=$(( (end - start) / 86400 ))
   if [ "$days" -lt "$GROWTH_MIN_DAYS" ]; then
-    printf 'UNMEASURED the files loaded now took their current shape on %s, %s days before the newest commit, under the %s days of history a rate needs' \
+    printf 'UNREAD the files loaded now took their current shape on %s, %s days before the newest commit, under the %s days of history a rate needs' \
       "$(git -C "$repo" log -1 --format=%cd --date=short "$base" 2>/dev/null)" "$days" "$GROWTH_MIN_DAYS"; return 0
   fi
   if [ -z "$base" ]; then
-    printf 'UNMEASURED the history of %s does not reach back %s days' "$repo" "$GROWTH_WINDOW_DAYS"; return 0
+    printf 'UNREAD the history of %s does not reach back %s days' "$repo" "$GROWTH_WINDOW_DAYS"; return 0
   fi
   grown=$(( $(loaded_total_at "$repo" HEAD) - $(loaded_total_at "$repo" "$base") ))
   if [ "$grown" -gt 0 ]; then
@@ -401,7 +402,7 @@ growth_reading() {  # $1 = payload directory
   fi
 }
 total_note() {  # $1 = total bytes  $2 = a growth_reading line -> the one line note
-  local t="$1" g="${2:-UNMEASURED no growth reading was taken}" grown days to room
+  local t="$1" g="${2:-UNREAD no growth reading was taken}" grown days to room
   if [ "$t" -gt "$TOTAL_WARN" ]; then
     printf 'the rule files every session loads total %s characters, %s past the %s at which Claude Code shows its size warning on a 1M window (%s on a 200k one). Nothing is dropped; each session carries the warning and the context it costs.' \
       "$t" "$(( t - TOTAL_WARN ))" "$TOTAL_WARN" "$TOTAL_WARN_SMALL_WINDOW"
@@ -424,10 +425,15 @@ total_note() {  # $1 = total bytes  $2 = a growth_reading line -> the one line n
       read -r _ days to <<< "$g"
       printf ', and they did not grow over the last %s days of their history to %s, so no date is projected.' "$days" "$to" ;;
     *)
-      printf '. How fast they grow is UNMEASURED: %s.' "${g#UNMEASURED }" ;;
+      # Why is said once, on the suite's SUITE-PART-UNMEASURED line, which the runner counts (#1444).
+      printf ', and how fast they grow could not be read here, so no date is projected.' ;;
   esac
 }
-printf 'SUITE-NOTE %s\n' "$(total_note "$total" "$(growth_reading "$PAYLOAD")")"
+growth_now="$(growth_reading "$PAYLOAD")"
+printf 'SUITE-NOTE %s\n' "$(total_note "$total" "$growth_now")"
+case "$growth_now" in
+  UNREAD\ *) printf 'SUITE-PART-UNMEASURED how fast the rule files every session loads grow: %s\n' "${growth_now#UNREAD }" ;;
+esac
 
 echo "rule file budget: no single index entry is longer than the cap"
 
@@ -531,7 +537,8 @@ fi
 case "$(total_note 140000 "RATE 2000 20 2026-01-21")" in *"10000 under the 150000"*"about 100 days"*"2000 characters over the last 20 days"*) ok ;; *) bad "the total note under the warning does not give the room left, the days, and the growth they come from: $(total_note 140000 "RATE 2000 20 2026-01-21")" ;; esac
 case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"10000 under the 150000"*"did not grow over the last 20 days"*) ok ;; *) bad "the total note for a set that is not growing does not say so: $(total_note 140000 "FLAT 20 2026-01-21")" ;; esac
 case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"days at"*|*"about "*" days"*) bad "a set that is not growing was still given a number of days: $(total_note 140000 "FLAT 20 2026-01-21")" ;; *) ok ;; esac
-case "$(total_note 140000 "UNMEASURED there is no history")" in *"10000 under the 150000"*"UNMEASURED"*"there is no history"*) ok ;; *) bad "the total note with no measured growth does not say UNMEASURED and why: $(total_note 140000 "UNMEASURED there is no history")" ;; esac
+case "$(total_note 140000 "UNREAD there is no history")" in *"10000 under the 150000"*"could not be read here, so no date is projected"*) ok ;; *) bad "the total note with no measured growth does not say it could not be read: $(total_note 140000 "UNREAD there is no history")" ;; esac
+case "$(total_note 140000 "UNREAD there is no history")" in *"days at"*|*"about "*" days"*|*"there is no history"*) bad "the total note with no measured growth gave days, or repeated the why its unmeasured line carries: $(total_note 140000 "UNREAD there is no history")" ;; *) ok ;; esac
 case "$(total_note 140000 "FLAT 20 2026-01-21")" in *"already past the 120000"*) ok ;; *) bad "a total over the 200k window's figure does not say it is past it: $(total_note 140000 "FLAT 20 2026-01-21")" ;; esac
 case "$(total_note 100000 "FLAT 20 2026-01-21")" in *"already past"*) bad "a total under the 200k window's figure is said to be past it: $(total_note 100000 "FLAT 20 2026-01-21")" ;; *"20000 under the 120000"*) ok ;; *) bad "a total under the 200k window's figure does not give the room left under it: $(total_note 100000 "FLAT 20 2026-01-21")" ;; esac
 case "$(total_note 151000 "RATE 2000 20 2026-01-21")" in *"1000 past the 150000"*"Nothing is dropped"*) ok ;; *) bad "the total note past the warning does not say how far past, or that nothing is dropped: $(total_note 151000 "RATE 2000 20 2026-01-21")" ;; esac
@@ -542,7 +549,7 @@ case "$(total_note 151000 "RATE 2000 20 2026-01-21")" in *"1000 past the 150000"
 # constant projected a deadline for a total that was not on that path (L316). Driven against fixture
 # histories with committed dates, so nothing here reads the clock.
 if ! command -v git >/dev/null 2>&1; then
-  echo "UNMEASURED: git is not installed here, so the growth readings were not checked"
+  echo "SUITE-PART-UNMEASURED git is not installed here, so the growth readings were not checked"
 else
   GH_EPOCH=1767225600   # 2026-01-01T00:00:00Z
   gh_commit(){ # gh_commit <repo> <day> <message>: commit the whole tree as of that day
@@ -563,7 +570,7 @@ else
   printf '@LESSONS-CORE-a.md\nrules\n' > "$GH/payload/CLAUDE.md"
   gh_bytes 500 > "$GH/payload/LESSONS-CORE-a.md"; gh_commit "$GH" 25 "the core is set"
   reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
-  case "$reading" in "UNMEASURED "*"2026-01-26"*) ok ;; *) bad "a core set the same day was given a growth rate from the library's history before it: $reading" ;; esac
+  case "$reading" in "UNREAD "*"2026-01-26"*) ok ;; *) bad "a core set the same day was given a growth rate from the library's history before it: $reading" ;; esac
   gh_bytes 9000 > "$GH/payload/LESSONS-INDEX-a.md"; gh_commit "$GH" 35 "library lessons the core does not load"
   printf '@LESSONS-CORE-a.md\nRULES\n' > "$GH/payload/CLAUDE.md"; gh_commit "$GH" 45 "an edit that imports nothing new"
   reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$GH/payload")"
@@ -580,14 +587,14 @@ else
   # A payload with no history of its own is read through the checkout a pull hands the runner.
   INST="$probe/installed"; mkdir -p "$INST"; cp "$GH/payload/CLAUDE.md" "$GH/payload/LESSONS-CORE-a.md" "$INST/"
   reading="$(RUN_ALL_TESTS_CHECKOUT="" growth_reading "$INST")"
-  case "$reading" in "UNMEASURED "*) ok ;; *) bad "a payload with no git history and no checkout handed in was given a rate: $reading" ;; esac
+  case "$reading" in "UNREAD "*) ok ;; *) bad "a payload with no git history and no checkout handed in was given a rate: $reading" ;; esac
   reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
   case "$reading" in "RATE 800 $GROWTH_WINDOW_DAYS "*) ok ;; *) bad "an installed copy was not measured from the checkout handed in RUN_ALL_TESTS_CHECKOUT: $reading" ;; esac
   # But only while it loads the same set as that checkout's history: a Mac with no core set loads
   # the library, and the checkout's core history says nothing about it.
   printf '@LESSONS-INDEX-a.md\nrules\n' > "$INST/CLAUDE.md"; cp "$GH/payload/LESSONS-INDEX-a.md" "$INST/"
   reading="$(RUN_ALL_TESTS_CHECKOUT="$GH" growth_reading "$INST")"
-  case "$reading" in "UNMEASURED "*"LESSONS-INDEX-a.md"*) ok ;; *) bad "an installed copy loading a different set from the checkout was given the checkout's rate: $reading" ;; esac
+  case "$reading" in "UNREAD "*"LESSONS-INDEX-a.md"*) ok ;; *) bad "an installed copy loading a different set from the checkout was given the checkout's rate: $reading" ;; esac
 fi
 if [ "$ENTRY_CAP" -lt 550 ]; then ok; else
   bad "the entry cap is at or above the longest rule sentence in the file, so it cannot shorten anything"

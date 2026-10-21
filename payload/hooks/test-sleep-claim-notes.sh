@@ -147,7 +147,7 @@ chmod 400 "$SLEEPDIR/notes/g1.jsonl"
 if [ -w "$SLEEPDIR/notes/g1.jsonl" ]; then
   # Root ignores the mode, so the case cannot be set up here: said, never read as a pass or a fail (L411).
   chmod 600 "$SLEEPDIR/notes/g1.jsonl"
-  echo "UNMEASURED: a notes file that cannot be written could not be made here (running as root?), so the lost note case was not run"
+  echo "SUITE-PART-UNMEASURED a notes file that cannot be written could not be made here (running as root?), so the lost note case was not run"
 else
   out="$(sleep_claim "$ROOT" 26 s1 2>&1)"; rc=$?
   chmod 600 "$SLEEPDIR/notes/g1.jsonl"

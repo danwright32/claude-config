@@ -442,7 +442,7 @@ if [ -n "$own_root" ] && [ -f "$own_root/payload/hooks/pr-merge-quiz.sh" ]; then
   if [ -f "$own_root/.no-pr-quiz" ]; then pass=$((pass+1)); else
     fail=$((fail+1)); echo "FAIL: claude-config does not carry .no-pr-quiz at its root"; fi
 else
-  echo "UNMEASURED: not running from the claude-config checkout, so its own opt out was not checked"
+  echo "SUITE-PART-UNMEASURED not running from the claude-config checkout, so its own opt out was not checked"
 fi
 
 forget_verdicts

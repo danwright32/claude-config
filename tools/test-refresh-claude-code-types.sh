@@ -96,7 +96,7 @@ run "$T/src3"
 lay "$T/src5" 2.1.500; printf 'export type B500 = 1\n' >> "$T/src5/claude-code-tools/index.d.ts"
 chmod 444 "$P/claude-code-tools/index.d.ts"; chmod 555 "$P/claude-code-tools"
 if [ -w "$P/claude-code-tools/index.d.ts" ]; then
-  echo "UNMEASURED: this user can write a mode 444 file, so a pin that cannot be written in place cannot be staged here"
+  echo "SUITE-PART-UNMEASURED this user can write a mode 444 file, so a pin that cannot be written in place cannot be staged here"
 else
   run "$T/src5"
   b="$(head -n 1 "$P/claude-code/index.d.ts")"; t="$(grep -c 'B500' "$P/claude-code-tools/index.d.ts")"
@@ -116,7 +116,7 @@ sums(){ cat "$P/claude-code/index.d.ts" "$P/claude-code-tools/index.d.ts" "$P/cl
 before="$(sums)"
 chmod 555 "$TS"
 if [ -w "$TS" ]; then
-  echo "UNMEASURED: this user can write a mode 555 folder, so a refresh that cannot write its new set cannot be staged here"
+  echo "SUITE-PART-UNMEASURED this user can write a mode 555 folder, so a refresh that cannot write its new set cannot be staged here"
 else
   run "$T/src6"
   stray="$(find "$TS" -maxdepth 1 -name 'claude-code-types.*' | wc -l | tr -d ' ')"

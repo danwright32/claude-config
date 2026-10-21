@@ -2824,7 +2824,7 @@ chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR"
 if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/.r1011-probe" ) 2>/dev/null; then
   rm -f "$CLAUDE_ISSUE_SPOOL_DIR/.r1011-probe"
   chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR"
-  echo "UNMEASURED: #1011 an unwritable spool cannot be made here (chmod does not restrict this user)"
+  echo "SUITE-PART-UNMEASURED #1011 an unwritable spool cannot be made here (chmod does not restrict this user)"
 else
   r1011_said="$(eval "$r1011_cmd" 2>&1)"
   r1011_rc=$?

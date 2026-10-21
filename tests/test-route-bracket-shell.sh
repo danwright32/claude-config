@@ -40,7 +40,7 @@ if command -v zsh >/dev/null 2>&1; then
   (cd "$FX" && zsh -c "printf 'zsh quoted\n' > '$PAGE'")
   [ "$(cat "$FX/$PAGE")" = "zsh quoted" ] && check "zsh, quoted" ok || check "zsh, quoted" "$(cat "$FX/$PAGE")"
 else
-  echo "UNMEASURED: zsh is not installed here, so its reading was not measured"
+  echo "SUITE-PART-UNMEASURED zsh is not installed here, so its reading was not measured"
 fi
 
 # 4. The exception, measured so it stays known: a one letter sibling holding the same file is where

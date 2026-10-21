@@ -134,7 +134,7 @@ check "the summary counts the landed against the total" "2 of 9 agent worktree(s
 if [ "$CAN_SEE_USE" -eq 1 ]; then
   check "a worktree something is running in is kept although its PR merged" "keeping agent-busy [fix/419-busy]: a running process is working in it" "$OUT"
 else
-  echo "UNMEASURED: neither lsof nor /proc here, so whether a busy worktree is seen cannot be tested"
+  echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so whether a busy worktree is seen cannot be tested"
 fi
 check_eq "the merged PRs are read once for the whole run, not once per worktree" \
   1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
@@ -243,7 +243,7 @@ if [ "$CAN_DENY" -eq 1 ]; then
   check "with the command that deletes it" "rm -rf $REPO_REAL/.claude/worktrees/agent-unwritable" "$OUT"
   check_eq "and deletes nothing itself" yes "$([ -d "$WT/agent-unwritable" ] && echo yes || echo no)"
 else
-  echo "UNMEASURED: a folder made unwritable here can still be written (running as root?), so a removal failing part way cannot be staged"
+  echo "SUITE-PART-UNMEASURED a folder made unwritable here can still be written (running as root?), so a removal failing part way cannot be staged"
 fi
 chmod -R u+w "$WT/agent-unwritable" 2>/dev/null; rm -rf "$WT/agent-unwritable"; rm -f "$MARKS/agent-unwritable"
 
@@ -473,7 +473,7 @@ if [ -n "$LIVE_START" ]; then
   check_eq "with its lock in place" "claude agent agent-lreal (pid $LIVE start $LIVE_START)" "$(lockof agent-lreal)"
   check "and the same pid in a lock from before the real boot is stale, so its worktree goes" "removed agent-lrealold [fix/609-realold]" "$OUT"
 else
-  echo "UNMEASURED: ps here gave no start time for a process this suite started, so the real lookup cannot be tested"
+  echo "SUITE-PART-UNMEASURED ps here gave no start time for a process this suite started, so the real lookup cannot be tested"
 fi
 kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
 
