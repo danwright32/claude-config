@@ -352,8 +352,12 @@ IFS=$' \t\n'
 [ "$held" -gt 0 ] && printf '%s more finished review(s) are not shown, to stay under the hook output cap; they will be shown on the next prompt.\n' "$held"
 
 # Housekeeping. Another session's record is swept by its age; this session's own never is, since it
-# was read above and is appended to below.
-find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.push-acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.prread' -o -name '*.txt.round' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+# was read above and is appended to below. The last four names are a run's own scratch (#1430): a
+# review is written to <review>.txt.tmp and renamed in the same breath, and <name>.diff, .marks and
+# .code are inputs the run removes when it ends. Nothing reads any of them by name afterwards and no
+# run lives longer than its deadline (minutes), so one older than 14 days is what a review killed
+# mid write (a crash, a power loss) left behind, never a live run's file.
+find "$AR_STATE_DIR" -maxdepth 1 \( -name '*.txt' -o -name '*.txt.delivered' -o -name '*.txt.readkey*' -o -name '*.txt.acknowledged' -o -name '*.txt.push-acknowledged' -o -name '*.txt.leftout' -o -name '*.txt.prread' -o -name '*.txt.round' -o -name '*.txt.tmp' -o -name '*.diff' -o -name '*.marks' -o -name '*.code' \) -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
 sweep_session_records
 
 # Last, so a run killed at any point before it has recorded nothing (see the header): what was
