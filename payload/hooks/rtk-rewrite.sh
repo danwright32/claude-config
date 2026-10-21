@@ -207,6 +207,26 @@ if [ "$rtk_dest_sub" = "lint" ]; then
   esac
 fi
 
+# NEVER rewrite into a destination that REPLACES what a person reads with a summary that drops what
+# they act on (claude-config#1428).
+#
+# Measured 2026-10-20 against rtk 0.31.0 with HOME emptied, each command run plain and through rtk,
+# bytes compared. `rtk curl` (its help: "auto-JSON detection and schema output") gave back a 200
+# item array as `[{ number: int, ... }] (200)` and an issue body as `body: string[7210]`: every
+# value gone, nothing that parses, down to a 50 byte array, and HTML and text bodies cut to a
+# tenth. Since #1423 refuses a piped rtk, this is what a curl read DIRECTLY showed, and a session
+# reading it sees field names and no values.
+#
+# `rtk gh` reformats every subcommand but one. Issue and pr views drop labels, milestone,
+# assignees and reviewers (it asks gh for number,title,state,author,body,url and nothing more, and
+# the issue view came out LARGER than gh's own), issue and pr lists drop the labels column, which
+# carries the priority, and cut titles, run list drops branch and title, repo view drops the
+# README, pr diff is no longer a patch, and pr status EXITS 1 on "Unknown JSON field" where gh exits
+# 0. Each drops what a reader decides on, silently, so the whole destination is refused, writes
+# included, rather than a list of the shapes measured so far (L96). That refusal is the one below
+# this function, because which gh subcommand runs is read by the shared reader, not by word position.
+if [ "$rtk_dest_sub" = "curl" ]; then return 0; fi
+
 return 1
 }
 
@@ -219,6 +239,38 @@ while read -r rtk_dest_sub rtk_dest_verb; do
   [ -n "$rtk_dest_sub" ] || continue
   if rtk_refused_destination "$rtk_dest_sub" "$rtk_dest_verb"; then exit 0; fi
 done <<< "$rtk_invocations"
+
+# NEVER rewrite into `rtk gh` other than `rtk gh api` (claude-config#1428, measured above with the
+# curl refusal).
+#
+# `rtk gh api` keeps its rewrite: byte for byte identical, a 6MB paginated array and a 4,219
+# character body included, and test-rtk-rewrite.sh pins those bytes through the real rtk so a
+# version that starts condensing it fails the suite. `gh ... --json` is not rewritten by rtk 0.31.0
+# at all, and if a later one starts, it is refused here with the rest of `rtk gh`.
+#
+# Which gh subcommand a command runs is read in ONE place, lib/push-scope.sh over
+# lib/shell-words.py, as gh itself reads it (claude-config#1188): gh takes flags in front of its
+# subcommand, so `rtk gh -R o/x api ...` is gh api and the third word is not. Only the commands rtk
+# runs are judged, so a gh that rtk left as written costs the rest of the rewrite nothing. With no
+# reader to ask (no python3, no lib), nothing can tell gh api from the rest and the rewrite is
+# refused: that costs a token saving and cannot cost a field (L42). The substring test only spares
+# commands that cannot run gh at all the cost of starting the reader.
+case "$REWRITTEN" in
+  *gh*)
+    rtk_hook_dir="${BASH_SOURCE[0]%/*}"; [ "$rtk_hook_dir" != "${BASH_SOURCE[0]}" ] || rtk_hook_dir=.
+    # shellcheck source=lib/push-scope.sh
+    . "$rtk_hook_dir/lib/push-scope.sh" 2>/dev/null || exit 0
+    ps__read "$REWRITTEN"; [ "$?" -ne 1 ] || exit 0
+    rtk_rec="${PS__M_FIRST[$PS__HIT]}"; rtk_rec_end=$((rtk_rec + PS__M_COUNT[PS__HIT]))
+    while [ "$rtk_rec" -lt "$rtk_rec_end" ]; do
+      case $'\x1f'"${PS__R_WORDS[$rtk_rec]}"$'\x1f' in
+        *$'\x1f'rtk$'\x1f'*)
+          if ! ps_runs_at gh "$rtk_rec" api && [ -n "$PS_RUN_SUB" ]; then exit 0; fi ;;
+      esac
+      rtk_rec=$((rtk_rec + 1))
+    done
+    ;;
+esac
 
 # NEVER rewrite a command so that a package RUNNER it named disappears (claude-config#1408).
 #

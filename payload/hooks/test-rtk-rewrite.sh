@@ -506,6 +506,60 @@ check "#1419 a here document body is not scanned as commands" \
   "$(kept_as "$(printf '%s\n' "rtk git commit -F - <<'EOF'" "it's a | b > c" "EOF")")"
 
 # ---------------------------------------------------------------------------
+# Output a person reads DIRECTLY is never swapped for a summary that drops what they act on
+# (claude-config#1428).
+#
+# Measured 2026-10-20 against rtk 0.31.0 with HOME emptied, each command run plain and through rtk
+# and the bytes compared. `rtk curl` replaces a JSON body with its SHAPE: a 200 item array came back
+# as `[{ number: int, ... }] (200)` and an issue body as `body: string[7210]`, every value gone and
+# nothing left that parses, down to a 50 byte array; HTML and text bodies were cut to a tenth. rtk's
+# own help calls it "auto-JSON detection and schema output". `rtk gh` outside `api` reformats: issue
+# and pr views drop labels, milestone, assignees and reviewers (it asks gh for
+# number,title,state,author,body,url and nothing else), the lists drop the labels column, priority
+# included, and cut titles, run list drops branch and title, repo view drops the README, pr diff is
+# no longer a patch, and pr status EXITS 1 on "Unknown JSON field" where gh exits 0. `rtk gh api`
+# was byte for byte identical, a 6MB paginated array and a 4,219 character body included, and
+# `gh ... --json` is not rewritten by rtk at all.
+# ---------------------------------------------------------------------------
+check "#1428 a curl is not replaced by rtk's JSON schema" "$(refused_to_rewrite 'rtk curl -s https://api.example.com/x.json')"
+check "#1428 nor a curl after cd &&" "$(refused_to_rewrite 'cd /repo && rtk curl -s http://127.0.0.1:8000/a.json')"
+check "#1428 an issue view is not reformatted without its labels and milestone" "$(refused_to_rewrite 'rtk gh issue view 1428')"
+check "#1428 nor a pr view" "$(refused_to_rewrite 'rtk gh pr view 1432')"
+check "#1428 nor an issue list, which drops the labels column" "$(refused_to_rewrite 'rtk gh issue list')"
+check "#1428 nor a pr list" "$(refused_to_rewrite 'rtk gh pr list --state merged')"
+check "#1428 nor a run list, which drops branch and title" "$(refused_to_rewrite 'rtk gh run list --limit 10')"
+check "#1428 nor pr status, which exits 1 under rtk where gh exits 0" "$(refused_to_rewrite 'rtk gh pr status')"
+check "#1428 nor a pr diff, which is no longer a patch" "$(refused_to_rewrite 'rtk gh pr diff 1432')"
+check "#1428 nor repo view, which drops the README" "$(refused_to_rewrite 'rtk gh repo view o/r')"
+check "#1428 nor an rtk gh shape nobody measured" "$(refused_to_rewrite 'rtk gh issue create --title t --body b')"
+check "#1428 nor after cd &&" "$(refused_to_rewrite 'cd /repo && rtk gh issue list')"
+# The controls: gh api was measured identical, so it keeps its rewrite and its place in the hook
+# (L159). Its bytes are pinned against the real rtk in the end to end check below.
+check "#1428 gh api keeps its rewrite" "$(kept_as 'rtk gh api repos/o/r/issues/1369')"
+check "#1428 and with --paginate and --jq" "$(kept_as "rtk gh api --paginate repos/o/r/issues --jq '.[].title'")"
+# Which gh subcommand runs is read by the one reading every gate shares (lib/push-scope.sh,
+# claude-config#1188), never by word position: gh takes flags in front of its subcommand, so the
+# third word is not always the subcommand. Each direction is held (L497).
+check "#1428 gh api with a flag in front of it is still gh api and keeps its rewrite" "$(kept_as 'rtk gh -R o/x api repos/o/x')"
+check "#1428 and an issue list with a flag in front of it is still refused" "$(refused_to_rewrite 'rtk gh --repo o/x issue list')"
+check "#1428 and so is one with rtk's own flag in front of gh" "$(refused_to_rewrite 'rtk -v gh issue list')"
+# Only what rtk runs is judged: a gh it left as written beside another rewrite costs that one nothing.
+check "#1428 a plain gh beside an rtk rewrite keeps that rewrite" "$(kept_as 'gh pr list --json number && rtk git status')"
+# Fail closed: with the shared reader gone, nothing can tell gh api from the rest, so an rtk gh is
+# not rewritten at all, while a rewrite with no gh in it still is (L42).
+NOLIB="$TMPROOT/nolib"; mkdir -p "$NOLIB"; cp "$H" "$NOLIB/rtk-rewrite.sh"
+printf 'rtk gh api repos/o/r\n' > "$TMPROOT/rewrite"; payload 'gh api repos/o/r'
+out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null)"
+[ -z "$out1428nl" ] \
+  && check "#1428 with no shared reader to ask, an rtk gh is not rewritten" ok \
+  || check "#1428 with no shared reader to ask, an rtk gh is not rewritten" "it rewrote to: $(printf '%s' "$out1428nl" | rewritten_to)"
+printf 'rtk git status\n' > "$TMPROOT/rewrite"; payload 'git status'
+out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
+[ "$out1428nl" = 'rtk git status' ] \
+  && check "#1428 and a rewrite with no gh in it still goes through" ok \
+  || check "#1428 and a rewrite with no gh in it still goes through" "got [$out1428nl]"
+
+# ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
 # the hook's logic and nothing about what actually runs. So this drives the exact shape that fooled
 # a session through the real hook and the real rtk, RUNS whatever the hook lets through, and asserts
@@ -644,6 +698,88 @@ else
   [ "$sub1408b" = 'rtk prisma migrate status' ] \
     && check "#1408 and prisma with no runner is still rewritten by the real rtk" ok \
     || check "#1408 and prisma with no runner is still rewritten by the real rtk" "got [$sub1408b]"
+fi
+
+# ---------------------------------------------------------------------------
+# End to end against the REAL rtk for #1428: JSON and issue fields read directly, through the real
+# hook, RUN, with the bytes that reach the reader compared against the source.
+#
+# Offline by construction. curl reads a file:// URL, which rtk 0.31.0 rewrites and condenses exactly
+# as it does an http one (measured), and gh is a stub first on PATH that prints a fixed response,
+# so `rtk gh` runs its real filter over known bytes and nothing reaches GitHub. The array holds 200
+# items and its first carries a body over 2,000 characters, the two sizes the issue asked about.
+# Same empty HOME as #1419, so no rtk config.toml can exclude curl or gh and leave this measuring
+# nothing.
+# ---------------------------------------------------------------------------
+if ! command -v rtk >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+  echo "note: rtk or curl is not installed on this Mac, so the #1428 end to end check did not run."
+else
+  FX1428="$TMPROOT/fx1428"; mkdir -p "$FX1428/home" "$FX1428/bin"
+  python3 - "$FX1428" <<'PY'
+import json, sys
+w = sys.argv[1]
+body = "".join("line %d of a long issue body, with `code` | pipes and \"quotes\"\n" % i for i in range(60))
+json.dump([{"number": i, "title": "item %d" % i, "body": body if i == 0 else "b"} for i in range(200)],
+          open(w + "/arr.json", "w"))
+json.dump({"number": 1, "title": "T", "body": body, "state": "OPEN", "author": {"login": "a"},
+           "labels": [{"name": "priority-p1"}], "milestone": {"title": "Fixture milestone 1428"},
+           "url": "https://example.invalid/1"}, open(w + "/issue.json", "w"))
+PY
+  printf '#!/bin/sh\ncase "$1" in api) cat "%s/arr.json" ;; issue) cat "%s/issue.json" ;; *) exit 1 ;; esac\n' \
+    "$FX1428" "$FX1428" > "$FX1428/bin/gh"
+  chmod +x "$FX1428/bin/gh"
+  run1428() { # run1428 <command>  -> runs it in the fixture with the stub gh first and HOME emptied
+    ( cd "$FX1428" && HOME="$FX1428/home" PATH="$FX1428/bin:$PATH" bash -c "$1" ) 2>/dev/null
+  }
+  hook1428() { # hook1428 <command>  -> what the real hook rewrote it to, empty when it passed through
+    payload "$1"
+    HOME="$FX1428/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to
+  }
+
+  # curl. The control: under this HOME rtk really does rewrite it and really does lose the JSON, so
+  # a green means the hook stopped it (L159).
+  cmd1428c="curl -s file://$FX1428/arr.json"
+  ctl1428c="$(HOME="$FX1428/home" rtk rewrite "$cmd1428c" 2>/dev/null)"
+  run1428 "$ctl1428c" > "$FX1428/ctl-curl.out"
+  if [ -z "$ctl1428c" ] || cmp -s "$FX1428/ctl-curl.out" "$FX1428/arr.json"; then
+    echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer condenses the #1428 curl (rewrite was [$ctl1428c]), so the end to end check below proves less than it did."
+  fi
+  sub1428c="$(hook1428 "$cmd1428c")"
+  run1428 "${sub1428c:-$cmd1428c}" > "$FX1428/curl.out"
+  cmp -s "$FX1428/curl.out" "$FX1428/arr.json" \
+    && check "#1428 a curl that actually runs hands the reader the JSON byte for byte" ok \
+    || check "#1428 a curl that actually runs hands the reader the JSON byte for byte" \
+         "ran [${sub1428c:-$cmd1428c}]: $(head -c 200 "$FX1428/curl.out")"
+
+  # gh api is KEPT, so this is the pin: the real rtk's filter, run over 200 items and a long body,
+  # must give back exactly the bytes gh printed. A future rtk that starts condensing gh api fails
+  # here rather than in a session that acts on the fields it dropped.
+  sub1428a="$(hook1428 'gh api repos/o/r/issues')"
+  [ "$sub1428a" = 'rtk gh api repos/o/r/issues' ] \
+    && check "#1428 gh api is still rewritten by the real rtk" ok \
+    || check "#1428 gh api is still rewritten by the real rtk" "got [$sub1428a]"
+  run1428 "${sub1428a:-gh api repos/o/r/issues}" > "$FX1428/api.out"
+  cmp -s "$FX1428/api.out" "$FX1428/arr.json" \
+    && check "#1428 and the real rtk gh api hands back gh's JSON byte for byte" ok \
+    || check "#1428 and the real rtk gh api hands back gh's JSON byte for byte" \
+         "ran [$sub1428a]: $(head -c 200 "$FX1428/api.out")"
+
+  # gh with --json is not rewritten by rtk at all today, and would be refused if it ever were.
+  sub1428j="$(hook1428 'gh issue view 1 --json title,body,labels,milestone')"
+  [ -z "$sub1428j" ] \
+    && check "#1428 gh issue view --json runs as gh itself" ok \
+    || check "#1428 gh issue view --json runs as gh itself" "got [$sub1428j]"
+
+  # The human issue view. The control: rtk rewrites it and the milestone does not survive, because
+  # rtk never asks gh for it. Through the hook the reader gets gh's own output, milestone included.
+  ctl1428v="$(HOME="$FX1428/home" rtk rewrite 'gh issue view 1' 2>/dev/null)"
+  if [ -z "$ctl1428v" ] || grep -q 'Fixture milestone 1428' <<< "$(run1428 "$ctl1428v")"; then
+    echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer drops the #1428 milestone (rewrite was [$ctl1428v]), so the check below proves less than it did."
+  fi
+  sub1428v="$(hook1428 'gh issue view 1')"
+  [ -z "$sub1428v" ] \
+    && check "#1428 a human gh issue view is not rewritten by the real rtk through the hook" ok \
+    || check "#1428 a human gh issue view is not rewritten by the real rtk through the hook" "got [$sub1428v]"
 fi
 
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
