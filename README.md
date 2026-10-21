@@ -935,7 +935,13 @@ would refuse. The changelog record gate is also asked at the first look, before 
 review, because nothing those do can add a missing label. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
-to the hooks block but not to the helper fails it. It accepts only the merge
+to the hooks block but not to the helper fails it. The head it merges is its branch's tip: GitHub's
+head for a pull request can lag a push (Bidspoke #2577 showed the old commit for over ten minutes on
+2026-10-21, and GitHub refused the merge with "Head branch is out of date"), so it reads the
+branch's tip when it first sees a head and again before the gates, waits two minutes for GitHub to
+catch up, then sets the pull request's base again to the one it has, which makes GitHub read the
+branch, waits two more for the real head, and stops in its own words if that has not taken
+(claude-config#1458). It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
