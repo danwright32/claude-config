@@ -176,22 +176,38 @@ CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
 # fixture (L261): rtk's config, the launch agents, and the register of clones.
 claude_home_is_users_own(){ [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; }
 
-# What status READS about the machine's jobs and clones (claude-config#1453): the seam when one is
+# Where this run reads AND writes the machine's jobs, clones and shell rc: the seam when one is
 # named, otherwise the real location only for this user's own config, and nothing at all for a
-# fixture home. Left at the real default, a suite running status against its own throwaway home
-# reported the scheduled clone's stale failure record, or a suite that record named, as if it were
-# the fixture's (L2, L463). An empty answer is said as NOT READ by the callers that report on it,
-# never as none installed (L11).
-launchagents_to_read(){
+# fixture home. Reads came first (claude-config#1453): left at the real default, a suite running
+# status against its own throwaway home reported the scheduled clone's stale failure record as if it
+# were the fixture's (L2, L463). Writes followed (claude-config#1470): install-schedule,
+# install-autosync, the restart after a pull and both writers of the register defaulted to the real
+# files whatever CLAUDE_HOME was, so a suite that forgot a seam rewrote, retired or appended to this
+# Mac's own. One answer for both, so a run can never write somewhere it would not read (L83).
+# An empty answer is said by every caller: as NOT READ by the readers, never as none installed (L11),
+# and as NOT WRITTEN by the writers, never as done.
+launchagents_for_this_home(){
   if [ -n "${SYNC_LAUNCHAGENTS:-}" ]; then printf '%s' "$SYNC_LAUNCHAGENTS"; return 0; fi
   claude_home_is_users_own || return 0
   printf '%s' "$HOME/Library/LaunchAgents"
 }
-clone_registry_to_read(){
+clone_registry_for_this_home(){
   if [ -n "${SYNC_CLONE_REGISTRY:-}" ]; then printf '%s' "$SYNC_CLONE_REGISTRY"; return 0; fi
   claude_home_is_users_own || return 0
   printf '%s' "$CLONE_REGISTRY"
 }
+zshrc_for_this_home(){
+  if [ -n "${SYNC_ZSHRC:-}" ]; then printf '%s' "$SYNC_ZSHRC"; return 0; fi
+  claude_home_is_users_own || return 0
+  printf '%s' "$HOME/.zshrc"
+}
+# launchctl has no seam to point it elsewhere: whatever plist it is handed, it loads into, unloads
+# from or restarts THIS Mac's launchd, under the real agents' labels. So it runs only for this
+# user's own config, and a fixture that names SYNC_LAUNCHAGENTS gets its plists written there and
+# never loaded. SYNC_NO_LAUNCHCTL=1 still turns it off for the user's own config too.
+launchctl_may_run(){ [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && claude_home_is_users_own; }
+# The one sentence every write that was refused or not loaded gives as its reason.
+not_users_own_home(){ printf "this run's config (%s) is not this user's own ~/.claude" "$CLAUDE_HOME"; }
 # A session about to commit deliberately can hold the WATCHER off (#262). Outside every clone, for
 # the same reason as the registry above: the watcher runs from a different clone than the one a
 # session works in, so a marker inside either of them reaches only itself.
@@ -1039,8 +1055,14 @@ TEMP_ROOTS
 #
 # Silent on every failure. This is a convenience for a later status, and a run that pulled config
 # must not fail because a note about itself could not be written.
+#
+# Silent under a fixture home with no SYNC_CLONE_REGISTRY too (claude-config#1470), deliberately:
+# this runs on every locked command, and a line on each of them in every suite would be noise read
+# past. The register belongs to the Mac, so a fixture's clone has no place in the real one, where
+# every later status and pull would go on reporting it.
 register_this_clone(){
-  local me
+  local me reg
+  reg="$(clone_registry_for_this_home)"; [ -n "$reg" ] || return 0
   me="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || return 0
   [ -n "$me" ] || return 0
   # A directory holding no claude-sync is not a clone of this tool, whatever else it is.
@@ -1048,8 +1070,8 @@ register_this_clone(){
   # Nor is a disposable one (claude-config#295): recording it is permanent and what it says stops
   # being true the moment the OS clears the directory.
   is_under_temp_dir "$me" && return 0
-  if [ -f "$CLONE_REGISTRY" ] && grep -qxF "$me" "$CLONE_REGISTRY" 2>/dev/null; then return 0; fi
-  printf '%s\n' "$me" >> "$CLONE_REGISTRY" 2>/dev/null || true
+  if [ -f "$reg" ] && grep -qxF "$me" "$reg" 2>/dev/null; then return 0; fi
+  printf '%s\n' "$me" >> "$reg" 2>/dev/null || true
   return 0
 }
 
@@ -1069,24 +1091,29 @@ register_this_clone(){
 # register_this_clone appends from inside with_lock, so holding it is what stops an append landing
 # between the read and the rename and being lost (L5). Written to a temp file and renamed, never
 # edited in place.
+#
+# Refused under a fixture home with no SYNC_CLONE_REGISTRY (claude-config#1470): the register is the
+# Mac's, and a fixture removing a line from it would stop a real clone being reported for ever.
 do_forget_clone(){   # $1 = the directory to forget
-  local want="${1:-}" tmp n
-  [ -n "$want" ] || die "forget-clone needs the directory to forget, exactly as it appears in $CLONE_REGISTRY. Run 'claude-sync pull' to see the ones being reported."
-  if [ ! -f "$CLONE_REGISTRY" ]; then
-    echo "There is no clone register at $CLONE_REGISTRY, so there was no entry for $want to remove."
+  local want="${1:-}" tmp n reg
+  reg="$(clone_registry_for_this_home)"
+  [ -n "$reg" ] || die "nothing was removed from any clone register: $(not_users_own_home), so the register of clones on this Mac is not its to change. Name the register to remove ${want:-an entry} from in SYNC_CLONE_REGISTRY."
+  [ -n "$want" ] || die "forget-clone needs the directory to forget, exactly as it appears in $reg. Run 'claude-sync pull' to see the ones being reported."
+  if [ ! -f "$reg" ]; then
+    echo "There is no clone register at $reg, so there was no entry for $want to remove."
     return 0
   fi
-  n="$(grep -cxF -- "$want" "$CLONE_REGISTRY" 2>/dev/null || true)"
+  n="$(grep -cxF -- "$want" "$reg" 2>/dev/null || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   if [ "$n" -eq 0 ]; then
     # A DIFFERENT answer from having removed something, or a mistyped path reads as a successful
     # removal and the notice it was meant to settle comes straight back (L98, L11).
-    echo "No entry for $want was in the clone register, so nothing was removed. The paths it holds are listed in $CLONE_REGISTRY."
+    echo "No entry for $want was in the clone register, so nothing was removed. The paths it holds are listed in $reg."
     return 0
   fi
   tmp="$(scratch_file)" || die "no scratch file could be made, so the clone register was left exactly as it is."
-  grep -vxF -- "$want" "$CLONE_REGISTRY" > "$tmp" 2>/dev/null || true
-  mv "$tmp" "$CLONE_REGISTRY" 2>/dev/null || { rm -f "$tmp"; die "the clone register at $CLONE_REGISTRY could not be rewritten, so it was left exactly as it is."; }
+  grep -vxF -- "$want" "$reg" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$reg" 2>/dev/null || { rm -f "$tmp"; die "the clone register at $reg could not be rewritten, so it was left exactly as it is."; }
   echo "Removed $want from the clone register; it will not be reported again."
   return 0
 }
@@ -8170,11 +8197,23 @@ pulled_script_ok(){
   notify "pulled claude-sync does not parse; kept the older copy"
   return 1
 }
+# Under a fixture home it restarts nothing (claude-config#1470): the daemon launchctl would restart
+# is this Mac's own, running this user's own config, whichever launch agents a fixture names. Said
+# either way, so a received script change is never silent about the daemon still running the old one.
 restart_watch_daemon_if_installed(){
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local agentdir
+  agentdir="$(launchagents_for_this_home)"
+  if [ -z "$agentdir" ]; then
+    echo "claude-sync script changed: left the watch daemon alone, because $(not_users_own_home), which is the config this Mac's daemon runs."
+    return 0
+  fi
   [ -f "$agentdir/com.claudesync.watch.plist" ] || return 0
   if [ "${SYNC_NO_LAUNCHCTL:-0}" = "1" ]; then
     echo "claude-sync script changed: would restart the watch daemon (SYNC_NO_LAUNCHCTL=1, skipped)."
+    return 0
+  fi
+  if ! launchctl_may_run; then
+    echo "claude-sync script changed: would restart the watch daemon, and did not, because $(not_users_own_home), and launchctl would restart this Mac's own."
     return 0
   fi
   if launchctl kickstart -k "gui/$(id -u)/com.claudesync.watch" 2>/dev/null; then
@@ -10856,8 +10895,8 @@ report_sync_times(){
 # and a textual comparison would report a clone as a stranger to itself.
 other_sync_clones(){   # prints one absolute directory per line, this clone excluded
   local agentdir plist path dir mine _reg_d registry
-  agentdir="$(launchagents_to_read)"
-  registry="$(clone_registry_to_read)"
+  agentdir="$(launchagents_for_this_home)"
+  registry="$(clone_registry_for_this_home)"
   mine="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || mine=""
   {
     if [ -n "$agentdir" ] && [ -d "$agentdir" ]; then
@@ -11216,11 +11255,11 @@ report_watcher_hold(){
 #
 # Silent when every clone has everything, because a line on every apply is the noise this exists to
 # prevent (L36). A clone it cannot read says so, which is not the same silence (L98, L11).
-# The register is read through clone_registry_to_read, as status reads it, so a pull or apply under
+# The register is read through clone_registry_for_this_home, as status reads it, so a pull or apply under
 # a fixture home reads no real clone (claude-config#1453).
 report_clones_missing_commands(){
   local d registry
-  registry="$(clone_registry_to_read)"
+  registry="$(clone_registry_for_this_home)"
   command -v sc_report_missing >/dev/null 2>&1 || return 0
   [ -n "$registry" ] && [ -f "$registry" ] || return 0
   while IFS= read -r d; do
@@ -11233,11 +11272,11 @@ report_clones_missing_commands(){
   return 0
 }
 
-# Through clone_registry_to_read for the same reason: a fixture pull here once FETCHED in every real
+# Through clone_registry_for_this_home for the same reason: a fixture pull here once FETCHED in every real
 # clone the register named (claude-config#1453).
 report_other_clones_position(){
   local up d head n line said=0 ck_refreshed ck_note registry
-  registry="$(clone_registry_to_read)"
+  registry="$(clone_registry_for_this_home)"
   have_git || return 0
   up="$(git -C "$SYNC_REPO" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
   [ -n "$up" ] || return 0
@@ -11379,9 +11418,9 @@ plist_interval(){  # $1 = plist -> StartInterval in seconds, or nothing
 # remedies and only one of them is a fault worth acting on (L11).
 report_automatic_jobs(){
   local agentdir
-  agentdir="$(launchagents_to_read)"
+  agentdir="$(launchagents_for_this_home)"
   if [ -z "$agentdir" ]; then
-    echo "automatic sync: not read, because this run's config ($CLAUDE_HOME) is not this user's own ~/.claude, so this Mac's launch agents say nothing about it. Name a directory of launch agents to read in SYNC_LAUNCHAGENTS."
+    echo "automatic sync: not read, because $(not_users_own_home), so this Mac's launch agents say nothing about it. Name a directory of launch agents to read in SYNC_LAUNCHAGENTS."
     return 0
   fi
   local tp="$agentdir/com.claudesync.timer.plist" wp="$agentdir/com.claudesync.watch.plist"
@@ -12355,7 +12394,8 @@ do_recheck(){
 
 # ---------- install-schedule ----------
 do_install_schedule(){
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local agentdir; agentdir="$(launchagents_for_this_home)"
+  [ -n "$agentdir" ] || die "nothing was installed: $(not_users_own_home), so this Mac's launch agents are not its to change. Name a directory to write the agent into in SYNC_LAUNCHAGENTS."
   local plist="$agentdir/com.claudesync.pull.plist"
   local self; self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/claude-sync"
   # launchd jobs get a minimal PATH that excludes Homebrew, so jq/gh/rsync the
@@ -12375,10 +12415,11 @@ do_install_schedule(){
   <key>StandardErrorPath</key><string>$HOME/.claude-sync.log</string>
 </dict></plist>
 PL
-  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ]; then
+  if launchctl_may_run; then
     launchctl unload "$plist" 2>/dev/null || true
     launchctl load "$plist"
   fi
+  say_not_loaded
   echo "Installed monthly auto-pull (1st of each month, 9:00am). Log: $HOME/.claude-sync.log"
   echo "To change cadence, edit StartCalendarInterval in: $plist"
 }
@@ -12690,12 +12731,23 @@ $3
 PL
 }
 
+# Said once by an installer that wrote agents launchctl may not load, so a plist written into a
+# fixture's SYNC_LAUNCHAGENTS is never read as running. Silent for SYNC_NO_LAUNCHCTL=1, which is set
+# on purpose by whoever runs it and has always been silent.
+say_not_loaded(){
+  [ "${SYNC_NO_LAUNCHCTL:-0}" = "1" ] && return 0
+  launchctl_may_run && return 0
+  echo "Not loaded with launchctl: $(not_users_own_home), and launchctl would load it into this Mac's own launchd. Written to $(launchagents_for_this_home) only."
+}
+# The installers write only where launchagents_for_this_home says, and refuse before calling this
+# when it says nowhere, so the directory is asked for again rather than defaulted (claude-config#1470).
 writeplist(){ # label  arg  extra-keys-xml
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local agentdir; agentdir="$(launchagents_for_this_home)"
+  [ -n "$agentdir" ] || die "$1 was not written: $(not_users_own_home). Name a directory to write it into in SYNC_LAUNCHAGENTS."
   local plist="$agentdir/$1.plist"
   mkdir -p "$agentdir"
   plist_text "$1" "$2" "$3" > "$plist"
-  if [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ]; then
+  if launchctl_may_run; then
     launchctl unload "$plist" 2>/dev/null || true
     launchctl load "$plist"
   fi
@@ -12706,7 +12758,7 @@ writeplist(){ # label  arg  extra-keys-xml
 # and reporting it here as well would say one thing twice in different words (L118).
 agents_out_of_date(){   # prints the labels that differ, one per line
   local agentdir label plist want have
-  agentdir="$(launchagents_to_read)"; [ -n "$agentdir" ] || return 0
+  agentdir="$(launchagents_for_this_home)"; [ -n "$agentdir" ] || return 0
   while IFS= read -r label; do
     [ -n "$label" ] || continue
     plist="$agentdir/$label.plist"
@@ -12727,7 +12779,7 @@ AGENT_LABELS
 # (L255), and the only place a fixture's marker can land is a throwaway.
 agents_state(){
   local agentdir stale any=0 label
-  agentdir="$(launchagents_to_read)"
+  agentdir="$(launchagents_for_this_home)"
   [ -n "$agentdir" ] || { printf 'none'; return 0; }
   while IFS= read -r label; do
     [ -n "$label" ] || continue
@@ -12748,7 +12800,12 @@ AGENT_LABELS
 # itself. Installing it alongside the launch agents makes the whole setup travel
 # together. SYNC_ZSHRC redirects the target so the tests can never touch a real one.
 ensure_zsh_alias(){
-  local rc="${SYNC_ZSHRC:-$HOME/.zshrc}"
+  local rc; rc="$(zshrc_for_this_home)"
+  # A fixture home with no SYNC_ZSHRC writes no shell rc (claude-config#1470): ~/.zshrc is the Mac's.
+  if [ -z "$rc" ]; then
+    echo "Shell alias not installed: $(not_users_own_home), so this Mac's ~/.zshrc is not its to change. Name a file to write it into in SYNC_ZSHRC."
+    return 0
+  fi
   # SYNC_SELF_DIR lets a test pin the repo location without moving the script.
   local selfdir="${SYNC_SELF_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
   local self="$selfdir/claude-sync"
@@ -12792,7 +12849,10 @@ ensure_zsh_alias(){
 }
 
 do_install_autosync(){
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local agentdir; agentdir="$(launchagents_for_this_home)"
+  # Refused whole under a fixture home with no SYNC_LAUNCHAGENTS (claude-config#1470), before any
+  # agent is retired or written: half an install into the real folder is worse than none.
+  [ -n "$agentdir" ] || die "nothing was installed: $(not_users_own_home), so this Mac's launch agents and shell rc are not its to change. Name where to write them in SYNC_LAUNCHAGENTS and SYNC_ZSHRC."
   # DAILY, not weekly (claude-config#323). This timer is the backstop for a Mac whose watcher is
   # not sending: since #323 a send that finds itself behind reconciles on the spot, so the timer no
   # longer has to be the only way out, but it is still the only thing that runs when the watcher is
@@ -12805,7 +12865,7 @@ do_install_autosync(){
   for legacy in com.claudesync.pull com.claudesync.auto; do
     lp="$agentdir/$legacy.plist"
     [ -f "$lp" ] || continue
-    [ "${SYNC_NO_LAUNCHCTL:-0}" != "1" ] && { launchctl unload "$lp" 2>/dev/null || true; }
+    if launchctl_may_run; then launchctl unload "$lp" 2>/dev/null || true; fi
     rm -f "$lp"
   done
   # receive-timer: two-way sync on a schedule (catches the other Mac's changes when idle).
@@ -12821,6 +12881,7 @@ do_install_autosync(){
     rm -f "$agentdir/com.claudesync.watch.plist"
     echo "fswatch not found — instant push disabled. For instant sync: brew install fswatch, then re-run: claude-sync install-autosync"
   fi
+  say_not_loaded
   ensure_zsh_alias
   echo "Log: $HOME/.claude-sync.log   (change interval: SYNC_INTERVAL=<seconds> claude-sync install-autosync)"
 }
