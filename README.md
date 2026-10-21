@@ -2053,7 +2053,11 @@ app's UI test target: after `capture-web.mjs --design-only` draws the design's s
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
 `test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
 Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
-purpose; elsewhere those two say UNMEASURED. It also runs the whole
+purpose; elsewhere those two say UNMEASURED, and a `SUITE-NOTE` names every part left unmeasured
+under the suite's line in the runner's report. The SwiftUI one also says UNMEASURED, not FAIL, on a Mac
+whose toolchain is the command line tools alone, which have no XCTest: `score/swift-xctest.sh` reads
+that from the `swift test` attempt itself and still fails on any other compile error
+(claude-config#1400, tested by `test-swift-xctest.sh`). It also runs the whole
 chain: a settled file `make-settled.py` wrote, against an app drawing the same fixture in the same
 chrome, at 100%, and failing the decision when the app's heading changes. All of it took 27 seconds
 on this Mac on 2026-10-20.
