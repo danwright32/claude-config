@@ -2066,9 +2066,9 @@ fixture route (the page with `?frame=<id>`) at the
 frame's width in one Chrome, runs `<design>.checks.js` on both, and scores. `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (SwiftUI) is copied into an
 app's UI test target: after `capture-web.mjs --design-only` draws the design's side, a snapshot test
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
-`test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
-Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
-purpose; elsewhere each part left unmeasured is said on a `SUITE-PART-UNMEASURED` line, which the
+`test-score-adapters.sh` runs the web and terminal adapters' logic against a stand in browser
+everywhere, and on a Mac with Playwright, Chrome and Swift it runs all three for real on fixtures, at
+100% and then changed on purpose; elsewhere each part left unmeasured is said on a `SUITE-PART-UNMEASURED` line, which the
 runner counts and prints under the suite's line in its report (#1444). The SwiftUI one also says UNMEASURED, not FAIL, on a Mac
 whose toolchain is the command line tools alone, which have no XCTest: `score/swift-xctest.sh` reads
 that from the `swift test` attempt itself and still fails on any other compile error
