@@ -248,6 +248,12 @@ case " aws wget prisma " in
   *" $rtk_dest_sub "*) return 0 ;;
 esac
 
+# NEVER rewrite into `rtk init` (claude-config#1468). Measured in claude-config#1446: `rtk init -g`
+# deletes this hook and its hash baseline, installs rtk's own hook with none of the refusals in this
+# file, and adds @RTK.md to CLAUDE.md. check-rtk-init.sh refuses a command that runs it as written;
+# this holds that no rewrite rule rtk adds can produce one.
+if [ "$rtk_dest_sub" = "init" ]; then return 0; fi
+
 return 1
 }
 

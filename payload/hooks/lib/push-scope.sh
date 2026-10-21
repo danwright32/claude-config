@@ -209,7 +209,8 @@ ps__crude_cut() {   # $1 = command
 # PS__R_GITDIR, the directory its `git -C` options name; PS__R_CMD, the command from its own name on,
 # past leading reserved words (then, do, {, !, time) and assignments, as written; PS__R_ASSIGNS, those
 # assignments, one per line, outer quotes removed; PS__R_TOOL, the gh or git subcommand it runs as gh
-# and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git). A command that read on its own is exactly
+# and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git), or else
+# the subcommand of rtk's own it runs, `rtk init` (rtk_field, read by ps_runs_at rtk, claude-config#1468). A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
 # Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
@@ -406,11 +407,11 @@ ps__runs_tool() {   # $1 = one command, $2 = gh | git, $3 = the subcommand, $4 =
 # ps_runs_gh and ps_runs_git for the command at record $2 of a reading this shell holds (ps__read,
 # PS__M_FIRST), for a caller walking the records itself: no lookup of the record by its text, and no
 # start. Fails, with PS_RUN_SUB still naming what it does run, when it runs something else.
-ps_runs_at() {   # $1 = gh | git, $2 = record index, $3 = subcommand, $4 = gh's action, or empty for any
+ps_runs_at() {   # $1 = gh | git | rtk, $2 = record index, $3 = subcommand, $4 = gh's action, or empty for any
   ps__tool_field "${PS__R_TOOL[$2]}" "$1" "$3" "${4:-}"
 }
 
-ps__tool_field() {   # $1 = a tool_field, $2 = gh | git, $3 = subcommand, $4 = action or empty
+ps__tool_field() {   # $1 = a tool_field, $2 = gh | git | rtk, $3 = subcommand, $4 = action or empty
   local field="$1" tool
   PS_RUN_SUB=""; PS_RUN_ACT=""; PS_RUN_ARGS=()
   [ -n "$field" ] || return 1

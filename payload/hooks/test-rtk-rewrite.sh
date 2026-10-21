@@ -607,6 +607,16 @@ check "#1443 and rtk prettier is still rewritten" "$(kept_as 'rtk prettier --che
 check "#1443 and rtk git status is still rewritten" "$(kept_as 'cd /repo && rtk git status')"
 
 # ---------------------------------------------------------------------------
+# Never a rewrite INTO `rtk init` (claude-config#1468). It deletes this hook and its hash baseline,
+# installs rtk's own hook with none of the refusals above, and adds @RTK.md to CLAUDE.md (measured
+# in claude-config#1446). check-rtk-init.sh refuses a command that runs it as written; this holds
+# that no rewrite can produce one, whatever rtk's rewrite rules say tomorrow.
+# ---------------------------------------------------------------------------
+check "#1468 a rewrite into rtk init is refused" "$(refused_to_rewrite 'rtk init -g --auto-patch')"
+check "#1468 nor one after cd &&" "$(refused_to_rewrite 'cd /repo && rtk init')"
+check "#1468 the control: rtk git init, git's own init, keeps its rewrite" "$(kept_as 'rtk git init')"
+
+# ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
 # the hook's logic and nothing about what actually runs. So this drives the exact shape that fooled
 # a session through the real hook and the real rtk, RUNS whatever the hook lets through, and asserts
