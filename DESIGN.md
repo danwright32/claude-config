@@ -1070,6 +1070,45 @@ model becomes the default, its entry has to be added here, or it runs at its own
 Both are written in one pass, decided on the value rather than the bytes, because `settings.json` is
 a WatchPath and a rewrite for formatting alone would trigger the next sync.
 
+## rtk's excluded commands are written into rtk's own config (#1427)
+
+rtk reads `[hooks] exclude_commands` from its own config, outside `~/.claude`, which the sync never
+carried. On 2026-10-20 the personal MacBook listed grep, rg, egrep, fgrep, cat, head and tail there
+and the work MacBook evidently none, so the two rewrote different commands and nothing recorded or
+checked it. `payload/rtk-exclude-commands.txt` is now the list's one home (L83), edited in the repo
+and never staged back from a Mac, like the shared settings.
+
+Only that key travels. The rest of rtk's config (tracking, display, filters, limits, telemetry) is
+this Mac's own, and carrying the whole file would overwrite it on the other Mac, so every apply
+replaces the one `exclude_commands` entry under `[hooks]` (adding the key, or the table, when it is
+missing) and prints every other line exactly as it was. rtk offers no command that sets a key
+(`rtk config` only shows the file or creates the default), so the merge is a small TOML reader in
+`claude-sync` that knows tables, multi line arrays, strings and comments; a file setting hooks some
+other way (a dotted key, an inline table, twice) is refused by name rather than given a second
+definition. Where the file is is asked of rtk itself, from the `Config:` line `rtk config` prints,
+so the sync writes the file rtk actually reads (L620). Only the real install reaches it: an apply
+into any other `CLAUDE_HOME`, which is every test fixture, touches rtk only through an rtk named in
+`SYNC_RTK_BIN`.
+
+The write is judged by rtk reading it back, not by the write returning: rtk must still parse the file
+and the list it holds must be the payload's, or the original is put back and the pull says so (L3,
+L5). A file rtk cannot parse, or cannot read, is refused before anything is written, with rtk's own
+error. The first write keeps the file as it was beside it, as `config.toml.before-claude-sync`, and
+never overwrites that copy, because every later copy would be one of ours; it sits outside
+`~/.claude` on purpose, since a backup there is mirrored into the public repo. With rtk not
+installed the pull says so and changes nothing, and verify does not count it as a difference,
+because nothing on that Mac is rewritten at all.
+
+The lists are compared as sets, since rtk asks only whether a command is listed. `claude-sync status`
+names a Mac whose list differs with both lists and `claude-sync pull` as the remedy, and `verify`
+fails on it with the same sentence. That check is this Mac's only: the other Mac's rtk config is not
+in the repo, so its own status and verify are where its difference shows. `payload_path_applied`
+judges the file applied when this Mac's list matches, and treats a state no pull can change (no rtk,
+a file rtk cannot parse) as applied, so it never holds the path unapplied for ever. rtk reads its
+config on every rewrite, so a running session uses the new list at once and the pull asks for no new
+session; the write is not counted as config received, because a Mac whose own list drifted receives
+nothing by having it put back.
+
 ## An absence is a deletion only where something was there before (#627, #781)
 
 The mirror cannot tell "this Mac deleted it" from "this Mac never had it" by looking at the folder,

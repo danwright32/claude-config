@@ -5476,6 +5476,257 @@ ensure_rtk_baseline(){
   return 0
 }
 
+# ---------- rtk's excluded commands, the same on every Mac (claude-config#1427) ----------
+# rtk reads `[hooks] exclude_commands` from its OWN config, outside ~/.claude
+# (~/Library/Application Support/rtk/config.toml on a Mac), which the sync never carried. On
+# 2026-10-20 the personal MacBook listed grep, rg, egrep, fgrep, cat, head and tail there and the work
+# MacBook evidently none, so the two rewrote different commands and nothing recorded or checked it.
+#
+# The list's one home is payload/rtk-exclude-commands.txt (L83), edited in the repo and never staged
+# back from a Mac. Every apply writes it into rtk's config here, replacing that one key and nothing
+# else, because the rest of rtk's config (tracking, display, limits) is this Mac's own. Where rtk
+# keeps its config is asked of rtk itself (`rtk config` prints it), never assumed (L620). A file rtk
+# cannot parse, or that cannot be read, is refused and named, never overwritten (L5). The first write
+# keeps the file as it was beside it, OUTSIDE ~/.claude, because a backup inside ~/.claude is
+# mirrored into the public repo. status and verify say when this Mac's list differs.
+RTK_EXCLUDES_FILE="rtk-exclude-commands.txt"
+RTK_BACKUP_SUFFIX=".before-claude-sync"
+
+# The rtk this sync may act through: SYNC_RTK_BIN when named, otherwise only when installing into
+# this user's own ~/.claude. rtk's config belongs to the home rtk runs in, and an install into any
+# other CLAUDE_HOME (every test fixture) must never reach the real one, so there it prints nothing.
+rtk_sync_bin(){
+  if [ -n "${SYNC_RTK_BIN:-}" ]; then printf '%s' "$SYNC_RTK_BIN"; return 0; fi
+  [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ] || return 0
+  local bin; bin="$(command -v rtk 2>/dev/null || true)"
+  # The scheduled job runs with launchd's short PATH, where rtk is usually not on it.
+  [ -n "$bin" ] || bin="$HOME/.local/bin/rtk"
+  printf '%s' "$bin"
+}
+
+# One pass over a TOML file that knows tables, multi line arrays and strings, which is all the
+# merge needs (claude-config#1427). $1 = file  $2 = read | replace | insert | append  $3 = the new
+# `exclude_commands = [...]` line, for the writing modes.
+#   read: prints the [hooks] exclude_commands values, one per line, and exits 0 when the key is
+#         there, 3 when [hooks] is there without it, 5 when there is no [hooks] table at all, and 4
+#         when hooks is set some way this does not rewrite (a dotted key, an inline table, the key
+#         twice), so the caller refuses rather than writing a second definition beside it.
+#   replace / insert / append: prints the file with the key replaced, added under [hooks], or a
+#         [hooks] table added at the end. Every other line is printed exactly as it was.
+rtk_toml_hooks_list(){
+  awk -v mode="$2" -v newline="${3:-}" '
+    function bare_of(s,   b) {
+      b = s
+      gsub(/"([^"\\]|\\.)*"/, "", b); gsub(/\047[^\047]*\047/, "", b); sub(/#.*/, "", b)
+      return b
+    }
+    function values_of(s,   t) {
+      while (match(s, /"[^"]*"|\047[^\047]*\047|#/)) {
+        t = substr(s, RSTART, RLENGTH)
+        if (t == "#") return
+        print substr(t, 2, length(t) - 2)
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }
+    BEGIN { sec = ""; depth = 0; grab = 0; found = 0; bad = 0; hooks_seen = 0; lastblank = 1; any = 0 }
+    {
+      line = $0; b = bare_of(line); any = 1
+      if (depth == 0 && !grab) {
+        if (b ~ /^[ \t]*\[\[/) { sec = "[[]]"; if (mode != "read") print line; lastblank = 0; next }
+        if (b ~ /^[ \t]*\[/) {
+          h = b; sub(/^[ \t]*\[[ \t]*/, "", h); sub(/[ \t]*\][ \t]*$/, "", h); sec = h
+          if (sec == "hooks") hooks_seen++
+          if (mode != "read") print line
+          if (sec == "hooks" && mode == "insert" && hooks_seen == 1) print newline
+          lastblank = 0
+          next
+        }
+        if (sec == "" && b ~ /^[ \t]*"?hooks"?[ \t]*(\.|=)/) bad = 1
+        if (sec == "hooks" && b ~ /^[ \t]*exclude_commands[ \t]*=/) {
+          found++; grab = 1
+          if (mode == "replace") print newline
+        }
+      }
+      if (grab && mode == "read") values_of(line)
+      if (!grab && mode != "read") print line
+      o = gsub(/\[/, "[", b); c = gsub(/\]/, "]", b); depth += o - c
+      if (depth <= 0) { depth = 0; grab = 0 }
+      lastblank = (line ~ /^[ \t]*$/)
+    }
+    END {
+      if (mode == "append") { if (any && !lastblank) print ""; print "[hooks]"; print newline }
+      if (bad || found > 1 || hooks_seen > 1) exit 4
+      if (found) exit 0
+      if (hooks_seen) exit 3
+      exit 5
+    }' "$1"
+}
+
+# Reads the whole state once, into RTKX_* globals, so the apply, status, verify and the applied check
+# all judge by the same reading (L70). RTKX_STATE is one of:
+#   off        the payload carries no list, so there is nothing to do or say
+#   fixture    CLAUDE_HOME is not this user's ~/.claude and no rtk was named: never touched
+#   refused    the payload's list is not a list of command names (RTKX_WHY says which line)
+#   absent     rtk is not installed (RTKX_BIN is what was looked for)
+#   nopath     rtk did not say where its config is (RTKX_WHY is what it printed)
+#   unreadable rtk's config exists and cannot be read
+#   malformed  rtk itself cannot parse its config (RTKX_WHY is rtk's own error)
+#   unmergeable hooks is set in a form this does not rewrite
+#   same       the installed list is the payload's
+#   differs    it is not (RTKX_HAVE and RTKX_WANT are each a comma list, RTKX_MODE how to write it)
+rtk_exclusions_state(){
+  RTKX_STATE=""; RTKX_BIN=""; RTKX_CFG=""; RTKX_HAVE=""; RTKX_WANT=""; RTKX_WHY=""; RTKX_MODE=""
+  local f="$PAYLOAD/$RTK_EXCLUDES_FILE" want="" n=0 raw name out rc errf have rrc
+  [ -f "$f" ] || { RTKX_STATE=off; return 0; }
+  RTKX_BIN="$(rtk_sync_bin)"
+  [ -n "$RTKX_BIN" ] || { RTKX_STATE=fixture; return 0; }
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    n=$((n + 1))
+    name="${raw#"${raw%%[![:space:]]*}"}"; name="${name%"${name##*[![:space:]]}"}"
+    case "$name" in ''|'#'*) continue ;; esac
+    # A command name and nothing else: it is written into rtk's config between double quotes, so
+    # anything that could close the string or mean something to rtk is refused, whole file and by line.
+    # A case pattern, not a pipe into grep -q, which can report a failure that never happened under
+    # pipefail (L183).
+    case "$name" in
+      *[!A-Za-z0-9._+-]*) RTKX_STATE=refused; RTKX_WHY="line $n, \"$name\", is not a command name"; return 0 ;;
+    esac
+    case "
+$want
+" in *"
+$name
+"*) continue ;; esac
+    want="${want:+$want
+}$name"
+  done < "$f"
+  RTKX_WANT="$(printf '%s' "$want" | paste -sd ',' - | sed 's/,/, /g')"
+  [ -x "$RTKX_BIN" ] || { RTKX_STATE=absent; return 0; }
+  errf="$(scratch_file)"
+  # Captured with || so set -e does not end the run on the very failure being read (rtk exits 1 on a
+  # file it cannot parse, which is what this asks).
+  rc=0; out="$("$RTKX_BIN" config 2>"$errf")" || rc=$?
+  RTKX_CFG="$(printf '%s\n' "$out" | sed -n '1s/^Config: //p')"
+  if [ -z "$RTKX_CFG" ]; then
+    RTKX_STATE=nopath; RTKX_WHY="$(printf '%s\n%s\n' "$out" "$(cat "$errf" 2>/dev/null)" | awk 'NF && !n++')"; [ -n "$RTKX_WHY" ] || RTKX_WHY=nothing
+    rm -f "$errf"; return 0
+  fi
+  # Readability first: rtk fails on an unreadable file too, and its parse error would name the
+  # wrong cause (L11).
+  if [ -e "$RTKX_CFG" ] && [ ! -r "$RTKX_CFG" ]; then RTKX_STATE=unreadable; rm -f "$errf"; return 0; fi
+  if [ "$rc" -ne 0 ]; then
+    RTKX_STATE=malformed; RTKX_WHY="$(awk 'NF && !n++' "$errf" 2>/dev/null || true)"; [ -n "$RTKX_WHY" ] || RTKX_WHY="rtk config exited $rc"
+    rm -f "$errf"; return 0
+  fi
+  rm -f "$errf"
+  if [ ! -e "$RTKX_CFG" ]; then
+    have=""; RTKX_MODE=create
+  else
+    rrc=0; have="$(rtk_toml_hooks_list "$RTKX_CFG" read)" || rrc=$?
+    case "$rrc" in
+      0) RTKX_MODE=replace ;;
+      3) RTKX_MODE=insert ;;
+      5) RTKX_MODE=append ;;
+      *) RTKX_STATE=unmergeable; return 0 ;;
+    esac
+  fi
+  RTKX_HAVE="$(printf '%s' "$have" | awk 'NF && !seen[$0]++' | paste -sd ',' - | sed 's/,/, /g')"
+  # Judged as SETS: rtk asks only whether a command is listed, so order and repeats change nothing.
+  if [ "$(printf '%s\n' "$have" | awk 'NF' | sort -u)" = "$(printf '%s\n' "$want" | awk 'NF' | sort -u)" ]; then
+    RTKX_STATE=same
+  else
+    RTKX_STATE=differs
+  fi
+  return 0
+}
+
+# The one sentence for each state that needs saying, shared by the apply, status and verify so the
+# three cannot describe one state three ways (L11). Prints nothing for off, fixture and same.
+rtk_exclusions_sentence(){
+  local list="payload/$RTK_EXCLUDES_FILE"
+  case "$RTKX_STATE" in
+    differs)
+      printf "rtk on this Mac leaves alone %s (in %s), but the shared list in %s is %s, so this Mac rewrites different commands from the other. Run 'claude-sync pull', which writes the shared list there." \
+        "${RTKX_HAVE:-no commands}" "$RTKX_CFG" "$list" "${RTKX_WANT:-no commands}" ;;
+    absent)
+      printf "rtk is not installed on this Mac (looked for %s), so the shared list of commands rtk leaves alone (%s) was not written anywhere. Nothing else is affected, and the first pull after rtk is installed writes it." \
+        "$RTKX_BIN" "$list" ;;
+    nopath)
+      printf "rtk (%s) did not say where its config is ('rtk config' printed: %s), so the shared list in %s was not written and cannot be checked. Nothing was changed." \
+        "$RTKX_BIN" "$RTKX_WHY" "$list" ;;
+    unreadable)
+      printf "rtk's config at %s could not be read, so the shared list in %s was not written there and cannot be checked. Nothing was changed: make the file readable, then pull again." \
+        "$RTKX_CFG" "$list" ;;
+    malformed)
+      printf "rtk cannot read its own config at %s (%s), so the shared list in %s was not written there and cannot be checked. Nothing was changed: fix the file ('rtk config' shows the error), then pull again." \
+        "$RTKX_CFG" "$RTKX_WHY" "$list" ;;
+    unmergeable)
+      printf "rtk's config at %s sets hooks as a dotted key, an inline table, or more than once, which claude-sync does not rewrite, so the shared list in %s was not written there. Nothing was changed: write it as a plain [hooks] table holding one exclude_commands line, then pull again." \
+        "$RTKX_CFG" "$list" ;;
+    refused)
+      printf "refused %s because %s, so no list was written into rtk's config on this Mac. Fix the file in the repo: one command name per line." \
+        "$list" "$RTKX_WHY" ;;
+  esac
+}
+
+# The apply's half: write the payload's list into rtk's config when it differs. Never fails the
+# apply: every refusal is said and the rest of the config still lands.
+write_rtk_exclusions(){
+  rtk_exclusions_state
+  case "$RTKX_STATE" in
+    off|fixture|same) return 0 ;;
+    differs) ;;
+    *) echo "claude-sync: $(rtk_exclusions_sentence)" >&2; return 0 ;;
+  esac
+  local cfg="$RTKX_CFG" dir bak tmp orig="" names line wrote_bak=""
+  dir="$(dirname "$cfg")"; bak="$cfg$RTK_BACKUP_SUFFIX"
+  # An empty list is a real one (rtk then leaves nothing alone), and grep finding no line is not a fault.
+  names="$(grep -vE '^[[:space:]]*(#|$)' "$PAYLOAD/$RTK_EXCLUDES_FILE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk '!seen[$0]++' || true)"
+  line="exclude_commands = [$(printf '%s\n' "$names" | awk 'NF { printf "%s\"%s\"", (n++ ? ", " : ""), $0 }')]"
+  mkdir -p "$dir" 2>/dev/null || { echo "claude-sync: could not create $dir, so the shared list in payload/$RTK_EXCLUDES_FILE was not written into rtk's config. Nothing was changed." >&2; return 0; }
+  # The file as it was before claude-sync FIRST changed it, kept once and never overwritten: it is
+  # the original a person may want back, and every later copy would be one of ours (L5, L7).
+  if [ -f "$cfg" ] && [ ! -e "$bak" ]; then
+    cp -p "$cfg" "$bak" 2>/dev/null || { echo "claude-sync: could not keep a copy of rtk's config at $bak before changing it, so it was left exactly as it was and the shared list in payload/$RTK_EXCLUDES_FILE was not written. Nothing was changed." >&2; return 0; }
+    wrote_bak=1
+  fi
+  # Beside the config, so the move into place is one rename on one disk, and named for this tool, so
+  # one left by a killed run says whose it is (#36).
+  tmp="$(mktemp "$dir/.claude-sync-rtk-config.XXXXXX" 2>/dev/null)" || { echo "claude-sync: could not write beside $cfg, so the shared list in payload/$RTK_EXCLUDES_FILE was not written into rtk's config. Nothing was changed." >&2; return 0; }
+  if [ "$RTKX_MODE" = create ]; then
+    printf '[hooks]\n%s\n' "$line" > "$tmp"
+  else
+    orig="$(scratch_file)"; cp -p "$cfg" "$orig"; cp -p "$cfg" "$tmp"   # -p: the new file keeps the old one's mode
+    # Its status says which shape the file had, already known from the reading above.
+    rtk_toml_hooks_list "$cfg" "$RTKX_MODE" "$line" > "$tmp" || true
+  fi
+  mv "$tmp" "$cfg"
+  # Judged by rtk reading it back, not by the write returning (L3): rtk must still parse the file,
+  # and the list it holds must now be the payload's. Otherwise the original goes back.
+  local had="$RTKX_HAVE"
+  rtk_exclusions_state
+  if [ "$RTKX_STATE" != same ]; then
+    if [ -n "$orig" ]; then cp -p "$orig" "$cfg"; else rm -f "$cfg"; fi
+    [ -n "$orig" ] && rm -f "$orig"
+    echo "claude-sync: wrote the shared list in payload/$RTK_EXCLUDES_FILE into rtk's config at $cfg, but reading it back did not give that list (${RTKX_STATE}${RTKX_WHY:+: $RTKX_WHY}), so the file was put back exactly as it was. rtk on this Mac still leaves alone ${had:-no commands}." >&2
+    return 0
+  fi
+  [ -n "$orig" ] && rm -f "$orig"
+  record_applied updated "rtk config ($cfg): excluded commands ${RTKX_WANT:-none}, was ${had:-none}"
+  if [ -n "$wrote_bak" ]; then
+    echo "claude-sync: rtk's config as it was before claude-sync first changed it is kept at $bak."
+  fi
+  return 0
+}
+
+# status: said only when there is something to act on (L36).
+report_rtk_exclusions(){
+  rtk_exclusions_state
+  case "$RTKX_STATE" in off|fixture|same) return 0 ;; esac
+  echo "--- rtk's excluded commands ---"
+  echo "  $(rtk_exclusions_sentence)"
+  return 0
+}
+
 # copy repo payload -> local config, merging the hooks block (no git)
 apply_payload_to_local(){
   # A TEST RUN may not write into the real config (claude-config#277, L2). This is the one place
@@ -5765,6 +6016,8 @@ $f
   record_mods_seen
   # The status line and the shared settings, after the hooks block for the same reason (#772, #695).
   write_settings_extras
+  # rtk's excluded commands, written into rtk's own config outside ~/.claude (claude-config#1427).
+  write_rtk_exclusions
   record_trees_seen keep
   # Before the imports are checked, and after the rule files have landed: on a Mac pulling for the
   # first time CLAUDE.md arrives importing an index that does not exist here yet, and after a merge
@@ -5811,7 +6064,7 @@ $f
   # say "nothing has come down for a while" when something small did, which prompts a harmless
   # pull; the other way round hides the drift, which is the failure being fixed.
   if [ -n "$APPLIED_LOG" ] && [ -s "$APPLIED_LOG" ] \
-     && awk '!/settings\.json \(hooks section\)/ && !/settings\.json \(status line/ { found = 1 } END { exit found ? 0 : 1 }' "$APPLIED_LOG"; then
+     && awk '!/settings\.json \(hooks section\)/ && !/settings\.json \(status line/ && !/\trtk config \(/ { found = 1 } END { exit found ? 0 : 1 }' "$APPLIED_LOG"; then
     record_received
   fi
   # .last-applied stays local (it is this Mac's own bookkeeping); this is the published
@@ -7224,6 +7477,15 @@ payload_path_applied(){   # $1 = path relative to payload/
       return $?
       ;;
     settings.json) return 0 ;;   # never applied wholesale; the hooks block owns it
+    "$RTK_EXCLUDES_FILE")
+      # Written into rtk's own config, never landing under its own name (claude-config#1427), so it
+      # is applied when this Mac's rtk holds the same list. A state the apply refuses or cannot reach
+      # (no rtk, a file rtk cannot parse) has nothing a pull could apply, so it does not hold this
+      # path unapplied for ever; the apply, status and verify say why.
+      rtk_exclusions_state
+      [ "$RTKX_STATE" = differs ] && return 1
+      return 0
+      ;;
     "$SHARED_SETTINGS_FILE")
       # Merged INTO settings.json key by key, never landing under its own name, so it is applied
       # when applying it would change nothing there, judged per leaf so a model entry holding other
@@ -7947,6 +8209,9 @@ needs_new_session(){
       # Both are read when a session starts (#772, #695), so a running one keeps what it had.
       "settings.json (shared settings: "*) name="settings.json (${name#settings.json (shared settings: }"; name="${name%)}, shared)" ;;
       "settings.json (status line"*) name="settings.json (statusLine)" ;;
+      # rtk reads its config on every rewrite it is asked for, so a running session already has the
+      # new list (claude-config#1427).
+      "rtk config ("*) continue ;;
       settings.json*)
         # An edit that leaves the same hooks registered (a matcher reworded, an
         # entry moved between events) changes nothing a running session holds, so
@@ -10431,6 +10696,14 @@ do_verify(){
     rc=1
     echo "claude-sync: this Mac holds $unsent change(s) the shared config does not have, so the markers below cannot mean the Macs agree on them. Run 'claude-sync status' to see what, then 'claude-sync sync' to send it." >&2
   fi
+  # rtk's excluded commands live outside ~/.claude, so no marker above can say whether this Mac's
+  # match the shared list (claude-config#1427). Checked here, for this Mac only, with the sentence
+  # status uses. rtk not installed is not a difference: nothing on this Mac is rewritten at all.
+  rtk_exclusions_state
+  case "$RTKX_STATE" in
+    off|fixture|same|absent) ;;
+    *) rc=1; echo "claude-sync: $(rtk_exclusions_sentence)" >&2 ;;
+  esac
   if [ "$behind" -eq 0 ]; then
     # One Mac agreeing with itself is agreement with nobody, and saying "agree" there is the
     # same vacuous success the no-markers case above exists to prevent. Found on the real
@@ -11336,6 +11609,7 @@ payload/$rel
   report_user_scope_plugins
   report_managed_settings
   report_settings_extras
+  report_rtk_exclusions
   report_duplicate_plugin_skills || true
   report_duplicate_skill_jobs || true
   report_conflict_copies
