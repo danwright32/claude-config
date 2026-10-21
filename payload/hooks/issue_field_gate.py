@@ -27,6 +27,10 @@ Two properties kept deliberately from the old design:
 
 What changed for the better: a create missing two things now says so once, instead of
 whichever of three gates happened to be reported first.
+
+The body file rule alone also judges the other gh commands that post a body from a file (gh issue
+edit and comment, gh pr create, edit and comment, claude-config#1435), whose refusal speaks only of
+the body file, since the issue rules are about filing an issue.
 """
 
 import glob
@@ -198,7 +202,10 @@ def body_files(args, command, place=None):
                     function's $1) where some non-empty file matches: either way, not judged here
       "shown"       written by this command from text it shows, so judged from the command (#1246)
       "text"        read from disk; detail is the text
-      "unreadable"  none of those, and not a file the gate can read; detail says why (#1416)
+      "missing"     none of those, and no file is there (or no file at all matches a pattern the
+                    command fills in as it runs); detail says where it looked (#1416)
+      "unreadable"  none of those, and not a file the gate can read for another reason (an empty
+                    file, a variable never set, a path it cannot work out); detail says why (#1416)
 
     A path is read the way the shell will read it where the create runs (scan.resolve_path): a
     variable the command does not set and its environment does not hold is empty there, and a
@@ -212,7 +219,7 @@ def body_files(args, command, place=None):
     if not words:
         return []
     try:
-        writes = scan.file_writes(command)
+        writes = scan.file_writes_in_context(command, place.start, place.environ)
         writes_known = True
     except scan.Unreadable:
         writes, writes_known = [], False
@@ -222,11 +229,15 @@ def body_files(args, command, place=None):
             out.append((word, "stdin", None))
             continue
         path, why = scan.resolve_path(word, place)
-        written = [w for w in writes if _same_path(w[0], word) or (path and scan.resolve_path(w[0], place)[0] == path)]
-        if any(not shown for _, _, shown in written):
+        # A write is this file when both land in one place, read where each happens, so a file written
+        # before a later cd is found where it was written (claude-config#1436). Only where either
+        # cannot be placed (a substitution, a cd the gate cannot follow) is the spelling matched.
+        written = [w for w in writes
+                   if (w[3] == path if w[3] and path else _same_path(w[0], word))]
+        if any(not shown for _, _, shown, _ in written):
             out.append((word, "hidden", None))
             continue
-        if any(not appends for _, appends, _ in written):
+        if any(not appends for _, appends, _, _ in written):
             out.append((word, "shown", None))
             continue
         if why:
@@ -236,12 +247,25 @@ def body_files(args, command, place=None):
         if scan.RUNTIME in path:
             # Part of the path is filled in only as the command runs (a loop's variable, a function's
             # $1), so which file is unknown: some non-empty file must be one it could name.
-            pattern = scan.runtime_pattern(path)
-            if written or any(os.path.isfile(m) and os.path.getsize(m) > 0 for m in glob.glob(pattern)):
+            # The value may hold a / (a loop over a/x b/y), so a match a few directories down counts too
+            # (claude-config#1436). Shallowest first, lazily, so the first good file ends the search.
+            matched = good = False
+            for pattern in ([] if written else scan.runtime_patterns(path)):
+                for m in glob.iglob(pattern):
+                    if os.path.isfile(m):
+                        matched = True
+                        good = os.path.getsize(m) > 0
+                        if good:
+                            break
+                if good:
+                    break
+            if written or good:
                 out.append((word, "hidden", None))
             else:
-                out.append((word, "unreadable", "no file matches %s that is not empty (each * is filled in "
-                            "only as the command runs)" % pattern))
+                out.append((word, "unreadable" if matched else "missing",
+                            "no file matches %s that is not empty, nor any up to %d directories further down "
+                            "(each * is filled in only as the command runs)"
+                            % (scan.runtime_pattern(path), scan.RUNTIME_DEPTH)))
             continue
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
@@ -250,7 +274,7 @@ def body_files(args, command, place=None):
             if written:
                 out.append((word, "shown", None))
             elif isinstance(e, FileNotFoundError):
-                out.append((word, "unreadable", "%s does not exist" % path))
+                out.append((word, "missing", "%s does not exist" % path))
             elif isinstance(e, IsADirectoryError):
                 out.append((word, "unreadable", "%s is a directory" % path))
             else:
@@ -264,15 +288,20 @@ def body_files(args, command, place=None):
         # Which files the command writes could not be read, so a file on disk may be one it is about
         # to replace (judged as before #1416: not at all), and a file not there yet one it makes.
         out = [(w, "hidden", None) if s == "text" else
-               (w, s, d + "; the gate also could not read which files this command writes" if s == "unreadable" else d)
+               (w, s, d + "; the gate also could not read which files this command writes"
+                if s in ("unreadable", "missing") else d)
                for w, s, d in out]
     return out
 
 
-def unreadable_body_files(args, command, place=None):
-    """Each --body-file of one create the gate cannot read, as a line naming it and saying why."""
+def unreadable_body_files(args, command, place=None, missing=True):
+    """Each --body-file of one command the gate cannot read, as a line naming it and saying why.
+
+    missing: whether a file that is not there counts. It does for gh issue create (#1416). The other
+    commands leave it to gh, which stops on a missing body file before any request (claude-config#1435).
+    """
     return ["--body-file %s: %s" % (word, why) for word, state, why in body_files(args, command, place)
-            if state == "unreadable"]
+            if state == "unreadable" or (missing and state == "missing")]
 
 
 def body_carries(args, command, found, found_in_command=None, place=None):
@@ -298,7 +327,7 @@ def body_carries(args, command, found, found_in_command=None, place=None):
     if spelled(command) or any(spelled(a) for a in args):
         return True
     for _, state, detail in body_files(args, command, place):
-        if state in ("hidden", "unreadable"):
+        if state in ("hidden", "unreadable", "missing"):
             return True
         if state == "text" and found(detail):
             return True
@@ -382,6 +411,17 @@ BODY_FILE_RULE = {
     "override": "SKIP_BODY_FILE_CHECK=1",
 }
 
+# The same rule for the other gh commands that post a body from a file (scan.BODY_FILE_COMMANDS,
+# claude-config#1435), the only rule they get. A missing file is left to gh, which stops on one before
+# any request (each of the six measured 2026-10-20, gh 2.89.0); refusing it here as well refused only
+# commands that write the file through a script the gate cannot read, 10 of about 1550 past ones. What
+# gh lets through is what it refuses: an empty file, a variable never set, a path it cannot work out.
+OTHER_BODY_FILE_RULE = dict(
+    BODY_FILE_RULE,
+    check=lambda args, command, place: not unreadable_body_files(args, command, place, missing=False),
+    details=lambda args, command, place: unreadable_body_files(args, command, place, missing=False),
+)
+
 
 # The table. A new rule is one entry: what it is called, how to detect it from the create's
 # arguments, the whole command and the place it runs (scan.Place), what to say, and its own
@@ -409,53 +449,78 @@ def session_rule(line):
 
 
 def evaluate(command, cwd=None):
-    """Which rules fail, across every create in the command.
+    """Which rules fail, across every create in the command, and every other gh command that posts a
+    body from a file (scan.BODY_FILE_COMMANDS, claude-config#1435), which only the body file rule judges.
 
     cwd is the directory the command starts in (the payload's), this process's when not given.
-    Returns (issue_count, [failing rule dicts]). The count is of offending creates, so
-    the message can say "1 issue" or "3 issues" correctly. A rule with `details` comes back
-    with its fix filled in from every create's details, each named once.
+    Returns (issue_count, [failing rule dicts], [other commands refused]). The count is of offending
+    creates, so the message can say "1 issue" or "3 issues" correctly; the other commands are named
+    once each, as `gh pr create`. A rule with `details` comes back with its fix filled in from every
+    command's details, each named once.
     """
-    creates = scan.scan_creates_in_context(command, cwd or os.getcwd(), dict(os.environ))
+    found = scan.scan_gh_in_context(command, cwd or os.getcwd(), dict(os.environ), scan.BODY_FILE_COMMANDS)
     rules = list(RULES)
-    line = session_line() if creates else None
+    line = session_line() if any(kind == scan.CREATE for kind, _, _, _ in found) else None
     if line:
         rules.append(session_rule(line))
     offenders = 0
+    others = []
+    by_creates = set()
     failing = []
     details = {}
-    for args, envs, place in creates:
-        missing = [r for r in rules if r["override"] not in envs and not r["check"](args, command, place)]
+    for kind, args, envs, place in found:
+        judged = rules if kind == scan.CREATE else [OTHER_BODY_FILE_RULE]
+        missing = [r for r in judged if r["override"] not in envs and not r["check"](args, command, place)]
         if not missing:
             continue
-        offenders += 1
+        if kind == scan.CREATE:
+            offenders += 1
+        elif "gh %s %s" % kind not in others:
+            others.append("gh %s %s" % kind)
         for r in missing:
             if r["name"] not in [f["name"] for f in failing]:
                 failing.append(r)
+            if kind == scan.CREATE:
+                by_creates.add(r["name"])
             if "details" in r:
                 seen = details.setdefault(r["name"], [])
                 seen += [d for d in r["details"](args, command, place) if d not in seen]
+    # Which rules a create failed, so the header names only what an issue misses, never a rule only
+    # another command failed.
     failing = [dict(r, fix=r["fix"].format(details="\n".join("     " + d for d in details[r["name"]])))
-               if "details" in r else r for r in failing]
-    return offenders, failing
+               if "details" in r else dict(r) for r in failing]
+    for r in failing:
+        r["by_create"] = r["name"] in by_creates
+    return offenders, failing, others
 
 
-def build_reason(offenders, failing):
-    names = ", ".join(r["name"] for r in failing)
-    lines = [
-        "This command would file %s missing %s. Every issue carries a milestone, a priority, at least one "
-        "category and an Open questions section, so the backlog can be read by feature, by urgency and by "
-        "area, and /sleep can ask what only Dan can decide; one filed from a Claude session names that session.\n"
-        % (scan.plural_issues(offenders), names),
-        "Fix each one, then re-run the command:\n",
-    ]
+def build_reason(offenders, failing, others=()):
+    """The refusal: the issue rules' framing when a create fails, the body file's alone otherwise."""
+    handed = ("%s a --body-file the gate cannot read, which would post a blank or wrong body%s"
+              % (" and ".join(others),
+                 ", and an edit would blank the description already there" if any(o.endswith(" edit") for o in others) else ""))
+    if not offenders:
+        lines = ["This command would hand %s.\n" % handed, "Fix it, then re-run the command:\n"]
+    else:
+        names = ", ".join(r["name"] for r in failing if r.get("by_create", True))
+        lines = [
+            "This command would file %s missing %s. Every issue carries a milestone, a priority, at least one "
+            "category and an Open questions section, so the backlog can be read by feature, by urgency and by "
+            "area, and /sleep can ask what only Dan can decide; one filed from a Claude session names that session.\n"
+            % (scan.plural_issues(offenders), names),
+            "Fix each one, then re-run the command:\n",
+        ]
+        if others:
+            lines.insert(1, "It would also hand %s.\n" % handed)
     for n, rule in enumerate(failing, 1):
         lines.append("%d. %s\n" % (n, rule["fix"]))
+    if offenders:
+        lines.append("The full rule for all of this is in ~/.claude/skills/milestone/NAMING.md.\n")
     lines.append(
-        "The full rule for all of this is in ~/.claude/skills/milestone/NAMING.md.\n\n"
-        "If one of these genuinely does not apply (a repo you do not own, a throwaway repo), say so and "
-        "re-run with the visible override for JUST that one, so waiving it cannot waive the others: %s "
-        "<the same command>. An override is good for the one command it prefixes, never standing permission."
+        "If one of these genuinely does not apply (a repo you do not own, a throwaway repo, a path the gate "
+        "cannot see is there), say so and re-run with the visible override for JUST that one, so waiving it "
+        "cannot waive the others: %s <the same command>. An override is good for the one command it "
+        "prefixes, never standing permission."
         % " / ".join(r["override"] for r in failing)
     )
     return "\n".join(lines)
@@ -476,14 +541,14 @@ def main():
         return 0
 
     try:
-        offenders, failing = evaluate(command, cwd)
+        offenders, failing, others = evaluate(command, cwd)
     except scan.Unreadable:
         return 0  # not ours to judge
 
-    if not offenders:
+    if not offenders and not others:
         return 0
 
-    json.dump(scan.deny_payload(build_reason(offenders, failing)), sys.stdout)
+    json.dump(scan.deny_payload(build_reason(offenders, failing, others)), sys.stdout)
     return 0
 
 
