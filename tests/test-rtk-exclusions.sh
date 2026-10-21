@@ -39,6 +39,10 @@ trap 'chmod -R u+rwx "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 # L463). Case 3c2 sets a table on purpose.
 export SYNC_PS_FIXTURE="$WORK/ps-none"; : > "$SYNC_PS_FIXTURE"
 export SYNC_SCRATCH_ROOT="$WORK/scratch-root"; mkdir -p "$SYNC_SCRATCH_ROOT"
+# And the launch agents and the register of clones, from which status finds other clones and reads
+# their hook suite records, which can name a suite by file (claude-config#1453). Neither exists.
+export SYNC_LAUNCHAGENTS="$WORK/no-launch-agents"
+export SYNC_CLONE_REGISTRY="$WORK/no-clone-registry"
 
 # Whether output says anything about the shared list, judged by what only the list's own code
 # prints: the status section's header, the list file every refusal and drift sentence names, the

@@ -65,6 +65,11 @@ case "${WORK%/}" in
 esac
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/state" "$WORK/home/.claude" "$WORK/repo"
+# status also reads the launch agents and the register of clones, and every other clone's hook
+# suite record they lead to (claude-config#1453). Pointed at nothing, so the only machine state
+# these status runs judge is the process table each one is handed.
+export SYNC_LAUNCHAGENTS="$WORK/no-launch-agents"
+export SYNC_CLONE_REGISTRY="$WORK/no-clone-registry"
 
 # The limits are READ from the library that ships them, never written here as literals at their
 # edge, so the day a default moves these fixtures still mean what they say (L401). Asserted where

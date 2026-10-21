@@ -170,6 +170,28 @@ RESOLVED_DIR="$SYNC_REPO/.resolved"
 # time it can hold a verdict at all, so the list is derived from what has actually run rather than
 # from what somebody remembered to write down (L41, L96).
 CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
+
+# Whether this run's config is this user's own ~/.claude, rather than any other CLAUDE_HOME, which
+# is every test fixture. ONE predicate for every read that would otherwise reach the machine from a
+# fixture (L261): rtk's config, the launch agents, and the register of clones.
+claude_home_is_users_own(){ [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; }
+
+# What status READS about the machine's jobs and clones (claude-config#1453): the seam when one is
+# named, otherwise the real location only for this user's own config, and nothing at all for a
+# fixture home. Left at the real default, a suite running status against its own throwaway home
+# reported the scheduled clone's stale failure record, or a suite that record named, as if it were
+# the fixture's (L2, L463). An empty answer is said as NOT READ by the callers that report on it,
+# never as none installed (L11).
+launchagents_to_read(){
+  if [ -n "${SYNC_LAUNCHAGENTS:-}" ]; then printf '%s' "$SYNC_LAUNCHAGENTS"; return 0; fi
+  claude_home_is_users_own || return 0
+  printf '%s' "$HOME/Library/LaunchAgents"
+}
+clone_registry_to_read(){
+  if [ -n "${SYNC_CLONE_REGISTRY:-}" ]; then printf '%s' "$SYNC_CLONE_REGISTRY"; return 0; fi
+  claude_home_is_users_own || return 0
+  printf '%s' "$CLONE_REGISTRY"
+}
 # A session about to commit deliberately can hold the WATCHER off (#262). Outside every clone, for
 # the same reason as the registry above: the watcher runs from a different clone than the one a
 # session works in, so a marker inside either of them reaches only itself.
@@ -5497,7 +5519,7 @@ RTK_BACKUP_SUFFIX=".before-claude-sync"
 # other CLAUDE_HOME (every test fixture) must never reach the real one, so there it prints nothing.
 rtk_sync_bin(){
   if [ -n "${SYNC_RTK_BIN:-}" ]; then printf '%s' "$SYNC_RTK_BIN"; return 0; fi
-  [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ] || return 0
+  claude_home_is_users_own || return 0
   local bin; bin="$(command -v rtk 2>/dev/null || true)"
   # The scheduled job runs with launchd's short PATH, where rtk is usually not on it.
   [ -n "$bin" ] || bin="$HOME/.local/bin/rtk"
@@ -10794,10 +10816,12 @@ report_sync_times(){
 # Compared with pwd -P on both sides, because the two clones can be reached through symlinked paths
 # and a textual comparison would report a clone as a stranger to itself.
 other_sync_clones(){   # prints one absolute directory per line, this clone excluded
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" plist path dir mine _reg_d
+  local agentdir plist path dir mine _reg_d registry
+  agentdir="$(launchagents_to_read)"
+  registry="$(clone_registry_to_read)"
   mine="$(cd "$SYNC_REPO" 2>/dev/null && pwd -P)" || mine=""
   {
-    if [ -d "$agentdir" ]; then
+    if [ -n "$agentdir" ] && [ -d "$agentdir" ]; then
       for plist in "$agentdir"/com.claudesync.*.plist; do
         [ -f "$plist" ] || continue
         sed -n 's|.*<string>\(/[^<]*/claude-sync\)</string>.*|\1|p' "$plist" 2>/dev/null || true
@@ -10806,14 +10830,14 @@ other_sync_clones(){   # prints one absolute directory per line, this clone excl
     # And every clone that has recorded itself (claude-config#189). A launch agent only ever names
     # the clone a background job runs from, so on its own this found the scheduled clone from the
     # development checkout and never the other way round.
-    if [ -f "$CLONE_REGISTRY" ]; then
+    if [ -n "$registry" ] && [ -f "$registry" ]; then
       # Disposable entries are dropped here too (claude-config#295), or a throwaway clone recorded
       # before the refusal existed goes on answering for a verdict nobody can act on.
       while IFS= read -r _reg_d; do
         [ -n "$_reg_d" ] || continue
         is_under_temp_dir "$_reg_d" && continue
         printf '%s/claude-sync\n' "$_reg_d"
-      done < "$CLONE_REGISTRY"
+      done < "$registry"
     fi
   } | while IFS= read -r path; do
       [ -n "$path" ] || continue
@@ -11309,7 +11333,12 @@ plist_interval(){  # $1 = plist -> StartInterval in seconds, or nothing
 # pointing at nothing", "installed and ungated" and "installed and gated" need four different
 # remedies and only one of them is a fault worth acting on (L11).
 report_automatic_jobs(){
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+  local agentdir
+  agentdir="$(launchagents_to_read)"
+  if [ -z "$agentdir" ]; then
+    echo "automatic sync: not read, because this run's config ($CLAUDE_HOME) is not this user's own ~/.claude, so this Mac's launch agents say nothing about it. Name a directory of launch agents to read in SYNC_LAUNCHAGENTS."
+    return 0
+  fi
   local tp="$agentdir/com.claudesync.timer.plist" wp="$agentdir/com.claudesync.watch.plist"
   local prog interval
 
@@ -12631,7 +12660,8 @@ writeplist(){ # label  arg  extra-keys-xml
 # agent that was never installed is a different fact and report_automatic_jobs already makes it,
 # and reporting it here as well would say one thing twice in different words (L118).
 agents_out_of_date(){   # prints the labels that differ, one per line
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" label plist want have
+  local agentdir label plist want have
+  agentdir="$(launchagents_to_read)"; [ -n "$agentdir" ] || return 0
   while IFS= read -r label; do
     [ -n "$label" ] || continue
     plist="$agentdir/$label.plist"
@@ -12647,8 +12677,13 @@ AGENT_LABELS
 # The one sentence this Mac publishes about its agents, so the OTHER Mac can report it. Three
 # states, because "none installed" and "installed but out of date" need different actions and one
 # word covering both would hide whichever it did not name (L11).
+# A fixture home with no seam reads no agents (claude-config#1453) and publishes none, into the
+# fixture's own repo: a fourth word here would be one the other Mac's reader has never accepted
+# (L255), and the only place a fixture's marker can land is a throwaway.
 agents_state(){
-  local agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}" stale any=0 label
+  local agentdir stale any=0 label
+  agentdir="$(launchagents_to_read)"
+  [ -n "$agentdir" ] || { printf 'none'; return 0; }
   while IFS= read -r label; do
     [ -n "$label" ] || continue
     [ -f "$agentdir/$label.plist" ] && any=1
