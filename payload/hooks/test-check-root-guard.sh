@@ -211,8 +211,9 @@ out_gone="$(bash "$CHECK" "$TMPROOT/not-there" 2>&1)"; code_gone=$?
 # ---------------------------------------------------------------------------
 ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$ROOT" ]; then
+  # Said once, by the agreed line, and counted as nothing: a pass here would be a check that
+  # measured nothing (claude-config#1452, L98).
   echo "SUITE-PART-UNMEASURED the real tree, because this copy is not inside a git checkout"
-  check "the real tree could not be measured from this copy" ok
 else
   out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
   [ "$code_real" -eq 0 ] \

@@ -676,13 +676,13 @@ REAL_BIN="$(command -v claude 2>/dev/null || true)"
 if [ ! -d "$ROOT/payload/mods" ]; then
   # The folder is created by the sync the first time a Mac sends a mod, and never by hand: payload/
   # in a development checkout is overwritten by the live daemon (payload-write-gate.sh).
-  echo "note: payload/mods does not exist yet (no Mac has sent a mod), so there is nothing to check."
-  check "the real mods folder is absent, which is not a pass over mods" ok
+  # Not a pass over mods, so not counted as one (claude-config#1452, L98): said by the agreed line.
+  echo "SUITE-PART-UNMEASURED the real mods, because payload/mods does not exist yet (no Mac has sent a mod), so there is nothing to check"
 else
   out="$(CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
   if [ "$code" -eq 3 ]; then
+    # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because there is no claude command on this machine"
-    check "the real mods could not be measured here" ok
     # Their types were checked all the same, wherever the pinned compiler is installed (#953).
     if [ -x "$ROOT/tools/typescript/node_modules/.bin/tsc" ]; then
       nm="$(find "$ROOT/payload/mods" -mindepth 3 -maxdepth 3 -path '*/.claude-plugin/plugin.json' | wc -l | tr -d ' ')"
@@ -695,7 +695,6 @@ else
     # Its reasons ride on the one agreed line, which the runner prints; an indented copy below it was
     # dropped like any other chatter (#1444).
     echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine. check-mods said: $(printf '%s\n' "$out" | grep UNMEASURED | sed 's/^check-mods: //' | tr '\n' ' ')"
-    check "the real mods could not be measured here" ok
   else
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
       || check "every mod in payload/mods passes Claude Code's own checks" "exit=$code out=$out"

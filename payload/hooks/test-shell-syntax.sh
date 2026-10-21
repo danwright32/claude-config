@@ -87,9 +87,9 @@ if [ "$HAS_FAULT" -eq 1 ]; then
   grep -qi 'matching' <<< "$out_apos" \
     && check "and what the shell said is passed through, not replaced with a guess" ok \
     || check "and what the shell said is passed through, not replaced with a guess" "out=$out_apos"
-else
-  check "the apostrophe case could not be measured on this bash" ok
 fi
+# On a bash that parses it correctly the case is said once, by the agreed line above, and counted
+# as nothing (claude-config#1452, L98).
 
 # ---------------------------------------------------------------------------
 # An ordinary syntax error, which no bash parses, so this half is measured everywhere. Without it
@@ -186,8 +186,8 @@ grep -qi 'home directory' <<< "$out_home"   && check "and it says that is what i
 # ---------------------------------------------------------------------------
 ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$ROOT" ]; then
+  # Said once, by the agreed line, and counted as nothing (claude-config#1452, L98).
   echo "SUITE-PART-UNMEASURED the real tree case, because this copy of the suite is not inside a git checkout, so there is no repository to parse"
-  check "the real tree case could not be measured from this copy" ok
 else
 out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?
 [ "$code_real" -eq 0 ] \
