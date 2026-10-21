@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# test-score-adapters.sh: the design match score's two platform adapters (claude-config#1364).
+# test-score-adapters.sh: the design match score's three platform adapters (claude-config#1364, #1414).
 #
 #   capture-web.mjs                      the web adapter: a Playwright screenshot of each frame of the
 #                                        settled design and of the build's fixture route, plus checks
 #   swiftui/DesignScoreTests/DesignScoreCapture.swift
 #                                        the SwiftUI adapter: a snapshot test drawing the real view
+#   capture-terminal.mjs                 the terminal adapter: a mod's own band, from its fixture, drawn
+#                                        through the shared terminal in the design's window (section 3f)
 #
-# The web adapter's logic runs against a stand in browser wherever node does, CI included. The two
-# real runs need what only a Mac set up for the apps has (a Playwright package, Chrome, a Swift
+# The web and terminal adapters' logic runs against a stand in browser wherever node does, CI included.
+# The real runs need what only a Mac set up for the apps has (a Playwright package, Chrome, a Swift
 # toolchain that can build XCTest, which the command line tools alone cannot, #1400), so each says
 # so by name where that is missing, never a pass, on a SUITE-PART-UNMEASURED line the runner counts
 # on the suite's line and names in its summary (L411, #1444): a fixture
@@ -46,17 +48,17 @@ if command -v node >/dev/null 2>&1; then
   # The TAP reporter by name: node's default reporter differs by version and by whether the output is
   # a terminal (CI's node printed no "# pass" line at all), and its counts are what is read here. The
   # exit code is read as well, never the counts alone (L184).
-  node --test --test-reporter=tap "$SKILL/score/tests/capture_web.test.mjs" > "$T/node.out" 2>&1
+  node --test --test-reporter=tap "$SKILL/score/tests/capture_web.test.mjs" "$SKILL/score/tests/capture_terminal.test.mjs" > "$T/node.out" 2>&1
   node_rc=$?
   n_pass="$(sed -n 's/^# pass \([0-9]*\)$/\1/p' "$T/node.out")"
   n_fail="$(sed -n 's/^# fail \([0-9]*\)$/\1/p' "$T/node.out")"
   if [ "$node_rc" -eq 0 ] && [ -n "$n_pass" ] && [ "${n_fail:-1}" = 0 ] && [ "$n_pass" -gt 0 ]; then
     pass=$((pass + n_pass))
   else
-    bad "the web adapter's node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
+    bad "the web and terminal adapters' node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
   fi
 else
-  unmeasured_part "node is not on PATH, so the web adapter's logic was not tested"
+  unmeasured_part "node is not on PATH, so the web and terminal adapters' logic was not tested"
 fi
 
 # --- 2. the frames both adapters draw come from the score's own reader --------------------------------
@@ -266,9 +268,9 @@ fi
 # --- 3d. a design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413) ---------
 # make-settled.py draws each frame as the switcher draws the terminal, the web adapter draws the design's
 # side at the frame's width and runs its checks on it, and the build's checks are filled in as a mod's own
-# test would fill them. Nothing yet captures a built mod screen (claude-config#1414), so the score is the
-# decision half and a picture half said to be unmeasured: no score, which the close gate's reader holds
-# as unmeasured, never as matched.
+# test would fill them. A capture made this way holds no picture of the build in the terminal's form
+# (only capture-terminal.mjs makes one, section 3f), so the score is the decision half and a picture half
+# said to be unmeasured: no score, which the close gate's reader holds as unmeasured, never as matched.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
   unmeasured_part "no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
 else
@@ -300,6 +302,65 @@ JSON
   python3 "$SCORE" score "$TM/cap" > "$TM/score.log" 2>&1; rc=$?
   if [ "$rc" -eq 2 ] && said "decisions  1 of 1 met (100%)" "$TM/score.log" && said "the picture half of a terminal design is unmeasured" "$TM/score.log" && said "the Claude Code terminal" "$TM/score.log"; then ok; else bad "a terminal design scores its decision half and says its picture half is unmeasured, no score (rc=$rc)" "$(cat "$TM/score.log")"; fi
   if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import design_score; s=json.load(open(sys.argv[2])); v,p=design_score.verify_score(s); sys.exit(0 if v == "unmeasured" and not p and s.get("kind") == "terminal" else 1)' "$HERE" "$TM/cap/score.json"; then ok; else bad "the close gate's reader of a score file holds the terminal design's score as unmeasured" "$(cat "$TM/score.log")"; fi
+fi
+
+# --- 3f. the terminal adapter for real: a mod's own band against a settled terminal design (#1414) -----
+# The design draws the status bar's band by hand in the shared terminal; the build is the status bar's
+# own rows, recorded from its test harness (payload/mods/status-bar/tests/register.test.tsx, a failing
+# PR, two unpushed commits and context at 74%, 2026-10-21), drawn by capture-terminal.mjs through mod-kit's
+# composer and the same terminal. Matching, both halves are 100%; one character of the band changed is
+# below 100% on the picture; a colour the terminal cannot draw is no score; and a check about the
+# design's transcript, which is not the mod's, is never met on the build's behalf.
+TERMINAL_ADAPTER="$HERE/capture-terminal.mjs"
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  unmeasured_part "no Playwright package, node or Chrome here, so a mod's band was not scored against a terminal design"
+else
+  TB="$T/terminal-built"
+  mkdir -p "$TB"
+  cat > "$TB/builder.js" <<'JS'
+function buildScreen(variant) {
+  var T = Terminal;
+  return T.screen({ title: "claude-config", width: variant.width,
+                    transcript: [T.user("keep going"), "Merging #653 once its checks pass."],
+                    band: [[T.amber("PR #636 checks failing"), T.dim(" | "), T.amber("2 unpushed commits")],
+                           [T.amber("ctx 74% "), T.button("Compact")]] });
+}
+JS
+  printf '{}\n' > "$TB/fixture.json"
+  cat > "$TB/settled.json" <<'JSON'
+{"title": "Status bar band", "builder": "builder.js", "fixture": "fixture.json", "screen": "terminal",
+ "frames": [{"id": "t1", "title": "Laptop", "width": 640, "variant": {"width": 640}}],
+ "decisions": [{"id": "D1", "decision": "The band leads with the failing PR", "requirement": "1",
+                "frames": ["t1"], "check": "the band's first line reads PR #636 checks failing | 2 unpushed commits"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['t1'], check: function (doc) { var l = doc.querySelector('.term-band .term-line'); return {ok: !!l && l.textContent === 'PR #636 checks failing | 2 unpushed commits', detail: l ? l.textContent : 'no band'}; }}];" > "$TB/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$TB/settled.json" "$TB/settled.html" > "$TB/make.log" 2>&1 \
+    || bad "make-settled.py writes the status bar's settled terminal design" "$(cat "$TB/make.log")"
+  # The mod's fixture: its rows exactly as recorded, and a copy with one character, or one colour, changed.
+  mod_screen() {  # mod_screen <file> <unpushed count> <colour of the PR item>
+    printf '{"format": "mod-screen", "version": 1, "mod": "status-bar", "provenBy": "payload/mods/status-bar/tests/register.test.tsx", "frames": [{"id": "t1", "band": [{"mod":"status-bar","id":"look","slot":"needs-a-look","lines":[[{"text":"PR #636 checks failing","color":"%s"},{"text":" | ","dim":true},{"text":"%s unpushed commits","color":"warning"}]]},{"mod":"status-bar","id":"compact","slot":"compact","lines":[[{"text":"ctx 74%% ","color":"warning"},{"button":"compact","label":"Compact","instead":[{"text":"type: ","dim":true},{"text":"/compact"}]}]]}]}]}\n' "$3" "$2" > "$1"
+  }
+  mod_screen "$TB/match.json" 2 warning
+  mod_screen "$TB/off.json" 3 warning
+  mod_screen "$TB/green.json" 2 success
+  run_terminal() {  # run_terminal <out> <mod fixture> <extra args...>
+    local out="$1" mod="$2"; shift 2
+    DESIGN_SCORE_PLAYWRIGHT="$PW" node "$TERMINAL_ADAPTER" --design "$TB/settled.html" --mod "$mod" --out "$out" \
+      --fixture "$TB/fixture.json" --channel chrome --repo "$APP" "$@" > "$out.log" 2>&1
+  }
+  run_terminal "$TB/match" "$TB/match.json"; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$TB/match.log" && said "pictures   100% of pixels match over 1 frame" "$TB/match.log" && said "only the band is the build's" "$TB/match.log"; then ok; else bad "the status bar's own band, drawn by the terminal adapter, scores 100% on both halves against the design drawing the same band (rc=$rc)" "$(cat "$TB/match.log")"; fi
+  if python3 -c 'import json,sys; sys.path.insert(0, sys.argv[1]); import pngio; c=json.load(open(sys.argv[2] + "/capture.json")); w,_,_=pngio.read_png(sys.argv[2] + "/t1-built.png"); sys.exit(0 if c["platform"] == "terminal" and w == 640 and c["frames"][0]["checks"] == [{"id": "D1", "ok": True, "detail": "PR #636 checks failing | 2 unpushed commits"}] else 1)' "$HERE" "$TB/match" 2>/dev/null; then ok; else bad "its capture is the terminal's, the build pictured at the frame's 640, and the build's check read the mod's band" "$(cat "$TB/match/capture.json" 2>/dev/null)"; fi
+  run_terminal "$TB/off" "$TB/off.json"; rc=$?
+  if [ "$rc" -eq 1 ] && said "not matched yet" "$TB/off.log" && said "see t1-diff.png" "$TB/off.log" && ! grep -q "pictures   100%" "$TB/off.log"; then ok; else bad "the same band with one character changed (3 unpushed commits) scores below 100% on the picture, naming the frame (rc=$rc)" "$(cat "$TB/off.log")"; fi
+  run_terminal "$TB/green" "$TB/green.json"; rc=$?
+  if [ "$rc" -eq 2 ] && said "could not be drawn in the shared terminal" "$TB/green.log" && said '"success"' "$TB/green.log"; then ok; else bad "a band in a colour the shared terminal cannot draw is no score, naming the colour (rc=$rc)" "$(cat "$TB/green.log")"; fi
+  # A check about the transcript, which is the design's and not the mod's, passes on the design and is
+  # never met on the build: the build's checks read the band alone.
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['t1'], check: function (doc) { var b = doc.querySelector('.term-body'); var ok = !!b && b.textContent.indexOf('Merging #653') >= 0; return {ok: ok, detail: ok ? 'the transcript is there' : 'no transcript'}; }}];" > "$TB/transcript.checks.js"
+  run_terminal "$TB/transcript" "$TB/match.json" --checks "$TB/transcript.checks.js"; rc=$?
+  if [ "$rc" -eq 1 ] && said "UNMET D1" "$TB/transcript.log" && said "no transcript" "$TB/transcript.log"; then ok; else bad "a check reading the design's transcript is unmet on the build, which draws the band alone (rc=$rc)" "$(cat "$TB/transcript.log")"; fi
 fi
 
 # --- 3e. a built page whose content security policy refuses inline scripts (claude-config#1411) --------

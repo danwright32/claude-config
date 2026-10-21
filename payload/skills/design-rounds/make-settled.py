@@ -232,8 +232,8 @@ def main(argv):
                                     **({"height": f["height"]} if f.get("height") else {})) for f in frames]}
     if chrome["kind"] in ("none", "screen"):
         # Read by the score, which records and says it, so a 100% on an email is never read as a build
-        # drawn inside the product (claude-config#1393), and a terminal design's picture half is said to
-        # be unmeasured until a built mod screen can be captured (claude-config#1413).
+        # drawn inside the product (claude-config#1393), and a terminal design's pictures are measured only
+        # from the terminal adapter's capture of the mod's band (claude-config#1413, #1414).
         frames_block["kind"] = chrome["page"]
     page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants)
 
