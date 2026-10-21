@@ -41,6 +41,19 @@
 # THE MERGE IS PINNED to the head the gates judged (--match-head-commit), so a push landing between
 # the judgement and the merge is refused by GitHub, and this goes round again for the new head.
 #
+# AND THAT HEAD IS THE BRANCH'S TIP (claude-config#1458). The pull request's head is GitHub's record,
+# and it can lag the branch: on 2026-10-21 Bidspoke #2577 showed 30ff7b1 for over ten minutes after
+# its branch was pushed to d854a1a (git ls-remote and the branches API both showed d854a1a), so this
+# merged pinned to the old head and GitHub refused it twice with "Head branch is out of date". So the
+# branch's tip is read (from the fork, for a fork's pull request) the first time a head is seen,
+# before any update or lessons review is spent on it, and again just before the gates are asked.
+# When they differ, this waits MWR_HEAD_LAG_SECONDS for GitHub to catch up, then sets the pull
+# request's base again to the base it already has, the no op write that made GitHub read the branch
+# at once that day, and waits as long again for the real head, whose checks and review are then
+# waited on as any new head's are. Still lagging after that, it stops in its own words; the base is
+# set again once per lag, never in a loop. A branch GitHub says is not there, or will not show, stops
+# it too: with no tip to confirm, nothing is merged.
+#
 # WHEN THE BASE KEEPS MOVING it waits for it to be still, and keeps going (claude-config#1271). This
 # used to update at most three times and then stop with nothing merged. On 2026-10-16, with several
 # pull requests merging at once and each head's checks taking 15 to 30 minutes, main moved faster
@@ -69,7 +82,8 @@
 #   0  merged (or found already merged), confirmed by reading the pull request back
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
-#      closed, or a read GitHub refused or still did not answer after being asked again
+#      closed, its head is still not its branch's tip after the base was set again (or the branch
+#      is gone), or a read GitHub refused or still did not answer after being asked again
 #   3  still waiting (on checks, the review, or a base still moving) when the deadline or the poll
 #      count ran out; running it again resumes
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
@@ -93,7 +107,9 @@
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
 # epoch seconds, the clock's seam), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
-# MWR_HEARTBEAT_SECONDS (300), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
+# MWR_HEARTBEAT_SECONDS (300), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
+# may lag its branch's tip before the base is set again to resync it, and how long after that before
+# it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
 # with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
 # MWR_REVIEW_LIB.
@@ -119,6 +135,7 @@ SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 300)"
+LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
 usage(){
@@ -231,7 +248,7 @@ with_retries(){   # $1 = what is being read, for the line it says; $2 = the read
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
 read_pr(){   # sets view_env
   local rc
-  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
+  view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
   mt_view_class "$view_env"; rc=$?
   read_err="$MT_VIEW_ERR"
   [ "$rc" -eq 1 ] && read_err="${read_err:-no answer}"
@@ -282,10 +299,13 @@ read_back(){   # sets after
 # where only what is still based on the branch is moved. Only the branch on GitHub is deleted;
 # gh's --delete-branch also deleted the local one and switched the checkout, which from a worktree
 # failed after the merge had landed, and touched a checkout another session may be standing in.
+# The repository it reads is ref_repo, set by the caller: this one for finish_branch, the fork for a
+# fork's pull request in head_is_tip (a reader takes no arguments, see with_retries).
+ref_repo=""
 read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
   local out rc
   ref_tip=""; ref_gone=""
-  out="$(gh_as api "repos/$slug/git/ref/heads/$branch" 2>&1)"; rc=$?
+  out="$(gh_as api "repos/${ref_repo:-$slug}/git/ref/heads/$branch" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then
     ref_tip="$(printf '%s' "$out" | jq -r '.object.sha // ""' 2>/dev/null)"
     [ -n "$ref_tip" ] && return 0
@@ -294,7 +314,7 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
   # GitHub answers 404 for what the account cannot see as well as for what is not there, so a 404
   # reads as deleted only when the base branch, asked the same way, can be seen.
   case "$out" in *"HTTP 404"*)
-    if gh_as api "repos/$slug/git/ref/heads/$base" >/dev/null 2>&1; then ref_gone=1; return 0; fi
+    if gh_as api "repos/${ref_repo:-$slug}/git/ref/heads/$base" >/dev/null 2>&1; then ref_gone=1; return 0; fi
     read_err="GitHub answered 404 for $branch and could not show $base either, so a deleted branch cannot be told from one it will not show"
     return 1 ;;
   esac
@@ -333,6 +353,7 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
   fi
   left="$said, but branch $branch was left in place"
   [ -n "$branch" ] || stop 4 "$said, but GitHub did not name its branch, so no branch was deleted."
+  ref_repo="$slug"
   with_retries "branch $branch" read_ref; rrc=$?
   [ "$rrc" -eq 0 ] || stop 4 "$left: could not read it from GitHub ($read_err$(tried "$rrc")). Delete it by hand, or run the same command again to finish."
   [ -z "$ref_gone" ] || stop 0 "$said. Its branch $branch was already deleted."
@@ -374,6 +395,53 @@ wait_a_look(){   # $1 = the status line; said when it changes, and every HEARTBE
   "$SLEEP" "$POLL"
 }
 mins(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $1 / 60 ))"; else printf '%ds' "$1"; fi; }
+
+# WHETHER GITHUB'S HEAD IS THE BRANCH'S TIP (claude-config#1458, see the header). Returns 0 when it
+# is. Otherwise it waits a look, sets the base again once, or stops, and returns 1 for the caller to
+# look again. The wait before the re-set, MWR_HEAD_LAG_SECONDS, is two minutes because GitHub
+# normally shows a push on the pull request within seconds, so two looks at the default pace is well
+# past an ordinary race between the push and this read, which then writes nothing to the pull
+# request, and still far short of the ten minutes Bidspoke #2577 lagged. The same time again after
+# the re-set bounds the wait for it to take, since that day it took at once. Both are settings, not
+# measurements of how long GitHub can lag. The lag is timed from the look that first saw it, and a
+# head that becomes the tip ends it, so a later lag is its own, with its own single re-set.
+lag_since=""; resynced_at=""
+head_is_tip(){
+  local rrc why where lagged
+  ref_repo="$slug"; where="branch $branch"
+  if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
+    ref_repo="$(printf '%s' "$view" | jq -r '(.headRepositoryOwner.login // "") + "/" + (.headRepository.name // "")')"
+    case "$ref_repo" in /*|*/) stop 1 "Stopped: #$pr is from a fork GitHub did not name, so its branch's tip cannot be read to confirm head ${head:0:7} is it. Nothing was merged." ;; esac
+    where="branch $ref_repo:$branch"
+  fi
+  [ -n "$branch" ] || stop 1 "Stopped: GitHub did not name the branch of #$pr, so head ${head:0:7} cannot be confirmed as its tip. Nothing was merged."
+  with_retries "the tip of $where" read_ref; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read the tip of $where ($read_err$(tried "$rrc")), so nothing here can confirm head ${head:0:7} is what the branch holds. Nothing was merged."
+  [ -z "$ref_gone" ] || stop 1 "Stopped: $where of #$pr is not on GitHub, so there is no tip to merge. Nothing was merged; push the branch again, then run the same command again."
+  if [ "$ref_tip" = "$head" ]; then lag_since=""; resynced_at=""; return 0; fi
+  lagged="GitHub still shows head ${head:0:7} for #$pr, but $where is at ${ref_tip:0:7}"
+  [ -n "$lag_since" ] || lag_since="$(now)"
+  if [ -z "$resynced_at" ]; then
+    if [ $(( $(now) - lag_since )) -lt "$LAG_WAIT" ]; then
+      out_of_time "is not its branch's tip ($where is at ${ref_tip:0:7})"
+      wait_a_look "Head ${head:0:7}: GitHub still shows it for #$pr, but $where is at ${ref_tip:0:7}; waiting up to $(mins "$LAG_WAIT") for GitHub to catch up."
+      return 1
+    fi
+    why="$(retarget "$pr")" || stop 1 "Stopped: after $(mins "$LAG_WAIT") $lagged, and GitHub refused to set its base again, the write that makes it read the branch again: $why. Nothing was merged."
+    resynced_at="$(now)"
+    say "After $(mins "$LAG_WAIT") $lagged, so its base was set again to $base, which makes GitHub read the branch again. Looking again for the real head."
+    "$SLEEP" "$POLL"
+    return 1
+  fi
+  if [ $(( $(now) - resynced_at )) -lt "$LAG_WAIT" ]; then
+    out_of_time "is not its branch's tip ($where is at ${ref_tip:0:7}) after its base was set again"
+    wait_a_look "Head ${head:0:7}: GitHub still shows it for #$pr after its base was set again, but $where is at ${ref_tip:0:7}; waiting up to $(mins "$LAG_WAIT") for that to take."
+    return 1
+  fi
+  stop 1 "Stopped: $lagged, $(mins "$LAG_WAIT") after its base was set again to make GitHub read the branch again (and $(mins "$LAG_WAIT") of waiting before that). Nothing was merged: GitHub refuses to merge a head that is not its branch's tip. Push to the branch again, or wait a while, then run the same command again."
+}
+tip_ok_for=""
+
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
@@ -404,6 +472,13 @@ while :; do
     if ! why="$(ask_gate "$CHANGELOG_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: require-changelog-tag.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+  fi
+
+  # The first time a head is seen, confirm it is the branch's tip before an update, a wait or a
+  # lessons review is spent on it (claude-config#1458).
+  if [ "$tip_ok_for" != "$head" ]; then
+    head_is_tip || continue
+    tip_ok_for="$head"
   fi
 
   # Behind its base: update, and go round for the new head.
@@ -494,7 +569,9 @@ while :; do
     continue
   fi
 
-  # Ready by every reading here. The gates decide.
+  # Ready by every reading here, so confirm again that the head is the branch's tip, since a push can
+  # land while the checks run and GitHub can fail to show it (claude-config#1458). The gates decide.
+  head_is_tip || continue
   cmd="$(merge_text "$head")"
   if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
     stop 1 "Stopped: block-red-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
