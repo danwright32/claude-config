@@ -142,7 +142,7 @@ export async function settle(page, width) {
   });
 }
 
-function gitState(dir, run = spawnSync) {
+export function gitState(dir, run = spawnSync) {
   const head = run("git", ["-C", dir, "rev-parse", "HEAD"], { encoding: "utf8" });
   const status = run("git", ["-C", dir, "status", "--porcelain"], { encoding: "utf8" });
   return {
@@ -152,10 +152,12 @@ function gitState(dir, run = spawnSync) {
 }
 
 /**
- * Draws every frame and writes the capture. `browser` is a Playwright browser (or a stand in with
- * the same few calls), so this can be exercised without one.
+ * What every adapter drawing a settled HTML design shares (the web adapter here, the terminal adapter
+ * in capture-terminal.mjs, claude-config#1414): the checks and fixture read once, the settled file
+ * opened once, and each frame's design side drawn and checked. One drawing of the design's side, so
+ * the two adapters can never picture or check a design differently.
  */
-export async function capture(o, browser, frames, deps = {}) {
+export async function openDesign(o, browser) {
   const design = resolve(o.design);
   const out = resolve(o.out);
   mkdirSync(out, { recursive: true });
@@ -171,23 +173,39 @@ export async function capture(o, browser, frames, deps = {}) {
     await source.close();
     throw new Error(`the settled design ${design} gives no designFrameDocument(id), so its frames cannot be drawn on their own; make it with the design rounds skill's make-settled.py`);
   }
+  return { design, out, checksSrc, fixture, notes, source };
+}
+
+/** Draws one frame's design side at its own width and runs the checks on it: its row, its document,
+ * and the viewport and screenshot options the build side is drawn with too. */
+export async function drawDesignFrame(d, browser, f) {
+  const viewport = { width: f.width, height: f.height || DEFAULT_HEIGHT };
+  const shot = { fullPage: !f.height, animations: "disabled", caret: "hide" };
+  const row = { id: f.id, designImage: `${f.id}-design.png`, builtImage: `${f.id}-built.png` };
+  const doc = await d.source.evaluate((id) => window.designFrameDocument(id), f.id);
+  const dpage = await browser.newPage({ viewport });
+  try {
+    await dpage.setContent(doc, { waitUntil: "load" });
+    await settle(dpage, f.width);
+    writeFileSync(join(d.out, row.designImage), await dpage.screenshot(shot));
+    row.designChecks = await runChecks(dpage, d.checksSrc, f.id, d.fixture);
+  } finally {
+    await dpage.close();
+  }
+  return { row, doc, viewport, shot };
+}
+
+/**
+ * Draws every frame and writes the capture. `browser` is a Playwright browser (or a stand in with
+ * the same few calls), so this can be exercised without one.
+ */
+export async function capture(o, browser, frames, deps = {}) {
+  const d = await openDesign(o, browser);
+  const { design, out, checksSrc, fixture, notes, source } = d;
   const ctxBuilt = o.storage && !o.designOnly ? await browser.newContext({ storageState: resolve(o.storage) }) : null;
   const rows = [];
   for (const f of frames) {
-    const viewport = { width: f.width, height: f.height || DEFAULT_HEIGHT };
-    const shot = { fullPage: !f.height, animations: "disabled", caret: "hide" };
-    const row = { id: f.id, designImage: `${f.id}-design.png`, builtImage: `${f.id}-built.png` };
-
-    const doc = await source.evaluate((id) => window.designFrameDocument(id), f.id);
-    const dpage = await browser.newPage({ viewport });
-    try {
-      await dpage.setContent(doc, { waitUntil: "load" });
-      await settle(dpage, f.width);
-      writeFileSync(join(out, row.designImage), await dpage.screenshot(shot));
-      row.designChecks = await runChecks(dpage, checksSrc, f.id, fixture);
-    } finally {
-      await dpage.close();
-    }
+    const { row, viewport, shot } = await drawDesignFrame(d, browser, f);
     if (o.designOnly) { rows.push(row); continue; }
 
     const bpage = ctxBuilt ? await ctxBuilt.newPage() : await browser.newPage({ viewport });
@@ -270,7 +288,7 @@ export function findPlaywright({ repo, env = process.env, home = homedir() }) {
   throw new Error(`no Playwright to draw the design with: the app at ${resolve(repo)} has none, DESIGN_SCORE_PLAYWRIGHT is not set, and the shared install is not at ${sharedPkg}. Install it with: bash ${installer}`);
 }
 
-function loadPlaywright(found) {
+export function loadPlaywright(found) {
   // Read by Playwright when it loads, so it is set before the require.
   if (found.browsersPath && !process.env.PLAYWRIGHT_BROWSERS_PATH) process.env.PLAYWRIGHT_BROWSERS_PATH = found.browsersPath;
   return createRequire(join(found.path, "package.json"))(found.path);
