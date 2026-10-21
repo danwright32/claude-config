@@ -467,27 +467,69 @@ _l="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"
 #     own marker and then waits for the other's. Run at once they both see it and pass; run one
 #     after another the first waits out its bound and fails, so the gate blocks. A timing
 #     assertion here would be a claim about how busy the machine is (L290).
-R6="$(mkrepo concurrent)"
-_rv="$TMPROOT/rendezvous"
-mkdir -p "$_rv"
-for _peer in alpha:beta beta:alpha; do
-  _me="${_peer%%:*}"; _other="${_peer#*:}"
-  cat > "$R6/payload/hooks/test-$_me.sh" <<EOF
+#
+#     Each waits on the CONDITION, the other's marker, polled every twentieth of a second, under a
+#     ceiling of 120 seconds by the clock (claude-config#1462). That is far above any start delay
+#     seen: the old spin, which lasted from 3 seconds to a little over 5 (measured below), never
+#     once ran out in over 4,000 runs at load averages up to 192 on 12 cores (#1454). A pair run in
+#     sequence therefore costs the whole ceiling before it fails, which is the price of never
+#     failing a pair that did run at once.
+add_rendezvous_scanner(){   # $1 = repo  $2 = rendezvous folder  $3 = me  $4 = the other
+                            # $5 = seconds before it starts  $6 = the ceiling on its wait, seconds
+  cat > "$1/payload/hooks/test-$3.sh" <<EOF
 #!/usr/bin/env bash
 git ls-files '*.sh' >/dev/null
-: > "$_rv/$_me"
-n=0
-while [ ! -e "$_rv/$_other" ] && [ "\$n" -lt 400000 ]; do n=\$(( n + 1 )); done
-[ -e "$_rv/$_other" ] || { echo "FAIL: $_me never saw $_other, so they ran one after another"; exit 1; }
+sleep $5
+: > "$2/$3"
+deadline=\$(( SECONDS + $6 ))
+while [ ! -e "$2/$4" ]; do
+  if [ "\$SECONDS" -ge "\$deadline" ]; then
+    echo "FAIL: $3 waited its whole ceiling of $6 seconds and $4 never started, so they ran one after another"
+    exit 1
+  fi
+  sleep 0.05
+done
 exit 0
 EOF
-  chmod +x "$R6/payload/hooks/test-$_me.sh"
-done
-commit_all "$R6"
+  chmod +x "$1/payload/hooks/test-$3.sh"
+}
+rendezvous_repo(){          # $1 = name  $2 = seconds beta starts late  -> prints the repo path
+  local r rv; r="$(mkrepo "$1")"; rv="$TMPROOT/rendezvous-$1"; mkdir -p "$rv"
+  add_rendezvous_scanner "$r" "$rv" alpha beta 0 120
+  add_rendezvous_scanner "$r" "$rv" beta alpha "$2" 120
+  commit_all "$r"; printf '%s' "$r"
+}
+R6="$(rendezvous_repo concurrent 0)"
 o8="$(fire "$R6" "git push")"; c8=$?
 [ "$c8" -eq 0 ] \
   && check "the scanners run at once rather than in sequence" ok \
   || check "the scanners run at once rather than in sequence" "exit=$c8 out=$o8"
+
+# --- and each waits for the OTHER TO START, not for a fixed stretch of its own (claude-config#1462).
+#     The wait was once 400000 turns of a loop, which is a clock in disguise (L290), and how long it
+#     lasted moved with the machine. Measured on this Mac 2026-10-21, load 5 to 10 on 12 cores: 3.0
+#     seconds bare (five runs, 2.89 to 3.04), 3.75 when the file it looks for sits in a folder under
+#     TMPDIR as here, 4.3 under the gate, and longer than 5 inside a run of this suite, where a peer
+#     STAGED 5 seconds late still passed against it. No real run ever started a peer that late, but
+#     one that did would have failed the check with both running at once. Here beta starts 10
+#     seconds late, twice the longest spin seen, and the pair must still pass; against the old spin
+#     it failed.
+R6L="$(rendezvous_repo latepeer 10)"
+o8l="$(fire "$R6L" "git push")"; c8l=$?
+[ "$c8l" -eq 0 ] \
+  && check "a scanner waits for a peer that starts later than a fixed spin would last" ok \
+  || check "a scanner waits for a peer that starts later than a fixed spin would last" "exit=$c8l out=$o8l"
+
+# --- the wait has a CEILING, and reaching it says which ceiling it was. A peer that never starts
+#     is the serial case R6 exists to catch, so it must end in a FAIL naming the bound, never a
+#     wait without end. The ceiling is handed in, so this costs no real wait (L524).
+R6C="$(mkrepo nopeer)"; mkdir -p "$TMPROOT/rendezvous-nopeer"
+add_rendezvous_scanner "$R6C" "$TMPROOT/rendezvous-nopeer" alpha beta 0 0
+commit_all "$R6C"
+o8c="$(fire "$R6C" "git push")"; c8c=$?
+[ "$c8c" -eq 2 ] && grep -q 'alpha waited its whole ceiling of 0 seconds and beta never started' <<< "$o8c" \
+  && check "a peer that never starts fails at the ceiling, and names it" ok \
+  || check "a peer that never starts fails at the ceiling, and names it" "exit=$c8c out=$o8c"
 
 # --- the FLOOR on how many scanners the selection holds (claude-config#530). The set is derived,
 #     which is right, and it can shrink to nothing without a word: on 2026-09-21 a conversion moved
