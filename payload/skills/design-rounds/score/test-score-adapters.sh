@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# test-score-adapters.sh: the design match score's two platform adapters (claude-config#1364).
+# test-score-adapters.sh: the design match score's three platform adapters (claude-config#1364, #1414).
 #
 #   capture-web.mjs                      the web adapter: a Playwright screenshot of each frame of the
 #                                        settled design and of the build's fixture route, plus checks
 #   swiftui/DesignScoreTests/DesignScoreCapture.swift
 #                                        the SwiftUI adapter: a snapshot test drawing the real view
+#   capture-terminal.mjs                 the terminal adapter: a mod's own band, from its fixture, drawn
+#                                        through the shared terminal in the design's window (section 3f)
 #
-# The web adapter's logic runs against a stand in browser wherever node does, CI included. The two
-# real runs need what only a Mac set up for the apps has (a Playwright package, Chrome, a Swift
+# The web and terminal adapters' logic runs against a stand in browser wherever node does, CI included.
+# The real runs need what only a Mac set up for the apps has (a Playwright package, Chrome, a Swift
 # toolchain that can build XCTest, which the command line tools alone cannot, #1400), so each says
 # so by name where that is missing, never a pass, on a SUITE-PART-UNMEASURED line the runner counts
 # on the suite's line and names in its summary (L411, #1444): a fixture
@@ -53,10 +55,10 @@ if command -v node >/dev/null 2>&1; then
   if [ "$node_rc" -eq 0 ] && [ -n "$n_pass" ] && [ "${n_fail:-1}" = 0 ] && [ "$n_pass" -gt 0 ]; then
     pass=$((pass + n_pass))
   else
-    bad "the web adapter's node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
+    bad "the web and terminal adapters' node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
   fi
 else
-  unmeasured_part "node is not on PATH, so the web adapter's logic was not tested"
+  unmeasured_part "node is not on PATH, so the web and terminal adapters' logic was not tested"
 fi
 
 # --- 2. the frames both adapters draw come from the score's own reader --------------------------------
