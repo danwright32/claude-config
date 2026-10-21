@@ -2224,6 +2224,97 @@ out_ls7="$(ls_run)"; code_ls7=$?
   && check "#277 the same change with no apply behind it still fails the run" ok \
   || check "#277 the same change with no apply behind it still fails the run" "exit=$code_ls7 out=$out_ls7"
 
+# The register a run against a FIXTURE home reads (claude-config#1470). Every run above names it
+# through SYNC_CLONE_REGISTRY. Left unnamed it defaulted to $HOME/.claude-sync-clones whatever
+# CLAUDE_HOME was, so a run against a throwaway home read this Mac's real register: a real apply
+# landing in the window excused the fixture's own store being rewritten, and the real register being
+# rewritten by somebody else failed the fixture run. It now follows claude-sync's own rule: the real
+# register only for this user's own ~/.claude, none for any other home. The planted "real" Mac is a
+# throwaway HOME, and the control runs AS its own config to show the plant is reachable (L1).
+rm -f "$LS/suites"/test-rulesagain.sh
+RH="$LS/realhome"; mkdir -p "$RH/.claude" "$LS/realclone"
+printf 'a commit\n' > "$LS/realclone/.last-applied"
+touch -t 202001010000 "$LS/realclone/.last-applied"
+printf '%s\n' "$LS/realclone" > "$RH/.claude-sync-clones"
+# The shell rc and the watcher's two markers are the Mac's in the same way, so they follow the same
+# rule and are left unnamed here too.
+ls_run_home(){ # ls_run_home <CLAUDE_HOME> -> as ls_run, with HOME at the planted Mac and no Mac seams
+  env -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC -u SYNC_WATCH_PID_FILE -u SYNC_HOLD_FILE \
+    HOME="$RH" CLAUDE_HOME="$1" \
+    CLAUDE_ISSUE_SPOOL_DIR="$LS/spool" HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
+    bash "$RUNNER" "$LS/suites" 2>&1
+}
+mk_real_apply(){ # mk_real_apply <rule file it rewrites> -> a suite standing in for a real apply
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "a whole file the sync installed\\n" > "%s"\n' "$1"
+    printf 'printf "a newer commit\\n" > "%s"\n' "$LS/realclone/.last-applied"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$LS/suites/test-realapply.sh"
+  chmod +x "$LS/suites/test-realapply.sh"
+}
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+mk_real_apply "$LS/claude-home/CLAUDE.md"
+out_lsf1="$(ls_run_home "$LS/claude-home")"; code_lsf1=$?
+[ "$code_lsf1" -ne 0 ] \
+  && check "#1470 a fixture run is not excused by an apply the real register names" ok \
+  || check "#1470 a fixture run is not excused by an apply the real register names" "exit=$code_lsf1 out=$out_lsf1"
+case "$out_lsf1" in
+  *"applied config into this Mac while these ran"*)
+    check "#1470 and it does not credit the real clone with the change" "out=$out_lsf1" ;;
+  *) check "#1470 and it does not credit the real clone with the change" ok ;;
+esac
+rm -f "$LS/suites"/test-realapply.sh
+touch -t 202001010000 "$LS/realclone/.last-applied"
+
+# Each of the Mac's stores, rewritten by somebody else while a fixture run goes on.
+MAC_STORES="$RH/.claude-sync-clones
+$RH/.zshrc
+$RH/.claude-sync-watch.pid
+$RH/.claude-sync-hold"
+mk_mac_writers(){ # mk_mac_writers <what each writes> -> one writer suite per store above
+  local f n=0
+  while IFS= read -r f; do
+    n=$((n + 1))
+    mk_store_writer "macstore$n" "$f" "$1"
+  done <<< "$MAC_STORES"
+}
+mk_mac_writers 'a store somebody else rewrote'
+out_lsf2="$(ls_run_home "$LS/claude-home")"; code_lsf2=$?
+while IFS= read -r f; do
+  case "$out_lsf2" in
+    *"$f"*) check "#1470 a fixture run does not judge $(basename "$f") as its own store" "exit=$code_lsf2 out=$out_lsf2" ;;
+    *) check "#1470 a fixture run does not judge $(basename "$f") as its own store" ok ;;
+  esac
+done <<< "$MAC_STORES"
+rm -f "$LS/suites"/test-macstore*.sh
+printf '%s\n' "$LS/realclone" > "$RH/.claude-sync-clones"
+
+# The control: the same two runs AS the planted home's own config read its register.
+printf 'the real rules\n' > "$RH/.claude/CLAUDE.md"
+mk_real_apply "$RH/.claude/CLAUDE.md"
+out_lsf3="$(ls_run_home "$RH/.claude")"; code_lsf3=$?
+case "$out_lsf3" in
+  *"applied config into this Mac while these ran"*)
+    [ "$code_lsf3" -eq 0 ] \
+      && check "#1470 control: this user's own run is excused by the apply its register names" ok \
+      || check "#1470 control: this user's own run is excused by the apply its register names" "exit=$code_lsf3 out=$out_lsf3" ;;
+  *) check "#1470 control: this user's own run is excused by the apply its register names" "exit=$code_lsf3 out=$out_lsf3" ;;
+esac
+rm -f "$LS/suites"/test-realapply.sh
+touch -t 202001010000 "$LS/realclone/.last-applied"
+
+mk_mac_writers 'a store a suite rewrote'
+out_lsf4="$(ls_run_home "$RH/.claude")"; code_lsf4=$?
+while IFS= read -r f; do
+  case "$out_lsf4" in
+    *"SUITES CHANGED A LIVE STORE"*"$f"*)
+      check "#1470 control: this user's own run still guards its real $(basename "$f")" ok ;;
+    *) check "#1470 control: this user's own run still guards its real $(basename "$f")" "exit=$code_lsf4 out=$out_lsf4" ;;
+  esac
+done <<< "$MAC_STORES"
+rm -f "$LS/suites"/test-macstore*.sh "$RH/.zshrc" "$RH/.claude-sync-watch.pid" "$RH/.claude-sync-hold"
+
 # Lines ADDED to a rule file, with none removed, is what the other writers of these stores do:
 # another Claude session recording a lesson inserts it into the section it belongs in, and that
 # failed two green runs on 2026-09-02 with the message saying a suite had written it. A checksum

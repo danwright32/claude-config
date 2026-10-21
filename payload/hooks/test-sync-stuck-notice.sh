@@ -257,6 +257,32 @@ sentence="$(printf '%s\n' "$raw" | awk -F'\t' '$1=="sending"{print $4}')"
 says "and status prints exactly the sentence it carries" "$st" "$sentence"
 clear_state
 
+echo "sync stuck notice: a fixture config reads no real launch agents (claude-config#1470)"
+
+# The launch agents belong to the Mac, so with no SYNC_LAUNCHAGENTS a config other than this user's
+# own ~/.claude reads none, as claude-sync does: left at the real default, a hook run against a
+# fixture home asked whatever clone this Mac's real agents name. The planted "real" agents sit in
+# the fixture HOME, and the control runs as that home's own config, set and unset, to show they are
+# reachable (L1).
+mkdir -p "$FHOME/Library/LaunchAgents"
+cp "$WORK/agents/com.claudesync.watch.plist" "$FHOME/Library/LaunchAgents/"
+prompt_home() { # prompt_home <session id> <CLAUDE_HOME, or nothing for unset>  -> no launch agents seam
+  local home=(CLAUDE_HOME="$2")
+  [ -n "$2" ] || home=()
+  printf '{"session_id":"%s","transcript_path":"/x/%s.jsonl","cwd":".","prompt":"carry on"}' "$1" "$1" \
+    | env -u SYNC_LAUNCHAGENTS -u CLAUDE_HOME HOME="$FHOME" ${home[@]+"${home[@]}"} \
+      CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="$NOW" \
+      SYNC_NO_NOTIFY=1 bash "$HOOK" 2>/dev/null
+}
+printf '57 %s %s %s\n' "$(( NOW - 39600 ))" "$(( NOW - 60 ))" "$(( NOW - 60 ))" > "$CLONE/.behind-skips"
+out="$(prompt_home fixturehome "$WORK/fixture-config")"
+silent "a fixture config is told nothing about a clone the real agents name" "$out"
+out="$(prompt_home ownhome "$FHOME/.claude")"
+says "control: this user's own config reads the real agents" "$out" "sending is stuck"
+out="$(prompt_home unsethome "")"
+says "control: an unset CLAUDE_HOME is this user's own config" "$out" "sending is stuck"
+clear_state
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -342,6 +342,34 @@ if [ "$NOPY_RC" = 0 ]; then check "a write to an unrelated file is not reported 
 else check "a write to an unrelated file is not reported over a reader it never needed" "exited $NOPY_RC saying: ${out:0:200}"; fi
 silent "and it says nothing about that write" "$out"
 
+echo "lesson entry check: a fixture config reads no real clone register (claude-config#1470)"
+
+# The register belongs to the Mac, so with no SYNC_CLONE_REGISTRY a config other than this user's
+# own ~/.claude reads none, as claude-sync does, and says the entry was not checked and why rather
+# than asking whatever clone this Mac's real register names. The planted "real" register sits in a
+# throwaway HOME and names this checkout, and the control runs as that home's own config to show it
+# is reachable (L1).
+FH="$WORK/realhome"; mkdir -p "$FH/.claude/hooks"
+printf '%s\n' "$REPO" > "$FH/.claude-sync-clones"
+cp "$HOME_FIX/hooks/test-rule-file-budget.sh" "$FH/.claude/hooks/"
+cp "$HOME_FIX/CLAUDE.md" "$FH/.claude/CLAUDE.md"
+bare='# Lessons\n\n## Proof over green\n\n- **L1. a rule that fits.** body\n- L2. an entry with the bold left off.\n'
+printf "$bare" > "$HOME_FIX/LESSONS.md"
+printf "$bare" > "$FH/.claude/LESSONS.md"
+run_home() { # run_home <CLAUDE_HOME>  -> the hook on that home's LESSONS.md, HOME at the plant, no seam
+  payload_for Edit "$1/LESSONS.md" | env -u SYNC_CLONE_REGISTRY HOME="$FH" CLAUDE_HOME="$1" bash "$HOOK" 2>&1
+}
+out="$(run_home "$HOME_FIX")"
+says "a fixture config says the entry was not checked" "$out" "could not be checked"
+says "and that its config is not this user's own" "$out" "not this user's own ~/.claude"
+says "and names the seam that would let it ask" "$out" "SYNC_CLONE_REGISTRY"
+out="$(run_home "$FH/.claude")"
+says "control: this user's own config asks the clone its register names" "$out" "- **L"
+case "$out" in
+  *"not this user's own"*) check "control: and does not call itself a fixture" "it said: ${out:0:200}" ;;
+  *) check "control: and does not call itself a fixture" ok ;;
+esac
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

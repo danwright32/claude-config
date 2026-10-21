@@ -53,7 +53,9 @@
 #
 # Env:
 #   SYNC_STUCK_NOTICE_AFTER      seconds a stretch must have lasted before it is said (default 3600)
-#   SYNC_LAUNCHAGENTS            where the launch agents are (default ~/Library/LaunchAgents)
+#   SYNC_LAUNCHAGENTS            where the launch agents are (default ~/Library/LaunchAgents, and
+#                                none when CLAUDE_HOME is not this user's own ~/.claude)
+#   CLAUDE_HOME                  the config root (default ~/.claude), read only for that rule
 #   CLAUDE_SYNC_STUCK_STATE_DIR  where each session's record of what it was told is kept (default
 #                                TMPDIR). Losing it costs one repeated notice and nothing else.
 #   CLAUDE_SYNC_STUCK_NOW        the clock, as an epoch, so a test can cross the threshold without
@@ -93,11 +95,19 @@ esac
 now="${CLAUDE_SYNC_STUCK_NOW:-}"
 case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
 
-# The clones the automatic jobs run, from the plists that name them.
-agentdir="${SYNC_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"
+# The clones the automatic jobs run, from the plists that name them. The launch agents are the Mac's,
+# so they are read by claude-sync's own rule (claude-config#1470): SYNC_LAUNCHAGENTS when named, the
+# real folder only when the config is this user's own ~/.claude (an unset CLAUDE_HOME means it), and
+# none for any other home, which would otherwise be told about whatever clone this Mac's real
+# agents name (L2).
+agentdir="${SYNC_LAUNCHAGENTS:-}"
+if [ -z "$agentdir" ]; then
+  _home="${CLAUDE_HOME:-$HOME/.claude}"
+  [ "${_home%/}" = "${HOME%/}/.claude" ] && agentdir="$HOME/Library/LaunchAgents"
+fi
 re_script='<string>(/[^<]*)/claude-sync</string>'
 clones=""
-for plist in "$agentdir"/com.claudesync.*.plist; do
+[ -n "$agentdir" ] && for plist in "$agentdir"/com.claudesync.*.plist; do
   [ -f "$plist" ] || continue
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ $re_script ]]; then

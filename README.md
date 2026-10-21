@@ -183,6 +183,13 @@ expanded home directory as the same path, and if a `claudesync` alias already ex
 pointing somewhere else it leaves your line alone and tells you rather than rewriting
 your shell config. Override the target file with `SYNC_ZSHRC=<path>`.
 
+The launch agents go to `~/Library/LaunchAgents` (or `SYNC_LAUNCHAGENTS=<dir>`) and are loaded with
+launchctl unless `SYNC_NO_LAUNCHCTL=1`. All of that is this Mac's, so when `CLAUDE_HOME` is anything
+other than your own `~/.claude` (every test fixture) `install-autosync` and `install-schedule`
+refuse unless `SYNC_LAUNCHAGENTS` names where to write, skip the alias unless `SYNC_ZSHRC` does,
+and never call launchctl, saying so; a pull that changes `claude-sync` leaves the watch daemon
+alone the same way (#1470).
+
 Sending is automatic on change; receiving is automatic on the timer. A no-op sync
 writes nothing (idempotent), so the watcher never re-triggers itself. On a merge
 conflict the background job stops and fires a desktop notification.
@@ -477,7 +484,12 @@ is what makes it work in both directions, since a launch agent only ever names t
 background job runs from. Both belong to the Mac rather than to a config, so a run whose
 `CLAUDE_HOME` is anything other than your own `~/.claude` (every test fixture) reads neither unless
 `SYNC_LAUNCHAGENTS` or `SYNC_CLONE_REGISTRY` names one, and status then says the launch agents were
-not read rather than that none is installed (#1453).
+not read rather than that none is installed (#1453). The same rule covers every write (#1470): such
+a run records no clone in the real register, `forget-clone` removes nothing from it, a `watch`
+records itself in no `~/.claude-sync-watch.pid`, `hold` and `release` refuse rather than touch
+`~/.claude-sync-hold` (unless `SYNC_WATCH_PID_FILE` or `SYNC_HOLD_FILE` names one), and
+`run-all-tests.sh`, `lesson-entry-check.sh` and `sync-stuck-notice.sh` read none of them. DESIGN.md's "A fixture home touches nothing that belongs to
+the Mac" has the whole rule.
 
 The verdict comes from the runner's exit code, never from a line of its output, and there are three
 outcomes rather than two: the suite passed, the suite FAILED (the config is on disk and a check on it

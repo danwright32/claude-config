@@ -254,11 +254,27 @@ _file_mtime(){ # <path> -> a unix timestamp, or nothing
   case "$m" in ''|*[!0-9]*) return 1 ;; esac
   printf '%s' "$m"
 }
+# Where this run finds a store that belongs to the Mac rather than to the config under test
+# (claude-config#1470), by the rule claude-sync's own store_for_this_home follows: the seam when
+# named, the real location only when the config under test is this user's own ~/.claude (an unset
+# CLAUDE_HOME means it), and none for any other home. A run against a fixture home that read the
+# real register was excused by a real apply landing in its window, and one that listed the real
+# register, shell rc or watcher markers among its live stores was failed by somebody else
+# rewriting them (L2, L463). Empty means none: neither evidence about a fixture's stores nor one
+# of them.
+store_for_this_home(){ # <the seam's value> <the real location>
+  if [ -n "$1" ]; then printf '%s' "$1"; return 0; fi
+  local home="${CLAUDE_HOME:-$HOME/.claude}"
+  [ "${home%/}" = "${HOME%/}/.claude" ] || return 0
+  printf '%s' "$2"
+}
+clone_registry_for_this_home(){ store_for_this_home "${SYNC_CLONE_REGISTRY:-}" "$HOME/.claude-sync-clones"; }
+watch_pid_file_for_this_home(){ store_for_this_home "${SYNC_WATCH_PID_FILE:-}" "$HOME/.claude-sync-watch.pid"; }
 sync_applied_since(){ # <unix timestamp> -> prints the clone and when, empty when none did
   local since="$1" reg clone m
   case "$since" in ''|*[!0-9]*) return 1 ;; esac
-  reg="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
-  [ -f "$reg" ] || return 1
+  reg="$(clone_registry_for_this_home)"
+  [ -n "$reg" ] && [ -f "$reg" ] || return 1
   while IFS= read -r clone; do
     [ -n "$clone" ] || continue
     [ -d "$clone" ] || continue
@@ -830,10 +846,15 @@ ${CLAUDE_HOME:-$HOME/.claude}/CLAUDE.md
 ${CLAUDE_HOME:-$HOME/.claude}/LESSONS-CORE.txt
 $(for _lsx in "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-INDEX-*.md "${CLAUDE_HOME:-$HOME/.claude}"/LESSONS-CORE-*.md; do [ -f "$_lsx" ] && printf '%s\n' "$_lsx"; done)
 ${CLAUDE_HOME:-$HOME/.claude}/settings.json
-${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}
-${SYNC_ZSHRC:-$HOME/.zshrc}
-${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}
-${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
+$(clone_registry_for_this_home)
+$(store_for_this_home "${SYNC_ZSHRC:-}" "$HOME/.zshrc")
+$(watch_pid_file_for_this_home)
+$(store_for_this_home "${SYNC_HOLD_FILE:-}" "$HOME/.claude-sync-hold")"
+  # The clone register, the shell rc and the watcher's two markers are the Mac's, so each is listed
+  # only where this run may read it (claude-config#1470): a run against a fixture home with no seam
+  # for one has none, and leaves the real one to a run of this user's own config, so another session
+  # rewriting it cannot fail a fixture's run.
+  #
   # The last two are the watcher's own markers, added to the list by claude-config#272: they were
   # created in the same commit as this guard and left off it, so a suite that ran `claude-sync
   # watch` or `claude-sync hold` without pointing the seam at its own throwaway path wrote into the
@@ -1614,7 +1635,7 @@ if [ -n "${_live_before:-}" ] && [ "$_live_before" != "$_live_after" ]; then
 "
       continue
     fi
-    if [ "$_lc_path" = "${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}" ] && watch_marker_is_not_ours "$_lc_path"; then
+    if [ "$_lc_path" = "$(watch_pid_file_for_this_home)" ] && watch_marker_is_not_ours "$_lc_path"; then
       _lc_noted="$_lc_noted  $_lc_path: rewritten by a watcher this run did not start, so it is the live daemon restarting rather than a suite.
 "
       continue
