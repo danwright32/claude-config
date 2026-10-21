@@ -203,23 +203,27 @@ del w.repo(REPO).issues[9]
 rc, out, _ = run(w)
 check("a milestone with no design is left alone", w.writes() == [], out)
 
-# 8b. Closed as not planned, the design was abandoned, and the close is left alone below 100%
-# (Dan, 2026-10-20, claude-config#1405). Any other reason, or none GitHub gave, is a completed close.
-w = world(comments=[score_comment(BELOW)], state_reason="not_planned")
-rc, out, _ = run(w)
-check("a Match issue closed as not planned below 100% is left closed",
-      rc == 0 and w.repo(REPO).issues[9]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
-check("and the run says it was left as abandoned", "left 1 closed as not planned" in out, out)
-for reason in ("completed", "duplicate", "reopened", ""):
+# 8b. Closed as not planned (Dan, 2026-10-20, claude-config#1405) or as a duplicate (Dan, 2026-10-21,
+# claude-config#1424), the design was abandoned, and the close is left alone below 100%. Any other
+# reason, or none GitHub gave, is a completed close.
+for abandoned in ("not_planned", "duplicate"):
+    w = world(comments=[score_comment(BELOW)], state_reason=abandoned)
+    rc, out, _ = run(w)
+    check("a Match issue closed as %s below 100%% is left closed" % abandoned,
+          rc == 0 and w.repo(REPO).issues[9]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
+    check("and the run says it was left as abandoned (%s)" % abandoned,
+          "left 1 closed as not planned or duplicate" in out, out)
+for reason in ("completed", "reopened", "", "Duplicate", "NOT_PLANNED"):
     w = world(comments=[score_comment(BELOW)], state_reason=reason)
     rc, out, _ = run(w)
     check("a Match issue closed below 100%% with the reason %r is reopened" % reason,
           w.repo(REPO).issues[9]["state"] == "open" and len(posted(w)) == 1, out)
-w = world(comments=[score_comment(BELOW)], state_reason="not_planned", issue_state="closed",
-          milestone_state="closed", ms_closed_at=CLOSED_AT)
-rc, out, _ = run(w)
-check("a design milestone whose Match issue was closed as not planned is left closed below 100%",
-      w.repo(REPO).milestones[3]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
+for abandoned in ("not_planned", "duplicate"):
+    w = world(comments=[score_comment(BELOW)], state_reason=abandoned, issue_state="closed",
+              milestone_state="closed", ms_closed_at=CLOSED_AT)
+    rc, out, _ = run(w)
+    check("a design milestone whose Match issue was closed as %s is left closed below 100%%" % abandoned,
+          w.repo(REPO).milestones[3]["state"] == "closed" and w.writes() == [], out + json.dumps(w.writes()))
 w = world(comments=[score_comment(BELOW)], state_reason="completed", issue_state="closed",
           milestone_state="closed", ms_closed_at=CLOSED_AT)
 rc, out, _ = run(w)

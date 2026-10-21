@@ -27,12 +27,15 @@ claude-config#1394; score_github.read_mark is the one reader), or one titled "Ma
 design" by hand. A milestone is a design milestone when its description carries the milestone mark
 or it holds a Match issue.
 
-CLOSED AS NOT PLANNED, the design was abandoned (Dan, 2026-10-20, claude-config#1405), and the
-close is let through below 100%: `gh issue close --reason "not planned"`, or a REST close sending
-state_reason=not_planned. Any other reason, two reasons, --duplicate-of, or a reason that cannot be
-read (an --input file) is judged as the completed close it may be; a GraphQL closeIssue is refused
-whatever its reason. A milestone has no close reason: its design is abandoned when its Match issue
-is closed as not planned, which is then not judged, so the milestone closes.
+CLOSED AS NOT PLANNED (Dan, 2026-10-20, claude-config#1405) OR AS A DUPLICATE (Dan, 2026-10-21,
+claude-config#1424), the design was abandoned, and the close is let through below 100%:
+`gh issue close --reason "not planned"`, `--reason duplicate`, `--duplicate-of <n>`, or a REST close
+sending state_reason=not_planned or state_reason=duplicate (score_github.abandons, the one predicate).
+Any other reason, another case (gh takes `Duplicate` but closes as completed), two different
+reasons, an empty --duplicate-of, or a reason that cannot be read (an --input file) is judged as the
+completed close it may be; a GraphQL closeIssue is refused whatever its reason. A milestone has no
+close reason: its design is abandoned when its Match issue is closed as not planned or as a
+duplicate, which is then not judged, so the milestone closes.
 
 THE SCORE is the newest score comment on the Match issue (`design_score.py post` writes them) whose
 commit has the same tree as the commit being closed on: the default branch's head, or the pull
@@ -133,10 +136,11 @@ def _flag_values(words, names, with_value):
     return out
 
 
-# The one reason a close of a Match issue below 100% is let through: not planned, the design
-# abandoned (Dan, 2026-10-20, claude-config#1405). Spelled exactly as gh and the REST API take it;
-# any other spelling, or a reason that cannot be read, is judged as the completed close it may be.
-GH_NOT_PLANNED = "not planned"
+# gh's spelling of each close reason, as the REST API's state_reason, so a gh close is judged by the
+# one predicate score_github.abandons. Exactly as gh spells them: gh takes `--reason Duplicate` in
+# any case but then closes as completed, so another case, or a reason that cannot be read, maps to
+# nothing and is judged as the completed close it may be. `--duplicate-of <n>` is a duplicate close.
+GH_REASONS = {"completed": "completed", "not planned": "not_planned", "duplicate": "duplicate"}
 
 
 REDIRECT = re.compile(r"^(\d*|&)(>>?|<<?<?|>&|<&|>\|)(.*)$")
@@ -219,10 +223,13 @@ def targets(command, cwd):
                 raise Refuse("`gh issue %s` names no issue, so which issue it %s cannot be told" % (act, act))
             spec = pos[0]
             if act == "close":
-                reasons = _flag_values(words, ["-r", "--reason"], ISSUE_FLAGS_WITH_VALUE)
-                duplicate = _flag_values(words, ["--duplicate-of"], ISSUE_FLAGS_WITH_VALUE)
-                if reasons and all(r == GH_NOT_PLANNED for r in reasons) and not duplicate:
-                    continue      # closed as not planned: the design abandoned, never judged
+                reasons = [GH_REASONS.get(r) for r in _flag_values(words, ["-r", "--reason"], ISSUE_FLAGS_WITH_VALUE)]
+                # gh closes as a duplicate when --duplicate-of names an issue; an empty one names
+                # none, and gh then closes as completed, so it is read as no reason it knows.
+                reasons += ["duplicate" if d else None
+                            for d in _flag_values(words, ["--duplicate-of"], ISSUE_FLAGS_WITH_VALUE)]
+                if sg.abandons(reasons):
+                    continue      # closed as not planned or duplicate: the design abandoned, never judged
             m = ISSUE_URL.match(spec)
             if m:
                 found.append(("issue", m.group(1), int(m.group(2)), "gh issue %s" % act))
@@ -243,7 +250,7 @@ def targets(command, cwd):
             closes = any(re.match(r"^state=closed$", f) for f in fields)
             unread_input = _flag_value(list(after), ["--input"]) is not None
             reasons = [f.split("=", 1)[1] for f in fields if f.startswith("state_reason=")]
-            not_planned = bool(reasons) and all(r == sg.NOT_PLANNED for r in reasons) and not unread_input
+            abandoned = sg.abandons(reasons) and not unread_input
             if endpoint == "graphql":
                 if "closeIssue" in " ".join(after):
                     found.append(("graphql", default_repo, None, "gh api graphql closeIssue"))
@@ -251,8 +258,8 @@ def targets(command, cwd):
             ep = endpoint.replace("{owner}/{repo}", default_repo or "{owner}/{repo}").replace(":owner/:repo", default_repo or ":owner/:repo")
             mi = ISSUE_EP.match(ep)
             mm = MILESTONE_EP.match(ep)
-            if mi and not_planned:
-                continue          # closed as not planned: the design abandoned, never judged
+            if mi and abandoned:
+                continue          # closed as not planned or duplicate: the design abandoned, never judged
             if mi and (closes or unread_input):
                 found.append(("issue", "%s/%s" % (mi.group(1), mi.group(2)), int(mi.group(3)), "gh api %s" % endpoint))
             elif mm and (closes or unread_input or method == "DELETE"):
@@ -364,8 +371,9 @@ class Gate:
             why = "%s, the head of %s" % (why, ref)
         for i in matches:
             # A milestone has no close reason of its own. Its design is abandoned when its Match
-            # issue was closed as not planned, and that issue is then not held to 100% (#1405).
-            if sg.closed_not_planned(i):
+            # issue was closed as not planned (#1405) or as a duplicate (#1424), and that issue is
+            # then not held to 100%.
+            if sg.closed_as_abandoned(i):
                 continue
             self.judge_issue(repo, i["number"], ref, why)
 
