@@ -204,8 +204,14 @@ check "pull, seam: the real Mac is untouched" same "$(plant)" "$BEFORE"
 # ==== 3. control: the same commands AS the planted home's own config do reach it ====
 replant
 OWN="$FAKEHOME/.claude"
-out="$(run_as "$OWN" pull SYNC_REPO="$WORK/pull-own")"
+# Under the runner a pull refuses to apply into HOME/.claude at all (CLAUDE_SUITE_RUN_ID), since
+# there it would be the real config. Here HOME is the planted throwaway inside WORK, so that one
+# refusal is lifted for this one call; without it the control pull dies before the restart and
+# proves nothing (seen in the full run).
+case "$OWN" in "$WORK"/*) ;; *) echo "FAIL: the control home is not inside WORK. Refusing to run it."; exit 1 ;; esac
+out="$(run_as "$OWN" pull SYNC_REPO="$WORK/pull-own" CLAUDE_SUITE_RUN_ID=)"
 check "control pull: restarts the watch daemon" grep -q 'kickstart -k gui/.*/com.claudesync.watch' "$LCLOG"
+grep -q 'kickstart' "$LCLOG" || printf '  the control pull said:\n%s\n  launchctl saw:\n%s\n' "$out" "$(calls)"
 check "control pull: records this clone in the register" grep -qxF "$WORK/pull-own" "$REGISTER"
 
 : > "$LCLOG"
