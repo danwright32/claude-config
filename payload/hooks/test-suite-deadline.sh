@@ -255,12 +255,15 @@ overrun_with pastshare LOAD_AVERAGE_CMD="$(mk_load seventeen 17)" LOAD_AVERAGE_C
 # that reader: the load came back unreadable and a stop that had to be UNMEASURED was a FAIL. Seen
 # on 2026-10-21 at a load average of 42, through test-scanners-before-push.sh, and reproduced 1 in
 # 200 under load. Made certain here rather than left to the scheduler: BASH_ENV hands the watchdog
-# (and only it sends USR1) a kill that holds it 0.3s after that signal, the gap load leaves; the
-# suite idles in builtins, so nothing defers its handler; and the reader takes 0.6s, so it is still
-# running when the tree is killed. The fix stops and kills first and flags last, so whatever the gap,
-# the handler cannot start until the kill is over.
-printf 'kill(){ builtin kill "$@"; local r=$?; [ "${1:-}" = -USR1 ] && sleep 0.3; return "$r"; }\n' > "$TMPROOT/slow-watchdog.env"
-printf '#!/bin/sh\nsleep 0.6\necho 30.5\n' > "$TMPROOT/load-slowbusy"; chmod +x "$TMPROOT/load-slowbusy"
+# (and only it sends USR1) a kill that, after that signal, waits until the handler's load reader
+# has STARTED, the gap load leaves, waited on as a condition rather than a fixed time (L290), with a
+# ceiling because once fixed the reader cannot start until the watchdog moves on. The suite idles in
+# builtins, so nothing defers its handler, and the reader stays alive after it starts, so the kill
+# finds it. The fix stops and kills first and flags last, so whatever the gap, the handler cannot
+# start until the kill is over.
+printf 'kill(){ builtin kill "$@"; local r=$? n=0; if [ "${1:-}" = -USR1 ]; then while [ ! -e %q ] && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done; fi; return "$r"; }\n' \
+  "$TMPROOT/gap-reader-started" > "$TMPROOT/slow-watchdog.env"
+printf '#!/bin/sh\n: > %q\nsleep 2\necho 30.5\n' "$TMPROOT/gap-reader-started" > "$TMPROOT/load-slowbusy"; chmod +x "$TMPROOT/load-slowbusy"
 mk_armed "$TMPROOT/gap.sh" 'while :; do :; done'
 env -u HOOK_TESTS_SLOTS BASH_ENV="$TMPROOT/slow-watchdog.env" \
   LOAD_AVERAGE_CMD="$TMPROOT/load-slowbusy" LOAD_AVERAGE_CORES=12 \
@@ -278,9 +281,10 @@ gp_out="$(cat "$TMPROOT/gap.out")"
 # flagged suite twenty polls to finish its handler before TERM, so every test that shortens the poll
 # to look quickly (0.05s here, in the runner's suite and in the scanners suite) also cut that grace
 # from 40 seconds to one, and a handler slowed by load past one second was killed before it said
-# anything: 2 of 800 runs under load ended 143 with no line at all (measured 2026-10-21). The grace is now its own number
-# of seconds on the clock, whatever the poll. Shown with a load reader that takes 2 seconds, longer
-# than twenty short polls and far inside the real grace.
+# anything: 2 of 800 runs under load ended 143 with no line at all (measured 2026-10-21). The grace
+# is now its own number of seconds on the clock, whatever the poll. Shown with a load reader that
+# takes 2 seconds, longer than twenty short polls and far inside the real grace. Load can only make
+# this pass on the old code (twenty polls stretched past 2 seconds), never fail on the new one.
 printf '#!/bin/sh\nsleep 2\necho 30.5\n' > "$TMPROOT/load-slowreader"; chmod +x "$TMPROOT/load-slowreader"
 overrun_with slowreader LOAD_AVERAGE_CMD="$TMPROOT/load-slowreader" LOAD_AVERAGE_CORES=12
 [ "$ow_rc" = 124 ] && said_mark "$ow_out" && ! said_fail "$ow_out" \
