@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L794. Model an RPC binding double so every property read is a remote method, or .call on a method passes tests and throws live.
 - L775. Check a change made through another service's API by re-reading on a timer to a deadline; one immediate read calls a landed change a failure.
 - L1023. Classifying outside free text by its PREFIX reads any new option sharing it as the old one, so match each known wording whole and refuse the rest.
 - L477. A browser error reporter files every uncaught error on the page as yours, including a host in-app browser's injected script: check your bundle first.
