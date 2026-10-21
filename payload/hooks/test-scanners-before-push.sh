@@ -509,9 +509,10 @@ o8="$(fire "$R6" "git push")"; c8=$?
 #     lasted moved with the machine. Measured on this Mac 2026-10-21, load 5 to 10 on 12 cores: 3.0
 #     seconds bare (five runs, 2.89 to 3.04), 3.75 when the file it looks for sits in a folder under
 #     TMPDIR as here, 4.3 under the gate, and longer than 5 inside a run of this suite, where a peer
-#     5 seconds late still passed against it. A peer the machine was slow to start for longer than
-#     the spin failed the check with both running at once. Here beta starts 10 seconds late, twice
-#     the longest spin seen, and the pair must still pass.
+#     STAGED 5 seconds late still passed against it. No real run ever started a peer that late, but
+#     one that did would have failed the check with both running at once. Here beta starts 10
+#     seconds late, twice the longest spin seen, and the pair must still pass; against the old spin
+#     it failed.
 R6L="$(rendezvous_repo latepeer 10)"
 o8l="$(fire "$R6L" "git push")"; c8l=$?
 [ "$c8l" -eq 0 ] \
