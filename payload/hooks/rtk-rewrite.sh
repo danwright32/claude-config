@@ -227,6 +227,27 @@ fi
 # this function, because which gh subcommand runs is read by the shared reader, not by word position.
 if [ "$rtk_dest_sub" = "curl" ]; then return 0; fi
 
+# The same refusal for the three destinations nobody had measured (claude-config#1443). Measured
+# 2026-10-21 against rtk 0.31.0 with HOME emptied, offline, each command run plain and through rtk
+# against a stub first on PATH that recorded the arguments rtk handed it, bytes compared.
+#
+# `rtk aws` appends `--output json` and prints the JSON's SHAPE, as `rtk curl` does: a 40 object
+# s3api list-objects-v2 came back as `[{ ETag: string, Key: string, ... }] (40)`, every key gone,
+# and log events as `message: string`, the messages gone.
+#
+# `rtk wget` changes the download, not only its report. `wget URL -O saved.txt` ran as
+# `wget -q -O - saved.txt URL`, so the file the command asked for was never written and saved.txt
+# was handed to wget as a second URL; `wget -O - URL` gained a stray `-` URL and a header in front
+# of the body.
+#
+# `rtk prisma` runs the same prisma (a bare one from PATH; `npx prisma`, where it would be a
+# different one, is refused by the runner rule below) but `prisma generate` lost the client
+# version and the schema path, and `prisma migrate status` moved every line, the unapplied
+# migrations included, from stdout to stderr.
+case " aws wget prisma " in
+  *" $rtk_dest_sub "*) return 0 ;;
+esac
+
 return 1
 }
 
