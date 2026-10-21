@@ -136,6 +136,9 @@ test("the built document is the design's own frame with the band put in place, f
   // A band carrying a closing script tag cannot end the injected script early.
   const sly = bandSpec([{ ...LOOK, lines: [[{ text: "</script><b>x" }]] }], { clickable: true }, kit);
   assert.ok(!builtDocument(design, sly, { bandOnly: false }).includes("</script><b>x"));
+  // A band whose own text spells a placeholder keeps its text: only the template's placeholders are filled.
+  const named = bandSpec([{ ...LOOK, lines: [[{ text: "__BAND_ONLY__ and __SPEC__" }]] }], { clickable: true }, kit);
+  assert.ok(builtDocument(design, named, { bandOnly: true }).includes('"text":"__BAND_ONLY__ and __SPEC__"'));
 });
 
 /** A stand in browser: each page reports what the injected band script would, per document. */

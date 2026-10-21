@@ -199,7 +199,9 @@ export function builtDocument(designDoc, spec, { bandOnly }) {
   const head = /<head[^>]*>/i.exec(designDoc);
   if (!head) throw new Error("the design's frame document has no <head> to put the mod's band ahead of its builder");
   const json = JSON.stringify(spec).replace(/</g, "\\u003c");
-  const script = BAND_SCRIPT.replace("__SPEC__", () => json).replace("__BAND_ONLY__", bandOnly ? "true" : "false");
+  // The template's own placeholders are filled before the band goes in, so a band whose text spells
+  // one is never rewritten.
+  const script = BAND_SCRIPT.replace("__BAND_ONLY__", bandOnly ? "true" : "false").replace("__SPEC__", () => json);
   const at = head.index + head[0].length;
   return designDoc.slice(0, at) + script + designDoc.slice(at);
 }
