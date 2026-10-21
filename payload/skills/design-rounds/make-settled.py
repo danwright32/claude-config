@@ -62,8 +62,9 @@ The spec, with paths resolved against the spec's own folder:
 It writes NOTHING when it refuses, and refuses: a chrome that is not a captured one (no stand ins), a
 "screen" that is not one of the three kinds or the terminal, or one named beside a captured chrome, a
 builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
-no width or variant, a terminal design with no Chrome to measure it in, a terminal frame whose window
-draws at a width other than the frame's own or whose builder throws, a decision with no owner (check-decision-map.py's rule), a decision a
+no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a
+terminal frame whose window draws at a width other than the frame's own, that draws no window, or whose
+builder throws, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, an intro that is not text, a requirements list that is empty or not in the shape above (a
 number not written as text, a requirement with no sentence, two sharing a number), a decision naming a

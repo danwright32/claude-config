@@ -370,7 +370,7 @@ terminal design is refused, naming that variable, where there is none. The file 
 and says its picture half is unmeasured, since nothing yet captures a built mod screen in the form the
 terminal is drawn in (claude-config#1414): a terminal design is no score until then, and its Match
 issue stays open. It refuses, writing nothing, a chrome
-that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal frame whose window draws at another width or whose builder throws, a checked decision with no check sentence or no frame, a
+that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
 hold, and an exception without Dan's words, a date and where he said them.

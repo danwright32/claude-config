@@ -293,7 +293,14 @@ def measure_screen_windows(page, frames, chrome_bin, deadline=60):
     if proc.returncode != 0 or not m:
         raise ChromeError("Chrome (%s) did not measure the terminal windows (exit %d): %s"
                           % (chrome_bin, proc.returncode, (proc.stderr.strip() or proc.stdout[-300:]).strip()[-600:]))
-    measured = json.loads(html.unescape(m.group(1)))
+    try:
+        measured = json.loads(html.unescape(m.group(1)))
+    except ValueError as err:
+        raise ChromeError("Chrome (%s) measured the terminal windows, and its measurement could not be read (%s): %s"
+                          % (chrome_bin, err, m.group(1)[:300]))
+    if not isinstance(measured, dict):
+        raise ChromeError("Chrome (%s) measured the terminal windows, and its measurement could not be read: %s"
+                          % (chrome_bin, m.group(1)[:300]))
     missing = [f["id"] for f in frames if f["id"] not in measured]
     if missing:
         raise ChromeError("Chrome measured no terminal window for frame %s" % ", ".join(missing))

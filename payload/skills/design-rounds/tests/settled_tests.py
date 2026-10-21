@@ -354,6 +354,18 @@ check("a terminal design with DESIGN_ROUNDS_CHROME naming no Chrome is refused, 
 rc, out, path = make("width-none-chrome-chrome", spec(), chrome=os.path.join(T, "no-such-chrome"))
 check("a design in captured chrome is written with no Chrome, since only a terminal's windows are measured",
       rc == 0 and os.path.isfile(path), out)
+# A Chrome that prints a page of its own, so what make-settled.py does with a measurement it cannot read is
+# seen on every machine: a refusal saying so, never a traceback that leaves its half-written file behind.
+for n, (label, body, needle) in enumerate([
+    ("a measurement that is not JSON", '<pre id="DR-MEASURE">{"t1": {"width": 64</pre>', "could not be read"),
+    ("no measurement at all", "<p>nothing measured</p>", "did not measure"),
+]):
+    fake = write("fake-chrome-%d" % n, "#!/bin/sh\nprintf '%%s\\n' '<html><body>%s</body></html>'\n" % body)
+    os.chmod(fake, 0o755)
+    rc, out, path = make("width-fake-%d" % n, on_t1(frames=[wide("t1", 640, 640)]), chrome=fake)
+    check("Chrome giving %s is refused, saying so, writing nothing and leaving nothing behind" % label,
+          rc == 2 and needle in out and "Traceback" not in out and not os.path.exists(path)
+          and not [x for x in os.listdir(T) if x.startswith("tmp") and x.endswith(".html")], out)
 if not TEST_CHROME:
     print("UNMEASURED: no Chrome at %s or on PATH, so no terminal frame's window was measured" % MAC_CHROME)
 else:
@@ -377,6 +389,11 @@ else:
     check("every mismatched frame is named in the one refusal, and a matching one is not",
           rc == 2 and "frame t1 is declared 640 wide" in out and "frame t3 is declared 820 wide" in out
           and "drawn 700 wide" in out and "frame t2" not in out, out)
+    write("term-bare.js", "function buildScreen(variant) { var p = document.createElement('p'); "
+                          "p.textContent = Terminal.amber('x').textContent; return p; }\n")
+    rc, out, path = make("width-nowindow", on_t1(builder="term-bare.js", frames=[wide("t1", 640)]))
+    check("a frame whose builder draws no terminal window is refused, saying so, never as a width",
+          rc == 2 and "frame t1 draws no terminal window" in out and not os.path.exists(path), out)
     rc, out, path = make("width-threw", on_t1(builder="term-default.js", frames=[wide("t1", 820, boom=True)]))
     check("a frame whose builder throws is refused with the builder's own words, never as a width",
           rc == 2 and "the band has no room data" in out and "frame t1" in out and not os.path.exists(path), out)
