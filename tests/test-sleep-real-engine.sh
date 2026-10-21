@@ -305,22 +305,33 @@ open(tmp, 'w').write(json.dumps(d))
 os.replace(tmp, rec)
 PY
 }
+check "/sleep places the sleep record" ok
 # A seam (#1469): the record ends SLEEP_REAL_ENGINE_ENDS_IN_MS after now, as /sleep itself writes it
-# when run in the seconds before noon ET, so that start time is reproduced at any hour.
+# when run in the seconds before noon ET, so that start time is reproduced at any hour. It stands for
+# what /sleep wrote, so the takeover below meets it exactly as it meets a real run before noon: with
+# no takeover, 4800 fails the 20 checks 2026-10-21 failed; with it, 4800 passes and -1000 (a night
+# already ended when the suite takes over) is said unmeasured.
 [ -n "${SLEEP_REAL_ENGINE_ENDS_IN_MS:-}" ] && end_night_in "$SLEEP_REAL_ENGINE_ENDS_IN_MS" >/dev/null
 # The night's end is the suite's from here on, never the wall clock's (#1469). /sleep ends a night at
 # noon ET after it, so one run in the last seconds before noon places a record that ends partway
 # through this run: on 2026-10-21 a record placed at 11:59:55 AM ET ended 4.8 seconds later, and
 # every check from the worker's permission prompt on failed (20 of 53) with nothing wrong. The
 # engine's clock cannot be set from here, so the end is: an hour from now, past the 1200 seconds
-# SUITE_WALL_DEFAULT lets any run last. A record that had already ended by now means /sleep's own
-# last steps ran on an ended night, which no fixture can undo, so that run is said, not failed.
-read -r WROTE_UNTIL TOOK_OVER < <(end_night_in 3600000)
-if [[ "$WROTE_UNTIL" =~ ^[0-9]+$ ]] && [ "$WROTE_UNTIL" -le "$TOOK_OVER" ]; then
+# SUITE_WALL_DEFAULT lets any run last. A takeover that fails, or a record with no end to read, is a
+# failure here, never a run going on with an end the suite did not set. A record that had already
+# ended by now means /sleep's own last steps ran on an ended night, which no fixture can undo, so
+# that run is said, not failed.
+NIGHT_END="$(end_night_in 3600000 2>&1)"; NIGHT_END_RC=$?
+read -r WROTE_UNTIL TOOK_OVER <<<"$NIGHT_END"
+if [ "$NIGHT_END_RC" -ne 0 ] || ! [[ "$WROTE_UNTIL" =~ ^[0-9]+$ && "$TOOK_OVER" =~ ^[0-9]+$ ]]; then
+  check "the suite sets the night's end itself, an hour on (#1469)" "exit $NIGHT_END_RC: $(clip "$NIGHT_END" 300)"
+  finish
+fi
+check "the suite sets the night's end itself, an hour on (#1469)" ok
+if [ "$WROTE_UNTIL" -le "$TOOK_OVER" ]; then
   unmeasured_parts+=("everything after /sleep: it ran in the seconds before noon ET, when a night ends, and its record ended at $WROTE_UNTIL ms before this run could set its end at $TOOK_OVER ms, so run it again")
   finish
 fi
-check "/sleep places the sleep record" ok
 grep -q '^scope-modes: Sleep mode is on until' <<<"$SLEEP_SAID" && check "/sleep says it is on and until when" ok || check "/sleep says it is on and until when" "said: $SLEEP_SAID"
 [ "$(jget "$REC" v)" = 1 ] && [ "$(jget "$REC" startedBy.sessionId)" = "$S1" ] \
   && check "the record is version 1 and names the session that started it" ok \
