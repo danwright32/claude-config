@@ -19,11 +19,13 @@ hook that slow is killed and the command goes unscreened.
       "<its words, 0x1f between them>" 0x1c "<its git -C directory>" 0x1c "<1 when the text read
       on its own is exactly this one command, else 0>" 0x1c "<the command from its name on, past
       leading reserved words and assignments>" 0x1c "<those assignments, one per line>" 0x1c "<the
-      gh or git subcommand it runs, tool_field: tool 0x1d sub 0x1d act 0x1d words, or empty>"
-      0x1e. Exit 3 as commands; see read(), command_rest(), gh_path() and git_path().
+      gh or git subcommand it runs, tool_field: tool 0x1d sub 0x1d act 0x1d words, else rtk's own
+      subcommand, rtk_field, in the same shape, or empty>" 0x1e. Exit 3 as commands; see read(),
+      command_rest(), gh_path(), git_path() and rtk_field().
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
-      front (tool_field), or nothing when it runs neither, exit 0 either way (claude-config#1188).
+      front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
+      it runs none of them, exit 0 either way (claude-config#1188).
   shell-words.py words      stdin: one command
       its words as the shell reads them, quotes removed, joined by 0x1f, past any leading reserved
       word (then, do, else, ...), so the first word is the command's own; see command_words().
@@ -542,7 +544,7 @@ def alone(text):
         return False
 
 
-def command_rest(text):
+def command_rest(text, passed=None):
     """(the command from its own name on, its leading assignments) for one command's text.
 
     Past the reserved words that only open or continue a compound command (RESERVED: then, do, {,
@@ -564,7 +566,7 @@ def command_rest(text):
             break
         s = s[m.end():]
     assigns, rest = split(s)
-    rest, more = past_runners(rest)
+    rest, more = past_runners(rest, passed)
     return rest, "\n".join(assigns + more)
 
 
@@ -606,11 +608,12 @@ def first_word(s):
     return w, s[lex.instream.tell():]
 
 
-def past_runners(rest):
+def past_runners(rest, passed=None):
     """The command past any rtk, env or sudo in front of it, each with its options, and the NAME=value
     settings env or sudo gives it, which are the command's own assignments as much as a leading one.
     A runner whose command cannot be read from its words (env -S, which splits a string into one) is
-    left as it stands, the command then being that runner's."""
+    left as it stands, the command then being that runner's. When passed is a list, each runner
+    passed over is appended to it as (its name, the text after its own options), for rtk_field."""
     assigns = []
     for _ in range(8):
         w, after = first_word(rest)
@@ -646,6 +649,8 @@ def past_runners(rest):
                 s = after_opt
                 continue
             break
+        if passed is not None:
+            passed.append((w.split("/")[-1], s))
         more, s = split(s)
         assigns.extend(more)
         rest = s
@@ -791,6 +796,35 @@ def tool_field(rest):
     return tool + "\x1d" + sub + "\x1d" + act + "\x1d" + "\x1f".join(words)
 
 
+def rtk_field(passed):
+    """The reading of a command whose LAST runner is rtk, from the runners command_rest passed over:
+    "rtk" 0x1d its subcommand 0x1d 0x1d the words after it joined by 0x1f, or "" (claude-config#1468).
+
+    rtk is read as a runner because `rtk git push` runs git push, but `rtk init` runs a subcommand of
+    rtk's own, and read as a runner it was a command named init, which nothing could tell from a bare
+    init. It is asked only where tool_field found neither gh nor git, so a gate asking about those
+    reads them exactly as before. rtk's own options in front of its subcommand (`rtk -v init`) were
+    passed over with it, as rtk itself passes over them."""
+    if not passed or passed[-1][0] != "rtk":
+        return ""
+    after = passed[-1][1]
+    try:
+        words = shlex.split(after, posix=True)
+    except ValueError:
+        words = after.split()
+    if not words:
+        return ""
+    return "rtk\x1d" + words[0] + "\x1d\x1d" + "\x1f".join(words[1:])
+
+
+def program_field(text):
+    """(the command from its own name on, its assignments, its reading) for one command's text: the
+    gh or git reading (tool_field), else rtk's own subcommand (rtk_field), else ""."""
+    passed = []
+    rest, assigns = command_rest(text, passed)
+    return rest, assigns, tool_field(rest) or rtk_field(passed)
+
+
 def read(s):
     """The commands reading, each record with its words, its git -C directory and whether it is alone.
 
@@ -805,9 +839,9 @@ def read(s):
         records, rc = crude_commands(s), 3
     out = []
     for d, t in records:
-        rest, assigns = command_rest(t)
+        rest, assigns, field = program_field(t)
         fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if alone(t) else "0", rest, assigns,
-                  tool_field(rest))
+                  field)
         out.append("\x1c".join(fields) + "\x1e")
     return "".join(out), rc
 
@@ -820,10 +854,10 @@ def main(argv):
     elif mode == "gitdir":
         sys.stdout.write(git_dir(command_rest(data)[0]))
     elif mode == "tool":
-        # One command's gh or git reading (tool_field), for a command lib/push-scope.sh holds no
-        # reading of. Exit 0 with nothing printed for a command that runs neither, so any other exit
-        # is a reader that failed, which the caller must not take for "runs neither" (L42).
-        sys.stdout.write(tool_field(command_rest(data)[0]))
+        # One command's gh, git or rtk reading (program_field), for a command lib/push-scope.sh holds
+        # no reading of. Exit 0 with nothing printed for a command that runs none of them, so any
+        # other exit is a reader that failed, which the caller must not take for "runs none" (L42).
+        sys.stdout.write(program_field(data)[2])
     elif mode == "bare":
         sys.stdout.write(bare(data))
     elif mode == "read":
