@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Block `gh issue create` unless the issue carries a milestone, a priority level and
-# at least one category label.
+# at least one category label. Also block gh issue edit and comment, and gh pr create, edit
+# and comment, when their --body-file is one the gate cannot read (claude-config#1435).
 #
 # The rules, the messages and the per-rule overrides all live in issue_field_gate.py.
 # This is only the wrapper: read the payload, run the gate, and make a crash visible.
