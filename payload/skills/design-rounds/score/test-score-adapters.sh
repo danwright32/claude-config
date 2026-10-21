@@ -8,7 +8,9 @@
 #
 # The web adapter's logic runs against a stand in browser wherever node does, CI included. The two
 # real runs need what only a Mac set up for the apps has (a Playwright package, Chrome, a Swift
-# toolchain), so each says UNMEASURED by name where that is missing, never a pass (L411): a fixture
+# toolchain that can build XCTest, which the command line tools alone cannot, #1400), so each says
+# so by name where that is missing, never a pass, on a SUITE-PART-UNMEASURED line the runner counts
+# on the suite's line and names in its summary (L411, #1444): a fixture
 # design and a fixture build drawn for real, scored at 100%, and then changed on purpose and scored
 # below it (the negative control, L1).
 set -uo pipefail
@@ -31,6 +33,13 @@ pass=0; fail=0
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed -n '1,30p' | sed 's/^/    /'; }
 said() { grep -q -- "$1" "$2"; }
+# A part this machine cannot measure: said on the one line the runner reads, which it counts on the
+# suite's ok line, prints under it and names in its summary, so a run that measured less never reads
+# as one that passed more (L411, L98, #1444). unmeasured_part <the sentence saying what, and why>
+unmeasured_part() {
+  echo "SUITE-PART-UNMEASURED $1"
+}
+. "$HERE/swift-xctest.sh"
 
 # --- 1. the web adapter's logic, against a stand in browser -----------------------------------------
 if command -v node >/dev/null 2>&1; then
@@ -47,7 +56,7 @@ if command -v node >/dev/null 2>&1; then
     bad "the web adapter's node tests (node $(node --version) exited $node_rc, passed ${n_pass:-none}, failed ${n_fail:-unknown})" "$(tail -n 30 "$T/node.out")"
   fi
 else
-  echo "SUITE-PART-UNMEASURED node is not on PATH, so the web adapter's logic was not tested"
+  unmeasured_part "node is not on PATH, so the web adapter's logic was not tested"
 fi
 
 # --- 2. the frames both adapters draw come from the score's own reader --------------------------------
@@ -109,7 +118,7 @@ cp "$T/design.html" "$APP/built.html"
 git -C "$APP" add built.html
 git -C "$APP" -c user.name=t -c user.email=t@t commit -q -m fixture
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Playwright package (set DESIGN_SCORE_PLAYWRIGHT), node or Chrome here, so the web adapter was not run in a real browser"
+  unmeasured_part "no Playwright package (set DESIGN_SCORE_PLAYWRIGHT), node or Chrome here, so the web adapter was not run in a real browser"
 else
   run_web() {  # run_web <out> <extra args...>
     local out="$1"; shift
@@ -136,7 +145,7 @@ fi
 # chrome page running the same builder from the same fixture, as an app's fixture preview would, picking
 # its frame from ?frame=<id>. Scored at 100%, then with the build's heading changed (the decision fails).
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled file was not scored end to end"
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled file was not scored end to end"
 else
   CH="$T/chain"
   mkdir -p "$CH"
@@ -200,7 +209,7 @@ fi
 # score file holds it, and a changed heading fails the decision. Nothing reads the missing page as a
 # stand in.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled email was not scored end to end"
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled email was not scored end to end"
 else
   EM="$T/email"
   mkdir -p "$EM/app"
@@ -261,7 +270,7 @@ fi
 # decision half and a picture half said to be unmeasured: no score, which the close gate's reader holds
 # as unmeasured, never as matched.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled terminal design was not scored end to end"
 else
   TM="$T/terminal"
   mkdir -p "$TM"
@@ -301,7 +310,7 @@ fi
 # must score 100%. The third must ALSO score 100%, because a real browser never draws that refused style:
 # the scoring browser keeps the page's own policy rather than switching it off, so it draws what ships.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Playwright package, node or Chrome here, so a build under a content security policy was not scored"
+  unmeasured_part "no Playwright package, node or Chrome here, so a build under a content security policy was not scored"
 else
   CS="$T/csp"
   mkdir -p "$CS/site/header" "$CS/site/meta" "$CS/site/strict"
@@ -360,8 +369,15 @@ PY
 fi
 
 # --- 4. the SwiftUI adapter for real: the real view drawn by a snapshot test ---------------------------
-if [ "$(uname -s)" != Darwin ] || ! command -v swift >/dev/null 2>&1 || [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
-  echo "SUITE-PART-UNMEASURED no Swift toolchain, Playwright or Chrome here, so the SwiftUI adapter was not run"
+# Each cause stands down with its own sentence (L11). Whether the toolchain can build XCTest is not
+# guessed here: the swift test below is the probe, and swift_xctest_run says unmeasured only when
+# that attempt showed the XCTest module missing (claude-config#1400).
+if [ "$(uname -s)" != Darwin ]; then
+  unmeasured_part "SwiftUI is only on macOS and this is $(uname -s), so the SwiftUI adapter was not run"
+elif ! command -v swift >/dev/null 2>&1; then
+  unmeasured_part "no Swift toolchain on PATH, so the SwiftUI adapter was not run"
+elif [ -z "$PW" ] || [ ! -x "$CHROME_APP" ]; then
+  unmeasured_part "no Playwright package or Chrome here to draw the design's side, so the SwiftUI adapter was not run"
 else
   PKG="$T/swift"
   mkdir -p "$PKG/Sources/DesignScore" "$PKG/Tests/DesignScoreTests"
@@ -406,9 +422,11 @@ HTML
     DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$T/bands.html" --out "$T/swift-$name" --design-only --channel chrome --repo "$APP" > "$T/swift-$name.design.log" 2>&1 \
       || bad "the design side of the SwiftUI capture is drawn by the web adapter (--design-only)" "$(cat "$T/swift-$name.design.log")"
   done
-  (cd "$PKG" && CAPTURE_MATCH="$T/swift-match" CAPTURE_OFF="$T/swift-off" swift test > "$T/swift.log" 2>&1); rc=$?
-  if [ "$rc" -ne 0 ]; then
-    bad "the SwiftUI snapshot tests run (rc=$rc)" "$(tail -30 "$T/swift.log")"
+  verdict="$(CAPTURE_MATCH="$T/swift-match" CAPTURE_OFF="$T/swift-off" swift_xctest_run "$PKG" "$T/swift.log")"
+  if [ "${verdict%% *}" = unmeasured ]; then
+    unmeasured_part "the SwiftUI adapter's snapshot tests were not run: ${verdict#unmeasured }"
+  elif [ "$verdict" != ran ]; then
+    bad "the SwiftUI snapshot tests run ($verdict)" "$(tail -30 "$T/swift.log")"
   else
     python3 "$SCORE" score "$T/swift-match" > "$T/swift-match.score" 2>&1; rc=$?
     if [ "$rc" -eq 0 ] && said "MATCHED" "$T/swift-match.score" && said ", swiftui," "$T/swift-match.score"; then ok; else bad "the real SwiftUI view, drawn at the frame's size in sRGB, matches the browser's drawing of the design at 100% (rc=$rc)" "$(cat "$T/swift-match.score")"; fi
