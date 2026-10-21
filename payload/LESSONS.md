@@ -7429,6 +7429,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L794. A test double for a Cloudflare service binding or RPC stub must model that every property
+  read is another remote method, because a plain object double lets code read a method off the stub
+  and invoke it with .call or .apply, which throws on the real binding on every call.** (bidspoke#2570, 2026-10-20)
+  SHORT: Model an RPC binding double so every property read is a remote method, or .call on a method passes tests and throws live.
 - **L775. After changing something through another service's management API, check the change by
   reading again on a short timer until a deadline, never with one immediate read, because those
   lists lag the change and one read reports a change that landed as a failure.** (slate#3787, 2026-10-15)
