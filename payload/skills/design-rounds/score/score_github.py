@@ -179,14 +179,25 @@ def is_match_issue(issue):
     return (design is not None or titled), design
 
 
-NOT_PLANNED = "not_planned"
+# The close reasons that abandon a design, spelled as GitHub's REST API reports and takes them
+# (state_reason): not planned (Dan, 2026-10-20, claude-config#1405) and duplicate (Dan, 2026-10-21,
+# claude-config#1424). A close for either is not held to 100%.
+ABANDONED_REASONS = ("not_planned", "duplicate")
 
 
-def closed_not_planned(issue):
-    """True only when GitHub reports `issue` closed as not planned: its design was abandoned, so
-    neither the close gate nor the daily reopen check holds it to 100% (Dan, 2026-10-20,
-    claude-config#1405). Any other reason, none, or one this cannot read is a completed close."""
-    return issue.get("state") == "closed" and issue.get("state_reason") == NOT_PLANNED
+def abandons(reasons):
+    """True only when `reasons`, every close reason one close gives, are one reason, given once or
+    repeated, that abandons the design. No reason, two different ones, another spelling or any
+    other reason is a completed close, judged as one."""
+    reasons = list(reasons)
+    return bool(reasons) and len(set(reasons)) == 1 and reasons[0] in ABANDONED_REASONS
+
+
+def closed_as_abandoned(issue):
+    """True only when GitHub reports `issue` closed as not planned or as a duplicate: its design was
+    abandoned, so neither the close gate nor the daily reopen check holds it to 100%. The one
+    predicate both read, through `abandons`, as does the gate's reading of a close command."""
+    return issue.get("state") == "closed" and abandons([issue.get("state_reason")])
 
 
 def milestone_issues(gh, repo, number):

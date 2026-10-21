@@ -2027,12 +2027,15 @@ block or an indented block is not one, because GitHub shows a quoted mark as tex
 its reading of the markdown is unsure it keeps the text, so a doubtful mark still counts. An issue
 titled "Match the settled design" is still one with no mark at all.
 
-**Closed as not planned, the design was abandoned** (Dan, 2026-10-20, #1405). The gate lets through
-`gh issue close <n> --reason "not planned"` and a REST close sending `state_reason=not_planned` on a
-Match issue below 100%. Any other reason, more than one reason, `--duplicate-of`, or a reason it
-cannot read (an `--input` file) is judged as a completed close; a GraphQL `closeIssue` is still
-refused, not planned or not, since which issue it closes is not read. A milestone has no close
-reason, so a design milestone is abandoned when its Match issue is closed as not planned: that issue
+**Closed as not planned or as a duplicate, the design was abandoned** (Dan, 2026-10-20, #1405, and
+2026-10-21, #1424). The gate lets through `gh issue close <n> --reason "not planned"`,
+`--reason duplicate`, `--duplicate-of <m>` and a REST close sending `state_reason=not_planned` or
+`state_reason=duplicate` on a Match issue below 100%, all judged by one predicate,
+`score_github.abandons`. Any other reason, another case (gh takes `--reason Duplicate` but closes
+as completed), two different reasons, an empty `--duplicate-of`, or a reason it cannot read (an
+`--input` file) is judged as a completed close; a GraphQL `closeIssue` is still refused, whatever
+its reason, since which issue it closes is not read. A milestone has no close reason, so a design
+milestone is abandoned when its Match issue is closed as not planned or as a duplicate: that issue
 is then not judged, and the milestone closes. Abandoning a design is Dan's decision, never a way past
 a refusal.
 
@@ -2047,9 +2050,10 @@ design round, or an exception Dan approves in the design file) and is reopened; 
 reopened and its comment goes on its Match issue. The comment carries a mark naming that close and is
 written before the reopen, so a run that dies between the two, or the same run on both Macs, comments
 once; a close made again after the reopen is a new close. A close at 100%, an exception included, is
-left alone, and so is a Match issue GitHub reports closed as not planned (`state_reason`
-`not_planned`), and a milestone whose Match issue is (#1405); any other reason, or none, is judged as
-completed. The run's summary counts what it left closed as not planned. It runs from `hooks/design-score-reopen.sh`, a SessionStart hook that starts it detached at
+left alone, and so is a Match issue GitHub reports closed as not planned or as a duplicate
+(`state_reason` `not_planned` or `duplicate`, `score_github.closed_as_abandoned`), and a milestone
+whose Match issue is (#1405, #1424); any other reason, or none, is judged as completed. The run's
+summary counts what it left closed as not planned or duplicate. It runs from `hooks/design-score-reopen.sh`, a SessionStart hook that starts it detached at
 most once every 20 hours on each Mac and says at the next session start what it reopened or could not
 read (a repo, a list or a reopen that failed is said by name, and that repo is read again next run); a
 run that started and never recorded finishing is said too. It runs there rather than as a launch agent
