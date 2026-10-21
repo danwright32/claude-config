@@ -3148,13 +3148,16 @@ if SYNC_SCRIPT_REAL="$(claude_sync_for_suite "$DIR" "${RUN_ALL_TESTS_CHECKOUT:-}
   # does not. Under the temp root on purpose: the clone registry drops temp entries, the launch
   # agents do not. The process table is this Mac's live state too, and status lists stray suite
   # processes from it with their command lines, so it reads an empty table here instead.
+  # The launch agents and the register are NAMED, not left to follow HOME (claude-config#1453):
+  # CLAUDE_HOME here is not HOME's own .claude, and status under such a home reads neither unless
+  # its seam names one, so the fixture's agent is reached through the seam every suite now sets.
   mkdir -p "$CT/fixturehome/Library/LaunchAgents" "$CT/ct-marker-clone" "$CT/tmp" "$CT/scr"
   : > "$CT/ps"
   : > "$CT/ct-marker-clone/claude-sync"
   printf 'outcome=passed\tat=%s\texit=0\n' "$(date +%s)" > "$CT/ct-marker-clone/.hook-tests"
   printf '<plist><dict><key>ProgramArguments</key><array><string>/bin/bash</string><string>%s/ct-marker-clone/claude-sync</string></array></dict></plist>\n' "$CT" \
     > "$CT/fixturehome/Library/LaunchAgents/com.claudesync.ctmarker.plist"
-  ct_status='HOME="$CT/fixturehome" TMPDIR="$CT/tmp" SYNC_PS_FIXTURE="$CT/ps" CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >"$CT/status.out" 2>&1'
+  ct_status='HOME="$CT/fixturehome" TMPDIR="$CT/tmp" SYNC_PS_FIXTURE="$CT/ps" SYNC_LAUNCHAGENTS="$CT/fixturehome/Library/LaunchAgents" SYNC_CLONE_REGISTRY="$CT/fixturehome/.claude-sync-clones" CLAUDE_HOME="$CT/cfg" SYNC_REPO="$CT/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 SYNC_SCRATCH_ROOT="$CT/scr" PATH="$CT/bin:$PATH" bash "$SYNC_SCRIPT_REAL" status >"$CT/status.out" 2>&1'
   : > "$CT/calls"
   ct_rc=0
   ( unset SYNC_CLAUDE_BIN; CT="$CT" SYNC_SCRIPT_REAL="$SYNC_SCRIPT_REAL" eval "$ct_status" ) || ct_rc=$?
