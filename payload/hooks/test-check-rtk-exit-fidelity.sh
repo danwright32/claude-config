@@ -121,6 +121,51 @@ grep -qi 'contained\|refused' <<< "$out" \
   || check "and the containment is reported rather than passed over in silence" "out=$out"
 
 # ---------------------------------------------------------------------------
+# A contained probe is still MEASURED against rtk's own substitute (claude-config#1443).
+#
+# A refusal hides the lie it was written for, so "contained" alone cannot say whether the probe
+# would catch that lie the day the refusal goes, or whether the refusal is still needed at all
+# (claude-config#1446 asks exactly that of a new rtk). So each contained probe also runs what rtk
+# itself would substitute and says which of the two it found (L1, L248).
+# ---------------------------------------------------------------------------
+REFUSE="find" LIE_find=0 run > /dev/null; out="$(cat "$TMPROOT/out")"
+grep -q 'contained: find-missing-path.*still needed' <<< "$out" \
+  && check "a contained destination that still lies is reported as a refusal still needed" ok \
+  || check "a contained destination that still lies is reported as a refusal still needed" "out=$out"
+REFUSE="find" run > /dev/null; out="$(cat "$TMPROOT/out")"
+grep -q 'contained: find-missing-path.*agrees' <<< "$out" \
+  && check "and one whose rtk substitute now agrees is reported as agreeing" ok \
+  || check "and one whose rtk substitute now agrees is reported as agreeing" "out=$out"
+[ "$rc" -eq 0 ] && check "and neither reading changes the verdict on what the hook allows" ok \
+  || check "and neither reading changes the verdict on what the hook allows" "rc=$rc out=$out"
+
+# ---------------------------------------------------------------------------
+# gh in the PASSING direction (claude-config#1443). `rtk gh pr status` exited 1 ("Unknown JSON
+# field currentBranch") where `gh pr status` exits 0, found by hand in #1428, because every gh
+# probe here failed on purpose and an rtk gh that always exits 1 agrees with a failure. Every gh
+# that succeeds talks to the API, so the probe's gh is a stub that answers `gh pr status` with
+# fixed text and hands every `--json` field list to the REAL gh to validate, offline. An rtk gh that
+# exits 1 must now fail the run, and must be named.
+# ---------------------------------------------------------------------------
+# The probe's stub hands field lists to the REAL gh, so without one the probe is skipped and these
+# cases could only pass or fail on its absence: that is said, not judged (L411).
+if ! command -v gh >/dev/null 2>&1; then
+  echo "SUITE-PART-UNMEASURED the passing gh probe (gh pr status): gh is not installed here, and its stub asks the real gh to validate field lists"
+else
+REFUSE="" LIE_gh=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
+[ "$rc" -eq 1 ] && check "an allowed rtk gh that fails where gh succeeds fails the run" ok \
+  || check "an allowed rtk gh that fails where gh succeeds fails the run" "rc=$rc out=$out"
+grep -q 'gh pr status' <<< "$out" \
+  && check "and names the gh command it was caught on" ok \
+  || check "and names the gh command it was caught on" "out=$out"
+# And while the hook refuses rtk gh, as it does since #1442, the same lie is still SEEN.
+REFUSE="gh" LIE_gh=1 run > /dev/null; out="$(cat "$TMPROOT/out")"
+grep -q 'contained: gh-pr-status-passes.*still needed' <<< "$out" \
+  && check "with rtk gh refused, the passing gh probe still reports rtk's own lie" ok \
+  || check "with rtk gh refused, the passing gh probe still reports rtk's own lie" "out=$out"
+fi
+
+# ---------------------------------------------------------------------------
 # Which tools the probe set actually reaches (claude-config#321).
 #
 # Every green above is about the probes that EXIST. A rewritten command with no probe is exempt
@@ -256,6 +301,18 @@ else
     *) check "against the real rtk, the check could measure at all" \
          "rtk is installed but the check exited $real_rc without measuring: $real_out" ;;
   esac
+  # The passing gh probe really ran against the real rtk, rather than being skipped or broken,
+  # wherever gh is installed for it to validate against (claude-config#1443).
+  if command -v gh >/dev/null 2>&1; then
+    case "$real_out" in
+      *"skipped gh-pr-status-passes"*|*"broken probe gh-pr-status-passes"*)
+        check "against the real rtk, the passing gh probe ran" "$(grep 'gh-pr-status-passes' <<< "$real_out")" ;;
+      *gh-pr-status-passes*) check "against the real rtk, the passing gh probe ran" ok ;;
+      *) check "against the real rtk, the passing gh probe ran" "it is not in the output at all: $real_out" ;;
+    esac
+    grep -q 'contained: gh-pr-status-passes.*still needed' <<< "$real_out" \
+      || echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer fails gh pr status where gh succeeds, so the rtk gh refusal is not needed for this probe: $(grep 'gh-pr-status-passes' <<< "$real_out")"
+  fi
 fi
 
 echo "passed: $pass, failed: $fail"
