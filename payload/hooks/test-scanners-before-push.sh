@@ -470,9 +470,10 @@ _l="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"%s"
 #
 #     Each waits on the CONDITION, the other's marker, polled every twentieth of a second, under a
 #     ceiling of 120 seconds by the clock (claude-config#1462). That is far above any start delay
-#     seen: the old spin, 3 to 5 seconds long, never once ran out in over 4,000 runs at load
-#     averages up to 192 on 12 cores (#1454). A pair run in sequence therefore costs the whole
-#     ceiling before it fails, which is the price of never failing a pair that did run at once.
+#     seen: the old spin, which lasted from 3 seconds to a little over 5 (measured below), never
+#     once ran out in over 4,000 runs at load averages up to 192 on 12 cores (#1454). A pair run in
+#     sequence therefore costs the whole ceiling before it fails, which is the price of never
+#     failing a pair that did run at once.
 add_rendezvous_scanner(){   # $1 = repo  $2 = rendezvous folder  $3 = me  $4 = the other
                             # $5 = seconds before it starts  $6 = the ceiling on its wait, seconds
   cat > "$1/payload/hooks/test-$3.sh" <<EOF
