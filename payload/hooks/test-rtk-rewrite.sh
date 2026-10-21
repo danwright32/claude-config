@@ -95,9 +95,23 @@ printf '%s' "$out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/n
 [ "$(printf '%s' "$out" | rewritten_to)" = "rtk git status" ] \
   && check "and carries the rewritten command" ok \
   || check "and carries the rewritten command" "out=$out"
-grep -q '"permissionDecision": *"allow"' <<< "$out" \
-  && check "and allows it, or the rewrite would just prompt" ok \
-  || check "and allows it, or the rewrite would just prompt" "out=$out"
+# It decides NOTHING about permission (claude-config#1455). It used to answer every rewrite with
+# "allow", which approved the command itself, skipping the prompt or the auto mode classifier for
+# anything rtk filters, `git push` included. Measured 2026-10-21 on Claude Code 2.1.304: with no
+# decision the rewrite still applies, and the permission rules judge the REWRITTEN command.
+hook_decision() { printf '%s' "$1" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("hookSpecificOutput" in d and "permissionDecision" in d["hookSpecificOutput"])' 2>/dev/null; }
+[ "$(hook_decision "$out")" = False ] \
+  && check "and decides nothing about permission, leaving it to Claude Code's rules" ok \
+  || check "and decides nothing about permission, leaving it to Claude Code's rules" "out=$out"
+grep -q '"hookEventName": *"PreToolUse"' <<< "$out" \
+  && check "and still names its event, so the rewrite is read as a PreToolUse answer" ok \
+  || check "and still names its event, so the rewrite is read as a PreToolUse answer" "out=$out"
+printf 'rtk git push origin main\n' > "$TMPROOT/rewrite"
+out1455="$(hook 'git push origin main')"
+[ "$(printf '%s' "$out1455" | rewritten_to)" = "rtk git push origin main" ] && [ "$(hook_decision "$out1455")" = False ] \
+  && check "#1455 a rewritten git push comes back rewritten and NOT approved" ok \
+  || check "#1455 a rewritten git push comes back rewritten and NOT approved" "out=$out1455"
+printf 'rtk git status\n' > "$TMPROOT/rewrite"
 # The rest of the tool input has to survive: the hook replaces ONE field of it, and a rewrite that
 # dropped the others would silently discard whatever else the caller set.
 grep -q '"description"' <<< "$out" \
