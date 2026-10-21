@@ -324,7 +324,7 @@ check "#1408 eslint on a bare directory name is not run as a package of that nam
 check "#1408 nor after cd &&" "$(refused_to_rewrite 'cd /repo && rtk lint src')"
 # The controls: the npx tools rtk DOES filter keep their rewrite, and so does eslint wherever its
 # first argument cannot be read as a linter name (L159).
-for keep1408 in 'rtk prisma migrate status' 'rtk lint .' 'rtk lint src/' 'rtk lint --fix src' 'rtk lint' 'rtk npm run build'; do
+for keep1408 in 'rtk prettier --check .' 'rtk lint .' 'rtk lint src/' 'rtk lint --fix src' 'rtk lint' 'rtk npm run build'; do
   printf '%s\n' "$keep1408" > "$TMPROOT/rewrite"
   out1408="$(hook 'some command')"
   [ "$(printf '%s' "$out1408" | rewritten_to)" = "$keep1408" ] \
@@ -343,15 +343,15 @@ runner_refused() { # runner_refused <source> <rewrite>  -> "ok" when the hook pa
 }
 # These use destinations nothing else refuses, so only the runner rule can refuse them (L159);
 # `rtk tsc` is refused on its own below, whatever the source.
-check "#1408 pnpm prisma does not lose pnpm to rtk prisma" "$(runner_refused 'pnpm prisma migrate status' 'rtk prisma migrate status')"
-check "#1408 nor npx prisma, which rtk runs as a bare prisma" "$(runner_refused 'npx prisma migrate status' 'rtk prisma migrate status')"
+check "#1408 pnpm prettier does not lose pnpm to rtk prettier" "$(runner_refused 'pnpm prettier --check .' 'rtk prettier --check .')"
+check "#1408 nor npx prettier" "$(runner_refused 'npx prettier --check .' 'rtk prettier --check .')"
 check "#1408 nor npx eslint" "$(runner_refused 'npx eslint src/' 'rtk lint src/')"
-check "#1408 nor yarn" "$(runner_refused 'yarn prisma generate' 'rtk prisma generate')"
+check "#1408 nor yarn" "$(runner_refused 'yarn prettier --write .' 'rtk prettier --write .')"
 check "#1408 nor bunx" "$(runner_refused 'bunx prettier --check .' 'rtk prettier --check .')"
-check "#1408 nor pnpm after cd &&" "$(runner_refused 'cd /repo && pnpm prisma generate' 'cd /repo && rtk prisma generate')"
+check "#1408 nor pnpm after cd &&" "$(runner_refused 'cd /repo && pnpm prettier --write .' 'cd /repo && rtk prettier --write .')"
 # The controls: a rewrite that KEEPS the runner, or a command that named none, is still rewritten,
 # and a runner word that is only an argument is carried through unchanged (L159).
-for pair1408 in 'prisma migrate status|rtk prisma migrate status' 'npm run build|rtk npm run build' 'pnpm list|rtk pnpm list' 'echo npm && git status|echo npm && rtk git status'; do
+for pair1408 in 'prettier --check .|rtk prettier --check .' 'npm run build|rtk npm run build' 'pnpm list|rtk pnpm list' 'echo npm && git status|echo npm && rtk git status'; do
   src1408="${pair1408%%|*}"; rw1408="${pair1408#*|}"
   printf '%s\n' "$rw1408" > "$TMPROOT/rewrite"
   out1408="$(hook "$src1408")"
@@ -574,6 +574,39 @@ out1428nl="$(PATH="$BIN:$PATH" bash "$NOLIB/rtk-rewrite.sh" < "$TMPROOT/payload.
   || check "#1428 and a rewrite with no gh in it still goes through" "got [$out1428nl]"
 
 # ---------------------------------------------------------------------------
+# The three destinations nobody had measured (claude-config#1443), each now measured plain against
+# rtk 0.31.0 with HOME emptied, offline, against stub binaries first on PATH that record the
+# arguments rtk hands them, and refused because each changes what the command does or what the
+# reader sees.
+#
+# `rtk aws` ("force JSON, compress") appends `--output json` and replaces the JSON with its SHAPE,
+# as `rtk curl` does: a 40 object s3api list-objects-v2 came back as `[{ ETag: string, Key: string,
+# ... }] (40)`, 8,547 bytes to 176 with every key gone, and log events as `message: string`, the
+# messages gone. sts get-caller-identity was condensed to one line without the UserId.
+#
+# `rtk wget` changes the DOWNLOAD itself. `wget URL -O saved.txt` was run as
+# `wget -q -O - saved.txt URL`: the file the command asked for was never written, the body went to
+# the terminal instead, and saved.txt was handed to wget as a second URL. `wget -O - URL` gained a
+# stray `-` URL and a `- ok | 2 lines` header in front of the body.
+#
+# `rtk prisma` runs the same prisma (a bare one from PATH, the same one the command named; the
+# runner rule refuses `npx prisma`, where it would not be) but rewrites what it prints:
+# `prisma generate` lost the client version, the schema path and the update notice, and
+# `prisma migrate status` moved every line, the unapplied migrations included, from stdout to
+# stderr.
+# ---------------------------------------------------------------------------
+check "#1443 an aws call is not replaced by rtk's JSON schema" "$(refused_to_rewrite 'rtk aws s3api list-objects-v2 --bucket b')"
+check "#1443 nor an aws call after cd &&" "$(refused_to_rewrite 'cd /repo && rtk aws sts get-caller-identity')"
+check "#1443 a wget is not rewritten into one that skips the file it was asked to write" "$(refused_to_rewrite 'rtk wget https://example.invalid/f.txt -O saved.txt')"
+check "#1443 nor a wget after a semicolon" "$(refused_to_rewrite 'true; rtk wget -O - https://example.invalid/f.txt')"
+check "#1443 a prisma command is not condensed" "$(refused_to_rewrite 'rtk prisma generate')"
+check "#1443 nor prisma migrate status after cd &&" "$(refused_to_rewrite 'cd /repo && rtk prisma migrate status')"
+# The controls: neighbouring destinations rtk filters, and that nothing refuses, keep their rewrite,
+# so the refusals above are not satisfied by a hook that has stopped rewriting (L159).
+check "#1443 and rtk prettier is still rewritten" "$(kept_as 'rtk prettier --check .')"
+check "#1443 and rtk git status is still rewritten" "$(kept_as 'cd /repo && rtk git status')"
+
+# ---------------------------------------------------------------------------
 # End to end against the REAL rtk (claude-config#399). Everything above uses a stub, which proves
 # the hook's logic and nothing about what actually runs. So this drives the exact shape that fooled
 # a session through the real hook and the real rtk, RUNS whatever the hook lets through, and asserts
@@ -695,7 +728,7 @@ else
     || check "#1408 and its failure keeps its own non zero exit code" "ran [$ran1408], exited $rc1408: $out1408e"
   # The runner rule and the tsc refusal against the real rtk: each source IS rewritten by it to the
   # destination named (the control), and the hook passes it through.
-  for pair1408e in 'npx prisma migrate status|rtk prisma migrate status' 'tsc --noEmit|rtk tsc --noEmit' 'pnpm tsc --noEmit|rtk tsc --noEmit'; do
+  for pair1408e in 'npx prettier --check .|rtk prettier --check .' 'tsc --noEmit|rtk tsc --noEmit' 'pnpm tsc --noEmit|rtk tsc --noEmit'; do
     src1408e="${pair1408e%%|*}"; want1408e="${pair1408e#*|}"
     ctl1408e="$(HOME="$FX1408/home" rtk rewrite "$src1408e" 2>/dev/null)"
     [ "$ctl1408e" = "$want1408e" ] \
@@ -706,12 +739,12 @@ else
       && check "#1408 the real rtk's rewrite of [$src1408e] is refused" ok \
       || check "#1408 the real rtk's rewrite of [$src1408e] is refused" "got [$sub1408e]"
   done
-  # The hook side control: prisma named with no runner is still rewritten by the real rtk.
-  payload 'prisma migrate status'
+  # The hook side control: prettier named with no runner is still rewritten by the real rtk.
+  payload 'prettier --check .'
   sub1408b="$(HOME="$FX1408/home" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to)"
-  [ "$sub1408b" = 'rtk prisma migrate status' ] \
-    && check "#1408 and prisma with no runner is still rewritten by the real rtk" ok \
-    || check "#1408 and prisma with no runner is still rewritten by the real rtk" "got [$sub1408b]"
+  [ "$sub1408b" = 'rtk prettier --check .' ] \
+    && check "#1408 and prettier with no runner is still rewritten by the real rtk" ok \
+    || check "#1408 and prettier with no runner is still rewritten by the real rtk" "got [$sub1408b]"
 fi
 
 # ---------------------------------------------------------------------------
@@ -794,6 +827,80 @@ PY
   [ -z "$sub1428v" ] \
     && check "#1428 a human gh issue view is not rewritten by the real rtk through the hook" ok \
     || check "#1428 a human gh issue view is not rewritten by the real rtk through the hook" "got [$sub1428v]"
+fi
+
+# ---------------------------------------------------------------------------
+# End to end against the REAL rtk for #1443: aws, wget and prisma, through the real hook, RUN, with
+# what reaches the reader (and, for wget, what reaches the disk) compared against the plain command.
+#
+# Offline by construction: aws, wget and prisma are stubs first on PATH with fixed output, so rtk
+# runs its real filter over known bytes and nothing reaches AWS or the network (L2). None of the
+# three is installed on either Mac, which is why the stubs, and not the real tools, are the subject.
+# Same empty HOME as #1419, so no rtk config.toml can exclude them and leave this measuring nothing.
+# Each control shows the real rtk under this HOME still makes the bad rewrite, so a green means the
+# hook stopped it (L159).
+# ---------------------------------------------------------------------------
+if ! command -v rtk >/dev/null 2>&1; then
+  echo "note: rtk is not installed on this Mac, so the #1443 end to end check did not run."
+else
+  FX1443="$TMPROOT/fx1443"; mkdir -p "$FX1443/home" "$FX1443/bin" "$FX1443/run"
+  python3 - "$FX1443" <<'PY'
+import json, sys
+w = sys.argv[1]
+json.dump({"Contents": [{"Key": "reports/%03d.csv" % i, "Size": 1000 + i, "StorageClass": "STANDARD"}
+                        for i in range(40)], "KeyCount": 40, "Name": "fixture-bucket"},
+          open(w + "/list.json", "w"), indent=4)
+open(w + "/body.txt", "w").write("line one of a downloaded file\n{\"k\": [1, 2, 3]}\n")
+open(w + "/generate.txt", "w").write(
+    "Prisma schema loaded from prisma/schema.prisma\n\n"
+    "Generated Prisma Client (v5.10.2) to ./node_modules/@prisma/client in 81ms\n")
+PY
+  printf '#!/bin/sh\ncat "%s/list.json"\n' "$FX1443" > "$FX1443/bin/aws"
+  printf '#!/bin/sh\ncat "%s/generate.txt"\n' "$FX1443" > "$FX1443/bin/prisma"
+  # A wget that honours -O, the one behaviour the measurement turned on: -O - is the terminal, any
+  # other -O names the file to write, and without one it writes body.txt.
+  cat > "$FX1443/bin/wget" <<STUB
+#!/bin/sh
+out=body.txt
+while [ \$# -gt 0 ]; do case "\$1" in -O) out="\$2"; shift ;; esac; shift; done
+if [ "\$out" = - ]; then cat "$FX1443/body.txt"; else cp "$FX1443/body.txt" "\$out"; fi
+STUB
+  chmod +x "$FX1443/bin/aws" "$FX1443/bin/prisma" "$FX1443/bin/wget"
+  run1443() { # run1443 <command>  -> runs it in a fresh run directory, stubs first, HOME emptied
+    rm -rf "$FX1443/run"; mkdir -p "$FX1443/run"
+    ( cd "$FX1443/run" && HOME="$FX1443/home" PATH="$FX1443/bin:$PATH" bash -c "$1" ) 2>/dev/null
+  }
+  hook1443() { # hook1443 <command>  -> what the real hook rewrote it to, empty when it passed through
+    payload "$1"
+    HOME="$FX1443/home" PATH="$FX1443/bin:$PATH" bash "$H" < "$TMPROOT/payload.json" 2>/dev/null | rewritten_to
+  }
+  for case1443 in 'aws s3api list-objects-v2 --bucket fixture-bucket|list.json' 'prisma generate|generate.txt' 'wget -O - http://127.0.0.1:9/f.txt|body.txt'; do
+    cmd1443="${case1443%%|*}"; want1443="$FX1443/${case1443#*|}"
+    ctl1443="$(HOME="$FX1443/home" rtk rewrite "$cmd1443" 2>/dev/null)"
+    run1443 "$ctl1443" > "$FX1443/ctl.out"
+    if [ -z "$ctl1443" ] || cmp -s "$FX1443/ctl.out" "$want1443"; then
+      echo "note: this rtk ($(rtk --version 2>/dev/null)) no longer changes what [$cmd1443] prints (rewrite was [$ctl1443]), so the check below proves less than it did."
+    fi
+    sub1443="$(hook1443 "$cmd1443")"
+    run1443 "${sub1443:-$cmd1443}" > "$FX1443/got.out"
+    cmp -s "$FX1443/got.out" "$want1443" \
+      && check "#1443 [$cmd1443] that actually runs hands the reader the tool's own bytes" ok \
+      || check "#1443 [$cmd1443] that actually runs hands the reader the tool's own bytes" \
+           "ran [${sub1443:-$cmd1443}]: $(head -c 200 "$FX1443/got.out")"
+  done
+  # wget asked to save a file. The control: the real rtk's rewrite never writes it. Through the hook
+  # the file the command named is on disk with the downloaded bytes.
+  cmd1443w='wget http://127.0.0.1:9/f.txt -O saved.txt'
+  ctl1443w="$(HOME="$FX1443/home" rtk rewrite "$cmd1443w" 2>/dev/null)"
+  run1443 "$ctl1443w" > /dev/null
+  if [ -z "$ctl1443w" ] || [ -f "$FX1443/run/saved.txt" ]; then
+    echo "note: this rtk ($(rtk --version 2>/dev/null)) now writes the file wget was asked for (rewrite was [$ctl1443w]), so the check below proves less than it did."
+  fi
+  sub1443w="$(hook1443 "$cmd1443w")"
+  run1443 "${sub1443w:-$cmd1443w}" > /dev/null
+  cmp -s "$FX1443/run/saved.txt" "$FX1443/body.txt" \
+    && check "#1443 a wget asked to save a file really writes that file" ok \
+    || check "#1443 a wget asked to save a file really writes that file" "ran [${sub1443w:-$cmd1443w}] and saved.txt is not the download"
 fi
 
 # ---- rtk's integrity baseline still describes the hook beside it (claude-config#259 follow-up) ----
