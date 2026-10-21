@@ -42,7 +42,11 @@
 # Not probed, and why, so the gaps are recorded rather than merely absent (L129):
 #   docker  rewritten, but `docker ps` exits 0 or 1 purely on whether the daemon happens to be
 #           running, so no fixture here stands for a fixed case (L130).
-#   wget    rewritten, but every wget that succeeds needs the network (L2).
+#   wget    rewritten by rtk and refused by the hook (claude-config#1443: it skipped the file asked
+#           for), and every real wget that succeeds needs the network (L2). Its exit codes were
+#           measured against a stub that day and agreed, 0 for 0 and 8 for 8.
+#   aws, prisma  rewritten by rtk and refused by the hook for what they print (#1443), and neither
+#           is installed on either Mac to compare a stub against.
 #   tree    rewritten, not installed on either Mac, so a probe would only ever report a skip.
 set -uo pipefail
 
@@ -117,6 +121,30 @@ printf '#!/bin/sh\nexit 3\n' > "$WORK/node/node_modules/.bin/probe-fail"
 printf '#!/bin/sh\nexit 0\n' > "$WORK/node/node_modules/.bin/probe-ok"
 chmod +x "$WORK/node/node_modules/.bin/probe-fail" "$WORK/node/node_modules/.bin/probe-ok"
 export NPM_CONFIG_OFFLINE=true NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_CACHE="$WORK/npm-cache"
+# A gh that SUCCEEDS, offline (claude-config#1443). Every real gh that succeeds talks to the API, so
+# this stub answers `gh pr status` with fixed text and exit 0, as gh does in a repository with no
+# pull requests. What it must not invent is gh's verdict on a field list, since that verdict is
+# what rtk got wrong (`rtk gh pr status` asks for `--json currentBranch,...` and gh refuses the
+# field, exiting 1). So any `--json` call is handed to the REAL gh to validate, with a token that is
+# not one, in a directory that is not a repository: gh refuses an unknown field before it needs
+# either, and fails on the missing repository, still offline, for a list it accepts (L2).
+# A probe directory holding a bin/ has it first on PATH for every run in that directory.
+mkdir -p "$WORK/ghstub/bin" "$WORK/ghstub/not-a-repo"
+real_gh="$(command -v gh 2>/dev/null || true)"
+cat > "$WORK/ghstub/bin/gh" <<GHSTUB
+#!/bin/sh
+case " \$* " in
+  *" --json "*)
+    err="\$(cd "$WORK/ghstub/not-a-repo" && env -u GH_REPO GH_TOKEN=not-a-token "$real_gh" "\$@" 2>&1 >/dev/null)"
+    case "\$err" in *"Unknown JSON field"*) printf '%s\n' "\$err" >&2; exit 1 ;; esac
+    echo '{"currentBranch":null,"createdBy":[],"needsReview":[]}'; exit 0 ;;
+esac
+case "\$1 \$2" in
+  "pr status") printf 'Relevant pull requests in fidelity/probe\n\nCurrent branch\n  There is no pull request associated with [main]\n'; exit 0 ;;
+esac
+exit 1
+GHSTUB
+chmod +x "$WORK/ghstub/bin/gh"
 repo_ready=no
 if command -v git >/dev/null 2>&1; then
   if git -C "$WORK/repo" init -q >/dev/null 2>&1 \
@@ -165,11 +193,11 @@ PROBES=(
   "curl-missing-file|curl|plain|fail|curl -sf file://$WORK/plain/no-such-file"
   "curl-present-file|curl|plain|pass|curl -sf file://$WORK/plain/a.txt"
   # gh, the most rewritten command in this repo. Outside a git repository it fails locally on the
-  # missing repo, so this needs no network. There is deliberately NO passing gh probe: every gh
-  # command that succeeds talks to the API, and a test that reaches a live service is worse than a
-  # half measured one (L2). So the always-0 direction is watched here and the always-1 direction is
-  # not, which is named rather than left to be assumed (L142).
+  # missing repo, so this needs no network, and it watches the always-0 direction.
   "gh-outside-a-repo|gh|plain|fail|gh issue list"
+  # And the always-1 direction (claude-config#1443), which #1428 found by hand: `rtk gh pr status`
+  # exited 1 where gh exits 0. Against the stub gh above, whose field verdicts are the real gh's.
+  "gh-pr-status-passes|gh|ghstub|pass|gh pr status"
   # npx on a tool rtk has no filter for (claude-config#1408). rtk 0.31.0 runs `rtk npx <tool>` as
   # `npm <tool>`, so the failing case exited 0 (npm printed its own version for `--version`) and
   # the passing one exited 1 (npm found no script of that name). Both directions, local bins only.
@@ -196,6 +224,44 @@ print(c)
 sys.exit(0 if c else 1)' 2>/dev/null
 }
 
+# Runs a command in a probe directory and returns its exit code. The directory's own bin/, when it
+# has one, goes first on PATH. With a third argument the named rtk's directory goes next, because a
+# compound substitution names rtk again past its first word and those later invocations look it up
+# on PATH: they must reach the same binary this script was pointed at, never another one.
+run_in() { # run_in <dir> <command> [with-rtk]
+  local d="$WORK/$1" p="$PATH"
+  [ -z "${3:-}" ] || p="$(dirname "$RTK_BIN"):$p"
+  [ ! -d "$d/bin" ] || p="$d/bin:$p"
+  ( cd "$d" && PATH="$p" && eval "$2" ) >/dev/null 2>&1
+}
+# A substitution as a command that runs the NAMED rtk at its first word too.
+named_rtk() {
+  case "$1" in
+    "rtk "*) printf '"%s" %s' "$RTK_BIN" "${1#rtk }" ;;
+    *)       printf '%s' "$1" ;;
+  esac
+}
+# For a CONTAINED probe, what rtk's own substitute would have done (claude-config#1443). A refusal
+# hides the lie it was written for, so without this a contained probe can say neither whether it
+# would catch that lie the day the refusal goes, nor whether the refusal is still needed. It never
+# changes the verdict: the hook decides what runs, and this only reports.
+rtk_own_reading() { # rtk_own_reading <dir> <command> <real exit>  -> one clause
+  local raw own
+  raw="$("$RTK_BIN" rewrite "$2" 2>/dev/null)"
+  if [ -z "$raw" ] || [ "$raw" = "$2" ]; then
+    echo "rtk itself does not rewrite it here, so there is no substitute to measure"
+    return
+  fi
+  run_in "$1" "$(named_rtk "$raw")" with-rtk; own=$?
+  if exits_differ "$3" "$own"; then
+    echo "rtk's own substitute \`$raw\` exits $own where the real tool exits $3, so the refusal is still needed"
+  else
+    # Agreement on the exit code is all this measures: a refusal made for what a destination PRINTS
+    # (curl, gh, aws) is untouched by it, so it claims nothing about whether that refusal can go.
+    echo "rtk's own substitute \`$raw\` agrees (exit $own), so on this probe's exit code the refusal is not what keeps the verdict right"
+  fi
+}
+
 compared=0
 skipped=0
 broken=0
@@ -215,7 +281,7 @@ for entry in "${PROBES[@]}"; do
     continue
   fi
 
-  ( cd "$WORK/$dir" && eval "$cmd" ) >/dev/null 2>&1; real=$?
+  run_in "$dir" "$cmd"; real=$?
   # A probe meant to fail that succeeded is a broken fixture, not a finding: comparing against it
   # would report about a case nobody chose (L165). Said out loud rather than quietly dropped.
   if { [ "$want" = fail ] && [ "$real" -eq 0 ]; } || { [ "$want" = pass ] && [ "$real" -ne 0 ]; }; then
@@ -225,18 +291,12 @@ for entry in "${PROBES[@]}"; do
   fi
 
   if ! sub="$(substitution_for "$cmd")"; then
-    contained+=("$id (\`$cmd\`): the hook passes it through, so the real tool runs and there is nothing to compare")
+    contained+=("$id (\`$cmd\`): the hook passes it through, so the real tool runs; $(rtk_own_reading "$dir" "$cmd" "$real")")
     continue
   fi
   # Run the substitution through the SAME rtk this script was pointed at, never whichever one is
   # first on PATH, or the reading would be about a different binary than the one named.
-  # A compound substitution names rtk again past its first word, so the named binary's directory
-  # also goes first on PATH for the run, where those later invocations look it up.
-  case "$sub" in
-    "rtk "*) sub_cmd="\"$RTK_BIN\" ${sub#rtk }" ;;
-    *)       sub_cmd="$sub" ;;
-  esac
-  ( cd "$WORK/$dir" && PATH="$(dirname "$RTK_BIN"):$PATH" && eval "$sub_cmd" ) >/dev/null 2>&1; got=$?
+  run_in "$dir" "$(named_rtk "$sub")" with-rtk; got=$?
   compared=$((compared + 1))
   if exits_differ "$real" "$got"; then
     mismatched+=("$id: \`$cmd\` exits $real but the hook substitutes \`$sub\` which exits $got")
