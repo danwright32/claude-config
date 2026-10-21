@@ -37,12 +37,22 @@ A Claude Code mod's design is drawn in the shared terminal of screens/, which is
 (claude-config#1413): shared_screen(<name>) gives it, and each frame is the terminal window alone, the
 screen's script and stylesheet ahead of the round's (on_screen), as the switcher draws it. load_screen
 is the one reader of screens/ for the switcher and the settled design, so both draw the same terminal.
+
+A terminal frame declares its width, and its builder gives Terminal.screen the window's (820 when it
+names none), so measure_screen_windows draws each frame in Chrome and reads the window's width back,
+for make-settled.py to refuse a frame whose two widths differ (claude-config#1422). Measured rather
+than read from the builder, because a builder computes it (every round so far wrote width:
+variant.width), and the drawn window is what the score's picture half will compare.
 """
 import base64
+import html
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -200,6 +210,120 @@ def shared_screen(name, builder, builder_name):
     script, styles = load_screen(name, builder, builder_name)
     return {"kind": "screen", "page": name, "line": SCREEN_KINDS[name] + ".", "script": script,
             "styles": styles, "slot": None, "width": None, "height": None, "source": None}
+
+
+MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CHROME_ON_PATH = ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+HEADLESS_DOM = os.path.join(HERE, "headless-dom.sh")
+
+
+def find_chrome():
+    """The Chrome a terminal design's windows are measured in (claude-config#1422): DESIGN_ROUNDS_CHROME
+    when it is set, else the Mac's Chrome, else one on PATH, as a Linux runner has it. A variable naming
+    nothing runnable is refused rather than passed over, so a typo in it is never a different Chrome."""
+    named = os.environ.get("DESIGN_ROUNDS_CHROME")
+    if named:
+        if os.path.isfile(named) and os.access(named, os.X_OK):
+            return named
+        raise ChromeError("DESIGN_ROUNDS_CHROME names %s, which is not a Chrome this can run, so the terminal "
+                          "windows cannot be measured. Point it at the Chrome binary, or unset it to use %s"
+                          % (named, MAC_CHROME))
+    if os.access(MAC_CHROME, os.X_OK):
+        return MAC_CHROME
+    for name in CHROME_ON_PATH:
+        found = shutil.which(name)
+        if found:
+            return found
+    raise ChromeError("a design drawn in the terminal has each frame's window measured in Chrome before it is "
+                      "written, so the width it is scored at is the width it draws (claude-config#1422), and "
+                      "there is no Chrome at %s or on PATH (%s). Set DESIGN_ROUNDS_CHROME to a Chrome binary"
+                      % (MAC_CHROME, ", ".join(CHROME_ON_PATH)))
+
+
+# Added to the settled page, which holds designFrameDocument: each frame drawn in an iframe at its declared
+# width, as the score's web adapter draws it, and its terminal window's drawn width read back.
+MEASURE = """<script>
+(function () {
+  var frames = __FRAMES__, out = {}, left = frames.length;
+  function done() {
+    var pre = document.createElement("pre");
+    pre.id = "DR-MEASURE";
+    pre.textContent = JSON.stringify(out);
+    document.body.append(pre);
+  }
+  if (!left) return done();
+  frames.forEach(function (pair) {
+    var f = document.createElement("iframe");
+    f.style.cssText = "width:" + pair[1] + "px;height:400px;border:0";
+    f.onload = function () {
+      var w = f.contentWindow, d = f.contentDocument, report = (w && w.DR_FRAME) || {};
+      var slot = d && d.getElementById("dr-slot"), win = slot && slot.querySelector(".term-window");
+      if (!report.built) out[pair[0]] = {why: report.why || "its builder never ran"};
+      else out[pair[0]] = {width: win ? win.getBoundingClientRect().width : null};
+      if (--left === 0) done();
+    };
+    f.srcdoc = designFrameDocument(pair[0]);
+    document.body.append(f);
+  });
+})();
+</script>"""
+
+
+def measure_screen_windows(page, frames, chrome_bin, deadline=60):
+    """{frame id: {"width": pixels or None} or {"why": the builder's error}} for a terminal design: the
+    settled page as written, each frame drawn in headless Chrome at its declared width and its terminal
+    window's width read, None where the frame draws no window. One Chrome run for every frame."""
+    at = page.rfind("</body>")
+    if at < 0:
+        raise ChromeError("the settled page has no </body> to measure its frames from")
+    probe = page[:at] + MEASURE.replace("__FRAMES__", script_text(json.dumps(
+        [[f["id"], f["width"]] for f in frames]))) + page[at:]
+    work = tempfile.mkdtemp(prefix="dr-measure.")
+    try:
+        path = os.path.join(work, "measure.html")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(probe)
+        proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox",
+                               "--virtual-time-budget=5000", "--dump-dom", "file://" + path],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, HEADLESS_DOM_CHROME=chrome_bin, HEADLESS_DOM_DEADLINE=str(deadline)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    m = re.search(r'<pre id="DR-MEASURE">(.*?)</pre>', proc.stdout, re.S)
+    if proc.returncode != 0 or not m:
+        raise ChromeError("Chrome (%s) did not measure the terminal windows (exit %d): %s"
+                          % (chrome_bin, proc.returncode, (proc.stderr.strip() or proc.stdout[-300:]).strip()[-600:]))
+    measured = json.loads(html.unescape(m.group(1)))
+    missing = [f["id"] for f in frames if f["id"] not in measured]
+    if missing:
+        raise ChromeError("Chrome measured no terminal window for frame %s" % ", ".join(missing))
+    return measured
+
+
+def pixels(value):
+    """A width as a reader writes it: 820, never 820.0."""
+    return "%d" % value if float(value).is_integer() else "%g" % value
+
+
+def window_width_problems(frames, measured):
+    """One sentence for each terminal frame whose declared width is not the width its window draws, or
+    whose window could not be measured, naming the frame, both numbers and the fix (claude-config#1422)."""
+    problems = []
+    for f in frames:
+        got = measured[f["id"]]
+        if "why" in got:
+            problems.append("frame %s could not be measured, because its builder threw: %s" % (f["id"], got["why"]))
+        elif got.get("width") is None:
+            problems.append("frame %s draws no terminal window, so the width it is scored at cannot be held to the "
+                            "width it draws: its builder returns no Terminal.screen(...)" % f["id"])
+        # A hundredth of a pixel, so a layout engine's rounding is never a mismatch and a real one always is.
+        elif abs(got["width"] - f["width"]) > 0.01:
+            drawn = pixels(got["width"])
+            problems.append('frame %s is declared %s wide, and its terminal window is drawn %s wide, measured in '
+                            'Chrome (Terminal.screen draws it at its "width", 820 when the builder names none). The '
+                            'frame is scored at its declared width, so give it "width": %s, or have its builder draw '
+                            "the window at %s" % (f["id"], pixels(f["width"]), drawn, drawn, pixels(f["width"])))
+    return problems
 
 
 def script_text(text):

@@ -360,12 +360,17 @@ block carries `"kind"`, which the score records in its score file and says in it
 on an email is never read as a build drawn inside the product. A Claude Code mod's design names
 `"screen": "terminal"`, as its rounds did: each frame is the shared terminal alone, drawn as the
 switcher draws it, at the size its builder gives the window (`Terminal.screen`'s `width`, 820 when it
-names none), so give each frame that same width; the file says it is the terminal and its
+names none). Each frame is scored at the width it declares, so before writing anything make-settled.py
+draws every frame in Chrome and measures its window, and refuses a frame whose declared width is not
+the width its window draws, naming the frame, both widths and the fix (claude-config#1422). It is
+measured rather than read from the builder, because a builder usually computes it (`width:
+variant.width`). The Chrome is `DESIGN_ROUNDS_CHROME` when set, else the Mac's, else one on PATH, and a
+terminal design is refused, naming that variable, where there is none. The file says it is the terminal and its
 `design-frames` block carries `"kind": "terminal"`. The score scores its decisions like any others,
 and says its picture half is unmeasured, since nothing yet captures a built mod screen in the form the
 terminal is drawn in (claude-config#1414): a terminal design is no score until then, and its Match
 issue stays open. It refuses, writing nothing, a chrome
-that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a checked decision with no check sentence or no frame, a
+that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal frame whose window draws at another width or whose builder throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
 hold, and an exception without Dan's words, a date and where he said them.

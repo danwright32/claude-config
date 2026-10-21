@@ -135,10 +135,26 @@ def spec(**changes):
     return s
 
 
-def make(name, s):
+# The Chrome make-settled.py measures a terminal design's windows in (claude-config#1422), found here
+# by the test's own lookup rather than make-settled's, so a fault in that lookup cannot agree with
+# itself: the Mac's Chrome, or one on PATH, as a Linux runner has it.
+MAC_CHROME = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+TEST_CHROME = MAC_CHROME if os.access(MAC_CHROME, os.X_OK) else next(
+    (p for p in (shutil.which(n) for n in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")) if p),
+    None)
+
+
+def make(name, s, chrome=True):
+    """make-settled.py on the spec, with DESIGN_ROUNDS_CHROME set to this machine's Chrome, or, given a
+    path as chrome, to that path, or, given None, taken out so make-settled.py finds its own."""
     p = write(name + ".json", json.dumps(s))
     out = os.path.join(T, name + ".html")
-    proc = subprocess.run([sys.executable, MAKE, p, out], capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "DESIGN_ROUNDS_CHROME"}
+    if chrome is True and TEST_CHROME:
+        env["DESIGN_ROUNDS_CHROME"] = TEST_CHROME
+    elif isinstance(chrome, str):
+        env["DESIGN_ROUNDS_CHROME"] = chrome
+    proc = subprocess.run([sys.executable, MAKE, p, out], capture_output=True, text=True, env=env)
     return proc.returncode, proc.stdout + proc.stderr, out
 
 
@@ -261,19 +277,27 @@ def term_spec(**changes):
 
 
 rc, out, term = make("terminal", term_spec())
-check("a design drawn in the shared terminal is written", rc == 0 and os.path.isfile(term), out)
-tsrc = open(term, encoding="utf-8").read() if os.path.isfile(term) else ""
-tm = re.search(r'<script type="application/json" id="design-frames">(.*?)</script>', tsrc, re.S)
-check("its frames block records the kind as terminal, for the score",
-      tm is not None and json.loads(tm.group(1)).get("kind") == "terminal", tm.group(1) if tm else tsrc[-800:])
-check("it says it is the terminal, where a design in chrome names its capture",
-      "The Claude Code terminal" in tsrc and "inside the product's real chrome" not in tsrc, tsrc[:900])
-fr = subprocess.run([sys.executable, SCORE, "frames", term], capture_output=True, text=True)
-check("the score reads its frames at their own sizes",
-      fr.returncode == 0 and [(f["id"], f["width"], f.get("height")) for f in json.loads(fr.stdout)["frames"]]
-      == [("t1", 640, None), ("t2", 820, 420)], fr.stdout + fr.stderr)
-rc2 = subprocess.run([sys.executable, CHECK, term], capture_output=True, text=True)
-check("and its decision map holds", rc2.returncode == 0, rc2.stdout + rc2.stderr)
+tsrc = ""
+if not TEST_CHROME:
+    # Its windows are measured in Chrome before it is written (claude-config#1422), so with none here
+    # the design is refused, and what it would have written is not checked.
+    print("UNMEASURED: no Chrome at %s or on PATH, so no terminal design was written and read" % MAC_CHROME)
+    check("with no Chrome here, a terminal design is refused, naming Chrome, writing nothing",
+          rc == 2 and "Chrome" in out and not os.path.exists(term), out)
+else:
+    check("a design drawn in the shared terminal is written", rc == 0 and os.path.isfile(term), out)
+    tsrc = open(term, encoding="utf-8").read() if os.path.isfile(term) else ""
+    tm = re.search(r'<script type="application/json" id="design-frames">(.*?)</script>', tsrc, re.S)
+    check("its frames block records the kind as terminal, for the score",
+          tm is not None and json.loads(tm.group(1)).get("kind") == "terminal", tm.group(1) if tm else tsrc[-800:])
+    check("it says it is the terminal, where a design in chrome names its capture",
+          "The Claude Code terminal" in tsrc and "inside the product's real chrome" not in tsrc, tsrc[:900])
+    fr = subprocess.run([sys.executable, SCORE, "frames", term], capture_output=True, text=True)
+    check("the score reads its frames at their own sizes",
+          fr.returncode == 0 and [(f["id"], f["width"], f.get("height")) for f in json.loads(fr.stdout)["frames"]]
+          == [("t1", 640, None), ("t2", 820, 420)], fr.stdout + fr.stderr)
+    rc2 = subprocess.run([sys.executable, CHECK, term], capture_output=True, text=True)
+    check("and its decision map holds", rc2.returncode == 0, rc2.stdout + rc2.stderr)
 try:
     tchrome = chrome_frame.shared_screen("terminal", TERM_BUILDER, "term-builder.js")
     tdoc = chrome_frame.frame_document(tchrome, TERM_BUILDER, ".term-band { margin: 0; }", {"width": 640}, {"room": "x"})
@@ -297,6 +321,65 @@ for n, (label, s, needle) in enumerate([
         write("term-own.js", "var Terminal = {};\n" + TERM_BUILDER)
     rc, out, path = make("bad-term-%d" % n, s)
     check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
+
+# --- a terminal frame's declared width against the window it draws (claude-config#1422) -------------
+# The frame entry declares its width, which the score draws and scores it at, and the builder gives
+# Terminal.screen the window's width (820 when it names none). make-settled.py measures each window in
+# Chrome and refuses a frame whose two widths differ, as a captured picture's width is held to its own.
+TERM_DEFAULT = """function buildScreen(variant) {
+  var T = Terminal;
+  if (variant.boom) throw new Error("the band has no room data");
+  return T.screen({ title: "claude-config", band: [[T.amber(variant.lead)]] });
+}
+"""
+write("term-default.js", TERM_DEFAULT)
+
+
+def wide(fid, declared, drawn=None, **more):
+    """A terminal frame declared at one width whose builder draws the window at another (or, with drawn
+    left out, at Terminal.screen's own 820 under term-default.js)."""
+    variant = dict({"lead": "Work has more room"}, **({"width": drawn} if drawn is not None else {}), **more)
+    return {"id": fid, "title": "Frame " + fid, "width": declared, "variant": variant}
+
+
+def on_t1(**changes):
+    """A terminal spec whose one decision shows on t1, so a spec of any frames holding t1 is whole."""
+    return term_spec(**dict(dict(decisions=[dict(TERM_DECISIONS[0], frames=["t1"])]), **changes))
+
+
+rc, out, path = make("width-none-chrome", term_spec(), chrome=os.path.join(T, "no-such-chrome"))
+check("a terminal design with DESIGN_ROUNDS_CHROME naming no Chrome is refused, naming the variable and the "
+      "path, writing nothing",
+      rc == 2 and "DESIGN_ROUNDS_CHROME" in out and "no-such-chrome" in out and not os.path.exists(path), out)
+rc, out, path = make("width-none-chrome-chrome", spec(), chrome=os.path.join(T, "no-such-chrome"))
+check("a design in captured chrome is written with no Chrome, since only a terminal's windows are measured",
+      rc == 0 and os.path.isfile(path), out)
+if not TEST_CHROME:
+    print("UNMEASURED: no Chrome at %s or on PATH, so no terminal frame's window was measured" % MAC_CHROME)
+else:
+    rc, out, path = make("width-off", on_t1(frames=[wide("t1", 640, 820)]))
+    check("a terminal frame declared 640 wide whose window draws at 820 is refused, naming the frame, both "
+          "widths and the fix, writing nothing",
+          rc == 2 and "frame t1 is declared 640 wide" in out and "drawn 820 wide" in out
+          and '"width": 820' in out and not os.path.exists(path), out)
+    rc, out, path = make("width-on", on_t1(frames=[wide("t1", 640, 640)]))
+    check("a terminal frame whose declared width is the width its window draws is written",
+          rc == 0 and os.path.isfile(path), out)
+    rc, out, path = make("width-default-on", on_t1(builder="term-default.js", frames=[wide("t1", 820)]))
+    check("a builder naming no width draws the window at 820, so a frame declared 820 is written",
+          rc == 0 and os.path.isfile(path), out)
+    rc, out, path = make("width-default-off", on_t1(builder="term-default.js", frames=[wide("t1", 640)]))
+    check("and a frame declared 640 over that builder is refused, naming 820 as the default it drew at",
+          rc == 2 and "frame t1 is declared 640 wide" in out and "drawn 820 wide" in out
+          and "820 when" in out and not os.path.exists(path), out)
+    rc, out, path = make("width-both-off", on_t1(frames=[wide("t1", 640, 820), wide("t2", 820, 820),
+                                                             wide("t3", 820, 700)]))
+    check("every mismatched frame is named in the one refusal, and a matching one is not",
+          rc == 2 and "frame t1 is declared 640 wide" in out and "frame t3 is declared 820 wide" in out
+          and "drawn 700 wide" in out and "frame t2" not in out, out)
+    rc, out, path = make("width-threw", on_t1(builder="term-default.js", frames=[wide("t1", 820, boom=True)]))
+    check("a frame whose builder throws is refused with the builder's own words, never as a width",
+          rc == 2 and "the band has no room data" in out and "frame t1" in out and not os.path.exists(path), out)
 
 # --- the design's requirements and its opening paragraph (claude-config#1401) -------------------------
 # Slate's Team capacity design, regenerated with make-settled, lost its Requirements list (which the
