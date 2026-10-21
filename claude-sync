@@ -172,8 +172,9 @@ RESOLVED_DIR="$SYNC_REPO/.resolved"
 CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
 
 # Whether this run's config is this user's own ~/.claude, rather than any other CLAUDE_HOME, which
-# is every test fixture. ONE predicate for every read that would otherwise reach the machine from a
-# fixture (L261): rtk's config, the launch agents, and the register of clones.
+# is every test fixture. ONE predicate for every read AND write that would otherwise reach the
+# machine from a fixture (L261): rtk's config, the launch agents and launchctl, the register of
+# clones, and the shell rc (claude-config#1453, #1470).
 claude_home_is_users_own(){ [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; }
 
 # Where this run reads AND writes the machine's jobs, clones and shell rc: the seam when one is
