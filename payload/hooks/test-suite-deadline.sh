@@ -248,6 +248,45 @@ overrun_with pastshare LOAD_AVERAGE_CMD="$(mk_load seventeen 17)" LOAD_AVERAGE_C
   && check "#1330 and load past that share does" ok \
   || check "#1330 and load past that share does" "exit=$ow_rc out=$ow_out"
 
+# The watchdog's own kill must never reach what the stop handler starts (claude-config#1454). The
+# handler reads the load through a child, and the watchdog used to flag the suite with USR1 BEFORE
+# stopping it and killing its tree. A watchdog descheduled between those two steps, which is what a
+# loaded machine does to it, let the handler start reading the load first, and the kill then took
+# that reader: the load came back unreadable and a stop that had to be UNMEASURED was a FAIL. Seen
+# on 2026-10-21 at a load average of 42, through test-scanners-before-push.sh, and reproduced 1 in
+# 200 under load. Made certain here rather than left to the scheduler: BASH_ENV hands the watchdog
+# (and only it sends USR1) a kill that holds it 0.3s after that signal, the gap load leaves; the
+# suite idles in builtins, so nothing defers its handler; and the reader takes 0.6s, so it is still
+# running when the tree is killed. The fix stops and kills first and flags last, so whatever the gap,
+# the handler cannot start until the kill is over.
+printf 'kill(){ builtin kill "$@"; local r=$?; [ "${1:-}" = -USR1 ] && sleep 0.3; return "$r"; }\n' > "$TMPROOT/slow-watchdog.env"
+printf '#!/bin/sh\nsleep 0.6\necho 30.5\n' > "$TMPROOT/load-slowbusy"; chmod +x "$TMPROOT/load-slowbusy"
+mk_armed "$TMPROOT/gap.sh" 'while :; do :; done'
+env -u HOOK_TESTS_SLOTS BASH_ENV="$TMPROOT/slow-watchdog.env" \
+  LOAD_AVERAGE_CMD="$TMPROOT/load-slowbusy" LOAD_AVERAGE_CORES=12 \
+  SUITE_WALL_STARTED=$(( now - 1000 )) SUITE_WALL_POLL=0.2 \
+  bash "$TMPROOT/gap.sh" > "$TMPROOT/gap.out" 2>&1 &
+gp=$!
+ALL_PIDS="$ALL_PIDS $gp"
+if wait_gone "$gp"; then wait "$gp"; gp_rc=$?; else gp_rc="still running"; fi
+gp_out="$(cat "$TMPROOT/gap.out")"
+[ "$gp_rc" = 124 ] && said_mark "$gp_out" && ! said_fail "$gp_out" \
+  && check "#1454 a watchdog slow between its steps does not kill the handler's own load reading" ok \
+  || check "#1454 a watchdog slow between its steps does not kill the handler's own load reading" "exit=$gp_rc out=$gp_out"
+
+# Nor may the time the handler is given be the POLL seam (claude-config#1454). The watchdog gave a
+# flagged suite twenty polls to finish its handler before TERM, so every test that shortens the poll
+# to look quickly (0.05s here, in the runner's suite and in the scanners suite) also cut that grace
+# from 40 seconds to one, and a handler slowed by load past one second was killed before it said
+# anything: 2 of 800 runs under load ended 143 with no line at all (measured 2026-10-21). The grace is now its own number
+# of seconds on the clock, whatever the poll. Shown with a load reader that takes 2 seconds, longer
+# than twenty short polls and far inside the real grace.
+printf '#!/bin/sh\nsleep 2\necho 30.5\n' > "$TMPROOT/load-slowreader"; chmod +x "$TMPROOT/load-slowreader"
+overrun_with slowreader LOAD_AVERAGE_CMD="$TMPROOT/load-slowreader" LOAD_AVERAGE_CORES=12
+[ "$ow_rc" = 124 ] && said_mark "$ow_out" && ! said_fail "$ow_out" \
+  && check "#1454 a handler slower than twenty short polls still finishes and says UNMEASURED" ok \
+  || check "#1454 a handler slower than twenty short polls still finishes and says UNMEASURED" "exit=$ow_rc out=$ow_out"
+
 # A copy of the helper with no load reader beside it cannot read a figure, so it fails as before
 # and says the reader is missing rather than printing nothing (L90).
 NOLOAD="$TMPROOT/noload-lib"
