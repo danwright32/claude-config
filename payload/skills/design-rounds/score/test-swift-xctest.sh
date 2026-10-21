@@ -94,14 +94,15 @@ v="$(run silent "" 1)"
 
 # --- 4. the adapter suite says what it did not measure where the runner prints it --------------------
 # With no Playwright to be found (an empty HOME, nothing named), every real section stands down, as
-# on Linux CI. The suite must still pass with no failure, and carry a SUITE-NOTE the runner prints
-# under its ok line naming the SwiftUI adapter as unmeasured, so a reader never takes it as passed.
+# on Linux CI. The suite must still pass with no failure, and carry a SUITE-PART-UNMEASURED line the
+# runner counts and prints under its ok line naming the SwiftUI adapter, so a reader never takes it as
+# passed (#1444).
 mkdir -p "$T/home"
 env -u DESIGN_SCORE_PLAYWRIGHT HOME="$T/home" bash "$HERE/test-score-adapters.sh" > "$T/adapters.out" 2>&1; rc=$?
 [ "$rc" -eq 0 ] && grep -q '^SUITE-RESULT passed=[0-9]* failed=0$' "$T/adapters.out" && ok \
   || bad "the adapter suite with nothing to draw with passes with no failure (rc=$rc)" "$(tail -20 "$T/adapters.out")"
-grep -E '^SUITE-NOTE .*UNMEASURED.*SwiftUI adapter' "$T/adapters.out" >/dev/null && ok \
-  || bad "the adapter suite prints a SUITE-NOTE naming the SwiftUI adapter as unmeasured" "$(grep -E 'UNMEASURED|SUITE-' "$T/adapters.out")"
+grep -E '^SUITE-PART-UNMEASURED .*SwiftUI adapter' "$T/adapters.out" >/dev/null && ok \
+  || bad "the adapter suite prints a SUITE-PART-UNMEASURED line naming the SwiftUI adapter" "$(grep -E 'UNMEASURED|SUITE-' "$T/adapters.out")"
 
 echo
 echo "passed: $pass, failed: $fail"

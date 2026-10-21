@@ -57,6 +57,12 @@
 # reported as UNMEASURED and counted on its own, never a pass, and the run then exits 1; under
 # CI=true it fails the suite. Any
 # line saying `command not found` fails the suite whatever else it printed (#1044).
+# `SUITE-PART-UNMEASURED <what was not measured, and why>`, one line per part, is how a suite that
+# ran says some of it could not be driven here (no Chrome, no zsh, running as root): counted on the
+# suite's own line, printed under it, and named in the summary, never a failure of the run (#1444).
+# It is the ONE shape for that. A line saying so any other way (a first word of UNMEASURED, or a
+# SUITE-NOTE or note: line carrying the word) fails the suite, naming the line, because every such
+# spelling was once dropped here and its suite read as a plain pass.
 
 set -uo pipefail
 
@@ -122,6 +128,11 @@ export SUITE_LOCK_WAIT="$LOCK_WAIT"
 # (claude-config#505). Small on purpose: this is for a measurement worth watching, not a second
 # output channel, and a suite that wants more than a few is telling the reader nothing.
 SUITE_NOTE_MAX="${SUITE_NOTE_MAX:-3}"
+# How many of a suite's SUITE-PART-UNMEASURED lines are printed under it (claude-config#1444). Larger
+# than the note cap, because each one is a part of the suite that did not count, and the reader is
+# owed the list; capped all the same, saying how many it hid, while the count on the suite's line
+# stays exact.
+SUITE_PART_UNMEASURED_MAX="${SUITE_PART_UNMEASURED_MAX:-8}"
 FAIL_DETAIL_MAX="${HOOK_TESTS_FAIL_DETAIL_MAX:-40}"
 # Run a suite that FAILED once more, purely to find out whether it is a flake (claude-config#245).
 # On by default because the cost is paid only by a run that is already red, and off inside the
@@ -412,6 +423,24 @@ suite_missing_commands(){   # suite_missing_commands <a suite's output> -> those
   printf '%s\n' "$1" | grep -F 'command not found' || true
 }
 
+# The parts a suite said it could not measure here, one per SUITE-PART-UNMEASURED line, without the
+# marker (claude-config#1444). The one reading, for the suite's line, the list under it and the
+# summary, so the three cannot disagree about what a part is (L263).
+suite_unmeasured_parts(){   # suite_unmeasured_parts <a suite's output> -> one part per line, or nothing
+  printf '%s\n' "$1" | sed -n 's/^SUITE-PART-UNMEASURED //p'
+}
+
+# Every line saying part of a suite was not measured in a shape this runner does NOT read
+# (claude-config#1444): a first word of UNMEASURED (`UNMEASURED: <what>`, `UNMEASURED-SECTIONS <n>`),
+# or a SUITE-NOTE or note: line carrying the word, or the agreed line indented so it is not read
+# exactly. Each of those was once dropped here (or would be), so its suite
+# read as a plain pass with part of it never run. Judged on what the suite PRINTED, so a marker
+# built in a variable or printed from python is caught as surely as a literal one (L247). The word
+# inside a check's name (`ok: ... is UNMEASURED`) is not this, and neither are the agreed lines.
+suite_unread_unmeasured(){   # suite_unread_unmeasured <a suite's output> -> those lines, or nothing
+  printf '%s\n' "$1" | grep -E '^[[:space:]]*((SUITE-NOTE|note:)[[:space:]].*)?UNMEASURED([^A-Za-z]|$)|^[[:space:]]+SUITE-PART-UNMEASURED' || true
+}
+
 # Whether a run's output counts as clean by the same rules the verdict below applies to the first
 # run: no missing command, and no failures on its result line where it printed one. The flake
 # recheck judged by exit status alone, so a second run that exited 0 while still counting failures
@@ -420,6 +449,7 @@ suite_missing_commands(){   # suite_missing_commands <a suite's output> -> those
 suite_output_clean(){   # suite_output_clean <a suite's output> -> 0 when clean
   local r f
   [ -z "$(suite_missing_commands "$1")" ] || return 1
+  [ -z "$(suite_unread_unmeasured "$1")" ] || return 1
   r="$(suite_result_line "$1")"
   [ -n "$r" ] || return 0
   f="${r#*failed=}"
@@ -1048,6 +1078,9 @@ blind_count=0
 # from all of these, because they ran, judged nothing, and keep the run from being a pass.
 overload_names=""
 overload_count=0
+# And those that ran with parts they could not measure here (#1444): passes, but not whole ones.
+partial=0
+partial_names=""
 divisions=""
 idx=0
 for suite in ${suites[@]+"${suites[@]}"}; do
@@ -1263,7 +1296,20 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       fi
       [ -n "$summary" ] || summary="(no result line, and no tally could be read)"
     fi
-    if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; } || [ -n "$cnf_lines" ]; then
+    # The parts it could not measure here, on its own line beside its passes, so a suite that ran
+    # half its checks never reads as the same plain pass as one that ran them all (claude-config#1444).
+    parts="$(suite_unmeasured_parts "$out")"
+    n_parts="$(printf '%s\n' "$parts" | grep -c . || true)"
+    case "$n_parts" in ''|*[!0-9]*) n_parts=0 ;; esac
+    if [ "$n_parts" -gt 0 ]; then
+      summary="$summary, $n_parts unmeasured"
+      partial=$((partial + 1))
+      partial_names="$partial_names $name"
+    fi
+    # And any line saying so in a shape this runner does not read, which fails the suite: read past,
+    # it is the silence this exists to end (#1444, L613).
+    stray_lines="$(suite_unread_unmeasured "$out")"
+    if [ "$code" -ne 0 ] || { [ -n "$tally" ] && [ "$tally" -gt 0 ]; } || [ -n "$cnf_lines" ] || [ -n "$stray_lines" ]; then
       failed=$((failed + 1))
       failed_names="$failed_names $name"
       # Was it a FLAKE? Run it once more and say so (claude-config#245).
@@ -1339,6 +1385,11 @@ run-all-tests: this suite left no exit status, so it was killed or never started
         printf '          It said command not found, so something it called does not exist and whatever called it never ran:\n'
         printf '%s\n' "$cnf_lines" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/            /'
       fi
+      if [ -n "$stray_lines" ]; then
+        printf '          It said part of it was not measured in a shape this runner does not read, so that part would have vanished from this report:\n'
+        printf '%s\n' "$stray_lines" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/            /'
+        printf '          Print each part as one line, SUITE-PART-UNMEASURED <what was not measured, and why>, which is counted on its line and named below.\n'
+      fi
       # And WHY. A one line verdict is enough on a machine where you can just run the suite
       # again; it is useless where you cannot, which is the whole point of running these
       # somewhere else (claude-config#101). The failing lines are printed, and the count is
@@ -1367,7 +1418,7 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       ' || true)"
       # Where the missing command is the only reason, its lines above are the detail, and the tail
       # of the output would only print them a second time.
-      [ -n "$detail" ] || [ -n "$cnf_lines" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
+      [ -n "$detail" ] || [ -n "$cnf_lines" ] || [ -n "$stray_lines" ] || detail="$(printf '%s\n' "$out" | tail -n "$FAIL_DETAIL_MAX")"
       shown="$(printf '%s\n' "$detail" | grep -c . || true)"
       [ -z "$detail" ] || printf '%s\n' "$detail" | awk -v n="$FAIL_DETAIL_MAX" 'NR <= n' | sed 's/^/          /'
       if [ "${shown:-0}" -gt "$FAIL_DETAIL_MAX" ]; then
@@ -1375,6 +1426,14 @@ run-all-tests: this suite left no exit status, so it was killed or never started
       fi
     else
       printf '  ok    %-38s %-26s %s\n' "$name" "$summary" "$dur"
+    fi
+    # Each part it could not measure, under its line whether it passed or failed, with the reason it
+    # gave (claude-config#1444). Capped, saying how many were hidden, as the notes below are.
+    if [ "$n_parts" -gt 0 ]; then
+      printf '%s\n' "$parts" | grep . | awk -v n="$SUITE_PART_UNMEASURED_MAX" 'NR <= n' | sed 's/^/          unmeasured: /'
+      if [ "$n_parts" -gt "$SUITE_PART_UNMEASURED_MAX" ]; then
+        printf '          unmeasured: ...and %s more, not shown\n' "$(( n_parts - SUITE_PART_UNMEASURED_MAX ))"
+      fi
     fi
     # A LINE THE SUITE MARKED AS WORTH SEEING (claude-config#505). Everything a suite says is
     # dropped except its summary and, on a failure, its FAIL lines. That is right for chatter and
@@ -1610,6 +1669,16 @@ fi
 if [ "$ran" -eq 0 ]; then
   echo "NOTHING WAS RUN. Treat this as a failure."
   exit 1
+fi
+# Suites that ran with parts they could not measure here (claude-config#1444): counted and named
+# above the verdict, as the suites that could not run are, and kept out of the verdict line itself,
+# whose two exact shapes claude-sync reads as coverage. Not a failure of the run: a Linux runner
+# cannot drive a Mac's Chrome, and a red that means "this machine lacks a tool" teaches everyone to
+# read past red. Never silent either, or half a suite reads as all of it (L98).
+if [ "$partial" -gt 0 ]; then
+  echo "$partial SUITE(S) RAN WITH PARTS UNMEASURED, so their passes do not cover them:$partial_names"
+  echo "  Each one's unmeasured lines above say what was not measured here and why. Run them where that is available to cover those parts."
+  echo
 fi
 if [ "$notrun" -gt 0 ]; then
   # Named and counted, above the verdict, because the verdict below deliberately no longer says

@@ -23,7 +23,7 @@ check(){   # $1 = name  $2 = "ok" or the evidence of failure
   if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1: $2"; fi
 }
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "UNMEASURED: the Safari check reads its store with python3, which this machine lacks"
+  echo "SUITE-PART-UNMEASURED the Safari check reads its store with python3, which this machine lacks"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 0
 fi
@@ -146,7 +146,7 @@ signed_out "$S.cut"
   || check "a store cut short: could not parse, exit 2" "code=$code out=$out"
 S="$TMPROOT/s8"; store "$S" ".claude.ai:sessionKey:$LATER"; chmod 000 "$S"
 if [ -r "$S" ]; then
-  echo "UNMEASURED: running as a user who can read a mode 000 file, so the permission refusal cannot be made"
+  echo "SUITE-PART-UNMEASURED running as a user who can read a mode 000 file, so the permission refusal cannot be made"
 else
   signed_out "$S"
   [ "$code" = 2 ] && case "$out" in *"permission refused"*"Full Disk Access"*) true ;; *) false ;; esac \
@@ -225,7 +225,7 @@ if [ -x /usr/bin/plutil ]; then
     && check "on Dans-MacBook-Pro it keeps the proven Chrome route" ok \
     || check "on Dans-MacBook-Pro it keeps the proven Chrome route" "code=$code args=$args out=$out"
 else
-  echo "UNMEASURED: the Chrome route reads Chrome's profile with macOS's plutil, which this machine lacks"
+  echo "SUITE-PART-UNMEASURED the Chrome route reads Chrome's profile with macOS's plutil, which this machine lacks"
 fi
 route Someone-Elses-Mac logout
 [ "$code" = 2 ] && [ ! -f "$TMPROOT/open.args" ] && [ "$out" = "no browser is set for this Mac (Someone-Elses-Mac) to sign out in" ] \

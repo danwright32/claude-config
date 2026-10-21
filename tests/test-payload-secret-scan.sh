@@ -449,7 +449,7 @@ if git -C "$ROOT" cat-file -e 96ec0d97:payload/skills/tracker/config.example.jso
     *) check "control: the scan refuses the token shaped placeholder that blocked sync after #675" "got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
   esac
 else
-  echo "UNMEASURED: the #675 placeholder control: commit 96ec0d97 is not in this clone's history"
+  echo "SUITE-PART-UNMEASURED the #675 placeholder control: commit 96ec0d97 is not in this clone's history"
 fi
 
 # Every path that ends a scan WITHOUT refusing clears the record of the last refusal
@@ -613,7 +613,7 @@ if git -C "$ROOT" cat-file -e a323443b:payload/skills/tracker/test-scan-flow.sh 
     *) check "#1125 control: the check finds the tracker scan test's token as #1112 shipped it" "not found" ;;
   esac
 else
-  echo "UNMEASURED: #1125 control on the fixture #1112 shipped: commit a323443b is not in this clone's history"
+  echo "SUITE-PART-UNMEASURED #1125 control on the fixture #1112 shipped: commit a323443b is not in this clone's history"
 fi
 
 echo "passed: $pass, failed: $fail"
@@ -622,7 +622,7 @@ printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 # A run that could not scan part of what it scans is not a pass: exit 3, apart from a failure, so
 # the pre push gate holds the push as a fault in its own run and CI stays red (#1146).
 if [ "$unmeasured_n" -gt 0 ]; then
-  echo "UNMEASURED: $unmeasured_n part(s) of this scan could not be made; the SUITE-UNMEASURED lines above say why."
+  echo "$unmeasured_n part(s) of this scan could not be made, so this run is unmeasured; the SUITE-UNMEASURED lines above say why."
   exit 3
 fi
 exit 0

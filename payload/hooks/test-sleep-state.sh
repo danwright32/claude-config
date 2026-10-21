@@ -106,7 +106,7 @@ if [ -n "$real_boot" ]; then
   printf '{"v":1,"until":%s000,"bootTime":%s}' "$(( $(date +%s) - 1 ))" "$real_boot" > "$WORK/home/.claude/state/sleep/current.json"
   check_eq "one that ended a second ago is expired" expired "$(HOME="$WORK/home" sleep_state)"
 else
-  echo "UNMEASURED: this machine has no sysctl kern.boottime, so the live boot read is not exercised here"
+  echo "SUITE-PART-UNMEASURED this machine has no sysctl kern.boottime, so the live boot read is not exercised here"
 fi
 # The night of 2026-10-08, read live: the record's bootTime 2 seconds off what sysctl now says, as a
 # clock correction left it, with this boot's own session, must still be asleep; the same start with
@@ -119,7 +119,7 @@ if [ -n "$real_boot" ] && [ -n "$real_session" ]; then
   printf '{"v":1,"until":%s000,"bootTime":%s,"bootSession":"00000000-0000-0000-0000-000000000000"}' "$(( $(date +%s) + 3600 ))" "$real_boot" > "$WORK/home/.claude/state/sleep/current.json"
   check_eq "another boot's session with this start, read live, is another boot" other-boot "$(HOME="$WORK/home" sleep_state)"
 else
-  echo "UNMEASURED: this machine has no sysctl kern.bootsessionuuid, so the live session read is not exercised here"
+  echo "SUITE-PART-UNMEASURED this machine has no sysctl kern.bootsessionuuid, so the live session read is not exercised here"
 fi
 
 # With no python3 the record cannot be read, which is said by name and reads as awake (L490).

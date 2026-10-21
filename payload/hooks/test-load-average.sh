@@ -68,7 +68,7 @@ if [ -r /proc/loadavg ] || sysctl -n vm.loadavg >/dev/null 2>&1; then
     *) check "this machine's own load average is read as a number" ok ;;
   esac
 else
-  echo "UNMEASURED: this machine has neither /proc/loadavg nor sysctl vm.loadavg, so the live read is not exercised here"
+  echo "SUITE-PART-UNMEASURED this machine has neither /proc/loadavg nor sysctl vm.loadavg, so the live read is not exercised here"
 fi
 
 # ---- the cores ----

@@ -231,7 +231,7 @@ H6="$WORK/h6"; mkdir -p "$H6"
 D6="$(cfg_dir m6)"; C6="$D6/config.toml"; mkdir -p "$D6"; mkstub "$WORK/stub6" "$C6"
 printf '[hooks]\nexclude_commands = ["tail"]\n' > "$C6"; chmod 000 "$C6"
 if [ -r "$C6" ]; then
-  echo "UNMEASURED: this run can read a mode 000 file (running as root?), so the unreadable case was not measured"
+  echo "SUITE-PART-UNMEASURED this run can read a mode 000 file (running as root?), so the unreadable case was not measured"
 else
   pull "$H6" "$R1" "$WORK/stub6/rtk"; out6="$OUT"
   check "unreadable: the pull still succeeds" [ "$PULL_RC" -eq 0 ]
@@ -298,7 +298,7 @@ check "verify: and does not call the config Verified" lacks "$outv2" "Verified:"
 # ---- 11. THE REAL rtk, where installed, reads what a pull wrote (L82, L404). ----
 REAL_RTK="$(command -v rtk 2>/dev/null || true)"
 if [ -z "$REAL_RTK" ]; then
-  echo "UNMEASURED: rtk is not installed here, so whether rtk itself honours the written list was not measured. Everything above used a stub."
+  echo "SUITE-PART-UNMEASURED rtk is not installed here, so whether rtk itself honours the written list was not measured. Everything above used a stub."
 else
   RH="$WORK/real-home"; mkdir -p "$RH"
   mkdir -p "$WORK/realwrap"

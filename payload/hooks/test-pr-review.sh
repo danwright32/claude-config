@@ -359,7 +359,7 @@ nojq_case(){ # nojq_case <label> <url> <exit code, or ""> <stdout> <stderr>
     check_eq "$label, jq: one opening recorded" "$((rows + 1))" "$(opened_rows)"
     check_eq "$label: with jq the URL column is the one gh printed" "$url" "$(opened_url)"
   else
-    echo "  UNMEASURED: $label: no jq on this machine, so only the fallback ran and there was nothing to compare it with"
+    echo "SUITE-PART-UNMEASURED $label: no jq on this machine, so only the fallback ran and there was nothing to compare it with"
   fi
   rows="$(opened_rows)"
   create_payload "gh pr create --fill" "$@" | PATH="$NOJQ" bash "$CREATE_HOOK" >/dev/null 2>&1
@@ -440,7 +440,7 @@ chmod a-w "$AI_REVIEW_STATE_DIR"
 if ( : > "$AI_REVIEW_STATE_DIR/.probe" ) 2>/dev/null; then
   # Root, or a filesystem ignoring modes: the case cannot be produced here, so it is said, not failed (L411).
   rm -f "$AI_REVIEW_STATE_DIR/.probe"; chmod u+w "$AI_REVIEW_STATE_DIR"
-  echo "  UNMEASURED: the state folder stayed writable after chmod a-w, so the no-write case was not produced"
+  echo "SUITE-PART-UNMEASURED the state folder stayed writable after chmod a-w, so the no-write case was not produced"
 else
   out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
   chmod u+w "$AI_REVIEW_STATE_DIR"

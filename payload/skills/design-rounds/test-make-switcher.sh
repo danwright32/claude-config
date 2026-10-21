@@ -28,7 +28,6 @@ trap 'rm -rf "$TMP"' EXIT
 
 pass=0
 fail=0
-unmeasured=0
 check() { # check <description> <expected-substring> <actual>
   if [[ "$3" == *"$2"* ]]; then
     pass=$((pass + 1))
@@ -289,11 +288,9 @@ clone_state(){ # clone_state <file naming a clone> -> there, gone, or never made
 user_root="$(t="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)" && [ -n "$t" ] && cd "${t%/}/.." 2>/dev/null && pwd -P)"
 clones_real="$(cd "$CLONES" && pwd -P)"
 if ! command -v lsof >/dev/null 2>&1; then
-  echo "UNMEASURED: no lsof here, so removing a killed Chrome's own copy was not tested"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no lsof here, so removing a killed Chrome's own copy was not tested"
 elif [ -z "$user_root" ] || [ "${clones_real#"$user_root"/}" = "$clones_real" ]; then
-  echo "UNMEASURED: this suite's temp folder $clones_real is not inside a per user temp folder (${user_root:-none found}), so removing a killed Chrome's own copy was not tested"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED this suite's temp folder $clones_real is not inside a per user temp folder (${user_root:-none found}), so removing a killed Chrome's own copy was not tested"
 else
   mkdir "$CLONES/code_sign_clone.before"
   : > "$CLONES/code_sign_clone.before/Google Chrome"
@@ -373,8 +370,7 @@ if [[ -x "$REAL_CHROME" ]]; then
   # With no such folder there is nothing to look in, and an empty look would pass whether or not
   # the folder was found in the right place, so that is said instead of passed.
   if [ ! -d "$real_clones" ]; then
-    echo "UNMEASURED: no clone folder at $real_clones, so whether a real Chrome run leaves its copy behind was not measured"
-    unmeasured=$((unmeasured + 1))
+    echo "SUITE-PART-UNMEASURED no clone folder at $real_clones, so whether a real Chrome run leaves its copy behind was not measured"
   else
     printf '<!doctype html><html><body><p>own copy</p></body></html>\n' > "$TMP/clone-probe.html"
     left="not run"; page=""
@@ -414,8 +410,7 @@ PROBEPY
 }
 
 if [[ ! -x "$CHROME" ]]; then
-  echo "UNMEASURED: no browser at $CHROME, so the keyboard wiring was not tested. Set SWITCHER_TEST_CHROME."
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so the keyboard wiring was not tested. Set SWITCHER_TEST_CHROME."
 else
   keys="$(probe "$TMP/out.html")"
   check_eq "arrows and jump keys move between the options" "Espresso,Ink,Espresso,Ink,Espresso" "$keys"
@@ -487,8 +482,7 @@ SCROLLPY
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
 if [[ ! -x "$CHROME" ]]; then
-  echo "UNMEASURED: no browser at $CHROME, so keeping the scroll position across a switch was not tested. Set SWITCHER_TEST_CHROME."
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so keeping the scroll position across a switch was not tested. Set SWITCHER_TEST_CHROME."
 else
   got="$(scroll_probe "$SCR/out.html")"
   check_eq "a switch keeps how far a scrolling region inside the screen was scrolled, both ways" "600,250" "${got%%|*}"
@@ -885,8 +879,7 @@ SAME
     --dump-dom "file://$TMP/collide-js.html" 2>/dev/null)"
   check_not "a page whose options differ carries no warning" 'class="dr-sameness"' "$differ_dom"
 else
-  unmeasured=$((unmeasured + 1))
-  echo "UNMEASURED: no headless Chrome, so the script collision was checked in the source only"
+  echo "SUITE-PART-UNMEASURED no headless Chrome, so the script collision was checked in the source only"
 fi
 
 
@@ -1012,8 +1005,7 @@ TYPED
   check "a key typed into the design's own field does not jump tabs" "drawn:A" \
     "$(render "$TMP/field-typed.html")"
 else
-  unmeasured=$((unmeasured + 1))
-  echo "UNMEASURED: no headless Chrome, so the key yielding was checked in the source only"
+  echo "SUITE-PART-UNMEASURED no headless Chrome, so the key yielding was checked in the source only"
 fi
 
 # A builder that THROWS is the third answer the page can give about sameness, and it needs
@@ -1211,8 +1203,7 @@ WALK
   check "revisiting an option does not draw it again" "drawn:B calls:2" \
     "$(render "$TMP/counting-walk.html")"
 else
-  unmeasured=$((unmeasured + 1))
-  echo "UNMEASURED: no headless Chrome, so how often the builder is called was not counted"
+  echo "SUITE-PART-UNMEASURED no headless Chrome, so how often the builder is called was not counted"
 fi
 
 # --- the shared terminal screen (claude-config#651) ---
@@ -1473,8 +1464,7 @@ TRPY
     esac
     check_eq "and it is the line docs/mods-design.md records" "$recorded" "$BUILT_STATUS"
   else
-    unmeasured=$((unmeasured + 1))
-    echo "UNMEASURED: no docs/mods-design.md beside this skill, so the default status line was not compared with the design record"
+    echo "SUITE-PART-UNMEASURED no docs/mods-design.md beside this skill, so the default status line was not compared with the design record"
   fi
   check_eq "transcript, band, prompt and status stack in that order" "transcript,band,prompt,status" "$(fact "$r" order)"
   check_eq "two options differing in one field are not reported as the same" "none" "$(fact "$r" strip)"
@@ -1497,8 +1487,7 @@ TRPY
     check "and the report names the typo: $bad" "$named" "$typo_strip"
   done
 else
-  unmeasured=$((unmeasured + 1))
-  echo "UNMEASURED: no headless Chrome, so what the terminal draws was not measured"
+  echo "SUITE-PART-UNMEASURED no headless Chrome, so what the terminal draws was not measured"
 fi
 
 # --- no stand ins: a round draws in the product's captured chrome (claude-config#1364) ---
@@ -1573,8 +1562,7 @@ PROBEPY
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
 if [[ ! -x "$CHROME" ]]; then
-  echo "UNMEASURED: no browser at $CHROME, so a round in captured chrome was not drawn"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so a round in captured chrome was not drawn"
 else
   got="$(chrome_probe "$NS/out.html")"
   check_eq "every option is drawn into the captured page's slot, one shown, and a key pressed inside it switches" \
@@ -1721,8 +1709,7 @@ PROBEPY
     | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")'
 }
 if [[ ! -x "$CHROME" ]]; then
-  echo "UNMEASURED: no browser at $CHROME, so a round with no product page was not drawn"
-  unmeasured=$((unmeasured + 1))
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so a round with no product page was not drawn"
 else
   got="$(nopage_probe "$NP/email.html")"
   check_eq "an email round draws each option at its own width with nothing around it, one shown, fitted to its height, and a key inside switches" \
@@ -1753,7 +1740,6 @@ fi
 
 echo
 echo "passed: $pass, failed: $fail"
-[[ "$unmeasured" -gt 0 ]] && echo "UNMEASURED-SECTIONS $unmeasured"
 # The runner parses this exact shape, so nothing else goes on this line.
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

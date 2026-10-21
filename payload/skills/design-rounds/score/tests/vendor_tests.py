@@ -122,7 +122,7 @@ if shutil.which("node"):
     check("the vendored capture-web.mjs loads, and with no Playwright says so and exits 2",
           p.returncode == 2 and "install-playwright.sh" in p.stderr, "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
 else:
-    print("UNMEASURED: node is not on PATH, so the vendored capture-web.mjs was not loaded")
+    print("SUITE-PART-UNMEASURED node is not on PATH, so the vendored capture-web.mjs was not loaded")
 # Running the score in the folder leaves nothing behind there (python writes __pycache__ beside a
 # module it imports unless told not to), so a CI job that scores and then checks still matches.
 p = subprocess.run([sys.executable, os.path.join(V, "design_score.py"), "frames", design],

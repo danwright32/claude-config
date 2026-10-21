@@ -25,7 +25,7 @@ check(){   # $1 = name  $2 = "ok" or the evidence of failure
   if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1: $2"; fi
 }
 if [ "$(uname)" != Darwin ] || [ ! -x /usr/bin/plutil ] || [ ! -x /usr/bin/sqlite3 ]; then
-  echo "UNMEASURED: the sign out scripts read Chrome's files with macOS's plutil and sqlite3, which this machine lacks"
+  echo "SUITE-PART-UNMEASURED the sign out scripts read Chrome's files with macOS's plutil and sqlite3, which this machine lacks"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 0
 fi

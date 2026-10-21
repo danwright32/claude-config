@@ -2484,6 +2484,162 @@ case "$n_shown" in ''|*[!0-9]*) n_shown=0 ;; esac
   || check "#505 a suite marking many lines is capped rather than allowed to flood" "it printed $n_shown"
 
 # ---------------------------------------------------------------------------
+# A SUITE THAT RAN, BUT NOT ALL OF IT (claude-config#1444).
+#
+# A suite that cannot drive some of its checks on this machine (no Chrome, no zsh, running as root)
+# said so in a line of its own, and the runner dropped every such line. On main CI run 39519794207
+# test-score-adapters.sh read "ok 26 passed, 0 failed" with six parts unmeasured, and nobody could
+# tell from any CI log whether the settled design suite measured terminal widths in Chrome or fell
+# back. Those suites said it four different ways (`UNMEASURED: <what>`, `UNMEASURED-SECTIONS <n>`, a
+# SUITE-NOTE, a `note:` line), so the cure is one agreed line the runner reads and a guard on the
+# others, rather than teaching the runner a fifth spelling (L83, L613).
+#
+# `SUITE-PART-UNMEASURED <what was not measured, and why>`, one line per part. The runner counts
+# them on the suite's own line, prints each under it, and names the suites in the summary. It does
+# not fail the run: a Linux runner legitimately cannot drive Chrome on a Mac path, and a red that
+# means "this machine lacks a tool" teaches people to read past red. It is never silent instead.
+# The markers are assembled at runtime, as MARK is, so this file is not itself an occurrence.
+PART_MARK="SUITE""-PART-UNMEASURED"
+STRAY_WORD="UNMEAS""URED"
+mk_part_suite() { # mk_part_suite <dir> <name> <failed> <part>..
+  local d="$1" n="$2" f="$3"; shift 3
+  mkdir -p "$d"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "  ok: ordinary chatter nobody needs to see"\n'
+    local one
+    for one in "$@"; do printf 'printf %s\\\\n "%s %s"\n' "'%s'" "$PART_MARK" "$one"; done
+    [ "$f" -eq 0 ] || printf 'echo "FAIL: something went wrong"\n'
+    printf 'printf %s\\\\n "%s passed=26 failed=%s"\n' "'%s'" "$MARK" "$f"
+    printf 'exit %s\n' "$f"
+  } > "$d/test-$n.sh"
+  chmod +x "$d/test-$n.sh"
+}
+
+PU1="$TMPROOT/dir-part-unmeasured"
+mk_part_suite "$PU1" partial 0 "the SwiftUI adapter, because this is not macOS" "a settled email scored end to end, because there is no Chrome here"
+mk_result_suite "$PU1" whole 3 0 0
+out_pu1="$(bash "$RUNNER" "$PU1" 2>&1)"; code_pu1=$?
+[ "$code_pu1" -eq 0 ] \
+  && check "#1444 a suite with parts unmeasured does not fail the run" ok \
+  || check "#1444 a suite with parts unmeasured does not fail the run" "exit=$code_pu1 out=$out_pu1"
+grep -E '^  ok +test-partial\.sh +26 passed, 0 failed, 2 unmeasured' > /dev/null <<< "$out_pu1" \
+  && check "#1444 its own line counts its unmeasured parts beside its passes" ok \
+  || check "#1444 its own line counts its unmeasured parts beside its passes" "out=$out_pu1"
+grep -E '^  ok +test-whole\.sh +3 passed, 0 failed +\(' > /dev/null <<< "$out_pu1" \
+  && check "#1444 a suite that measured everything says nothing about unmeasured parts" ok \
+  || check "#1444 a suite that measured everything says nothing about unmeasured parts" "out=$out_pu1"
+grep -qE '^ +unmeasured: the SwiftUI adapter, because this is not macOS$' <<< "$out_pu1" \
+  && grep -qE '^ +unmeasured: a settled email scored end to end, because there is no Chrome here$' <<< "$out_pu1" \
+  && check "#1444 and each unmeasured part is printed under it, with its reason" ok \
+  || check "#1444 and each unmeasured part is printed under it, with its reason" "out=$out_pu1"
+grep -qE '^1 SUITE\(S\) RAN WITH PARTS UNMEASURED, so their passes do not cover them: test-partial\.sh$' <<< "$out_pu1" \
+  && check "#1444 the summary counts and names the suites with parts unmeasured" ok \
+  || check "#1444 the summary counts and names the suites with parts unmeasured" "out=$out_pu1"
+# The verdict line keeps its exact shape, because claude-sync reads it as the measure of coverage.
+grep -qE '^ALL 2 SUITES PASSED$' <<< "$out_pu1" \
+  && check "#1444 the verdict line keeps the shape claude-sync reads" ok \
+  || check "#1444 the verdict line keeps the shape claude-sync reads" "out=$out_pu1"
+
+# A failing suite's unmeasured parts are printed too, and it is still named in the summary.
+PU2="$TMPROOT/dir-part-unmeasured-fail"
+mk_part_suite "$PU2" partbad 1 "the keyboard wiring, because there is no browser here"
+out_pu2="$(HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$PU2" 2>&1)"; code_pu2=$?
+[ "$code_pu2" -ne 0 ] \
+  && grep -qE '^ +unmeasured: the keyboard wiring, because there is no browser here$' <<< "$out_pu2" \
+  && grep -qE '^1 SUITE\(S\) RAN WITH PARTS UNMEASURED.*: test-partbad\.sh$' <<< "$out_pu2" \
+  && check "#1444 a failing suite still fails, and its unmeasured parts are still shown and named" ok \
+  || check "#1444 a failing suite still fails, and its unmeasured parts are still shown and named" "exit=$code_pu2 out=$out_pu2"
+
+# Many parts are capped on screen, and the cap says how many it hid, while the count is exact.
+PU3="$TMPROOT/dir-part-unmeasured-many"
+mk_part_suite "$PU3" partmany 0 p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12
+out_pu3="$(bash "$RUNNER" "$PU3" 2>&1)"
+pu3_shown="$(grep -cE '^ +unmeasured: p[0-9]+$' <<< "$out_pu3" || true)"
+case "$pu3_shown" in ''|*[!0-9]*) pu3_shown=0 ;; esac
+[ "$pu3_shown" -ge 1 ] && [ "$pu3_shown" -lt 12 ] \
+  && grep -qE '26 passed, 0 failed, 12 unmeasured' <<< "$out_pu3" \
+  && grep -qE "^ +unmeasured: \.\.\.and $(( 12 - pu3_shown )) more, not shown$" <<< "$out_pu3" \
+  && check "#1444 many unmeasured parts are capped on screen, saying how many were hidden, and counted exactly" ok \
+  || check "#1444 many unmeasured parts are capped on screen, saying how many were hidden, and counted exactly" "shown=$pu3_shown out=$out_pu3"
+
+# THE GUARD, at run time: a suite saying part of it was not measured in any other shape is FAILED,
+# naming the line and the shape to use, so the next hand rolled spelling cannot vanish as the old
+# ones did (L613). Judged by what the suite PRINTED, so a marker built in a variable, printed from
+# python, or carried in a note is caught as surely as a literal (L247).
+mk_stray_suite() { # mk_stray_suite <dir> <name> <the line it prints>
+  mkdir -p "$1"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf %s\\\\n %q\n' "'%s'" "$3"
+    printf 'printf %s\\\\n "%s passed=5 failed=0"\n' "'%s'" "$MARK"
+    printf 'exit 0\n'
+  } > "$1/test-$2.sh"
+  chmod +x "$1/test-$2.sh"
+}
+pu_n=0
+for pu_line in "$STRAY_WORD-SECTIONS 6" "$STRAY_WORD: no Chrome here, so the keyboard wiring was not tested" \
+               "  $STRAY_WORD: \$label: no jq on this machine" "$NOTE_MARK $STRAY_WORD here, so not in the passed count: the SwiftUI adapter" \
+               "$NOTE_MARK the claude-sync seam checks are $STRAY_WORD here" \
+               "note: this copy is not in a checkout, so the real tree is reported $STRAY_WORD rather than passed." \
+               "  $PART_MARK the agreed line, but indented, so it is not read"; do
+  pu_n=$((pu_n + 1))
+  PUS="$TMPROOT/dir-part-stray-$pu_n"
+  mk_stray_suite "$PUS" stray "$pu_line"
+  out_pus="$(HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$PUS" 2>&1)"; code_pus=$?
+  [ "$code_pus" -ne 0 ] \
+    && grep -qE '^  FAIL +test-stray\.sh' <<< "$out_pus" \
+    && grep -qF "$pu_line" <<< "$out_pus" \
+    && grep -qF "$PART_MARK <what was not measured, and why>" <<< "$out_pus" \
+    && check "#1444 a suite saying part of it was unmeasured as [$pu_line] fails, quoting it and naming the agreed line" ok \
+    || check "#1444 a suite saying part of it was unmeasured as [$pu_line] fails, quoting it and naming the agreed line" "exit=$code_pus out=$out_pus"
+done
+# And it is not a guard on the WORD: check names and the runner's own agreed lines that mention it
+# are fine, or every suite that tests an unmeasured path would be failed for describing it (L36).
+PUC="$TMPROOT/dir-part-clean"
+mk_stray_suite "$PUC" mentions "  ok: a tree that cannot be listed is $STRAY_WORD with the reason"
+mk_stray_suite "$PUC" passline "PASS: #1146 a FAIL line outranking SUITE-$STRAY_WORD"
+out_puc="$(bash "$RUNNER" "$PUC" 2>&1)"; code_puc=$?
+[ "$code_puc" -eq 0 ] \
+  && check "#1444 a suite whose check names mention the word is not failed for it" ok \
+  || check "#1444 a suite whose check names mention the word is not failed for it" "exit=$code_puc out=$out_puc"
+
+# THE GUARD, in the source: a branch that never runs on this machine (as root, on Linux, with no
+# zsh) prints nothing here, so the run time guard cannot see it. So every suite in the repository
+# is also read for a print whose text starts with the word, or a note carrying it, in a shell suite
+# or a python one. Found from what git tracks, never from a list (L96).
+stray_unmeasured_prints(){   # stray_unmeasured_prints <file>.. -> file:line for each such print
+  grep -n -E "(echo|printf)[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*[\"'](\\\\n|[[:space:]])*((SUITE-NOTE|note:)[^\"']*)?${STRAY_WORD}([^A-Za-z]|\$)|print\\([[:space:]]*[fr]?[\"'][[:space:]]*((SUITE-NOTE|note:)[^\"']*)?${STRAY_WORD}([^A-Za-z]|\$)|(echo|printf|print\\()[[:space:]]*[fr]?[\"'][[:space:]]+${PART_MARK}" "$@" 2>/dev/null || true
+}
+PUF="$TMPROOT/dir-part-source"; mkdir -p "$PUF"
+printf 'echo "%s: no zsh here, so its reading was not measured"\n' "$STRAY_WORD" > "$PUF/test-a.sh"
+printf '    print("%s: no Chrome at %%s" %% X)\n' "$STRAY_WORD" > "$PUF/b_tests.py"
+printf 'echo "note: this copy is reported %s rather than passed."\n' "$STRAY_WORD" > "$PUF/test-c.sh"
+printf 'printf %s\\n "the parts"\ncheck "it is said as %s" ok\n' "'$PART_MARK %s'" "$STRAY_WORD" > "$PUF/test-d.sh"
+printf '  echo "  %s indented, so it is not read"\n' "$PART_MARK" > "$PUF/test-e.sh"
+pu_found="$(stray_unmeasured_prints "$PUF/test-a.sh" "$PUF/b_tests.py" "$PUF/test-c.sh" "$PUF/test-d.sh" "$PUF/test-e.sh")"
+case "$pu_found" in
+  *test-a.sh:1:*b_tests.py:1:*test-c.sh:1:*test-e.sh:1:*) case "$pu_found" in *test-d.sh*) check "#1444 the source scan finds each stray print and nothing else" "it flagged the agreed line: $pu_found" ;; *) check "#1444 the source scan finds each stray print and nothing else" ok ;; esac ;;
+  *) check "#1444 the source scan finds each stray print and nothing else" "found: $pu_found" ;;
+esac
+pu_root="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ] || pu_root="${RUN_ALL_TESTS_CHECKOUT:-}"
+if [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ]; then
+  pu_files=()
+  while IFS= read -r pu_f; do pu_files+=("$pu_root/$pu_f"); done < <(git -C "$pu_root" ls-files | grep -E '(^|/)(test-[^/]*\.sh|[^/]*_tests\.py)$')
+  if [ "${#pu_files[@]}" -lt 50 ]; then
+    check "#1444 the source scan read the repository's suites" "it found only ${#pu_files[@]} suite files in $pu_root, so it read almost nothing"
+  else
+    pu_stray="$(stray_unmeasured_prints "${pu_files[@]}")"
+    [ -z "$pu_stray" ] \
+      && check "#1444 no suite in the repository prints an unmeasured part in a shape the runner does not read" ok \
+      || check "#1444 no suite in the repository prints an unmeasured part in a shape the runner does not read" "print each as $PART_MARK <what, and why> instead: $(printf '%s\n' "$pu_stray" | sed "s|^$pu_root/||" | cut -c1-200 | tr '\n' ';')"
+  fi
+else
+  printf '%s %s\n' "$PART_MARK" "the source scan for unmeasured parts the runner cannot read, because this copy is not in a checkout and none was handed in RUN_ALL_TESTS_CHECKOUT"
+fi
+
+# ---------------------------------------------------------------------------
 # A SUITE THAT CALLED SOMETHING THAT DOES NOT EXIST (claude-config#1044).
 #
 # A case calling a helper before it is defined makes bash print `command not found` on stderr and
@@ -2818,7 +2974,7 @@ mk_stopped_suite() { # mk_stopped_suite <dir> <name> [an earlier line it printed
     printf '#!/usr/bin/env bash\n'
     printf 'echo ran >> "%s"\n' "$1/$2.runs"
     [ -n "${3:-}" ] && printf 'echo "%s"\n' "$3"
-    printf 'echo "UNMEASURED: test-%s.sh ran past its own wall clock of 60s and was stopped"\n' "$2"
+    printf 'echo "STOPPED, UNMEASURED: test-%s.sh ran past its own wall clock of 60s and was stopped"\n' "$2"
     printf 'printf %s\\\\n "%s stopped at its 60s wall clock at a load average of 30.5 on 12 cores"\n' "'%s'" "$STOP_MARK"
     printf 'exit 124\n'
   } > "$1/test-$2.sh"
@@ -3058,7 +3214,7 @@ if SYNC_SCRIPT_REAL="$(claude_sync_for_suite "$DIR" "${RUN_ALL_TESTS_CHECKOUT:-}
     && check "a suite the runner starts cannot reach a claude command through claude-sync" ok \
     || check "a suite the runner starts cannot reach a claude command through claude-sync" "$(cat "$CT/calls" 2>&1)"
 else
-  printf '%s %s\n' "$NOTE_MARK" "the claude-sync seam checks are UNMEASURED here: no claude-sync above $DIR and no checkout handed in RUN_ALL_TESTS_CHECKOUT"
+  printf '%s %s\n' "$PART_MARK" "the claude-sync seam checks, because there is no claude-sync above $DIR and no checkout was handed in RUN_ALL_TESTS_CHECKOUT"
 fi
 
 echo "passed: $pass, failed: $fail"

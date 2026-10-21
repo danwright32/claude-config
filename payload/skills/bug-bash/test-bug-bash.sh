@@ -45,7 +45,7 @@ busy_machine() { # busy_machine <got rc> <got output>
 expect() { # expect <description> <want rc> <want words> <got rc> <got output>
   if [ "$4" -eq "$2" ] && grep -qi -- "$3" <<< "$5"; then ok
   elif [ "$2" -ne 9 ] && busy_machine "$4" "$5"; then
-    unmeasured=$((unmeasured + 1)); echo "UNMEASURED: $1: this Mac could not open a connection to the read only proxy"
+    unmeasured=$((unmeasured + 1)); echo "SUITE-PART-UNMEASURED $1: this Mac could not open a connection to the read only proxy"
   else bad "$1 (want rc $2, got $4)" "$5"; fi
 }
 
@@ -914,7 +914,7 @@ SETUP="$DIR/egress-setup.sh"
 # Run with no arguments only when this suite is not root: as root it would really set the Mac up
 # (L2), so there it is left unmeasured rather than run (lessons review of #955).
 if [ "$(id -u)" = 0 ]; then
-  echo "UNMEASURED: this suite is running as root, so the setup's refusal of a non root run is not driven here"
+  echo "SUITE-PART-UNMEASURED this suite is running as root, so the setup's refusal of a non root run is not driven here"
 else
   out="$(bash "$SETUP" 2>&1)"; rc=$?
   [ "$rc" = 2 ] && grep -q 'sudo bash ~/.claude/skills/bug-bash/egress-setup.sh' <<< "$out" && ok || bad "the setup, not run as root, refuses and names how to run it (rc $rc)" "$out"
@@ -927,7 +927,7 @@ if command -v visudo >/dev/null 2>&1 || [ -x /usr/sbin/visudo ]; then
   printf '%s\n' "$grant" > "$TMP/sudoers.check"
   out="$(PATH="$PATH:/usr/sbin" visudo -cf "$TMP/sudoers.check" 2>&1)" && ok || bad "the sudoers grant parses" "$out"
 else
-  echo "UNMEASURED: visudo is not on this machine, so the sudoers grant's syntax was not checked"
+  echo "SUITE-PART-UNMEASURED visudo is not on this machine, so the sudoers grant's syntax was not checked"
 fi
 out="$(bash "$SETUP" --print-sudoers 'x ALL=(ALL) ALL' 2>&1)"; rc=$?
 [ "$rc" = 2 ] && ok || bad "the setup refuses a user name that is not one (rc $rc)" "$out"

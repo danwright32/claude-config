@@ -2066,13 +2066,14 @@ suite_load_said(){
   else printf 'load average of %s on %s cores (%s of it this suite'"'"'s own shards)' "$SUITE_LOAD_FIGURE" "$SUITE_LOAD_CORES" "${SUITE_JOBS:-1}"
   fi
 }
-# Says a guard's red was not judged, on stderr and as a SUITE-NOTE, since run-all-tests.sh carries
-# that line to CI and drops plain stderr (claude-config#505).
+# Says a guard's red was not judged, on stderr and as a SUITE-PART-UNMEASURED line, which
+# run-all-tests.sh counts on this suite's line and names in its summary, where plain stderr and a
+# note saying UNMEASURED were dropped or read as a pass (claude-config#505, #1444).
 suite_load_unmeasured(){   # $1 = what was not judged, in words
   local _lu_msg
-  _lu_msg="UNMEASURED: $1, but it ran at a $(suite_load_said), more than the machine has cores beyond those shards, and processor time inflates too on a machine that busy, so whether the suite has grown is NOT known (claude-config#1259). Not treated as a failure; run it again on a quieter machine to judge it."
-  echo "test suite: $_lu_msg" >&2
-  printf 'SUITE-NOTE %s\n' "$_lu_msg"
+  _lu_msg="$1, but it ran at a $(suite_load_said), more than the machine has cores beyond those shards, and processor time inflates too on a machine that busy, so whether the suite has grown is NOT known (claude-config#1259). Not treated as a failure; run it again on a quieter machine to judge it."
+  echo "test suite: UNMEASURED: $_lu_msg" >&2
+  printf 'SUITE-PART-UNMEASURED %s\n' "$_lu_msg"
 }
 # What the end of a full run says about the deadline's headroom, and whether that fails the run.
 #
@@ -17005,9 +17006,9 @@ check "#1259 and it is not dressed as a failure" "! line_has \"\$_wbl_busy\" '^F
 check "#1259 and it says the budget was UNMEASURED" "case \"\$_wbl_busy\" in *UNMEASURED*) true ;; *) false ;; esac"
 check "#1259 and records the load it saw, the cores, and the figures it could not judge" \
   "line_has \"\$_wbl_busy\" '59.86' '12 cores' '2536' '2520' '1379'"
-# It reaches CI: run-all-tests.sh carries a SUITE-NOTE line and drops plain stderr.
-check "#1259 and it is carried to CI as a marked note" \
-  "line_has \"\$_wbl_busy\" '^SUITE-NOTE ' 'UNMEASURED.*59.86'"
+# It reaches CI: run-all-tests.sh counts a SUITE-PART-UNMEASURED line and drops plain stderr (#1444).
+check "#1259 and it is carried to CI as an unmeasured part" \
+  "line_has \"\$_wbl_busy\" '^SUITE-PART-UNMEASURED ' '59.86'"
 # The positive control in the same shape (L159): the same figures on a quiet machine still fail.
 _wbl_quiet="$(_wbl 2536 3600 1379 10.00)"; _wbl_quiet_rc=$?
 check "#1259 the same figures on a quiet machine still fail" "[ '$_wbl_quiet_rc' -eq 1 ]"
@@ -17130,7 +17131,7 @@ check "#167 and just over it is the suite's"                                    
 _hd_busy="$(LOAD_AVERAGE_CMD="echo 59.86" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 2>&1)"; _hd_busy_rc=$?
 check "#1259 a run that filled its deadline on a machine past its cores does not fail" "[ '$_hd_busy_rc' -eq 0 ]"
 check "#1259 and says UNMEASURED with the load it saw" "line_has \"\$_hd_busy\" 'UNMEASURED' '59.86' '12 cores'"
-check "#1259 and is carried to CI as a marked note" "line_has \"\$_hd_busy\" '^SUITE-NOTE ' 'UNMEASURED'"
+check "#1259 and is carried to CI as an unmeasured part" "line_has \"\$_hd_busy\" '^SUITE-PART-UNMEASURED ' 'NOT known'"
 _hd_quiet_rc=0; LOAD_AVERAGE_CMD="echo 10.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_headroom_report 1943 1500 3600 >/dev/null 2>&1 || _hd_quiet_rc=$?
 check "#1259 and the same run on a quiet machine still fails" "[ '$_hd_quiet_rc' -ne 0 ]"
 

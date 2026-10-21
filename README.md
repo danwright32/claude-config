@@ -1445,10 +1445,24 @@ it was more than the machine has cores, as do `tools/check-mods.sh`'s engine ref
 caused by a busy machine reads as one (#1083, read by `hooks/lib/load-average.sh`). The sync
 suite's two cost guards, its section time budget and its wall clock headroom, go further: where
 either would fail a run, a load average more than the machine has cores beyond the suite's own
-shards makes it `UNMEASURED` instead, said on a `SUITE-NOTE` line with the load it saw, since under
+shards makes it `UNMEASURED` instead, said on a `SUITE-PART-UNMEASURED` line with the load it saw, since under
 that much contention the processor time each guard trusts inflates too (#1259: on 2026-10-16,
 2536s against a 2520s budget at load 59.86 on 12 cores, green on a rerun with nothing changed). The shards are taken
 off so CI's two cores, which the shards alone outnumber, are still judged.
+
+A suite that ran but could not drive some of its checks here (no Chrome, no zsh, no XCTest, running
+as root) prints one `SUITE-PART-UNMEASURED <what was not measured, and why>` line per part (#1444).
+The runner adds the count to the suite's own line (`26 passed, 0 failed, 6 unmeasured`), prints each
+part under it as `unmeasured: <what, and why>` (capped at `SUITE_PART_UNMEASURED_MAX`, default 8,
+saying how many it hid), and names every such suite above the verdict in
+`N SUITE(S) RAN WITH PARTS UNMEASURED, so their passes do not cover them: <names>`. It does not fail
+the run, because a Linux runner legitimately cannot drive a Mac's Chrome, and the verdict line keeps
+its two exact shapes because claude-sync reads them. It is the one shape for that fact: a suite that
+says so any other way (a line whose first word is `UNMEASURED`, `UNMEASURED-SECTIONS <n>`, a
+`SUITE-NOTE` or `note:` line carrying the word, or the agreed line indented) is FAILED, the line
+quoted and the agreed shape named, because every one of those spellings was once dropped and its
+suite read as a plain pass. `test-run-all-tests.sh` also reads every tracked `test-*.sh` and
+`*_tests.py` for such a print, so a branch that never runs on the machine at hand is caught too.
 
 A skill's Python tests (`test_*.py` or `*_test.py`, unittest classes or plain `test_*` functions)
 need no wrapper: `payload/hooks/test-skill-python-tests.sh` runs every one under `payload/skills`
@@ -2053,8 +2067,8 @@ app's UI test target: after `capture-web.mjs --design-only` draws the design's s
 renders the real view per frame at scale 1 in sRGB, with Swift checks, into the same capture.
 `test-score-adapters.sh` runs the web adapter's logic against a stand in browser everywhere, and on a
 Mac with Playwright, Chrome and Swift it runs both for real on fixtures, at 100% and then changed on
-purpose; elsewhere those two say UNMEASURED, and a `SUITE-NOTE` names every part left unmeasured
-under the suite's line in the runner's report. The SwiftUI one also says UNMEASURED, not FAIL, on a Mac
+purpose; elsewhere each part left unmeasured is said on a `SUITE-PART-UNMEASURED` line, which the
+runner counts and prints under the suite's line in its report (#1444). The SwiftUI one also says UNMEASURED, not FAIL, on a Mac
 whose toolchain is the command line tools alone, which have no XCTest: `score/swift-xctest.sh` reads
 that from the `swift test` attempt itself and still fails on any other compile error
 (claude-config#1400, tested by `test-swift-xctest.sh`). It also runs the whole

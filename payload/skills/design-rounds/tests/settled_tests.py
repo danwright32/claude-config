@@ -281,7 +281,7 @@ tsrc = ""
 if not TEST_CHROME:
     # Its windows are measured in Chrome before it is written (claude-config#1422), so with none here
     # the design is refused, and what it would have written is not checked.
-    print("UNMEASURED: no Chrome at %s or on PATH, so no terminal design was written and read" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so no terminal design was written and read" % MAC_CHROME)
     check("with no Chrome here, a terminal design is refused, naming Chrome, writing nothing",
           rc == 2 and "Chrome" in out and not os.path.exists(term), out)
 else:
@@ -367,7 +367,7 @@ for n, (label, body, needle) in enumerate([
           rc == 2 and needle in out and "Traceback" not in out and not os.path.exists(path)
           and not [x for x in os.listdir(T) if x.startswith("tmp") and x.endswith(".html")], out)
 if not TEST_CHROME:
-    print("UNMEASURED: no Chrome at %s or on PATH, so no terminal frame's window was measured" % MAC_CHROME)
+    print("SUITE-PART-UNMEASURED no Chrome at %s or on PATH, so no terminal frame's window was measured" % MAC_CHROME)
 else:
     rc, out, path = make("width-off", on_t1(frames=[wide("t1", 640, 820)]))
     check("a terminal frame declared 640 wide whose window draws at 820 is refused, naming the frame, both "
@@ -587,7 +587,7 @@ for label, page_src in (("a page with requirements", rsrc), ("a page without", b
 CHROME_APP = os.environ.get("SETTLED_TEST_CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 HEADLESS_DOM = os.path.join(SKILL, "headless-dom.sh")
 if not os.access(CHROME_APP, os.X_OK):
-    print("UNMEASURED: no Chrome at %s, so the settled file's frames were not drawn in a browser" % CHROME_APP)
+    print("SUITE-PART-UNMEASURED no Chrome at %s, so the settled file's frames were not drawn in a browser" % CHROME_APP)
 else:
     probe = src.replace("</body></html>", """<script>
 var out = [];

@@ -185,7 +185,7 @@ if [ -f "$CORE_FILE" ]; then
 else
   # Before the cutover there is no core list in the payload to check the seats against, which is
   # said rather than passed (L411); the run time refusal covers it from the first re-rank.
-  echo "UNMEASURED: no payload/LESSONS-CORE.txt yet, so the committed seats were not checked against the core list"
+  echo "SUITE-PART-UNMEASURED no payload/LESSONS-CORE.txt yet, so the committed seats were not checked against the core list"
 fi
 
 # 3. THE SIZE AFTER THE MOVES AGAINST THE CAP, in the unit core-set measures (chars of index lines).

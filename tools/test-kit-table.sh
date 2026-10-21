@@ -78,7 +78,7 @@ D="$(mk readonly)"
 chmod 555 "$D/payload/mods/mod-kit/tests"
 if [ -w "$D/payload/mods/mod-kit/tests" ]; then
   chmod 755 "$D/payload/mods/mod-kit/tests"
-  echo "UNMEASURED: this runner can write a 555 folder, so the cannot write case cannot be staged here"
+  echo "SUITE-PART-UNMEASURED this runner can write a 555 folder, so the cannot write case cannot be staged here"
 else
   out="$(python3 "$TOOL" "$D" 2>&1)"; rc=$?
   chmod 755 "$D/payload/mods/mod-kit/tests"

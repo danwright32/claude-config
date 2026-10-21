@@ -67,7 +67,7 @@ echo "$x"
 FIXTURE
 if bash -n "$TMPROOT/tree/apostrophe.sh" >/dev/null 2>&1; then
   HAS_FAULT=0
-  echo "note: this bash ($BASH_VERSION) parses a comment inside a command substitution correctly, so the apostrophe case below is reported as UNMEASURED rather than passed."
+  echo "SUITE-PART-UNMEASURED the apostrophe case, because this bash ($BASH_VERSION) parses a comment inside a command substitution correctly"
 else
   HAS_FAULT=1
 fi
@@ -186,7 +186,7 @@ grep -qi 'home directory' <<< "$out_home"   && check "and it says that is what i
 # ---------------------------------------------------------------------------
 ROOT="$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$ROOT" ]; then
-  echo "note: this copy of the suite is not inside a git checkout, so there is no repository to parse and that case is reported as UNMEASURED rather than passed."
+  echo "SUITE-PART-UNMEASURED the real tree case, because this copy of the suite is not inside a git checkout, so there is no repository to parse"
   check "the real tree case could not be measured from this copy" ok
 else
 out_real="$(bash "$CHECK" "$ROOT" 2>&1)"; code_real=$?

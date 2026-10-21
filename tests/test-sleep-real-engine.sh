@@ -73,7 +73,7 @@ suite_deadline_arm || exit $?
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "ok: $1"; else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
-unmeasured() { echo "UNMEASURED: $1"; printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"; [ "$fail" -eq 0 ]; exit $?; }
+unmeasured() { echo "SUITE-PART-UNMEASURED $1"; printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"; [ "$fail" -eq 0 ]; exit $?; }
 
 # The session driver itself, which needs only python3 and so runs everywhere, CI included: a session
 # that exits without reading its input must still end in a summary naming that, never a traceback
@@ -129,8 +129,8 @@ finish() {
   stop_model
   echo "time: $(( $(date +%s) - STARTED )) seconds; cost: none, the model is the scripted stand-in"
   local u
-  for u in ${unmeasured_parts[@]+"${unmeasured_parts[@]}"}; do echo "UNMEASURED: $u"; done
-  echo "UNMEASURED: a real interactive session's enrolment by /sleep (a headless run is never one), an idle worker told to start by /sleep, the before bed questions, a real model following the overnight rules, a full hour of work and a real usage limit; the first real night measures them"
+  for u in ${unmeasured_parts[@]+"${unmeasured_parts[@]}"}; do echo "SUITE-PART-UNMEASURED $u"; done
+  echo "SUITE-PART-UNMEASURED a real interactive session's enrolment by /sleep (a headless run is never one), an idle worker told to start by /sleep, the before bed questions, a real model following the overnight rules, a full hour of work and a real usage limit; the first real night measures them"
   printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
   exit $?

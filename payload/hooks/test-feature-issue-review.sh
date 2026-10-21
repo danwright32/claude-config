@@ -673,7 +673,7 @@ touch -t 202001010000 "$SWF/claude-issue-findings-dddddddddddd.s.manifest"
 chmod a-w "$SWF"
 if ( : > "$SWF/.probe" ) 2>/dev/null; then
   rm -f "$SWF/.probe"; chmod u+w "$SWF"
-  echo "UNMEASURED: #1019 a directory the sweep cannot write cannot be made here (chmod does not restrict this user)"
+  echo "SUITE-PART-UNMEASURED #1019 a directory the sweep cannot write cannot be made here (chmod does not restrict this user)"
 else
   swf_said="$(bash "$DIR/lib/issue-spool.sh" sweep-stamps "$SWF" "claude-issue-findings-" 2>&1)"
   swf_rc=$?
@@ -734,7 +734,7 @@ printf 'issue-spool seen v1\nsess-k dddd4444\n' > "$kl_temp"
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR/seen"; chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
 if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe" ) 2>/dev/null; then
   rm -f "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe"; chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
-  echo "UNMEASURED: #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
+  echo "SUITE-PART-UNMEASURED #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
 else
   kl_fail="$(bash "$SPOOL_LIB" keep-ledgers "$KL_TMP" "claude-issue-findings-" 2>&1)"; kl_frc=$?
   chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
@@ -753,7 +753,7 @@ touch -t 202001010000 "$SU_TMP/claude-issue-findings-ffffffffffff.s.manifest"
 chmod a-r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
 if ls "$CLAUDE_ISSUE_SPOOL_DIR/seen" >/dev/null 2>&1; then
   chmod u+r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
-  echo "UNMEASURED: #1019 an unlistable kept ledger directory cannot be made here (chmod does not restrict this user)"
+  echo "SUITE-PART-UNMEASURED #1019 an unlistable kept ledger directory cannot be made here (chmod does not restrict this user)"
 else
   su_said="$(bash "$SPOOL_LIB" sweep-stamps "$SU_TMP" "claude-issue-findings-" 2>&1)"; su_rc=$?
   chmod u+r "$CLAUDE_ISSUE_SPOOL_DIR/seen"
@@ -771,7 +771,7 @@ printf 'issue-spool seen v1\nsess-r 9999aaaa\n' > "${TMPDIR%/}/claude-issue-find
 mkdir -p "$CLAUDE_ISSUE_SPOOL_DIR/seen"; chmod a-w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
 if ( : > "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe" ) 2>/dev/null; then
   rm -f "$CLAUDE_ISSUE_SPOOL_DIR/seen/.probe"; chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"
-  echo "UNMEASURED: #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
+  echo "SUITE-PART-UNMEASURED #1019 an unwritable kept ledger directory cannot be made here (chmod does not restrict this user)"
 else
   kr_reason="$(reason_of "$(run_review "$KR_PROJ")")"
   chmod u+w "$CLAUDE_ISSUE_SPOOL_DIR/seen"

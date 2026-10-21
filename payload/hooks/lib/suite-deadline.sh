@@ -85,7 +85,7 @@ _suite_deadline_expired(){
     _sd_load="$(load_average_one_minute)"
     _sd_cores="$(load_average_cores)"
     if load_average_busy "$_sd_load" "$_sd_cores" "$_sd_own"; then
-      echo "UNMEASURED: $_suite_deadline_label ran past its own wall clock of ${_suite_deadline_limit}s and was stopped, at a load average of $_sd_load on $_sd_cores cores ($_sd_own of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
+      echo "STOPPED, UNMEASURED: $_suite_deadline_label ran past its own wall clock of ${_suite_deadline_limit}s and was stopped, at a load average of $_sd_load on $_sd_cores cores ($_sd_own of it this suite's own share), more than the machine has cores beyond that share (claude-config#1330)."
       echo "  On a machine that busy a suite that was only starved cannot be told from one that waits without end, so this is NOT judged as a failure. Every process it had started was killed and nothing after that step ran."
       echo "  Run it again on its own on a quieter machine to judge it."
       # The agreed line the runner reads (run-all-tests.sh), one line, carrying what was measured.

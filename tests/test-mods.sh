@@ -425,7 +425,7 @@ out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHEC
 # is said as unmeasured rather than read as a fault in the check (L411).
 RO="$TMPROOT/ro-tmp"; mkdir -p "$RO"; chmod 500 "$RO"
 if [ -w "$RO" ]; then
-  echo "UNMEASURED: this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
+  echo "SUITE-PART-UNMEASURED this user can write a mode 500 folder, so a scratch copy that fails cannot be staged here"
 else
   out="$(TMPDIR="$RO" STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" TSC_BIN="$TSC" CHECK_MODS_TS_DIR="$TSDIR" PATH=/usr/bin:/bin bash "$CHECK" "$M4E" 2>&1)"; code=$?
   printf '%s\n' "$out" | grep 'plain ok' | grep -q 'could not copy it to scratch' \
@@ -487,7 +487,7 @@ done
 # (always on CI, #895): a mod whose tool.call matcher names its own MCP tool, as manual-steps' do.
 REAL_TSC="$ROOT/tools/typescript/node_modules/.bin/tsc"
 if [ ! -x "$REAL_TSC" ]; then
-  echo "UNMEASURED: the pinned compiler is not installed in this checkout (npm ci --prefix tools/typescript), so the real compiler's verdict was not compared across installed copies"
+  echo "SUITE-PART-UNMEASURED the pinned compiler is not installed in this checkout (npm ci --prefix tools/typescript), so the real compiler's verdict was not compared across installed copies"
 else
   M4J="$TMPROOT/m4j"; mkmod "$M4J" realmcp
   cat > "$M4J/realmcp/hooks/register.ts" <<'TS'
@@ -681,7 +681,7 @@ if [ ! -d "$ROOT/payload/mods" ]; then
 else
   out="$(CLAUDE_BIN="${REAL_BIN:-$TMPROOT/no-such-claude}" bash "$CHECK" "$ROOT/payload/mods" 2>&1)"; code=$?
   if [ "$code" -eq 3 ]; then
-    echo "note: no claude command on this machine, so the real mods are reported UNMEASURED rather than passed."
+    echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because there is no claude command on this machine"
     check "the real mods could not be measured here" ok
     # Their types were checked all the same, wherever the pinned compiler is installed (#953).
     if [ -x "$ROOT/tools/typescript/node_modules/.bin/tsc" ]; then
@@ -692,8 +692,9 @@ else
     fi
   elif [ "$code" -eq 4 ]; then
     # Claude Code's cached rollout switch, which this suite cannot set (#740, L411).
-    echo "note: Claude Code has hooks modules switched off on this machine, so the real mods are UNMEASURED rather than passed:"
-    printf '%s\n' "$out" | grep UNMEASURED | sed 's/^/  /'
+    # Its reasons ride on the one agreed line, which the runner prints; an indented copy below it was
+    # dropped like any other chatter (#1444).
+    echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine. check-mods said: $(printf '%s\n' "$out" | grep UNMEASURED | sed 's/^check-mods: //' | tr '\n' ' ')"
     check "the real mods could not be measured here" ok
   else
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
@@ -2159,7 +2160,7 @@ noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looke
     # that has not installed it, and every check below would otherwise go quietly unmeasured.
     check "the pinned TypeScript compiler starts where CI runs the noun wait checks (#895)" "it did not start from $1: $(tail -1 "$TMPROOT/ts-probe/err.txt" 2>/dev/null)"
   else
-    echo "UNMEASURED: the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript"
+    echo "SUITE-PART-UNMEASURED the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript"
   fi
 }
 # A stand-in compiler that is installed but exits non zero as it loads, as a Mac's copy does on Linux.
@@ -2171,7 +2172,7 @@ for ts in no-typescript-here broken-typescript; do
   before=$fail
   noun_wait_section "$TMPROOT/$ts" required > "$TMPROOT/noun-waits-required.out" 2>&1
   got=$((fail - before)); fail=$before
-  [ "$got" -eq 1 ] && ! grep -q '^UNMEASURED' "$TMPROOT/noun-waits-required.out" \
+  [ "$got" -eq 1 ] && ! grep -q '^SUITE-PART-UNMEASURED' "$TMPROOT/noun-waits-required.out" \
     && check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" ok \
     || check "under CI a compiler that does not start ($ts) fails the noun wait checks, never UNMEASURED (#895)" "failures=$got out=$(cat "$TMPROOT/noun-waits-required.out")"
   # Elsewhere the section is UNMEASURED, never a failure, and runs nothing. Run in this shell, never a
@@ -2179,7 +2180,7 @@ for ts in no-typescript-here broken-typescript; do
   before=$fail; ran=$pass
   noun_wait_section "$TMPROOT/$ts" > "$TMPROOT/noun-waits-unmeasured.out" 2>&1
   out="$(cat "$TMPROOT/noun-waits-unmeasured.out")"
-  [ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^UNMEASURED: the noun wait checks .*npm ci --prefix tools/typescript" \
+  [ "$fail" -eq "$before" ] && [ "$pass" -eq "$ran" ] && printf '%s\n' "$out" | grep -q "^SUITE-PART-UNMEASURED the noun wait checks .*npm ci --prefix tools/typescript" \
     && ! printf '%s\n' "$out" | grep -q "^FAIL" \
     && check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" ok \
     || check "with a compiler that does not start ($ts) the noun wait checks are UNMEASURED, never failed (#895)" "$out"
