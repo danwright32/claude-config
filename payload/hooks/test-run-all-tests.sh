@@ -2639,6 +2639,73 @@ else
   printf '%s %s\n' "$PART_MARK" "the source scan for unmeasured parts the runner cannot read, because this copy is not in a checkout and none was handed in RUN_ALL_TESTS_CHECKOUT"
 fi
 
+# A CHECK THAT DECLARES ITSELF UNMEASURED AND COUNTS AS A PASS (claude-config#1452).
+#
+# After #1444 three suites printed the agreed line and then went on to `check "<the part> could not
+# be measured here" ok`, so the part that never ran was ALSO counted among the passes, and the
+# runner's "26 passed" included checks that measured nothing (L98). One more had no agreed line at
+# all, only the check, so the word lived inside a check's name and nothing read it: the runner sees
+# a check's name only when it fails, and the scan above reads prints, not checks.
+#
+# The rule, decided precisely so it can be tested from both sides: a check is a DECLARED pass when
+# it is a statement of its own (`check "<name>" ok` alone on its line, or straight after then, else,
+# do or {, in python `check("<name>", True)`), so nothing was tested to reach it. It is not one when
+# it continues a test (the line before ends in a backslash, && or ||, or it follows one on its line),
+# ends a case arm (;;), or computes its result. A declared pass whose NAME says the thing was not
+# measured (the word, in any case, or "could not / cannot / was not ... measured") is the defect:
+# say it once with the agreed line and count nothing. A name that MENTIONS the word on a check that
+# tests something (a suite asserting another tool reports unmeasured) is a check like any other.
+# The two quote characters are handed in as variables and the patterns built from them, and the
+# opening brace is written as its octal escape, so the program text holds no unpaired quote or
+# brace: either one unbalances the shell readers of this file, scan-subshell-globals.py among them,
+# which counts braces to find where a function ends.
+declared_unmeasured_passes(){   # declared_unmeasured_passes <file>.. -> file:line for each
+  awk -v dq=$'\x22' -v sq=$'\x27' '
+    BEGIN {
+      quoted = "(" dq "[^" dq "]*" dq "|" sq "[^" sq "]*" sq ")"
+      shell_pass = "^[[:space:]]*((then|else|do|[\173])[[:space:]]+)?check[[:space:]]+" quoted "[[:space:]]+ok[[:space:]]*;?[[:space:]]*$"
+      py_pass = "^[[:space:]]*check[(][[:space:]]*" quoted "[[:space:]]*,[[:space:]]*True[[:space:]]*[)][[:space:]]*$"
+      opening = "^[^" dq sq "]*[" dq sq "]"; closing = "[" dq sq "].*$"
+    }
+    FNR == 1 { prev = "" }
+    {
+      line = $0
+      if (prev !~ /([\\]|&&|[|][|])[[:space:]]*$/ && line !~ /;;[[:space:]]*$/ && (line ~ shell_pass || line ~ py_pass)) {
+        name = line
+        sub(opening, "", name); sub(closing, "", name)
+        if (tolower(name) ~ /unmeasured|(could not|cannot|can.t|was not|were not|not) (be )?measured/) print FILENAME ":" FNR ":" line
+      }
+      prev = line
+    }
+  ' "$@" 2>/dev/null || true
+}
+DPF="$TMPROOT/dir-declared-pass"; mkdir -p "$DPF"
+# The defect, four ways: the old phrasing, the word only inside the check's name, the check alone in
+# an else branch on the line after it, and python.
+printf 'check "the real tree could not be measured from this copy" ok\n' > "$DPF/test-dp1.sh"
+printf '  check "the keyboard wiring is %s here" ok\n' "$STRAY_WORD" > "$DPF/test-dp2.sh"
+printf 'else\n  check "the apostrophe case could not be measured on this bash" ok\nfi\n' > "$DPF/test-dp3.sh"
+printf 'check("the frames were not measured in a browser", True)\n' > "$DPF/dp4_tests.py"
+# Ordinary checks that mention the word: each tests something, so none is flagged.
+printf '[ "$c" -eq 3 ] && check "no claude means exit 3, %s" ok\n' "$STRAY_WORD" > "$DPF/test-dn1.sh"
+printf 'grep -q x f \\\n  && check "and it says %s rather than a pass" ok \\\n  || check "and it says %s rather than a pass" "$out"\n' "$STRAY_WORD" "$STRAY_WORD" > "$DPF/test-dn2.sh"
+printf 'case "$o" in\n  *x*)\n    check "an unreadable record is counted as %s" ok ;;\nesac\n' "$STRAY_WORD" > "$DPF/test-dn3.sh"
+printf 'check "a thin window is %s, not a pass" "%s" "$out"\n' "$STRAY_WORD" "$STRAY_WORD" > "$DPF/test-dn4.sh"
+printf 'check "every mod passes its checks" ok\n' > "$DPF/test-dn5.sh"
+printf 'check("its picture half is said to be %s", "x" in out, out)\n' "$STRAY_WORD" > "$DPF/dn6_tests.py"
+dp_found="$(cd "$DPF" && declared_unmeasured_passes test-dp1.sh test-dp2.sh test-dp3.sh dp4_tests.py test-dn1.sh test-dn2.sh test-dn3.sh test-dn4.sh test-dn5.sh dn6_tests.py | cut -d: -f1,2 | tr '\n' ' ')"
+[ "$dp_found" = "test-dp1.sh:1 test-dp2.sh:1 test-dp3.sh:2 dp4_tests.py:1 " ] \
+  && check "#1452 a check declaring itself unmeasured is found four ways, and checks that test an unmeasured report are not" ok \
+  || check "#1452 a check declaring itself unmeasured is found four ways, and checks that test an unmeasured report are not" "found: $dp_found"
+if [ -n "$pu_root" ] && [ -f "$pu_root/payload/hooks/run-all-tests.sh" ] && [ "${#pu_files[@]}" -ge 50 ]; then
+  dp_stray="$(declared_unmeasured_passes "${pu_files[@]}")"
+  [ -z "$dp_stray" ] \
+    && check "#1452 no suite in the repository counts a part it could not measure as a passing check" ok \
+    || check "#1452 no suite in the repository counts a part it could not measure as a passing check" "print $PART_MARK <what, and why> and count nothing: $(printf '%s\n' "$dp_stray" | sed "s|^$pu_root/||" | cut -c1-200 | tr '\n' ';')"
+else
+  printf '%s %s\n' "$PART_MARK" "the source scan for checks that declare themselves unmeasured, because this copy is not in a checkout and none was handed in RUN_ALL_TESTS_CHECKOUT"
+fi
+
 # ---------------------------------------------------------------------------
 # A SUITE THAT CALLED SOMETHING THAT DOES NOT EXIST (claude-config#1044).
 #
