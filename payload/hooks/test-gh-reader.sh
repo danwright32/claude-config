@@ -68,6 +68,23 @@ check_eq "an opener glued to git, as the crude cut leaves it" "$G|push||" "$(rea
 check_eq "a mention inside echo is no command of gh" "" "$(reading 'echo gh pr create')"
 check_eq "command -v names gh without running a subcommand" "gh|||" "$(reading 'command -v gh')"
 check_eq "another program" "" "$(reading 'ls -la')"
+# --- rtk's own subcommand, where rtk runs no other program (claude-config#1468) -------------------
+# rtk is read as a runner in front of gh and git (`rtk git push` is git push), so a command whose
+# rtk runs a subcommand of its own, `rtk init`, used to read as a command named init. The reading
+# says it is rtk's: tool rtk, its subcommand, then the words after it.
+check_eq "#1468 rtk init, plain" "rtk|init||-g" "$(reading 'rtk init -g')"
+check_eq "#1468 rtk's own option in front of its subcommand" "rtk|init||--show" "$(reading 'rtk -v init --show')"
+check_eq "#1468 rtk by its path" "rtk|init||--global,--auto-patch" "$(reading '~/.local/bin/rtk init --global --auto-patch')"
+check_eq "#1468 rtk by a path built from a variable, quoted" "rtk|init||" "$(reading '"$HOME/.local/bin/rtk" init')"
+check_eq "#1468 command in front of rtk" "rtk|init||" "$(reading 'command rtk init')"
+check_eq "#1468 env with a setting in front of rtk" "rtk|init||-g" "$(reading 'env A=1 rtk init -g')"
+check_eq "#1468 a reserved word in front of rtk" "rtk|init||" "$(reading 'then rtk init')"
+check_eq "#1468 rtk in front of git is still git's" "$G|push||" "$(reading "rtk $G push")"
+check_eq "#1468 rtk in front of gh is still gh's" "gh|pr|view|3" "$(reading 'rtk gh pr view 3')"
+check_eq "#1468 a mention of rtk init inside echo is no command of rtk" "" "$(reading 'echo "rtk init"')"
+check_eq "#1468 nor inside grep's pattern" "" "$(reading 'grep "rtk init" notes.md')"
+check_eq "#1468 a bare init is no rtk" "" "$(reading 'init -g')"
+
 printf 'gh pr create' | python3 -B "$SW" tool >/dev/null; check_eq "the tool mode answers with exit 0" "0" "$?"
 printf 'ls' | python3 -B "$SW" tool >/dev/null; check_eq "and exit 0 for a command that runs neither, so any other exit is a failed reader" "0" "$?"
 
