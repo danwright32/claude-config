@@ -503,13 +503,18 @@ fi
 ORIGINAL_INPUT=$(echo "$INPUT" | jq -c '.tool_input')
 UPDATED_INPUT=$(echo "$ORIGINAL_INPUT" | jq --arg cmd "$REWRITTEN" '.command = $cmd')
 
+# The rewrite carries NO permission decision (claude-config#1455). This hook used to answer
+# "allow", which approved every command it rewrote by itself: rtk 0.31.0 rewrites `git push` and
+# `git commit` too, so anything rtk filters skipped the prompt, or in auto mode the classifier,
+# that would otherwise have judged it. Measured 2026-10-21 on Claude Code 2.1.304, headless: with
+# no decision the updated input still applies, and the permission rules judge the REWRITTEN
+# command (an allow rule on the original alone left it blocked), so whether it runs is decided
+# exactly where every other command's is. A token saving is never a reason to grant permission.
 jq -n \
   --argjson updated "$UPDATED_INPUT" \
   '{
     "hookSpecificOutput": {
       "hookEventName": "PreToolUse",
-      "permissionDecision": "allow",
-      "permissionDecisionReason": "RTK auto-rewrite",
       "updatedInput": $updated
     }
   }'
