@@ -692,8 +692,9 @@ else
     fi
   elif [ "$code" -eq 4 ]; then
     # Claude Code's cached rollout switch, which this suite cannot set (#740, L411).
-    echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine (its reasons follow)"
-    printf '%s\n' "$out" | grep UNMEASURED | sed 's/^/  /'
+    # Its reasons ride on the one agreed line, which the runner prints; an indented copy below it was
+    # dropped like any other chatter (#1444).
+    echo "SUITE-PART-UNMEASURED the real mods against Claude Code's own checks, because Claude Code has hooks modules switched off on this machine. check-mods said: $(printf '%s\n' "$out" | grep UNMEASURED | sed 's/^check-mods: //' | tr '\n' ' ')"
     check "the real mods could not be measured here" ok
   else
     [ "$code" -eq 0 ] && check "every mod in payload/mods passes Claude Code's own checks" ok \
