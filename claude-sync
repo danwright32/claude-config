@@ -168,8 +168,8 @@ RESOLVED_DIR="$SYNC_REPO/.resolved"
 # it, and outside $CLAUDE_HOME because anything in there travels to the other Mac and this
 # describes THIS one. A clone appends itself the first time it takes the lock, which is the first
 # time it can hold a verdict at all, so the list is derived from what has actually run rather than
-# from what somebody remembered to write down (L41, L96).
-CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
+# from what somebody remembered to write down (L41, L96). Where it is, for reading and writing
+# alike, is clone_registry_for_this_home below.
 
 # Whether this run's config is this user's own ~/.claude, rather than any other CLAUDE_HOME, which
 # is every test fixture. ONE predicate for every read AND write that would otherwise reach the
@@ -187,21 +187,14 @@ claude_home_is_users_own(){ [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; }
 # Mac's own. One answer for both, so a run can never write somewhere it would not read (L83).
 # An empty answer is said by every caller: as NOT READ by the readers, never as none installed (L11),
 # and as NOT WRITTEN by the writers, never as done.
-launchagents_for_this_home(){
-  if [ -n "${SYNC_LAUNCHAGENTS:-}" ]; then printf '%s' "$SYNC_LAUNCHAGENTS"; return 0; fi
+store_for_this_home(){   # $1 = the seam's value  $2 = the real location
+  if [ -n "$1" ]; then printf '%s' "$1"; return 0; fi
   claude_home_is_users_own || return 0
-  printf '%s' "$HOME/Library/LaunchAgents"
+  printf '%s' "$2"
 }
-clone_registry_for_this_home(){
-  if [ -n "${SYNC_CLONE_REGISTRY:-}" ]; then printf '%s' "$SYNC_CLONE_REGISTRY"; return 0; fi
-  claude_home_is_users_own || return 0
-  printf '%s' "$CLONE_REGISTRY"
-}
-zshrc_for_this_home(){
-  if [ -n "${SYNC_ZSHRC:-}" ]; then printf '%s' "$SYNC_ZSHRC"; return 0; fi
-  claude_home_is_users_own || return 0
-  printf '%s' "$HOME/.zshrc"
-}
+launchagents_for_this_home(){ store_for_this_home "${SYNC_LAUNCHAGENTS:-}" "$HOME/Library/LaunchAgents"; }
+clone_registry_for_this_home(){ store_for_this_home "${SYNC_CLONE_REGISTRY:-}" "$HOME/.claude-sync-clones"; }
+zshrc_for_this_home(){ store_for_this_home "${SYNC_ZSHRC:-}" "$HOME/.zshrc"; }
 # launchctl has no seam to point it elsewhere: whatever plist it is handed, it loads into, unloads
 # from or restarts THIS Mac's launchd, under the real agents' labels. So it runs only for this
 # user's own config, and a fixture that names SYNC_LAUNCHAGENTS gets its plists written there and
@@ -215,7 +208,10 @@ not_users_own_home(){ printf "this run's config (%s) is not this user's own ~/.c
 #
 # It holds only the automatic send. `claude-sync send` typed by a person is not the thing being
 # held off, and a command that refuses the person who set the hold is a dead control (L109).
-SYNC_HOLD_FILE="${SYNC_HOLD_FILE:-$HOME/.claude-sync-hold}"
+#
+# Empty under a fixture home with no SYNC_HOLD_FILE (claude-config#1470): the hold is this Mac's
+# watcher's, so a fixture neither reads one (and never clears an expired one) nor takes or lifts one.
+SYNC_HOLD_FILE="$(store_for_this_home "${SYNC_HOLD_FILE:-}" "$HOME/.claude-sync-hold")"
 # How long a hold lasts when none is named. It fails OPEN on purpose: a hold that outlives the
 # session that took it silently stops the sync, and #196 already records how hard a watcher that
 # has stopped sending is to notice from outside (L523).
@@ -10234,6 +10230,7 @@ hold_remaining(){
 
 do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
   local mins="${1:-$SYNC_HOLD_MINUTES}" why now
+  [ -n "$SYNC_HOLD_FILE" ] || die "no hold was taken: $(not_users_own_home), so this Mac's watcher is not its to hold. Name a hold file in SYNC_HOLD_FILE."
   case "$mins" in ''|*[!0-9]*|0) mins="$SYNC_HOLD_MINUTES" ;; esac
   shift 2>/dev/null || true
   why="$*"
@@ -10245,6 +10242,7 @@ do_hold(){   # $1 = minutes (optional)  $2.. = why (optional)
 }
 
 do_release(){
+  [ -n "$SYNC_HOLD_FILE" ] || die "nothing was released: $(not_users_own_home), so this Mac's watcher hold is not its to lift. Name a hold file in SYNC_HOLD_FILE."
   if [ -f "$SYNC_HOLD_FILE" ]; then
     rm -f "$SYNC_HOLD_FILE" 2>/dev/null || true
     echo "Watcher hold released; the next edit sends normally."
@@ -12437,7 +12435,10 @@ PL
 # The pid is confirmed against what that process actually IS, never taken from the file alone. A
 # stale pid is reused by the system constantly, and a guard that trusts the number refuses to
 # start because some unrelated process inherited it (L237, L70).
-SYNC_WATCH_PID_FILE="${SYNC_WATCH_PID_FILE:-$HOME/.claude-sync-watch.pid}"
+# Empty under a fixture home with no SYNC_WATCH_PID_FILE (claude-config#1470): a fixture watcher
+# neither reads this Mac's record (so a live daemon never refuses it) nor writes it, which would
+# make the live daemon refuse to start, or step down for a watcher that is about to exit.
+SYNC_WATCH_PID_FILE="$(store_for_this_home "${SYNC_WATCH_PID_FILE:-}" "$HOME/.claude-sync-watch.pid")"
 watch_already_running(){   # -> prints the live watcher's pid, or nothing
   local pid cmd
   [ -f "$SYNC_WATCH_PID_FILE" ] || return 1
@@ -12512,7 +12513,11 @@ do_watch(){
   # Twice at most: a record that VANISHES between the failed claim and the replace (its watcher exited
   # just then) is claimed again rather than reported as unwritable (review of #785).
   local claimed="" _try
+  if [ -z "$SYNC_WATCH_PID_FILE" ]; then
+    echo "claude-sync: this watcher is recorded in no pid file, because $(not_users_own_home), so a second watcher started later will not be refused. Name a pid file in SYNC_WATCH_PID_FILE." >&2
+  fi
   for _try in 1 2; do
+    [ -n "$SYNC_WATCH_PID_FILE" ] || break
     if ( set -C; printf '%s\n' "$$" > "$SYNC_WATCH_PID_FILE" ) 2>/dev/null; then claimed=1; break; fi
     if live="$(watch_already_running)"; then
       die "a claude-sync watcher started at the same moment as this one (process $live) and claimed $SYNC_WATCH_PID_FILE first. Nothing was started."
@@ -12527,7 +12532,7 @@ do_watch(){
     fi
     break
   done
-  if [ -z "$claimed" ]; then
+  if [ -z "$claimed" ] && [ -n "$SYNC_WATCH_PID_FILE" ]; then
     rm -f "$SYNC_WATCH_PID_FILE.$$" 2>/dev/null || true
     # Unwritable rather than taken: the watcher still runs, as before, and says it is unguarded.
     echo "claude-sync: could not write $SYNC_WATCH_PID_FILE, so a second watcher started later will not be refused. Watching anyway." >&2

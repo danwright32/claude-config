@@ -65,8 +65,7 @@ export SYNC_CLAUDE_BIN="$WORK/no-such-claude"
 export SYNC_GH="$WORK/no-such-gh"
 export SYNC_RTK_BIN="$WORK/no-such-rtk"
 export SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1
-export SYNC_HOLD_FILE="$WORK/no-hold" SYNC_LOG_FILE="$WORK/sync-log"
-export SYNC_WATCH_PID_FILE="$WORK/watch.pid"
+export SYNC_LOG_FILE="$WORK/sync-log"
 # Every path here is under the temp directory, and a clone there is never registered (#295), so the
 # register would be left alone for that reason rather than the one under test (L322).
 export SYNC_TEMP_ROOTS="/no-such-temp-root-exists-here"
@@ -77,6 +76,8 @@ FAKEHOME="$WORK/home"
 AGENTS="$FAKEHOME/Library/LaunchAgents"
 REGISTER="$FAKEHOME/.claude-sync-clones"
 ZSHRC="$FAKEHOME/.zshrc"
+HOLD="$FAKEHOME/.claude-sync-hold"
+PIDFILE="$FAKEHOME/.claude-sync-watch.pid"
 PLANTED_CLONE="$WORK/planted-clone"
 # Planted afresh before every scenario, so each one is judged on its own: a write one scenario let
 # through must never be what fails the next (L203).
@@ -89,7 +90,12 @@ replant(){
   done
   printf '%s\n%s\n' "$PLANTED_CLONE" "$WORK/another-planted-clone" > "$REGISTER"
   printf 'export PLANTED=1\n' > "$ZSHRC"
+  # The watcher's two markers (claude-config#1470, the coordinator's extension): a hold still in
+  # force for a day, and a pid file naming a watcher that has gone, which a watcher replaces.
+  printf '%s %s planted-host a planted hold\n' "$(( $(date +%s) + 86400 ))" "$(date +%s)" > "$HOLD"
+  printf '999999\n' > "$PIDFILE"
   : > "$LCLOG"
+  BEFORE="$(plant)"
 }
 
 plant(){   # every file of the planted Mac, with its checksum
@@ -112,6 +118,7 @@ run_as(){   # $1 = CLAUDE_HOME  $2 = command  then extra environment as NAME=val
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do extra+=("$1"); shift; done
   [ "${1:-}" = "--" ] && shift
   env -u SYNC_LAUNCHAGENTS -u SYNC_NO_LAUNCHCTL -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC \
+    -u SYNC_HOLD_FILE -u SYNC_WATCH_PID_FILE \
     HOME="$FAKEHOME" PATH="$RUNPATH" CLAUDE_HOME="$home" SYNC_REPO="$NOREPO" SYNC_FSWATCH="$FSWATCH" ${extra[@]+"${extra[@]}"} \
     bash "$SCRIPT" "$cmd" "$@" 2>&1
 }
@@ -168,6 +175,29 @@ check "pull, fixture: the script change was received" has "$out" "watch daemon"
 check "pull, fixture: the real watch daemon is not restarted" same "$(calls)" ""
 check "pull, fixture: says why it was left alone" has "$out" "not this user's own ~/.claude"
 check "pull, fixture: this clone is not added to the real register" same "$(plant)" "$BEFORE"
+
+# The watcher's markers: hold writes one, release removes one, and watch claims the pid file,
+# replacing one whose watcher has gone, then removes it on the way out.
+replant
+out="$(run_as "$FIXHOME" hold -- 5 a fixture hold)"
+check "hold, fixture: the real hold marker is untouched" same "$(plant)" "$BEFORE"
+check "hold, fixture: says no hold was taken, and why" has "$out" "not this user's own ~/.claude"
+check "hold, fixture: names the seam that would take it" has "$out" "SYNC_HOLD_FILE"
+replant
+out="$(run_as "$FIXHOME" release)"
+check "release, fixture: the real hold marker is not removed" same "$(plant)" "$BEFORE"
+check "release, fixture: says nothing was released, and why" has "$out" "not this user's own ~/.claude"
+check "release, fixture: does not claim a release" lacks "$out" "Watcher hold released"
+replant
+out="$(run_as "$FIXHOME" watch SYNC_WATCH_SEND=true)"
+check "watch, fixture: the real pid file is untouched" same "$(plant)" "$BEFORE"
+check "watch, fixture: says it is recorded nowhere, and why" has "$out" "not this user's own ~/.claude"
+check "watch, fixture: names the seam that would record it" has "$out" "SYNC_WATCH_PID_FILE"
+replant
+SEAMHOLD="$WORK/seam-hold"; rm -f "$SEAMHOLD"
+out="$(run_as "$FIXHOME" hold SYNC_HOLD_FILE="$SEAMHOLD" -- 5 a seam hold)"
+check "hold, seam: written where SYNC_HOLD_FILE names" grep -q 'a seam hold' "$SEAMHOLD"
+check "hold, seam: the real Mac is untouched" same "$(plant)" "$BEFORE"
 
 # ==== 2. the seams still take the writes under a fixture home, and launchctl still never runs ====
 replant
@@ -234,6 +264,13 @@ check "control with SYNC_NO_LAUNCHCTL=1: still no launchctl call" same "$(calls)
 out="$(run_as "$OWN" forget-clone -- "$PLANTED_CLONE")"
 check "control forget-clone: removes the entry from the real register" lacks "$(cat "$REGISTER")" "$PLANTED_CLONE"
 check "control forget-clone: says so" has "$out" "Removed $PLANTED_CLONE"
+
+out="$(run_as "$OWN" watch SYNC_WATCH_SEND=true)"
+check "control watch: replaces the real pid file whose watcher has gone" lacks "$(cat "$PIDFILE" 2>/dev/null)" "999999"
+out="$(run_as "$OWN" hold -- 5 a control hold)"
+check "control hold: writes the real hold marker" grep -q 'a control hold' "$HOLD"
+out="$(run_as "$OWN" release)"
+check "control release: removes the real hold marker" test ! -e "$HOLD"
 
 echo
 echo "passed: $pass, failed: $fail"

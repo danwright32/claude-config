@@ -485,8 +485,10 @@ background job runs from. Both belong to the Mac rather than to a config, so a r
 `CLAUDE_HOME` is anything other than your own `~/.claude` (every test fixture) reads neither unless
 `SYNC_LAUNCHAGENTS` or `SYNC_CLONE_REGISTRY` names one, and status then says the launch agents were
 not read rather than that none is installed (#1453). The same rule covers every write (#1470): such
-a run records no clone in the real register, `forget-clone` removes nothing from it, and
-`run-all-tests.sh` reads it for nothing. DESIGN.md's "A fixture home touches nothing that belongs to
+a run records no clone in the real register, `forget-clone` removes nothing from it, a `watch`
+records itself in no `~/.claude-sync-watch.pid`, `hold` and `release` refuse rather than touch
+`~/.claude-sync-hold` (unless `SYNC_WATCH_PID_FILE` or `SYNC_HOLD_FILE` names one), and
+`run-all-tests.sh`, `lesson-entry-check.sh` and `sync-stuck-notice.sh` read none of them. DESIGN.md's "A fixture home touches nothing that belongs to
 the Mac" has the whole rule.
 
 The verdict comes from the runner's exit code, never from a line of its output, and there are three

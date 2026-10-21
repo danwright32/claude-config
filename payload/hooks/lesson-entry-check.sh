@@ -42,12 +42,19 @@
 # Env:
 #   CLAUDE_HOME            the config root (default ~/.claude)
 #   SYNC_CLONE_REGISTRY    where the clones of the tool on this Mac are recorded
-#                          (default ~/.claude-sync-clones, written by the tool itself)
+#                          (default ~/.claude-sync-clones, written by the tool itself, and none
+#                          when CLAUDE_HOME is not this user's own ~/.claude)
 
 set -uo pipefail
 
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
-CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-$HOME/.claude-sync-clones}"
+# The register is the Mac's, so it is read by claude-sync's own rule (claude-config#1470):
+# SYNC_CLONE_REGISTRY when named, the real one only when CLAUDE_HOME is this user's own ~/.claude,
+# and none for any other home, which is then told its entry was not checked and why.
+CLONE_REGISTRY="${SYNC_CLONE_REGISTRY:-}"
+if [ -z "$CLONE_REGISTRY" ] && [ "${CLAUDE_HOME%/}" = "${HOME%/}/.claude" ]; then
+  CLONE_REGISTRY="$HOME/.claude-sync-clones"
+fi
 
 payload="$(cat 2>/dev/null || true)"
 
@@ -159,6 +166,9 @@ print(json.dumps({"decision": "block", "reason": sys.stdin.read()}, separators=(
 # Which clone of the tool to ask. Read from the registry the tool maintains itself, never a path
 # written down here: a clone appends itself the first time it takes the lock, so the list is
 # derived from what has actually run (L41), and it is right on both Macs with nothing to configure.
+if [ -z "$CLONE_REGISTRY" ]; then
+  block "$WRITTEN could not be checked: this config ($CLAUDE_HOME) is not this user's own ~/.claude, so this Mac's register of claude-sync clones was not read and no clone could run 'claude-sync lesson-faults' against it. Name a register to read in SYNC_CLONE_REGISTRY, or check the entry by hand with 'claude-sync lesson-faults'."
+fi
 sync=""
 while IFS= read -r clone; do
   [ -n "$clone" ] || continue

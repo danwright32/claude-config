@@ -2236,9 +2236,11 @@ RH="$LS/realhome"; mkdir -p "$RH/.claude" "$LS/realclone"
 printf 'a commit\n' > "$LS/realclone/.last-applied"
 touch -t 202001010000 "$LS/realclone/.last-applied"
 printf '%s\n' "$LS/realclone" > "$RH/.claude-sync-clones"
-ls_run_home(){ # ls_run_home <CLAUDE_HOME> -> as ls_run, with HOME at the planted Mac and no register seam
-  env -u SYNC_CLONE_REGISTRY HOME="$RH" CLAUDE_HOME="$1" \
-    SYNC_ZSHRC="$LS/zshrc" SYNC_WATCH_PID_FILE="$LS/watch.pid" SYNC_HOLD_FILE="$LS/hold" \
+# The shell rc and the watcher's two markers are the Mac's in the same way, so they follow the same
+# rule and are left unnamed here too.
+ls_run_home(){ # ls_run_home <CLAUDE_HOME> -> as ls_run, with HOME at the planted Mac and no Mac seams
+  env -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC -u SYNC_WATCH_PID_FILE -u SYNC_HOLD_FILE \
+    HOME="$RH" CLAUDE_HOME="$1" \
     CLAUDE_ISSUE_SPOOL_DIR="$LS/spool" HOOK_TESTS_ROOT="$LS" HOOK_TESTS_TIMINGS= HOOK_TESTS_BUDGET=4 \
     bash "$RUNNER" "$LS/suites" 2>&1
 }
@@ -2265,14 +2267,27 @@ esac
 rm -f "$LS/suites"/test-realapply.sh
 touch -t 202001010000 "$LS/realclone/.last-applied"
 
-mk_store_writer realregister "$RH/.claude-sync-clones" 'a register somebody else rewrote'
+# Each of the Mac's stores, rewritten by somebody else while a fixture run goes on.
+MAC_STORES="$RH/.claude-sync-clones
+$RH/.zshrc
+$RH/.claude-sync-watch.pid
+$RH/.claude-sync-hold"
+mk_mac_writers(){ # mk_mac_writers <what each writes> -> one writer suite per store above
+  local f n=0
+  while IFS= read -r f; do
+    n=$((n + 1))
+    mk_store_writer "macstore$n" "$f" "$1"
+  done <<< "$MAC_STORES"
+}
+mk_mac_writers 'a store somebody else rewrote'
 out_lsf2="$(ls_run_home "$LS/claude-home")"; code_lsf2=$?
-case "$out_lsf2" in
-  *"$RH/.claude-sync-clones"*)
-    check "#1470 a fixture run does not judge the real register as its own store" "exit=$code_lsf2 out=$out_lsf2" ;;
-  *) check "#1470 a fixture run does not judge the real register as its own store" ok ;;
-esac
-rm -f "$LS/suites"/test-realregister.sh
+while IFS= read -r f; do
+  case "$out_lsf2" in
+    *"$f"*) check "#1470 a fixture run does not judge $(basename "$f") as its own store" "exit=$code_lsf2 out=$out_lsf2" ;;
+    *) check "#1470 a fixture run does not judge $(basename "$f") as its own store" ok ;;
+  esac
+done <<< "$MAC_STORES"
+rm -f "$LS/suites"/test-macstore*.sh
 printf '%s\n' "$LS/realclone" > "$RH/.claude-sync-clones"
 
 # The control: the same two runs AS the planted home's own config read its register.
@@ -2289,14 +2304,16 @@ esac
 rm -f "$LS/suites"/test-realapply.sh
 touch -t 202001010000 "$LS/realclone/.last-applied"
 
-mk_store_writer realregister "$RH/.claude-sync-clones" 'a register a suite rewrote'
+mk_mac_writers 'a store a suite rewrote'
 out_lsf4="$(ls_run_home "$RH/.claude")"; code_lsf4=$?
-case "$out_lsf4" in
-  *"SUITES CHANGED A LIVE STORE"*"$RH/.claude-sync-clones"*)
-    check "#1470 control: this user's own run still guards its real register" ok ;;
-  *) check "#1470 control: this user's own run still guards its real register" "exit=$code_lsf4 out=$out_lsf4" ;;
-esac
-rm -f "$LS/suites"/test-realregister.sh
+while IFS= read -r f; do
+  case "$out_lsf4" in
+    *"SUITES CHANGED A LIVE STORE"*"$f"*)
+      check "#1470 control: this user's own run still guards its real $(basename "$f")" ok ;;
+    *) check "#1470 control: this user's own run still guards its real $(basename "$f")" "exit=$code_lsf4 out=$out_lsf4" ;;
+  esac
+done <<< "$MAC_STORES"
+rm -f "$LS/suites"/test-macstore*.sh "$RH/.zshrc" "$RH/.claude-sync-watch.pid" "$RH/.claude-sync-hold"
 
 # Lines ADDED to a rule file, with none removed, is what the other writers of these stores do:
 # another Claude session recording a lesson inserts it into the section it belongs in, and that

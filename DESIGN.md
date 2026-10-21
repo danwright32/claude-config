@@ -1113,16 +1113,19 @@ nothing by having it put back.
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to
 the config it is pointed at: the launch agents, launchd itself, the register of clones and the shell
-rc. Each defaulted to its real location whatever `CLAUDE_HOME` was, so a suite that forgot one seam
+rc, and the watcher's two markers (its pid file and the hold). Each defaulted to its real location
+whatever `CLAUDE_HOME` was, so a suite that forgot one seam
 read, and then wrote, this Mac's own: status reported a real clone's stale failure as a fixture's
 (#1453), and `install-schedule`, `install-autosync`, the watch daemon restart after a pull that
 changes the script, and both writers of the register (a clone recording itself, and `forget-clone`)
 could rewrite, retire or append to the real files from a throwaway run (#1470).
 
-One predicate decides all of them, `claude_home_is_users_own` (L261), and one function per store
-answers where a run reads AND writes it: the seam when one is named (`SYNC_LAUNCHAGENTS`,
-`SYNC_CLONE_REGISTRY`, `SYNC_ZSHRC`), the real location only for this user's own `~/.claude`, and
-nothing for any other home. One answer for both directions, so a run can never write somewhere it
+One predicate decides all of them, `claude_home_is_users_own` (L261), and one function,
+`store_for_this_home`, answers where a run reads AND writes each store: the seam when one is named
+(`SYNC_LAUNCHAGENTS`, `SYNC_CLONE_REGISTRY`, `SYNC_ZSHRC`, `SYNC_WATCH_PID_FILE`, `SYNC_HOLD_FILE`),
+the real location only for this user's own `~/.claude`, and nothing for any other home. A fixture
+`watch` is then recorded in no pid file (so a live daemon neither refuses it nor is refused by it),
+and `hold` and `release` refuse. One answer for both directions, so a run can never write somewhere it
 would not read (L83). launchctl has no seam to redirect: whatever plist it is handed it loads into,
 unloads from or restarts this Mac's launchd under the real agents' labels, so it runs only for this
 user's own config, and a fixture that names `SYNC_LAUNCHAGENTS` gets its plists written there and
@@ -1132,8 +1135,14 @@ A refused write says so, never as done (L11): the installers and `forget-clone` 
 touching anything and exit 1 naming the seam that would take the write, a restart that was skipped
 says why, and an install into a fixture's own agents folder says it was not loaded. The one silent
 case is a clone recording itself in the register, which happens on every locked command and is
-silent on every failure by design. `run-all-tests.sh` reads the register by the same rule, both for
-the apply that excuses a changed rule file and for the register's place on its list of live stores.
+silent on every failure by design. `run-all-tests.sh` follows the same rule for the register (the
+apply that excuses a changed rule file) and for the register, shell rc and both watcher markers on
+its list of live stores; `lesson-entry-check.sh` reads the register by it, and says an entry under
+a fixture home was not checked and why; `sync-stuck-notice.sh` reads the launch agents by it. The
+hooks that guard writes into a clone's `payload/` (`payload-write-gate.sh`,
+`payload-revert-warning.sh`, through `lib/sync-clone.sh`) keep the real watcher markers whatever
+`CLAUDE_HOME` is: they ask about the real watcher and a checkout, never about a config under test,
+so this rule is not their question (L342).
 
 ## An absence is a deletion only where something was there before (#627, #781)
 
