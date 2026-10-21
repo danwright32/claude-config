@@ -2059,7 +2059,8 @@ session start. Records and the log are in `~/.claude/state/design-score-reopen/`
 nothing: `python3 ~/.claude/hooks/design-score-reopen.py --dry-run`. `test-design-score-reopen.sh`
 holds it, against a fake GitHub that remembers what is written to it.
 
-**Two adapters write the capture.** `score/capture-web.mjs` (web) draws each frame of the settled
+**Three adapters write the capture**: the two below, and the terminal adapter for a mod's screen
+(`score/capture-terminal.mjs`, described under the shared terminal further on). `score/capture-web.mjs` (web) draws each frame of the settled
 file (the document its `designFrameDocument(<id>)` gives, as a page of its own) and the app's
 fixture route (the page with `?frame=<id>`) at the
 frame's width in one Chrome, runs `<design>.checks.js` on both, and scores. `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (SwiftUI) is copied into an
@@ -2144,13 +2145,27 @@ terminal (the terminal's script and stylesheet ahead of the round's, through one
 in `chrome_frame.py` that both tools call), the terminal window alone at the size its builder gives it,
 and records `"kind": "terminal"` in the `design-frames` block. The kinds a frames block may name are
 `FRAME_KINDS` in `design_file.py`: the three no page kinds and the shared screens in `SCREEN_KINDS`.
-The score scores a terminal design's decision half as it does any other, but its picture half is
-unmeasured: nothing yet captures a BUILT mod screen in the form the design's terminal is drawn in
-(#1414), so the score says so in its report and is no score (exit 2), which the close gate refuses, as
-it refuses every unmeasured score. A score file claiming a terminal design's pictures were measured is
-refused as not written by the score. `test-make-settled.sh` (each frame drawn in Chrome at its own
-width), `test-design-score.sh`, `test-design-score-gate.sh` and `test-score-adapters.sh` (a terminal
-design drawn by the web adapter and scored) hold it.
+The score scores a terminal design's decision half as it does any other, and measures its pictures
+only from a capture the terminal adapter made (#1414, below); from any other capture its picture half
+is unmeasured, said in its report, and no score (exit 2), which the close gate refuses, as it refuses
+every unmeasured score. A score file claiming a terminal design's pictures were measured from any other
+adapter's capture is refused as not written by the score. `test-make-settled.sh` (each frame drawn in
+Chrome at its own width), `test-design-score.sh`, `test-design-score-gate.sh` and
+`test-score-adapters.sh` (a terminal design drawn by the web adapter and scored) hold it.
+
+**A mod's built screen is captured by the terminal adapter** (#1414). `score/capture-terminal.mjs`
+reads the mod's committed screen fixture (`"format": "mod-screen"`: per frame, the band rows the mod
+hands `$.modkit.bandRow`, and `"provenBy"`, the mod's test that holds the file to what the mod really
+publishes), puts the rows through mod-kit's own `band.ts` (its composer, its refusals and its button
+fallback, imported as it ships), and draws them through the shared terminal in place of the band the
+design's own frame draws, so both pictures come from one renderer at the frame's width. The rest of
+the window is the design's on both sides, so the score says only the band is the build's, and the
+build's checks are run on the window with everything but the band left out. The design side is drawn
+by the web adapter's own `drawDesignFrame`, shared rather than copied. A colour, strikethrough or
+button style the terminal has no drawing for is no score for its frame, never drawn plain.
+`tests/capture_terminal.test.mjs` (the logic, with mod-kit's real module) and `test-score-adapters.sh`
+section 3f (the status bar's real rows against a settled design in Chrome: 100%, then one character
+changed and below it) hold it. The adapter is not vendored into apps: only claude-config has mods.
 
 ## Mods
 

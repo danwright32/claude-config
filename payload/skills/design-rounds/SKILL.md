@@ -367,9 +367,8 @@ measured rather than read from the builder, because a builder usually computes i
 variant.width`). The Chrome is `DESIGN_ROUNDS_CHROME` when set, else the Mac's, else one on PATH, and a
 terminal design is refused, naming that variable, where there is none. The file says it is the terminal and its
 `design-frames` block carries `"kind": "terminal"`. The score scores its decisions like any others,
-and says its picture half is unmeasured, since nothing yet captures a built mod screen in the form the
-terminal is drawn in (claude-config#1414): a terminal design is no score until then, and its Match
-issue stays open. It refuses, writing nothing, a chrome
+and measures its pictures only from the terminal adapter's capture (below, claude-config#1414); from
+any other capture it says the picture half is unmeasured, so it is no score. It refuses, writing nothing, a chrome
 that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
@@ -456,7 +455,7 @@ python3 ~/.claude/skills/design-rounds/score/design_score.py show <capture folde
 ```
 
 It prints both halves, every unmet or unchecked decision, every frame's percentage, and the
-exceptions it skipped, and writes `score.json` (the one score format, the same for web and SwiftUI)
+exceptions it skipped, and writes `score.json` (the one score format, the same for every adapter)
 and a `<frame>-diff.png` per frame, differences in red. Exit 0 is matched, 1 not matched yet, and 2
 no score: a capture or design it cannot read, a frame with no picture, a design picture not drawn at
 its frame's width, a check that threw, a check the design itself fails (so the check is wrong, not
@@ -464,10 +463,10 @@ the build), or nothing left to measure. Unmeasured is never 100%. The capture's 
 of `design_score.py`. It reads PNGs with the standard library alone, so it runs the same on both Macs
 and on CI: two 1280 by 2000 frames scored in about 7 seconds on 2026-10-19.
 
-**The two adapters.** Both draw the same data on both sides: the design's fixture, committed in the
+**The three adapters.** Each draws the same data on both sides: the design's fixture, committed in the
 app's repository, which the settled file's frames are drawn from and which the app renders in a
 development only preview (Slate's `?frame=` route on the page itself, honoured only under a dev flag
-on the local machine, never in a deployment).
+on the local machine, never in a deployment), or for a mod, the mod's own band from its fixture.
 
 - **Web**: `node ~/.claude/skills/design-rounds/score/capture-web.mjs --design <settled.html> --build
   <the page's local URL> --out <capture folder> [--fixture <fixture.json>] [--storage <signed in
@@ -490,6 +489,42 @@ on the local machine, never in a deployment).
   Measured 2026-10-19: a SwiftUI view of two colour bands matched Chrome's drawing of the same HTML
   at 100%, and the same view 15 levels off did not. Swift checks cannot run on the HTML design, so a
   SwiftUI score says its checks have no positive control.
+- **A Claude Code mod** (a design with `"screen": "terminal"`, claude-config#1414): `node
+  ~/.claude/skills/design-rounds/score/capture-terminal.mjs --design <settled.html> --mod <the mod's
+  screen fixture.json> --out <capture folder> [--fixture <the design's fixture.json>]`. A mod draws
+  inside Claude Code, and a picture of the real terminal differs from the design's drawing
+  everywhere, so the build is drawn in the design's own form: the mod's band rows, exactly as it
+  hands them to `$.modkit.bandRow`, read from a fixture committed with the mod, put through mod-kit's
+  own composer and refusals (`mods/mod-kit/hooks/band.ts`), and drawn through the shared terminal in
+  place of the band the design's frame draws. Both pictures come from one renderer at the frame's
+  width. Everything else in the window (title, transcript, prompt, status line) is the design's on
+  both sides, so only the band is the build's, the score says so on every such capture, and the
+  build's checks run on the window with everything but the band left out, so a check about the
+  transcript can never pass on the mod's behalf. A check for a mod's design therefore reads the band
+  (`.term-band`); a decision about anything else in the window is not the mod's to draw and is
+  `"verify": "elsewhere"`. Measured 2026-10-21 with the status bar's real rows: 738000 of 738000
+  pixels at 820 wide, and 737965 (99.9%) with one character of the band changed.
+
+  **How a mod milestone produces its capture.** Commit, beside the mod's tests, its screen fixture:
+
+  ```json
+  {"format": "mod-screen", "version": 1, "mod": "status-bar",
+   "provenBy": "payload/mods/status-bar/tests/register.test.tsx",
+   "frames": [{"id": "f1", "band": [{"mod": "status-bar", "id": "look", "slot": "needs-a-look",
+                                     "lines": [[{"text": "PR #636 checks failing", "color": "warning"}]]}],
+               "clickable": true}]}
+  ```
+
+  one frame per frame of the design, holding the rows the mod publishes in that frame's state, and
+  `clickable` false for a frame drawn where a click cannot land (its buttons then show their
+  `instead` text, as mod-kit draws them). The test `provenBy` names must hold the file to the mod: it
+  drives the mod into each frame's state through its mod-kit stand in, reads the rows the mod
+  published, and asserts they equal the fixture's band, so the fixture changes only when the mod's
+  output does. The adapter refuses a fixture with no `provenBy`, a frame the design does not declare,
+  and a row of another mod; a design frame with no band in the fixture, and a band the shared
+  terminal has no drawing for (a colour other than `warning`, `error`, `magenta` or `gray`,
+  strikethrough, a button's hotkey or plain style), are no score for that frame, naming what, never
+  drawn plain. Run the adapter on the mod's pull request and post its score as for any other.
 
 **Which Playwright draws.** `capture-web.mjs` uses, in order: the app's own (resolved from its
 checkout, as Slate has), the package `DESIGN_SCORE_PLAYWRIGHT` names (one naming nothing is refused),

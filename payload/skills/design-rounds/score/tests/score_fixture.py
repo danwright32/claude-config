@@ -56,7 +56,7 @@ def make(root, name="app", decisions=("D1",), exception=False, failing=(), commi
     proc = subprocess.run([sys.executable, SCORE, "score", cap], capture_output=True, text=True)
     # 0 matched and 1 not matched are both scores a test can use; 2 is no score at all, which is the
     # fixture broken, never a reading to test against, except for a terminal design, whose picture half
-    # is unmeasured until a built mod screen can be captured (claude-config#1414).
+    # this web capture leaves unmeasured, since only the terminal adapter's capture measures it (#1414).
     if proc.returncode not in ((0, 1, 2) if kind == "terminal" else (0, 1)):
         raise RuntimeError("the fixture could not be scored (exit %d): %s" % (proc.returncode, proc.stdout + proc.stderr))
     with open(os.path.join(cap, "score.json")) as fh:
