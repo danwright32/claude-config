@@ -1128,6 +1128,38 @@ test('a mode whose check of a call throws refuses the call rather than letting i
   expect(w.reached).toEqual(['echo __reader_fails'])
 })
 
+// #1495, Dan's decision 2026-10-22 (picker answer "Let stops through on a check error"): stopping a
+// job can never break a mode, so a TaskStop whose check errors is let through, and said in the
+// debug log. Every other tool's check error still refuses (the test above, and the edit and the write
+// below), and a mode's own refusal of a TaskStop, were it to make one, is untouched: only the error
+// is narrowed, and only for a TaskStop.
+test('winding down: a TaskStop whose check errors runs, while an edit whose check errors is still refused (#1495)', withDeps, async ($, on) => {
+  const store = { broken: false }
+  on('state.get', async ($, e, next) => {
+    if (store.broken && (e as { key: string }).key === 'target') return { deny: 'the state store broke' } as never
+    return next(e)
+  })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  store.broken = true
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b2', tool_use_id: 't2' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+  expect(await call($ as never, edit('/repo/app.ts', 'e1'))).toMatch(/^Blocked: winding down is on and its check of this call failed \(.*the state store broke.*\), so the call did not run\./)
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+})
+
+test('asleep: a TaskStop whose check errors runs, while a write whose check errors is still refused (#1495)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  w.o.cwdThrows = true
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['TaskStop'])
+  expect(await call($ as never, { tool: 'Write', file_path: '/repo/notes.md', content: 'x', tool_use_id: 'w1' } as never)).toMatch(/^Blocked: sleep mode is on and its check of this call failed \(.*session\.cwd.*\), so the call did not run\./)
+  expect(w.reached).toEqual(['TaskStop'])
+})
+
 test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts no build', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ask: 'No' })
   await start($ as never, clock)
