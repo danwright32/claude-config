@@ -3089,6 +3089,62 @@ Not settled by any round, built so the spec holds, and each an open question for
 - **/accounts rename** with no name renames this session's account; with a name (a nickname or an
   email) it renames that one.
 
+## Area check (#1506), phase 1 built 2026-10-22 (#1508)
+
+Dan's 12 decisions and the plan from /plan-lite are on #1506; two more were settled with him the
+same day: ship it observing for a week first, then turn the hold on from what that week measured
+(#1509, L56, L172), and let an edit through loudly when the mod itself fails. Phase 1 is the
+observing half, so it has no surface of its own: no card, no question, nothing drawn. What it does:
+
+- **What is judged.** The first Edit, Write, MultiEdit or NotebookEdit a session makes to each file
+  that was there before the call (decision 2: a new file never), once per file per session, keyed on
+  the project's main working tree and the path inside the checkout so every worktree shares it; a
+  subagent is judged for itself under its own id (decision 8). Source and test files only (decision
+  3, `fileKind` in `rules.ts`); docs, config in a source language (`*.config.ts`, `.eslintrc.js`),
+  migrations, type declarations and generated or vendored folders are not. Tests are told apart by
+  mod-kit's `hooks/testfile.ts`, the design round guard's rule moved there and copied byte for byte
+  into both mods. A shell write is never judged, so restructuring itself is never obstructed. An
+  edit a guard beneath refused is judged too (the attempt is what the hold would meet), its record
+  saying `refusedBeneath`.
+- **Off the edit's path.** Whether the file was there is asked before the call runs; everything else
+  runs once the call has returned, so observing costs a session nothing. Every read for one file
+  runs under one deadline of 7 seconds, under 75% of a hook's 10 (L743), so the week also measures
+  whether the hold could have answered in time (`ms` on each record, and `not read within 7
+  seconds` when it could not).
+- **The facts.** Issues naming the file (decision 4), matched every way `issuesNaming` reads: full
+  repository relative path, a partial suffix on path segment boundaries when unique among tracked
+  files, a bare basename when unique, each read whole by the shared path reader so `lib/foo.ts`
+  never stands for `lib/foo.tsx` (L1023); then issues naming files in the same folder when that
+  folder has at most 5. The paths come from `hooks/lib/match-open-issues.py --paths`, the same
+  function the end of turn review's duplicate matcher reads paths with (L655, L370), and
+  `test-match-open-issues-paths.sh` holds every extension this mod counts as source to that reader.
+  Structural means a whole label among `tech-debt`, `refactor` and `test-refactor`, the spellings
+  measured across the repo-digest repositories on 2026-10-22 (L564); unlabelled matches are logged
+  too, since phase 2 may widen the set. The session's own issues, its branch's and its `/goal`'s, are
+  left out (decision 5). Growth is net lines over 90 days on `origin/<default>` (never local main,
+  which can sit far behind), renames followed, with fix titles counted by title alone (rough, L801);
+  the bar is provisional (1,500 lines, 300 net, the 10 fastest), to be calibrated in #1509.
+- **The data.** Open issues are read unfiltered (L1014), as each account gh is logged in to through
+  mod-kit's `askAnyAccount` (decision 12), and kept in the mod's store per repository for an hour, a
+  failed read for ten minutes; the session's own repository is read at session start, so its first
+  edit rarely waits. A list at the 1,000 limit is TRUNCATED and one that could not be read UNREAD,
+  each with its reason, and the growth bar still applies. The growth ranking is kept in memory
+  under its repository, origin head sha, day and rule version (L573).
+- **The record.** `~/.claude-area-check/log.jsonl`, this Mac only, appended a line at a time so two
+  sessions cannot lose each other's lines: `loaded` per session start (a week with none is the mod
+  not loading, never no firings, L90), `judged` per file (decision, why, the issues shown and left
+  out, every match with how it matched and its priority, the issue read's state and age, the growth
+  line, the branch, merge base and origin head, `ms`), and `unjudged` with why for a checkout with no
+  GitHub remote or a branch git cannot read. The mod's own failures go to `errors.jsonl` beside it,
+  by a separate write (L561), and the first each session is one dim line naming the file and saying
+  nothing was held.
+- **The replay.** `node tools/area-check-replay.ts <checkout> --repo <owner/name>` runs a
+  repository's last 30 days through `rules.ts` itself, each commit standing in for a session, and
+  reports holds per session; `tests/replay-fixture.ts` is this repository's own month, measured that
+  way, and the mod's replay test holds the rules to it. On 2026-10-22 a busy work repository's month
+  replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
+  which is what the week's log is for.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact
