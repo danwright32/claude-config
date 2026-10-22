@@ -23,6 +23,7 @@ workspace root meant this never ran there at all, and a footnote at the foot of 
 not read as "this whole review was blind" (claude-config#344).
 
 Usage:  match-open-issues.py <project dir> < findings.txt > annotated.txt
+        match-open-issues.py --paths < issues.json > paths.json   (the area check's reader)
 """
 import json
 import os
@@ -32,10 +33,46 @@ import sys
 
 TIMEOUT = float(os.environ.get("CLAUDE_ISSUE_MATCH_TIMEOUT") or 20)
 
-# A path with an extension, which is what a finding names when it names anything.
+# A path with an extension, which is what a finding names when it names anything. The one reader of
+# the paths a text names: the area check mod (mods/area-check) asks it through `--paths` for every
+# open issue's paths rather than keeping a second extractor (claude-config#1508, L655, L370), and
+# test-match-open-issues-paths.sh holds every extension that mod counts as source to this list.
 PATH_RE = re.compile(
-    r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|js|mjs|ts|tsx|jsx|sh|swift|rb|go|rs|java|kt|"
+    r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|js|mjs|cjs|ts|tsx|jsx|sh|swift|rb|go|rs|java|kt|kts|"
+    r"vue|svelte|scss|php|cs|cpp|c|h|m|"
     r"md|json|yml|yaml|sql|css|html|txt|tsv)\b")
+
+
+def paths(text):
+    """Each path `text` names, once, in the order it first appears. A line or range after a path
+    (`a.ts:12-40`) is not part of it, nor is a leading `./`: PATH_RE starts at a word character and
+    ends at the extension, so neither is ever matched."""
+    seen = []
+    for p in PATH_RE.findall(text or ""):
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
+def paths_main():
+    """`--paths`: a JSON list of issues (number, title, body) on stdin, each issue's paths out as
+    {"<number>": [paths]}. A list that cannot be read exits 2, never read as issues naming nothing."""
+    try:
+        rows = json.loads(sys.stdin.read())
+    except Exception as exc:
+        sys.stderr.write("match-open-issues --paths: stdin is not JSON (%s)\n" % type(exc).__name__)
+        return 2
+    if not isinstance(rows, list):
+        sys.stderr.write("match-open-issues --paths: stdin is not a list of issues\n")
+        return 2
+    out = {}
+    for r in rows:
+        if not isinstance(r, dict) or r.get("number") is None:
+            sys.stderr.write("match-open-issues --paths: an entry has no number\n")
+            return 2
+        out[str(r["number"])] = paths("%s\n%s" % (r.get("title") or "", r.get("body") or ""))
+    sys.stdout.write(json.dumps(out))
+    return 0
 
 # Words that say nothing about WHICH finding this is. Every repo has its own generic vocabulary and
 # no list here can know it, which is why a shared word is never enough on its own: it only breaks a
@@ -128,8 +165,8 @@ def words(text):
 
 def match(finding, issues):
     """The issues that already cover this finding, best first. Empty when nothing clearly does."""
-    paths = {p for p in PATH_RE.findall(finding)}
-    if not paths:
+    named = set(paths(finding))
+    if not named:
         # With no file path there is nothing specific enough to match on. Title words alone
         # produced false siblings twice in the milestone helper, always claiming a cluster that was
         # not there, and the same words would do the same here (claude-config#265).
@@ -142,7 +179,7 @@ def match(finding, issues):
     hits = []
     for number, title, body in issues:
         text = title + "\n" + body
-        shared_paths = {p for p in paths if p in text}
+        shared_paths = {p for p in named if p in text}
         if not shared_paths:
             continue
         # A shared path and nothing else is a file two unrelated findings both mention. The words
@@ -157,6 +194,8 @@ def match(finding, issues):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--paths":
+        return paths_main()
     project = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     text = sys.stdin.read()
     if "FINDING" not in text:
