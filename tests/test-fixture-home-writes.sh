@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # claude-sync run against a fixture CLAUDE_HOME writes, loads, restarts and removes nothing on the
-# real Mac (claude-config#1470).
+# real Mac (claude-config#1470), and appends nothing to its sync log (claude-config#1486).
 #
 # #1453 gave the READS of the launch agents and the clone register one rule: the seam when one is
 # named, the real location only when CLAUDE_HOME is this user's own ~/.claude, and nothing for any
@@ -78,6 +78,7 @@ REGISTER="$FAKEHOME/.claude-sync-clones"
 ZSHRC="$FAKEHOME/.zshrc"
 HOLD="$FAKEHOME/.claude-sync-hold"
 PIDFILE="$FAKEHOME/.claude-sync-watch.pid"
+SYNCLOG="$FAKEHOME/.claude-sync.log"
 PLANTED_CLONE="$WORK/planted-clone"
 # Planted afresh before every scenario, so each one is judged on its own: a write one scenario let
 # through must never be what fails the next (L203).
@@ -94,6 +95,9 @@ replant(){
   # force for a day, and a pid file naming a watcher that has gone, which a watcher replaces.
   printf '%s %s planted-host a planted hold\n' "$(( $(date +%s) + 86400 ))" "$(date +%s)" > "$HOLD"
   printf '999999\n' > "$PIDFILE"
+  # The sync log (claude-config#1486): what the scheduled and watch jobs have written so far, which
+  # a fixture run must neither append to nor rewrite.
+  printf '2026-10-01 09:00:00 claude-sync: a planted line from the real watcher\n' > "$SYNCLOG"
   : > "$LCLOG"
   BEFORE="$(plant)"
 }
@@ -118,7 +122,7 @@ run_as(){   # $1 = CLAUDE_HOME  $2 = command  then extra environment as NAME=val
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do extra+=("$1"); shift; done
   [ "${1:-}" = "--" ] && shift
   env -u SYNC_LAUNCHAGENTS -u SYNC_NO_LAUNCHCTL -u SYNC_CLONE_REGISTRY -u SYNC_ZSHRC \
-    -u SYNC_HOLD_FILE -u SYNC_WATCH_PID_FILE \
+    -u SYNC_HOLD_FILE -u SYNC_WATCH_PID_FILE -u SYNC_LOG_FILE \
     HOME="$FAKEHOME" PATH="$RUNPATH" CLAUDE_HOME="$home" SYNC_REPO="$NOREPO" SYNC_FSWATCH="$FSWATCH" ${extra[@]+"${extra[@]}"} \
     bash "$SCRIPT" "$cmd" "$@" 2>&1
 }
@@ -199,6 +203,64 @@ out="$(run_as "$FIXHOME" hold SYNC_HOLD_FILE="$SEAMHOLD" -- 5 a seam hold)"
 check "hold, seam: written where SYNC_HOLD_FILE names" grep -q 'a seam hold' "$SEAMHOLD"
 check "hold, seam: the real Mac is untouched" same "$(plant)" "$BEFORE"
 
+# ==== 1b. the sync log: a fixture home with no SYNC_LOG_FILE writes nothing to the real one ====
+# (claude-config#1486.) Every line claude-sync appends itself goes through sync_log_line, and two of
+# its callers are reachable without a working clone: notify while the Mac is asleep, which logs what
+# it would have shown (any command that dies off a terminal reaches it), and a push whose
+# settings.json cannot be read, which logs that the hooks block was held back. Each runs under a
+# fixture home that is asleep, so both callers fire, and the planted log must stay byte for byte as
+# it was. A home of its own, so the unreadable settings.json reaches no other scenario.
+SLEEPLIB="$HERE/../payload/hooks/lib/sleep.sh"
+BOOT="$(bash -c '. "$1" && sleep_boot_of "$(sysctl -n kern.boottime 2>/dev/null)"' _ "$SLEEPLIB")"
+[ -n "$BOOT" ] || BOOT=1   # no sysctl (Linux CI): sleep.sh skips the boot check, so any boot will do
+asleep(){   # $1 = a CLAUDE_HOME, which is then asleep for the next hour
+  local now_ms; now_ms="$(( $(date +%s) * 1000 ))"
+  mkdir -p "$1/state/sleep"
+  printf '{"v":1,"generation":"g-1486","since":%s,"until":%s,"night":"2026-10-22","bootTime":%s,"report":"%s/r.md","startedBy":{"sessionId":"s0","cwd":"/"},"workers":[],"placeBefore":"home"}\n' \
+    "$((now_ms - 60000))" "$((now_ms + 3600000))" "$BOOT" "$WORK" > "$1/state/sleep/current.json"
+}
+LOGHOME="$WORK/fixture-log-claude"; mkdir -p "$LOGHOME"; asleep "$LOGHOME"
+printf '{ not json\n' > "$LOGHOME/settings.json"
+# Something to publish that the secret scan refuses, so a push logs twice: the held back block,
+# then the scan's death, which while asleep is logged rather than shown. The key is built here, so
+# this file holds none for any scanner to find.
+mkdir -p "$LOGHOME/agents"
+printf '# a fixture agent\nkey: AKIA%s\n' "$(printf '%016d' 0)" > "$LOGHOME/agents/fixture-agent.md"
+LOGBARE="$WORK/log-remote.git"; git init -q --bare "$LOGBARE"
+for c in log-fixture log-seam log-own; do git clone -q "$LOGBARE" "$WORK/$c" 2>/dev/null; done
+NOTIFYING=(SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WORK/no-such-notifier")
+LOGNOTE="writes nothing to the sync log"
+
+# The seam first, which also proves both callers really log from such a run: without that, the
+# planted log staying put below could mean only that nothing was ever logged (L98).
+SEAMLOG="$WORK/seam-sync-log"; : > "$SEAMLOG"
+out="$(run_as "$LOGHOME" no-such-command-1486 "${NOTIFYING[@]}" SYNC_LOG_FILE="$SEAMLOG")"
+check "a death while asleep, seam: logged where SYNC_LOG_FILE names" grep -q 'not shown, Dan is asleep: .*no-such-command-1486' "$SEAMLOG"
+PUSHSEAMLOG="$WORK/seam-sync-log-push"; : > "$PUSHSEAMLOG"
+out="$(run_as "$LOGHOME" push "${NOTIFYING[@]}" SYNC_REPO="$WORK/log-seam" SYNC_LOG_FILE="$PUSHSEAMLOG")"
+check "a held back hooks block, seam: logged where SYNC_LOG_FILE names" grep -q 'hooks block was NOT published' "$PUSHSEAMLOG"
+check "the seam runs say nothing about an unwritten log" lacks "$out" "$LOGNOTE"
+
+replant
+out="$(run_as "$LOGHOME" no-such-command-1486 "${NOTIFYING[@]}")"
+check "a death while asleep, fixture: the real sync log is untouched" same "$(plant)" "$BEFORE"
+check "a death while asleep, fixture: says the line went nowhere, and why" has "$out" "$LOGNOTE"
+check "a death while asleep, fixture: names the seam that would keep it" has "$out" "SYNC_LOG_FILE"
+check "a death while asleep, fixture: and the reason is the home" has "$out" "not this user's own ~/.claude"
+
+replant
+out="$(run_as "$LOGHOME" push "${NOTIFYING[@]}" SYNC_REPO="$WORK/log-fixture")"
+check "a held back hooks block, fixture: the push did hold it back" has "$out" "hooks block was NOT published"
+check "a held back hooks block, fixture: the real sync log is untouched" same "$(plant)" "$BEFORE"
+check "a held back hooks block, fixture: says the line went nowhere" has "$out" "$LOGNOTE"
+# Said ONCE however many lines the run would have logged, so it reads as a fact about the run
+# rather than a second copy of every line. This push logs two (the block, then its death while
+# asleep), counted in the seam log above, so one note is the claim and not the only possibility.
+check "the push under the seam logged more than one line, so the count below means something" \
+  test "$(grep -c ' claude-sync: ' "$PUSHSEAMLOG")" -ge 2
+[ "$(grep -c ' claude-sync: ' "$PUSHSEAMLOG")" -ge 2 ] || printf '  the seam push logged:\n%s\n  the fixture push said:\n%s\n' "$(cat "$PUSHSEAMLOG")" "$out"
+check "a held back hooks block, fixture: says it once" same "$(grep -cF "$LOGNOTE" <<< "$out")" 1
+
 # ==== 2. the seams still take the writes under a fixture home, and launchctl still never runs ====
 replant
 SEAMAGENTS="$WORK/seam-agents"
@@ -271,6 +333,17 @@ out="$(run_as "$OWN" hold -- 5 a control hold)"
 check "control hold: writes the real hold marker" grep -q 'a control hold' "$HOLD"
 out="$(run_as "$OWN" release)"
 check "control release: removes the real hold marker" test ! -e "$HOLD"
+
+# The sync log, appended to exactly as before for this user's own config, its earlier lines kept.
+replant
+asleep "$OWN"; printf '{ not json\n' > "$OWN/settings.json"
+out="$(run_as "$OWN" no-such-command-1486 "${NOTIFYING[@]}")"
+check "control death while asleep: appended to the real sync log" grep -q 'not shown, Dan is asleep: .*no-such-command-1486' "$SYNCLOG"
+check "control death while asleep: the real log's earlier lines are kept" grep -q 'a planted line from the real watcher' "$SYNCLOG"
+check "control death while asleep: says nothing about an unwritten log" lacks "$out" "$LOGNOTE"
+out="$(run_as "$OWN" push "${NOTIFYING[@]}" SYNC_REPO="$WORK/log-own" CLAUDE_SUITE_RUN_ID=)"
+check "control push: the held back hooks block is appended to the real sync log" grep -q 'hooks block was NOT published' "$SYNCLOG"
+check "control push: still the first line first" same "$(head -1 "$SYNCLOG")" "2026-10-01 09:00:00 claude-sync: a planted line from the real watcher"
 
 echo
 echo "passed: $pass, failed: $fail"
