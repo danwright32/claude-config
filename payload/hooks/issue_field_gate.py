@@ -19,11 +19,15 @@ Two properties kept deliberately from the old design:
 
 1. Each rule has its OWN override, so waiving one never waives another. They answer
    different questions about the issue.
-2. It fails OPEN on a COMMAND it cannot parse. Anything unparseable exits quietly rather
-   than blocking work. This is a completeness gate, not a safety gate, and a false block on
-   a command it merely could not read would teach the override habit. A --body-file it
-   cannot read is different (claude-config#1416): the command parsed, and it points gh at a
-   description that is not there, so that is refused, naming the path and why.
+2. A COMMAND it cannot read is refused only when its text names a command the gate judges
+   (claude-config#1485), saying which quote never closes and where, and passes untouched
+   otherwise. It used to pass every one whole, so an incomplete create beside a lone apostrophe
+   the reader could not close was never judged. The reader now reads a body in "$(...)", which
+   was 19 of the 23 such past commands naming gh on this Mac (of about 103,000 measured
+   2026-10-22); the refusal fired on 1, which bash could not have run as written either. Passing
+   one takes the override of every rule it could not judge, so waiving one still waives no other.
+   A --body-file it cannot read is refused too (claude-config#1416): the command parsed, and it
+   points gh at a description that is not there, so that is refused, naming the path and why.
 
 What changed for the better: a create missing two things now says so once, instead of
 whichever of three gates happened to be reported first.
@@ -526,6 +530,43 @@ def build_reason(offenders, failing, others=()):
     return "\n".join(lines)
 
 
+def _has_override(command, override):
+    """Whether the text of a command it could not read sets an override anywhere as a word of its own."""
+    return re.search(r"(?:^|[\s;&|(])%s(?=\s)" % re.escape(override), command) is not None
+
+
+def unreadable_reason(command, error):
+    """The refusal for a command the gate could not read (claude-config#1485), or None to pass it.
+
+    Refused when its text names a command the gate judges: a gh issue create that files an issue, or a
+    body file command (scan.BODY_FILE_COMMANDS) naming a --body-file, the only thing it judges there.
+    Which command an override prefixes cannot be read either, so one anywhere counts, and passing the
+    command takes the override of every rule the gate could not judge.
+    """
+    named, overrides = [], []
+    for kind, args in scan.gated_in_text(command):
+        if kind == scan.CREATE:
+            if any(a in scan.NON_FILING_FLAGS for a in args):
+                continue
+            judged = list(RULES)
+            line = session_line()
+            if line:
+                judged.append(session_rule(line))
+        elif scan.flag_values(args, "--body-file", "-F"):
+            judged = [OTHER_BODY_FILE_RULE]
+        else:
+            continue
+        if "gh %s %s" % kind not in named:
+            named.append("gh %s %s" % kind)
+        overrides += [r["override"] for r in judged if r["override"] not in overrides]
+    if not named or all(_has_override(command, o) for o in overrides):
+        return None
+    return ("The issue field gate could not read this command, so it cannot judge the %s in it: %s. Close that "
+            "quote, or reword so the line holds no lone quote, then re-run; if the command is right as written, "
+            "say so and put %s in front of it, which waives every rule the gate could not judge, for that one "
+            "command only." % (" or the ".join(named), error, " ".join(overrides)))
+
+
 def main():
     # Asked by create-milestone.sh, whose creates this gate never sees, whether a body already has
     # the section, so the two read it by one rule (claude-config#1320). The answer is printed, yes
@@ -542,8 +583,11 @@ def main():
 
     try:
         offenders, failing, others = evaluate(command, cwd)
-    except scan.Unreadable:
-        return 0  # not ours to judge
+    except scan.Unreadable as e:
+        reason = unreadable_reason(command, e)
+        if reason:
+            json.dump(scan.deny_payload(reason), sys.stdout)
+        return 0
 
     if not offenders and not others:
         return 0

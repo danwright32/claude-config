@@ -10,9 +10,10 @@
 # the ones a gate's own suite is least likely to reach, because it asks about the gate's verdict
 # rather than about what the parser saw.
 #
-# Both gates fail OPEN on anything unreadable, deliberately: they are completeness gates, not
-# safety gates, and a false block on a command nobody could parse teaches the override habit. That
-# choice is only safe if "unreadable" stays rare and loud, so it is checked as its own outcome.
+# Unreadable is its own outcome, never zero creates. The issue field gate refuses an unreadable
+# command whose text names a command it judges, saying which quote and where (claude-config#1485),
+# and passes one naming none. Either way the scanner must say unreadable, and where, rather than
+# read it as nothing to judge.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -502,6 +503,35 @@ for c in "bash -c 'gh issue create --title T'" "eval gh issue create --title T" 
          "rtk proxy gh issue create --title T" "xargs gh issue create --title T"; do
   [[ "$(gate_from "$DIR" "$c")" == *'"deny"'* ]] && check "#1478 the gate refuses it wrapped: $c" ok || check "#1478 the gate refuses it wrapped: $c" "it passed"
 done
+
+# ---------------------------------------------------------------------------
+# A body in a command substitution inside double quotes (claude-config#1485). Of the 23 past commands
+# on this Mac naming gh that the scanner could not read (of about 103,000 measured 2026-10-22), 19 were
+# a --body "$(cat <<'EOF' ... EOF)" or "$(printf ...)" body holding an apostrophe or a double quote,
+# which bash reads as one word and the lexer read as quotes never closed. They are read as one word.
+# ---------------------------------------------------------------------------
+HEREDOC_BODY="$(printf 'gh issue create --title T -m M --body "$(cat <<'"'"'EOF'"'"'\nIt says "couldn'"'"'t save" (twice).\n\n## Open questions\n\nNone\nEOF\n)"')"
+[ "$(ask count "$HEREDOC_BODY")" = "1" ] && check "#1485 a heredoc body in \"\$(...)\" with an apostrophe and double quotes is read" ok \
+  || check "#1485 a heredoc body in \"\$(...)\" with an apostrophe and double quotes is read" "got $(ask count "$HEREDOC_BODY")"
+[ "$(ask milestones "$HEREDOC_BODY")" = "M" ] && check "#1485 and the create's flags are its own" ok \
+  || check "#1485 and the create's flags are its own" "got $(ask milestones "$HEREDOC_BODY")"
+PRINTF_BODY="gh pr create -t T --body \"\$(printf 'a test'\"'\"'s temp dir, \"%s\"' \"x\")\" && gh issue create -t U -m N"
+[ "$(ask milestones "$PRINTF_BODY")" = "N" ] && check "#1485 a printf body in \"\$(...)\" with '\"'\"' is read, and the create after it found" ok \
+  || check "#1485 a printf body in \"\$(...)\" with '\"'\"' is read, and the create after it found" "got $(ask milestones "$PRINTF_BODY")"
+# What the shell itself cannot read stays unreadable, and says which quote and where (L11).
+case "$(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")" in
+  *"line 2, column 6"*) check "#1485 an unreadable command names the quote's line and column" ok ;;
+  *) check "#1485 an unreadable command names the quote's line and column" "got $(ask count "$(printf 'echo a\n# don'"'"'t\ngh issue create -t x')")" ;;
+esac
+case "$(ask count 'gh issue create --body "$(cat <<EOF')" in
+  UNREADABLE*) check "#1485 a substitution never closed is still unreadable" ok ;;
+  *) check "#1485 a substitution never closed is still unreadable" "got $(ask count 'gh issue create --body "$(cat <<EOF')" ;;
+esac
+# The gate on the fallback reader answers an unreadable command as it does on the shared one.
+UNREAD_CREATE="$(printf '# don'"'"'t\ngh issue create --title T')"
+shared="$(gate_from "$DIR" "$UNREAD_CREATE")"; fallback="$(gate_from "$FB" "$UNREAD_CREATE")"
+[[ "$shared" == *'"deny"'* && "$shared" = "$fallback" ]] && check "#1485 the gate refuses an unreadable create on both readers alike" ok \
+  || check "#1485 the gate refuses an unreadable create on both readers alike" "shared [${shared:0:160}] fallback [${fallback:0:160}]"
 
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
