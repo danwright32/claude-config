@@ -203,3 +203,4 @@ which is NOT loaded into the session.
 - L730. jsdom cannot see the server/client boundary: a server component calling a use client module's function passes tests, so scan or render the route.
 - L760. Judge completion against the EXPECTED set, never only what has reported: an empty-set guard passes once one fast result arrives first.
 - L790. A maintenance command lacking privilege (ANALYZE) warns and carries on, so prove its effect by reading it back under the role that runs it.
+- L797. A test runner reusing a server on a fixed port tests whatever build it serves; with parallel checkouts give each its own port.

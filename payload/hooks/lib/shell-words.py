@@ -20,8 +20,11 @@ hook that slow is killed and the command goes unscreened.
       on its own is exactly this one command, else 0>" 0x1c "<the command from its name on, past
       leading reserved words and assignments>" 0x1c "<those assignments, one per line>" 0x1c "<the
       gh or git subcommand it runs, tool_field: tool 0x1d sub 0x1d act 0x1d words, else rtk's own
-      subcommand, rtk_field, in the same shape, or empty>" 0x1e. Exit 3 as commands; see read(),
-      command_rest(), gh_path(), git_path() and rtk_field().
+      subcommand, rtk_field, in the same shape, or empty>" 0x1c "<the wrapper, `bash -c`, `eval` or
+      `env -S`, when it hands a string to a shell or eval, with 0x1d and why after it when that string
+      cannot be read, else empty>" 0x1e, the commands a wrapper runs being records of their own right
+      after it (claude-config#1478). Exit 3 as commands; see read(), command_rest(), gh_path(),
+      git_path(), rtk_field() and wrapped().
   shell-words.py tool       stdin: one command
       the gh or git subcommand it runs, as gh and git themselves find it past the options written in
       front (tool_field), else rtk's own subcommand (rtk_field, claude-config#1468), or nothing when
@@ -198,7 +201,7 @@ def moved(cwd, old, target):
     return os.path.join(cwd, target), cwd
 
 
-def commands(s):
+def commands(s, cwd=""):
     """Every simple command in s, in the order the shell finishes reading them, as (dir, text).
 
     The text is the command as written, quotes and all, and a command substitution's text stays
@@ -210,12 +213,15 @@ def commands(s):
     (lessons review of #1017); with none, "; " is the line break that starts a heredoc body and ends
     a comment, because the flattened text cannot tell a newline from a separator there (main read
     it the same way). Raises Unreadable when anything is still open at the end.
+
+    cwd is the directory s starts in, "" for the session's: a string a wrapper runs (wrapped) starts
+    where the wrapper runs (claude-config#1478).
     """
     n = len(s)
     line_break = "\n" if "\n" in s else "; "
     closing_line = re.escape(line_break) + "%s%s" + (r"(?=\n|$)" if line_break == "\n" else r"(?=;|$)")
     out, pending = [], []
-    frames = [{"k": "top", "start": 0, "cwd": "", "old": None}]
+    frames = [{"k": "top", "start": 0, "cwd": cwd, "old": None}]
 
     def cut(f, end, how):
         text = s[f["start"]:end]
@@ -514,13 +520,13 @@ def bare(s):
     return "".join(out)
 
 
-def crude_commands(s):
+def crude_commands(s, cwd=""):
     """The reading used when commands() cannot be trusted: a cut at every separator, quotes and all.
 
     It can only see MORE commands than are there, which is the direction a gate that must not miss a
     push needs (L42), and it keeps the cds in order, so the last one before a push still governs it.
     """
-    out, cwd, old = [], "", None
+    out, old = [], None
     for text in re.split(r"&&|\|\||;|\||\n", s):
         if text.strip():
             out.append((cwd, text))
@@ -565,6 +571,13 @@ def command_rest(text, passed=None):
         if not m or m.group(1) not in RESERVED:
             break
         s = s[m.end():]
+        # The shell's own time takes -p, and -- to end it, before the command it times
+        # (claude-config#1478); /usr/bin/time by its path is a runner (RUNNERS).
+        while m.group(1) == "time":
+            m2 = re.match(r"(-p|--)(\s+|$)", s)
+            if not m2:
+                break
+            s = s[m2.end():]
     assigns, rest = split(s)
     rest, more = past_runners(rest, passed)
     return rest, "\n".join(assigns + more)
@@ -588,7 +601,27 @@ RUNNERS = {
     "env": ("CPSu", {"--chdir", "--split-string", "--unset"}),
     "sudo": ("CDghpRrTtUu", {"--chdir", "--chroot", "--close-from", "--command-timeout", "--group", "--host",
                              "--other-user", "--prompt", "--role", "--type", "--user"}),
+    "nohup": ("", set()),
+    "nice": ("n", {"--adjustment"}),
+    "time": ("fo", {"--format", "--output"}),
+    "timeout": ("sk", {"--signal", "--kill-after"}),
+    "gtimeout": ("sk", {"--signal", "--kill-after"}),
+    "caffeinate": ("tw", set()),
+    "stdbuf": ("eio", {"--error", "--input", "--output"}),
+    "doas": ("Cu", set()),
+    "xargs": ("EIJLnPRSsad", {"--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars",
+                              "--process-slot-var"}),
 }
+# The launchers that run their arguments as a command were none of these, so `nohup git push`, `xargs
+# git push` and `timeout 30 git push` were commands named nohup, xargs and timeout to every gate
+# (claude-config#1478). Their option letters are the macOS and GNU versions' together: xargs -I, -J,
+# -L, -n, -P, -E, -R, -S, -s (BSD) and -a, -d (GNU) take a value; nice -n; GNU time -f and -o;
+# timeout -s and -k, then a duration (POSITIONALS); caffeinate -t and -w. rtk's `proxy` subcommand
+# runs the words after it as they stand (rtk 0.31.0 `rtk proxy --help`: its options -v, -u,
+# --skip-env and -h take no value), so past_runners reads through it.
+#
+# The words a runner takes after its options and before the command: timeout's duration.
+POSITIONALS = {"timeout": 1, "gtimeout": 1}
 
 
 def first_word(s):
@@ -609,7 +642,8 @@ def first_word(s):
 
 
 def past_runners(rest, passed=None):
-    """The command past any rtk, env or sudo in front of it, each with its options, and the NAME=value
+    """The command past any runner in front of it (RUNNERS: rtk, env, sudo, nohup, xargs, timeout and
+    the rest, rtk proxy included), each with its options, and the NAME=value
     settings env or sudo gives it, which are the command's own assignments as much as a leading one.
     A runner whose command cannot be read from its words (env -S, which splits a string into one) is
     left as it stands, the command then being that runner's. When passed is a list, each runner
@@ -649,8 +683,26 @@ def past_runners(rest, passed=None):
                 s = after_opt
                 continue
             break
+        name = w.split("/")[-1]
+        for _ in range(POSITIONALS.get(name, 0)):
+            _, s = first_word(s)
+        if name == "rtk":
+            sub_word, after_sub = first_word(s)
+            if sub_word == "proxy":
+                # rtk proxy runs the words after its own options as they stand. rtk is then not the
+                # command's last runner, so `rtk proxy init` is a program named init, not rtk's.
+                s = after_sub
+                while True:
+                    opt, after_opt = first_word(s)
+                    if opt is None or not opt.startswith("-") or opt == "-":
+                        break
+                    s = after_opt
+                    if opt == "--":
+                        break
+                rest = s
+                continue
         if passed is not None:
-            passed.append((w.split("/")[-1], s))
+            passed.append((name, s))
         more, s = split(s)
         assigns.extend(more)
         rest = s
@@ -760,20 +812,33 @@ def tool_command(words):
     words, leading assignments and any rtk, env or sudo in front, read by command_rest, so a caller
     with words of its own (gh_issue_scan.py, merge-selector.py, push-scope.sh's add reader) sees
     `rtk gh issue create` and `env GH_TOKEN=x gh pr merge` exactly as the bash gates do."""
-    if not words:
+    text = rejoin(words)
+    if not text:
         return None
-    first = words[0].lstrip("({")
-    words = ([first] if first else []) + list(words[1:])
-    if not words:
-        return None
-    # Written back as the shell would read the same words. An assignment keeps its name outside the
-    # quotes, `NAME='a b'`, so command_rest still reads it as one: quoted whole, as shlex.join quotes
-    # it, `env GH_TOKEN="a b" gh issue create` read as a command named GH_TOKEN=a b (the lessons
-    # review of #1188).
-    text = " ".join(w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
-                    for w, m in ((w, ASSIGNMENT.match(w)) for w in words))
     rest, _ = command_rest(text)
     return tool_read(command_words(rest))
+
+
+def rejoin(words):
+    """One command's words as a caller split them, written back as the shell would read the same
+    words, or "" for none. A subshell or group opener glued to the first is the crude cut's and is
+    dropped. An assignment keeps its name outside the quotes, `NAME='a b'`, so command_rest still
+    reads it as one: quoted whole, as shlex.join quotes it, `env GH_TOKEN="a b" gh issue create` read
+    as a command named GH_TOKEN=a b (the lessons review of #1188)."""
+    if not words:
+        return ""
+    first = words[0].lstrip("({")
+    words = ([first] if first else []) + list(words[1:])
+    return " ".join(w[:m.end()] + shlex.quote(w[m.end():]) if m else shlex.quote(w)
+                    for w, m in ((w, ASSIGNMENT.match(w)) for w in words))
+
+
+def wrapped_words(words):
+    """wrapped() for one command's words as a caller split them (gh_issue_scan.py): past reserved
+    words, assignments and runners, (wrapper, string, why) when it hands a string to a shell, eval or
+    env -S, else None (claude-config#1478)."""
+    text = rejoin(words)
+    return wrapped(command_rest(text)[0]) if text else None
 
 
 def gh_command(words):
@@ -825,25 +890,318 @@ def program_field(text):
     return rest, assigns, tool_field(rest) or rtk_field(passed)
 
 
+# ---- commands a wrapper runs: a shell's -c string, eval, env -S (claude-config#1478) ------------
+# Every gate read only the commands in command position, so a command another program runs from a
+# string was text to all of them: `bash -c 'git push --force'`, `eval "git push"`, `env -S 'git
+# push'`. The string is a command line in its own right, so it is read as one, by commands(), in the
+# directory the wrapper runs in, and its commands are records of the reading after the wrapper's own,
+# recursively up to MAX_DEPTH. A wrapper whose string cannot be read is reported, naming it, so a
+# gate refuses rather than passes what it cannot see (check-wrapped-commands.sh): a variable or a
+# substitution where the string's command should be (`bash -c "$CMD"`), a quote that never closes, a
+# shell reading its commands from its input (a pipe, a here string, a heredoc), wrapping past
+# MAX_DEPTH, or an eval that changes directory, since eval runs in the shell around it and every
+# directory read after it would be wrong. A mention (echo, a grep pattern, a commit message, a
+# heredoc body) is no command, so it is never a wrapper.
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# A shell's long options that take the next word as their value.
+SHELL_VALUED = {"--rcfile", "--init-file"}
+# A word that is a redirection, with its target attached (group 1) or in the next word.
+REDIRECT_WORD = re.compile(r"\d*(?:<<<|<<-?|<>|<&|>&|>>|&>>?|<|>)(.*)\Z", re.S)
+MAX_DEPTH = 5
+WHY_VARIABLE = "its command is a variable or a substitution, known only as it runs"
+WHY_QUOTE = "it holds a quote that never closes"
+WHY_INPUT = "it reads its commands from its input (a pipe, a here string, a heredoc or a file)"
+WHY_DEEP = "it is wrapped more than %d deep" % MAX_DEPTH
+WHY_EVAL_CD = "it changes directory in the shell around it, so where the commands after it run cannot be told"
+WHY_FILE = "it runs the script file %s, whose commands are in the file, not the command"
+WHY_EXECDIR = "it runs its command in the directory of each file it finds, which cannot be told"
+WHY_UNENDED = "its %s command never ends with ; or {} +"
+
+
+def wrapped(rest):
+    """(wrapper, string, why) for one command, from its own name on (command_rest), that runs a string
+    as a command line, else None. wrapper names it (`bash -c`, `eval`, `env -S`, or the shell's name
+    when it reads its input); string is the command line it runs, None when there is none to read;
+    why is "" when the string can be read, else the reason it cannot."""
+    name, _ = first_word(rest)
+    if name is None:
+        raw = rest.split(None, 1)
+        name = raw[0].strip("'\"") if raw else ""
+    name = name.split("/")[-1]
+    if name not in SHELLS and name not in ("eval", "env") and name not in ARGUMENT_RUNNERS:
+        return None
+    try:
+        words = shlex.split(rest, posix=True)
+    except ValueError:
+        if name == "env" and "-S" not in rest and "--split-string" not in rest:
+            return None
+        return (name, None, WHY_QUOTE)
+    if name == "eval":
+        args = words[1:]
+        if args and args[0] == "--":
+            args = args[1:]
+        return ("eval", " ".join(args), "") if args else None
+    if name == "env":
+        return _env_split_string(words)
+    if name in ARGUMENT_RUNNERS:
+        # A redirection is the shell's, never the program's argument.
+        kept, k = [], 0
+        while k < len(words):
+            m = REDIRECT_WORD.match(words[k]) if k else None
+            if m:
+                k += 1 if m.group(1) else 2
+                continue
+            kept.append(words[k])
+            k += 1
+        return ARGUMENT_RUNNERS[name](kept)
+    has_c, reads_input, operands, options = False, False, [], True
+    k = 1
+    while k < len(words):
+        w = words[k]
+        m = REDIRECT_WORD.match(w)
+        if m:
+            if w.lstrip("0123456789").startswith("<"):
+                reads_input = True
+            k += 1 if m.group(1) else 2
+            continue
+        if options and w in ("--", "-"):
+            options = False
+        elif options and w in ("--version", "--help"):
+            return None
+        elif options and w.startswith("--"):
+            k += 1 if w not in SHELL_VALUED else 2
+            continue
+        elif options and w[:1] in ("-", "+") and len(w) > 1:
+            letters = w[1:]
+            if w[0] == "-" and "c" in letters:
+                has_c = True
+            if w[0] == "-" and "s" in letters:
+                reads_input = True
+            k += 1 + letters.count("o") + letters.count("O")
+            continue
+        else:
+            options = False
+            operands.append(w)
+        k += 1
+    if has_c:
+        return (name + " -c", operands[0], "") if operands else None
+    if operands and not reads_input:
+        # A script file: its commands are in the file, not the command, and no gate reads files.
+        return (name, None, WHY_FILE % operands[0])
+    return (name, None, WHY_INPUT)
+
+
+def _options(words, values, longs, k=1):
+    """The index of the first word past a program's own options from k: a short option taking a value
+    (a letter in values) takes the rest of its word or the next word, a long one in longs the next
+    word unless written with =, and -- ends them."""
+    while k < len(words):
+        w = words[k]
+        if w == "--":
+            return k + 1
+        if w.startswith("--"):
+            k += 2 if ("=" not in w and w in longs) else 1
+            continue
+        if w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            at = next((j for j, ch in enumerate(letters) if ch in values), None)
+            k += 2 if at is not None and at == len(letters) - 1 else 1
+            continue
+        return k
+    return k
+
+
+def _find_exec(words):
+    """wrapped() for find: the commands its -exec, -execdir, -ok and -okdir run, each ending at ; or
+    at {} +, as one command line; None when it runs none."""
+    out, label, why, k = [], "find -exec", "", 1
+    while k < len(words):
+        w = words[k]
+        if w in ("-exec", "-execdir", "-ok", "-okdir"):
+            end = k + 1
+            while end < len(words) and not (words[end] == ";" or (words[end] == "+" and words[end - 1] == "{}")):
+                end += 1
+            if w.endswith("dir"):
+                label, why = "find " + w, WHY_EXECDIR
+            if end >= len(words):
+                return (label if why else "find " + w, None, why or WHY_UNENDED % w)
+            out.append(rejoin(words[k + 1:end]))
+            k = end + 1
+            continue
+        k += 1
+    return (label, "; ".join(out), why) if out else None
+
+
+def _watch(words):
+    """wrapped() for watch: its words, run by sh -c joined by spaces, or as they stand under -x."""
+    k = _options(words, "nq", {"--interval", "--equexit"})
+    if k >= len(words):
+        return None
+    as_words = any(w in ("-x", "--exec") or (w.startswith("-") and not w.startswith("--") and "x" in w[1:])
+                   for w in words[1:k])
+    return ("watch", rejoin(words[k:]) if as_words else " ".join(words[k:]), "")
+
+
+SCRIPT_VALUED_LONGS = {"--echo", "--log-in", "--log-out", "--log-io", "--log-timing", "--logging-format",
+                       "--output-limit"}
+
+
+def _script(words):
+    """wrapped() for script: util-linux's -c string, or macOS's command after the file it writes."""
+    k = 1
+    while k < len(words):
+        w = words[k]
+        if w in ("-c", "--command"):
+            return ("script", words[k + 1], "") if k + 1 < len(words) else None
+        if w.startswith("--command="):
+            return ("script", w.split("=", 1)[1], "")
+        if w.startswith("-") and not w.startswith("--") and "c" in w[1:]:
+            rest = w[w.index("c") + 1:]
+            if rest:
+                return ("script", rest, "")
+            return ("script", words[k + 1], "") if k + 1 < len(words) else None
+        if w == "--":
+            k += 1
+            break
+        if w.startswith("--"):
+            k += 2 if ("=" not in w and w in SCRIPT_VALUED_LONGS) else 1
+            continue
+        if w.startswith("-") and len(w) > 1:
+            letters = w[1:]
+            at = next((j for j, ch in enumerate(letters) if ch in "tEIOBTmo"), None)
+            k += 2 if at is not None and at == len(letters) - 1 else 1
+            continue
+        break
+    operands = words[k:]
+    return ("script", rejoin(operands[1:]), "") if len(operands) > 1 else None
+
+
+PARALLEL_VALUED_LONGS = {"--jobs", "--arg-file", "--sshlogin", "--delimiter", "--max-args", "--max-replace-args",
+                         "--max-lines", "--max-chars", "--joblog", "--results", "--tmpdir", "--workdir", "--wd",
+                         "--timeout", "--retries", "--halt", "--delay", "--memfree", "--load", "--env",
+                         "--tagstring", "--colsep", "--basefile", "--return", "--sshloginfile", "--sqlandworker"}
+
+
+def _parallel(words):
+    """wrapped() for GNU parallel: its command before :::, run by a shell; with none, each argument
+    after ::: is a command line of its own; with neither, it reads its commands from its input."""
+    k = _options(words, "jaSIdEnNPLs", PARALLEL_VALUED_LONGS)
+    seps = (":::", "::::", ":::+", "::::+")
+    end = next((j for j in range(k, len(words)) if words[j] in seps), len(words))
+    if end > k:
+        return ("parallel", " ".join(words[k:end]), "")
+    if end < len(words) and words[end] == ":::":
+        args = [a for a in words[end + 1:] if a not in seps]
+        return ("parallel", "; ".join(args), "") if args else None
+    return ("parallel", None, WHY_INPUT)
+
+
+# The programs that run a command line made of their own arguments (claude-config#1478), as the mods'
+# reader (mod-kit hooks/commands.ts) reads find -exec.
+ARGUMENT_RUNNERS = {"find": _find_exec, "watch": _watch, "script": _script, "parallel": _parallel}
+
+
+def _env_split_string(words):
+    """wrapped() for env: the string its -S (--split-string) splits into the command, else None."""
+    values, longs = RUNNERS["env"]
+    k = 1
+    while k < len(words):
+        w = words[k]
+        if w in ("-S", "--split-string") or w.startswith("--split-string="):
+            if "=" in w:
+                value, after = w.split("=", 1)[1], words[k + 1:]
+            else:
+                value, after = (words[k + 1] if k + 1 < len(words) else ""), words[k + 2:]
+            break
+        if w.startswith("-") and not w.startswith("--") and len(w) > 1:
+            letters = w[1:]
+            at = next((j for j, ch in enumerate(letters) if ch in values), None)
+            if at is not None and letters[at] == "S":
+                value = letters[at + 1:] or (words[k + 1] if k + 1 < len(words) else "")
+                after = words[k + 1 + (0 if letters[at + 1:] else 1):]
+                break
+            k += 2 if at is not None and at == len(letters) - 1 else 1
+            continue
+        if w.startswith("--"):
+            k += 2 if ("=" not in w and w in longs) else 1
+            continue
+        if ASSIGNMENT.match(w):
+            k += 1
+            continue
+        return None
+    else:
+        return None
+    return ("env -S", " ".join([value] + [shlex.quote(a) for a in after]), "")
+
+
+def _records(s, cwd, depth):
+    """(records, crude) for a command line: each record (dir, text, wrap, rest, assigns, field, depth), a
+    wrapper's commands right after it (claude-config#1478). wrap is "" for a command that is no
+    wrapper, the wrapper's name (`bash -c`, `eval`, ...) for one whose string was read, and that name
+    0x1d the reason for one whose string cannot be read; depth is how many wrappers it is inside; crude
+    says s itself could only be read by the crude cut."""
+    try:
+        cut, crude = commands(s, cwd), False
+    except Unreadable:
+        cut, crude = crude_commands(s, cwd), True
+    out = []
+    for d, t in cut:
+        rest, assigns, field = program_field(t)
+        found = wrapped(rest)
+        if found is None:
+            out.append((d, t, "", rest, assigns, field, depth))
+            continue
+        wrapper, string, why = found
+        inner = []
+        if string is not None:
+            if depth >= MAX_DEPTH:
+                why = why or WHY_DEEP
+            else:
+                inner, inner_crude = _records(string, d, depth + 1)
+                if inner_crude:
+                    why = why or WHY_QUOTE
+                for _, t2, _, rest2, _, _, _ in inner:
+                    if why:
+                        break
+                    head, _ = first_word(rest2)
+                    if head and head[0] in "$`":
+                        why = WHY_VARIABLE
+                    elif wrapper == "eval" and cd_target(t2) is not None:
+                        why = WHY_EVAL_CD
+        out.append((d, t, wrapper + ("\x1d" + why if why else ""), rest, assigns, field, depth))
+        out.extend(inner)
+    return out, crude
+
+
+def every_command(s, cwd=""):
+    """Every command s runs, as (dir, text, wrapper, why, depth): the commands reading (commands(), or the
+    crude cut when it cannot be trusted) with the commands each wrapper runs right after it (wrapped,
+    claude-config#1478). wrapper is "" for a command that is none; why is "" unless the wrapper's
+    string cannot be read, and then says why; depth is how many wrappers the command is inside."""
+    out = []
+    for d, t, wrap, _, _, _, depth in _records(s, cwd, 0)[0]:
+        wrapper, _, why = wrap.partition("\x1d")
+        out.append((d, t, wrapper, why, depth))
+    return out
+
+
 def read(s):
     """The commands reading, each record with its words, its git -C directory and whether it is alone.
 
     Everything lib/push-scope.sh and lib/merge-target.sh ask of one command, answered by one python
     start rather than one per command (claude-config#1040): ps_is_git_push asked python for the words
     of every command in the line, so a heredoc commit, forty short commands and a push started 44
-    pythons in every push hook (measured 2026-10-12).
+    pythons in every push hook (measured 2026-10-12). The commands a wrapper runs are records of their
+    own after it (claude-config#1478), and a wrapper is never alone, since read on its own it is more
+    than one command.
     """
-    try:
-        records, rc = commands(s), 0
-    except Unreadable:
-        records, rc = crude_commands(s), 3
+    records, crude = _records(s, "", 0)
     out = []
-    for d, t in records:
-        rest, assigns, field = program_field(t)
-        fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if alone(t) else "0", rest, assigns,
-                  field)
+    for d, t, wrap, rest, assigns, field, _ in records:
+        fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if not wrap and alone(t) else "0",
+                  rest, assigns, field, wrap)
         out.append("\x1c".join(fields) + "\x1e")
-    return "".join(out), rc
+    return "".join(out), 3 if crude else 0
 
 
 def main(argv):

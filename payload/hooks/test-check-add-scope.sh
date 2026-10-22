@@ -210,6 +210,20 @@ run "env GIT_TRACE=0 git add -A"
 refused "#1188 an unscoped add behind env is refused too"
 run "sudo git add ."
 refused "#1188 and so is one behind sudo"
+# Run by another program it is the same add (claude-config#1478): a shell's -c string, eval, env -S
+# and the launchers are read by the shared reader.
+for c in "bash -c 'git add -A'" "sh -c \"git add .\"" "zsh -c 'git add --all'" "bash -lc 'git add -A'" \
+         "bash -c 'cd $REPO && git add -A'" "eval git add -A" "eval 'git add -A && git commit -m x'" \
+         "env -S 'git add -A'" "xargs git add -A" "nohup git add -A" "time git add -A" "nice -n 5 git add -A" \
+         "timeout 30 git add -A" "caffeinate -i git add -A" "command git add -A" "rtk proxy git add -A" \
+         "sudo -u dan bash -c 'git add -A'" "find . -maxdepth 0 -exec git add -A \;" "watch -n 5 'git add -A'" "script -q /dev/null git add -A" "parallel git add -A ::: x"; do
+  run "$c"
+  refused "#1478 an unscoped add is refused wrapped: $c"
+done
+run "bash -c 'git add mine.txt'"
+allowed "#1478 control: a scoped add in bash -c is allowed"
+run "echo \"bash -c 'git add -A'\""
+allowed "#1478 control: a wrapped add only echoed is no add"
 
 run "git add ."
 refused "a bare dot is refused the same way"

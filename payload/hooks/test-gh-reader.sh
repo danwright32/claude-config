@@ -125,6 +125,125 @@ check_eq "and the crude reading keeps a push's own words, its remote and branch"
 crashed="$(bash -c '. "$1/lib/push-scope.sh"; PS_SHELL_WORDS="$2"; if ps_runs_gh "gh pr -R o/x create --fill" pr create; then echo "yes:${PS_RUN_ARGS[*]-}"; else echo no; fi' _ "$DIR" "$BROKEN")"
 check_eq "and a creation's words after its action" "yes:--fill" "$crashed"
 
+# --- commands run by a wrapper (claude-config#1478) ---------------------------------------------
+# Every gate read only commands in command position, so a command another program runs was invisible
+# to all of them: `bash -c 'git push --force'`, `eval`, `xargs git push`, `nohup`, `rtk proxy`.
+# A launcher that runs its own arguments is read through like env and sudo, by the tool reading.
+check_eq "#1478 xargs runs its command" "$G|push||" "$(reading "xargs $G push")"
+check_eq "#1478 xargs's own options and their values are passed over" "$G|add||{}" "$(reading "xargs -0 -n 1 -I {} -P 4 $G add {}")"
+check_eq "#1478 xargs -I with its value attached" "$G|add||{}" "$(reading "xargs -I{} $G add {}")"
+check_eq "#1478 nohup runs its command" "$G|push||origin" "$(reading "nohup $G push origin")"
+check_eq "#1478 time with -p in front" "$G|push||" "$(reading "time -p $G push")"
+check_eq "#1478 time by its path, with -o and its value" "$G|push||" "$(reading "/usr/bin/time -o out.txt $G push")"
+check_eq "#1478 nice with -n and its value" "$G|push||" "$(reading "nice -n 5 $G push")"
+check_eq "#1478 nice with an old style number" "$G|push||" "$(reading "nice -10 $G push")"
+check_eq "#1478 timeout takes a duration before the command" "$G|push||--force" "$(reading "timeout 30 $G push --force")"
+check_eq "#1478 timeout with -s and its value before the duration" "$G|push||" "$(reading "timeout -s KILL 30s $G push")"
+check_eq "#1478 caffeinate runs its command" "$G|push||" "$(reading "caffeinate -i -t 600 $G push")"
+check_eq "#1478 rtk proxy runs its command" "$G|push||--force" "$(reading "rtk proxy $G push --force")"
+check_eq "#1478 rtk proxy with its own option" "gh|issue|create|" "$(reading 'rtk proxy -v gh issue create')"
+check_eq "#1478 rtk proxy rtk init is rtk's init" "rtk|init||-g" "$(reading 'rtk proxy rtk init -g')"
+check_eq "#1478 rtk proxy init runs a program named init, not rtk's" "" "$(reading 'rtk proxy init -g')"
+# The mods' reader (mod-kit hooks/commands.ts, RUNNERS) reads stdbuf and doas too, so this one does.
+check_eq "#1478 stdbuf with a value attached" "$G|push||" "$(reading "stdbuf -oL $G push")"
+check_eq "#1478 doas with -u and its value" "$G|push||" "$(reading "doas -u root $G push")"
+check_eq "#1478 launchers stack" "$G|push||" "$(reading "nohup nice -n 5 timeout 30 sudo env A=1 $G push")"
+
+# A command given to a shell as a string, or to eval, is a command line of its own: read in the one
+# reading as records after the wrapper's, recursively, in the directory the wrapper runs in. Each
+# record printed as tool|sub|act ("-" for none), then !wrapper when it cannot be read, then @dir.
+records(){ printf '%s' "$1" | python3 -B "$SW" read | python3 -c '
+import sys
+out = []
+for rec in sys.stdin.read().split("\x1e"):
+    if not rec:
+        continue
+    f = rec.split("\x1c")
+    s = "|".join(f[7].split("\x1d")[:3]) if f[7] else "-"
+    if len(f) > 8 and "\x1d" in f[8]:
+        s += "!" + f[8].split("\x1d")[0]
+    if f[0]:
+        s += "@" + f[0]
+    out.append(s)
+print(" ; ".join(out))'; }
+check_eq "#1478 bash -c" "- ; $G|push|" "$(records "bash -c '$G push --force'")"
+check_eq "#1478 sh -c" "- ; $G|push|" "$(records "sh -c \"$G push\"")"
+check_eq "#1478 zsh -c" "- ; $G|push|" "$(records "zsh -c '$G push'")"
+check_eq "#1478 a flag joined to -c" "- ; $G|push|" "$(records "bash -lc '$G push'")"
+check_eq "#1478 flags before -c, one taking a value" "- ; $G|push|" "$(records "bash -e -o pipefail -c '$G push'")"
+check_eq "#1478 -- between -c and its string" "- ; $G|push|" "$(records "bash -c -- '$G push'")"
+check_eq "#1478 a shell by its path" "- ; $G|push|" "$(records "/bin/bash -c '$G push'")"
+check_eq "#1478 the shell's own arguments after its string are not commands" "- ; $G|push|" "$(records "sh -c '$G push \"\$1\"' sh origin")"
+check_eq "#1478 several commands in the string" "- ; - ; $G|push|" "$(records "bash -c 'echo hi && $G push'")"
+check_eq "#1478 a cd inside the string moves the commands after it" "- ; - ; $G|push|@/tmp/x" "$(records "bash -c 'cd /tmp/x && $G push'")"
+check_eq "#1478 the string runs where the wrapper does" "- ; -@/tmp/a ; $G|push|@/tmp/a" "$(records "cd /tmp/a && bash -c '$G push'")"
+check_eq "#1478 a cd in the string does not move what follows the wrapper" "- ; - ; $G|commit|" "$(records "bash -c 'cd /tmp/x' ; $G commit -m m")"
+check_eq "#1478 a shell inside a shell" "- ; - ; $G|push|" "$(records "bash -c \"sh -c '$G push'\"")"
+check_eq "#1478 behind a launcher" "- ; $G|push|" "$(records "nohup bash -c '$G push' &")"
+check_eq "#1478 xargs running sh -c" "- ; $G|push|" "$(records "xargs -I{} sh -c '$G push {}'")"
+check_eq "#1478 eval of plain words" "- ; $G|push|" "$(records "eval $G push --force")"
+check_eq "#1478 eval of one quoted string holding two commands" "- ; $G|commit| ; $G|push|" "$(records "eval '$G commit -m x && $G push'")"
+check_eq "#1478 env -S splits its string into the command" "- ; $G|push|" "$(records "env -S '$G push --force'")"
+check_eq "#1478 a gh command in the string" "- ; gh|issue|create" "$(records "bash -c 'gh issue create --title T'")"
+check_eq "#1478 rtk init in the string" "- ; rtk|init|" "$(records "sh -c 'rtk init -g'")"
+check_eq "#1478 a variable among the string's arguments is read as it would be bare" "- ; $G|push|" "$(records "bash -c \"$G push origin \$BRANCH\"")"
+
+# The programs that run a command line made of their own arguments: find's -exec and -ok, watch,
+# script and GNU parallel, as the mods' reader reads find -exec (mod-kit hooks/commands.ts).
+check_eq "#1478 find -exec ... ;" "- ; $G|add|" "$(records "find . -name '*.md' -exec $G add {} \\;")"
+check_eq "#1478 find -exec ... + and a second -exec" "- ; $G|add| ; $G|commit|" "$(records "find . -exec $G add {} + -exec $G commit -m x \\;")"
+check_eq "#1478 find -ok" "- ; $G|push|" "$(records "find . -maxdepth 0 -ok $G push \\;")"
+check_eq "#1478 find -exec running sh -c" "- ; - ; $G|push|" "$(records "find . -maxdepth 0 -exec sh -c '$G push' \\;")"
+check_eq "#1478 find -execdir runs in each file's own directory, which cannot be told" "-!find -execdir ; $G|push|" "$(records "find . -execdir $G push \\;")"
+check_eq "#1478 find -exec that never ends" "-!find -exec" "$(records "find . -exec $G push")"
+check_eq "#1478 watch, its words a command line" "- ; $G|status| ; $G|push|" "$(records "watch -n 5 '$G status && $G push'")"
+check_eq "#1478 watch -x runs its words as they stand" "- ; $G|push|" "$(records "watch -x -n 5 $G push")"
+check_eq "#1478 script -c, util-linux" "- ; $G|push|" "$(records "script -q -c '$G push' /dev/null")"
+check_eq "#1478 script with a file then a command, macOS" "- ; $G|push|" "$(records "script -q /dev/null $G push --force")"
+check_eq "#1478 parallel's command before :::" "- ; $G|push|" "$(records "parallel -j 2 $G push ::: origin upstream")"
+check_eq "#1478 parallel with no command runs its arguments" "- ; $G|push| ; -" "$(records "parallel ::: '$G push' 'ls'")"
+check_eq "#1478 parallel reading its commands from its input" "-!parallel" "$(records "parallel -j 4 < jobs.txt")"
+check_eq "#1478 a shell running a script file cannot be read" "-!bash" "$(records 'bash ./deploy.sh --fast')"
+check_eq "#1478 nor sh with an option and a script file" "-!sh" "$(records 'sh -e scripts/x.sh')"
+check_eq "#1478 control: find with no -exec" "-" "$(records "find . -name '$G'")"
+check_eq "#1478 control: watch mentioned by echo" "-" "$(records "echo watch $G push")"
+
+# A wrapped string that cannot be read is said to be unreadable, naming the wrapper, so a gate can
+# refuse rather than pass it.
+check_eq "#1478 a variable holding the whole command" "-!bash -c ; -" "$(records 'bash -c "$CMD"')"
+check_eq "#1478 a substitution holding the whole command" "- ; -!sh -c ; - ; -" "$(records 'sh -c "$(cat cmd.txt)"')"
+check_eq "#1478 a variable holding a later command of the string" "-!bash -c ; - ; -" "$(records 'bash -c "set -e; $CMD"')"
+check_eq "#1478 eval of a variable" "-!eval ; -" "$(records 'eval "$CMD"')"
+check_eq "#1478 eval of a substitution" "- ; -!eval ; - ; -" "$(records 'eval "$(ssh-agent -s)"')"
+check_eq "#1478 eval that changes directory for the commands after it" "-!eval ; - ; $G|push|" "$(records "eval 'cd /tmp' && $G push")"
+check_eq "#1478 a string holding a quote that never closes" "-!bash -c ; $G|push|" "$(records "bash -c \"$G push 'x\"")"
+check_eq "#1478 a shell fed a here string" "-!bash" "$(records "bash <<< '$G push'")"
+check_eq "#1478 a shell fed by a pipe" "- ; -!sh" "$(records "echo '$G push' | sh")"
+check_eq "#1478 a shell fed a heredoc" "-!bash" "$(records "$(printf 'bash <<EOF\n%s push\nEOF' "$G")")"
+check_eq "#1478 wrapped more than five deep" "- ; - ; - ; - ; - ; -!eval" "$(records "eval eval eval eval eval eval $G push")"
+check_eq "#1478 five deep is still read" "- ; - ; - ; - ; - ; $G|push|" "$(records "eval eval eval eval eval $G push")"
+
+# What only mentions a wrapper stays text.
+check_eq "#1478 control: a wrapper inside echo" "-" "$(records "echo \"bash -c '$G push'\"")"
+check_eq "#1478 control: inside a grep pattern" "-" "$(records "grep \"bash -c '$G push'\" notes.md")"
+check_eq "#1478 control: inside a commit message" "$G|commit|" "$(records "$G commit -m \"bash -c '$G push'\"")"
+check_eq "#1478 control: inside a heredoc body" "-" "$(records "$(printf "cat <<'EOF'\nbash -c '%s push'\neval %s push\nEOF" "$G" "$G")")"
+check_eq "#1478 control: eval mentioned by echo" "-" "$(records "echo eval $G push")"
+check_eq "#1478 control: a shell asked its version" "-" "$(records 'bash --version')"
+check_eq "#1478 control: python's -c is not a shell's" "-" "$(records "python3 -c 'import os; os.system(\"x\")'")"
+
+check_eq "#1478 ps_is_git_push sees a push in bash -c" "yes" "$(asks ps_is_git_push -- "bash -c '$G push --force'")"
+check_eq "#1478 and through xargs" "yes" "$(asks ps_is_git_push -- "printf 'a\n' | xargs $G push origin")"
+check_eq "#1478 and through eval" "yes" "$(asks ps_is_git_push -- "eval '$G push'")"
+check_eq "#1478 control: not one in echo" "no" "$(asks ps_is_git_push -- "echo \"bash -c '$G push'\"")"
+check_eq "#1478 ps_is_gh_pr_create sees one in sh -c" "yes" "$(asks ps_is_gh_pr_create -- "sh -c 'gh pr create --fill'")"
+check_eq "#1478 ps_is_git_commit sees one through rtk proxy" "yes" "$(asks ps_is_git_commit -- "rtk proxy $G commit -m x")"
+unread(){ bash -c '. "$1/lib/push-scope.sh"; if ps_unreadable "$2"; then printf "%s|%s" "$PS_UNREAD_WRAPPER" "$PS_UNREAD_WHY"; else echo none; fi' _ "$DIR" "$1"; }
+u="$(unread 'X=1; bash -c "$CMD"')"
+check_eq "#1478 ps_unreadable names the wrapper" "bash -c" "${u%%|*}"
+case "$u" in *"variable"*) ok ;; *) bad "#1478 and says why it cannot be read: $u" ;; esac
+check_eq "#1478 ps_unreadable: nothing unreadable in a plain wrapper" "none" "$(unread "bash -c '$G push'")"
+
 # --- the scan ----------------------------------------------------------------------------------
 scan(){ out="$(python3 -B "$SCAN" "$1" 2>&1)"; rc=$?; }
 scan "$DIR"

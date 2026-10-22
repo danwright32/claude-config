@@ -198,8 +198,11 @@ def _positionals(words, with_value):
 
 def targets(command, cwd):
     """What the command would close: [(kind, repo, number, how)], kind issue, milestone or graphql."""
+    # Every command it runs, a shell's -c string, eval's words and env -S's string read as commands of
+    # their own after their wrapper (claude-config#1478), with the crude cut where the reading cannot
+    # be trusted. A wrapper whose string cannot be read is check-wrapped-commands.sh's to refuse.
     try:
-        records = sw.commands(command)
+        records = [(d, text) for d, text, _, _, _ in sw.every_command(command)]
     except Exception:  # noqa: BLE001  the crude reading still finds the commands
         records = sw.crude_commands(command)
     found = []

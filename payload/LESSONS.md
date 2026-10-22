@@ -2712,6 +2712,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   built on it must be proved by reading back the effect (the table statistics, the plan) under the
   role that will run it, never by the call returning success.** (project-enrollment-tracker#1741, 2026-10-20)
   SHORT: A maintenance command lacking privilege (ANALYZE) warns and carries on, so prove its effect by reading it back under the role that runs it.
+- **L797. A test runner told to reuse a server already listening on a fixed port tests whatever build that server is serving, so wherever checkouts run in parallel give each its own port and refuse a server that is not serving this checkout's build, or a run passes or fails for code it never built.** (project-enrollment-tracker#1844, 2026-10-21)
+  SHORT: A test runner reusing a server on a fixed port tests whatever build it serves; with parallel checkouts give each its own port.
 
 ## Data safety
 
@@ -3276,6 +3278,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L800. A monitor warning that an operation is nearing its limit must not read only what is recorded when an operation finishes, because one killed at the limit never finishes and so never appears, and the failure the warning exists for reads as absent; count the kills from a source that sees them.** (bidspoke#2651, 2026-10-22)
+  SHORT: A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
   SHORT: An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.
 - **L1028. Every outbound call made inside a function the platform kills at a hard deadline needs its own timeout well inside that deadline, because a kill skips every catch block and the failure alert it holds, so a dependency that hangs goes silent while one that refuses pages.** (nursedex#1218, 2026-10-20)
@@ -5673,6 +5677,11 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: Judge whether another writer moved a field by that field's own prior value, never the record's last modified time, which any write to any field moves.
 
 ## Security and privacy
+
+- **L799. A browser security report's named source is whatever script was running when the
+  blocked load fired, not the code that added the element, so never treat a named source as
+  proof your own code requested the resource.** (slate#4063, 2026-10-22)
+  SHORT: A CSP report's named source is the script running when the load fired, not who added it; never read it as proof your code requested it.
 
 - **L1026. An access check in a shared layout does not protect the pages beneath it, because the
   framework renders a layout and its page at the same time and may not re-run the layout on navigation;
@@ -9983,6 +9992,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
 - **L796. A recovery step that re-submits work into the same bounded queue it is waiting on must first ask that queue whether the work is already pending, because reading a queued item as a lost one fires a false alarm and adds a duplicate that lengthens the very delay it reported.** (project-enrollment-tracker#1825, 2026-10-21)
   SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
+- **L798. Deleting a deployed thing's source from the repository does not remove it from the platform it runs on, so a removal is finished only when the platform's own list no longer shows it, and a teardown left as a sentence in a pull request body is never carried out.** (project-enrollment-tracker#1855, 2026-10-21)
+  SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

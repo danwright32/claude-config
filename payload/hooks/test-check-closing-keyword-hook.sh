@@ -64,6 +64,14 @@ run "#1188 behind env with a setting"          $BLOCK 'env GH_TOKEN=x gh -R o/x 
 run "#1188 behind sudo"                        $BLOCK 'sudo gh pr -R o/x edit 12 --body "does not resolve #5"'
 run "#1188 a commit with git -C in front"      $BLOCK 'git -C /tmp commit -m "this does not fix #12"'
 run "#1188 a commit behind env"                $BLOCK 'env A=1 git commit -m "this does not fix #12"'
+# --- run by another program it is the same creation, edit or commit (#1478) ---
+run "#1478 a pr create in bash -c"             $BLOCK "bash -c 'gh pr create --title x --body \"It does not close #897.\"'"
+run "#1478 a pr edit in sh -c after a cd"      $BLOCK "sh -c 'cd /tmp && gh pr edit 12 --body \"does not resolve #5\"'"
+run "#1478 a pr create through eval"           $BLOCK "eval 'gh pr create --title x --body \"It does not close #897.\"'"
+run "#1478 a pr create through nohup"          $BLOCK 'nohup gh pr create --title x --body "It does not close #897."'
+run "#1478 a pr create through rtk proxy"      $BLOCK 'rtk proxy gh pr create --title x --body "It does not close #897."'
+run "#1478 a commit in bash -c"                $BLOCK "bash -c 'git commit -m \"this does not fix #12\"'"
+run "#1478 a commit through timeout"           $BLOCK 'timeout 30 git commit -m "this does not fix #12"'
 run "#1188 control: a flag in front of pr view" $ALLOW 'gh -R o/x pr view 12 --json body --jq ".body" | grep "does not close #5"'
 
 # --- A genuine close must sail through, or the hook is useless ---

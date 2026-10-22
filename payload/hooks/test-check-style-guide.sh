@@ -204,6 +204,26 @@ W="$(mk_style_repo 'const label = "Loading, please wait";')"
 run_style_hook "$E2E" "cd $W && git push"
 want_style_code 0 "clean copy pushed the same way is allowed"
 
+# A push another program runs is checked as the bare push is (claude-config#1478): the shared reader
+# reads a shell's -c string, eval, env -S and the launchers, and where each one runs.
+W="$(mk_style_repo "$BAD")"
+for c in "cd $W && bash -c 'git push'" "bash -c 'cd $W && git push'" "sh -c \"cd $W && git push --force\"" \
+         "cd $W && zsh -c 'git push'" "cd $W && bash -lc 'git push'" "eval 'cd $W && git push'" "cd $W && eval git push" \
+         "env -S 'git -C $W push'" "cd $W && xargs git push" "cd $W && nohup git push" "cd $W && time git push" \
+         "cd $W && nice -n 5 git push" "cd $W && timeout 30 git push" "cd $W && caffeinate -i git push" \
+         "cd $W && rtk proxy git push" "sudo -u dan bash -c 'cd $W && git push'" \
+         "cd $W && find . -maxdepth 0 -exec git push \\;" "cd $W && watch -x git push" \
+         "cd $W && script -q /dev/null git push" "cd $W && parallel git push ::: origin"; do
+  run_style_hook "$E2E" "$c"
+  want_style_code 2 "#1478 a forbidden character blocks a wrapped push: $c"
+done
+W="$(mk_style_repo 'const label = "Loading, please wait";')"
+run_style_hook "$E2E" "bash -c 'cd $W && git push'"
+want_style_code 0 "#1478 control: clean copy pushed through bash -c is allowed"
+W="$(mk_style_repo "$BAD")"
+run_style_hook "$E2E" "cd $W && echo \"bash -c 'git push'\""
+want_style_code 0 "#1478 control: a push only echoed is no push"
+
 # --- what the push would actually CARRY, not what happens to be lying about ----
 #
 # This gate is PreToolUse, so on a chained commit and push it runs BEFORE the commit
@@ -274,6 +294,17 @@ want_style_code 0 "a modified tracked file nobody named must not block the push"
 W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
 run_style_hook "$E2E" "cd $W && git add -A && git commit -qm copy && git push"
 want_style_code 2 "git add -A stages the stranger, so it is judged"
+
+# 4b. The same add and commit run by a shell or eval take the same files (claude-config#1478).
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && bash -c 'git add -A && git commit -qm copy' && git push"
+want_style_code 2 "#1478 git add -A in bash -c stages the stranger, so it is judged"
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && eval 'git add -A' && git commit -qm copy && git push"
+want_style_code 2 "#1478 and so does one through eval"
+W="$(mk_pending_repo "$CLEAN" "$BAD" baseline)"
+run_style_hook "$E2E" "cd $W && bash -c 'git add app/copy.ts && git commit -qm copy' && git push"
+want_style_code 0 "#1478 control: an add in bash -c naming one clean file does not take the stranger"
 
 # 5. And a commit that stages tracked changes itself takes those.
 W="$(mk_pending_repo "$CLEAN" "$CLEAN" "$BAD")"
