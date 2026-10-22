@@ -1130,8 +1130,9 @@ test('a mode whose check of a call throws refuses the call rather than letting i
 
 // #1495, Dan's decision 2026-10-22 (picker answer "Let stops through on a check error"): stopping a
 // job can never break a mode, so a TaskStop whose check errors is let through, and said in the
-// debug log. Every other tool's check error still refuses, a TaskStop's included in the test above's
-// sense: only the error is narrowed, never a mode's own refusal.
+// debug log. Every other tool's check error still refuses (the test above, and the edit and the write
+// below), and a mode's own refusal of a TaskStop, were it to make one, is untouched: only the error
+// is narrowed, and only for a TaskStop.
 test('winding down: a TaskStop whose check errors runs, while an edit whose check errors is still refused (#1495)', withDeps, async ($, on) => {
   const store = { broken: false }
   on('state.get', async ($, e, next) => {
