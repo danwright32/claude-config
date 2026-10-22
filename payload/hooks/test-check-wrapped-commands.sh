@@ -19,6 +19,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/check-wrapped-commands.sh"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
+# Every refusal is recorded (claude-config#1492), so every case here records into a ledger of this
+# suite's own, never the Mac's real one, whose counts decide how the refusal is narrowed.
+export WRAPPED_REFUSAL_LEDGER_DIR="$WORKDIR/ledger"
+LEDGER="$WRAPPED_REFUSAL_LEDGER_DIR/refusals.tsv"
 
 pass=0; fail=0
 ok(){ pass=$((pass + 1)); }
@@ -107,9 +111,10 @@ print(sum(1 for m in d["hooks"].get("PreToolUse", []) if m.get("matcher") == "Ba
 check_eq "#1478 registered once as a PreToolUse hook on Bash" "1" "$wired"
 
 # 3. With no python3 the command cannot be read, so one naming a wrapper beside git, gh or rtk is
-# refused as not judged, saying so; one naming neither still passes in silence.
+# refused as not judged, saying so; one naming neither still passes in silence. The PATH holds every
+# ordinary tool the refusal's record is written with (claude-config#1492) and lacks only python3.
 NOPY="$WORKDIR/nopy"; mkdir -p "$NOPY"
-for t in bash cat dirname sed awk tr head grep jq printf; do
+for t in bash cat dirname sed awk tr head grep jq printf date mkdir hostname wc tail mv mktemp rm; do
   p="$(command -v "$t" 2>/dev/null)" && [ -x "$p" ] && ln -sf "$p" "$NOPY/$t"
 done
 nopy(){ out="$(payload "$1" | PATH="$NOPY" "$NOPY/bash" "$HOOK" 2>&1)"; rc=$?; }
@@ -137,6 +142,99 @@ check_eq "#1478 a payload nothing can read, naming a wrapper and git, is refused
 check "#1478 and says the payload could not be read" "could not read the hook payload" "$out"
 out="$(payload "ls -la" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 control: a command naming neither passes in silence even with the reader missing" "0|" "$rc|$out"
+
+# 5. Every refusal is recorded (claude-config#1492): one tab separated line of time, Mac, wrapper,
+# reason category and outcome, so how often the refusal fires, and on what, can be read after a week
+# of real use. Never the command, never a path: a script file's name is somebody's content.
+HOST_SHORT="$(hostname 2>/dev/null)"; HOST_SHORT="${HOST_SHORT%%.*}"
+line_of(){ # the ledger's only line, or what is wrong with it
+  local n
+  n="$(grep -c . "$LEDGER" 2>/dev/null || true)"
+  case "$n" in 1) cat "$LEDGER" ;; *) printf 'LEDGER HOLDS %s LINES' "${n:-no}" ;; esac
+}
+recorded(){ # recorded <name> <command> <wrapper> <reason category> [outcome]
+  rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+  judge "$2"
+  local l now ts host wrapper reason outcome extra
+  l="$(line_of)"
+  IFS=$'\t' read -r ts host wrapper reason outcome extra <<< "$l"
+  now="$(date +%s)"
+  check_eq "#1492 recorded with the right wrapper, reason and outcome: $1" "$3|$4|${5:-refused}|" "$wrapper|$reason|$outcome|${extra:-}"
+  check_eq "#1492 and on this Mac: $1" "$HOST_SHORT" "$host"
+  case "$ts" in ''|*[!0-9]*) bad "#1492 and stamped with the time: $1 (got '$ts')" ;;
+    *) if [ $((now - ts)) -ge 0 ] && [ $((now - ts)) -le 60 ]; then ok; else bad "#1492 and stamped with the time: $1 ($ts against $now)"; fi ;;
+  esac
+}
+recorded "a variable" "CMD='git push --force'; bash -c \"\$CMD\"" "bash -c" variable
+recorded "a quote never closed" "bash -c \"git push 'x\"" "bash -c" quote
+recorded "a shell fed by a pipe" "echo 'git push' | sh" "sh" input
+recorded "an eval that changes directory" "eval 'cd /tmp' && git push" "eval" eval-cd
+recorded "wrapping too deep" "eval eval eval eval eval eval git push" "eval" depth
+recorded "a script file" "bash ./secret-build-1492.sh && git push" "bash" script-file
+recorded "find -execdir" "find . -name x -execdir git add {} \\;" "find -execdir" execdir
+recorded "a find -exec never ended" "find . -exec git push" "find -exec" unended
+
+# The script file's name and the command are nowhere in what was recorded.
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "bash ./secret-build-1492.sh && git push origin private-branch-1492"
+held="$(cat "$LEDGER" 2>/dev/null)"
+check_eq "#1492 the record holds a line for the refusal" "1" "$(grep -c . "$LEDGER" 2>/dev/null || true)"
+case "$held" in
+  *secret-build*|*private-branch*|*"git push"*|*/*) bad "#1492 the record holds no command text and no path (got: $held)" ;;
+  *) ok ;;
+esac
+
+# Each reason the reader can give has a category of its own, so a new one arriving in
+# lib/shell-words.py with no category here fails this, rather than being counted as "other" for ever
+# (L96). The eight cases above are one per reason.
+whys="$(python3 -c 'import re, sys; print(len(re.findall(r"^WHY_[A-Z_]+ = ", open(sys.argv[1]).read(), re.M)))' "$DIR/lib/shell-words.py")"
+check_eq "#1492 every reason the reader gives is one of the eight categories recorded above" "8" "$whys"
+
+# An override is recorded as one, with what it overrode, and the command still runs in silence.
+recorded "the override" "SKIP_WRAPPED_CHECK=1 bash -c \"\$CMD\" # git" "bash -c" variable overridden
+check_eq "#1492 and the override still says nothing" "0|" "$rc|$out"
+
+# What is not refused is not recorded.
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "bash -c 'git push --force'"
+judge "git status"
+judge 'bash -c "$CMD"'
+check_eq "#1492 nothing passed is recorded" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
+
+# Refused as not judged is recorded too, under the wrapper the command names and why it was not.
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+out="$(payload "bash -c 'git push'" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
+IFS=$'\t' read -r _ _ wrapper reason outcome <<< "$(line_of)"
+check_eq "#1492 a refusal with no reader to judge it is recorded" "2|bash|reader-missing|refused" "$rc|$wrapper|$reason|$outcome"
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+nopy "eval 'git push'"
+IFS=$'\t' read -r _ _ wrapper reason outcome <<< "$(line_of)"
+check_eq "#1492 a refusal with no python3 is recorded" "2|eval|no-python3|refused" "$rc|$wrapper|$reason|$outcome"
+
+# An unwritable record leaves the decision exactly as it was and says so, once (L95).
+NOTDIR="$WORKDIR/not-a-dir"; : > "$NOTDIR"
+out="$(payload "CMD='git push --force'; bash -c \"\$CMD\"" | WRAPPED_REFUSAL_LEDGER_DIR="$NOTDIR" bash "$HOOK" 2>&1)"; rc=$?
+check_eq "#1492 an unwritable record still refuses" "2" "$rc"
+check "#1492 and still says why" "variable or a substitution" "$out"
+check_eq "#1492 and says, once, that the refusal could not be recorded" "1" "$(grep -o 'could not be recorded' <<< "$out" | grep -c .)"
+out="$(payload "SKIP_WRAPPED_CHECK=1 bash -c \"\$CMD\" # git" | WRAPPED_REFUSAL_LEDGER_DIR="$NOTDIR" bash "$HOOK" 2>&1)"; rc=$?
+check_eq "#1492 an unwritable record still lets the override run" "0" "$rc"
+check_eq "#1492 and says, once, that the override could not be recorded" "1" "$(grep -o 'could not be recorded' <<< "$out" | grep -c .)"
+out="$(payload "bash -c 'git push'" | WRAPPED_REFUSAL_LEDGER_DIR="$NOTDIR" bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1492 an unwritable record still refuses what could not be judged" "2" "$rc"
+check "#1492 and says that too" "could not be recorded" "$out"
+
+# The record is capped: past its limit and a tenth more it keeps the newest lines, so it can never
+# grow without bound, and it is not rewritten on every refusal below that.
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"; mkdir -p "$WRAPPED_REFUSAL_LEDGER_DIR"
+python3 -c 'import sys; [print("%d\tolder\tbash\tinput\trefused" % (1000 + i)) for i in range(int(sys.argv[1]))]' 11 > "$LEDGER"
+out="$(payload "echo 'git push' | sh" | WRAPPED_REFUSAL_LEDGER_MAX=10 bash "$HOOK" 2>&1)"
+check_eq "#1492 past the cap the record keeps the newest lines" "10" "$(grep -c . "$LEDGER")"
+check "#1492 and the newest is the refusal just made" "$HOST_SHORT	sh	input	refused" "$(tail -n 1 "$LEDGER")"
+check_eq "#1492 and the oldest went" "1002" "$(head -n 1 "$LEDGER" | cut -f 1)"
+python3 -c 'import sys; [print("%d\tolder\tbash\tinput\trefused" % (1000 + i)) for i in range(int(sys.argv[1]))]' 5 > "$LEDGER"
+out="$(payload "echo 'git push' | sh" | WRAPPED_REFUSAL_LEDGER_MAX=10 bash "$HOOK" 2>&1)"
+check_eq "#1492 control: under the cap nothing is dropped" "6" "$(grep -c . "$LEDGER")"
 
 echo
 echo "passed: $pass, failed: $fail"
