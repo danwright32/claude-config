@@ -205,6 +205,84 @@ PY
   if [ "$rc" -eq 1 ] && said "UNMET D1" "$CH/off.log" && said "Capacity" "$CH/off.log"; then ok; else bad "the same app with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$CH/off.log")"; fi
 fi
 
+# --- 3g. the chain for a design whose frames were captured from different pages (claude-config#1474) ----
+# One settled file, its f1 drawn in a page captured in edit mode and its f2 in one captured in view mode,
+# as Bidspoke's lead validation design was (try-pennie/bidspoke#2590). The app draws each frame in the
+# matching mode and scores 100% on both halves; drawing f2 in edit mode instead takes f2's picture below
+# 100% and leaves f1's whole, so each frame is scored against its own page and no other.
+if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
+  unmeasured_part "no Playwright package, node or Chrome here, so a settled file of several captured pages was not scored end to end"
+else
+  MC="$T/multi"
+  mkdir -p "$MC/app"
+  cat > "$MC/edit.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 40px; background: #14213d; color: #fff; padding: 8px; } main { padding: 12px; }</style>
+</head><body><header>Editing lead 7</header><main id="main"></main></body></html>
+HTML
+  cat > "$MC/view.html" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>App</title>
+<style>html, body { margin: 0; font: 16px/1.4 Helvetica, Arial, sans-serif; } header { height: 64px; background: #2d6a4f; color: #fff; padding: 8px; } .card { margin: 24px; padding: 12px; background: #f6efe3; }</style>
+</head><body><header>Lead 7</header><section class="card" id="card"></section></body></html>
+HTML
+  cat > "$MC/builder.js" <<'JS'
+function buildScreen(variant) {
+  var box = document.createElement("div");
+  var h = document.createElement("h1");
+  h.textContent = "Team capacity";
+  var p = document.createElement("p");
+  p.textContent = variant.day + ": " + window.DESIGN_FIXTURE.open[variant.day] + " calls open";
+  box.append(h, p);
+  return box;
+}
+JS
+  printf '{"open": {"Tue": 42, "Wed": 17}}\n' > "$MC/fixture.json"
+  cat > "$MC/settled.json" <<'JSON'
+{"title": "Lead validation", "builder": "builder.js", "fixture": "fixture.json",
+ "chromes": [{"name": "edit", "captured": "edit.html", "from": "the fixture app, edit mode, 2026-10-22", "slot": "#main", "width": 600},
+             {"name": "view", "captured": "view.html", "from": "the fixture app, view mode, 2026-10-22", "slot": "#card", "width": 600}],
+ "frames": [{"id": "f1", "title": "The panel, editing", "chrome": "edit", "width": 600, "height": 200, "variant": {"day": "Tue"}},
+            {"id": "f2", "title": "The card", "chrome": "view", "width": 600, "height": 240, "variant": {"day": "Wed"}}],
+ "decisions": [{"id": "D1", "decision": "The heading reads Team capacity", "requirement": "1",
+                "frames": ["f1", "f2"], "check": "the h1 reads Team capacity"}],
+ "exceptions": []}
+JSON
+  printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['f1', 'f2'], check: function (doc) { var h = doc.querySelector('h1'); return {ok: !!h && h.textContent === 'Team capacity', detail: h ? h.textContent : 'no heading'}; }}];" > "$MC/settled.checks.js"
+  python3 "$SKILL/make-settled.py" "$MC/settled.json" "$MC/settled.html" > "$MC/make.log" 2>&1 \
+    || bad "make-settled.py writes a settled design of several captured pages" "$(cat "$MC/make.log")"
+  # The app's fixture route: the frame picked by ?frame=<id> is drawn in the page its mode shows, f1 in
+  # edit mode and f2 in view mode, or, given edit, f2 in edit mode too.
+  multi_app() {  # multi_app <f2's mode: view or edit>
+    python3 - "$MC" "$1" <<'PY'
+import json, sys
+mc, f2 = sys.argv[1], sys.argv[2]
+pages = {"edit": [open(mc + "/edit.html").read(), "main"], "view": [open(mc + "/view.html").read(), "card"]}
+safe = lambda v: json.dumps(v).replace("</", "<\\/")
+page = ("<!doctype html><html><head><meta charset=\"utf-8\"></head><body>"
+        "<script>window.DESIGN_FIXTURE = %s;</script><script>%s</script><script>"
+        "var frame = new URLSearchParams(location.search).get('frame');"
+        "var mode = {f1: 'edit', f2: %s}[frame], day = {f1: 'Tue', f2: 'Wed'}[frame], P = %s[mode];"
+        "var doc = new DOMParser().parseFromString(P[0], 'text/html');"
+        "document.head.replaceWith(document.importNode(doc.head, true));"
+        "document.body.replaceWith(document.importNode(doc.body, true));"
+        "document.getElementById(P[1]).replaceChildren(buildScreen({day: day}));"
+        "</script></body></html>"
+        % (open(mc + "/fixture.json").read(), open(mc + "/builder.js").read(), safe(f2), safe(pages)))
+open(mc + "/app/index.html", "w").write(page)
+PY
+  }
+  multi_app view
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$MC/settled.html" --build "file://$MC/app/index.html" \
+    --fixture "$MC/fixture.json" --out "$MC/match" --channel chrome --repo "$APP" > "$MC/match.log" 2>&1; rc=$?
+  if [ "$rc" -eq 0 ] && said "MATCHED: both halves are 100%" "$MC/match.log" && said "f1 .* wide in edit" "$MC/match.log" && said "f2 .* wide in view" "$MC/match.log"; then ok; else bad "a settled file of several captured pages, against an app drawing each frame in its own mode, scores 100% on both halves and names each frame's page (rc=$rc)" "$(cat "$MC/match.log")"; fi
+  multi_app edit
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$MC/settled.html" --build "file://$MC/app/index.html" \
+    --fixture "$MC/fixture.json" --out "$MC/off" --channel chrome --repo "$APP" > "$MC/off.log" 2>&1; rc=$?
+  if [ "$rc" -eq 1 ] && python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); f={x["id"]: x for x in s["pictures"]["frames"]}; sys.exit(0 if f["f1"]["matched"] == f["f1"]["compared"] and f["f2"]["matched"] < f["f2"]["compared"] and f["f2"]["chrome"] == "view" else 1)' "$MC/off/score.json" 2>/dev/null; then ok; else bad "the same app drawing f2 in edit mode takes f2's picture below 100% and leaves f1's whole (rc=$rc)" "$(cat "$MC/off.log")"; fi
+fi
+
 # --- 3c. the same chain for a design with no product page around it (claude-config#1393) ---------------
 # An email: make-settled.py draws each frame at its own width with nothing around it, the app's fixture
 # route draws the email alone, and the score is 100% on both halves, the close gate's own reader of a

@@ -380,6 +380,27 @@ decision on a frame the design does not hold, a decision with no owner, an intro
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
 hold, and an exception without Dan's words, a date and where he said them.
 
+**A design whose frames were captured from different pages is still one file** (claude-config#1474).
+Bidspoke's lead validation design had its panel captured in edit mode and its card in view mode, and
+was split into two settled files, so its milestone compared two decision maps. Instead, list every
+captured page in `"chromes"`, in place of `"chrome"`, each with a `"name"`, and have each frame name
+the one it is drawn in:
+
+```json
+"chromes": [{"name": "edit", "captured": "edit.html", "from": "<URL, edit mode, panel open, date>", "slot": "#panel", "width": 1280},
+            {"name": "view", "captured": "view.html", "from": "<URL, view mode, zoomed on a card, date>", "slot": "#card", "width": 1280}],
+"frames": [{"id": "f1", "chrome": "edit", ...}, {"id": "f2", "chrome": "view", ...}]
+```
+
+Each page is carried once however many frames share it, `designFrameDocument(<id>)` gives each frame
+in its own page, the file lists each page once with where it was captured, each frame's heading names
+its page, and its `design-frames` block names it on each frame, which the score keeps on the frame's
+row and says beside it ("f2 1280 wide in view"). The built page's fixture route draws each frame in
+the matching mode. A spec with one `"chrome"` writes exactly the file it always did. Refused, writing
+nothing: `"chromes"` beside `"chrome"` or a `"screen"`, an empty list, a page with no name, two pages
+sharing a name, a page no frame is drawn in, a frame naming a page the list does not hold, a frame
+naming none in a design of several, and a frame naming one in a design of one.
+
 The checks themselves go beside the file as `<name>.checks.js`, one per checked decision, written
 from those sentences (the score's adapters section below says what a check reads).
 
