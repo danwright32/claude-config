@@ -1,4 +1,4 @@
-// Written by Claude Code 2.1.294.
+// Written by Claude Code 2.1.307.
 
 declare module 'claude-code' {
   export type AgentCallRecord = {
@@ -51,6 +51,9 @@ declare module 'claude-code' {
           runId: string;
           agentIndex: number;
       };
+      resume?: {
+          agentId: string;
+      };
       name?: string;
       cwd?: string;
   };
@@ -79,6 +82,7 @@ declare module 'claude-code' {
       mcpServers?: readonly (string | Record<string, unknown>)[];
       hooks?: Record<string, unknown>;
       maxTurns?: number;
+      autoCompactWindow?: number;
       skills?: readonly string[];
       initialPrompt?: string;
       memory?: 'user' | 'project' | 'local';
@@ -220,27 +224,27 @@ declare module 'claude-code' {
       alignItems?: 'flex-start' | 'center' | 'flex-end' | 'stretch';
       alignSelf?: 'flex-start' | 'center' | 'flex-end' | 'auto';
       justifyContent?: 'flex-start' | 'center' | 'flex-end' | 'space-between' | 'space-around' | 'space-evenly';
-      gap?: number;
-      columnGap?: number;
-      rowGap?: number;
+      gap?: Space;
+      columnGap?: Space;
+      rowGap?: Space;
       width?: number | string;
       height?: number | string;
       minWidth?: number | string;
       minHeight?: number | string;
-      margin?: number;
-      marginX?: number;
-      marginY?: number;
-      marginTop?: number;
-      marginBottom?: number;
-      marginLeft?: number;
-      marginRight?: number;
-      padding?: number;
-      paddingX?: number;
-      paddingY?: number;
-      paddingTop?: number;
-      paddingBottom?: number;
-      paddingLeft?: number;
-      paddingRight?: number;
+      margin?: Space;
+      marginX?: Space;
+      marginY?: Space;
+      marginTop?: Space;
+      marginBottom?: Space;
+      marginLeft?: Space;
+      marginRight?: Space;
+      padding?: Space;
+      paddingX?: Space;
+      paddingY?: Space;
+      paddingTop?: Space;
+      paddingBottom?: Space;
+      paddingLeft?: Space;
+      paddingRight?: Space;
       borderStyle?: string;
       borderColor?: Color;
       borderDimColor?: boolean;
@@ -571,7 +575,7 @@ declare module 'claude-code' {
 
   export type ContextSkill = {
       name: string;
-      source: string;
+      source: SkillSource;
       pluginName?: string;
       tokens: number;
   };
@@ -604,6 +608,7 @@ declare module 'claude-code' {
           log: (text: string, options?: UiLogOptions) => void;
           ask: (question: string, options?: readonly string[] | AskOptions) => Promise<string>;
           toast: (text: string, options?: ToastOptions) => void;
+          notify: (text: string, options?: NotifyOptions) => Promise<UiNotifyResult>;
           status: (text: string | undefined) => void;
           open: (pane: PaneOpenArgs) => Promise<UiOpenResult>;
           close: (pane: PaneCloseArgs) => Promise<void>;
@@ -612,6 +617,7 @@ declare module 'claude-code' {
           focus: (args: UiFocusArgs) => Promise<UiFocusResult>;
           copy: (args: UiCopyArgs) => Promise<UiCopyResult>;
           selection: () => Promise<UiSelection | undefined>;
+          view: (view: SiteView) => Promise<UiViewResult>;
       };
       model: {
           complete: (request: ModelCompleteRequest, options?: ModelCompleteOptions) => Promise<ModelCompleteResult>;
@@ -642,6 +648,7 @@ declare module 'claude-code' {
           send: EventCalls['session']['send'];
           append: (args: SessionAppendArgs) => Promise<SessionAppendResult>;
           authorize: () => Promise<SessionAuthorization>;
+          identity: () => Promise<SessionIdentity>;
       };
       turn: {
           abort: (input: OpEventOf['turn.abort']) => Promise<void>;
@@ -649,6 +656,7 @@ declare module 'claude-code' {
       prompt: {
           submit: EventCalls['prompt']['submit'];
           read: () => Promise<PromptBox>;
+          media: (args: PromptMediaArgs) => Promise<PromptMedia>;
           fill: (input: PromptFillArgs) => Promise<PromptFilled>;
           suggest: EventCalls['prompt']['suggest'];
           compose: EventCalls['prompt']['compose'];
@@ -709,11 +717,11 @@ declare module 'claude-code' {
           spawn: (request: ProcessSpawnRequest) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
       };
       settings: {
-          read: (args?: SettingsReadArgs) => Promise<Settings>;
+          read: SettingsReadOverloads;
       };
       env: {
           get: (name: string) => Promise<string | undefined>;
-          set: (name: string, value: string | undefined) => Promise<void>;
+          set: (name: string, value: string | undefined) => Promise<EnvSetResult>;
       };
   }
 
@@ -780,7 +788,7 @@ declare module 'claude-code' {
       [P in RenderSurface]: keyof Elements[P];
   }[RenderSurface];
 
-  export type Elements = {
+  export interface Elements {
       terminal: {
           Box: ElementConstructor<BoxProps>;
           Text: ElementConstructor<TextProps>;
@@ -826,7 +834,7 @@ declare module 'claude-code' {
           Code: ElementConstructor<CodeProps>;
           Markdown: ElementConstructor<MarkdownProps>;
       };
-  };
+  }
 
   export type ElementTable<P extends RenderSurface = RenderSurface> = Elements[P];
 
@@ -875,6 +883,7 @@ declare module 'claude-code' {
       'prompt.fill': PromptFillInput;
       'prompt.suggest': PromptSuggestInput;
       'prompt.edit': PromptEditInput;
+      'prompt.change': PromptChangeInput;
       'prompt.autocomplete': PromptAutocompleteInput;
       'prompt.section': PromptSectionInput;
       'prompt.context': PromptContextInput;
@@ -931,6 +940,7 @@ declare module 'claude-code' {
       'prompt.fill': PromptFillResult;
       'prompt.suggest': PromptSuggestResult;
       'prompt.edit': PromptEditResult;
+      'prompt.change': PromptChangeResult;
       'prompt.autocomplete': PromptAutocompleteResult;
       'prompt.section': PromptSectionResult;
       'prompt.context': PromptContextResult;
@@ -962,6 +972,10 @@ declare module 'claude-code' {
       'engine.create': EngineCreateResult;
   };
 
+  type EnvSetResult = {
+      deny?: string;
+  };
+
   export type EventCalls = {
       tool: {
           call: ToolCallOverloads;
@@ -987,7 +1001,7 @@ declare module 'claude-code' {
           compose: (input?: PromptComposeArgs) => Promise<PromptComposeResult>;
       };
       skill: {
-          prompt: (input: SkillPromptInput) => Promise<SkillPromptResult>;
+          prompt: (input: SkillPromptArgs) => Promise<SkillPromptResult>;
       };
       attribution: {
           text: (input: AttributionTextInput) => Promise<AttributionTextResult>;
@@ -1134,8 +1148,7 @@ declare module 'claude-code' {
   };
 
   export type HookFailure = {
-      readonly kind: 'throw' | 'timeout' | 're-entry';
-      readonly cause?: 'lent';
+      readonly kind: 'throw' | 'timeout';
       readonly message?: string;
       readonly budget: number;
   };
@@ -1223,6 +1236,7 @@ declare module 'claude-code' {
       placeholder?: string;
       value?: string;
       submitLabel?: string;
+      rows?: number;
       autoFocus?: true;
       onInput?: (value: string, e: UiInputArgument) => void;
       onSubmit: (value: string, e: UiInputArgument) => void;
@@ -1235,6 +1249,7 @@ declare module 'claude-code' {
       kind: InstructionFileKind;
       content: string;
       parent?: string;
+      isUnverified?: true;
   };
 
   export type InstructionFileKind = (typeof INSTRUCTION_FILE_KINDS)[number];
@@ -1536,6 +1551,10 @@ declare module 'claude-code' {
       notification_type: string;
   };
 
+  export type NotifyOptions = {
+      title?: string;
+  };
+
   type NounEvent = {
       [K in PluginNoun]: {
           [M in keyof EngineInterface[K] & string]: EngineInterface[K][M] extends (...args: infer Parameters) => infer Result ? NounEventRow<`${K}.${M}`, Parameters extends readonly [] ? NoArgs : Parameters[0], Awaited<Result>> : never;
@@ -1609,6 +1628,7 @@ declare module 'claude-code' {
       'session.surface': NoArgs;
       'session.surfaces': NoArgs;
       'session.authorize': NoArgs;
+      'session.identity': NoArgs;
       'session.usage': SessionUsageArgs;
       'session.version': NoArgs;
       'turn.abort': {
@@ -1645,6 +1665,11 @@ declare module 'claude-code' {
       'ui.panes': NoArgs;
       'ui.selection': NoArgs;
       'ui.copy': UiCopyArgs;
+      'ui.view': SiteView;
+      'ui.notify': {
+          text: string;
+          title?: string;
+      };
       'ui.blit': UiBlitArgs;
       'fs.read': {
           path: string;
@@ -1691,7 +1716,7 @@ declare module 'claude-code' {
           init?: ProcessRunInit;
       };
       'process.spawn': ProcessSpawnRequest;
-      'settings.read': SettingsReadArgs;
+      'settings.read': SettingsReadInput;
       'env.get': {
           name: string;
       };
@@ -1721,6 +1746,7 @@ declare module 'claude-code' {
       'session.surface': RenderSurface | null;
       'session.surfaces': readonly RenderSurface[];
       'session.authorize': SessionAuthorization;
+      'session.identity': SessionIdentity;
       'session.usage': SessionUsage;
       'session.version': SessionVersion;
       'turn.abort': void;
@@ -1748,6 +1774,8 @@ declare module 'claude-code' {
       'ui.panes': readonly UiPane[];
       'ui.selection': UiSelection | undefined;
       'ui.copy': UiCopyResult;
+      'ui.view': UiViewResult;
+      'ui.notify': UiNotifyResult;
       'ui.blit': UiBlitResult;
       'fs.read': string | FsBytes;
       'fs.write': void;
@@ -1770,7 +1798,7 @@ declare module 'claude-code' {
       'process.spawn': ProcessSpawnResult;
       'settings.read': Settings;
       'env.get': string | undefined;
-      'env.set': void;
+      'env.set': EnvSetResult;
   };
 
   type OrderedOverloads<Names extends EventName> = Overloads<Exclude<Names, LateOverload>> & Overloads<Extract<Names, 'classic.PreToolUse'>> & Overloads<Extract<Names, 'turn.abort'>> & Overloads<Extract<Names, NoArgsEvent>>;
@@ -2130,6 +2158,31 @@ declare module 'claude-code' {
       cursor: number;
   };
 
+  export type PromptChangeInput = {
+      text: string;
+      cursor: number;
+      origin: PromptChangeOrigin;
+  };
+
+  export type PromptChangeOrigin = {
+      kind: 'history';
+  } | {
+      kind: 'clear';
+  } | {
+      kind: 'undo';
+  } | {
+      kind: 'plugin';
+      name: string;
+  } | {
+      kind: 'app';
+  } | {
+      kind: 'engine';
+  };
+
+  export type PromptChangeResult = {
+      text: string;
+  };
+
   export type PromptComposeArgs = Partial<PromptComposeInput>;
 
   export type PromptComposeInput = {
@@ -2180,7 +2233,9 @@ declare module 'claude-code' {
   export type PromptDecoration = {
       start: number;
       end: number;
-  } & Pick<TextProps, 'color' | 'backgroundColor' | 'dimColor' | 'bold' | 'italic' | 'underline' | 'strikethrough'>;
+      bold?: boolean;
+      virtualText?: string;
+  } & Pick<TextProps, 'color' | 'backgroundColor' | 'dimColor' | 'italic' | 'underline' | 'strikethrough'>;
 
   export type PromptEditInput = {
       origin: PromptEditOrigin;
@@ -2232,6 +2287,37 @@ declare module 'claude-code' {
   export type PromptFillResult = {
       isFilled: boolean;
       refusal?: 'no_composer' | 'dialog';
+  };
+
+  export type PromptMedia = {
+      type: 'image' | 'document';
+      mediaType: string;
+      base64: string;
+      size: number;
+      next?: number;
+      unreadable?: undefined;
+      deny?: undefined;
+  } | {
+      unreadable: string;
+      type?: undefined;
+      mediaType?: undefined;
+      base64?: undefined;
+      size?: undefined;
+      next?: undefined;
+      deny?: undefined;
+  } | {
+      deny: string;
+      type?: undefined;
+      mediaType?: undefined;
+      base64?: undefined;
+      size?: undefined;
+      next?: undefined;
+      unreadable?: undefined;
+  };
+
+  export type PromptMediaArgs = {
+      id: string;
+      offset?: number;
   };
 
   export type PromptMentionAttached = 'file' | 'already_read_file' | 'pdf_reference';
@@ -2300,7 +2386,7 @@ declare module 'claude-code' {
       text: string | null;
   };
 
-  export type PromptSubmitArgs = Omit<PromptSubmitInput, 'origin' | 'turnId' | 'wait' | 'context'> & {
+  export type PromptSubmitArgs = Omit<PromptSubmitInput, 'origin' | 'turnId' | 'wait' | 'context' | 'command' | 'isMeta'> & {
       asUser?: true;
   };
 
@@ -2308,10 +2394,18 @@ declare module 'claude-code' {
       type: 'image' | 'audio' | 'document';
       mediaType?: string;
       filename?: string;
+      id?: string;
+  };
+
+  export type PromptSubmitCommand = {
+      name: string;
+      args: string;
   };
 
   export type PromptSubmitInput = {
       text: string;
+      command?: PromptSubmitCommand;
+      isMeta?: true;
       attachments?: readonly PromptSubmitAttachment[];
       context?: readonly string[];
       turnId?: string;
@@ -2405,6 +2499,7 @@ declare module 'claude-code' {
           handle: number;
       };
       hover?: TextHoverProps;
+      children?: RenderNode[];
   } | {
       type: 'Input';
       props: {
@@ -2413,6 +2508,7 @@ declare module 'claude-code' {
           placeholder?: string;
           value?: string;
           submitLabel?: string;
+          rows?: number;
           autoFocus?: true;
       };
       press: {
@@ -2445,6 +2541,7 @@ declare module 'claude-code' {
   } | {
       type: 'Markdown';
       props: MarkdownLeafProps;
+      part?: PluginStamp;
       children?: undefined;
   } | {
       type: 'Markdown';
@@ -2525,6 +2622,7 @@ declare module 'claude-code' {
           isRunning: boolean;
           isErrored: boolean;
           isInterrupted: boolean;
+          isExpanded?: boolean;
           output?: unknown;
           onScreen?: OnScreen | null;
       };
@@ -2533,12 +2631,14 @@ declare module 'claude-code' {
           tool: string;
           output: unknown;
           isErrored: boolean;
+          isExpanded?: boolean;
           onScreen?: OnScreen | null;
       };
       ToolGroup: {
           calls: ReadonlyArray<ToolGroupCall>;
           isActive: boolean;
           isExpanded: boolean;
+          isCallsOnly?: boolean;
           onScreen?: OnScreen | null;
       };
       CommandOutput: {
@@ -2562,6 +2662,15 @@ declare module 'claude-code' {
       TurnDuration: {
           word: string;
           durationMs: number;
+          isExpanded?: boolean;
+          waitingFor?: {
+              agents: ReadonlyArray<{
+                  id: string;
+                  agentType: string;
+                  tool_use_id?: string;
+              }>;
+              workflows: number;
+          };
           onScreen?: OnScreen | null;
       };
       InfoNotice: {
@@ -2600,7 +2709,7 @@ declare module 'claude-code' {
       [C in RenderComponent]: RenderElement;
   };
 
-  export type RenderSurface = 'terminal' | 'desktop' | 'mobile' | 'vscode';
+  export type RenderSurface = keyof Elements & string;
 
   export type RenderViewport = {
       columns: number;
@@ -2653,7 +2762,7 @@ declare module 'claude-code' {
       agentId?: string;
   };
 
-  type SessionAppendDoor = 'prompt' | 'command' | 'response' | 'tool-result' | 'tool-message' | 'delivery' | 'attachment' | 'hook-context' | 'note' | 'compaction' | 'notice';
+  type SessionAppendDoor = 'prompt' | 'command' | 'response' | 'tool-result' | 'tool-message' | 'delivery' | 'attachment' | 'hook-context' | 'note' | 'compaction' | 'notice' | 'queue';
 
   type SessionAppendInput = {
       message: SessionAppendMessage;
@@ -2796,6 +2905,22 @@ declare module 'claude-code' {
 
   export type SessionEndResult = {
       sessionId: string;
+  };
+
+  export type SessionIdentity = {
+      kind: string;
+      organizationId?: string;
+      organizationType?: string;
+      email?: string;
+      isVerified: boolean;
+      deny?: undefined;
+  } | {
+      deny: string;
+      kind?: undefined;
+      organizationId?: undefined;
+      organizationType?: undefined;
+      email?: undefined;
+      isVerified?: undefined;
   };
 
   export type SessionMeasureInput = {
@@ -2982,8 +3107,36 @@ declare module 'claude-code' {
 
   export type Settings = Readonly<Record<string, unknown>>;
 
+  type SettingsKeyRead = {
+      key: string;
+      source?: SettingsSource;
+  };
+
+  type SettingsLayer = {
+      source: SettingsLayerSource;
+      settings: Settings;
+  };
+
+  type SettingsLayerSource = 'plugin' | SettingsSource;
+
+  type SettingsObjectRead = {
+      source?: SettingsSource;
+      key?: undefined;
+  };
+
   export type SettingsReadArgs = {
       source?: SettingsSource;
+      layers?: readonly SettingsLayer[];
+  };
+
+  type SettingsReadInput = {
+      source?: SettingsSource;
+      layers: readonly SettingsLayer[];
+  };
+
+  type SettingsReadOverloads = {
+      (args: SettingsKeyRead): Promise<unknown>;
+      (args?: SettingsObjectRead): Promise<Settings>;
   };
 
   export type SettingsSource = 'user' | 'project' | 'local' | 'flag' | 'policy';
@@ -3009,14 +3162,32 @@ declare module 'claude-code' {
       agentId?: string;
   };
 
+  export interface SkillFrontmatter {
+      readonly [key: string]: SkillFrontmatterValue;
+  }
+
+  export interface SkillFrontmatterList extends ReadonlyArray<SkillFrontmatterValue> {
+  }
+
+  export type SkillFrontmatterValue = null | boolean | number | string | SkillFrontmatterList | SkillFrontmatter;
+
+  export type SkillPromptArgs = Omit<SkillPromptInput, 'frontmatter' | 'source'> & Partial<Pick<SkillPromptInput, 'frontmatter' | 'source'>>;
+
   export type SkillPromptInput = {
       skill: string;
       text: string;
+      frontmatter: SkillFrontmatter;
+      frontmatterProblem?: string;
+      source: SkillSource;
+      pluginName?: string;
+      path?: string;
   };
 
   export type SkillPromptResult = {
       text: string;
   };
+
+  export type SkillSource = 'userSettings' | 'projectSettings' | 'policySettings' | 'plugin' | 'built-in' | 'mcp' | 'syncedSkills' | (string & {});
 
   export type SleepOptions = {
       signal?: AbortSignal;
@@ -3025,6 +3196,8 @@ declare module 'claude-code' {
   export type SourceValues<S extends readonly unknown[]> = {
       [I in keyof S]: S[I] extends Atom<infer V> ? V : S[I] extends Derived<infer V> ? V : S[I] extends StateName<infer P, infer K> ? P extends keyof PluginState & string ? K extends keyof PluginState[P] & string ? StateValue<P, K> | undefined : unknown : unknown : unknown;
   };
+
+  export type Space = number | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
   export type SpeakOptions = {
       voice?: string;
@@ -3135,6 +3308,7 @@ declare module 'claude-code' {
       props?: Record<string, string | number | boolean>;
       hover?: Hover;
       group?: PluginStamp;
+      part?: PluginStamp;
       children?: RenderNode[];
   };
 
@@ -3262,11 +3436,16 @@ declare module 'claude-code' {
       color?: Color;
       backgroundColor?: Color;
       dimColor?: boolean;
+      size?: 'caption' | 'footnote' | 'body' | 'heading' | 'title';
+      weight?: 'regular' | 'medium' | 'semibold' | 'bold';
+      mono?: boolean;
+      tabular?: boolean;
       bold?: boolean;
       italic?: boolean;
       underline?: boolean;
       strikethrough?: boolean;
       inverse?: boolean;
+      dir?: 'ltr' | 'rtl';
       wrap?: 'wrap' | 'end' | 'middle' | 'truncate' | 'truncate-start' | 'truncate-middle' | 'truncate-end';
   };
 
@@ -3290,7 +3469,7 @@ declare module 'claude-code' {
 
   export type ToolCallEnvelope = BuiltinToolCallInput | McpToolCallInput;
 
-  export type ToolCallInput = ToolCallEnvelope & AgentLoop;
+  export type ToolCallInput = ToolCallEnvelope & AgentLoop & ToolRequestMeta;
 
   type ToolCallOverloads = {
       <T extends string>(input: ToolCallArgs & ToolNamed<T>): Promise<ToolCallResult<T>>;
@@ -3329,6 +3508,8 @@ declare module 'claude-code' {
       deny?: undefined;
   };
 
+  type ToolCheckApprover = 'host' | 'person';
+
   type ToolCheckArgs = Pick<ToolCheckInput, 'tool' | 'input'>;
 
   type ToolCheckDecision = 'allow' | 'ask' | 'deny';
@@ -3339,6 +3520,8 @@ declare module 'claude-code' {
       tool_use_id?: string;
       agentId?: string;
       ceiling?: ToolCheckDecision;
+      approver?: ToolCheckApprover;
+      isReadOnly?: true;
   };
 
   type ToolCheckResult = {
@@ -3346,6 +3529,8 @@ declare module 'claude-code' {
       reason?: string;
       rule?: string;
       hook?: string;
+      setting?: string;
+      plugin?: string;
       ceiling?: ToolCheckDecision;
   };
 
@@ -3392,6 +3577,10 @@ declare module 'claude-code' {
       readonly tool: T;
   };
 
+  export type ToolRequestMeta = {
+      requestMeta?: Record<string, string>;
+  };
+
   export type ToolResultOf<Name extends string> = string extends Name ? unknown : Name extends keyof BuiltinToolResults & string ? BuiltinToolResults[Name] | (Name extends 'Agent' ? AgentCallRecord | AgentTeammateRecord : never) : unknown;
 
   export type ToolResultSummary = {
@@ -3399,6 +3588,7 @@ declare module 'claude-code' {
       text: string;
       isError: boolean;
       result?: unknown;
+      meta?: Record<string, unknown>;
   };
 
   export type ToolSpec = {
@@ -3417,6 +3607,7 @@ declare module 'claude-code' {
       isError?: true;
       agentId?: string;
       durationMs?: number;
+      meta?: Record<string, unknown>;
   };
 
   export type TraceEntry<N extends EventName = EventName, E = Args<N>, O = NextResult<N>> = {
@@ -3469,6 +3660,7 @@ declare module 'claude-code' {
   export type TurnStartInput = {
       text: string;
       turnId: string;
+      agentId?: string;
   };
 
   export type TurnStartResult = {
@@ -3643,6 +3835,14 @@ declare module 'claude-code' {
       props?: unknown;
   };
 
+  export type UiNotifyResult = {
+      isSent: true;
+      channel: 'iterm2' | 'iterm2_with_bell' | 'kitty' | 'ghostty' | 'terminal_bell';
+  } | {
+      isSent: false;
+      reason: 'disabled' | 'no-channel' | 'no-surface' | 'refused';
+  };
+
   export type UiOpenResult = {
       isPlaced: true;
   } | {
@@ -3731,6 +3931,10 @@ declare module 'claude-code' {
   export type UiSelectResult = {
       element: string;
       value: string;
+  };
+
+  export type UiViewResult = {
+      deny?: string;
   };
 
   type UndeclaredAttachmentInput = {
@@ -3916,6 +4120,7 @@ declare module 'claude-code' {
 }
 
 declare module 'claude-code/testing' {
+  import type { AgentLoop } from 'claude-code';
   import type { Args } from 'claude-code';
   import type { Chunk } from 'claude-code';
   import type { ClassicEventName } from 'claude-code';
@@ -3941,6 +4146,9 @@ declare module 'claude-code/testing' {
   import type { SessionAppendInput } from 'claude-code';
   import type { StreamingEventName } from 'claude-code';
   import type { Tier } from 'claude-code';
+  import type { ToolCallArgs } from 'claude-code';
+  import type { ToolCallReserved } from 'claude-code';
+  import type { ToolCallResult } from 'claude-code';
   import type { UiInputArgument } from 'claude-code';
   import type { UiInputResult } from 'claude-code';
   import type { UiPressResult } from 'claude-code';
@@ -4004,7 +4212,7 @@ declare module 'claude-code/testing' {
   };
 
   export type EngineNoun<N extends keyof EventCalls> = {
-      [V in EngineNounEvent<N>]: `${N}.${V}` extends 'tool.call' | 'ui.render' ? EventCalls[N][V] : EngineCall<`${N}.${V}` & EventName>;
+      [V in EngineNounEvent<N>]: `${N}.${V}` extends 'tool.call' ? EngineToolCall : `${N}.${V}` extends 'ui.render' | 'skill.prompt' ? EventCalls[N][V] : EngineCall<`${N}.${V}` & EventName>;
   };
 
   export type EngineNounEvent<N extends keyof EventCalls> = Exclude<keyof EventCalls[N] & string, `${N}.resolve` extends 'ui.resolve' ? 'resolve' : never>;
@@ -4015,6 +4223,11 @@ declare module 'claude-code/testing' {
 
   export type EngineSelect = {
       select: (target: SelectTarget) => Promise<UiSelectResult | undefined>;
+  };
+
+  export type EngineToolCall = {
+      <T extends string>(input: ToolCallArgs & Pick<ToolCallReserved<T>, 'tool'> & AgentLoop): Promise<ToolCallResult<T>>;
+      (input: ToolCallArgs & AgentLoop): Promise<ToolCallResult>;
   };
 
   export type Expect = Expecting & Matching;

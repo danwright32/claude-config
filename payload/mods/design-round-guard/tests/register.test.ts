@@ -7,6 +7,7 @@ import { git as gitCommand, pipeline } from './mod-kit/hooks/commands.ts'
 import { readBranch, type Run } from './mod-kit/hooks/branch.ts'
 import { githubRepo, repoName } from './mod-kit/hooks/repo.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
+import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 
 // The design round guard (claude-config#978) in a session. Dan, 2026-10-08: "claude should never
 // design something without my input. If we can make this something that can't be ignored rather than
@@ -263,15 +264,15 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     return { value: undefined } as never
   })
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
-  // Claude Code's settings hooks and permission check, beneath every mod's tool.check hook: they
-  // allow every call, unless the test has them refuse one (the payload write gate, say).
-  on('tool.check', () => (ctl.settingsRefuse ? { decision: 'deny', reason: 'Blocked by a settings hook.' } : { decision: 'allow' }) as never)
-  // Core, standing in: the engine decides whether the call may run (the tool.check chain), then
-  // runs it, or shows Dan the dialog and hands back his answer as the dialog does.
+  // Core, standing in (mod-kit's tests/core.ts): the tool.check chain decides whether the call may
+  // run, then it runs, or Dan is shown the dialog and his answer handed back as the dialog does.
+  // Beneath every mod's tool.check hook, Claude Code's settings hooks and permission check allow
+  // every call, unless the test has them refuse one (the payload write gate, say).
+  const core = standInCore(engine, on, () => (ctl.settingsRefuse ? { decision: 'deny', reason: 'Blocked by a settings hook.' } : { decision: 'allow' }))
   on('tool.call', async ($, e) => {
-    const { tool, tool_use_id: id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const verdict = await engine.tool.check({ tool: String(tool), input, ...(id === undefined ? {} : { tool_use_id: String(id) }) } as never)
-    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
+    const c = await core(e)
+    if ('refused' in c) return c.refused as never
+    const { tool, input } = c.call
     if (tool === 'AskUserQuestion') {
       const a = input as unknown as Asked
       asked.push(a)
@@ -297,7 +298,8 @@ type Caller = { tool: { call: (e: never) => Promise<unknown> } }
 type Result = { deny?: string; text?: string; isError?: boolean; context?: readonly string[] }
 let calls = 0
 const call = async ($: Caller, input: Record<string, unknown>) => (await $.tool.call({ tool_use_id: `t${++calls}`, ...input } as never)) as Result
-const refusalOf = (r: Result) => r.deny ?? (r.isError ? r.text : undefined) ?? ''
+// This mod's own reason, in whichever form Claude Code wraps a refusal (#1484).
+const refusalOf = (r: Result) => (r.deny !== undefined || r.isError ? reasonOf(r, 'design-round-guard') : '')
 const contextOf = (r: Result) => (r.context ?? []).join('\n')
 const idIn = (refusal: string) => /design-round-guard:(t\d+)/.exec(refusal)?.[1]
 const PAGE = { tool: 'Write', file_path: '/w/slate/app/page.tsx', content: 'export default function Page() { return <main className="p-4" /> }\n' }
