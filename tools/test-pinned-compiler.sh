@@ -337,6 +337,25 @@ printf '%s\n' "$line" | grep -q '2 linked by no checkout' && check "#1507 and ho
 out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
 ! printf '%s\n' "$out" | grep -q 'shared TypeScript compiler' && check "#1507 a clone with no shared installs says nothing about them" ok \
   || check "#1507 a clone with no shared installs says nothing about them" "$out"
+# The installs that grow are the development clone's, where the worktrees are, while status runs
+# from the scheduled clone: so every clone in this Mac's register of clones is counted too (read
+# through the register's seam here, never the real one).
+printf '%s\n' "$R3" "$R9" > "$T/clones9"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_CLONE_REGISTRY="$T/clones9" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+printf '%s\n' "$out" | grep -q "5 shared TypeScript compiler installs in $ROOT9" \
+  && check "#1507 status counts the shared installs of every registered clone, not only the one it runs from" ok \
+  || check "#1507 status counts the shared installs of every registered clone, not only the one it runs from" "$out"
+# A registered clone not yet pulled past this change has a helper with no --plan, which would take
+# the word for a folder: status says the count needs a pull there, and runs nothing.
+R9O="$T/repo9old"; mkrepo "$R9O"; mkdir -p "$R9O/tools/lib" "$R9O/.git/pinned-typescript/k-fake-arch"
+# The #1496 helper in miniature: its only mode treats the first argument as the folder to install
+# into. It records that it ran, which it must not.
+printf '#!/bin/bash\necho "$1" > "%s/old-helper-ran"\nexit 1\n' "$T" > "$R9O/tools/lib/pinned-compiler.sh"
+printf '%s\n' "$R9O" > "$T/clones9old"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_CLONE_REGISTRY="$T/clones9old" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+printf '%s\n' "$out" | grep -q "In $R9O they could not be counted: .*predates" && [ ! -e "$T/old-helper-ran" ] \
+  && check "#1507 a registered clone whose helper predates the count is named as that, and nothing is run there" ok \
+  || check "#1507 a registered clone whose helper predates the count is named as that, and nothing is run there" "$out"
 
 # An install pruned in the moment between being found whole and being linked (a prune from another
 # worktree at the same time) is installed again rather than linked broken. The seam removes the

@@ -2377,8 +2377,9 @@ worktree `git worktree list` names (the main checkout among them) and from each 
 where it was linked; the checkout's own pin, and a folder an install still running is making, are
 always kept; a locked worktree whose folder cannot be read stops the prune with nothing removed.
 `bash tools/lib/pinned-compiler.sh --prune tools/typescript` runs it by hand, and `claude-sync
-status` shows how many shared installs the clone holds, their size, and how many no checkout links
-to. Where it cannot install (no npm,
+status` shows how many shared installs each clone holds (its own and every clone in this Mac's
+register of clones, so the development clone's are seen from the scheduled one), their size, and
+how many no checkout links to. Where it cannot install (no npm,
 offline with an empty cache, not a git checkout) the UNMEASURED lines below say why. The types it checks against come from this repository alone
 (#953), never from an installed copy: Claude Code lays a mod's types only in the copy it loads, and
 their MCP part lists whatever tools the session had connected when that copy last reloaded, so a
