@@ -358,6 +358,24 @@ test("a later edit sharing a ranking that ran out of the first edit's time makes
   expect(second).toMatchObject({ path: 'src/big.ts', decision: 'would_hold', growth: { net: 800, crosses: true } })
 })
 
+// Lessons review of 42547b6: the same for a shared issue read another edit started.
+test("a later edit sharing an issue read that ran out of the first edit's time reads again, within its own deadline", KIT, async ($, on) => {
+  const w = world(on)
+  let first = true
+  w.ctl.gh = () => {
+    if (!first) return { exitCode: 0, stdout: JSON.stringify(ISSUES), stderr: '' }
+    first = false
+    return 'slow'
+  }
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'c1', file_path: `${APP}/src/big.ts`, old_string: 'a', new_string: 'b' } as never)
+  await w.clock.advance(3000)
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'c2', file_path: `${APP}/src/lib/slack.ts`, old_string: 'a', new_string: 'b' } as never)
+  await w.clock.advance(DEADLINE_MS + 3000)
+  const [a, b] = w.judged()
+  expect(a).toMatchObject({ path: 'src/big.ts', issues: { state: 'unread', why: `not read within ${DEADLINE_MS / 1000} seconds` } })
+  expect(b).toMatchObject({ path: 'src/lib/slack.ts', decision: 'would_hold', issues: { state: 'read' } })
+})
+
 test('its own failure lets the edit through, is kept in a separate error file, and is said once a session in a dim line', KIT, async ($, on) => {
   const w = world(on)
   w.ctl.branchThrows = true

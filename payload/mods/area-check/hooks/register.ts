@@ -153,17 +153,23 @@ const readIssues = async ($: EngineInterface, repo: string, d: Deadline): Promis
   return facts
 }
 
-const issuesFor = async ($: EngineInterface, repo: string, d: Deadline): Promise<IssuesFacts> => {
+const issuesFor = async ($: EngineInterface, repo: string, d: Deadline, again = false): Promise<IssuesFacts> => {
   const now = await $.clock.now()
   const cached = (await $.store.get(issuesKey(repo))) as IssuesFacts | undefined
-  if (fresh(cached, now)) return cached
+  if (fresh(cached, now) && !again) return cached
   let p = inflight.get(repo)
+  const joined = p !== undefined
   if (!p) {
     p = readIssues($, repo, d).finally(() => inflight.delete(repo))
     inflight.set(repo, p)
   }
   try {
-    return await within($, d, p)
+    const r = await within($, d, p)
+    // A read another edit (or the session start's warm) started runs under that one's deadline
+    // (lessons review of 42547b6): when it ran out while this edit's own time remains, this edit
+    // reads again, once, under its own, and what it reads replaces the late one in the cache.
+    if (joined && !again && r.state === 'unread' && r.why === LATE && (await left($, d)) > 0) return issuesFor($, repo, d, true)
+    return r
   } catch (err) {
     if (!(err instanceof Late)) throw err
     const late: IssuesFacts = { at: now, state: 'unread', why: LATE }
