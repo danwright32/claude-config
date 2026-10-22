@@ -7,6 +7,7 @@ import { pipeline } from './mod-kit/hooks/commands.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 import { type TypedAnswer, typedAnswerText, typedToast } from './mod-kit/hooks/typed.ts'
+import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 
 // Ask before saving (claude-config#618) in a session: every route to lasting memory is refused until
 // Dan answers, his own permanent words skip the question, and each answer does what the spec says.
@@ -233,16 +234,13 @@ const world = (engine: Engine, on: On, init: { files?: Record<string, string>; f
     if (t === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: t } as never
   })
-  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
-  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
-  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
-  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
-  on('tool.check', () => ({ decision: 'allow' }))
+  // Core, standing in (mod-kit's tests/core.ts): the tool.check chain over every plugin decides
+  // whether the call may run, then it runs. Beneath every plugin's tool.check hook the rules allow it.
+  const core = standInCore(engine, on)
   on('tool.call', async ($, e, next) => {
-    const { tool, tool_use_id: id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const verdict = await engine.tool.check({ tool: String(tool), input, ...(id === undefined ? {} : { tool_use_id: String(id) }) } as never)
-    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
-    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
+    const c = await core(e)
+    if ('refused' in c) return c.refused as never
+    const { tool, input } = c.call
     if (tool === 'AskUserQuestion') {
       if (dialog.fails) throw new Error('the dialog broke')
       const a = input as unknown as Asked
@@ -295,8 +293,9 @@ type Caller = { tool: { call: (e: never) => Promise<unknown> } }
 type Result = { deny?: string; text?: string; isError?: boolean; context?: readonly string[] }
 let calls = 0
 const call = async ($: Caller, input: Record<string, unknown>) => (await $.tool.call({ tool_use_id: `t${++calls}`, ...input } as never)) as Result
-// What Claude reads of a refused call: the refusal, whether a tool.call hook or the tool.check hook gave it.
-const refusalOf = (r: Result) => r.deny ?? (r.isError ? r.text : undefined) ?? ''
+// What Claude reads of a refused call: the refusal, whether a tool.call hook or the tool.check hook gave
+// it, as this mod's own reason in whichever form Claude Code wraps it (#1484).
+const refusalOf = (r: Result) => (r.deny !== undefined || r.isError ? reasonOf(r, 'ask-before-saving') : '')
 const contextOf = (r: Result) => (r.context ?? []).join('\n')
 const idIn = (refusal: string) => /"source": "ask-before-saving:([^"]+)"/.exec(refusal)?.[1]
 // Claude asking Dan as the refusal told it to, and Dan answering in the dialog.

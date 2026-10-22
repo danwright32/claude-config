@@ -1,6 +1,7 @@
 import { expect, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import { branchAt } from './mod-kit/hooks/branch.ts'
+import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 
 // Stand-ins for the two mods this one depends on. An inline plugin cannot reach this file's
 // variables, so the registry stand-in asks the world below for the sessions (a process.run the
@@ -412,16 +413,12 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
     return { value: undefined }
   })
   on('clock.after', () => ({ value: undefined }) as never)
-  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
-  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
-  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
-  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
-  on('tool.check', () => ({ decision: 'allow' }))
+  // Core, standing in (mod-kit's tests/core.ts): the tool.check chain over every plugin decides
+  // whether the call may run, then it runs. Beneath every plugin's tool.check hook the rules allow it.
+  const core = standInCore(engine, on)
   on('tool.call', async ($, e) => {
-    const { tool, tool_use_id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const verdict = await engine.tool.check({ tool: String(tool), input, ...(tool_use_id === undefined ? {} : { tool_use_id: String(tool_use_id) }) } as never)
-    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
-    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
+    const c = await core(e)
+    if ('refused' in c) return c.refused as never
     if (typeof o.ran === 'object') return { deny: o.ran.deny } as never
     w.reached.push(e.tool)
     if (o.ran === 'error') return { result: 'exit status 1', text: 'exit status 1', isError: true } as never
@@ -432,10 +429,8 @@ const world = (engine: Engine, on: On, o: Opts = {}) => {
 
 const edit = (path: string, id = 'c1') => ({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', tool_use_id: id }) as never
 const bash = (command: string, id = 'c1') => ({ tool: 'Bash', command, tool_use_id: id }) as never
-const refusal = (r: unknown) => {
-  const x = r as { deny?: string; text?: string }
-  return x.deny ?? x.text ?? ''
-}
+// The guard's own reason, in whichever form Claude Code wraps a refusal (#1484).
+const refusal = (r: unknown) => reasonOf(r, 'collision-guard')
 
 test('an edit nobody else is making goes through and is noted for the others', withDeps, async ($, on) => {
   const w = world($, on)

@@ -2180,8 +2180,8 @@ test('an agent whose tool call never returns wakes this idle conversation exactl
   expect(quietSaid(w).length).toBe(1)
 })
 
-// The build running here raises turn.start for a subagent's run too, naming it, though the pinned
-// 2.1.294 types declare no agentId there: that turn must not read as this conversation's own.
+// Later builds raise turn.start for a subagent's run too, naming it (2.1.294's types declare no
+// agentId there, 2.1.307's do): that turn must not read as this conversation's own.
 test("a subagent's own turn starting leaves the idle conversation idle, so it is still woken (#1234)", withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
