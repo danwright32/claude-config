@@ -10,7 +10,7 @@ lessons review before any merge; read any one in full with
 - Cross-system reliability (cross-system-reliability): 105 lessons, 35 in the core
 - Data safety (data-safety): 45 lessons, 26 in the core
 - External systems (external-systems): 40 lessons, 17 in the core
-- Honest failure (honest-failure): 107 lessons, 33 in the core
+- Honest failure (honest-failure): 108 lessons, 33 in the core
 - Pipeline speed (pipeline-speed): 27 lessons, 24 in the core
 - Proof over green (proof-over-green): 199 lessons, 99 in the core
 - Security and privacy (security-and-privacy): 39 lessons, 13 in the core

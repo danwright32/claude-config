@@ -3278,6 +3278,8 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Honest failure
 
+- **L800. A monitor warning that an operation is nearing its limit must not read only what is recorded when an operation finishes, because one killed at the limit never finishes and so never appears, and the failure the warning exists for reads as absent; count the kills from a source that sees them.** (bidspoke#2651, 2026-10-22)
+  SHORT: A near-limit monitor reading only what finished cannot see an operation killed at the limit, so count the kills from a source that sees them.
 - **L795. An alert opened from state held inside one short-lived process (a Worker isolate, a serverless instance, a pod) must be clearable from a healthy reading any process can take, because the process that opened it can be evicted before it ever sees the recovery, and the alert then stays open and repeats a false outage.** (slate#4008, 2026-10-21)
   SHORT: An alert opened from one short-lived process's state must clear from a reading any process can take, or eviction leaves it open forever.
 - **L1028. Every outbound call made inside a function the platform kills at a hard deadline needs its own timeout well inside that deadline, because a kill skips every catch block and the failure alert it holds, so a dependency that hangs goes silent while one that refuses pages.** (nursedex#1218, 2026-10-20)
