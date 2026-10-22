@@ -893,8 +893,8 @@ LIVESTORES
   _live_before="$(_live_fingerprint)"
   _live_started="$(date +%s)"
   # A COPY of each store as well as its fingerprint, because the verdict below needs to know what
-  # KIND of change happened and a checksum cannot say (claude-config#277). These files total well
-  # under a megabyte, so this costs nothing measurable beside a run of minutes.
+  # KIND of change happened and a checksum cannot say (claude-config#277). These files came to about
+  # 1.2MB on this Mac on 2026-10-22, which costs nothing measurable beside a run of minutes.
   #
   # Inside WORK, which runner_cleanup removes on every way out (claude-config#1494). It was a
   # directory of its own in TMPDIR, removed only in the branch below that reports a CHANGED store,
