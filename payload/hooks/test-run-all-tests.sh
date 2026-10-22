@@ -369,6 +369,22 @@ case "$sl_seen" in
        || check "every suite is handed a sync log of its own" "the log it was handed exists: $sl_seen" ;;
 esac
 
+# And no suite records a refusal in the Mac's REAL record of wrapped command refusals
+# (claude-config#1492), whose counts decide how that refusal is narrowed: a suite driving
+# check-wrapped-commands.sh without pointing it elsewhere would count its fixtures as real use.
+WR="$TMPROOT/dir-wrapped-refusals"
+mkdir -p "$WR"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${WRAPPED_REFUSAL_LEDGER_DIR:-}" > "$(dirname "$0")/ledger.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$WR/test-wrapped-ledger.sh"
+env -u WRAPPED_REFUSAL_LEDGER_DIR HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$WR" >/dev/null 2>&1
+wr_seen="$(cat "$WR/ledger.seen" 2>/dev/null)"
+case "$wr_seen" in
+  '') check "every suite is handed a wrapped refusal record of its own" "it was handed none, so the gate would record into the real one" ;;
+  "$HOME/.claude/"*) check "every suite is handed a wrapped refusal record of its own" "it was handed the real one: $wr_seen" ;;
+  *) [ ! -e "$wr_seen" ] \
+       && check "every suite is handed a wrapped refusal record of its own" ok \
+       || check "every suite is handed a wrapped refusal record of its own" "the record it was handed exists: $wr_seen" ;;
+esac
+
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?
