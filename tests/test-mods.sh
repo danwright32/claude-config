@@ -816,6 +816,28 @@ printf 'x\n' > "$M9C/reads-real/tests/mod-kit/hooks/gone.ts"
 out="$(bash "$SHARED" "$M9C" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && printf '%s\n' "$out" | grep -q "reads-real's tests/mod-kit/hooks/gone.ts copies no file of mod-kit's" \
   && check "a copy of a file mod-kit does not have fails the run, named" ok || check "a copy of a file mod-kit does not have fails the run, named" "exit=$code out=$out"
+# #1484: Claude Code's core stands in for a guard's tests once, in mod-kit's tests/core.ts. Five
+# tests each raised the tool.check chain themselves, so when 2.1.307's test kit began raising it too,
+# four of them judged every call twice. A test raising it its own way fails the run, naming the copy
+# to use; a test asking the chain as a query, a comment naming it, and mod-kit itself pass.
+M9K="$TMPROOT/m9k"
+mkmodsrc "$M9K" mod-kit "export const reader = 1"
+mkdir -p "$M9K/mod-kit/tests"
+printf 'export const standInCore = (engine, on) => async e => engine.tool.check({ tool: e.tool, input: e })\n' > "$M9K/mod-kit/tests/core.ts"
+mkmodsrc "$M9K" own-core "export const register = () => {}"
+mkdir -p "$M9K/own-core/tests"
+printf "import { test } from 'claude-code/testing'\nconst world = (engine, on) => {\n  on('tool.call', async (\$, e) => { const v = await engine.tool.check({ tool: e.tool, input: e } as never) })\n}\n" > "$M9K/own-core/tests/register.test.tsx"
+mkmodsrc "$M9K" shared-core "export const register = () => {}"
+mkdir -p "$M9K/shared-core/tests/mod-kit/tests"
+cp "$M9K/mod-kit/tests/core.ts" "$M9K/shared-core/tests/mod-kit/tests/core.ts"
+printf "import { standInCore } from './mod-kit/tests/core.ts'\n// the stand-in used to call engine.tool.check( itself\n  // and so did engine.tool.check( here\nconst q = await \$.tool.check({ tool: 'Bash', input: {} } as never)\n" > "$M9K/shared-core/tests/register.test.ts"
+out="$(bash "$SHARED" "$M9K" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1484: a test raising the tool.check chain its own way fails the run" ok \
+  || check "#1484: a test raising the tool.check chain its own way fails the run" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'own-core' | grep 'tests/register.test.tsx:3' | grep -q 'standInCore' \
+  && check "#1484: naming the file and line, and pointing at mod-kit's standInCore" ok \
+  || check "#1484: naming the file and line, and pointing at mod-kit's standInCore" "$out"
+case "$out" in *"check-mod-shared-parts: shared-core"*|*"check-mod-shared-parts: mod-kit"*) check "#1484: a query, a comment and mod-kit's own stand-in pass" "$out" ;; *) check "#1484: a query, a comment and mod-kit's own stand-in pass" ok ;; esac
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.

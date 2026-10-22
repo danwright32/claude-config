@@ -1,5 +1,6 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
+import { reasonOf, standInCore } from './mod-kit/tests/core.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'
 const DEBUG = '/Users/x/Build/Debug/Overture.app/Contents/MacOS/Overture'
@@ -118,16 +119,12 @@ const world = (engine: Engine, on: On, w: World) => {
     // The tool's own result: answers keyed by each question's text, as the dialog records them.
     return { result: { questions: qs, answers: { [q?.question ?? '']: w.answer } }, text: `"${q?.question}"="${w.answer}"` } as never
   })
-  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
-  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
-  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
-  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
-  on('tool.check', () => ({ decision: 'allow' }))
+  // Core, standing in (mod-kit's tests/core.ts): the tool.check chain over every plugin decides
+  // whether the call may run, then it runs. Beneath every plugin's tool.check hook the rules allow it.
+  const core = standInCore(engine, on)
   on('tool.call', async ($, e) => {
-    const { tool, tool_use_id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const verdict = await engine.tool.check({ tool: String(tool), input, ...(tool_use_id === undefined ? {} : { tool_use_id: String(tool_use_id) }) } as never)
-    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
-    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
+    const c = await core(e)
+    if ('refused' in c) return c.refused as never
     reached.push(e.tool)
     return { result: 'ran', text: 'ran' } as never
   })
@@ -146,10 +143,8 @@ const world = (engine: Engine, on: On, w: World) => {
 
 const KEY = `TARGET_APP=${OVERTURE} osascript -e 'tell application "System Events" to ${KEYWORD} "n" using command down'`
 const bash = (command: string, id = 't1') => ({ tool: 'Bash', command, tool_use_id: id }) as never
-const refusal = (r: unknown) => {
-  const x = r as { deny?: string; text?: string }
-  return x.deny ?? x.text ?? ''
-}
+// The guard's own reason, in whichever form Claude Code wraps a refusal (#1484).
+const refusal = (r: unknown) => reasonOf(r, 'keystroke-guard')
 
 test('an undeclared target is refused before anyone is asked', withKit, async ($, on) => {
   const w = world($, on, { front: 10, running: { 10: OVERTURE }, answer: 'Go ahead' })

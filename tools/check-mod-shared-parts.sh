@@ -114,6 +114,10 @@
 # or its tests read with a reader mod-kit no longer has (L422); one that differs, or copies nothing,
 # fails the run, naming the cp that brings it back.
 #
+# One part a mod's TESTS must take from mod-kit (#1484): Claude Code's core standing in, the
+# tool.check chain a call is judged by before it runs. A test raising it itself (engine.tool.check
+# in its world) fails, naming the copy of mod-kit's tests/core.ts to use instead.
+#
 # One part of mod-kit a mod must hold at RUN time, not ask for (#1281): hooks/skew.ts, the reader of
 # a call to another mod's noun that failed because the noun or member is not there. It cannot be a
 # member of mod-kit's noun, since it is needed exactly when the mod-kit loaded in the session is the
@@ -218,6 +222,21 @@ for d in "$dir"/*/; do
         echo "check-mod-shared-parts: $name's tests/mod-kit/$rel differs from mod-kit's own, so its tests read with a reader mod-kit no longer has: cp \"$dir/mod-kit/$rel\" \"${d%/}/tests/mod-kit/$rel\""
       fi
     done <<< "$copied"
+  fi
+  # core (#1484): Claude Code's core stands in for a guard's tests once, as standInCore in mod-kit's
+  # tests/core.ts. Five tests each raised the tool.check chain themselves from a tool.call hook, and
+  # when 2.1.307's test kit began raising it before any such hook, four of them judged every call
+  # twice. The spelling every copy had is caught (engine.tool.check, the engine handed to the
+  # world); a test's own query ($.tool.check) is not, and nor is a line that is wholly a comment.
+  if [ -d "$d/tests" ]; then
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      line="${h#*:*:}"
+      case "$(printf '%s' "$line" | sed 's/^[[:space:]]*//')" in '//'*|'*'*) continue ;; esac
+      failed=1
+      at="${h%:"$line"}"
+      echo "check-mod-shared-parts: $name raises the tool.check chain its own way at ${at#"${d%/}"}: use standInCore(engine, on) from a copy of mod-kit's tests/core.ts (cp \"$dir/mod-kit/tests/core.ts\" \"${d%/}/tests/mod-kit/tests/core.ts\"), which raises it only for a call the test kit has not already checked."
+    done <<< "$(grep -rnE --include='*.ts' --include='*.tsx' --exclude-dir=mod-kit 'engine\.tool\.check\(' "${d%/}/tests" 2>/dev/null)"
   fi
   # run time copies (#1281): each file under the mod's hooks/mod-kit is a copy of mod-kit's hooks.
   if [ -d "$d/hooks/mod-kit" ]; then

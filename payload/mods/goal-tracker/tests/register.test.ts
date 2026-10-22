@@ -1,6 +1,7 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, Register } from 'claude-code'
 import { isDans } from './mod-kit/hooks/origin.ts'
+import { standInCore } from './mod-kit/tests/core.ts'
 
 // A stand-in for the session registry: what the tracker records there comes back as a transcript
 // line the world collects (an inline plugin cannot reach this file's variables).
@@ -147,16 +148,12 @@ const world = (engine: Engine, on: On, opts: WorldOpts = {}) => {
   // The rows the conversation keeps. Nothing in the test kit stores one (2.1.289), so the call then
   // fails beneath; `appendRow` catches that, after the plugins above have seen the row.
   on('session.append', ($, e, next) => next(e))
-  // Core, standing in: the engine decides whether the call may run (the tool.check chain over every
-  // plugin, with the call's id and its arguments as the permission decision reads them), then runs
-  // it. The harness raises classic.PreToolUse above this hook as a session does, but not tool.check,
-  // so it is raised here. Beneath every plugin's tool.check hook the rules allow the call.
-  on('tool.check', () => ({ decision: 'allow' }))
+  // Core, standing in (mod-kit's tests/core.ts): the tool.check chain over every plugin decides
+  // whether the call may run, then it runs. Beneath every plugin's tool.check hook the rules allow it.
+  const core = standInCore(engine, on)
   on('tool.call', async ($, e) => {
-    const { tool, tool_use_id: id, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
-    const verdict = await engine.tool.check({ tool: String(tool), input, ...(id === undefined ? {} : { tool_use_id: String(id) }) } as never)
-    // A refusal there reaches the call as core reports it, an errored result whose text is the reason.
-    if (verdict.decision === 'deny') return { isError: true, result: verdict.reason, text: verdict.reason ?? 'denied' } as never
+    const c = await core(e)
+    if ('refused' in c) return c.refused as never
     if (e.tool === 'AskUserQuestion') opts.duringAsk?.(w)
     if (e.tool === 'AskUserQuestion' && opts.askThrows) throw new Error('the question could not be shown')
     if (e.tool === 'AskUserQuestion' && opts.askRefused) return { deny: 'the question was refused' } as never
