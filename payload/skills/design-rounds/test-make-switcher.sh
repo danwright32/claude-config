@@ -450,8 +450,10 @@ function buildScreen(variant) {
   outer.appendChild(list);
   return outer;
 }
+// On the stage, not necessarily its child: since #1499 each screen sits in a holder the page fits.
 function screenShown(variant, element) {
-  SHOWN_LOG.push(variant.name + ":" + (element && element.parentNode && element.parentNode.id));
+  var on = element && element.closest && element.closest("#dr-stage");
+  SHOWN_LOG.push(variant.name + ":" + (on && !element.closest("[hidden]") ? on.id : ""));
 }
 BUILDER
 printf '.screen { color: #111; }\n' > "$SCR/screen.css"
@@ -1716,6 +1718,126 @@ else
     "An email, with no product page around it.|shown:600:bare:Espresso,hidden:600:bare:Ink|fitted|Ink|0" "$got"
   got="$(nopage_probe "$NP/new-product.html")"
   check "a new product round says its page does not exist yet, on the page" "A new product, whose page does not exist yet.|shown:600:bare:Espresso" "$got"
+fi
+
+# --- three faults in a round drawn in captured chrome, each from a real round ---
+#
+# frame_probe <page> <window width> <javascript run once every frame has loaded, which sets `said`>
+# -> what `said` held, then every strip on the page. The script runs in the switcher's own page.
+frame_probe() {
+  python3 - "$1" "$3" <<'PROBEPY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+harness = """
+<script>
+setTimeout(function () {
+  var said = "";
+  %s
+  setTimeout(function () {
+    var strips = Array.prototype.map.call(document.querySelectorAll(".dr-sameness"), function (p) { return p.textContent; });
+    var out = document.createElement("pre"); out.id = "PROBE";
+    out.textContent = said + "|" + strips.join(" / ");
+    document.body.append(out);
+  }, 400);
+}, 1200);
+</script>
+""" % sys.argv[2]
+open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
+PROBEPY
+  "$CHROME" --headless --disable-gpu --no-sandbox --window-size="$2",900 --virtual-time-budget=6000 \
+    --dump-dom "file://$1.probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")'
+}
+CF="$TMP/chrome-faults"; mkdir -p "$CF"
+cat > "$CF/chrome.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>header { height: 40px; } [data-theme="dark"] body { background: #111; color: #eee; }</style></head>
+<body><header>Ovation</header><main id="main"></main></body></html>
+HTML
+printf 'function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }\n' > "$CF/builder.js"
+printf '.screen { color: #111; }\n' > "$CF/screen.css"
+
+# claude-config#1499: the stage was drawn at 1132px even in a 1900px window, so an option captured at
+# 1280 was cut off at the right, where PET #1876's three rounds held the very control being judged.
+# Whole in a window it fits, and scaled with its true width and percentage said where it does not;
+# never cut off, and its own document still 1280 wide, so its media queries answer to its real width.
+spec "$CF/wide.json" "$TWO" '{"chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 1280}}'
+run "$CF/wide.json" "$CF/wide.html" >/dev/null
+FIT_JS='var f = document.querySelector("#dr-stage iframe"), st = document.getElementById("dr-stage");
+  var r = f.getBoundingClientRect(), s = st.getBoundingClientRect();
+  var m = /(\d+)% of its true 1280px width/.exec(document.querySelector(".dr-frame").innerText);
+  said = [r.width >= 1279 ? "whole" : (r.width < 1279 && r.width > 600 ? "smaller" : "drawn " + r.width),
+    r.left >= s.left - 1 && r.right <= s.right + 1 ? "inside" : "cut off at " + Math.round(s.right) + " of " + Math.round(r.right),
+    st.scrollWidth > st.clientWidth + 1 ? "scrolls sideways" : "no sideways scroll",
+    "viewport " + f.contentWindow.innerWidth,
+    m ? (Math.abs(parseInt(m[1], 10) - Math.floor(r.width / 12.8)) <= 1 ? "captioned true to the drawing" : "captioned " + m[1] + "% but drawn " + r.width) : "no caption"].join(",");'
+if [[ -x "$CHROME" ]]; then
+  got="$(frame_probe "$CF/wide.html" 1900 "$FIT_JS")"
+  check_eq "a 1280 option in a 1900px window is shown whole, uncaptioned (#1499)" \
+    "whole,inside,no sideways scroll,viewport 1280,no caption|" "$got"
+  got="$(frame_probe "$CF/wide.html" 1280 "$FIT_JS")"
+  check_eq "a 1280 option in a 1280px window is scaled to fit and captioned with its true width and percentage (#1499)" \
+    "smaller,inside,no sideways scroll,viewport 1280,captioned true to the drawing|" "$got"
+  # And the option switched to, whose frame loaded while hidden and is sized only once shown.
+  got="$(frame_probe "$CF/wide.html" 1280 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  var g = document.querySelectorAll("#dr-stage iframe")[1].getBoundingClientRect(), st = document.getElementById("dr-stage").getBoundingClientRect();
+  said = (g.width < 1279 && g.height > 20 ? "scaled" : "drawn " + g.width + "x" + g.height) + "," + (g.right <= st.right + 1 ? "inside" : "cut off");')"
+  check_eq "the option switched to is scaled and whole too (#1499)" "scaled,inside|" "$got"
+else
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so whether a wide option is cut off was not measured"
+fi
+
+# claude-config#1512: Slate's #4101 rounds set the spacing, and the theme, on the page root, so their
+# slots held the same markup while the pictures differed, and the page said they drew the same picture.
+cat > "$CF/root-builder.js" <<'BUILDER'
+function buildScreen(variant) {
+  document.documentElement.setAttribute("data-theme", variant.key === "1" ? "light" : "dark");
+  var d = document.createElement("div"); d.textContent = "same words"; return d;
+}
+BUILDER
+cat > "$CF/sheet-builder.js" <<'BUILDER'
+function buildScreen(variant) {
+  var rule = document.createElement("style");
+  rule.textContent = "#main { padding: " + (variant.key === "1" ? 8 : 24) + "px; }";
+  document.head.append(rule);
+  var d = document.createElement("div"); d.textContent = "same words"; return d;
+}
+BUILDER
+cat > "$CF/same-root-builder.js" <<'BUILDER'
+function buildScreen(variant) {
+  document.documentElement.setAttribute("data-theme", "dark");
+  var d = document.createElement("div"); d.textContent = "same words"; return d;
+}
+BUILDER
+for b in root sheet same-root; do
+  spec "$CF/$b.json" "$TWO" '{"builder": "'"$b"'-builder.js", "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+  run "$CF/$b.json" "$CF/$b.html" >/dev/null
+done
+if [[ -x "$CHROME" ]]; then
+  got="$(frame_probe "$CF/root.html" 1440 'said = "probed";')"
+  check_eq "options differing only by the theme on the page root are not called the same picture (#1512)" "probed|" "$got"
+  got="$(frame_probe "$CF/sheet.html" 1440 'said = "probed";')"
+  check_eq "options differing only by a stylesheet the builder adds are not called the same picture (#1512)" "probed|" "$got"
+  got="$(frame_probe "$CF/same-root.html" 1440 'said = "probed";')"
+  check "options setting the same root and drawing the same slot are still said to draw the same picture (#1512)" \
+    "Espresso and Ink draw the same picture" "$got"
+else
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so what counts as the same picture was not measured"
+fi
+
+# claude-config#1467: a Bidspoke round switched to an option whose 1.2 MB frame was still loading, and
+# the page said the builder's screenShown threw, when the throw was this page's own sizing reading a
+# document with no root yet. A document emptied by open() has no root, as one still loading does.
+spec "$CF/load.json" "$TWO" '{"chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+run "$CF/load.json" "$CF/load.html" >/dev/null
+if [[ -x "$CHROME" ]]; then
+  got="$(frame_probe "$CF/load.html" 1440 'var f = document.querySelectorAll("#dr-stage iframe")[1];
+  f.contentDocument.open();
+  said = f.contentDocument.documentElement === null ? "no root" : "has a root";
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  said += "," + document.querySelector(".dr-readout h2").textContent;')"
+  check_eq "switching to an option whose frame has no document yet switches quietly (#1467)" "no root,Ink|" "$got"
+else
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so switching to a frame still loading was not tried"
 fi
 
 # --- the committed terminal example is what the tool produces today ---
