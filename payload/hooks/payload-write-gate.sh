@@ -321,7 +321,11 @@ try:
             where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
             segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
 except Exception:
-    pass
+    # With no reading of the wrapped commands, a command naming a wrapper has every payload path it
+    # holds taken for a write: the reading that sees more writes, never fewer (L42).
+    if re.search(r"(^|[^A-Za-z0-9_.-])(bash|sh|zsh|dash|ksh|eval|env|find|watch|script|parallel)([^A-Za-z0-9_.-]|$)", cmd):
+        for m in re.finditer(r"[^\s\"\x27;&|<>()]*payload/[^\s\"\x27;&|<>()]*", cmd):
+            add(m.group(0), cwd)
 for seg in segments:
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):

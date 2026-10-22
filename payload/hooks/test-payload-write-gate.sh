@@ -282,6 +282,25 @@ runbash "bash -c 'cat $FIX/dev/payload/LESSONS.md'" "$FIX/dev"
 allowed "#1478 control: a read in bash -c is still a read"
 runbash "bash -c 'cd $FIX/dev/payload' && cp /tmp/x LESSONS.md" "$FIX/elsewhere"
 allowed "#1478 control: a cd inside bash -c does not move a copy after it"
+# A reader that fails while reading the wrapped commands must not read as no wrapped write: every
+# payload path a command naming a wrapper holds is then taken for a write (the lessons review of
+# #1478, L42). A copy of the hook whose reader raises there.
+mkdir -p "$FIX/brokenreader"
+cp "$HOOK" "$FIX/brokenreader/payload-write-gate.sh"
+cp -R "$DIR/lib" "$FIX/brokenreader/lib"
+python3 - "$FIX/brokenreader/lib/shell-words.py" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('def every_command(s, cwd=""):\n', 'def every_command(s, cwd=""):\n    raise RuntimeError("broken for the test")\n', 1)
+open(p, "w").write(s)
+PY
+HOOK_SAVED="$HOOK"; HOOK="$FIX/brokenreader/payload-write-gate.sh"
+runbash "bash -c 'cp /tmp/x $FIX/dev/payload/LESSONS.md'" "$FIX/dev"
+refused "#1478 with the wrapped reading failing, a payload path in a wrapper is still refused"
+runbash "cat $FIX/dev/payload/LESSONS.md" "$FIX/dev"
+allowed "#1478 control: and a read naming no wrapper is still a read"
+HOOK="$HOOK_SAVED"
 # restore --staged rewrites only the index, never the file, and -s names a commit, not a path.
 runbash "git restore --staged LESSONS.md" "$FIX/dev/payload"
 allowed "a git restore --staged of a payload file writes no file, so it is allowed"
