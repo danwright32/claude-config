@@ -320,6 +320,18 @@ const quietOnMain = (w: W) => {
   expect(notesOf(w)).toBe('')
 }
 
+// #1491: from 2.1.307 every plugin's tool.check hook judges a mod's own $.tool.call, the job
+// watcher's TaskStop among them, sent with no call id. A stop saves nothing, so it goes through
+// unasked, even where the session's folder cannot be read and any save would be refused.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, goes through unasked (#1491)", withKit, async ($, on) => {
+  const w = world($, on, { cwdFails: true })
+  const own = (await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as never)) as Result
+  const claudes = await call($, { tool: 'TaskStop', task_id: 'b2' })
+  expect([refusalOf(own), refusalOf(claudes)]).toEqual(['', ''])
+  expect(w.ran.map(r => r.tool)).toEqual(['TaskStop', 'TaskStop'])
+  quietOnMain(w)
+})
+
 test('a Write to a project CLAUDE.md is refused, and Claude is told to ask Dan in the dialog, naming the file, in plain words', withKit, async ($, on) => {
   const w = world($, on)
   const r = await call($, { tool: 'Write', file_path: 'CLAUDE.md', content: '# Slate\n\n- Ask before merging.\n' })

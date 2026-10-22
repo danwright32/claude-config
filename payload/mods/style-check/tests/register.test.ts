@@ -238,6 +238,18 @@ test('a commit a command substitution runs is judged; quoted, it is text (#974)'
   expect(w.reached).toEqual(['Bash', 'Bash'])
 })
 
+// #1491: from 2.1.307 a mod's own $.tool.call goes through every plugin's hooks, the job watcher's
+// TaskStop among them, sent with no call id. A stop sends no text, so it is never scanned, even with
+// a scanner that crashes.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, is not scanned (#1491)", withKit, async ($, on) => {
+  const w = world(on, { scanner: 'crash' })
+  const own = await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as never)
+  const claudes = await $.tool.call({ tool: 'TaskStop', task_id: 'b2', tool_use_id: 's2' } as never)
+  expect([refused(own), refused(claudes)]).toEqual(['', ''])
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+  expect(w.runs.length).toBe(0)
+})
+
 test('an ordinary command is not scanned at all', withKit, async ($, on) => {
   const w = world(on)
   await $.tool.call({ tool: 'Bash', command: `grep -n "${DASH}" file.txt` } as never)

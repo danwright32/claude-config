@@ -234,7 +234,8 @@ const isGone = async ($: EngineInterface, path: string): Promise<boolean> => {
 }
 
 // Claude Code's own stop for that task id: the traced handle, never a match on its text (L1011).
-// Why it did not stop, or undefined when it did; a refusal and a throw are both said (L12).
+// Why it did not stop, or undefined when it did; a refusal and a throw are both said (L12). A mod
+// guard's tool.check refusal is one of these from 2.1.307 (#1491), and never reaches the tool.
 const stop = async ($: EngineInterface, id: string): Promise<string | undefined> => {
   try {
     const r = await $.tool.call({ tool: 'TaskStop', task_id: id } as never)
@@ -500,8 +501,12 @@ const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet =
 
 const stoppedNotice = (job: Job, said: string) =>
   `Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${said}", so it never succeeded.`
+// A stop that did not happen, whoever said no: Claude Code, or from 2.1.307 any mod's tool.check
+// hook, which judges the watcher's own call before the tool and words its refusal "Permission to use
+// TaskStop denied by plugin <mod>: <reason>" (#1491). The job is still on the record and still looked
+// at, so the next look may stop it, and Claude reads that it still runs (L11).
 const notStoppedNotice = (job: Job, said: string, why: string) =>
-  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${why}. Stop it with TaskStop.`
+  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${why.trim().replace(/\.+$/, '')}. It is still running, and the watcher is still watching it. Stop it with TaskStop.`
 
 const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: Live) => {
   // What a stop sent by a look since given up came to is said, and acted on, here (#706).
