@@ -212,13 +212,19 @@ const traceGroup = async ($: EngineInterface, outputPath: string): Promise<numbe
 // Whether the job's process group has ended: macOS ps exits 1 and prints nothing at all for a group
 // with no processes left (measured 2026-10-04). Anything else, an error or no traced group, is
 // unknown, never ended, so a job is only ever dropped on that evidence.
-const hasEnded = async ($: EngineInterface, pgid: number | null): Promise<boolean> => {
-  if (pgid === null) return false
+const hasEnded = async ($: EngineInterface, pgid: number | null): Promise<boolean> => (await runsNow($, pgid)) === false
+
+// Whether a job's process group runs now, measured: macOS ps prints its processes, or exits 1 and
+// prints nothing at all once none is left. Anything else, an untraced job included, is unknown.
+const runsNow = async ($: EngineInterface, pgid: number | null): Promise<boolean | undefined> => {
+  if (pgid === null) return undefined
   try {
     const r = await $.process.run(['ps', '-g', String(pgid), '-o', 'pid='], { timeoutMs: 10_000 })
-    return r.exitCode === 1 && !r.stdout.trim() && !r.stderr.trim()
+    if (r.exitCode === 0 && r.stdout.trim()) return true
+    if (r.exitCode === 1 && !r.stdout.trim() && !r.stderr.trim()) return false
+    return undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -234,7 +240,8 @@ const isGone = async ($: EngineInterface, path: string): Promise<boolean> => {
 }
 
 // Claude Code's own stop for that task id: the traced handle, never a match on its text (L1011).
-// Why it did not stop, or undefined when it did; a refusal and a throw are both said (L12).
+// Why it did not stop, or undefined when it did; a refusal and a throw are both said (L12). A mod
+// guard's tool.check refusal is one of these from 2.1.307 (#1491), and never reaches the tool.
 const stop = async ($: EngineInterface, id: string): Promise<string | undefined> => {
   try {
     const r = await $.tool.call({ tool: 'TaskStop', task_id: id } as never)
@@ -498,10 +505,40 @@ const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet =
   return false
 }
 
+// Words from elsewhere (a guard's refusal, Claude's reason) set inside a sentence of the watcher's,
+// with any full stop of their own taken off so the sentence ends with one (#1491).
+const clause = (text: string) => text.trim().replace(/\.+$/, '')
+
 const stoppedNotice = (job: Job, said: string) =>
   `Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${said}", so it never succeeded.`
-const notStoppedNotice = (job: Job, said: string, why: string) =>
-  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${why}. Stop it with TaskStop.`
+// A stop that did not happen, whoever said no: Claude Code, or from 2.1.307 any mod's tool.check
+// hook, which judges the watcher's own call before the tool and words its refusal "Permission to use
+// TaskStop denied by plugin <mod>: <reason>" (#1491). What Claude reads of the job is only what was
+// measured after the refusal (L11, lessons review of #1491): still running and still watched, so a
+// later look may stop it; ended as it was asked ("no task is running"), so it is dropped; or not
+// measurable, said as such. `once` holds the notice to one until the job runs healthily again.
+const notStoppedNotice = (job: Job, said: string, why: string, runs: boolean | undefined) =>
+  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${clause(why)}. ${
+    runs === false
+      ? 'It has ended since, so there is nothing left to stop.'
+      : runs
+        ? 'It is still running, and the watcher is still watching it. Stop it with TaskStop.'
+        : 'Whether it is still running could not be measured, and the watcher is still watching it. Stop it with TaskStop if it is.'
+  }`
+const notStopped = async ($: EngineInterface, job: Job, w: Watch, said: string, why: string, once: boolean, live: Live) => {
+  const runs = await runsNow($, (jobs.get(job.id) ?? job).pgid)
+  // A look given up while ps answered acts on nothing it read (#706).
+  if (!live()) return
+  if (runs === false) {
+    // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
+    say(job.owner?.id, notStoppedNotice(job, said, why, runs))
+    await forget($, job.id)
+    return
+  }
+  if (once && w.told) return
+  w.told = true
+  say(job.owner?.id, notStoppedNotice(job, said, why, runs))
+}
 
 const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: Live) => {
   // What a stop sent by a look since given up came to is said, and acted on, here (#706).
@@ -511,10 +548,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     if (late.why === undefined) {
       say(job.owner?.id, stoppedNotice(job, late.said))
       await forget($, job.id)
-    } else {
-      w.told = true
-      say(job.owner?.id, notStoppedNotice(job, late.said, late.why))
-    }
+    } else await notStopped($, job, w, late.said, late.why, false, live)
     return
   }
   // A job that finished is Claude Code's to report; the watcher just stops watching it.
@@ -589,10 +623,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
       // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
       say(job.owner?.id, stoppedNotice(job, said))
       await forget($, job.id)
-    } else if (!w.told) {
-      w.told = true
-      say(job.owner?.id, notStoppedNotice(job, said, why))
-    }
+    } else await notStopped($, job, w, said, why, true, live)
   } else if (a.state !== 'running' && !w.told) {
     w.told = true
     const how = a.state === 'silent' ? `with no new output for ${Math.round(a.forMs / 60_000)} minutes` : `that keeps repeating "${repeated(a)}"`
@@ -1011,7 +1042,7 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
-    return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
+    return { result: `Kept ${id} (${name}): ${clause(reason)}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
   })
 
   on('tool.call', async ($, e, next) => {

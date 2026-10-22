@@ -21705,6 +21705,8 @@ check "#833 a checkout without the pinned compiler is named, with the version it
 check "#833 and the command that installs it, for this checkout" \
   "line_has \"\$out_tc1\" 'not installed' 'npm ci --prefix $TC_R/tools/typescript'"
 check "#833 and what goes unchecked meanwhile" "line_has \"\$out_tc1\" 'strict mod type check' 'UNMEASURED'"
+check "#1496 and that the check installs it on its first run, so it is unmeasured only where it cannot" \
+  "line_has \"\$out_tc1\" 'installs it on its first run' 'only where that cannot'"
 mkdir -p "$TC_R/tools/typescript/node_modules/typescript"
 printf '{"name": "typescript", "version": "7.0.1"}\n' > "$TC_R/tools/typescript/node_modules/typescript/package.json"
 out_tc2="$(tc_status)"

@@ -1128,6 +1128,38 @@ test('a mode whose check of a call throws refuses the call rather than letting i
   expect(w.reached).toEqual(['echo __reader_fails'])
 })
 
+// #1495, Dan's decision 2026-10-22 (picker answer "Let stops through on a check error"): stopping a
+// job can never break a mode, so a TaskStop whose check errors is let through, and said in the
+// debug log. Every other tool's check error still refuses (the test above, and the edit and the write
+// below), and a mode's own refusal of a TaskStop, were it to make one, is untouched: only the error
+// is narrowed, and only for a TaskStop.
+test('winding down: a TaskStop whose check errors runs, while an edit whose check errors is still refused (#1495)', withDeps, async ($, on) => {
+  const store = { broken: false }
+  on('state.get', async ($, e, next) => {
+    if (store.broken && (e as { key: string }).key === 'target') return { deny: 'the state store broke' } as never
+    return next(e)
+  })
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'winddown')
+  store.broken = true
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b2', tool_use_id: 't2' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+  expect(await call($ as never, edit('/repo/app.ts', 'e1'))).toMatch(/^Blocked: winding down is on and its check of this call failed \(.*the state store broke.*\), so the call did not run\./)
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+})
+
+test('asleep: a TaskStop whose check errors runs, while a write whose check errors is still refused (#1495)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  w.o.cwdThrows = true
+  expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+  expect(w.reached).toEqual(['TaskStop'])
+  expect(await call($ as never, { tool: 'Write', file_path: '/repo/notes.md', content: 'x', tool_use_id: 'w1' } as never)).toMatch(/^Blocked: sleep mode is on and its check of this call failed \(.*session\.cwd.*\), so the call did not run\./)
+  expect(w.reached).toEqual(['TaskStop'])
+})
+
 test('"Switch to build?" is asked of Dan, naming the change; only his yes lifts no build', withDeps, async ($, on) => {
   const { w, clock } = world(on, { ask: 'No' })
   await start($ as never, clock)
@@ -2765,6 +2797,24 @@ test('asleep, a session that is not a worker publishes no page: the call is held
   expect(await call($ as never, { tool: 'Artifact', action: 'read', url: 'https://claude.ai/artifact/abc', tool_use_id: 'p3' } as never)).toBe('ran')
   // A subagent's publish is held as well: it would hand Dan the same page.
   expect(await call($ as never, { tool: 'Artifact', file_path: '/s/b.html', agentId: 'a1', tool_use_id: 'p4' } as never)).toMatch(/^Held until Dan wakes/)
+})
+
+// #1491: from 2.1.307 a mod's own $.tool.call goes through every plugin's hooks, the job watcher's
+// TaskStop among them, sent with no call id. A stop starts nothing, changes no file, needs nobody at
+// the Mac and hands Dan nothing, so every mode lets it run: no build, winding down, away and asleep.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, runs in every mode (#1491)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  for (const mode of ['nobuild', 'winddown']) {
+    await command($ as never, mode)
+    expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+    expect(await call($ as never, { tool: 'TaskStop', task_id: 'b2', tool_use_id: `t-${mode}` } as never)).toBe('ran')
+  }
+  expect(w.reached.filter(t => t === 'TaskStop').length).toBe(4)
+  expect(w.cards).toEqual([])
+  // The same world is asleep, so a page is still held: the stop ran on its own merits.
+  expect(await call($ as never, PUBLISH('p9'))).toMatch(/^Held until Dan wakes/)
 })
 
 test('asleep, every prompt says to hand Dan nothing tonight, never to deliver as when he is away (#1284)', withDeps, async ($, on) => {

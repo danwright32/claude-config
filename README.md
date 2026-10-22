@@ -2357,9 +2357,22 @@ from `claude --version`, every route when the version cannot be read), and a dif
 the next build that adds or drops a route fails on the first Mac to install it while the other Mac
 and CI stay as they were.
 It also type checks each mod strictly (#758), as the mod's own `tsconfig.json` says, with the
-TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed once per checkout
-with `npm ci --prefix tools/typescript`, and on CI before the suites; `TSC_BIN` overrides it, and
-`tsc` on the path is the last resort). The types it checks against come from this repository alone
+TypeScript compiler pinned in `tools/typescript` (#803; TypeScript 7.0.2, installed on CI before the
+suites; `TSC_BIN` overrides it, and `tsc` on the path is the last resort). A checkout without it, as
+every new worktree is, gets it with no manual step (#1496): `tools/lib/pinned-compiler.sh`, called by
+`check-mods.sh`, `check-mod-noun-waits.sh` and `tests/test-mods.sh`, links the checkout's
+`node_modules` (a real folder of links, so the ignore rule still covers it) to ONE install per clone
+and pin, kept in the clone's common git folder at `.git/pinned-typescript/<lockfile hash>-<platform>`.
+Only the first checkout of a clone after the pin moves installs it, with `npm ci --prefer-offline`
+(from the npm cache, 0.9 s measured on 2026-10-22, the registry only for what the cache lacks),
+stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). A test suite
+never asks the registry: `tests/test-mods.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
+only, so where the cache lacks the package its sections say UNMEASURED with that reason. Two runs
+installing at once each install into a folder of their own and publish it by one rename, so neither
+can see the other's half made copy and no lock is left behind by a run that is killed. A
+`node_modules` it did not make (an `npm ci` by hand, which still works) is never touched, and an
+install an older pin's checkout is still linked to is never removed. Where it cannot install (no npm,
+offline with an empty cache, not a git checkout) the UNMEASURED lines below say why. The types it checks against come from this repository alone
 (#953), never from an installed copy: Claude Code lays a mod's types only in the copy it loads, and
 their MCP part lists whatever tools the session had connected when that copy last reloaded, so a
 check that borrowed them gave the same tree a different verdict from one hour to the next
@@ -2381,10 +2394,11 @@ that setting. Errors fail the run with the mod named and counted, except a mod l
 `tools/typescript/known-type-errors.tsv` (empty since #822 fixed the errors the first run found,
 2026-10-05, in 12 mods), kept by file and error code, which passes while each file and code is at or under its recorded count and fails on any beyond it, so fixing one error makes no room for a new one. A compiler
 that exits without any type error is said as that, never as 0 errors. Where no compiler is found,
-each mod's line says its types were not checked and why, and the run says UNMEASURED, counting them
-and naming the install command, which is not a failure. `claude-sync status` names a sync clone
-where the pinned compiler is not installed, with its `npm ci` command (the apply does not install
-it, which would put npm and the network on every pull). The pinned types are Claude Code 2.1.307's
+each mod's line says its types were not checked and why (with why the pinned one could not be
+installed), and the run says UNMEASURED, counting them and naming the install command, which is not a
+failure. `claude-sync status` names a sync clone where the pinned compiler is not installed yet,
+with its `npm ci` command (the apply does not install it, which would put npm and the network on
+every pull; the mods' checks install it on their first run there). The pinned types are Claude Code 2.1.307's
 (2026-10-22, #1484, all 20 mods clean; 2.1.294's before, from 2026-10-08). A run on a Mac with another build says so and changes no verdict;
 to move the pin, run `bash tools/refresh-claude-code-types.sh` once a mod has loaded on the new build
 (it copies the engine and built-in tool types from `~/.claude/mods/mod-kit/.claude-plugin/types`, or
@@ -2417,8 +2431,8 @@ each call a noun makes to the function the TypeScript compiler's own checker res
 parameters are the language's answer rather than the first function of that name in the mod (#895).
 A promise kept in a variable outside a noun's code is linked to a noun's read the same way, so only
 a read of that same variable counts, never another function's variable sharing its name (#915).
-Run on its own, it refuses (exit 4, naming `npm ci --prefix tools/typescript`) where that compiler
-is not installed. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
+Run on its own, it installs that compiler as the type check does, and refuses (exit 4, naming why
+and `npm ci --prefix tools/typescript`) where it cannot. `tests/test-mods.sh` judges the compiler by whether it starts (a Mac's native build
 copied to Linux is installed and cannot run), and where it does not, reports its noun wait checks
 UNMEASURED with the same command, as the type check above does, rather than failing. Under `CI=true`,
 where the workflow installs it, a compiler that does not start fails instead. (It no

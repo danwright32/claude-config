@@ -5289,8 +5289,8 @@ report_settings_extras(){
 }
 
 # THE PINNED TYPESCRIPT COMPILER (#833). The strict mod type check uses the compiler pinned in
-# tools/typescript, which each checkout installs by hand once, and without it the hook suite's type
-# check says UNMEASURED on every run, which is easy to stop reading. Not installed by the apply,
+# tools/typescript, which the check installs on its first run in a checkout (#1496, from the npm
+# cache where it can), and says UNMEASURED where it cannot, which is easy to stop reading. Not installed by the apply,
 # because that would put npm and the network on every pull; said here instead, against the version
 # the pin asks for, with the one command for this checkout. Quiet when the pinned version is there.
 report_pinned_compiler(){
@@ -5302,7 +5302,7 @@ report_pinned_compiler(){
   [ "$have" = "$pinned" ] && return 0
   echo "--- the pinned TypeScript compiler ---"
   if [ -z "$have" ]; then
-    echo "  TypeScript $pinned, pinned in $dir, is not installed in this checkout, so the strict mod type check in the hook suite is UNMEASURED here rather than run. Install it once with: npm ci --prefix $dir"
+    echo "  TypeScript $pinned, pinned in $dir, is not installed in this checkout yet. The strict mod type check installs it on its first run (#1496), and is UNMEASURED only where that cannot (no npm, offline with an empty npm cache). Install it now with: npm ci --prefix $dir"
   else
     echo "  TypeScript $have is installed in $dir, but the pin asks for $pinned, so the strict mod type check runs on a compiler nobody measured the record with. Install the pinned one with: npm ci --prefix $dir"
   fi
