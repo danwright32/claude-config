@@ -10496,6 +10496,20 @@ mkdir -p "$ST_BW_LIVE" "$ST_BW_PIN"
 if [ -n "$SUITE_SECTION_TIMINGS" ] && [ -d "$SUITE_SECTION_TIMINGS" ]; then
   cp -R "$SUITE_SECTION_TIMINGS/." "$ST_BW_LIVE/" 2>/dev/null || true
 fi
+# Every section the live store has no record for is given one, so the control below has a whole
+# store to disturb however warm the real one is (claude-config#1494). It used to require more than
+# 50 records from whatever the live store held, so a run started with an empty store, a fresh
+# SUITE_SECTION_TIMINGS or a cold cache, failed it for a reason that had nothing to do with the
+# disturbance. The figures are uneven on purpose, one to seven seconds by position, so inverting them
+# has an order to change.
+_bw_sections=0
+while IFS= read -r _bw_key; do
+  [ -n "$_bw_key" ] || continue
+  _bw_sections=$(( _bw_sections + 1 ))
+  [ -f "$ST_BW_LIVE/$_bw_key" ] || printf '%s\n' "$(( _bw_sections % 7 + 1 ))" > "$ST_BW_LIVE/$_bw_key"
+done <<BWKEYS
+$(grep '^section "' "$SCRIPT_SELF" | sed 's/^section "//; s/"$//' | suite_section_key_lines)
+BWKEYS
 cp -R "$ST_BW_LIVE/." "$ST_BW_PIN/" 2>/dev/null || true
 # The store moving under the run, standing for a sibling shard closing a section mid comparison.
 #
@@ -10563,8 +10577,8 @@ _bw_after="$(_bw_cov_only "$(_bw_lines 4 "$ST_BW_LIVE")")"
 # Two halves, because they fail differently: that the disturbance reached real records at all, and
 # that reaching them changed the answer. A control that quietly rewrote nothing would report the
 # same agreement as a store nobody touched (L98).
-check "#245 the control disturbed the records it meant to ($_bw_moved of them)" \
-  "[ \"\$_bw_moved\" -gt 50 ]"
+check "#245 the control disturbed the records it meant to ($_bw_moved of them, for $_bw_sections section(s))" \
+  "[ \"\$_bw_sections\" -gt 50 ] && [ \"\$_bw_moved\" -ge \"\$_bw_sections\" ]"
 check "#245 the control: a timings store that moves between two reads really does repartition" \
   "[ -n \"\$_bw_before\" ] && [ \"\$_bw_before\" != \"\$_bw_after\" ]"
 

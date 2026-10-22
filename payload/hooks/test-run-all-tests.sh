@@ -2399,6 +2399,31 @@ case "$out_ls4" in
       || check "#216 a run that touched no live store says nothing about them" "exit=$code_ls4 out=$out_ls4" ;;
 esac
 
+# The COPIES the bracket keeps of every live store are the run's own scratch, and they go with it
+# however it ends (claude-config#1494). They were removed only inside the branch that reports a
+# changed store, so every run that changed nothing, which is nearly every run, left its copies in
+# TMPDIR: 2,971 directories of about 1.2MB each in this Mac's TMPDIR on 2026-10-22, and every sync
+# suite's scratch sweep walked all of them. Counted in a TMPDIR of the fixture's own, both for a run
+# that changed nothing and for one that did, so the check cannot pass on a TMPDIR something else
+# keeps clean.
+LSTMP="$TMPROOT/livestores-tmpdir"
+rm -rf "$LSTMP"; mkdir -p "$LSTMP"
+TMPDIR="$LSTMP" ls_run >/dev/null 2>&1
+ls_left="$(find "$LSTMP" -mindepth 1 -maxdepth 1 | grep -c . || true)"
+[ "${ls_left:-x}" = 0 ] \
+  && check "#1494 a run that changed no live store leaves nothing in TMPDIR" ok \
+  || check "#1494 a run that changed no live store leaves nothing in TMPDIR" "left: $(ls "$LSTMP" 2>/dev/null | tr '\n' ' ')"
+mk_store_writer rules "$LS/claude-home/CLAUDE.md" 'a line no suite may add'
+rm -rf "$LSTMP"; mkdir -p "$LSTMP"
+TMPDIR="$LSTMP" ls_run >/dev/null 2>&1
+ls_left2="$(find "$LSTMP" -mindepth 1 -maxdepth 1 | grep -c . || true)"
+[ "${ls_left2:-x}" = 0 ] \
+  && check "#1494 and neither does a run that did change one" ok \
+  || check "#1494 and neither does a run that did change one" "left: $(ls "$LSTMP" 2>/dev/null | tr '\n' ' ')"
+rm -f "$LS/suites"/test-rules.sh
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+rm -rf "$LSTMP"
+
 # ---------------------------------------------------------------------------
 # A failing suite's WHOLE diagnosis reaches the reader (claude-config#253).
 #

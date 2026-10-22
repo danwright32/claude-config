@@ -895,7 +895,12 @@ LIVESTORES
   # A COPY of each store as well as its fingerprint, because the verdict below needs to know what
   # KIND of change happened and a checksum cannot say (claude-config#277). These files total well
   # under a megabyte, so this costs nothing measurable beside a run of minutes.
-  _live_copies="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-work.live-copies.XXXXXXXX" 2>/dev/null || true)"
+  #
+  # Inside WORK, which runner_cleanup removes on every way out (claude-config#1494). It was a
+  # directory of its own in TMPDIR, removed only in the branch below that reports a CHANGED store,
+  # so nearly every run left it behind: 2,971 of them, about 1.2MB each, in this Mac's TMPDIR on
+  # 2026-10-22.
+  _live_copies="$(mktemp -d "$WORK/live-copies.XXXXXXXX" 2>/dev/null || true)"
   if [ -n "$_live_copies" ]; then
     _lcp_n=0
     while IFS= read -r _lcp_f; do
@@ -1667,7 +1672,6 @@ LIVEAFTER
     failed=$((failed + 1))
     failed_names="$failed_names live-store-pollution"
   fi
-  [ -n "${_live_copies:-}" ] && rm -rf "$_live_copies" 2>/dev/null
   if [ -n "$_lc_noted" ]; then
     # Said, not silent, and not counted. The same shape as the spool line above: a store this run
     # did not write still changed while it ran, which is worth knowing when reading anything else
