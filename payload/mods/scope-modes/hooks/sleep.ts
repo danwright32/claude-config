@@ -20,7 +20,7 @@ export type SleepRecord = {
   since: number
   /** When it stops holding by itself: noon ET the day after `night` (L523). */
   until: number
-  /** The evening it began, as an ET date (YYYY-MM-DD); before noon ET counts as the night before. */
+  /** The evening it began, as an ET date (YYYY-MM-DD), from nightOf: before 9 AM ET counts as the night before (before noon on a record written before #1479). Read as written, never recomputed. */
   night: string
   /** This boot's start in seconds (sysctl kern.boottime): a record from another boot reads as awake. Judged within BOOT_TIME_TOLERANCE_S, and only where `bootSession` cannot decide. */
   bootTime: number
@@ -146,10 +146,23 @@ const noonEt = (y: number, mo: number, d: number): number => {
   return etParts(edt).h === 12 ? edt : Date.UTC(y, mo - 1, d, 17)
 }
 
-/** The night a moment belongs to, as an ET date: before noon ET it is still the night before. */
+/**
+ * The hour (ET, 24 hour clock) from which a moment belongs to the coming night rather than the one
+ * ending. Dan, 2026-10-21 (#1479, "Run to tomorrow's noon"): a /sleep from 9 AM ET on is the coming
+ * night and lasts until noon ET the next day; one before 9 AM still belongs to the night just ending,
+ * as before. It was noon until then, so a /sleep at 11:59:55 AM ended 4.8 seconds later (#1469).
+ */
+export const NIGHT_TURNS_AT_HOUR = 9
+
+/**
+ * The night a moment belongs to, as an ET date: before 9 AM ET it is still the night before. The one
+ * place a night is computed: /sleep writes it into the record with `untilOf`'s end, and every reader
+ * (the report, its name, the morning review, the shell) reads the record's own `night` and `until`,
+ * never recomputes them, so a record written under the old noon turn keeps its meaning (L1010).
+ */
 export const nightOf = (ms: number): string => {
   const p = etParts(ms)
-  const day = p.h < 12 ? new Date(Date.UTC(p.y, p.mo - 1, p.d - 1)) : new Date(Date.UTC(p.y, p.mo - 1, p.d))
+  const day = p.h < NIGHT_TURNS_AT_HOUR ? new Date(Date.UTC(p.y, p.mo - 1, p.d - 1)) : new Date(Date.UTC(p.y, p.mo - 1, p.d))
   return `${day.getUTCFullYear()}-${pad(day.getUTCMonth() + 1)}-${pad(day.getUTCDate())}`
 }
 
@@ -158,6 +171,26 @@ export const untilOf = (night: string): number => {
   const [y, mo, d] = night.split('-').map(Number) as [number, number, number]
   const next = new Date(Date.UTC(y, mo - 1, d + 1))
   return noonEt(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate())
+}
+
+/**
+ * When sleep ends, as Dan reads it at `now` (#1479): "noon ET today (Wed Oct 21)" or "noon ET
+ * tomorrow (Thu Oct 22)" when the end is that noon and still ahead, so a /sleep at 8:59 AM and one at
+ * 9 AM read apart; any other end (one past, further off, or not at noon) is its time and day.
+ */
+export const endSaid = (until: number, now: number): string => {
+  const e = etParts(until)
+  const n = etParts(now)
+  const tomorrow = new Date(Date.UTC(n.y, n.mo - 1, n.d + 1))
+  const when =
+    until <= now || until !== noonEt(e.y, e.mo, e.d)
+      ? null
+      : e.y === n.y && e.mo === n.mo && e.d === n.d
+        ? 'today'
+        : e.y === tomorrow.getUTCFullYear() && e.mo === tomorrow.getUTCMonth() + 1 && e.d === tomorrow.getUTCDate()
+          ? 'tomorrow'
+          : null
+  return when ? `noon ET ${when} (${e.wd} ${MONTHS[e.mo - 1]} ${e.d})` : etWhen(until)
 }
 
 /** The calendar date of a moment in ET, YYYY-MM-DD: what a decision Dan gave is dated with (L249). */

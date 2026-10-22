@@ -379,6 +379,8 @@ type Opts = {
   dupCheckFails?: string
   /** What a `gh issue create` call prints, as gh does: the new issue's link (#1389). */
   issueCreated?: string
+  /** The engine's clock at the start, in ms; T0 unless said (#1479). */
+  now?: number
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -430,8 +432,10 @@ const world = (on: On, o: Opts = {}) => {
     beneathStops: 0,
     /** Every run of milestone-candidates.sh, its arguments after the script (#1389). */
     dupChecks: [] as string[][],
+    /** Every slash command the mod registered, with the description the menu shows (#1479). */
+    commands: [] as { name: string; description: string }[],
   }
-  const clock = mock.clock(on, { now: T0 })
+  const clock = mock.clock(on, { now: o.now ?? T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
   on('env.get', ($, e) => {
     const name = (e as unknown as { name: string }).name
@@ -756,7 +760,11 @@ const world = (on: On, o: Opts = {}) => {
   on('session.repo', () => ({ value: o.noRepo ? null : { root: '/repo', remote: o.remote === undefined ? 'git@github.com:o/r.git' : o.remote, internal: false, name: null } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
-  on('command.register', () => ({ value: undefined }) as never)
+  on('command.register', ($, e) => {
+    const c = e as unknown as { name: string; description: string }
+    w.commands.push({ name: c.name, description: c.description })
+    return { value: undefined } as never
+  })
   on('tool.register', ($, e) => {
     w.tools.push(String((e as { name?: string }).name))
     return { value: undefined } as never
@@ -2257,7 +2265,7 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`].sort())
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
-  expect(r.text).toBe(`Sleep mode is on until 12:00 PM ET on Thu Jan 1. Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
+  expect(r.text).toBe(`Sleep mode is on until noon ET tomorrow (Thu Jan 1). Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
   // A goal already set is asked about by nobody: no question, and every worker's transcript read.
   expect(w.asked).toEqual([])
   expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl', '/Users/x/.claude/projects/-repo/s2.jsonl'])
@@ -2467,6 +2475,38 @@ test('/sleep says when the report could not be started, and sleep still holds (#
   expect(lastModes(w)).toEqual(['ASLEEP'])
 })
 
+// Dan, 2026-10-21 (#1479): from 9 AM ET a /sleep is the coming night, to noon ET the next day; before
+// 9 AM it is still the night just ending. The record and what /sleep says both follow the one nightOf.
+test('a /sleep in the late morning is the coming night, to noon tomorrow, and says so (#1479)', withDeps, async ($, on) => {
+  // 11:59:55 AM EDT on Wed Oct 21 2026, the moment whose record ended 4.8 seconds later (#1469).
+  const at = Date.UTC(2026, 9, 21, 15, 59, 55)
+  const { w, clock } = world(on, { now: at })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(recordOf(w).night).toBe('2026-10-21')
+  expect(recordOf(w).until).toBe(Date.UTC(2026, 9, 22, 16))
+  expect(r.text).toMatch(/^Sleep mode is on until noon ET tomorrow \(Thu Oct 22\)\. /)
+})
+test('a /sleep before 9 AM is still the night just ending, to noon today, and says so (#1479)', withDeps, async ($, on) => {
+  // 8:59 AM EDT on Wed Oct 21 2026.
+  const { w, clock } = world(on, { now: Date.UTC(2026, 9, 21, 12, 59) })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(recordOf(w).night).toBe('2026-10-20')
+  expect(recordOf(w).until).toBe(Date.UTC(2026, 9, 21, 16))
+  expect(r.text).toMatch(/^Sleep mode is on until noon ET today \(Wed Oct 21\)\. /)
+})
+
+// The menu's line for /sleep is read at any hour, so it names no day: before 9 AM the end is today's
+// noon, from 9 AM tomorrow's (#1479).
+test('the /sleep command says it runs until noon ET, true at any hour (#1479)', withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  const sleep = w.commands.find(c => c.name === 'sleep')
+  expect(sleep?.description).toBe('Sleep: the whole Mac goes quiet until noon ET; interactive sessions are enrolled to work overnight.')
+  expect(sleep?.description).not.toMatch(/today|tomorrow/)
+})
+
 test('/sleep run twice says when and where sleep started, and changes nothing', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)
@@ -2474,7 +2514,7 @@ test('/sleep run twice says when and where sleep started, and changes nothing', 
   const first = w.files[CURRENT]
   await clock.advance(10 * MIN)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at 12:00 PM ET on Thu Jan 1. Nothing changed.')
+  expect(r.text).toBe('Sleep mode is already on: it started at 7:16 PM ET on Wed Dec 31 in /repo, and ends at noon ET tomorrow (Thu Jan 1). Nothing changed.')
   expect(w.files[CURRENT]).toBe(first)
   expect(recordWrites(w).length).toBe(1)
 })
@@ -3596,7 +3636,7 @@ test('while asleep every session is quiet as away: what needs Dan at the Mac is 
   expect(await call($ as never, bash(DIALOG))).toMatch(/^Held: /)
   expect(w.reached).toEqual([])
   const r = await say($ as never, 'how is it going')
-  expect(r.context?.join('\n')).toMatch(/Sleep mode is on until 12:00 PM ET on Thu Jan 1\. This session is not one of the overnight workers\./)
+  expect(r.context?.join('\n')).toMatch(/Sleep mode is on until noon ET tomorrow \(Thu Jan 1\)\. This session is not one of the overnight workers\./)
   await command($ as never, 'wake')
   expect(await call($ as never, bash(DIALOG, 'c2'))).toBe('ran')
 })
