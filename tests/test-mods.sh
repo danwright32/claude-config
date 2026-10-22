@@ -24,7 +24,10 @@ TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/test-mods.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
 # The sections below that run the real pinned compiler look for it in this checkout, which in a new
 # worktree has none until it is linked or installed (#1496), so that is done first, here, and why it
-# could not be is carried on every line that says those sections were not measured.
+# could not be is carried on every line that says those sections were not measured. From the npm
+# cache only, here and in every check this suite starts: a suite never asks the registry, so where
+# the cache lacks it the sections say UNMEASURED with the reason and the npm ci command.
+export PINNED_TS_OFFLINE=1
 PINNED_WHY=""
 if [ -z "${CHECK_MODS_TS_DIR:-}" ]; then
   if . "$ROOT/tools/lib/pinned-compiler.sh"; then

@@ -32,7 +32,9 @@
 # why it could not, for the caller's UNMEASURED line (L411, L11). Run as a script, it does the same
 # and prints it.
 #
-# PINNED_TS_NPM names the npm to run (tests); PINNED_TS_INSTALL_DEADLINE bounds it, in seconds.
+# PINNED_TS_NPM names the npm to run (tests); PINNED_TS_INSTALL_DEADLINE bounds it, in seconds;
+# PINNED_TS_OFFLINE=1 reads the npm cache only, never the registry, which tests/test-mods.sh sets
+# so that no suite run reaches the network.
 
 PINNED_TS_MARK=".pinned-typescript-store"
 
@@ -62,7 +64,7 @@ _pc_bounded(){
 # Install the pin from $1 (the tools/typescript folder) into $3, the shared install for key $4 under
 # $2. Returns 1 with PINNED_TS_WHY set when it cannot.
 _pc_install(){
-  local dir="$1" root="$2" store="$3" key="$4" npm deadline t pid tmp rc said
+  local dir="$1" root="$2" store="$3" key="$4" npm deadline t pid tmp rc said mode offline_note
   npm="${PINNED_TS_NPM:-$(command -v npm 2>/dev/null)}"
   if [ -z "$npm" ] || [ ! -x "$npm" ]; then
     PINNED_TS_WHY="npm is not installed (looked for ${PINNED_TS_NPM:-npm on PATH}), so the pinned compiler could not be installed"
@@ -88,14 +90,21 @@ _pc_install(){
     PINNED_TS_WHY="could not copy $dir/package.json and package-lock.json into $tmp to install from"
     return 1
   fi
+  # A test suite sets PINNED_TS_OFFLINE=1 so no suite run ever asks the registry: the npm cache or
+  # nothing. Everything else prefers the cache and asks the registry only for what it lacks.
+  mode=--prefer-offline offline_note=""
+  if [ "${PINNED_TS_OFFLINE:-}" = 1 ]; then
+    mode=--offline
+    offline_note=" (PINNED_TS_OFFLINE is set, so only the npm cache was read and the registry was not asked)"
+  fi
   # The log stays with the install, so what npm did is there to read later (L338).
-  _pc_bounded "$deadline" "$npm" ci --prefix "$tmp" --prefer-offline --no-audit --no-fund > "$tmp/npm-ci.log" 2>&1; rc=$?
+  _pc_bounded "$deadline" "$npm" ci --prefix "$tmp" "$mode" --no-audit --no-fund > "$tmp/npm-ci.log" 2>&1; rc=$?
   if [ "$rc" -eq 124 ]; then
     PINNED_TS_WHY="npm ci did not finish within $deadline s (offline with the package not in the npm cache, or the registry did not answer), so it was stopped"
   elif [ "$rc" -ne 0 ]; then
     said="$(awk 'tolower($0) ~ /error/ && n < 3 { sub(/^ */, ""); print; n++ }' "$tmp/npm-ci.log" | paste -sd';' -)"
     [ -n "$said" ] || said="$(sed '/^ *$/d' "$tmp/npm-ci.log" | tail -n 1)"
-    PINNED_TS_WHY="npm ci exited $rc: ${said:-it printed nothing}"
+    PINNED_TS_WHY="npm ci exited $rc: ${said:-it printed nothing}$offline_note"
   elif [ ! -x "$tmp/node_modules/.bin/tsc" ]; then
     PINNED_TS_WHY="npm ci finished but left no node_modules/.bin/tsc"
   fi

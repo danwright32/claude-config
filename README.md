@@ -2365,7 +2365,9 @@ every new worktree is, gets it with no manual step (#1496): `tools/lib/pinned-co
 and pin, kept in the clone's common git folder at `.git/pinned-typescript/<lockfile hash>-<platform>`.
 Only the first checkout of a clone after the pin moves installs it, with `npm ci --prefer-offline`
 (from the npm cache, 0.9 s measured on 2026-10-22, the registry only for what the cache lacks),
-stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). Two runs
+stopped with everything it started after `PINNED_TS_INSTALL_DEADLINE` seconds (60). A test suite
+never asks the registry: `tests/test-mods.sh` sets `PINNED_TS_OFFLINE=1`, which reads the npm cache
+only, so where the cache lacks the package its sections say UNMEASURED with that reason. Two runs
 installing at once each install into a folder of their own and publish it by one rename, so neither
 can see the other's half made copy and no lock is left behind by a run that is killed. A
 `node_modules` it did not make (an `npm ci` by hand, which still works) is never touched, and an
