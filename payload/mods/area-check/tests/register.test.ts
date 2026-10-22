@@ -351,9 +351,10 @@ test('the ranking is reused for the same origin head on the same day, and made a
   expect(numstats()).toBe(2)
 })
 
-// Lessons review of 5a4148a: a ranking another edit started runs under that edit's deadline, so a
-// later edit sharing it must not be told it ran out of time while its own time remains.
-test("a later edit sharing a ranking that ran out of the first edit's time makes its own, within its own deadline", KIT, async ($, on) => {
+// Lessons reviews of 5a4148a and adb5a9e: a ranking another edit started runs under that edit's
+// deadline, so it fails when that edit's time is spent (here its git log is killed at the timeout it
+// was given), and a later edit sharing it, whose own time remains, makes the ranking again.
+test("a later edit sharing a ranking that failed for lack of the first edit's time makes its own, within its own deadline", KIT, async ($, on) => {
   const w = world(on)
   w.ctl.slowLogOnce = true
   await $.tool.call({ tool: 'Edit', tool_use_id: 'c1', file_path: `${APP}/src/lib/slack.ts`, old_string: 'a', new_string: 'b' } as never)

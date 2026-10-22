@@ -105,7 +105,8 @@ const runIn = async ($: EngineInterface, d: Deadline, argv: string[], init: { en
 // (Late), by a command killed at its timeout, or by anything else. Lessons reviews of 5a4148a, 42547b6
 // and adb5a9e found that one cause at a time; it is one rule, kept here once: an edit that JOINED a
 // read which then failed, for whatever reason, starts it again, once, under its own deadline. An edit
-// that started the read itself is not retried, so a real outage costs each edit one read, never two.
+// that started the read itself is not retried, so in a real outage the edit that started a read pays
+// for one, and an edit that joined it for one more of its own, never further.
 const shared = async <T>(
   $: EngineInterface,
   d: Deadline,
