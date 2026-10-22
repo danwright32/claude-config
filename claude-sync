@@ -5311,7 +5311,7 @@ report_pinned_compiler_installs(){
   kb="$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install" { print $3 }' | scratch_total_kb)"
   echo "--- shared TypeScript compiler installs ---"
   if [ "$kb" = "?" ]; then kb="a size not measured (du ran out of time)"; else kb="$(scratch_human_size "$kb")"; fi
-  echo "  $n shared TypeScript compiler install$([ "$n" -eq 1 ] || echo s) in $(dirname "$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install" { print $3; exit }')"), $kb in all, ${unlinked:-0} linked by no checkout."
+  echo "  $n shared TypeScript compiler install$([ "$n" -eq 1 ] || echo s) in $(dirname "$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install" && !seen { print $3; seen = 1 }')"), $kb in all, ${unlinked:-0} linked by no checkout."
   if [ "${unlinked:-0}" -gt 0 ]; then
     echo "  Those are removed the next time a new pin is installed, or now with: bash $lib --prune $dir"
   fi

@@ -317,7 +317,7 @@ pinned_compiler_prune(){
     # Only ever a folder directly inside the store, never a link (a second guard on the plan's).
     [ -n "$name" ] && [ "$path" = "$_PC_ROOT/$name" ] && [ -d "$path" ] && [ ! -L "$path" ] || continue
     if [ "$kind" = leftover ]; then rm -rf "$path"; continue; fi
-    kb="$(du -sk "$path" 2>/dev/null | awk '{ print $1 + 0; exit }')"
+    kb="$(du -sk "$path" 2>/dev/null | awk 'NR == 1 { print $1 + 0 }')"
     doomed="$_PC_ROOT/.$name.pruning.$$"
     # A seam for the test of a checkout linking to it between the plan and its removal.
     [ -z "${PINNED_TS_TEST_BEFORE_REMOVE:-}" ] || "$PINNED_TS_TEST_BEFORE_REMOVE" "$path"
