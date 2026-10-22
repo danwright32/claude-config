@@ -985,7 +985,17 @@ head for a pull request can lag a push (Bidspoke #2577 showed the old commit for
 branch's tip when it first sees a head and again before the gates, waits two minutes for GitHub to
 catch up, then sets the pull request's base again to the one it has, which makes GitHub read the
 branch, waits two more for the real head, and stops in its own words if that has not taken
-(claude-config#1458). It accepts only the merge
+(claude-config#1458). The same lag can follow its own update: on 2026-10-22 PET #1885's branch moved
+when it was updated while the pull request kept showing the old head for over 45 minutes, and the
+helper updated it seven more times. Now the look after an update reads the branch again, says the
+pull request has not caught up with its branch, waits through that lag (a 404 from the compare
+included) as above, and never updates the same head twice; four minutes after the update with
+nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
+repository's settings, merges by the one method they allow, and when they allow more (PET and
+claude-config allow all three) stops at once naming them rather than at the merge after the wait.
+It does not guess squash from history, which GitHub does not record a method for. While it waits it
+says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
+one can be told apart (claude-config#1476). It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
