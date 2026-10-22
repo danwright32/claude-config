@@ -736,6 +736,16 @@ test('a job kept with a reason is published as kept, with the name the band show
   expect(lastRecs(w)[0]?.kept).toEqual({ name: 'dev server', reason: 'Dan is clicking through the site', quiet: false, at: 5 * MIN })
 })
 
+// #1491's class: a reason Claude ends with its own full stop is said with one, never two.
+test('a keep reason that ends in a full stop is said with one full stop after it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is clicking through the site.' }))) as { result?: unknown }
+  expect(String(r.result)).toContain('Kept job1 (dev server): Dan is clicking through the site. It shows on the status bar')
+})
+
 // #707: this mod answers its keep tool itself, so the secret guard beneath it never sees the call;
 // it asks mod-kit's screen first. A reason carrying a token is refused before the job is kept or
 // published for the status bar.

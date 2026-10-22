@@ -499,6 +499,10 @@ const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet =
   return false
 }
 
+// Words from elsewhere (a guard's refusal, Claude's reason) set inside a sentence of the watcher's,
+// with any full stop of their own taken off so the sentence ends with one (#1491).
+const clause = (text: string) => text.trim().replace(/\.+$/, '')
+
 const stoppedNotice = (job: Job, said: string) =>
   `Background job ${job.id} (${shortCommand(job.command)}) was stopped: it is a poll loop that only ever repeated "${said}", so it never succeeded.`
 // A stop that did not happen, whoever said no: Claude Code, or from 2.1.307 any mod's tool.check
@@ -506,7 +510,7 @@ const stoppedNotice = (job: Job, said: string) =>
 // TaskStop denied by plugin <mod>: <reason>" (#1491). The job is still on the record and still looked
 // at, so the next look may stop it, and Claude reads that it still runs (L11).
 const notStoppedNotice = (job: Job, said: string, why: string) =>
-  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${why.trim().replace(/\.+$/, '')}. It is still running, and the watcher is still watching it. Stop it with TaskStop.`
+  `Background job ${job.id} (${shortCommand(job.command)}) is a poll loop that only ever repeated "${said}", but it could not be stopped: ${clause(why)}. It is still running, and the watcher is still watching it. Stop it with TaskStop.`
 
 const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: Live) => {
   // What a stop sent by a look since given up came to is said, and acted on, here (#706).
@@ -1016,7 +1020,7 @@ export const register: Register = on => {
       noteReminded(input.tool_use_id)
     }
     const quietly = kept.quiet ? ' It is quiet by design, so it will not be reported for printing nothing.' : ''
-    return { result: `Kept ${id} (${name}): ${reason}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
+    return { result: `Kept ${id} (${name}): ${clause(reason)}. It shows on the status bar by its name, state and run time, like "${name} running ${runFor(kept.at - current.startedAt)}".${quietly}`, ...(said.length ? { context: said } : {}) }
   })
 
   on('tool.call', async ($, e, next) => {
