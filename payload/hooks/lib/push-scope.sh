@@ -210,7 +210,12 @@ ps__crude_cut() {   # $1 = command
 # past leading reserved words (then, do, {, !, time) and assignments, as written; PS__R_ASSIGNS, those
 # assignments, one per line, outer quotes removed; PS__R_TOOL, the gh or git subcommand it runs as gh
 # and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git), or else
-# the subcommand of rtk's own it runs, `rtk init` (rtk_field, read by ps_runs_at rtk, claude-config#1468). A command that read on its own is exactly
+# the subcommand of rtk's own it runs, `rtk init` (rtk_field, read by ps_runs_at rtk, claude-config#1468);
+# PS__R_WRAP, empty for a command that hands no string to a shell or eval, else the wrapper's name
+# (`bash -c`, `eval`, `env -S`), with 0x1d and the reason after it when its string cannot be read
+# (ps_unreadable). The commands a wrapper runs are records of their own right after it (shell-words.py
+# wrapped, claude-config#1478), so the wrapper's record is a container, never an action of its own
+# (ps__action_records). A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
 # Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
@@ -222,13 +227,13 @@ PS__M_ENV=""
 PS__HIT=0
 PS__REC=0
 PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
-PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=()
+PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=(); PS__R_WRAP=()
 # How many readings are kept before they are all dropped, which bounds what a lookup compares.
 PS__M_MAX=256
 
 ps__forget() {
   PS__M_KEY=(); PS__M_RC=(); PS__M_FIRST=(); PS__M_COUNT=()
-  PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=()
+  PS__R_DIR=(); PS__R_TEXT=(); PS__R_WORDS=(); PS__R_GITDIR=(); PS__R_CMD=(); PS__R_ASSIGNS=(); PS__R_TOOL=(); PS__R_WRAP=()
 }
 
 # Reads $1 unless this shell already holds its reading, and points PS__HIT at it. Returns 0 for a
@@ -238,7 +243,7 @@ ps__forget() {
 # not blank. Never call it in a command substitution where the answer matters: what it keeps would
 # stay in the subshell.
 ps__read() {   # $1 = command
-  local env="$PATH"$'\x1f'"$PS_SHELL_WORDS" k n out rc rec dir text words gitdir alone first count cmd assigns tool
+  local env="$PATH"$'\x1f'"$PS_SHELL_WORDS" k n out rc rec dir text words gitdir alone first count cmd assigns tool wrap
   if [ "$env" != "$PS__M_ENV" ]; then ps__forget; PS__M_ENV="$env"; fi
   n=${#PS__M_KEY[@]}
   k=0
@@ -259,11 +264,11 @@ ps__read() {   # $1 = command
   local -a alone_at=()
   while IFS= read -r -d $'\x1e' rec; do
     # Split by read, never by pattern removal, which tries every prefix of a 26 KB command.
-    IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns tool <<< "$rec"
+    IFS=$'\x1c' read -r -d '' dir text words gitdir alone cmd assigns tool wrap <<< "$rec"
     # The last field takes read's trailing newline.
-    tool="${tool%$'\n'}"; assigns="${assigns%$'\n'}"
+    wrap="${wrap%$'\n'}"; tool="${tool%$'\n'}"; assigns="${assigns%$'\n'}"
     PS__R_DIR+=("$dir"); PS__R_TEXT+=("$text"); PS__R_WORDS+=("$words"); PS__R_GITDIR+=("$gitdir")
-    PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool")
+    PS__R_CMD+=("$cmd"); PS__R_ASSIGNS+=("$assigns"); PS__R_TOOL+=("$tool"); PS__R_WRAP+=("$wrap")
     [ "$alone" = 1 ] && [ "$text" != "$1" ] && alone_at+=($((first + count)))
     count=$((count + 1))
   done < <(printf '%s' "$out")
@@ -274,10 +279,34 @@ ps__read() {   # $1 = command
     PS__R_DIR+=(""); PS__R_TEXT+=("${PS__R_TEXT[$k]}")
     PS__R_WORDS+=("${PS__R_WORDS[$k]}"); PS__R_GITDIR+=("${PS__R_GITDIR[$k]}")
     PS__R_CMD+=("${PS__R_CMD[$k]}"); PS__R_ASSIGNS+=("${PS__R_ASSIGNS[$k]}"); PS__R_TOOL+=("${PS__R_TOOL[$k]}")
+    PS__R_WRAP+=("${PS__R_WRAP[$k]}")
     PS__M_KEY+=("${PS__R_TEXT[$k]}"); PS__M_RC+=(0)
     PS__M_FIRST+=($((${#PS__R_TEXT[@]} - 1))); PS__M_COUNT+=(1)
   done
   return "$rc"
+}
+
+# Does the command hold a wrapper whose command cannot be read (claude-config#1478)? A shell's -c
+# string, eval's words or env -S's string are read as commands of their own (lib/shell-words.py
+# wrapped), so every gate sees `bash -c 'git push --force'` as the push it is; but `bash -c "$CMD"`,
+# a string with a quote that never closes, a shell fed its commands on its input, or an eval that
+# changes directory cannot be read, and a gate that took them for nothing would pass what it cannot
+# see. Returns 0 with PS_UNREAD_WRAPPER (`bash -c`, `eval`, ...) and PS_UNREAD_WHY set for the first
+# one; 1 when there is none, or nothing could read the command (ps_reader_missing says which).
+ps_unreadable() {   # $1 = command
+  local i end u rc
+  PS_UNREAD_WRAPPER=""; PS_UNREAD_WHY=""
+  ps__read "$1"; rc=$?
+  [ "$rc" -eq 1 ] && return 1
+  i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
+  while [ "$i" -lt "$end" ]; do
+    u="${PS__R_WRAP[$i]}"
+    case "$u" in
+      *$'\x1d'*) PS_UNREAD_WRAPPER="${u%%$'\x1d'*}"; PS_UNREAD_WHY="${u#*$'\x1d'}"; return 0 ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
 }
 
 # Sets PS__REC to the index of a record whose text is exactly $1, in any reading this shell holds,
@@ -494,7 +523,8 @@ ps_repo_dirs() {
   # Read here first, so the subshell below and every question after it find the reading (#1040).
   ps__read "$cmd" || :
   recs="$(ps__action_records "$cmd" "$pred")"; rc=$?
-  grep -Eq '(^|[[:space:];&|({])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
+  # A cd may open a string a shell or eval runs, `bash -c 'cd <repo> && git push'` (#1478).
+  grep -Eq '(^|[[:space:];&|({"'"'"'])cd([[:space:]]|$)|[[:space:]]-C([[:space:]]|$)' <<< "$cmd" && names=1
   if [ "$rc" -eq 2 ] && [ "$names" -eq 1 ]; then
     echo "push-scope: this command names a directory with a cd or a git -C, and nothing here could read which one is in force: $PS_SHELL_WORDS is missing or python3 is not on PATH. Nothing was judged rather than judging ${cwd:-the session directory} in its place (claude-config#1017, L490). Reinstall the hooks (claude-sync pull) or install python3." >&2
     return 2
@@ -639,17 +669,22 @@ ps_cd_target() {   # $1 = command  $2 = the action's predicate (default ps_is_gi
 # that leaves an action judged.
 ps__action_records() {   # $1 = command  $2 = the action's predicate
   local pred="${2:-ps_is_git_push}" rc out="" text b i end j
-  local -a dirs=() texts=()
+  local -a dirs=() texts=() wraps=()
   # Read in THIS shell (#1040), and the records copied out before any predicate runs: a predicate
   # reads its own command, and a reading can drop the ones it holds (PS__M_MAX).
   ps__read "$1"; rc=$?
   [ "$rc" -eq 1 ] && return 2
   i="${PS__M_FIRST[$PS__HIT]}"; end=$((i + PS__M_COUNT[PS__HIT]))
-  while [ "$i" -lt "$end" ]; do dirs+=("${PS__R_DIR[$i]}"); texts+=("${PS__R_TEXT[$i]}"); i=$((i + 1)); done
+  while [ "$i" -lt "$end" ]; do
+    dirs+=("${PS__R_DIR[$i]}"); texts+=("${PS__R_TEXT[$i]}"); wraps+=("${PS__R_WRAP[$i]}"); i=$((i + 1))
+  done
   [ "${#texts[@]}" -gt 0 ] || return 1
   j=0
   while [ "$j" -lt "${#texts[@]}" ]; do
     text="${texts[$j]}"; j=$((j + 1))
+    # A wrapper (`bash -c '...'`, eval) holds its commands as records of their own after it, each in
+    # the directory it runs in; the wrapper itself is not a second action (claude-config#1478).
+    [ -z "${wraps[$((j - 1))]}" ] || continue
     "$pred" "$text" </dev/null || continue
     case "$text" in
       *'$('*|*'`'*)
@@ -705,7 +740,8 @@ ps_has_override() {
 }
 
 ps_commit_in_chain() {
-  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]]|$)' <<< "$1"
+  # A quote may stand either side, since the commit may be a string a shell or eval runs (#1478).
+  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+commit([[:space:]"'"'"']|$)' <<< "$1"
 }
 
 # Does the command stage with a git add, and does its commit stage for itself with -a? Two
@@ -713,7 +749,7 @@ ps_commit_in_chain() {
 # `commit -a` stages every tracked change and names nothing. The first is a cheap filter only;
 # ps__read_adds decides what an add really is.
 ps__git_add_in_chain() {
-  grep -Eq '(^|[[:space:];&|])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]]|$)' <<< "$1"
+  grep -Eq '(^|[[:space:];&|"'"'"'])([^[:space:]]*/)?(rtk[[:space:]]+)?git([[:space:]]+[^[:space:]]+)*[[:space:]]+add([[:space:]"'"'"']|$)' <<< "$1"
 }
 ps__commit_stages_all() {
   grep -Eq 'git[[:space:]][^&|;]*commit[[:space:]][^&|;]*-[A-Za-z]*a' <<< "$1"
@@ -751,7 +787,12 @@ try:
     shell_words = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shell_words)
     git_command = shell_words.git_command
+    # The commands a wrapper runs (bash -c, eval, env -S, claude-config#1478), as segments of their own
+    # beside the cut below, and each wrapper whose string cannot be read. The cut below still reads
+    # what it always read; these only add to it.
+    wrapped = [r for r in shell_words.every_command(cmd) if r[4] > 0 or r[3]]
 except Exception:
+    wrapped = []
     # With no reader of git, any segment naming git and add is an add, the words after add its own:
     # the reading that sees more adds, never fewer (L42).
     def git_command(toks):
@@ -762,8 +803,17 @@ except Exception:
 EVERYTHING = {"-A", "--all", "--no-ignore-removal", ".", "./", ":/", "*"}
 TRACKED_ONLY = {"-u", "--update"}
 REDIRECT = re.compile(r"\d*(>>?|<<?)&?")
-saw_add, takes_all, tracked, unreadable, paths = False, False, False, False, []
-for seg in re.split(r"&&|\|\||;|\||\n", cmd):
+saw_add, takes_all, tracked, unreadable, unread_wrapper, paths = False, False, False, False, False, []
+segments = re.split(r"&&|\|\||;|\||\n", cmd)
+for _, text, wrapper, why, depth in wrapped:
+    if why:
+        # A wrapper whose string cannot be read, in a command naming an add: what it stages cannot be
+        # told, so it is an add nobody can account for (UNKNOWN), never no add at all (L98).
+        if re.search(r"(^|[^A-Za-z0-9_-])add([^A-Za-z0-9_-]|$)", cmd):
+            saw_add, unreadable, unread_wrapper = True, True, True
+        continue
+    segments.append(text)
+for seg in segments:
     try:
         toks, readable = shlex.split(seg, posix=True), True
     except ValueError:
@@ -796,7 +846,7 @@ for seg in re.split(r"&&|\|\||;|\||\n", cmd):
         elif a and not a.startswith("-") and readable:
             paths.append(a)
 if mode == "takes":
-    print("yes" if (takes_all or tracked) else "no")
+    print("yes" if (takes_all or tracked or unread_wrapper) else "no")
 elif not saw_add:
     print("NONE")
 elif takes_all:

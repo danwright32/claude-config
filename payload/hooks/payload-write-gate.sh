@@ -310,7 +310,19 @@ shell_text = "\n".join(shell)
 WRITERS = ("tee", "cp", "mv", "rm", "touch", "mkdir", "patch", "install", "rsync", "truncate",
            "ln", "ditto", "unlink", "rmdir")
 base = cwd
-for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
+segments = re.split(r"&&|\|\||;|\||\n", shell_text)
+# The commands a shell runs from its -c string, eval from its words and env -S from its string
+# (claude-config#1478), read by lib/shell-words.py as commands of their own, each after a cd to the
+# directory it runs in, so a cd inside one moves only what follows it there. Only added to the cut
+# above, which still reads everything it always read.
+try:
+    for d, text, _, _, depth in _sw.every_command(cmd):
+        if depth > 0:
+            where = d if d.startswith("/") else (os.path.join(cwd, d) if d else cwd)
+            segments += ["cd \"%s\"" % where] + re.split(r"&&|\|\||;|\||\n", text)
+except Exception:
+    pass
+for seg in segments:
     # A redirect TARGET: the word after > or >> (or 2>, &>, a fd form), attached or separated.
     for m in re.finditer(r"(?:^|[^0-9<>&|])(?:[0-9]*|&)>>?\s*([^\s;&|<>]+)", seg):
         add(m.group(1), base)
@@ -322,8 +334,14 @@ for seg in re.split(r"&&|\|\||;|\||\n", shell_text):
         k += 1
     if k >= len(words):
         continue
-    head = words[k].lstrip("(").rsplit("/", 1)[-1]
-    args = words[k + 1:]
+    # Past the launchers that run the command after them, sudo, env, nohup, timeout, xargs and the rest
+    # (lib/shell-words.py RUNNERS, claude-config#1478), so `sudo cp x payload/y` is the copy it runs.
+    try:
+        past = _sw.command_rest(" ".join(words[k:]))[0].split() or words[k:]
+    except Exception:
+        past = words[k:]
+    head = past[0].lstrip("(").rsplit("/", 1)[-1]
+    args = past[1:]
     found = git_command(words[k:])
     if found:
         # Past the options git itself takes to the subcommand: -C names the directory the paths

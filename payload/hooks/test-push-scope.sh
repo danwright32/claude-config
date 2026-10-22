@@ -1192,6 +1192,81 @@ else check "a command with no add is not blamed on the missing reader" ok; fi
 
 rm -rf "$NOPY_ROOT"
 
+# ---------------------------------------------------------------------------
+# A command another program runs is judged as the same command written bare (claude-config#1478).
+# Every question here read only commands in command position, so `bash -c 'git push --force'`,
+# `eval`, `xargs git push`, `nohup git push` and `rtk proxy git push` were no push, commit or add to
+# any gate. Each wrapper is asked about each action, and the bare form is asked beside it, so a
+# wrapper that is seen only because the bare form is not seen either cannot pass (L1).
+# ---------------------------------------------------------------------------
+WR="$(mktemp -d "${TMPDIR:-/tmp}/claude-sync-wrapped.XXXXXXXX")"
+case "${WR%/}" in ''|/|"${HOME%/}") echo "refusing: throwaway came back as '$WR'" >&2; exit 2 ;; esac
+git init -q "$WR/target" 2>/dev/null
+git init -q "$WR/session" 2>/dev/null
+WT="$WR/target"; WS="$WR/session"
+# Each wrapper with a %s where the command goes. The string wrappers hand it over single quoted.
+WRAPPERS=("bash -c '%s'" "sh -c '%s'" "zsh -c '%s'" "bash -lc '%s'" "bash -e -o pipefail -c '%s'"
+          "/bin/bash -c '%s'" "eval '%s'" "eval %s" "env -S '%s'" "xargs %s" "xargs -n 1 -I{} %s"
+          "nohup %s" "time %s" "time -p %s" "nice -n 5 %s" "timeout 30 %s" "caffeinate -i %s"
+          "env A=1 %s" "command %s" "sudo %s" "rtk proxy %s" "sudo -u dan bash -c '%s'"
+          "nohup bash -c \"%s\"" "find . -maxdepth 0 -exec %s \\;" "find . -maxdepth 0 -ok %s \;" "watch -n 5 '%s'"
+          "watch -x %s" "script -q /dev/null %s" "script -q -c '%s' /dev/null" "parallel %s ::: x" "parallel ::: '%s'")
+wrap() { printf "$1" "$2"; }   # wrap <wrapper> <command>
+asked() { if "$1" "$2"; then echo yes; else echo no; fi; }   # asked <predicate> <command>
+for pair in "ps_is_git_push|git push --force origin main" "ps_is_git_commit|git commit -m x" \
+            "ps_is_git_add|git add -A" "ps_is_gh_pr_create|gh pr create --fill"; do
+  pred="${pair%%|*}"; bare="${pair#*|}"
+  [ "$(asked "$pred" "$bare")" = yes ] && check "#1478 control: $pred sees the bare $bare" ok \
+    || check "#1478 control: $pred sees the bare $bare" "the bare form was not seen"
+  for w in "${WRAPPERS[@]}"; do
+    c="$(wrap "$w" "$bare")"
+    [ "$(asked "$pred" "$c")" = yes ] && check "#1478 $pred sees: $c" ok || check "#1478 $pred sees: $c" "not seen"
+  done
+done
+# Where it runs: the cd in force for the wrapper, and a cd inside the string.
+for w in "${WRAPPERS[@]}"; do
+  c="cd $WT && $(wrap "$w" "git push")"
+  got="$(ps_repo_dir "$c" "$WS" 2>/dev/null)"
+  [ "$got" = "$WT" ] && check "#1478 the cd before the wrapper names the repo: $c" ok \
+    || check "#1478 the cd before the wrapper names the repo: $c" "resolved to [$got]"
+done
+for w in "bash -c '%s'" "sh -c '%s'" "eval '%s'" "env -S '%s'" "nohup bash -c \"%s\""; do
+  c="$(wrap "$w" "cd $WT && git push")"
+  got="$(ps_repo_dir "$c" "$WS" 2>/dev/null)"
+  [ "$got" = "$WT" ] && check "#1478 a cd inside the string names the repo: $c" ok \
+    || check "#1478 a cd inside the string names the repo: $c" "resolved to [$got]"
+done
+got="$(ps_repo_dir "bash -c 'cd $WT' && git push" "$WS" 2>/dev/null)"
+[ "$got" = "$WS" ] && check "#1478 a cd inside bash -c does not move a push after it" ok \
+  || check "#1478 a cd inside bash -c does not move a push after it" "resolved to [$got]"
+# The commit chained before a push, and what its adds take.
+for w in "${WRAPPERS[@]}"; do
+  c="$(wrap "$w" "git commit -m x") && git push"
+  ps_commit_in_chain "$c" && check "#1478 a commit in the chain is seen: $c" ok \
+    || check "#1478 a commit in the chain is seen: $c" "not seen"
+  c="$(wrap "$w" "git add -A") && git commit -m x && git push"
+  got="$(ps_add_scope "$c" | awk 'NR == 1')"
+  [ "$got" = ALL ] && check "#1478 an add of everything is read: $c" ok || check "#1478 an add of everything is read: $c" "scope [$got]"
+  ps_add_takes_all "$(wrap "$w" "git add -A")" && check "#1478 ps_add_takes_all: $w" ok || check "#1478 ps_add_takes_all: $w" "not seen"
+done
+got="$(ps_add_scope "bash -c 'git add a.txt b.txt && git commit -m x' && git push" | tr '\n' ' ')"
+[ "$got" = "PATHS a.txt b.txt " ] && check "#1478 the paths an add in a string names are read" ok \
+  || check "#1478 the paths an add in a string names are read" "scope [$got]"
+# A wrapper whose string cannot be read is never read as no add: the gates widen and say so (L98).
+got="$(ps_add_scope "CMD='git add -A'; bash -c \"\$CMD\" && git commit -m x && git push" | awk 'NR == 1')"
+[ "$got" = UNKNOWN ] && check "#1478 an add in a string that cannot be read is UNKNOWN" ok \
+  || check "#1478 an add in a string that cannot be read is UNKNOWN" "scope [$got]"
+ps_add_takes_all "CMD='git add -A'; eval \"\$CMD\"" && check "#1478 and an unread add is taken to take everything" ok \
+  || check "#1478 and an unread add is taken to take everything" "read as scoped"
+# What only mentions a wrapper is still text.
+for c in "echo \"bash -c 'git push'\"" "git commit -m \"eval git push\"" "grep -n 'xargs git push' notes.md" \
+         "$(printf "cat <<'EOF'\nbash -c 'git push'\nEOF")"; do
+  [ "$(asked ps_is_git_push "$c")" = no ] && check "#1478 control: no push in: $c" ok || check "#1478 control: no push in: $c" "seen as a push"
+done
+got="$(ps_add_scope "echo \"bash -c 'git add -A'\" && git commit -m x && git push" | awk 'NR == 1')"
+[ "$got" = INDEX ] && check "#1478 control: an add only echoed takes nothing" ok || check "#1478 control: an add only echoed takes nothing" "scope [$got]"
+rm -rf "$WR"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

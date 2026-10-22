@@ -192,6 +192,9 @@ if ! gh issue create --repo "$repo" --title "$t"; then exit 1; fi
 gh -R "$repo" issue create --title "$t"
 env GH_TOKEN="$tok" gh issue --repo "$repo" create --title "$t"
 echo "gh -R x issue create is quoted here and is not a call"
+bash -c 'gh issue create --repo x --title t'
+nohup gh issue create --repo x --title t
+echo "bash -c 'gh issue create --title t' is quoted here and is not a call"
 SH
 scan
 [ "$rc" -eq 1 ] && ok || bad "a script filing issues without their fields fails the scan (rc=$rc)" "$out"
@@ -206,7 +209,10 @@ has "$out" "$FILE:8:" && bad "labels passed through an array count" "$out" || ok
 fires S1 14 "#1188 a call with -R in front of issue"
 fires S1 15 "#1188 a call behind env with --repo between issue and create"
 has "$out" "$FILE:16:" && bad "#1188 a quoted mention is not a call" "$out" || ok
-has "$out" "findings=7" && ok || bad "exactly the seven bare calls are flagged" "$out"
+fires S1 17 "#1478 a call a shell runs from its -c string"
+fires S1 18 "#1478 a call through nohup"
+has "$out" "$FILE:19:" && bad "#1478 a quoted mention of a wrapped call is not a call" "$out" || ok
+has "$out" "findings=9" && ok || bad "exactly the nine calls are flagged" "$out"
 
 # The calls are read by lib/shell-words.py (#1188). Without it the scan cannot tell a call from a
 # mention, so it says so as a finding of its own rather than passing the script, and the audit's

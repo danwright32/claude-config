@@ -61,6 +61,11 @@ refused "after a quote never closed, read by the crude cut" "echo don't; gh pr c
 refused "#1188 -R in front of pr checks" "gh -R acme/widget pr checks 12 --watch"
 refused "#1188 -R between run and watch" "gh run -R acme/widget watch 123456"
 refused "#1188 --repo=x in front, behind env" "env GH_TOKEN=x gh --repo=acme/widget pr checks 12 --watch -i 5"
+# Run by another program it is the same watch (claude-config#1478).
+refused "#1478 in bash -c" "bash -c 'gh pr checks 12 --watch'"
+refused "#1478 through eval" "eval gh run watch 123456"
+refused "#1478 through nohup in the background" "nohup gh pr checks 12 --watch &"
+refused "#1478 through timeout" "timeout 600 gh run watch 123456"
 judge "gh -R acme/widget pr checks 12 --watch"
 check "#1188 the command it suggests keeps the flag that was in front" "gh pr checks -R acme/widget 12 --watch --interval 60" "$out"
 

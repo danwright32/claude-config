@@ -458,6 +458,51 @@ for c in "${FB_OVER_READ[@]}"; do
     || check "#1449 where the fallback reads more, the gate on it refuses: $c" "shared and fallback did not split refuse and pass"
 done
 
+# ---------------------------------------------------------------------------
+# A create another program runs (claude-config#1478): a shell's -c string, eval, env -S and the
+# launchers, read by lib/shell-words.py (wrapped, RUNNERS). Each is found as the bare create is, its
+# flags read from inside the string, and the gate refuses an incomplete one as it refuses it bare.
+# ---------------------------------------------------------------------------
+WRAPPED_CREATES=("bash -c 'gh issue create -t x -m M'" "sh -c \"gh issue create -t x -m M\"" "zsh -c 'gh issue create -t x -m M'"
+                 "bash -lc 'gh issue create -t x -m M'" "eval 'gh issue create -t x -m M'" "eval gh issue create -t x -m M"
+                 "env -S 'gh issue create -t x -m M'" "xargs gh issue create -t x -m M" "nohup gh issue create -t x -m M"
+                 "time gh issue create -t x -m M" "nice -n 5 gh issue create -t x -m M" "timeout 30 gh issue create -t x -m M"
+                 "caffeinate -i gh issue create -t x -m M" "command gh issue create -t x -m M"
+                 "rtk proxy gh issue create -t x -m M" "sudo -u dan bash -c 'gh issue create -t x -m M'"
+                 "echo hi && bash -c 'echo a; gh issue create -t x -m M'"
+                 "find . -maxdepth 0 -exec gh issue create -t x -m M \\;" "watch -n 60 'gh issue create -t x -m M'"
+                 "script -q /dev/null gh issue create -t x -m M" "parallel gh issue create -t x -m M ::: y")
+for c in "${WRAPPED_CREATES[@]}"; do
+  [ "$(ask count "$c")" = "1" ] && check "#1478 a wrapped create is found: $c" ok || check "#1478 a wrapped create is found: $c" "got $(ask count "$c")"
+  [ "$(ask milestones "$c")" = "M" ] && check "#1478 and its flags are its own: $c" ok || check "#1478 and its flags are its own: $c" "got $(ask milestones "$c")"
+done
+[ "$(ask count "bash -c \"sh -c 'gh issue create -t x'\"")" = "1" ] \
+  && check "#1478 a shell inside a shell" ok || check "#1478 a shell inside a shell" "not found"
+[ "$(ask found "bash -c 'gh pr edit 3 --body-file b.md'")" = "pr edit" ] \
+  && check "#1478 a body file command in a string is found" ok || check "#1478 a body file command in a string is found" "got $(ask found "bash -c 'gh pr edit 3 --body-file b.md'")"
+[ "$(ask bodyfile "bash -c 'cd /x && gh issue create --body-file b.md'")" = "/x/b.md" ] \
+  && check "#1478 a body file is read where the string runs" ok \
+  || check "#1478 a body file is read where the string runs" "got $(ask bodyfile "bash -c 'cd /x && gh issue create --body-file b.md'")"
+[ "$(ask bodyfile "cd /y && bash -c 'gh issue create --body-file b.md'")" = "/y/b.md" ] \
+  && check "#1478 and where the wrapper runs" ok \
+  || check "#1478 and where the wrapper runs" "got $(ask bodyfile "cd /y && bash -c 'gh issue create --body-file b.md'")"
+# What only mentions one stays text, and a wrapper that cannot be read hides no create beside it:
+# that one is check-wrapped-commands.sh's to refuse, never a reason to pass the rest.
+for c in "echo \"bash -c 'gh issue create -t x'\"" "grep \"eval gh issue create\" notes.md" \
+         "$(printf "cat <<'EOF'\nbash -c 'gh issue create -t x'\nEOF")"; do
+  [ "$(ask count "$c")" = "0" ] && check "#1478 control: no create in: $c" ok || check "#1478 control: no create in: $c" "got $(ask count "$c")"
+done
+[ "$(ask count 'eval "$X"; gh issue create -t x')" = "1" ] \
+  && check "#1478 an unreadable wrapper beside a create leaves the create found" ok \
+  || check "#1478 an unreadable wrapper beside a create leaves the create found" "got $(ask count 'eval "$X"; gh issue create -t x')"
+# The gate itself: an incomplete create is refused wrapped exactly as it is bare.
+[[ "$(gate_from "$DIR" "gh issue create --title T")" == *'"deny"'* ]] \
+  && check "#1478 control: the gate refuses the bare incomplete create" ok || check "#1478 control: the gate refuses the bare incomplete create" "it passed"
+for c in "bash -c 'gh issue create --title T'" "eval gh issue create --title T" "nohup gh issue create --title T" \
+         "rtk proxy gh issue create --title T" "xargs gh issue create --title T"; do
+  [[ "$(gate_from "$DIR" "$c")" == *'"deny"'* ]] && check "#1478 the gate refuses it wrapped: $c" ok || check "#1478 the gate refuses it wrapped: $c" "it passed"
+done
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
