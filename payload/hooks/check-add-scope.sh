@@ -21,6 +21,9 @@
 # inside Bash, and a gate that could only see Edit calls would call all of that foreign and be
 # turned off within the hour. A file a script wrote without its command naming it is credited by
 # time instead: changed while one of this session's own Bash calls was running (claude-config#585).
+# In a SUBAGENT the payload's transcript is the dispatching session's, so the agent's own transcript
+# is read beside it, never a sibling's, and every change in the isolated worktree Claude Code was
+# recorded spawning it with is its own (claude-config#1513).
 #
 # The match is deliberately GENEROUS, on the side of allowing: a path counts as this session's if
 # the session mentioned it anywhere. Being wrong that way lets one unscoped add through; being
@@ -119,14 +122,54 @@ MSG
   exit 2
 fi
 
-transcript="$(printf '%s' "$payload" | python3 -c '
-import json, sys
+# WHOSE RECORD THIS IS (claude-config#1513). In a SUBAGENT the payload's `transcript_path` names the
+# transcript of the session that DISPATCHED it, not the agent's own; the payload says it is a
+# subagent by carrying `agent_id`, and the agent's own tool calls are written to
+# <that transcript minus .jsonl>/subagents/[<group>/]agent-<agent_id>.jsonl, beside an
+# agent-<agent_id>.meta.json recording the worktree Claude Code created for it, if any (measured on
+# Claude Code 2.1.307, 2026-10-22, from its own path builder and a live probe). Reading only the
+# parent's record called every file an agent wrote, through Edit or by script, another session's:
+# a Bidspoke agent was refused three times that day over its own files and overrode the gate each
+# time, which is how a guard teaches overriding (L36). So a subagent's own transcript is read
+# BESIDE its parent's (whose record always counted), and never a sibling agent's, because a
+# sibling is a concurrent worker in the same tree, the very hazard this gate is for.
+# The agent id becomes part of a path, so it must be a plain name, or nothing is read for it.
+ids="$(printf '%s' "$payload" | python3 -c '
+import glob, json, os, re, sys
 try:
     d = json.loads(sys.stdin.read())
 except Exception:
     d = {}
-print(d.get("transcript_path") or "")
+if not isinstance(d, dict):
+    d = {}
+tr = d.get("transcript_path") or ""
+tr = tr if isinstance(tr, str) else ""
+is_agent = "agent_id" in d
+aid = d.get("agent_id")
+aid = aid if isinstance(aid, str) else ""
+agent_tr = agent_wt = looked = ""
+if is_agent and tr.endswith(".jsonl"):
+    sub = os.path.join(tr[:-len(".jsonl")], "subagents")
+    looked = os.path.join(sub, "agent-%s.jsonl" % aid)
+    if re.fullmatch(r"[A-Za-z0-9_-]+", aid):
+        for c in [looked] + sorted(glob.glob(os.path.join(glob.escape(sub), "*", "agent-%s.jsonl" % aid))):
+            if os.path.isfile(c):
+                agent_tr = c
+                break
+        meta = (agent_tr or looked)[:-len(".jsonl")] + ".meta.json"
+        try:
+            with open(meta) as fh:
+                m = json.load(fh)
+            if isinstance(m, dict) and m.get("spawnedWithWorktree") is True \
+                    and isinstance(m.get("worktreePath"), str):
+                agent_wt = m["worktreePath"]
+        except Exception:
+            pass
+print("\x1f".join([tr, "1" if is_agent else "0", agent_tr, agent_wt, looked]))
 ' 2>/dev/null || true)"
+IFS=$'\x1f' read -r transcript is_agent agent_transcript agent_worktree agent_looked <<IDS || true
+$ids
+IDS
 
 # NOT silence. Without the transcript there is no way to tell this session's work from another
 # session's, and "everything is yours" is the assumption that produced the incident. Refusing is
@@ -148,15 +191,40 @@ MSG
   exit 2
 fi
 
-# The cache of what this session has mentioned, topped up from wherever the last read stopped.
-key="$(printf '%s' "$transcript" | shasum | cut -c1-12)"
+# THE WORKTREE THIS AGENT WAS SPAWNED WITH IS ITS OWN (claude-config#1513). Claude Code creates an
+# isolated worktree for one agent and records it in that agent's .meta.json, so every change in it
+# is that agent's, including what a background process it started wrote after its call returned,
+# which no time window below can see. Only a LINKED worktree qualifies: the main checkout is the one
+# concurrent sessions share, and no record naming it is ever a blanket credit. Only the CALLING
+# agent's own meta is read, so a worktree another agent was spawned with credits nothing here.
+if [ -n "$agent_worktree" ]; then
+  top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
+  top_real="$(cd "$top" 2>/dev/null && pwd -P || true)"
+  wt_real="$(cd "$agent_worktree" 2>/dev/null && pwd -P || true)"
+  git_dir="$(git -C "$repo" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  common_dir="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$top_real" ] && [ "$top_real" = "$wt_real" ] && [ -n "$git_dir" ] && [ -n "$common_dir" ] \
+     && [ "$git_dir" != "$common_dir" ]; then
+    exit 0
+  fi
+fi
+
+# The cache of what this session has mentioned, topped up from wherever the last read stopped. One
+# cache per transcript read: the session's, and in a subagent its own beside it.
 STATE_DIR="${CLAUDE_ADD_SCOPE_STATE_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+MENTIONS_FILES=()
+WINDOWS_FILES=()
+topup_cache(){ # topup_cache <transcript>
+local transcript="$1" key MENTIONS OFFSET WINDOWS from size
+key="$(printf '%s' "$transcript" | shasum | cut -c1-12)"
 MENTIONS="$STATE_DIR/claude-add-scope-$key.mentions"
 OFFSET="$STATE_DIR/claude-add-scope-$key.offset"
 # When each of this session's Bash calls started and finished, as "S id epoch" and "E id epoch"
 # lines, read in the same pass as the mentions (claude-config#585).
 WINDOWS="$STATE_DIR/claude-add-scope-$key.windows"
+MENTIONS_FILES+=("$MENTIONS")
+WINDOWS_FILES+=("$WINDOWS")
 
 from=0
 [ -f "$OFFSET" ] && from="$(cat "$OFFSET" 2>/dev/null || echo 0)"
@@ -222,6 +290,11 @@ if windows:
 ' >> "$MENTIONS" 2>/dev/null || true
   printf '%s' "$size" > "$OFFSET" 2>/dev/null || true
 fi
+: >> "$MENTIONS" 2>/dev/null || true
+}
+
+topup_cache "$transcript"
+[ -n "$agent_transcript" ] && topup_cache "$agent_transcript"
 
 # Every changed path sorted into exactly ONE bucket, in one pass. A second loop asking the inverse
 # question would be a second reading of the same evidence and the two drift (L16, L517).
@@ -231,7 +304,7 @@ while IFS= read -r p; do
   [ -n "$p" ] || continue
   # Matched on the repo relative path and on the absolute one, because a session names a file both
   # ways: an Edit records the absolute path and a command typically uses the relative one.
-  if grep -qF -- "$p" "$MENTIONS" 2>/dev/null || grep -qF -- "$repo/$p" "$MENTIONS" 2>/dev/null; then
+  if grep -qF -- "$p" "${MENTIONS_FILES[@]}" 2>/dev/null || grep -qF -- "$repo/$p" "${MENTIONS_FILES[@]}" 2>/dev/null; then
     mine="${mine:+$mine }$p"
   else
     foreign="${foreign}  $p
@@ -251,11 +324,21 @@ CHANGED
 # side for the clock's rounding, is credited. Generous on purpose, as the rest of this match is: a
 # concurrent session writing at that same moment would be credited too, and that costs one add,
 # while the other way costs every scripted edit. Asked only of the paths still foreign, in one pass.
-if [ -s "$WINDOWS" ]; then
-  credited="$(printf '%s' "$foreign" | sed 's/^  //' | ADD_SCOPE_WINDOWS="$WINDOWS" ADD_SCOPE_REPO="$repo" python3 -c '
+windows_list=""
+for w in "${WINDOWS_FILES[@]}"; do
+  [ -s "$w" ] && windows_list="${windows_list}${w}
+"
+done
+if [ -n "$windows_list" ]; then
+  credited="$(printf '%s' "$foreign" | sed 's/^  //' | ADD_SCOPE_WINDOWS="$windows_list" ADD_SCOPE_REPO="$repo" python3 -c '
 import os, sys
 starts, ends = {}, {}
-for line in open(os.environ["ADD_SCOPE_WINDOWS"]):
+lines = []
+for wf in os.environ["ADD_SCOPE_WINDOWS"].splitlines():
+    if wf:
+        with open(wf) as fh:
+            lines.extend(fh.read().splitlines())
+for line in lines:
     parts = line.split()
     if len(parts) != 3:
         continue
@@ -308,11 +391,21 @@ fi
 
 [ -n "$foreign" ] || exit 0
 
+# A subagent whose own transcript is not on disk (a nested agent's is never written) was judged on
+# the dispatching session's record alone. That is the refusing direction, and the refusal says so,
+# because "another session made these" is then a claim nothing measured (L11).
+unread_note=""
+if [ "$is_agent" = 1 ] && [ -z "$agent_transcript" ]; then
+  unread_note="
+This call comes from a subagent, and its own transcript was not found (looked for ${agent_looked:-it beside the session transcript}), so only the dispatching session's record was read: files this agent changed itself are among those listed.
+"
+fi
+
 cat >&2 <<MSG
 claude-sync: REFUSED an unscoped 'git add' in $repo.
 
 These changes are in the tree and this session never touched them, so they belong to another session working in the same checkout:
-$foreign
+$foreign$unread_note
 An unscoped add stages them too, and they then travel in a commit whose message does not describe them, judged by a test gate that was not asked about them. That happened on 2026-09-10, in this repo, and the work only survived because it happened to be correct.
 
 Stage what this session actually changed, by name:
