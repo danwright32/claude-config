@@ -45,11 +45,10 @@ PATH_RE = re.compile(
 
 def paths(text):
     """Each path `text` names, once, in the order it first appears. A line or range after a path
-    (`a.ts:12-40`) is not part of it, nor is a leading `./`."""
+    (`a.ts:12-40`) is not part of it, nor is a leading `./`: PATH_RE starts at a word character and
+    ends at the extension, so neither is ever matched."""
     seen = []
     for p in PATH_RE.findall(text or ""):
-        while p.startswith("./"):
-            p = p[2:]
         if p not in seen:
             seen.append(p)
     return seen

@@ -24,7 +24,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   GROWTH_DAYS,
-  GROWTH_MIN,
   ISSUE_LIMIT,
   RULE_VERSION,
   SIZE_MIN,
