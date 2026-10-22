@@ -1,6 +1,7 @@
 // Design round guard (claude-config#978): which files change how a screen looks, what an issue or
 // branch is keyed by, and every sentence Claude and Dan read. Pure, so each rule is tested on its own.
 import type { DesignRoundSubject } from '../types/index.d.ts'
+import { isTestPath } from './mod-kit/testfile.ts'
 
 export const GUARD = 'Design round guard'
 /** The dialog's header chip; Claude Code takes at most 12 characters. */
@@ -55,20 +56,9 @@ const TOKENS = /^(design[-_.]?)?tokens(\.[\w-]+)*\.(json|jsonc|js|cjs|mjs|ts|css
 
 export type LookKind = 'style' | 'screen' | 'tailwind' | 'tokens' | 'swift'
 
-/**
- * Whether a path is a test file, by the usual markers (Dan, 2026-10-08, on seeing the guard: "On,
- * but let tests through"): a `.test.` or `.spec.` part in its name, or a `__tests__`, `tests` or
- * `test` folder above it; and for Swift, a test target's folder ending `Tests` or a name ending
- * `Tests.swift`. A name merely holding "test" (latest.tsx, contest.css) is no test.
- */
-export const isTestPath = (path: string): boolean => {
-  const parts = path.split('/').filter(Boolean)
-  const base = parts.pop() ?? ''
-  if (/\.(test|spec)\./i.test(base)) return true
-  if (parts.some(p => p === '__tests__' || p === 'tests' || p === 'test')) return true
-  if (/\.swift$/i.test(base)) return /Tests\.swift$/.test(base) || parts.some(p => /Tests$/.test(p))
-  return false
-}
+// Whether a path is a test file (Dan, 2026-10-08, on seeing the guard: "On, but let tests through"):
+// mod-kit's one rule since #1508, which the area check asks too, kept here as a byte for byte copy.
+export { isTestPath }
 
 // The session's scratchpad (#1191), as Claude Code hands every session one:
 // <temp>/claude-<uid>/<project>/<session id>/scratchpad, where <temp> is CLAUDE_CODE_TMPDIR when it is

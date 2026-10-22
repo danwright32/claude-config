@@ -1,0 +1,8 @@
+{
+  "name": "area-check",
+  "version": "0.1.0",
+  "description": "Observes, without refusing anything, the first edit a session makes to each existing source or test file: which open tech-debt or refactor issues name the file and how fast it grows, logged as would hold or quiet outside ~/.claude for a week before the hold is turned on (#1506, #1508).",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit", "session-registry"]
+}
