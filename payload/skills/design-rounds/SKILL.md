@@ -116,6 +116,8 @@ are held like any screen edit until Dan answers Settled (claude-config#1191: a r
 | `<out>.picker.json`, the closing picker's options | The tab and the picker entry are the same two facts, so they are emitted once rather than retyped |
 | The same scroll position on every option | A round about anything below the fold is compared in place, without scrolling back down after each switch |
 | `screenShown(variant, element)`, called after each switch when the builder defines it | The builder always knows which option is on the stage |
+| Every option whole, on a stage as wide as the window, scaled with its true width and percentage said when the window is narrower | The part cut off or scrolled away is so often the part being judged (claude-config#1499) |
+| A warning when two options draw the same picture, judged on each option's whole page, its root and stylesheets included | A round set on the page root, the theme or the spacing, differs outside the slot (claude-config#1512) |
 
 **A builder that changes its screen after load (a click that opens an editor, switches a
 partner, redraws a list) keeps no single global redraw function and reads no global set in
@@ -138,7 +140,8 @@ at the same size, under a readout naming three different widths, and nothing ref
 because the page was structurally perfect. A person spotted that the pictures matched.
 So: every class the chrome styles now carries the `dr-` prefix, the round's heading has a
 class rather than being a bare `h1` that reached into the screen, and `.dr-stage > *` is
-`flex: none` so the stage scrolls rather than squeezing. A builder may use any class name
+`flex: none` so a screen is laid out at the width it declares rather than squeezed (one
+wider than the stage is then scaled down whole, with its true width said, as below). A builder may use any class name
 it likes except a `dr-` one. Two tests hold this, one asserting the namespace and one
 measuring that a 1400px screen is 1400px on the page.
 
@@ -149,7 +152,10 @@ part being judged, and scrolling it defeats the comparison. Scale it, and captio
 its true width and the percentage, so a scaled option can never be mistaken for a clamped
 one. It has to be an iframe rather than a scaled div, because a media query inside a
 scaled div answers to the outer window and reports the wrong width, which is precisely the
-variable a round about width is testing.
+variable a round about width is testing. The switcher does this for every option: a round in
+captured chrome is already an iframe at its captured width, the stage is the window's width, and
+an option still wider is scaled down whole with the caption above the stage (claude-config#1499,
+from PET #1876, whose 1280 options were cut off at the right in a 1900px window).
 
 ## Rounds about a Claude Code mod: the shared terminal
 
