@@ -1109,11 +1109,11 @@ config on every rewrite, so a running session uses the new list at once and the 
 session; the write is not counted as config received, because a Mac whose own list drifted receives
 nothing by having it put back.
 
-## A fixture home touches nothing that belongs to the Mac (#1453, #1470)
+## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to
 the config it is pointed at: the launch agents, launchd itself, the register of clones and the shell
-rc, and the watcher's two markers (its pid file and the hold). Each defaulted to its real location
+rc, the watcher's two markers (its pid file and the hold), and the sync log. Each defaulted to its real location
 whatever `CLAUDE_HOME` was, so a suite that forgot one seam
 read, and then wrote, this Mac's own: status reported a real clone's stale failure as a fixture's
 (#1453), and `install-schedule`, `install-autosync`, the watch daemon restart after a pull that
@@ -1122,7 +1122,8 @@ could rewrite, retire or append to the real files from a throwaway run (#1470).
 
 One predicate decides all of them, `claude_home_is_users_own` (L261), and one function,
 `store_for_this_home`, answers where a run reads AND writes each store: the seam when one is named
-(`SYNC_LAUNCHAGENTS`, `SYNC_CLONE_REGISTRY`, `SYNC_ZSHRC`, `SYNC_WATCH_PID_FILE`, `SYNC_HOLD_FILE`),
+(`SYNC_LAUNCHAGENTS`, `SYNC_CLONE_REGISTRY`, `SYNC_ZSHRC`, `SYNC_WATCH_PID_FILE`, `SYNC_HOLD_FILE`,
+`SYNC_LOG_FILE`),
 the real location only for this user's own `~/.claude`, and nothing for any other home. A fixture
 `watch` is then recorded in no pid file (so a live daemon neither refuses it nor is refused by it),
 and `hold` and `release` refuse. One answer for both directions, so a run can never write somewhere it
@@ -1143,6 +1144,17 @@ hooks that guard writes into a clone's `payload/` (`payload-write-gate.sh`,
 `payload-revert-warning.sh`, through `lib/sync-clone.sh`) keep the real watcher markers whatever
 `CLAUDE_HOME` is: they ask about the real watcher and a checkout, never about a config under test,
 so this rule is not their question (L342).
+
+The sync log followed in #1486. Every line `claude-sync` appends itself goes through
+`sync_log_line` (a held back hooks block, a leftover removed, what a notification would have said
+while the Mac is asleep), and under a fixture home with no `SYNC_LOG_FILE` it now writes nothing and
+says once per run that its lines went nowhere and why, rather than once per line. Nothing in the
+tool, the watcher, status or any hook READS the log; it is for a person. The launch agents still
+point their output at `~/.claude-sync.log` whatever `SYNC_LOG_FILE` is, because those jobs run as
+this user's own config with no seam in their environment, so that is where their own lines land; and
+they are only ever loaded for that config. `run-all-tests.sh` hands every suite a `SYNC_LOG_FILE` of
+its own, as it does the issue spool, rather than bracketing the real log among its live stores: the
+live watcher appends to it throughout a run, and an append is the one change that bracket excuses.
 
 ## An absence is a deletion only where something was there before (#627, #781)
 

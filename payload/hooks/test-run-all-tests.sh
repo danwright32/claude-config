@@ -350,6 +350,25 @@ case "$sr_seen" in
        || check "every suite is handed a sleep record of its own" "the record it was handed exists: $sr_seen" ;;
 esac
 
+# And no suite appends to the Mac's REAL sync log (claude-config#1486). claude-sync logs into
+# ~/.claude-sync.log only for this user's own config, so a suite that runs it against a fixture home
+# logs nowhere; but one that points HOME at the real home, or names the user's own config, would
+# still append there, and the watcher's log is not a place test lines belong. Every suite is handed
+# a log of its own, which does not exist yet. Run with the variable cleared, so a value an outer
+# runner exported cannot pass for this runner's own.
+SL="$TMPROOT/dir-sync-log"
+mkdir -p "$SL"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${SYNC_LOG_FILE:-}" > "$(dirname "$0")/log.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$SL/test-sync-log.sh"
+env -u SYNC_LOG_FILE HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$SL" >/dev/null 2>&1
+sl_seen="$(cat "$SL/log.seen" 2>/dev/null)"
+case "$sl_seen" in
+  '') check "every suite is handed a sync log of its own" "it was handed none, so claude-sync run as the user's own config would append to the real one" ;;
+  "$HOME/.claude-sync.log") check "every suite is handed a sync log of its own" "it was handed the real one: $sl_seen" ;;
+  *) [ ! -e "$sl_seen" ] \
+       && check "every suite is handed a sync log of its own" ok \
+       || check "every suite is handed a sync log of its own" "the log it was handed exists: $sl_seen" ;;
+esac
+
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?
