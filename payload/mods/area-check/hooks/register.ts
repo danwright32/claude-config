@@ -97,6 +97,42 @@ const runIn = async ($: EngineInterface, d: Deadline, argv: string[], init: { en
   return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr }
 }
 
+// ---- A read several edits share ----
+//
+// The issue list and the growth ranking are each read once however many edits want them at once. A
+// shared read runs under the deadline of the edit (or the session start's warm) that started it, so
+// it can fail for that one's lack of time while an edit that joined it still has some: by running out
+// (Late), by a command killed at its timeout, or by anything else. Lessons reviews of 5a4148a, 42547b6
+// and adb5a9e found that one cause at a time; it is one rule, kept here once: an edit that JOINED a
+// read which then failed, for whatever reason, starts it again, once, under its own deadline. An edit
+// that started the read itself is not retried, so a real outage costs each edit one read, never two.
+const shared = async <T>(
+  $: EngineInterface,
+  d: Deadline,
+  map: Map<string, Promise<T>>,
+  key: string,
+  start: (d: Deadline) => Promise<T>,
+  failed: (r: T) => boolean,
+  keep: boolean,
+): Promise<T> => {
+  const begin = () => {
+    const p = start(d)
+    map.set(key, p)
+    const drop = () => {
+      if (map.get(key) === p) map.delete(key)
+    }
+    // A failed read is never kept, so the next edit reads again; a good one only where `keep` says.
+    p.then(r => (!keep || failed(r) ? drop() : undefined), drop)
+    return p
+  }
+  const had = map.get(key)
+  const settle = (p: Promise<T>) => within($, d, p).then(r => ({ r }), (err: unknown) => ({ err }))
+  let o: { r: T } | { err: unknown } = await settle(had ?? begin())
+  if (had && ('err' in o || failed(o.r)) && (await left($, d)) > 0) o = await settle(begin())
+  if ('err' in o) throw o.err
+  return o.r
+}
+
 // ---- Issues: one unfiltered list per repository (L1014), cached for an hour (decision 12) ----
 
 type IssuesFacts = { at: number; state: 'read' | 'truncated'; count: number; issues: CachedIssue[] } | { at: number; state: 'unread'; why: string }
@@ -153,23 +189,13 @@ const readIssues = async ($: EngineInterface, repo: string, d: Deadline): Promis
   return facts
 }
 
-const issuesFor = async ($: EngineInterface, repo: string, d: Deadline, again = false): Promise<IssuesFacts> => {
+const issuesFor = async ($: EngineInterface, repo: string, d: Deadline): Promise<IssuesFacts> => {
   const now = await $.clock.now()
   const cached = (await $.store.get(issuesKey(repo))) as IssuesFacts | undefined
-  if (fresh(cached, now) && !again) return cached
-  let p = inflight.get(repo)
-  const joined = p !== undefined
-  if (!p) {
-    p = readIssues($, repo, d).finally(() => inflight.delete(repo))
-    inflight.set(repo, p)
-  }
+  if (fresh(cached, now)) return cached
   try {
-    const r = await within($, d, p)
-    // A read another edit (or the session start's warm) started runs under that one's deadline
-    // (lessons review of 42547b6): when it ran out while this edit's own time remains, this edit
-    // reads again, once, under its own, and what it reads replaces the late one in the cache.
-    if (joined && !again && r.state === 'unread' && r.why === LATE && (await left($, d)) > 0) return issuesFor($, repo, d, true)
-    return r
+    // What a read finds replaces whatever the cache held, a late read another edit left included.
+    return await shared($, d, inflight, repo, own => readIssues($, repo, own), r => r.state === 'unread', false)
   } catch (err) {
     if (!(err instanceof Late)) throw err
     const late: IssuesFacts = { at: now, state: 'unread', why: LATE }
@@ -190,37 +216,28 @@ const gitIn = async ($: EngineInterface, d: Deadline, root: string, args: string
   return r.stdout
 }
 
-const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBranch: string | null, repo: string, again = false): Promise<RankFacts> => {
+const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBranch: string | null, repo: string): Promise<RankFacts> => {
   if (!defaultBranch) return { unread: 'origin names no default branch', sha: null }
   const rev = `origin/${defaultBranch}`
   let sha: string | null = null
   try {
     sha = (await gitIn($, d, root, ['rev-parse', '--verify', `${rev}^{commit}`])).trim()
-    const key = rankingKey(repo, sha, await $.clock.now())
-    let p = rankings.get(key)
-    if (!p) {
-      const head = sha
-      p = (async (): Promise<RankFacts> => {
-        const [log, tree] = await Promise.all([
-          gitIn($, d, root, ['log', rev, `--since=${GROWTH_DAYS}.days`, '--numstat', '-M', '--format=%x1e%s']),
-          gitIn($, d, root, ['ls-tree', '-r', '--name-only', rev]),
-        ])
-        const growth = parseNumstat(log)
-        const cands = sizeCandidates(growth)
-        const sizes = cands.length ? parseLineCounts(await gitIn($, d, root, ['grep', '-c', '', rev, '--', ...cands], [0, 1]), rev) : {}
-        return { key, sha: head, ranked: rank(growth, sizes), tracked: tree.split('\n').filter(Boolean) }
-      })()
-      rankings.set(key, p)
-      while (rankings.size > RANKINGS_KEPT) rankings.delete(rankings.keys().next().value as string)
-      // A failed ranking is not kept, so the next edit tries again.
-      p.catch(() => rankings.delete(key))
+    const head = sha
+    const key = rankingKey(repo, head, await $.clock.now())
+    const make = async (own: Deadline): Promise<RankFacts> => {
+      const [log, tree] = await Promise.all([
+        gitIn($, own, root, ['log', rev, `--since=${GROWTH_DAYS}.days`, '--numstat', '-M', '--format=%x1e%s']),
+        gitIn($, own, root, ['ls-tree', '-r', '--name-only', rev]),
+      ])
+      const growth = parseNumstat(log)
+      const cands = sizeCandidates(growth)
+      const sizes = cands.length ? parseLineCounts(await gitIn($, own, root, ['grep', '-c', '', rev, '--', ...cands], [0, 1]), rev) : {}
+      return { key, sha: head, ranked: rank(growth, sizes), tracked: tree.split('\n').filter(Boolean) }
     }
-    return await within($, d, p)
+    const r = await shared($, d, rankings, key, make, () => false, true)
+    while (rankings.size > RANKINGS_KEPT) rankings.delete(rankings.keys().next().value as string)
+    return r
   } catch (err) {
-    // A ranking another edit started runs under that edit's deadline (lessons review of 5a4148a):
-    // when it ran out while this edit's own time remains, this edit makes the ranking again, once,
-    // under its own (the failed one is already gone from the map).
-    if (err instanceof Late && !again && (await left($, d)) > 0) return ranking($, d, root, defaultBranch, repo, true)
     return { unread: err instanceof Late ? LATE : msg(err), sha }
   }
 }

@@ -146,7 +146,14 @@ const world = (on: On, init: Init = {}) => {
       if (sub === 'log origin/main --since=90.days --numstat -M --format=%x1e%s') {
         if (ctl.slowLogOnce) {
           ctl.slowLogOnce = false
-          await clock.sleep(DEADLINE_MS + 500)
+          // Killed at the timeout it was given, as $.process.run is (lessons review of adb5a9e):
+          // the shared ranking then fails by a rejection, not by running out of time.
+          const wait = DEADLINE_MS + 500
+          if (timeoutMs !== undefined && timeoutMs < wait) {
+            await clock.sleep(timeoutMs)
+            return { deny: `git log was still running after ${timeoutMs} ms` } as never
+          }
+          await clock.sleep(wait)
         }
         return answer(ok(NUMSTAT))
       }
@@ -354,7 +361,7 @@ test("a later edit sharing a ranking that ran out of the first edit's time makes
   await $.tool.call({ tool: 'Edit', tool_use_id: 'c2', file_path: `${APP}/src/big.ts`, old_string: 'a', new_string: 'b' } as never)
   await w.clock.advance(DEADLINE_MS + 3000)
   const [first, second] = w.judged()
-  expect(first).toMatchObject({ path: 'src/lib/slack.ts', growth: { unread: `not read within ${DEADLINE_MS / 1000} seconds` } })
+  expect(first).toMatchObject({ path: 'src/lib/slack.ts', growth: { unread: `area-check: $.process.run: git log was still running after ${DEADLINE_MS} ms` } })
   expect(second).toMatchObject({ path: 'src/big.ts', decision: 'would_hold', growth: { net: 800, crosses: true } })
 })
 
