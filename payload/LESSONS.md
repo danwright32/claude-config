@@ -2712,6 +2712,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   built on it must be proved by reading back the effect (the table statistics, the plan) under the
   role that will run it, never by the call returning success.** (project-enrollment-tracker#1741, 2026-10-20)
   SHORT: A maintenance command lacking privilege (ANALYZE) warns and carries on, so prove its effect by reading it back under the role that runs it.
+- **L797. A test runner told to reuse a server already listening on a fixed port tests whatever build that server is serving, so wherever checkouts run in parallel give each its own port and refuse a server that is not serving this checkout's build, or a run passes or fails for code it never built.** (project-enrollment-tracker#1844, 2026-10-21)
+  SHORT: A test runner reusing a server on a fixed port tests whatever build it serves; with parallel checkouts give each its own port.
 
 ## Data safety
 
@@ -9983,6 +9985,8 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
 - **L796. A recovery step that re-submits work into the same bounded queue it is waiting on must first ask that queue whether the work is already pending, because reading a queued item as a lost one fires a false alarm and adds a duplicate that lengthens the very delay it reported.** (project-enrollment-tracker#1825, 2026-10-21)
   SHORT: A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
+- **L798. Deleting a deployed thing's source from the repository does not remove it from the platform it runs on, so a removal is finished only when the platform's own list no longer shows it, and a teardown left as a sentence in a pull request body is never carried out.** (project-enrollment-tracker#1855, 2026-10-21)
+  SHORT: Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
 ## Test speed
 
 Distilled from the 2026-08-29 test speed audit of nine repos (Bidspoke, PET, Slate, NurseDex,

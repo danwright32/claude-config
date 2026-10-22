@@ -109,3 +109,4 @@ which is NOT loaded into the session.
 - L1021. cd to a computed path only as cd "${var:?}": cd to an empty variable succeeds in place and the rest of the command runs where you already are.
 - L791. A workflow naming a secret the repo lacks gets an empty string, not an error, so guard that every named secret exists and fail the build.
 - L796. A recovery that re-submits into the queue it waits on must first ask whether the work is already pending, or it false-alarms and lengthens the delay.
+- L798. Deleting a deployed thing's source does not undeploy it; a removal is done only when the platform's own list no longer shows it.
