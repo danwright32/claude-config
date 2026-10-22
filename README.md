@@ -788,6 +788,21 @@ for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bas
 push` is refused, since what the script does is not in the command: run the script and the push as
 two commands.
 
+Every refusal it makes is recorded, overrides included (#1492), one line each in
+`~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category
+(`variable`, `quote`, `input`, `depth`, `eval-cd`, `script-file`, `execdir`, `unended`, or why it
+could not judge at all) and whether it was refused or overridden. Never the command and never a path.
+Per Mac and never synced, and capped, keeping the newest (5,000 by default, set by `WRAPPED_REFUSAL_LEDGER_MAX`). A record it cannot
+write never changes the decision; the gate says so once in what it prints. Read it on each Mac with:
+
+```bash
+python3 ~/.claude/hooks/lib/wrapped-refusal-report.py [--days 7]
+```
+
+It prints the refusals and overrides in the window and the count for each shape, a wrapper and a
+reason, commonest first, which is what the refusal is narrowed by. The suites record into a
+throwaway one (`WRAPPED_REFUSAL_LEDGER_DIR`, which `run-all-tests.sh` hands every suite).
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).
@@ -1134,7 +1149,7 @@ Ten of them came after the 2026-09-21 timing further down, which measured the fi
 | `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
-| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds |
+| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3) |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
