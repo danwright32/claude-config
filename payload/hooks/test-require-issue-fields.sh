@@ -241,7 +241,39 @@ for payload in 'not json at all' '{}' '{"tool_input":{}}'; do
   if [[ "$out" != *'"deny"'* ]]; then pass=$((pass + 1)); else
     fail=$((fail + 1)); echo "FAIL: unreadable payload should fail quiet, got: $out"; fi
 done
-allows "unbalanced quotes are not ours to judge" 'gh issue create --title "unclosed'
+# A command the gate cannot read (claude-config#1485). It used to pass whole, so an incomplete create
+# beside a lone apostrophe the lexer could not close (a comment, say, which bash ignores) was never
+# judged. Now one whose text names a command the gate judges is refused, saying which quote and where;
+# one naming none passes untouched.
+UNREAD_CREATE="$(printf 'echo a\n# don'"'"'t\ngh issue create --title T')"
+denies "#1485 an unreadable command naming gh issue create is refused" "$UNREAD_CREATE"
+denies "#1485 so is one whose quote never closes at all" 'gh issue create --title "unclosed'
+says "#1485 it says it could not read the command" "could not read this command" "$UNREAD_CREATE"
+says "#1485 it names which quote and where" "the ' at line 2, column 6" "$UNREAD_CREATE"
+says "#1485 it names the line the quote is on" "# don't" "$UNREAD_CREATE"
+says "#1485 it names the rules it could not judge, by their own overrides" \
+  "SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 SKIP_OPEN_QUESTIONS_CHECK=1 SKIP_BODY_FILE_CHECK=1" "$UNREAD_CREATE"
+omits "#1485 and is not the incomplete create message, which it could not know" "would file" "$UNREAD_CREATE"
+allows "#1485 every rule it could not judge waived passes it" \
+  "SKIP_MILESTONE_CHECK=1 SKIP_PRIORITY_CHECK=1 SKIP_CATEGORY_CHECK=1 SKIP_OPEN_QUESTIONS_CHECK=1 SKIP_BODY_FILE_CHECK=1 $UNREAD_CREATE"
+denies "#1485 one override waives only its own rule, so it does not pass it" "SKIP_MILESTONE_CHECK=1 $UNREAD_CREATE"
+says "#1485 a command ending in a lone backslash says so" "it ends in a backslash with nothing after it" 'gh issue create --title T \'
+denies "#1485 an unreadable gh pr edit with a body file is refused" "$(printf '# don'"'"'t\ngh pr edit 5 --body-file b.md')"
+says "#1485 by the body file rule's override alone" "SKIP_BODY_FILE_CHECK=1 in front" "$(printf '# don'"'"'t\ngh pr edit 5 --body-file b.md')"
+omits "#1485 never the issue rules' for a pr edit" "SKIP_MILESTONE_CHECK" "$(printf '# don'"'"'t\ngh pr edit 5 --body-file b.md')"
+allows "#1485 an unreadable gh pr comment with no body file is nothing the gate judges" "$(printf '# don'"'"'t\ngh pr comment 5 --body hi')"
+allows "#1485 an unreadable gh issue create --help files nothing" "$(printf '# don'"'"'t\ngh issue create --help')"
+allows "#1485 an unreadable command naming no gated command passes" "$(printf '# don'"'"'t\ngh pr view 5')"
+allows "#1485 an unreadable command naming no gh at all passes" "$(printf '# don'"'"'t\ngit status')"
+# The control: an apostrophe inside quotes is read, and the command judged as any other.
+denies "#1485 control: an incomplete create with an apostrophe in its title is judged" 'gh issue create --title "Don'"'"'t break it"'
+says "#1485 control: and refused with the ordinary message" "missing a milestone" 'gh issue create --title "Don'"'"'t break it"'
+omits "#1485 control: never the unreadable one" "could not read this command" 'gh issue create --title "Don'"'"'t break it"'
+allows "#1485 control: the complete create with that title passes" 'gh issue create --title "Don'"'"'t break it" '"$ALL"
+# A body in "$(cat <<'EOF' ...)" holding an apostrophe and double quotes is read and judged.
+HD_BODY="$(printf -- '--body "$(cat <<'"'"'EOF'"'"'\nIt says "couldn'"'"'t save" twice.\n\n## Open questions\n\nNone\nEOF\n)"')"
+allows "#1485 a complete create with that heredoc body passes" "gh issue create --title T $M $P $C $HD_BODY"
+says "#1485 an incomplete one is refused with the ordinary message" "missing a milestone" "gh issue create --title T $P $C $HD_BODY"
 
 # If the gate itself cannot run it must still let the command through, while making
 # the gap visible: a gate that fails silently is indistinguishable from one that passed.

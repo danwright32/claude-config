@@ -353,6 +353,23 @@ test('a file that does not change the look passes untouched, with nothing asked 
   expect(w.storeGets).toEqual([])
 })
 
+// #1491: from 2.1.307 every plugin's tool.check hook judges a mod's own $.tool.call, the job
+// watcher's TaskStop among them, sent with no call id. A stop carries no path and writes no file, so
+// it passes untouched, even where the branch and the store cannot be read and a look change is held.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, passes untouched (#1491)", withKit, async ($, on) => {
+  const w = world($, on)
+  w.branches['/w/slate'] = 'UNREADABLE'
+  w.ctl.storeGetFails = true
+  const own = (await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as never)) as Result
+  const claudes = await call($, { tool: 'TaskStop', task_id: 'b2' })
+  expect([refusalOf(own), refusalOf(claudes)]).toEqual(['', ''])
+  expect(w.ran.map(x => x.tool)).toEqual(['TaskStop', 'TaskStop'])
+  expect(w.gitRuns).toEqual([])
+  expect(w.cards).toEqual([])
+  // The same world still holds a look change, so the stop passed on its own merits.
+  expect(refusalOf(await call($, PAGE))).toContain('could not tell which issue or branch')
+})
+
 // Dan, 2026-10-08: "On, but let tests through".
 test('a test of a screen passes with no answer recorded, while the screen beside it is still held', withKit, async ($, on) => {
   const w = world($, on)

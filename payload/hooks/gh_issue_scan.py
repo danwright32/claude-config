@@ -13,9 +13,10 @@ the other gh commands that post a body from a file (scan_gh_in_context, claude-c
 "which files does the command write, from text it shows, and where" (file_writes, claude-config#1246,
 file_writes_in_context, claude-config#1436).
 
-Both gates fail OPEN: anything unparseable is not ours to judge. These are
-completeness gates, not safety gates, and a false block on a command we merely
-could not read would teach the override habit.
+A command it cannot tokenize raises Unreadable, saying which quote never closes and where, and
+gated_in_text reads that command's text crudely for the gated commands it names. The issue field
+gate refuses such a command when it names one and passes it otherwise (claude-config#1485); the
+filed issue session hook, which runs after the command, reads it as no create.
 """
 
 import glob
@@ -41,6 +42,36 @@ CREATE = ("issue", "create")
 BODY_FILE_COMMANDS = {CREATE, ("issue", "edit"), ("issue", "comment"),
                       ("pr", "create"), ("pr", "edit"), ("pr", "comment")}
 
+# The crude reading of gh, used where the shared reader cannot be: with no reader at all, and over the
+# text of a command nobody could tokenize (gated_in_text, claude-config#1485). Any command naming gh
+# runs it, and a gated subcommand and action anywhere after gh are the ones it runs: the reading that
+# sees more commands, never fewer, so a gate asks rather than misses. It stands down only on a word gh
+# would take as a different subcommand or action, one outside the gated pairs that no flag in front of
+# it can be taking as a value. The flags written in front of the action are the action's own, as gh
+# reads them (claude-config#1449: dropping them let `gh issue --body-file empty.md edit 5` past the body
+# file rule, and refused `gh issue -m M create`).
+def crude_gh_command(words):
+    names = [w.split("/")[-1] for w in words]
+    if "gh" not in names:  # gh-reader: the crude reading, when there is no other
+        return None
+    subs = {s for s, _ in BODY_FILE_COMMANDS}
+    front, sub, prev = [], None, ""
+    for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude reading, when there is no other
+        w = words[k]
+        if (sub, w) in BODY_FILE_COMMANDS:
+            return (sub, w, front, list(words[k + 1:]))
+        if sub is None and w in subs:
+            sub = w
+        elif w.startswith("-") and len(w) > 1:
+            front.append(w)
+        elif prev.startswith("-") and len(prev) > 1 and "=" not in prev and (prev.startswith("--") or len(prev) == 2):
+            front.append(w)  # the value of the flag before it
+        else:
+            return None  # a subcommand or action of gh's that no gate here reads
+        prev = w
+    return None
+
+
 try:
     _spec = importlib.util.spec_from_file_location(
         "shell_words", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib", "shell-words.py"))
@@ -52,34 +83,9 @@ try:
     wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
 except Exception:
     def wrapped_words(words):
-        return None  # with no reader, the crude reading below finds a create wherever gh stands
+        return None  # with no reader, the crude reading finds a create wherever gh stands
     MAX_DEPTH = 0
-    # With no reader, any command naming gh runs it, and a gated subcommand and action anywhere after
-    # gh are the ones it runs: the reading that sees more commands, never fewer, so a gate asks rather
-    # than misses. It stands down only on a word gh would take as a different subcommand or action, one
-    # outside the gated pairs that no flag in front of it can be taking as a value. The flags written in
-    # front of the action are the action's own, as gh reads them (claude-config#1449: dropping them let
-    # `gh issue --body-file empty.md edit 5` past the body file rule, and refused `gh issue -m M create`).
-    def gh_command(words):
-        names = [w.split("/")[-1] for w in words]
-        if "gh" not in names:  # gh-reader: the crude reading, when there is no other
-            return None
-        subs = {s for s, _ in BODY_FILE_COMMANDS}
-        front, sub, prev = [], None, ""
-        for k in range(names.index("gh") + 1, len(words)):  # gh-reader: the crude reading, when there is no other
-            w = words[k]
-            if (sub, w) in BODY_FILE_COMMANDS:
-                return (sub, w, front, list(words[k + 1:]))
-            if sub is None and w in subs:
-                sub = w
-            elif w.startswith("-") and len(w) > 1:
-                front.append(w)
-            elif prev.startswith("-") and len(prev) > 1 and "=" not in prev and (prev.startswith("--") or len(prev) == 2):
-                front.append(w)  # the value of the flag before it
-            else:
-                return None  # a subcommand or action of gh's that no gate here reads
-            prev = w
-        return None
+    gh_command = crude_gh_command
 
 OPERATORS = {"&&", "||", ";", "|", "&", "(", ")", "{", "}", "\n"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -106,14 +112,32 @@ def normalize(cmd):
 
     Without this the gate saw only the first line of a multi-line command: a
     newline is plain whitespace to shlex, so a create on line 3 was invisible.
+
+    A command substitution inside double quotes is part of the quoted word, its own quotes, heredoc
+    bodies and comments included, as bash reads it (claude-config#1485): `--body "$(cat <<'EOF'`
+    with an apostrophe or a double quote in the body was read as quotes never closed, so the gate
+    passed it unjudged. It is copied with its backslashes and double quotes escaped, which the lexer
+    reads back as the text written.
     """
+    return _normalize(cmd)[0]
+
+
+def _normalize(cmd):
+    """normalize, and where in cmd the quote that never closes was opened (None when every one does)."""
     out = []
     i, n = 0, len(cmd)
     quote = None
+    opened = None
     while i < n:
         c = cmd[i]
 
         if quote:
+            if quote == '"' and cmd.startswith("$(", i):
+                end = _substitution_end(cmd, i)
+                if end is not None:
+                    out.append(cmd[i:end].replace("\\", "\\\\").replace('"', '\\"'))
+                    i = end
+                    continue
             if c == "\\" and quote == '"' and i + 1 < n:
                 out.append(c)
                 out.append(cmd[i + 1])
@@ -136,6 +160,7 @@ def normalize(cmd):
 
         if c in ("'", '"'):
             quote = c
+            opened = i
             out.append(c)
             i += 1
             continue
@@ -187,7 +212,87 @@ def normalize(cmd):
 
         out.append(c)
         i += 1
-    return "".join(out)
+    return "".join(out), (opened if quote else None)
+
+
+SUBSTITUTION_HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z0-9_]+))")
+
+
+def _double_quote_end(cmd, i):
+    """The index after the double quote closing the one at i, a $(...) inside it read whole, or None."""
+    j, n = i + 1, len(cmd)
+    while j < n:
+        if cmd[j] == "\\":
+            j += 2
+        elif cmd[j] == '"':
+            return j + 1
+        elif cmd.startswith("$(", j):
+            j = _substitution_end(cmd, j)
+            if j is None:
+                return None
+        else:
+            j += 1
+    return None
+
+
+def _substitution_end(cmd, i):
+    """The index after the parenthesis closing the $( at i, read as bash reads one, or None.
+
+    Its quotes, heredoc bodies and comments are its own, so a quote or a parenthesis inside any of
+    them closes nothing outside it (claude-config#1485). None when it never closes, which leaves the
+    command to the lexer, and so unreadable.
+    """
+    n = len(cmd)
+    j, depth, pending, word_start = i + 2, 1, [], True
+    while j < n:
+        c = cmd[j]
+        if c == "\\":
+            j, word_start = j + 2, False
+        elif c == "'":
+            k = cmd.find("'", j + 1)
+            if k == -1:
+                return None
+            j, word_start = k + 1, False
+        elif c == '"':
+            j = _double_quote_end(cmd, j)
+            if j is None:
+                return None
+            word_start = False
+        elif c == "#" and word_start:
+            k = cmd.find("\n", j)
+            j = n if k == -1 else k
+        elif c == "\n":
+            j += 1
+            # Each heredoc opened on the line just ended has its body here, up to its delimiter line.
+            for delim, strip_tabs in pending:
+                while True:
+                    if j >= n:
+                        return None
+                    e = cmd.find("\n", j)
+                    line = cmd[j:(e if e != -1 else n)]
+                    j = (e + 1) if e != -1 else n
+                    if (line.lstrip("\t") if strip_tabs else line).strip() == delim:
+                        break
+            pending, word_start = [], True
+        elif cmd.startswith("<<<", j):
+            j, word_start = j + 3, True
+        elif cmd.startswith("<<", j):
+            m = SUBSTITUTION_HEREDOC.match(cmd, j)
+            if not m:
+                j += 2
+                continue
+            pending.append((next(g for g in m.groups()[1:] if g is not None), m.group(1) == "-"))
+            j, word_start = m.end(), False
+        else:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return j + 1
+            word_start = c in " \t;&|()"
+            j += 1
+    return None
 
 
 def _is_operator(tok):
@@ -195,7 +300,28 @@ def _is_operator(tok):
 
 
 class Unreadable(Exception):
-    """The command could not be tokenized, so no gate may judge it."""
+    """The command could not be tokenized, so no gate may judge it.
+
+    Its message says why, and where when a quote never closes (claude-config#1485): which quote, its
+    line and column in the command, and that line's text.
+    """
+
+
+def _unreadable(command, error):
+    """The Unreadable for a command the lexer refused with `error`, saying which quote and where."""
+    opened = _normalize(command)[1]
+    if opened is None:
+        if "escaped" in str(error):
+            return Unreadable("it ends in a backslash with nothing after it")
+        return Unreadable("it holds a quote the gate could not match to the one closing it")
+    line = command.count("\n", 0, opened) + 1
+    start = command.rfind("\n", 0, opened) + 1
+    end = command.find("\n", opened)
+    whole = command[start:(end if end != -1 else len(command))]
+    col = opened - start
+    text = whole.strip() if len(whole.strip()) <= 60 else "..." + whole[max(0, col - 30):col + 30].strip() + "..."
+    return Unreadable("the %s at line %d, column %d never closes (that line reads: %s)"
+                      % (command[opened], line, col + 1, text))
 
 
 # ---- where each create runs: what the command sets before it (claude-config#1416) ----
@@ -430,6 +556,7 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
     if not command or not command.strip():
         return []
 
+    written = command
     command = normalize(command)
 
     try:
@@ -441,8 +568,8 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
-    except ValueError:
-        raise Unreadable("unbalanced quotes")
+    except ValueError as e:
+        raise _unreadable(written, e)
 
     creates = []
     i = 0
@@ -777,6 +904,27 @@ def flag_values(args, long_flag, short_flag=None):
 
         i += 1
     return values
+
+
+# The text of a command that cannot be tokenized, cut where a command could end (a shell operator, a
+# line break, a backtick), and each piece's words: runs of anything but whitespace, a redirection or a
+# quote, so `"$(gh` still yields gh.
+TEXT_PIECE = re.compile(r"[;&|()\n`]")
+TEXT_WORD = re.compile(r"[^\s<>'\"]+")
+
+
+def gated_in_text(command, kinds=BODY_FILE_COMMANDS):
+    """Each gated gh command the TEXT of an unreadable command names, as (kind, args) (claude-config#1485).
+
+    The crude reading (crude_gh_command) of every piece of the text, so it reads more than the shell
+    would, never less: a mention counts, and a gate asks rather than misses.
+    """
+    out = []
+    for piece in TEXT_PIECE.split(command or ""):
+        found = crude_gh_command(TEXT_WORD.findall(piece))
+        if found and tuple(found[:2]) in kinds:
+            out.append((tuple(found[:2]), list(found[2]) + list(found[3])))
+    return out
 
 
 def deny_payload(reason):

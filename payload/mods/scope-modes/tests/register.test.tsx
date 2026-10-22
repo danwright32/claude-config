@@ -2767,6 +2767,24 @@ test('asleep, a session that is not a worker publishes no page: the call is held
   expect(await call($ as never, { tool: 'Artifact', file_path: '/s/b.html', agentId: 'a1', tool_use_id: 'p4' } as never)).toMatch(/^Held until Dan wakes/)
 })
 
+// #1491: from 2.1.307 a mod's own $.tool.call goes through every plugin's hooks, the job watcher's
+// TaskStop among them, sent with no call id. A stop starts nothing, changes no file, needs nobody at
+// the Mac and hands Dan nothing, so every mode lets it run: no build, winding down, away and asleep.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, runs in every mode (#1491)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  await command($ as never, 'away')
+  for (const mode of ['nobuild', 'winddown']) {
+    await command($ as never, mode)
+    expect(await call($ as never, { tool: 'TaskStop', task_id: 'b1' } as never)).toBe('ran')
+    expect(await call($ as never, { tool: 'TaskStop', task_id: 'b2', tool_use_id: `t-${mode}` } as never)).toBe('ran')
+  }
+  expect(w.reached.filter(t => t === 'TaskStop').length).toBe(4)
+  expect(w.cards).toEqual([])
+  // The same world is asleep, so a page is still held: the stop ran on its own merits.
+  expect(await call($ as never, PUBLISH('p9'))).toMatch(/^Held until Dan wakes/)
+})
+
 test('asleep, every prompt says to hand Dan nothing tonight, never to deliver as when he is away (#1284)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   await start($ as never, clock)

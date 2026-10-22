@@ -403,6 +403,19 @@ test('a tool call whose secret check throws is refused, never run unscreened (#1
   expect(said).not.toContain('could not read')
 })
 
+// #1491: from 2.1.307 a mod's own $.tool.call goes through every plugin's hooks, the job watcher's
+// TaskStop among them, sent with no call id. A task id carries no secret and no command to read, so
+// it runs, even with a kit whose command reader throws.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, runs (#1491)", { plugins: [olderKit] }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  const own = (await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as never)) as { deny?: string; isError?: boolean }
+  const claudes = (await $.tool.call({ tool: 'TaskStop', task_id: 'b2', tool_use_id: 'f2' } as never)) as { deny?: string; isError?: boolean }
+  expect([own.deny, own.isError, claudes.deny, claudes.isError]).toEqual([undefined, undefined, undefined, undefined])
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+  expect(w.toasts).toEqual([])
+})
+
 // The session.append hook fails open the same way: a scrub that throws is skipped and the row is
 // kept as it came, secret and all. Its .catch withholds the text instead.
 test('a tool result the guard cannot scrub is withheld rather than kept as it was (#1298, L42)', withKit, async ($, on) => {

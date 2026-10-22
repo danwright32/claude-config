@@ -580,6 +580,18 @@ test('a git -C into another checkout is judged against that checkout', withDeps,
   expect(w.prompts[0]?.prompt).toContain('git reset --hard origin/main')
 })
 
+// #1491: from 2.1.307 every plugin's tool.check hook judges a mod's own $.tool.call, the job
+// watcher's TaskStop among them, sent with no call id. A stop changes no file, so it is never judged
+// here, even with another session's edits on a record that cannot be read and a judge saying Stop.
+test("a TaskStop, the job watcher's own with no call id or Claude's with one, goes through unjudged (#1491)", withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/src/a.ts'] })], unreadable: ['/sessions/x.json'], judge: '{"verdict":"Stop","reason":"x"}' })
+  const own = (await $.tool.call({ tool: 'TaskStop', task_id: 'b1' } as never)) as { deny?: string; isError?: boolean }
+  const claudes = (await $.tool.call({ tool: 'TaskStop', task_id: 'b2', tool_use_id: 'c9' } as never)) as { deny?: string; isError?: boolean }
+  expect([own.deny, own.isError, claudes.deny, claudes.isError]).toEqual([undefined, undefined, undefined, undefined])
+  expect(w.reached).toEqual(['TaskStop', 'TaskStop'])
+  expect(w.prompts.length).toBe(0)
+})
+
 test('an ordinary git command is not judged', withDeps, async ($, on) => {
   const w = world($, on, { open: [rec('them')] })
   await $.tool.call(bash('git status'))
