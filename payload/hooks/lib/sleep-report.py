@@ -110,7 +110,15 @@ SESSION_LINK = re.compile(r"claude\.ai/code/(session_[A-Za-z0-9]+)")
 UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 LOCAL_ID = re.compile(r"^%s$" % UUID)
 SESSION_LOCAL = re.compile(r"Claude-Session: local (%s)" % UUID)
-CLAIM_BRANCH = re.compile(r"^sleep/([1-9][0-9]*)$")
+
+
+def claim_branch(issue):
+    """The branch sleep-queue.sh makes for the worktree of a claim on an issue (sleep_worktree).
+    A merged PR is matched to a claim by this name, never by reading a number out of its branch,
+    which is mod-kit's one reader's work (#1475)."""
+    return "sleep/%d" % issue
+
+
 ENDED = ("woke", "limit")
 TERMINAL = ("done", "parked", "failed")
 KNOWN = ("start", "claim", "released", "done", "parked", "failed", "question", "issue", "lesson", "finding",
@@ -630,9 +638,9 @@ def credit(repo, p, who):
     not) where why not names any session its body names that wrote nothing tonight, else None."""
     ids, links, claims = who
     branch = p.get("headRefName") if isinstance(p.get("headRefName"), str) else ""
-    m = CLAIM_BRANCH.match(branch)
-    if m and (repo.lower(), int(m.group(1))) in claims:
-        return session_name(claims[(repo.lower(), int(m.group(1)))]), "its branch %s, that session's claim" % branch
+    claimed = next((k for k in claims if k[0] == repo.lower() and branch == claim_branch(k[1])), None)
+    if claimed is not None:
+        return session_name(claims[claimed]), "its branch %s, that session's claim" % branch
     body = p.get("body") if isinstance(p.get("body"), str) else ""
     named = list(dict.fromkeys(SESSION_LINK.findall(body)))
     for link in named:

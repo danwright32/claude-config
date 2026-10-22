@@ -226,7 +226,9 @@ export type ModKit = {
    * `isDefault`, that branch, or main or master when there is none; and `issues`, each part of the
    * branch name between a `/`, `-`, `_` or `.` that is 2 to 6 digits with at most one letter after
    * (`978-guard`, `fix/issue-41-and-52`, `961a-gh-reader`), never digits inside a word such as an
-   * agent worktree's hex id (#1306), so such a branch names none. Null when the
+   * agent worktree's hex id (#1306), so such a branch names none, and never a plan's step, a date
+   * or a version (#1475: `pr10` or `pr-10`, `guard-costs/2026-09-03`, `tsx-4.23.12`); an `i` glued
+   * to three digits or more is one (`i2968-render`). Null when the
    * path is in no checkout. A branch git cannot read, a detached head, or no main working tree is
    * `unreadable`, saying which, with `main` where git named it. Rejects as `workingTree` does. Asked
    * of git with three reads at once, each bounded at 3 seconds. The one reading every mod uses (L613).
