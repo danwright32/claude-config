@@ -451,11 +451,10 @@ def shell_words():
 
 def runs_gh_issue_create(cmd: str) -> bool:
     SW = shell_words()
-    try:
-        records = SW.commands(cmd)
-    except SW.Unreadable:
-        records = SW.crude_commands(cmd)
-    for _, text in records:
+    # Every command the line runs, a shell's -c string, eval's words and env -S's string read as
+    # commands of their own (claude-config#1478), with the crude cut where the reading cannot be
+    # trusted.
+    for _, text, _, _, _ in SW.every_command(cmd):
         found = SW.tool_read(SW.command_words(SW.command_rest(text)[0]))
         if found and found[:3] == ("gh", "issue", "create"):
             return True

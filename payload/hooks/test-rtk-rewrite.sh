@@ -559,6 +559,16 @@ check "#1428 and an issue list with a flag in front of it is still refused" "$(r
 check "#1428 and so is one with rtk's own flag in front of gh" "$(refused_to_rewrite 'rtk -v gh issue list')"
 # Only what rtk runs is judged: a gh it left as written beside another rewrite costs that one nothing.
 check "#1428 a plain gh beside an rtk rewrite keeps that rewrite" "$(kept_as 'gh pr list --json number && rtk git status')"
+# An rtk gh run by another program is read as it is bare (claude-config#1478): the shared reader reads
+# a shell's -c string, eval and the launchers.
+check "#1478 an rtk gh issue list in bash -c is refused" "$(refused_to_rewrite "bash -c 'rtk gh issue list'")"
+check "#1478 and in sh -c after a cd in the string" "$(refused_to_rewrite "sh -c 'cd /repo && rtk gh pr view 3'")"
+check "#1478 and through eval" "$(refused_to_rewrite 'eval rtk gh pr view 3')"
+check "#1478 and through nohup" "$(refused_to_rewrite 'nohup rtk gh run list &')"
+check "#1478 and through timeout" "$(refused_to_rewrite 'timeout 30 rtk gh pr status')"
+check "#1478 and through xargs" "$(refused_to_rewrite 'xargs rtk gh issue view')"
+check "#1478 an rtk gh api in bash -c keeps its rewrite" "$(kept_as "bash -c 'rtk gh api repos/o/r/issues/1'")"
+check "#1478 control: an rtk gh issue list only echoed keeps the rewrite beside it" "$(kept_as "echo \"bash -c 'rtk gh issue list'\" && rtk git status")"
 # Fail closed: with the shared reader gone, nothing can tell gh api from the rest, so an rtk gh is
 # not rewritten at all, while a rewrite with no gh in it still is (L42).
 NOLIB="$TMPROOT/nolib"; mkdir -p "$NOLIB"; cp "$H" "$NOLIB/rtk-rewrite.sh"

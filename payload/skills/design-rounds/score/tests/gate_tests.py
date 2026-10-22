@@ -322,7 +322,18 @@ for cmd in ["gh issue close https://github.com/acme/widgets/issues/9",
             # the flag takes the next word, the endpoint, as its value (lessons review of #1406).
             "gh api -X PATCH -f '>x' repos/acme/widgets/issues/9 -f state=closed",
             "gh api -X PATCH --field '2>&1' repos/acme/widgets/issues/9 -f state=closed",
-            "gh issue close --comment '>note' 9"]:
+            "gh issue close --comment '>note' 9",
+            # Run by another program it is the same close (claude-config#1478): a shell's -c string,
+            # eval, env -S and the launchers are read by the shared reader.
+            "bash -c 'gh issue close 9'",
+            "sh -c \"cd /tmp && gh issue close 9 -R acme/widgets\"",
+            "eval gh issue close 9",
+            "eval 'gh issue close 9 --reason completed'",
+            "env -S 'gh issue close 9'",
+            "nohup gh issue close 9",
+            "timeout 30 gh issue close 9",
+            "xargs gh issue close 9",
+            "rtk proxy gh issue close 9"]:
     routes(comments=[comment(NOT_MATCHED)])
     rc, reason, out = gate(cmd)
     check("%r is judged" % cmd, "below 100%" in reason, out)

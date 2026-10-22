@@ -98,6 +98,32 @@ allowed "rtk rewrite of a command naming init" 'rtk rewrite "rtk init -g"'
 allowed "an ordinary command" "ls -la"
 allowed "the override, for one command" "SKIP_RTK_INIT_CHECK=1 rtk init -g"
 
+# 2a. Run by another program, it is refused as it is bare (claude-config#1478): the shared reader
+# reads a shell's -c string, eval, env -S and the launchers, rtk proxy included.
+refused "#1478 in bash -c" "bash -c 'rtk init -g'"
+refused "#1478 in sh -c" "sh -c \"rtk init -g\""
+refused "#1478 in zsh -c" "zsh -c 'rtk init -g'"
+refused "#1478 in bash -lc" "bash -lc 'rtk init -g'"
+refused "#1478 in bash -c after a cd in the string" "bash -c 'cd /tmp && rtk init -g'"
+refused "#1478 through eval" "eval rtk init -g"
+refused "#1478 through eval of a string" "eval 'rtk init -g'"
+refused "#1478 through env -S" "env -S 'rtk init -g'"
+refused "#1478 through xargs" "xargs rtk init -g"
+refused "#1478 through nohup" "nohup rtk init -g &"
+refused "#1478 through time" "time rtk init -g"
+refused "#1478 through nice" "nice -n 5 rtk init -g"
+refused "#1478 through timeout" "timeout 30 rtk init -g"
+refused "#1478 through caffeinate" "caffeinate -i rtk init -g"
+refused "#1478 through rtk proxy" "rtk proxy rtk init -g"
+refused "#1478 sudo then a shell" "sudo -u dan bash -c 'rtk init -g'"
+refused "#1478 through find -exec" "find . -maxdepth 0 -exec rtk init -g \\;"
+refused "#1478 through watch" "watch -n 60 'rtk init -g'"
+refused "#1478 through script" "script -q /dev/null rtk init -g"
+refused "#1478 through parallel" "parallel rtk init -g ::: x"
+allowed "#1478 --show in bash -c only reads" "bash -c 'rtk init --show'"
+allowed "#1478 rtk proxy init runs a program named init" "rtk proxy init -g"
+allowed "#1478 a wrapper only mentioned by echo" "echo \"bash -c 'rtk init -g'\""
+
 # Built is not wired (L3): the hook is registered to see every Bash call before it runs. In the
 # repository the hooks block is payload/settings.hooks.json; installed it is settings.json.
 . "$DIR/lib/settings-file.sh"

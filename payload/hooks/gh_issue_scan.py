@@ -47,7 +47,13 @@ try:
     _sw = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_sw)
     gh_command = _sw.gh_command
+    # A command run from a string by a shell, eval or env -S (claude-config#1478): (wrapper, string,
+    # why), or None. Its string is scanned as a command line of its own.
+    wrapped_words, MAX_DEPTH = _sw.wrapped_words, _sw.MAX_DEPTH
 except Exception:
+    def wrapped_words(words):
+        return None  # with no reader, the crude reading below finds a create wherever gh stands
+    MAX_DEPTH = 0
     # With no reader, any command naming gh runs it, and a gated subcommand and action anywhere after
     # gh are the ones it runs: the reading that sees more commands, never fewer, so a gate asks rather
     # than misses. It stands down only on a word gh would take as a different subcommand or action, one
@@ -404,7 +410,7 @@ def scan_creates_in_context(command, cwd=None, environ=None):
     return [(args, envs, place) for _, args, envs, place in scan_gh_in_context(command, cwd, environ, {CREATE})]
 
 
-def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE})):
+def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}), start=None, depth=0):
     """Every gh command of the given kinds, as (kind, args, envs, place), kind its (sub, act).
 
     The walk scan_creates_in_context makes, for any gh command that names a body file
@@ -415,6 +421,11 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
     kin carry to later segments; an assignment in front of a command applies to that command only,
     after the shell has expanded its arguments, so it does not reach them. A cd, pushd or popd moves
     the directory. Each lasts to the end of the subshell it was made in.
+
+    A command a shell runs from its -c string, eval runs from its words or env -S splits from its
+    string is scanned as a command line of its own (claude-config#1478), from start, the Place where
+    the wrapper runs, depth being how many wrappers deep it is. One whose string cannot be read is
+    passed over here, never a reason to pass the rest: check-wrapped-commands.sh refuses it.
     """
     if not command or not command.strip():
         return []
@@ -436,7 +447,7 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
     creates = []
     i = 0
     at_head = True
-    place = Place(cwd, environ if environ is not None else {})
+    place = start.copy() if start is not None else Place(cwd, environ if environ is not None else {})
     subshells = []
     # An override belongs to the ONE command it prefixes. Reading it across the whole
     # call is how an unmilestoned create slipped through on 2026-07-29: an override on
@@ -469,6 +480,18 @@ def scan_gh_in_context(command, cwd=None, environ=None, kinds=frozenset({CREATE}
                 j += 1
             found = gh_command(tokens[i:j])
             if not found or tuple(found[:2]) not in kinds:
+                inner = wrapped_words(tokens[i:j]) if depth < MAX_DEPTH else None
+                if inner is not None and inner[1] is None and inner[0].startswith("find") and j < len(tokens) \
+                        and tokens[j] == ";":
+                    # The lexer cuts the `\;` ending find's -exec off as an operator, so it is put back.
+                    inner = wrapped_words(tokens[i:j] + [";"])
+                if inner is not None and inner[1] is not None and not inner[2]:
+                    # A shell's string runs in a shell of its own, which sees only what was exported,
+                    # so the variables this command set are not its to read; eval runs in this one.
+                    child = place.copy()
+                    if inner[0] != "eval":
+                        child.vars = {}
+                    creates.extend(scan_gh_in_context(inner[1], kinds=kinds, start=child, depth=depth + 1))
                 _follow(place, tokens[i:j])
                 seg_env = []  # they applied to that command alone
                 i = j

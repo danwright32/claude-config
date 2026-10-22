@@ -771,6 +771,22 @@ which fails on a hook that reads a gh or git subcommand by word position again; 
 allows carry `gh-reader:` with a reason, in the reader itself and in the crude readings a few callers
 keep for when it cannot be loaded, which see more commands than are there, never fewer.
 
+It also reads through the programs that run a command for you (claude-config#1478), so each gate
+judges a wrapped command exactly as the bare one: the launchers that run their arguments (nohup,
+xargs, time, nice, timeout, caffeinate, stdbuf, doas and `rtk proxy`, each past its own options), and
+a command line handed over as a string, a shell's `-c` string (`bash -c 'git push --force'`, `bash
+-lc`, `sh -c`, `zsh -c`), eval's words, env -S's string, the commands find runs with -exec and -ok,
+watch's words, script's command (`script -c` or the macOS form after its file) and GNU parallel's
+command (or each of its arguments when it names none), read as commands of their own in the
+directory the wrapper runs in, up to five deep. A wrapper whose command cannot be read (`bash -c
+"$CMD"`, a substitution, a quote never closed, a shell fed its commands on its input or running a
+script file such as `bash ./x.sh`, parallel reading its input, find -execdir, a find -exec that
+never ends, an eval that changes directory, wrapping past five deep) is reported as unreadable,
+naming it, and `check-wrapped-commands.sh` refuses any such command that names git, gh or rtk, once
+for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bash ./build.sh && git
+push` is refused, since what the script does is not in the command: run the script and the push as
+two commands.
+
 The same review is asked BEFORE a push, so its findings are fixed before GitHub sees the branch
 and CI is not spent on a head the merge gate would refuse (claude-config#599; on 2026-10-02 every
 after the fact catch in one Slate session was this review, at about 5 minutes of CI a round).
@@ -1094,7 +1110,7 @@ these cases.
 
 ### What a push actually waits on
 
-Twenty-six PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Twenty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1106,7 +1122,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Nine of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Ten of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1117,6 +1133,7 @@ Nine of them came after the 2026-09-21 timing further down, which measured the f
 | `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
+| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 

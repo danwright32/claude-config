@@ -672,11 +672,20 @@ else fail "#1186 a repository flag with no value was judged"; fi
 if mt_api_merge_untold "gh -R https://github.com/acme/widget pr merge 7"; then fail "#1186 an address gh reads was refused: $MT_API_WHY"; else pass; fi
 
 # The reading behind the table's wrapper rows (lib/shell-words.py past_runners): each runner's options
-# and settings are passed over, and env -S, whose command is a string split at run time, is left as
-# a command named env rather than guessed at.
+# and settings are passed over. env -S, whose command is a string split at run time, stays a command
+# named env, and since claude-config#1478 its string is read as a command line of its own after it
+# (shell-words.py wrapped), as the mods' reader reads it (mod-kit hooks/commands.ts, #730), so the
+# merge it runs is a merge to every gate.
 eq "$(mt_command_segments 'env -i -u GH_HOST -C /tmp GH_TOKEN="a b" gh pr merge 7')" "gh pr merge 7" "#1181 env's options and settings are passed over"
 eq "$(mt_command_segments 'sudo --user=dan -g staff -- gh pr merge 7')" "gh pr merge 7" "#1181 sudo's options are passed over"
-eq "$(mt_command_segments 'env -S "gh pr merge 7"')" 'env -S "gh pr merge 7"' "#1181 env -S is left as it stands"
+eq "$(mt_command_segments 'env -S "gh pr merge 7"')" 'env -S "gh pr merge 7"'$'\n''gh pr merge 7' "#1478 env -S stays as it stands, and the merge in its string is read after it"
+eq "$(mt_command_segments "bash -c 'gh pr merge 7 --squash'")" "bash -c 'gh pr merge 7 --squash'"$'\n''gh pr merge 7 --squash' "#1478 a merge in bash -c is read after the shell"
+if mt_runs_merge "bash -c 'gh pr merge 7 --squash'"; then pass; else fail "#1478 mt_runs_merge sees a merge in bash -c"; fi
+if mt_runs_merge "eval gh pr merge 7"; then pass; else fail "#1478 mt_runs_merge sees a merge through eval"; fi
+if mt_runs_merge "rtk proxy gh pr merge 7"; then pass; else fail "#1478 mt_runs_merge sees a merge through rtk proxy"; fi
+if mt_runs_merge "nohup gh pr merge 7 &"; then pass; else fail "#1478 mt_runs_merge sees a merge through nohup"; fi
+if mt_runs_merge "echo \"bash -c 'gh pr merge 7'\""; then fail "#1478 control: a merge only mentioned in echo is none"; else pass; fi
+eq "$(mt_pr_number "sh -c 'gh pr merge 42 --squash'")" "42" "#1478 the pull request a wrapped merge names is read from inside the string"
 eq "$(mt_command_segments 'sudo')" "sudo" "#1181 a runner with nothing after it is itself"
 # A setting env gives the merge is the merge's own, so the lessons review's read key can ride on it.
 eq "$(mt_presented_read_key 'env PR_REVIEW_READ=ab12 gh pr merge 7' mt_runs_merge)" "ab12" "#1181 a read key env sets is presented by the merge"
