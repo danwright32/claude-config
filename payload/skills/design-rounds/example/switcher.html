@@ -11,7 +11,10 @@
      stage takes whatever height is left over. */
   .dr-sameness { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px;
          background: #FDECEA; color: #6B1A12; border: 1px solid #E4A9A1; font-weight: 600; }
-  .dr-frame { max-width: 1180px; margin: 0 auto; padding: 28px 24px 24px;
+  /* No ceiling on the width: the stage is the window's width less its gutters. A ceiling of 1180px
+     drew the stage at 1132px in a 1900px window, so an option captured at 1280 was cut off at the
+     right, where the control being judged sat (claude-config#1499). The text keeps its own measure. */
+  .dr-frame { padding: 28px 24px 24px;
            box-sizing: border-box; min-height: 100vh;
            display: flex; flex-direction: column; }
   .dr-eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase;
@@ -46,8 +49,16 @@
   /* `flex: none` because a flex item SHRINKS by default: a screen declaring a width
      wider than the stage was silently squeezed to the stage's width, which is half of
      how three options declaring 1100, 1440 and 1720 all rendered at the same size on
-     2026-09-08. The stage scrolls instead, so a declared width is the width drawn. */
+     2026-09-08. So a declared width is the width laid out, and a screen wider than the
+     stage is scaled down whole with that width said, never squeezed (claude-config#1499). */
   .dr-stage > * { margin: auto; flex: none; }
+  /* Each screen sits in a holder the page fits to the stage: a screen wider than the stage is scaled
+     down whole, never cut off, and the line above the stage says by how much (claude-config#1499).
+     The holder takes the scaled size; the screen inside keeps its own width, so an option's own
+     document is still as wide as its page was captured, and its media queries answer to that. */
+  .dr-scaled { display: flex; width: max-content; transform-origin: 0 0; }
+  .dr-scaled > * { flex: none; }
+  .dr-scale { margin: 0 0 8px; color: #6E6259; font-size: 13px; flex: none; }
   .dr-hint { margin: 22px 0 0; color: #7C7168; font-size: 12px; flex: none; }
 </style>
 <style>
@@ -62,6 +73,7 @@
   <p class="dr-measurement">Both rows measured at 4.9 to 1 against the row fill.</p>
   <div class="dr-tabs" id="dr-tabs"></div>
   <div class="dr-readout" id="dr-readout"></div>
+  <p class="dr-scale" hidden></p>
   <div class="dr-stage" id="dr-stage"></div>
   <p class="dr-hint">Left and right arrows step through the options. The key on each tab jumps
   straight to it, unless the design on the stage wants that key for itself.</p>
@@ -94,8 +106,33 @@ function buildScreen(variant) {
 function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
   var doc = frame.contentDocument;
   /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
-     so a short screen would keep whatever height its frame started at. */
-  if (!DR_HEIGHT && doc && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+     so a short screen would keep whatever height its frame started at. A frame still loading its page
+     has no root yet, and is left alone: its own load sizes it. Reading the root anyway threw, and the
+     page said the builder's screenShown had, whenever an option was chosen before its frame loaded
+     (claude-config#1467). */
+  if (!DR_HEIGHT && doc && doc.documentElement && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+}
+/* What an option draws, for telling two options apart. Its whole document, not only its slot: a round
+   set on the page root (the theme, the spacing) or in a stylesheet the builder adds draws different
+   pictures around identical slots, and the slot alone called them the same (claude-config#1512). So:
+   the document's markup with its scripts left out, since they carry each option's own variant and
+   always differ; what no markup holds, a canvas's pixels and a field's value; and the live rules of
+   every stylesheet, which a builder can change without touching the markup. A rendered picture cannot
+   be read from inside the page, so this is markup, and two documents alike in all of it draw alike. */
+function drPicture(doc, key) {
+  var copy = doc.documentElement.cloneNode(true);
+  Array.prototype.forEach.call(copy.querySelectorAll("script"), function (s) { s.remove(); });
+  var parts = [copy.outerHTML];
+  Array.prototype.forEach.call(doc.querySelectorAll("canvas, input, textarea, select"), function (node) {
+    /* One that cannot be read is never taken as alike, so it can never make two pictures the same. */
+    try { parts.push(node.tagName === "CANVAS" ? node.toDataURL() : node.type === "checkbox" || node.type === "radio" ? String(node.checked) : node.value); } catch (err) { parts.push("unread in " + key); }
+  });
+  Array.prototype.slice.call(doc.styleSheets).concat(doc.adoptedStyleSheets || []).forEach(function (sheet) {
+    var rules;
+    try { rules = Array.prototype.map.call(sheet.cssRules, function (r) { return r.cssText; }).join("\n"); } catch (err) { rules = "unread in " + key; }
+    parts.push((sheet.disabled ? "off " : "on ") + rules);
+  });
+  return parts.join("\n");
 }
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
@@ -103,7 +140,7 @@ function drLoaded(frame, variant) {
   screenShown(variant, frame);
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
-  DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? slot.innerHTML : null };
+  DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? drPicture(doc, variant.key) : null };
   if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
 }
 function drVerdict() {
@@ -192,9 +229,47 @@ window.addEventListener("message", function (event) {
   var tabs = document.getElementById("dr-tabs");
   var readout = document.getElementById("dr-readout");
   var stage = document.getElementById("dr-stage");
+  var caption = document.querySelector(".dr-scale");
   var current = 0;
   var built = [];
   var hookSaid = false;
+  var shown = null;
+  /* The screen showing is fitted again whenever the window changes the stage's width or the screen
+     changes its own size, as a captured page's frame does once it has loaded and is sized to its page. */
+  var watch = typeof ResizeObserver === "function" ? new ResizeObserver(function () { fit(); }) : null;
+  if (watch) watch.observe(stage);
+  else window.addEventListener("resize", function () { fit(); });
+
+  /* The holder a screen is drawn in, made the first time it is asked for: the holder sits on the stage
+     and takes the screen's size as drawn, and the box inside it is the one scaled (claude-config#1499). */
+  function holdOf(node) {
+    var inner = node.parentNode;
+    if (inner && inner.className === "dr-scaled") return inner.parentNode;
+    var hold = el("div", "dr-fit");
+    inner = el("div", "dr-scaled");
+    inner.append(node);
+    hold.append(inner);
+    if (watch) watch.observe(inner);
+    return hold;
+  }
+
+  /* The screen showing, drawn whole: at its own size when the stage has room for it, and otherwise
+     scaled to the stage's width with its true width and the percentage said above the stage, so a
+     scaled option can never be mistaken for one drawn at its own size. Never cut off, and never
+     scrolled sideways, since the part cut off or scrolled away is so often the part being judged. */
+  function fit() {
+    if (!shown) return;
+    var inner = shown.firstElementChild;
+    var pad = getComputedStyle(stage);
+    var room = stage.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
+    var wide = inner.offsetWidth;
+    var scale = wide > room && room > 0 ? room / wide : 1;
+    inner.style.transform = scale < 1 ? "scale(" + scale + ")" : "";
+    shown.style.width = scale < 1 ? wide * scale + "px" : "";
+    shown.style.height = scale < 1 ? inner.offsetHeight * scale + "px" : "";
+    caption.textContent = scale < 1 ? "Shown at " + Math.floor(scale * 100) + "% of its true " + wide + "px width." : "";
+    caption.hidden = scale === 1;
+  }
 
   function show(index) {
     current = (index + VARIANTS.length) % VARIANTS.length;
@@ -210,18 +285,20 @@ window.addEventListener("message", function (event) {
        time that option is chosen. The fallback covers the one case where drawAll could not
        finish, so a page whose builder threw is still usable rather than blank. */
     var incoming = built[current] || buildScreen(variant);
+    shown = holdOf(incoming);
     var kept = [];
     if (KEEP_ALL) {
       built[current] = incoming;
       built.forEach(function (node, position) {
         if (!node) return;
-        if (node.parentNode !== stage) stage.append(node);
-        node.hidden = position !== current;
+        var hold = holdOf(node);
+        if (hold.parentNode !== stage) stage.append(hold);
+        hold.hidden = node.hidden = position !== current;
       });
     } else {
       var outgoing = stage.firstElementChild;
       kept = outgoing ? scrolled(outgoing) : [];
-      stage.replaceChildren(incoming);
+      stage.replaceChildren(shown);
     }
     /* A browser resets the scroll of an element taken out of the document, so every scrolling
        region came back at the top on a switch, and a round about anything below the fold could not
@@ -229,7 +306,7 @@ window.addEventListener("message", function (event) {
        are put on the incoming one's regions, matched by where each sits in the screen, so options
        are compared at the same place by default and no builder has to ask for it. */
     kept.forEach(function (at) {
-      var region = nodeAt(incoming, at.path);
+      var region = nodeAt(shown, at.path);
       if (region) {
         region.scrollTop = at.top;
         region.scrollLeft = at.left;
@@ -253,6 +330,7 @@ window.addEventListener("message", function (event) {
         }
       }
     }
+    fit();
   }
 
   /* Every element in a screen that is scrolled away from its start, each named by its path from
