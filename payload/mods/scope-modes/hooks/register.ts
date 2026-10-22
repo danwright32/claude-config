@@ -70,7 +70,7 @@ import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
-import { bootOf, bootSessionOf, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -1261,7 +1261,7 @@ let announced = false
 // limit, well past the before bed questions' ten minutes each.
 const PREPARING_STALE_MS = 2 * 60 * MIN
 
-const startedWhere = (r: SleepRecord) => `it started at ${etWhen(r.since)} in ${r.startedBy?.cwd ?? 'a session that left no folder'}, and ends at ${etWhen(r.until)}`
+const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started at ${etWhen(r.since)} in ${r.startedBy?.cwd ?? 'a session that left no folder'}, and ends at ${endSaid(r.until, await $.clock.now())}`
 
 // /sleep (#840). The record, its workers, the night's merge and deploy lists (#843) and the before
 // bed questions on the queue's issues (#836) here: paging (phase 2, #841) and the overnight driver
@@ -1276,7 +1276,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   const startedBoot = b.boot.time
   if (startedBoot === null) return `Sleep mode did not start: this boot's start could not be read (${b.timeWhy ?? 'sysctl gave no reason'}).`
   let reading = await sleepNow($)
-  if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
+  if (reading.state === 'asleep') return `Sleep mode is already on: ${await startedWhere($, reading.record)}. Nothing changed.`
   if (reading.state === 'unreadable') {
     const p = await sleepPaths($).catch(() => null)
     if (p && (await $.fs.exists(p.current))) return `A sleep record is already there but cannot be read (${reading.why}). Nothing changed; /wake clears it.`
@@ -1284,7 +1284,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   if (reading.state === 'expired' || reading.state === 'other-boot') {
     await endIfOver($, reading)
     reading = await sleepNow($)
-    if (reading.state === 'asleep') return `Sleep mode is already on: ${startedWhere(reading.record)}. Nothing changed.`
+    if (reading.state === 'asleep') return `Sleep mode is already on: ${await startedWhere($, reading.record)}. Nothing changed.`
   }
   const p = await sleepPaths($)
   // On battery a night of work drains the Mac, so sleep does not start; unknown power is said, never guessed (#844).
@@ -1308,7 +1308,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   const again = await sleepNow($)
   if (again.state === 'asleep') {
     await releaseMarker($, p.preparing, claim.claimed)
-    return `Sleep mode is already on: ${startedWhere(again.record)}. Nothing changed.`
+    return `Sleep mode is already on: ${await startedWhere($, again.record)}. Nothing changed.`
   }
   // Everything from here until the record is in place is under the marker, so a second /sleep never
   // asks the questions again in between, and it is released however this ends.
@@ -1413,7 +1413,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
       const there = await sleepNow($)
       if (there.state === 'asleep') {
         placed = there.record.generation === generation
-        return `Sleep mode is already on: ${startedWhere(there.record)}. Nothing changed.`
+        return `Sleep mode is already on: ${await startedWhere($, there.record)}. Nothing changed.`
       }
       return `Sleep mode did not start: the record could not be put in place (${ln.stderr.trim() || `ln exited ${ln.exitCode}`}).`
     }
@@ -1487,7 +1487,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   const awake = await holdAwake($, p.dir, record.until, now)
   const others = e.others ? ` and ${e.others} other${e.others === 1 ? '' : 's'}` : ''
   const enrolled = e.workers.includes(self) ? `this session${others}` : e.others ? `${e.others} other session${e.others === 1 ? '' : 's'}` : 'no session'
-  let s = `Sleep mode is on until ${etWhen(record.until)}. Enrolled to work overnight: ${enrolled}.`
+  let s = `Sleep mode is on until ${endSaid(record.until, now)}. Enrolled to work overnight: ${enrolled}.`
   if (e.left) s += ` Not enrolled: ${e.left} session${e.left === 1 ? '' : 's'} that ${e.left === 1 ? 'is' : 'are'} not interactive or ${e.left === 1 ? 'has' : 'have'} not said.`
   if (e.unknown) s += ` Other sessions may be missing: ${e.unknown}.`
   s += goals.said + startSaid + closedSentence(repos) + issues.said + unnoted + tookOver
@@ -3957,8 +3957,8 @@ const SCOPE_NOTE: Record<ScopeModesScope, string> = {
 }
 const AWAY_NOTE = `Dan is away from the Mac: ${MODE_DEF.away.will} (the Artifact tool). Do not ${MODE_DEF.away.willNot}.`
 // What Claude is told on each prompt while the Mac sleeps: only what phase 1 does (L703).
-const sleepPromptNote = (r: SleepRecord, self: string) =>
-  `Sleep mode is on until ${etWhen(r.until)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`
+const sleepPromptNote = (r: SleepRecord, self: string, now: number) =>
+  `Sleep mode is on until ${endSaid(r.until, now)}. ${r.workers?.includes(self) ? `This session is enrolled to work overnight. ${WORKER_NOTE}` : 'This session is not one of the overnight workers.'} ${ASLEEP_DELIVERY}`
 // What phase 3 (#834) does for a worker, and only that (L703).
 const WORKER_NOTE =
   "Its permission prompts are approved by themselves, except a question for Dan, the plan approval and what Dan bans while he sleeps, which are refused with the reason. A refusal, by that list or by the auto mode classifier, is final: never look for another way to do it; skip that issue."
@@ -4047,7 +4047,7 @@ export const register: Register = on => {
       ['build', 'Turn no build or winding down off.'],
       ['away', 'Away: every session publishes pages for the phone and holds what needs you at the Mac.'],
       ['home', 'Home: every session delivers on the Mac again.'],
-      ['sleep', 'Sleep: the whole Mac goes quiet until noon ET tomorrow; interactive sessions are enrolled to work overnight.'],
+      ['sleep', 'Sleep: the whole Mac goes quiet until noon ET; interactive sessions are enrolled to work overnight.'],
       ['wake', 'Wake: sleep mode off, every session back where it was.'],
     ] as const)
       await $.command.register({ name, description, immediate: true })
@@ -4320,7 +4320,7 @@ export const register: Register = on => {
     let asking: string | undefined
     const sleeping = await sleepNow($)
     if (sleeping.state === 'asleep') {
-      notes.push(sleepPromptNote(sleeping.record, await $.session.id()))
+      notes.push(sleepPromptNote(sleeping.record, await $.session.id(), await $.clock.now()))
       // A worker names its report as its first prompt asleep goes in (#1287), before any note it
       // writes, so its own name by its title is the one kept, not the report script's by its id.
       try {

@@ -2422,8 +2422,11 @@ night ends, and the band above the prompt shows ASLEEP in every session.
 
 **Ending it.** Type `/wake`, or say "I'm up", in any session. If you write to a session between 7 AM
 and 7 PM ET while sleep is still on, Claude asks you once, in a plain line, whether you are up; it
-never ends sleep by itself. If you forget, sleep ends on its own at noon ET the next day (or when the
-Mac restarts) and sends one notification. The session you woke it in opens its own report in
+never ends sleep by itself. If you forget, sleep ends on its own at noon ET (or when the Mac
+restarts): the next day's noon for a `/sleep` from 9 AM ET on, and that same day's noon for one
+before 9 AM, which still belongs to the night just ending. `/sleep` says which, "until noon ET
+tomorrow (Thu Oct 22)" or "until noon ET today (Wed Oct 21)". Ending by itself sends one
+notification. The session you woke it in opens its own report in
 BBEdit (focus moves there), unless you are away or woke it from your phone, when opening it waits
 for you in the held card; a session with no report of its own says so and opens nothing. That session then summarises its own night and offers what the overnight
 sessions proposed: new issues in one multi select picker, with the priority, labels and milestone
@@ -2498,7 +2501,7 @@ folder, named night first, then the project, then the session: `2026-10-16 Bidsp
 sleep report.md`, the session's title where it has one (auto naming's `(project)` prefix dropped),
 else the first 8 characters of its id (`2026-10-16 Bidspoke 3f2a9c1e sleep report.md`), and a
 second sleep the same night adds ` (2)` rather than writing over the first. The night is the evening
-sleep started (anything before noon ET counts as the night before). The name is fixed when the file
+sleep started (anything before 9 AM ET counts as the night before). The name is fixed when the file
 is first written, by the session itself (at `/sleep`, its first prompt asleep as a worker, or its
 first minute asleep with news) or, for a session that never got to it, by the report script from its
 id and the folder its notes name (two minutes after its first note, or at the end of the night), and

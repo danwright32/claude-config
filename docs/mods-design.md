@@ -1001,10 +1001,17 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   (L523), and a stray page is better than a silence nobody sees. When this boot's start cannot be
   read (sysctl failing), only the boot check is skipped: a sound record still holds until its end,
   and is never called broken for what this side could not read.
-- The night is the ET date of the evening: before noon ET counts as the night before, and `until` is
+- The night is the ET date of the evening: before 9 AM ET counts as the night before, and `until` is
   noon ET the next day, found in America/New_York whatever zone the Mac is set to, so a change to
   or from daylight time moves it an hour in UTC and never in ET. Tested at both edges and across
-  both changes, with the clock injected.
+  both changes, with the clock injected. The turn was noon until #1479, so a `/sleep` in the late
+  morning got a night ending within minutes (one at 11:59:55 AM ended 4.8 seconds later, #1469);
+  Dan, 2026-10-21: from 9 AM a `/sleep` is the coming night and runs to noon ET the next day, and
+  before 9 AM it still belongs to the night just ending, so the shortest night is the three hours
+  from 8:59 AM. `nightOf` is the one place a night is computed (`NIGHT_TURNS_AT_HOUR`); every reader
+  takes the record's own `night` and `until`, so a record written under the noon turn keeps its
+  meaning. What sleep says of its end (`endSaid`: the /sleep reply, "already on" and the prompt
+  note) names the real day, "noon ET today (Wed Oct 21)" or "noon ET tomorrow (Thu Oct 22)".
 - `bootTime` is `sysctl kern.boottime`'s seconds, read once per session (a session lives inside one
   boot; a failed read is not kept). `/sleep` refuses when it cannot be read, since such a record
   could never be told apart from an old boot's. The mod's `bootOf` and the shell's `sleep_boot_of`
