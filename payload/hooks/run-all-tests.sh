@@ -815,6 +815,12 @@ if [ "$ran" -gt 0 ]; then
   PUSH_GATE_LEDGER_DIR="$WORK/push-gates"
   export PUSH_GATE_LEDGER_DIR
 
+  # And the record of wrapped command refusals (claude-config#1492), whose counts decide how
+  # check-wrapped-commands.sh is narrowed: a suite driving that gate without pointing it elsewhere
+  # records its fixtures here, never as real use. Not bracketed, for the push ledger's reason.
+  WRAPPED_REFUSAL_LEDGER_DIR="$WORK/wrapped-refusals"
+  export WRAPPED_REFUSAL_LEDGER_DIR
+
   # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
   # but a suite running it as a home's own config, with HOME left real, would append its lines to the
   # log the real watcher writes. A suite that names its own still wins. Not bracketed like the stores
