@@ -5676,6 +5676,11 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Security and privacy
 
+- **L799. A browser security report's named source is whatever script was running when the
+  blocked load fired, not the code that added the element, so never treat a named source as
+  proof your own code requested the resource.** (slate#4063, 2026-10-22)
+  SHORT: A CSP report's named source is the script running when the load fired, not who added it; never read it as proof your code requested it.
+
 - **L1026. An access check in a shared layout does not protect the pages beneath it, because the
   framework renders a layout and its page at the same time and may not re-run the layout on navigation;
   every protected page or its data loader must check access itself, with a test that fails when one

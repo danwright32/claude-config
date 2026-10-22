@@ -13,7 +13,7 @@ lessons review before any merge; read any one in full with
 - Honest failure (honest-failure): 107 lessons, 33 in the core
 - Pipeline speed (pipeline-speed): 27 lessons, 24 in the core
 - Proof over green (proof-over-green): 199 lessons, 99 in the core
-- Security and privacy (security-and-privacy): 38 lessons, 13 in the core
+- Security and privacy (security-and-privacy): 39 lessons, 13 in the core
 - State and identity (state-and-identity): 79 lessons, 20 in the core
 - Test speed (test-speed): 13 lessons, 9 in the core
 - UX completeness (ux-completeness): 101 lessons, 41 in the core
