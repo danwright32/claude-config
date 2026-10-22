@@ -22,6 +22,21 @@ check(){   # $1 = name  $2 = "ok" or the evidence of failure
 }
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/test-mods.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
+# The sections below that run the real pinned compiler look for it in this checkout, which in a new
+# worktree has none until it is linked or installed (#1496), so that is done first, here, and why it
+# could not be is carried on every line that says those sections were not measured.
+PINNED_WHY=""
+if [ -z "${CHECK_MODS_TS_DIR:-}" ]; then
+  if . "$ROOT/tools/lib/pinned-compiler.sh"; then
+    if pinned_compiler_ensure "$ROOT/tools/typescript"; then
+      [ -z "$PINNED_TS_DID" ] || echo "test-mods: the pinned TypeScript compiler was $PINNED_TS_DID."
+    else
+      PINNED_WHY=" It could not be installed automatically: ${PINNED_TS_WHY%.}."
+    fi
+  else
+    PINNED_WHY=" tools/lib/pinned-compiler.sh, which installs it, is missing."
+  fi
+fi
 
 mkmod(){   # $1 = mods dir  $2 = name
   mkdir -p "$1/$2/.claude-plugin" "$1/$2/hooks"
@@ -353,6 +368,51 @@ printf '%s\n' "$out" | grep -q "UNMEASURED: 4 of 4 mods' types were not checked 
 printf '%s\n' "$out" | grep -q 'npm ci --prefix tools/typescript' \
   && check "with the command that installs the pinned compiler" ok || check "with the command that installs the pinned compiler" "$out"
 
+# 4c2. No compiler named and none installed in the checkout, as in every new worktree (#1496): the
+#      check installs the pinned one itself, through tools/lib/pinned-compiler.sh (whose own suite is
+#      tools/test-pinned-compiler.sh), and where it genuinely cannot, its UNMEASURED line says why.
+#      npm is a stub (L2): it lays the stub compiler above as the package's tsc.
+TSA_REPO="$TMPROOT/ts-auto"; TSA="$TSA_REPO/tools/typescript"; mkdir -p "$TSA"; pin "$TSA" 2.1.291
+cp "$ROOT/tools/typescript/package.json" "$ROOT/tools/typescript/package-lock.json" "$TSA/"
+git -C "$TSA_REPO" init -q
+AUTO_NPM="$TMPROOT/npm-auto"
+cat > "$AUTO_NPM" <<STUB
+#!/bin/bash
+prefix=""; prev=""
+for a in "\$@"; do [ "\$prev" = --prefix ] && prefix="\$a"; prev="\$a"; done
+mkdir -p "\$prefix/node_modules/.bin" "\$prefix/node_modules/typescript/bin"
+cp "$TSC" "\$prefix/node_modules/typescript/bin/tsc"
+ln -s ../typescript/bin/tsc "\$prefix/node_modules/.bin/tsc"
+STUB
+chmod +x "$AUTO_NPM"
+M4CA="$TMPROOT/m4ca"; mkmod "$M4CA" welltyped
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TS_DIR="$TSA" PINNED_TS_NPM="$TMPROOT/no-such-npm" PATH=/usr/bin:/bin bash "$CHECK" "$M4CA" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep 'UNMEASURED' | grep -q 'npm is not installed' \
+  && check "where the pinned compiler cannot be installed, the UNMEASURED line says why (#1496)" ok \
+  || check "where the pinned compiler cannot be installed, the UNMEASURED line says why (#1496)" "exit=$code out=$out"
+printf '%s\n' "$out" | grep 'welltyped ok' | grep -q 'types not checked: no TypeScript compiler.*npm is not installed' \
+  && check "and so does the mod's own line (#1496)" ok || check "and so does the mod's own line (#1496)" "$out"
+printf '%s\n' "$out" | grep 'UNMEASURED' | grep -q 'npm ci --prefix tools/typescript' \
+  && check "still naming the command that installs it by hand (#1496)" ok || check "still naming the command that installs it by hand (#1496)" "$out"
+out="$(STUB_LOG="$LOG" TSC_LOG="$TSC_LOG" CLAUDE_BIN="$FAKE" CHECK_MODS_TS_DIR="$TSA" PINNED_TS_NPM="$AUTO_NPM" PATH=/usr/bin:/bin bash "$CHECK" "$M4CA" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && printf '%s\n' "$out" | grep -q '1 of 1 mods type checked against' && ! printf '%s\n' "$out" | grep -q 'UNMEASURED: 1 of 1' \
+  && check "where it can, the check installs the pinned compiler and type checks every mod with it (#1496)" ok \
+  || check "where it can, the check installs the pinned compiler and type checks every mod with it (#1496)" "exit=$code out=$out"
+printf '%s\n' "$out" | grep -q 'pinned TypeScript compiler was installed' \
+  && check "and says it installed it (#1496)" ok || check "and says it installed it (#1496)" "$out"
+# The noun wait check gets the compiler the same way, and says why the same way when it cannot.
+M4CW="$TMPROOT/m4cw"; mkdir -p "$M4CW"
+TSW_REPO="$TMPROOT/ts-auto-waits"; TSW="$TSW_REPO/tools/typescript"; mkdir -p "$TSW"
+cp "$ROOT/tools/typescript/package.json" "$ROOT/tools/typescript/package-lock.json" "$TSW/"
+git -C "$TSW_REPO" init -q
+out="$(CHECK_MODS_TS_DIR="$TSW" PINNED_TS_NPM="$TMPROOT/no-such-npm" bash "$ROOT/tools/check-mod-noun-waits.sh" "$M4CW" 2>&1)"; code=$?
+[ "$code" -eq 4 ] && printf '%s\n' "$out" | grep -q 'npm is not installed' \
+  && check "the noun wait check says why the pinned compiler could not be installed (#1496)" ok \
+  || check "the noun wait check says why the pinned compiler could not be installed (#1496)" "exit=$code out=$out"
+out="$(CHECK_MODS_TS_DIR="$TSW" PINNED_TS_NPM="$AUTO_NPM" bash "$ROOT/tools/check-mod-noun-waits.sh" "$M4CW" 2>&1)"; code=$?
+[ -x "$TSW/node_modules/.bin/tsc" ] && [ -f "$TSW/node_modules/.pinned-typescript-store" ] \
+  && check "and installs it where it can (#1496)" ok || check "and installs it where it can (#1496)" "exit=$code out=$out"
+
 # 4d. The pinned compiler (#803) and its record of known type errors, and each mod's dependencies,
 #     whose contracts are read from the folder under review (#840), named by each dependency's own
 #     plugin.json, never from an installed copy.
@@ -487,7 +547,7 @@ done
 # (always on CI, #895): a mod whose tool.call matcher names its own MCP tool, as manual-steps' do.
 REAL_TSC="$ROOT/tools/typescript/node_modules/.bin/tsc"
 if [ ! -x "$REAL_TSC" ]; then
-  echo "SUITE-PART-UNMEASURED the pinned compiler is not installed in this checkout (npm ci --prefix tools/typescript), so the real compiler's verdict was not compared across installed copies"
+  echo "SUITE-PART-UNMEASURED the pinned compiler is not installed in this checkout (npm ci --prefix tools/typescript), so the real compiler's verdict was not compared across installed copies.$PINNED_WHY"
 else
   M4J="$TMPROOT/m4j"; mkmod "$M4J" realmcp
   cat > "$M4J/realmcp/hooks/register.ts" <<'TS'
@@ -2181,7 +2241,7 @@ noun_wait_section(){   # $1 = the folder the pinned TypeScript compiler is looke
     # that has not installed it, and every check below would otherwise go quietly unmeasured.
     check "the pinned TypeScript compiler starts where CI runs the noun wait checks (#895)" "it did not start from $1: $(tail -1 "$TMPROOT/ts-probe/err.txt" 2>/dev/null)"
   else
-    echo "SUITE-PART-UNMEASURED the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript"
+    echo "SUITE-PART-UNMEASURED the noun wait checks (section 12) did not run: no TypeScript compiler that starts in $1. Install it with: npm ci --prefix tools/typescript.$([ "$1" = "$ROOT/tools/typescript" ] && printf '%s' "$PINNED_WHY")"
   fi
 }
 # A stand-in compiler that is installed but exits non zero as it loads, as a Mac's copy does on Linux.

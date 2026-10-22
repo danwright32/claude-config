@@ -75,6 +75,17 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 3
 fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A checkout without the pinned compiler, as every new worktree is, gets it here (#1496), as
+# check-mods.sh does; where it cannot, why rides on the refusal below.
+PINNED_TS_WHY=""
+if . "$here/lib/pinned-compiler.sh" 2>/dev/null; then
+  if pinned_compiler_ensure "${CHECK_MODS_TS_DIR:-$here/typescript}"; then
+    [ -z "$PINNED_TS_DID" ] || echo "check-mod-noun-waits: the pinned TypeScript compiler was $PINNED_TS_DID." >&2
+  fi
+else
+  PINNED_TS_WHY="tools/lib/pinned-compiler.sh, which installs it, is missing"
+fi
+export PINNED_TS_WHY
 python3 - "${dir%/}" "$here/lib" "${CHECK_MODS_TS_DIR:-$here/typescript}" <<'PY'
 import ast, json, os, re, subprocess, sys
 
@@ -188,6 +199,8 @@ def resolve_all(mods):
     why = None
     if not os.path.isdir(os.path.join(ts_dir, "node_modules", "typescript")):
         why = f"it is not installed in {ts_dir}"
+        if os.environ.get("PINNED_TS_WHY"):
+            why += f", and could not be installed automatically: {os.environ['PINNED_TS_WHY'].rstrip('.')}"
     else:
         payload = json.dumps({"mods": [{"files": [os.path.abspath(os.path.join(folder, f.rel)) for f in files]} for _, folder, _, files in mods if files]})
         try:

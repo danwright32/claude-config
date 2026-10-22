@@ -18,7 +18,8 @@
 #
 # CLAUDE_BIN names the claude command; left unset it is found on PATH, then at ~/.local/bin/claude.
 # TSC_BIN names a TypeScript compiler for the strict type check; left unset it is the compiler pinned
-# in tools/typescript (installed with `npm ci --prefix tools/typescript`, #803), else tsc on PATH.
+# in tools/typescript (#803), which a checkout without it gets automatically from the clone's shared
+# install (tools/lib/pinned-compiler.sh, #1496), else tsc on PATH.
 # CHECK_MODS_TS_DIR moves where the pin, the pinned Claude Code types (claude-code-types/) and the
 # record of known type errors are read from, for tests. Nothing is read from an installed copy of a
 # mod (#953), so the same tree gives the same verdict on any machine and in CI.
@@ -300,6 +301,22 @@ done
 TS_DIR="${CHECK_MODS_TS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/typescript}"
 PINNED="$TS_DIR/claude-code-types"
 tsc="${TSC_BIN:-}"
+# A checkout without the pinned compiler, as every new worktree is, gets it here rather than by a
+# manual npm ci (#1496): linked from the clone's one shared install, or installed into it from the
+# lockfile, bounded in time. Where it genuinely cannot, why is carried on the UNMEASURED line below.
+pinned_why=""
+if [ -z "$tsc" ]; then
+  # shellcheck source=lib/pinned-compiler.sh
+  if . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/pinned-compiler.sh" 2>/dev/null; then
+    if pinned_compiler_ensure "$TS_DIR"; then
+      [ -z "$PINNED_TS_DID" ] || echo "check-mods: the pinned TypeScript compiler was $PINNED_TS_DID." >&2
+    else
+      pinned_why="$PINNED_TS_WHY"
+    fi
+  else
+    pinned_why="tools/lib/pinned-compiler.sh, which installs it, is missing"
+  fi
+fi
 [ -n "$tsc" ] || { [ -x "$TS_DIR/node_modules/.bin/tsc" ] && tsc="$TS_DIR/node_modules/.bin/tsc"; }
 [ -n "$tsc" ] || tsc="$(command -v tsc 2>/dev/null || true)"
 [ -n "$tsc" ] && [ -x "$tsc" ] || tsc=""
@@ -360,7 +377,7 @@ for i in "${!mods[@]}"; do
   # No compiler is decided first, so it is the cause named whatever else is wrong.
   if [ -z "$tsc" ]; then
     unchecked "no TypeScript compiler" "$name"
-    types_of[i]="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-$TS_DIR/node_modules/.bin/tsc, then tsc on PATH})"
+    types_of[i]="types not checked: no TypeScript compiler (looked for ${TSC_BIN:-$TS_DIR/node_modules/.bin/tsc, then tsc on PATH})${pinned_why:+; the pinned one could not be installed: $pinned_why}"
     continue
   fi
   if [ -n "$pinned_missing" ]; then
@@ -441,7 +458,9 @@ if [ "$untyped" -gt 0 ]; then
   causes="$(printf '%s' "$untyped_why" | awk -F'\t' 'NF == 2 { if (!($1 in n)) order[++k] = $1; n[$1]++; m[$1] = m[$1] ($1 in seen ? ", " : "") $2; seen[$1] = 1 }
     END { for (i = 1; i <= k; i++) printf "%s%d %s: %s", (i > 1 ? "; " : ""), n[order[i]], order[i], m[order[i]] }')"
   fix=""
-  case "$untyped_why" in *"no TypeScript compiler	"*) fix=" Install the pinned compiler with: npm ci --prefix tools/typescript" ;; esac
+  case "$untyped_why" in *"no TypeScript compiler	"*)
+    fix="${pinned_why:+ The pinned compiler could not be installed automatically: ${pinned_why%.}.} Install the pinned compiler with: npm ci --prefix tools/typescript" ;;
+  esac
   echo "check-mods: UNMEASURED: $untyped of $n mods' types were not checked ($causes).$fix" >&2
 fi
 
