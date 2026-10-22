@@ -145,6 +145,10 @@ type Job = {
   missing?: boolean
   /** ps cannot say whether its group still runs (#1387): it fails with an error. */
   psFails?: boolean
+  /** It ends as Claude Code answers the watcher's stop, so the stop's refusal races its end (#1491). */
+  goneOnStop?: boolean
+  /** ps can say whether its group runs only until the watcher's stop is answered (#1491). */
+  psFailsAfterStop?: boolean
 }
 /** One agent of the session as $.agent.list() names it (#759). */
 type Agent = { id: string; description: string; type: string; status: string }
@@ -175,6 +179,8 @@ type World = {
   submitFailsAfter?: Promise<unknown>
   /** The engine's handling of a turn's end beneath the watcher throws (lessons review of #1234). */
   turnEndThrows?: boolean
+  /** Whether the guard below (refusesStops) refuses a TaskStop now; the test may change it as it goes (#1491). */
+  guard?: { refuses: boolean }
 }
 const CLAIMS = '/Users/dan/.claude/state/job-watcher/claims'
 const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
@@ -233,6 +239,7 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       const s = o.sessions && 'throwsOnce' in o.sessions ? o.sessions.throwsOnce : o.sessions
       return ok(JSON.stringify({ open: s?.open ?? [], closed: s?.closed ?? [], unreadable: s?.unreadable ?? [], selfId: 'me' }))
     }
+    if (cmd === '__guard') return ok(o.guard?.refuses ? 'refuse\n' : 'allow\n')
     if (cmd === '__asleep' && o.asleepAfter) await o.asleepAfter
     if (cmd === '__asleep') return o.asleep === 'throws' ? res(1, '', 'the sleep record could not be read') : ok(o.asleep ? 'yes\n' : 'no\n')
     if (cmd === '__sleepnote') {
@@ -405,6 +412,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return new Promise<never>(() => undefined)
     }
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
+    if (e.tool === 'TaskStop' && j?.goneOnStop) j.gone = true
+    if (e.tool === 'TaskStop' && j?.psFailsAfterStop) j.psFails = true
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
     // Claude Code's own words for a task that has already ended, seen live on 2026-10-20 (#1387).
@@ -542,6 +551,40 @@ test('a stop Claude Code refuses keeps the job, and Claude is told the stop fail
   expect(contextOf(next)).toContain('could not be stopped')
   expect(contextOf(next)).toContain('no task job1 is running')
   expect(contextOf(next)).not.toContain('was stopped')
+  // Its group still runs, measured after the refusal, so that is what Claude reads (#1491).
+  expect(contextOf(next)).toContain('It is still running, and the watcher is still watching it.')
+})
+
+// #1491 lessons review: a refused stop says only what was measured after it (L11). Claude Code
+// answers a stop "no task is running" when the job ended as it was asked, and then nothing is left
+// to stop; when ps cannot answer, whether it runs is not claimed either way.
+test('a stop refused because the job ended as it was asked says it has ended, and the job is dropped (#1491)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'refused', goneOnStop: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('Background job job1')
+  expect(said).toContain('no task job1 is running')
+  expect(said).toContain('It has ended since, so there is nothing left to stop.')
+  expect(said).not.toContain('still running')
+  expect(said).not.toContain('Stop it with TaskStop')
+})
+
+test('a refused stop whose job ps cannot measure claims neither that it runs nor that it ended (#1491)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'refused', psFailsAfterStop: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect((w.extra[w.extra.length - 1] as { id: string }[]).map(j => j.id)).toEqual(['job1'])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('could not be stopped: no task job1 is running.')
+  expect(said).toContain('Whether it is still running could not be measured, and the watcher is still watching it. Stop it with TaskStop if it is.')
+  expect(said).not.toContain('It is still running')
+  expect(said).not.toContain('has ended')
 })
 
 test('a stop that throws keeps the job and is said the same way', withDeps, async ($, on) => {
@@ -731,6 +774,16 @@ test('a job kept with a reason is published as kept, with the name the band show
   // The bar no longer says kept (#784): Claude is told what it will show.
   expect(String(r.result)).toContain('It shows on the status bar by its name, state and run time, like "dev server running 5m".')
   expect(lastRecs(w)[0]?.kept).toEqual({ name: 'dev server', reason: 'Dan is clicking through the site', quiet: false, at: 5 * MIN })
+})
+
+// #1491's class: a reason Claude ends with its own full stop is said with one, never two.
+test('a keep reason that ends in a full stop is said with one full stop after it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'dev server', reason: 'Dan is clicking through the site.' }))) as { result?: unknown }
+  expect(String(r.result)).toContain('Kept job1 (dev server): Dan is clicking through the site. It shows on the status bar')
 })
 
 // #707: this mod answers its keep tool itself, so the secret guard beneath it never sees the call;
@@ -1309,6 +1362,59 @@ test('a late refusal of a given up look is said by the next look, once', withDep
   // Answered, a later look may stop it again.
   await clock.advance(MIN)
   expect(stopsOf(w)).toBe(2)
+})
+
+// #1491: from Claude Code 2.1.307 a mod's own $.tool.call is judged by every plugin's tool.check hook
+// before any tool.call hook, and a refusal there never reaches the tool. A guard standing in for any
+// of the mods' guards refuses the watcher's TaskStop while the world says so.
+const refusesStops: { name: string; register: Register } = {
+  name: 'stop-refuser',
+  register: on => {
+    on('tool.check', { tool: 'TaskStop' }, async ($, e, next) => {
+      const r = await $.process.run(['__guard'])
+      if (r.stdout.trim() === 'refuse') return { decision: 'deny', reason: 'Blocked: Dan is away, so nothing is stopped.' } as never
+      return next(e)
+    })
+  },
+}
+const withGuard = { plugins: [deps, refusesStops] }
+
+test('a stop a guard refuses is never said as stopped: Claude is told the job, that it still runs, and the guard and its reason (#1491)', withGuard, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000 }, { guard: { refuses: true } })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  // Refused before the tool: Claude Code never saw a stop, and the job is still on the record.
+  expect(stopsOf(w)).toBe(0)
+  expect((w.extra[w.extra.length - 1] as { id: string }[]).map(j => j.id)).toEqual(['job1'])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('Background job job1')
+  expect(said).toContain('stop-refuser')
+  // The guard's reason in its own words, one full stop after it, then that the job still runs.
+  expect(said).toContain('Blocked: Dan is away, so nothing is stopped. It is still running, and the watcher is still watching it.')
+  expect(said).not.toContain('was stopped')
+  // Said once while the guard goes on refusing, and the job is still watched.
+  await clock.advance(MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toBe('')
+  expect((w.extra[w.extra.length - 1] as { id: string }[]).map(j => j.id)).toEqual(['job1'])
+})
+
+test('a job whose stop a guard refused is stopped by a later look once the guard lets it through (#1491)', withGuard, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const guard = { refuses: true }
+  const w = world(on, { tail: REPEATING, size: 9000 }, { guard })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(stopsOf(w)).toBe(0)
+  guard.refuses = false
+  await clock.advance(MIN)
+  expect(stopsOf(w)).toBe(1)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('Background job job1')
+  expect(said).toContain('was stopped')
 })
 
 test('a clock that throws while a job starts never fails the Bash call that started it, and Claude is told', withDeps, async ($, on) => {
