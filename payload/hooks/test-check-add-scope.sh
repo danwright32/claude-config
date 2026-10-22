@@ -192,6 +192,148 @@ run "git add -A"
 allowed "a transcript record whose message is a plain string does not lose the session's mentions"
 rm -f "$REPO/afterodd.txt"
 
+echo "check add scope: a subagent's own work, read from its own transcript (claude-config#1513)"
+
+# On 2026-10-22 a Bidspoke agent in its own isolated worktree was refused three times over files it
+# had written itself, and overrode the gate each time. Measured the same day (Claude Code 2.1.307):
+# a subagent's PreToolUse payload carries `transcript_path` naming the DISPATCHING session's
+# transcript, plus `agent_id`, and the agent's own tool calls live in
+# <that transcript minus .jsonl>/subagents/agent-<agent_id>.jsonl, beside an .meta.json naming the
+# worktree it was spawned with. Reading only the parent's record called every file the agent wrote,
+# through Edit or by script, another session's. The layout below is that real one.
+PROJ="$FIX/projects/proj"; mkdir -p "$PROJ/sess1/subagents"
+PARENT_TR="$PROJ/sess1.jsonl"; : > "$PARENT_TR"
+AGENT_ID="a1513aaaaaaaaaaaa"
+AGENT_TR="$PROJ/sess1/subagents/agent-$AGENT_ID.jsonl"; : > "$AGENT_TR"
+SIBLING_ID="a1513bbbbbbbbbbbb"
+SIBLING_TR="$PROJ/sess1/subagents/agent-$SIBLING_ID.jsonl"; : > "$SIBLING_TR"
+run_agent(){ # run_agent <command> <agent id> [repo to run in]
+  OUT="$(python3 -c '
+import json, sys
+d = {"tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1]},
+     "transcript_path": sys.argv[3], "session_id": "sess1", "agent_id": sys.argv[4],
+     "agent_type": "general-purpose"}
+print(json.dumps(d))
+' "$1" "${3:-$REPO}" "$PARENT_TR" "$2" | env CLAUDE_ADD_SCOPE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
+}
+write_meta(){ # write_meta <agent id> <worktree path> <spawned with worktree: true|false>
+  python3 -c '
+import json, sys
+print(json.dumps({"agentType": "general-purpose", "worktreePath": sys.argv[2],
+                  "spawnedWithWorktree": sys.argv[3] == "true", "spawnDepth": 1}))
+' "$1" "$2" "$3" > "$PROJ/sess1/subagents/agent-$1.meta.json"
+}
+# A repository of its own, so the tree holds only what each case puts there and the cases after
+# this section find the shared one as they left it.
+REPO_BEFORE_1513="$REPO"; REPO="$FIX/repo1513"
+git init -q -b main "$REPO"
+git -C "$REPO" config user.email t@e
+git -C "$REPO" config user.name t
+printf 'seed\n' > "$REPO/seed.txt"
+git -C "$REPO" add seed.txt
+git -C "$REPO" -c commit.gpgsign=false commit -q -m seed
+
+TR_SAVED="$TR"; TR="$AGENT_TR"
+printf 'agent edit\n' > "$REPO/agentedit.txt"
+mention_edit "$REPO/agentedit.txt"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+allowed "#1513 a file a subagent wrote through Edit is that subagent's, from its own transcript"
+now="$(date +%s)"
+bash_call t1513a "python3 $FIX/convert.py" "$((now - 500))" "$((now - 490))"
+printf 'converted\n' > "$REPO/converted.txt"
+set_mtime "$REPO/converted.txt" "$((now - 495))"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+allowed "#1513 a file a subagent's own script wrote, never naming it, is that subagent's"
+TR="$TR_SAVED"
+# The controls in the SHARED checkout: another session's file, and a file only a SIBLING agent
+# mentioned, are still refused. A sibling is a concurrent worker in the same tree, which is the
+# hazard this gate exists for, so its transcript is never read for the caller.
+printf 'stranger\n' > "$REPO/stranger.txt"
+set_mtime "$REPO/stranger.txt" "$((now - 300))"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+refused "#1513 control: another session's file in the shared checkout is still refused for a subagent"
+says "and it is the one named" "stranger.txt"
+silentabout "and the subagent's own scripted file is not accused" "  converted.txt"
+rm -f "$REPO/stranger.txt"
+TR="$SIBLING_TR"
+printf 'sibling\n' > "$REPO/sibling.txt"
+set_mtime "$REPO/sibling.txt" "$((now - 300))"
+mention_edit "$REPO/sibling.txt"
+TR="$TR_SAVED"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+refused "#1513 control: a file only a sibling agent wrote is not credited to this one"
+says "and it is named" "sibling.txt"
+rm -f "$REPO/sibling.txt"
+# The dispatching session's own record still counts, as it always has.
+printf 'parent\n' > "$REPO/parentedit.txt"
+TR="$PARENT_TR"; mention_edit "$REPO/parentedit.txt"; TR="$TR_SAVED"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+allowed "#1513 a file the dispatching session wrote is still credited to its subagent, as before"
+git -C "$REPO" add -A >/dev/null 2>&1; git -C "$REPO" -c commit.gpgsign=false commit -q -m "agent files" >/dev/null 2>&1
+
+# A subagent whose own transcript is not on disk (a nested agent's never is) is judged on the
+# parent's record alone, the refusing direction, and the refusal says why.
+printf 'nested\n' > "$REPO/nested.txt"
+fresh_cache
+run_agent "git add -A" "a1513cccccccccccc"
+refused "#1513 a subagent whose own transcript is missing is still refused over an unmentioned file"
+says "and says its own transcript was not found" "own transcript"
+# An agent id that tries to walk out of the subagents folder reads nothing. The fixture makes the
+# walk land on a real transcript that mentions the file, so only the plain name check refuses it.
+mkdir -p "$PROJ/sess1/subagents/agent-x"
+TR="$PROJ/sess1/elsewhere.jsonl"; mention_edit "$REPO/nested.txt"; TR="$TR_SAVED"
+fresh_cache
+run_agent "git add -A" "x/../../elsewhere"
+refused "#1513 an agent id that is a path reads no file outside the subagents folder"
+rm -f "$REPO/nested.txt"
+
+echo "check add scope: a worktree a subagent was spawned with is its own (claude-config#1513)"
+
+# An isolated agent worktree belongs to the one agent Claude Code created it for, and its
+# .meta.json says which: every change in it is that agent's, including what a background process it
+# started wrote after the call had returned, which no time window can see.
+WT="$FIX/wt-agent"
+git -C "$REPO" worktree add -q -b wt-agent "$WT" >/dev/null 2>&1
+printf 'background output\n' > "$WT/bg.txt"
+set_mtime "$WT/bg.txt" "$((now - 50000))"
+write_meta "$AGENT_ID" "$WT" true
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+allowed "#1513 an unmentioned file in the worktree this subagent was spawned with is its own"
+# Controls: each half of the rule, removed in turn.
+fresh_cache
+REPO_MAIN_1513="$REPO"; REPO="$WT"
+run "git add -A" "$PARENT_TR"
+REPO="$REPO_MAIN_1513"
+refused "#1513 control: the main session in the same tree gets no worktree credit"
+write_meta "$SIBLING_ID" "$WT" true
+rm -f "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+refused "#1513 control: a worktree another agent was spawned with is not this agent's"
+rm -f "$PROJ/sess1/subagents/agent-$SIBLING_ID.meta.json"
+write_meta "$AGENT_ID" "$WT" false
+fresh_cache
+run_agent "git add -A" "$AGENT_ID" "$WT"
+refused "#1513 control: a meta that says the agent was not spawned with a worktree credits nothing"
+# A meta naming the MAIN checkout (shared by every session) is never a blanket credit, even if one
+# ever said so: only a linked worktree can belong to one agent.
+write_meta "$AGENT_ID" "$REPO" true
+printf 'shared\n' > "$REPO/sharedfile.txt"
+set_mtime "$REPO/sharedfile.txt" "$((now - 50000))"
+fresh_cache
+run_agent "git add -A" "$AGENT_ID"
+refused "#1513 control: a meta naming the shared main checkout credits nothing in it"
+says "and the foreign file is named" "sharedfile.txt"
+rm -f "$REPO/sharedfile.txt" "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
+git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
+REPO="$REPO_BEFORE_1513"
+
 echo "check add scope: a checkout somebody else is working in"
 
 # The incident: another session's file, which this one has never mentioned anywhere.
