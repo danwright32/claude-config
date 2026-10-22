@@ -2200,6 +2200,14 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # of 1800 the budget is 1260s against a measured 980s, which is room for 28% more work, and it
 # speaks well before the wall clock guard, which needs 1800s of section time to reach its 900s.
 #
+# CI's runners come in TWO speeds, and the budget runs out on the slower (claude-config#1494). Over
+# 30 CI runs of this suite at 3022 checks, on 2026-10-21 and 22, the section time fell into two
+# groups with nothing between them: 926s to 1085s, and 1197s to 1274s. The slower group is about a
+# quarter slower on every suite in the run, not only this one, so it is the machine and not the
+# work, and it went past 1260s three times. #1494 brought it back to 1176s by cutting work rather
+# than moving the budget, which still speaks at the same fraction of the ceiling for the reason
+# given above. The margin on the slower runners is the one to read.
+#
 # MEASURED AGAINST THAT BUDGET 2026-09-20, with tools/measure-section-time.sh, which takes several
 # readings and records the machine state beside each one (claude-config#517). The two figures that
 # issue was filed about, 963s and 1847s, were never a comparison: neither recorded what else was
