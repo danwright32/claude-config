@@ -228,26 +228,46 @@ SUITE_SECTION_TIMINGS="${SUITE_SECTION_TIMINGS-${XDG_CACHE_HOME:-$HOME/.cache}/c
 # The two must agree or the store is written under one name and read under another, which is not an
 # error anywhere: every lookup simply misses and the run reports that nothing has been measured
 # while the records sit there (L100).
+# The answer is also left in _st_out, so a loop over every heading can take it without a command
+# substitution, which forks (claude-config#1494).
 suite_section_title(){   # suite_section_title <a raw `section "..."` line> -> the title
-  local _st_t="${1:-}"
-  _st_t="${_st_t#section \"}"
-  printf '%s' "${_st_t%\"}"
+  _st_out="${1:-}"
+  _st_out="${_st_out#section \"}"
+  _st_out="${_st_out%\"}"
+  printf '%s' "$_st_out"
 }
 
+# Titles in, one per line, record names out, one per line: the one encoding, used for a single
+# title and for a whole list at once.
+suite_section_key_lines(){ sed 's/%/%25/g; s#/#%2F#g'; }
 suite_section_key(){   # suite_section_key <section title> -> the record's file name
-  printf '%s' "${1:-}" | sed 's/%/%25/g; s#/#%2F#g'
+  printf '%s' "${1:-}" | suite_section_key_lines
 }
 
-# What that section was last measured at, or NOTHING. A record that is not a whole number of
-# seconds is treated as no record rather than guessed at as a number: the store is a cache, and
-# being wrong about it costs the shard balance and nothing else.
-suite_section_seconds(){   # suite_section_seconds <section title> -> whole seconds, or nothing
-  [ -n "$SUITE_SECTION_TIMINGS" ] || return 0
-  [ -n "${1:-}" ] || return 0
-  local _ss_v
-  _ss_v="$(awk 'NR == 1 { print $1 }' "$SUITE_SECTION_TIMINGS/$(suite_section_key "$1")" 2>/dev/null)"
-  case "$_ss_v" in ''|*[!0-9]*) return 0 ;; esac
-  printf '%s' "$_ss_v"
+# What each section was last measured at, for a whole list of titles in ONE pass (claude-config#1494).
+# It was one title per call, four processes each (two command substitutions, the key's sed and the
+# reader's awk), once per section on every launch that deals shards: 202 sections on 2026-10-22,
+# about 800 processes and most of a coverage launch, and the suite starts dozens of those.
+#
+# Titles on stdin, one per line. Prints "<line number><TAB><seconds>" for every title, with the
+# seconds EMPTY where there is no record, so the caller can never shift one section's figure onto
+# another by losing a blank line. A record that is not a whole number of seconds is treated as no
+# record rather than guessed at as a number: the store is a cache, and being wrong about it costs the
+# shard balance and nothing else. With the store switched off every title comes back empty.
+suite_section_seconds_each(){
+  if [ -z "$SUITE_SECTION_TIMINGS" ]; then
+    awk '{ printf "%d\t\n", NR }'
+    return 0
+  fi
+  suite_section_key_lines | awk -v d="$SUITE_SECTION_TIMINGS" '
+    { v = ""
+      if ($0 != "") {
+        f = d "/" $0; line = ""
+        if ((getline line < f) > 0) { split(line, a, " "); v = a[1] }
+        close(f)
+      }
+      if (v !~ /^[0-9]+$/) v = ""
+      printf "%d\t%s\n", NR, v }'
 }
 
 # What this run measured, written down for the next one. Called from suite_profile, so it happens
@@ -457,10 +477,18 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTIO
   # `^section "..."$` by stripping one trailing quote, and #37's `_late` would fail SILENTLY,
   # leaving the guard that proves a filtered child stops where it was told passing for the wrong
   # reason (L103).
+  #
+  # Read from grep's list of the heading and declaration lines with their numbers, rather than by
+  # the shell reading every line of this file (claude-config#1494): 22,000 lines on 2026-10-22, read
+  # once by every launch that selects sections. A declaration counts only DIRECTLY beneath its
+  # heading, so a gap in the numbers is the line in between that the full read used to see, and it
+  # resets the same flag that line did.
   _so_i=0; _so_ln=0; _so_after=0; _so_all=""
   _so_titles=(); _so_starts=(); _so_needs=()
-  while IFS= read -r _so_l; do
-    _so_ln=$((_so_ln + 1))
+  while IFS= read -r _so_nl; do
+    _so_n="${_so_nl%%:*}"; _so_l="${_so_nl#*:}"
+    [ "$_so_n" -eq $((_so_ln + 1)) ] || _so_after=0
+    _so_ln="$_so_n"
     case "$_so_l" in
       'section "'*)
         _so_i=$((_so_i + 1))
@@ -479,7 +507,9 @@ if { [ -n "${SECTION_ONLY:-}" ] || [ -n "${SECTION_UNTIL:-}" ] || [ -n "${SECTIO
         ;;
       *) _so_after=0 ;;
     esac
-  done < "$0"
+  done <<SOHEADINGS
+$(grep -a -n -E '^(section "|# needs:)' "$0")
+SOHEADINGS
 
   # Resolve a pattern to exactly one heading. Fixed string and case insensitive, matching what
   # SECTION_UNTIL already does, but the COUNT is what matters here: "run up to" has a natural
@@ -728,12 +758,30 @@ SHNEEDS
   _sh_secs=(); _sh_unk=()
   _sh_measured=0; _sh_total=0
   _sh_all_secs=""
+  # Every record read in one pass, into _sh_rec by section number (claude-config#1494). The reader
+  # numbers its answers, so a section is matched to its own figure by that number and never by
+  # counting lines.
+  _sh_rec=(); _sh_titles_in=""
+  _sh_k=$(( _so_pend + 1 ))
+  while [ "$_sh_k" -le "$_so_i" ]; do
+    suite_section_title "${_so_titles[$_sh_k]:-}" >/dev/null
+    _sh_titles_in="$_sh_titles_in$_st_out
+"
+    _sh_k=$(( _sh_k + 1 ))
+  done
+  _sh_tab="$(printf '\t')"
+  while IFS="$_sh_tab" read -r _sh_n_in _sh_v_in; do
+    case "$_sh_n_in" in ''|*[!0-9]*) continue ;; esac
+    _sh_rec[$(( _so_pend + _sh_n_in ))]="$_sh_v_in"
+  done <<SHRECORDS
+$(printf '%s' "$_sh_titles_in" | suite_section_seconds_each 2>/dev/null)
+SHRECORDS
   _sh_k=$(( _so_pend + 1 ))
   while [ "$_sh_k" -le "$_so_i" ]; do
     _sh_root "$_sh_k"; _sh_r="$_sh_root_out"
     _sh_size[$_sh_r]=$(( ${_sh_size[$_sh_r]:-0} + 1 ))
     _sh_total=$(( _sh_total + 1 ))
-    _sh_sec="$(suite_section_seconds "$(suite_section_title "${_so_titles[$_sh_k]:-}")")"
+    _sh_sec="${_sh_rec[$_sh_k]:-}"
     if [ -n "$_sh_sec" ]; then
       _sh_secs[$_sh_r]=$(( ${_sh_secs[$_sh_r]:-0} + _sh_sec ))
       _sh_measured=$(( _sh_measured + 1 ))
@@ -8828,8 +8876,14 @@ SUITE_RUN_REGISTRY="$_rg_file" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 
 _rg_nested="$(grep -c . "$_rg_file" 2>/dev/null || true)"
 case "$_rg_nested" in ''|*[!0-9]*) _rg_nested=0 ;; esac
 : > "$_rg_file"
-# One shard of ninety-nine, so it carries about one section: this is asking whether a shard
-# REGISTERS, not what a shard costs, and a shard of one is the whole suite.
+# This is asking whether a shard REGISTERS, not what a shard costs, so the shard is run from a COPY
+# of this file holding the prelude and one probe section in place of every real one
+# (claude-config#1494). It was shard 1 of 99 of the real file, on the belief that it would carry
+# about one section. It carried the HEAVIEST group instead, because the deal is heaviest first and
+# shard 1 is dealt first: measured 2026-10-22 that was this section's own group (#32, #163 and this
+# one, 125 seconds of the live store), so the probe ran the section it sits in again one level
+# down, 57 seconds of a full run on a Mac, for a question a two second shard answers. The copy keeps
+# the whole harness, which is the code under test, and has nothing heavy left to deal.
 # The same run answers a second question for free (claude-config#473): a shard handed its
 # parent's section mark must write ITS progress into that file rather than minting one of its
 # own, because the parent fans out and never reaches a section, so that file is the only thing
@@ -8837,7 +8891,20 @@ case "$_rg_nested" in ''|*[!0-9]*) _rg_nested=0 ;; esac
 # would leave nothing behind and this could not pass by accident.
 _rg_mark="$WORK/shared-section-mark"
 rm -f "$_rg_mark"
-SUITE_RUN_REGISTRY="$_rg_file" SUITE_SECTION_MARK_SHARED="$_rg_mark" SUITE_SHARD="1/99" SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 bash "$SCRIPT_SELF" >/dev/null 2>&1
+_rg_copy="$WORK/registry-probe-suite.sh"
+awk -v pend="$SUITE_PRELUDE_END" '
+  /^section "/ { if (past) skip = 1; if (index($0, pend)) past = 1 }
+  /^suite_profile$/ && skip { print "section \"== zzz the shard registry probe ==\""; print "check \"zzz the shard registry probe ran\" \"true\""; skip = 0 }
+  !skip { print }' "$SCRIPT_SELF" > "$_rg_copy"
+_rg_out="$WORK/registry-probe-shard.txt"
+SUITE_RUN_REGISTRY="$_rg_file" SUITE_SECTION_MARK_SHARED="$_rg_mark" SUITE_SHARD="1/2" SUITE_SECTION_TIMINGS= \
+  SUITE_DEPTH="$SUITE_CHILD_DEPTH" SUITE_NO_LOCK=1 SCRIPT="$SCRIPT" SCRIPT_SELF="$_rg_copy" bash "$_rg_copy" > "$_rg_out" 2>&1
+# What the probe shard ran, asserted, so a copy that lost the probe or kept a real section reads as
+# a broken fixture rather than as a shard that registered (L159).
+check "#1494 the registry probe shard ran its one probe section" \
+  "grep -q 'zzz the shard registry probe ran' '$_rg_out' && grep -q '^SUITE-RESULT passed=[1-9]' '$_rg_out'"
+check "#1494 and nothing else after the prelude: its own sections hold exactly the probe's one check" \
+  "grep -q '^SUITE-SECTIONS .* target_pass=1 target_fail=0 ' '$_rg_out'"
 _rg_shard="$(grep -c . "$_rg_file" 2>/dev/null || true)"
 case "$_rg_shard" in ''|*[!0-9]*) _rg_shard=0 ;; esac
 check "#170 a shard registers itself, because it outlives a killed parent ($_rg_shard)" \
