@@ -80,6 +80,7 @@ const world = (on: On, init: Init = {}) => {
     logFails?: boolean
     pathsFails?: boolean
     refuse?: boolean
+    slowLogOnce?: boolean
     sha: string
     goal: string | null
   } = {
@@ -142,7 +143,13 @@ const world = (on: On, init: Init = {}) => {
       if (sub === 'remote get-url origin') return answer(ok('git@github.com:dan/app.git\n'))
       if (sub === 'rev-parse --verify origin/main^{commit}') return answer(ok(`${ctl.sha}\n`))
       if (sub === 'merge-base HEAD origin/main') return answer(ok('mb123\n'))
-      if (sub === 'log origin/main --since=90.days --numstat -M --format=%x1e%s') return answer(ok(NUMSTAT))
+      if (sub === 'log origin/main --since=90.days --numstat -M --format=%x1e%s') {
+        if (ctl.slowLogOnce) {
+          ctl.slowLogOnce = false
+          await clock.sleep(DEADLINE_MS + 500)
+        }
+        return answer(ok(NUMSTAT))
+      }
       if (sub === 'ls-tree -r --name-only origin/main') return answer(ok(TRACKED + '\n'))
       if (sub.startsWith('grep -c  origin/main -- ')) return answer(ok('origin/main:src/big.ts:2400\n'))
     }
@@ -335,6 +342,20 @@ test('the ranking is reused for the same origin head on the same day, and made a
   w.ctl.sha = 'ffff00'
   await edit($ as never, w, `${APP}/src/pay/stripe.ts`)
   expect(numstats()).toBe(2)
+})
+
+// Lessons review of 5a4148a: a ranking another edit started runs under that edit's deadline, so a
+// later edit sharing it must not be told it ran out of time while its own time remains.
+test("a later edit sharing a ranking that ran out of the first edit's time makes its own, within its own deadline", KIT, async ($, on) => {
+  const w = world(on)
+  w.ctl.slowLogOnce = true
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'c1', file_path: `${APP}/src/lib/slack.ts`, old_string: 'a', new_string: 'b' } as never)
+  await w.clock.advance(3000)
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'c2', file_path: `${APP}/src/big.ts`, old_string: 'a', new_string: 'b' } as never)
+  await w.clock.advance(DEADLINE_MS + 3000)
+  const [first, second] = w.judged()
+  expect(first).toMatchObject({ path: 'src/lib/slack.ts', growth: { unread: `not read within ${DEADLINE_MS / 1000} seconds` } })
+  expect(second).toMatchObject({ path: 'src/big.ts', decision: 'would_hold', growth: { net: 800, crosses: true } })
 })
 
 test('its own failure lets the edit through, is kept in a separate error file, and is said once a session in a dim line', KIT, async ($, on) => {

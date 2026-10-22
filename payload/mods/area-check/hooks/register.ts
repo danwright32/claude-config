@@ -184,7 +184,7 @@ const gitIn = async ($: EngineInterface, d: Deadline, root: string, args: string
   return r.stdout
 }
 
-const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBranch: string | null, repo: string): Promise<RankFacts> => {
+const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBranch: string | null, repo: string, again = false): Promise<RankFacts> => {
   if (!defaultBranch) return { unread: 'origin names no default branch', sha: null }
   const rev = `origin/${defaultBranch}`
   let sha: string | null = null
@@ -211,6 +211,10 @@ const ranking = async ($: EngineInterface, d: Deadline, root: string, defaultBra
     }
     return await within($, d, p)
   } catch (err) {
+    // A ranking another edit started runs under that edit's deadline (lessons review of 5a4148a):
+    // when it ran out while this edit's own time remains, this edit makes the ranking again, once,
+    // under its own (the failed one is already gone from the map).
+    if (err instanceof Late && !again && (await left($, d)) > 0) return ranking($, d, root, defaultBranch, repo, true)
     return { unread: err instanceof Late ? LATE : msg(err), sha }
   }
 }

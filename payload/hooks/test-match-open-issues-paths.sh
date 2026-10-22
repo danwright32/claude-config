@@ -32,6 +32,9 @@ same "a longer extension is read whole, never cut to a shorter one" \
 same "a leading ./ is not part of the path" \
   '{"9": ["hooks/x.sh"]}' \
   "$(paths '[{"number": 9, "title": "t", "body": "run ./hooks/x.sh"}]')"
+same "a path in backticks, a markdown link or after a line range's own dot is read whole" \
+  '{"10": ["src/a.ts", "docs/b.md", "lib/c.py"]}' \
+  "$(paths '[{"number": 10, "title": "t", "body": "see `src/a.ts`, [b](docs/b.md) and lib/c.py:3."}]')"
 same "an issue naming no path is listed with none, never left out" \
   '{"3": []}' \
   "$(paths '[{"number": 3, "title": "Make it faster", "body": null}]')"

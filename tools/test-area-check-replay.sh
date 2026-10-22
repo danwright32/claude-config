@@ -66,6 +66,10 @@ out="$(PATH="$W/bin:$PATH" GH_FAILS=1 node "$TOOL" "$W/app" --repo dan/app 2>&1)
 
 out="$(node "$TOOL" "$W/app" 2>&1)"; code=$?
 [ "$code" -eq 2 ] && check "a replay with no --repo exits 2" ok || check "a replay with no --repo exits 2" "exit $code: $out"
+out="$(node "$TOOL" "$W/app" --repo dan/app --days 1.5 2>&1)"; code=$?
+[ "$code" -eq 2 ] && check "a window that is not a whole number of days exits 2" ok || check "a window that is not a whole number of days exits 2" "exit $code: $out"
+out="$(PATH="$W/bin:$PATH" node "$TOOL" "$W/app" --repo dan/app --days 1 2>&1)"; code=$?
+case "$out" in *"Replay of dan/app, 1 days"*) check "the window given is the window replayed" ok ;; *) check "the window given is the window replayed" "exit $code: $out" ;; esac
 
 echo
 echo "passed: $pass, failed: $fail"
