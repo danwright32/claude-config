@@ -2371,7 +2371,15 @@ only, so where the cache lacks the package its sections say UNMEASURED with that
 installing at once each install into a folder of their own and publish it by one rename, so neither
 can see the other's half made copy and no lock is left behind by a run that is killed. A
 `node_modules` it did not make (an `npm ci` by hand, which still works) is never touched, and an
-install an older pin's checkout is still linked to is never removed. Where it cannot install (no npm,
+install an older pin's checkout is still linked to is never removed. Installing a new pin prunes the
+rest (#1507): an install is removed only when no `node_modules` links to it, read from every
+worktree `git worktree list` names (the main checkout among them) and from each install's record of
+where it was linked; the checkout's own pin, and a folder an install still running is making, are
+always kept; a locked worktree whose folder cannot be read stops the prune with nothing removed.
+`bash tools/lib/pinned-compiler.sh --prune tools/typescript` runs it by hand, and `claude-sync
+status` shows how many shared installs each clone holds (its own and every clone in this Mac's
+register of clones, so the development clone's are seen from the scheduled one), their size, and
+how many no checkout links to. Where it cannot install (no npm,
 offline with an empty cache, not a git checkout) the UNMEASURED lines below say why. The types it checks against come from this repository alone
 (#953), never from an installed copy: Claude Code lays a mod's types only in the copy it loads, and
 their MCP part lists whatever tools the session had connected when that copy last reloaded, so a

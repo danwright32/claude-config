@@ -242,6 +242,133 @@ else
   echo "SUITE-PART-UNMEASURED the real compiler through the links: this checkout's tools/typescript is not linked to a shared install"
 fi
 
+# 9. Pruning the shared installs no checkout links to (#1507). Each is about 30 MB, one per pin the
+#    clone has ever been on, and nothing removed them. The prune keeps every install any worktree's
+#    node_modules links to (read from `git worktree list`, never guessed), the current pin's, and an
+#    install still being made by a running process; it removes the rest, and nothing outside the
+#    store. Every repository here is a throwaway one under $T, never this checkout's own store.
+R9="$T/repo9"; mkrepo "$R9"; ROOT9="$R9/.git/pinned-typescript"
+git -C "$R9" worktree add -q "$T/wt9a" -b a9
+git -C "$R9" worktree add -q "$T/wt9b" -b b9
+pin9(){ printf '{ "lockfileVersion": 3, "packages": { "node_modules/typescript": { "version": "%s" } } }\n' "$2" > "$1/package-lock.json"; }
+store_of(){ cat "$1/node_modules/.pinned-typescript-store" 2>/dev/null; }
+ensure "$T/wt9a/tools/typescript"; ensure "$T/wt9b/tools/typescript"; ensure "$R9/tools/typescript"
+KA="$(store_of "$T/wt9a/tools/typescript")"
+# An install from a pin weeks old that no checkout links to any more, as a moved pin leaves behind.
+mkdir -p "$ROOT9/oldpin-fake-arch/node_modules/.bin"; : > "$ROOT9/oldpin-fake-arch/.complete"
+# Things in the store that are not installs: a link pointing outside it (what it points at must never
+# be touched, nor the link followed) and a file somebody left there.
+mkdir -p "$T/outside9"; echo precious > "$T/outside9/keep"; ln -s "$T/outside9" "$ROOT9/stray-link"; echo note > "$ROOT9/by-hand.txt"
+pin9 "$T/wt9a/tools/typescript" 7.1.0
+: > "$NPM_LOG"
+ensure "$T/wt9a/tools/typescript"
+KB="$(store_of "$T/wt9a/tools/typescript")"
+[ "$code" -eq 0 ] && [ "$(calls)" -eq 1 ] && [ -n "$KB" ] && [ "$KB" != "$KA" ] && [ -f "$KB/.complete" ] \
+  && check "#1507 a new pin is installed (the case the prune runs after)" ok || check "#1507 a new pin is installed (the case the prune runs after)" "exit=$code calls=$(calls) KA=$KA KB=$KB out=$out"
+[ ! -e "$ROOT9/oldpin-fake-arch" ] && check "#1507 an old install no checkout links to is removed once a new pin is installed" ok \
+  || check "#1507 an old install no checkout links to is removed once a new pin is installed" "$(ls -A "$ROOT9")"
+printf '%s\n' "$out" | grep -q 'removed 1 shared install' && check "#1507 and the run says what it removed" ok || check "#1507 and the run says what it removed" "$out"
+[ -f "$KA/.complete" ] && "$T/wt9b/tools/typescript/node_modules/.bin/tsc" | grep -q '^fake tsc' \
+  && check "#1507 an old install a worktree still links to is kept, and that worktree's compiler still runs" ok \
+  || check "#1507 an old install a worktree still links to is kept, and that worktree's compiler still runs" "$(ls -A "$ROOT9")"
+[ -f "$KB/.complete" ] && check "#1507 the current pin's install is kept" ok || check "#1507 the current pin's install is kept" "$(ls -A "$ROOT9")"
+[ "$(cat "$T/outside9/keep" 2>/dev/null)" = precious ] && [ -L "$ROOT9/stray-link" ] && [ -f "$ROOT9/by-hand.txt" ] \
+  && check "#1507 nothing in the store that is not an install is removed, and a link out of it is never followed" ok \
+  || check "#1507 nothing in the store that is not an install is removed, and a link out of it is never followed" "$(ls -lA "$ROOT9" "$T/outside9" 2>&1)"
+
+# Run on its own (--prune), from a checkout whose own pin is installed but which links to nothing.
+# An install linked from a node_modules outside tools/typescript is kept from the record of where it
+# was linked; one whose only worktree was deleted by hand is removed; in flight installs are judged
+# by their pid, alive (including one belonging to another user, which kill -0 cannot signal) or not.
+mkdir -p "$T/wt9b/elsewhere/typescript"; cp "$T/wt9b/tools/typescript/package.json" "$T/wt9b/elsewhere/typescript/"; pin9 "$T/wt9b/elsewhere/typescript" 7.3.0
+ensure "$T/wt9b/elsewhere/typescript"; KE="$(store_of "$T/wt9b/elsewhere/typescript")"
+git -C "$R9" worktree add -q "$T/wt9d" -b d9; pin9 "$T/wt9d/tools/typescript" 7.4.0
+ensure "$T/wt9d/tools/typescript"; KD="$(store_of "$T/wt9d/tools/typescript")"
+git -C "$R9" worktree add -q "$T/wt9c" -b c9; pin9 "$T/wt9c/tools/typescript" 7.2.0
+ensure "$T/wt9c/tools/typescript"; KC="$(store_of "$T/wt9c/tools/typescript")"
+rm -rf "$T/wt9c/tools/typescript/node_modules" "$T/wt9d"
+mkdir -p "$ROOT9/.k1.tmp.$$" "$ROOT9/.k2.tmp.1" "$ROOT9/.k3.tmp.99999999" "$ROOT9/.k4.pruning.99999999"
+out="$(bash "$LIB" --prune "$T/wt9c/tools/typescript" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && [ -n "$KD" ] && [ ! -e "$KD" ] \
+  && check "#1507 an install whose only worktree was deleted by hand is removed" ok || check "#1507 an install whose only worktree was deleted by hand is removed" "exit=$code KD=$KD out=$out $(ls -A "$ROOT9")"
+[ -n "$KC" ] && [ -f "$KC/.complete" ] && check "#1507 the pin of the checkout pruned from is kept though nothing links to it yet" ok \
+  || check "#1507 the pin of the checkout pruned from is kept though nothing links to it yet" "KC=$KC $(ls -A "$ROOT9")"
+[ -f "$KA/.complete" ] && [ -f "$KB/.complete" ] && check "#1507 installs the main checkout and a worktree link to are kept" ok || check "#1507 installs the main checkout and a worktree link to are kept" "$(ls -A "$ROOT9")"
+[ -n "$KE" ] && [ -f "$KE/.complete" ] && check "#1507 an install linked from outside tools/typescript is kept, from the record of where it was linked" ok \
+  || check "#1507 an install linked from outside tools/typescript is kept, from the record of where it was linked" "KE=$KE $(ls -A "$ROOT9")"
+[ -d "$ROOT9/.k1.tmp.$$" ] && check "#1507 an install in flight under a live pid is kept" ok || check "#1507 an install in flight under a live pid is kept" "$(ls -A "$ROOT9")"
+[ -d "$ROOT9/.k2.tmp.1" ] && check "#1507 and so is one whose live pid belongs to another user" ok || check "#1507 and so is one whose live pid belongs to another user" "$(ls -A "$ROOT9")"
+[ ! -e "$ROOT9/.k3.tmp.99999999" ] && [ ! -e "$ROOT9/.k4.pruning.99999999" ] \
+  && check "#1507 a dead pid's leftover is removed" ok || check "#1507 a dead pid's leftover is removed" "$(ls -A "$ROOT9")"
+
+# A worktree git says is locked and whose folder cannot be read (a removable disk not mounted) may
+# link to anything, so nothing is removed and the reason is said.
+git -C "$R9" worktree add -q "$T/wt9l" -b l9
+git -C "$R9" worktree lock "$T/wt9l"
+mv "$T/wt9l" "$T/wt9l.away"
+mkdir -p "$ROOT9/oldpin2-fake-arch/node_modules"; : > "$ROOT9/oldpin2-fake-arch/.complete"
+out="$(bash "$LIB" --prune "$T/wt9c/tools/typescript" 2>&1)"; code=$?
+[ "$code" -ne 0 ] && [ -d "$ROOT9/oldpin2-fake-arch" ] && printf '%s\n' "$out" | grep -q 'locked' \
+  && check "#1507 a locked worktree that cannot be read stops the prune, removing nothing, and says why" ok \
+  || check "#1507 a locked worktree that cannot be read stops the prune, removing nothing, and says why" "exit=$code out=$out $(ls -A "$ROOT9")"
+mv "$T/wt9l.away" "$T/wt9l"; git -C "$R9" worktree unlock "$T/wt9l"
+
+# A checkout that links to an install after the prune judged it unlinked (another worktree's check
+# starting at that moment) gets it put back, not deleted. The seam links a folder to it, recorded in
+# the install's own .links, which is the record the prune must still read once the install is
+# renamed aside.
+printf '#!/bin/bash\nmkdir -p "%s/node_modules"\nprintf "%%s\\n" "$1" > "%s/node_modules/.pinned-typescript-store"\nprintf "%%s\\n" "%s/node_modules" >> "$1/.links"\n' "$T/late9" "$T/late9" "$T/late9" > "$T/seam9late"; chmod +x "$T/seam9late"
+out="$(PINNED_TS_TEST_BEFORE_REMOVE="$T/seam9late" bash "$LIB" --prune "$T/wt9c/tools/typescript" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && [ -f "$ROOT9/oldpin2-fake-arch/.complete" ] && [ -f "$T/late9/node_modules/.pinned-typescript-store" ] \
+  && check "#1507 an install linked in the moment before it is removed is put back" ok \
+  || check "#1507 an install linked in the moment before it is removed is put back" "exit=$code out=$out late=$(ls -A "$T/late9" 2>&1) $(ls -A "$ROOT9")"
+rm -rf "$T/late9"
+
+# status counts the shared installs and their size, and how many no checkout links to, without
+# removing any. Installs now: KA, KB, KC, KE and oldpin2 (the in flight folders are not installs);
+# linked by none, judged from the main checkout's pin: KC (its checkout links nothing) and oldpin2.
+mkdir -p "$R9/tools/lib" "$T/home9"; cp "$LIB" "$R9/tools/lib/"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R9" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+line="$(printf '%s\n' "$out" | grep 'shared TypeScript compiler install')"
+printf '%s\n' "$line" | grep -q '5 shared TypeScript compiler installs' && printf '%s\n' "$line" | grep -Eq '[0-9]+ (KB|MB)' \
+  && check "#1507 status shows the count and total size of the shared installs" ok || check "#1507 status shows the count and total size of the shared installs" "$out"
+printf '%s\n' "$line" | grep -q '2 linked by no checkout' && check "#1507 and how many no checkout links to" ok || check "#1507 and how many no checkout links to" "$line"
+[ -d "$ROOT9/oldpin2-fake-arch" ] && check "#1507 and removes nothing" ok || check "#1507 and removes nothing" "$(ls -A "$ROOT9")"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+! printf '%s\n' "$out" | grep -q 'shared TypeScript compiler' && check "#1507 a clone with no shared installs says nothing about them" ok \
+  || check "#1507 a clone with no shared installs says nothing about them" "$out"
+# The installs that grow are the development clone's, where the worktrees are, while status runs
+# from the scheduled clone: so every clone in this Mac's register of clones is counted too (read
+# through the register's seam here, never the real one).
+printf '%s\n' "$R3" "$R9" > "$T/clones9"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_CLONE_REGISTRY="$T/clones9" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+printf '%s\n' "$out" | grep -q "5 shared TypeScript compiler installs in $ROOT9" \
+  && check "#1507 status counts the shared installs of every registered clone, not only the one it runs from" ok \
+  || check "#1507 status counts the shared installs of every registered clone, not only the one it runs from" "$out"
+# A registered clone not yet pulled past this change has a helper with no --plan, which would take
+# the word for a folder: status says the count needs a pull there, and runs nothing.
+R9O="$T/repo9old"; mkrepo "$R9O"; mkdir -p "$R9O/tools/lib" "$R9O/.git/pinned-typescript/k-fake-arch"
+# The #1496 helper in miniature: its only mode treats the first argument as the folder to install
+# into. It records that it ran, which it must not.
+printf '#!/bin/bash\necho "$1" > "%s/old-helper-ran"\nexit 1\n' "$T" > "$R9O/tools/lib/pinned-compiler.sh"
+printf '%s\n' "$R9O" > "$T/clones9old"
+out="$(CLAUDE_HOME="$T/home9" SYNC_REPO="$R3" SYNC_CLONE_REGISTRY="$T/clones9old" SYNC_NO_NOTIFY=1 bash "$DIR/../claude-sync" status 2>&1)"
+printf '%s\n' "$out" | grep -q "In $R9O they could not be counted: .*predates" && [ ! -e "$T/old-helper-ran" ] \
+  && check "#1507 a registered clone whose helper predates the count is named as that, and nothing is run there" ok \
+  || check "#1507 a registered clone whose helper predates the count is named as that, and nothing is run there" "$out"
+
+# An install pruned in the moment between being found whole and being linked (a prune from another
+# worktree at the same time) is installed again rather than linked broken. The seam removes the
+# store once, at exactly that moment.
+R9R="$T/repo9r"; mkrepo "$R9R"; git -C "$R9R" worktree add -q "$T/wt9r" -b r9
+ensure "$R9R/tools/typescript"
+printf '#!/bin/bash\n[ -e "%s" ] && exit 0\n: > "%s"\nrm -rf "$1"\n' "$T/seam9.done" "$T/seam9.done" > "$T/seam9"; chmod +x "$T/seam9"
+: > "$NPM_LOG"
+out="$(PINNED_TS_TEST_BEFORE_LINK="$T/seam9" FAKE_NPM_LOG="$NPM_LOG" PINNED_TS_NPM="$NPM" bash "$LIB" "$T/wt9r/tools/typescript" 2>&1)"; code=$?
+[ -e "$T/seam9.done" ] && [ "$code" -eq 0 ] && [ "$(calls)" -eq 1 ] && "$T/wt9r/tools/typescript/node_modules/.bin/tsc" | grep -q '^fake tsc' \
+  && check "#1507 an install pruned between being found and being linked is installed again" ok \
+  || check "#1507 an install pruned between being found and being linked is installed again" "seam=$([ -e "$T/seam9.done" ] && echo ran || echo not-run) exit=$code calls=$(calls) out=$out"
+
 [ -x "$LIB" ] && check "tools/lib/pinned-compiler.sh is executable" ok || check "tools/lib/pinned-compiler.sh is executable" "not executable"
 
 echo "passed: $pass, failed: $fail"
