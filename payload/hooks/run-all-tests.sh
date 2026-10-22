@@ -815,6 +815,14 @@ if [ "$ran" -gt 0 ]; then
   PUSH_GATE_LEDGER_DIR="$WORK/push-gates"
   export PUSH_GATE_LEDGER_DIR
 
+  # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
+  # but a suite running it as a home's own config, with HOME left real, would append its lines to the
+  # log the real watcher writes. A suite that names its own still wins. Not bracketed like the stores
+  # below either: the live watcher appends to the real one all through a run, and an append is what
+  # that bracket excuses anyway, so it would only ever report the watcher.
+  SYNC_LOG_FILE="$WORK/sync-log"
+  export SYNC_LOG_FILE
+
   # And the sleep record (lib/sleep.sh): a record of its own that does not exist, so a suite driving
   # a sleep aware hook is never silenced by the Mac really being asleep. On 2026-10-13 the first run
   # made during a night of sleep mode failed every such suite while CI, with no record, passed. A

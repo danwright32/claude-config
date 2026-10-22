@@ -347,8 +347,25 @@ notify_posted(){
 # The log the scheduled and watch jobs write to (their launch agents point stdout and stderr here).
 # A line appended directly, with its own time, for an event that must leave a record whichever entry
 # point ran it, because the watcher keeps a send's stderr to itself (claude-config#592).
-SYNC_LOG_FILE="${SYNC_LOG_FILE:-$HOME/.claude-sync.log}"
-sync_log_line(){ printf '%s claude-sync: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$SYNC_LOG_FILE" 2>/dev/null || true; return 0; }
+#
+# The log is the Mac's, like the stores above, so it follows the same rule (claude-config#1486): the
+# seam when SYNC_LOG_FILE names one, ~/.claude-sync.log only for this user's own config, and nowhere
+# for a fixture home, which says so once per run rather than appending a test's lines to the log the
+# real watcher writes. The launch agents' StandardOutPath stays ~/.claude-sync.log on purpose: those
+# jobs run as this user's own config with no SYNC_LOG_FILE, so that is where their own lines land too.
+SYNC_LOG_FILE="$(store_for_this_home "${SYNC_LOG_FILE:-}" "$HOME/.claude-sync.log")"
+SYNC_LOG_DROPPED_SAID=0
+sync_log_line(){
+  if [ -z "$SYNC_LOG_FILE" ]; then
+    if [ "$SYNC_LOG_DROPPED_SAID" != 1 ]; then
+      SYNC_LOG_DROPPED_SAID=1
+      echo "claude-sync: this run writes nothing to the sync log, because $(not_users_own_home). Name a file in SYNC_LOG_FILE to keep its lines." >&2
+    fi
+    return 0
+  fi
+  printf '%s claude-sync: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$SYNC_LOG_FILE" 2>/dev/null || true
+  return 0
+}
 # On failure, notify ONLY when run non-interactively (the background auto-sync job),
 # so the silent log-only failure becomes visible; interactive users see stderr.
 die(){ echo "claude-sync: $*" >&2; [ -t 2 ] || notify "$*"; exit 1; }
