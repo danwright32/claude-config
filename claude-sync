@@ -5285,6 +5285,36 @@ report_settings_extras(){
   esac
   report_shared_effort_model
   report_pinned_compiler
+  report_pinned_compiler_installs
+  return 0
+}
+
+# THE SHARED TYPESCRIPT INSTALLS (#1507). tools/lib/pinned-compiler.sh keeps one install per pin in
+# the clone's common git folder, about 30 MB each, shared by every worktree, and prunes the ones no
+# checkout links to when a new pin is installed. Nothing else on this Mac shows they are there, so
+# status counts them and their size, and how many a prune would remove, read from the helper's own
+# plan (--plan removes nothing) so the rule for what is linked lives in one place. Quiet when the
+# clone holds none.
+report_pinned_compiler_installs(){
+  local lib="$SYNC_REPO/tools/lib/pinned-compiler.sh" dir="$SYNC_REPO/tools/typescript" plan rc=0 n unlinked kb
+  have_git || return 0
+  [ -f "$lib" ] && [ -f "$dir/package-lock.json" ] || return 0
+  plan="$(bash "$lib" --plan "$dir" 2>&1)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "--- shared TypeScript compiler installs ---"
+    echo "  Could not be counted: ${plan#pinned-compiler: }"
+    return 0
+  fi
+  n="$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install"' | grep -c . || true)"
+  [ "${n:-0}" -gt 0 ] || return 0
+  unlinked="$(printf '%s\n' "$plan" | awk -F'\t' '$1 == "remove" && $2 == "install"' | grep -c . || true)"
+  kb="$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install" { print $3 }' | scratch_total_kb)"
+  echo "--- shared TypeScript compiler installs ---"
+  if [ "$kb" = "?" ]; then kb="a size not measured (du ran out of time)"; else kb="$(scratch_human_size "$kb")"; fi
+  echo "  $n shared TypeScript compiler install$([ "$n" -eq 1 ] || echo s) in $(dirname "$(printf '%s\n' "$plan" | awk -F'\t' '$2 == "install" { print $3; exit }')"), $kb in all, ${unlinked:-0} linked by no checkout."
+  if [ "${unlinked:-0}" -gt 0 ]; then
+    echo "  Those are removed the next time a new pin is installed, or now with: bash $lib --prune $dir"
+  fi
   return 0
 }
 
