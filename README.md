@@ -792,7 +792,7 @@ Every refusal it makes is recorded, overrides included (#1492), one line each in
 `~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category
 (`variable`, `quote`, `input`, `depth`, `eval-cd`, `script-file`, `execdir`, `unended`, or why it
 could not judge at all) and whether it was refused or overridden. Never the command and never a path.
-Per Mac and never synced, capped at 5,000 lines (`WRAPPED_REFUSAL_LEDGER_MAX`). A record it cannot
+Per Mac and never synced, and capped, keeping the newest (5,000 by default, set by `WRAPPED_REFUSAL_LEDGER_MAX`). A record it cannot
 write never changes the decision; the gate says so once in what it prints. Read it on each Mac with:
 
 ```bash

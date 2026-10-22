@@ -52,7 +52,7 @@ want "2  bash, script-file: refused 2, overridden 0" "a second shape"
 want "1  eval, eval-cd: refused 0, overridden 1" "an override only shape"
 want "1  sh, input: refused 1, overridden 0" "a shape from two days back"
 # Most first, so the shape to look at is the first line read.
-order="$(grep -E '^ +[0-9]+  ' <<< "$out" | head -n 1)"
+order="$(grep -m 1 -E '^ +[0-9]+  ' <<< "$out")"
 case "$order" in *"bash -c, variable"*) pass=$((pass+1)) ;; *) fail=$((fail+1)); echo "FAIL: the commonest shape is not first: $order" ;; esac
 want "the record runs from" "how far back the record goes is said, so a short window is not read as a quiet gate"
 
