@@ -4586,7 +4586,8 @@ export const register: Register = on => {
     if (!scope && !away) return go()
 
     // A judge that throws refuses the call rather than letting it through: a tool call hook that
-    // fails is skipped, which would run the very thing the mode is on to stop (L42).
+    // fails is skipped, which would run the very thing the mode is on to stop (L42). A TaskStop is
+    // the one exception (#1495, below).
     let verdict: Verdict
     try {
       verdict = await judge($, { tool, input, toolUseId, scope, away, asleep })
@@ -4597,7 +4598,15 @@ export const register: Register = on => {
       // reads it at the next Stop too (lessons review).
       if (asleep && missingOf(err)?.kind === 'member') skewMet = msg(err)
       const modes = [...(scope ? [SCOPE_NAME[scope].toLowerCase()] : []), ...(asleep ? ['sleep mode'] : away ? ['away'] : [])].join(' and ')
-      verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
+      // #1495, Dan's decision 2026-10-22 (picker answer "Let stops through on a check error"):
+      // stopping a job can never break a mode, so refusing a TaskStop whose check errored only kept
+      // a job running, the job watcher's own stop of a dead poll loop among them. Only the error is
+      // narrowed, and only for TaskStop: a mode's own refusal of it, and every other tool's check
+      // error, still refuse.
+      if (tool === 'TaskStop') {
+        $.ui.log(`scope-modes: ${modes} could not check a TaskStop (${msg(err)}), so it was let through: a stop cannot break a mode (#1495)`, { to: 'debug' })
+        verdict = undefined
+      } else verdict = { deny: `Blocked: ${modes} is on and its check of this call failed (${msg(err)}), so the call did not run. Try it again; if it fails the same way, tell Dan.` }
     }
     if (verdict && 'deny' in verdict) return verdict
     return go(verdict?.cleanups ?? [])
