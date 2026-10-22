@@ -145,6 +145,10 @@ type Job = {
   missing?: boolean
   /** ps cannot say whether its group still runs (#1387): it fails with an error. */
   psFails?: boolean
+  /** It ends as Claude Code answers the watcher's stop, so the stop's refusal races its end (#1491). */
+  goneOnStop?: boolean
+  /** ps can say whether its group runs only until the watcher's stop is answered (#1491). */
+  psFailsAfterStop?: boolean
 }
 /** One agent of the session as $.agent.list() names it (#759). */
 type Agent = { id: string; description: string; type: string; status: string }
@@ -408,6 +412,8 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
       return new Promise<never>(() => undefined)
     }
     const j = list[Number(String(input.task_id ?? '').replace('job', '')) - 1]
+    if (e.tool === 'TaskStop' && j?.goneOnStop) j.gone = true
+    if (e.tool === 'TaskStop' && j?.psFailsAfterStop) j.psFails = true
     if (e.tool === 'TaskStop' && j?.stop === 'refused') return { deny: `no task ${String(input.task_id)} is running` } as never
     if (e.tool === 'TaskStop' && j?.stop === 'throws') throw new Error('stop failed')
     // Claude Code's own words for a task that has already ended, seen live on 2026-10-20 (#1387).
@@ -545,6 +551,40 @@ test('a stop Claude Code refuses keeps the job, and Claude is told the stop fail
   expect(contextOf(next)).toContain('could not be stopped')
   expect(contextOf(next)).toContain('no task job1 is running')
   expect(contextOf(next)).not.toContain('was stopped')
+  // Its group still runs, measured after the refusal, so that is what Claude reads (#1491).
+  expect(contextOf(next)).toContain('It is still running, and the watcher is still watching it.')
+})
+
+// #1491 lessons review: a refused stop says only what was measured after it (L11). Claude Code
+// answers a stop "no task is running" when the job ended as it was asked, and then nothing is left
+// to stop; when ps cannot answer, whether it runs is not claimed either way.
+test('a stop refused because the job ended as it was asked says it has ended, and the job is dropped (#1491)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'refused', goneOnStop: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect(w.extra[w.extra.length - 1]).toEqual([])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('Background job job1')
+  expect(said).toContain('no task job1 is running')
+  expect(said).toContain('It has ended since, so there is nothing left to stop.')
+  expect(said).not.toContain('still running')
+  expect(said).not.toContain('Stop it with TaskStop')
+})
+
+test('a refused stop whose job ps cannot measure claims neither that it runs nor that it ended (#1491)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: REPEATING, size: 9000, stop: 'refused', psFailsAfterStop: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: LOOP, run_in_background: true } as never)
+  await clock.advance(MIN + 1)
+  expect((w.extra[w.extra.length - 1] as { id: string }[]).map(j => j.id)).toEqual(['job1'])
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('could not be stopped: no task job1 is running.')
+  expect(said).toContain('Whether it is still running could not be measured, and the watcher is still watching it. Stop it with TaskStop if it is.')
+  expect(said).not.toContain('It is still running')
+  expect(said).not.toContain('has ended')
 })
 
 test('a stop that throws keeps the job and is said the same way', withDeps, async ($, on) => {
