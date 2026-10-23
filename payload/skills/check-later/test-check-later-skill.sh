@@ -47,6 +47,21 @@ check "it shows Dan each draft before writing" \
   "$(grep -qi 'Nothing is written before Dan picks' "$SKILL" && echo ok || echo "no approval before write")"
 check "it counts a wait from going live, not the merge" \
   "$(grep -qi 'A merge time is not a live time' "$SKILL" && echo ok || echo "no live time rule")"
+# #1487, Dan's decision of 2026-10-22 (picker answer "Keep the exact time"): a wait that ends on a
+# weekend or in the evening keeps the exact time it ends, said in so many words, never moved to the
+# next working morning.
+check "a weekend or evening end keeps the exact time" \
+  "$(grep -qi 'weekend or in the evening keeps the exact ET time' "$SKILL" && echo ok || echo "no weekend and evening rule")"
+check "it is never moved to the next working morning" \
+  "$(grep -qi 'never moved to the next working morning' "$SKILL" && echo ok || echo "no rule against moving it")"
+# #1487: the Description has a length limit, read back after writing, and what does not fit goes into
+# a comment on the issue the row names.
+check "the description has a length limit" \
+  "$(grep -qi 'at most 600 characters' "$SKILL" && echo ok || echo "no length limit")"
+check "what runs long moves into a comment on the issue" \
+  "$(grep -qi 'moves into a comment on the issue' "$SKILL" && echo ok || echo "no rule for where the rest goes")"
+check "the read back measures the length too" \
+  "$(grep -qi 'and at most 600 characters' "$SKILL" && echo ok || echo "no length check on read back")"
 check "the skill holds no long dash" \
   "$(perl -CSD -ne '$f = 1 if /[\x{2013}\x{2014}]/; END { exit($f ? 1 : 0) }' "$SKILL" && echo ok || echo "found one")"
 

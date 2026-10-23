@@ -72,10 +72,17 @@ Start Date is the first ET day the check can run with complete data. The reminde
 that day. When the wait ends later that day, or the data comes from a scheduled report that lands at
 or after 9:00 AM, or the time otherwise matters, give the exact ET time instead and say why.
 
+A wait that ends on a weekend or in the evening keeps the exact ET time it ends, on that day (Dan,
+2026-10-22): a gate ending Sunday at 7:05 PM ET gets a Sunday 7:05 PM ET reminder. It is
+never moved to the next working morning. Say in the question (step 6) that the time is the exact
+end, so Dan can change the date there if he wants it later.
+
 ### 4. Write the row
 
-The Description is ONE line with no line breaks, in plain words, with no dashes as punctuation. Its
-parts, in this order:
+The Description is ONE line with no line breaks, in plain words, with no dashes as punctuation, and
+at most 600 characters (about 90 words), so it reads whole in the preview beside the options in
+step 6 and in the list without opening the row. 600 is a chosen number, not a measured width:
+drafts of about 300 words (some 1,800 characters) overflowed both. Its parts, in this order:
 
 1. What and where: `Check #2220 in Bidspoke:` or `Finish #1437 in Bidspoke.`
 2. What to read first: the issue and its comments, naming the comment date that matters.
@@ -91,6 +98,13 @@ parts, in this order:
    and `propose a short numbered plan for my approval before building.` Any follow on from step 1
    comes here, as what to plan once Dan approves.
 
+When the draft runs past 600 characters, the detail moves into a comment on the issue, never into a
+longer Description: the facts of part 3 (times, ids, tables, numbers, the source to read instead of
+a purged one), the full conditions of part 4 and any follow on plan. The comment opens with
+`Check later, <Start Date>:` and the Description keeps parts 1, 5 and 6 whole, names that comment by
+its heading and date in part 2, and keeps of parts 3 and 4 only what still fits. Count with
+`printf %s "<description>" | wc -m`.
+
 Project is the select option matching the repo. When none matches, leave it empty; the card gets a
 step for it (step 8).
 
@@ -105,14 +119,17 @@ Dan set is for the old date.
 
 One AskUserQuestion per row, one question per call. Put any correction from step 2 in the question.
 The recommended option carries a preview holding Task, Start Date, Project, reminder time and the
-Description. Options: add it as drafted (Recommended), change the date, change the wording, skip it.
+Description, and the comment from step 4 when there is one. Options: add it as drafted (Recommended), change the date, change the wording, skip it.
 Nothing is written before Dan picks.
 
 ### 7. Write and read back
 
-`slack_add_list_record` (or `slack_update_list_record` for an approved update). Keep the Link each
-call returns. Then read the list back and confirm each Description holds no line break; if one does,
-write it again joined into one line and read back again.
+Post the step 4 comment first, where there is one (`gh issue comment <n> --body-file <file>`), so the
+row never names a comment that is not there. Then `slack_add_list_record` (or
+`slack_update_list_record` for an approved update). Keep the Link each call returns. Then
+read the list back and confirm each Description holds no line break and at most 600 characters; if
+one does not, join it into one line or move more into the comment, write it again and read back
+again.
 
 ### 8. Pin the reminder card
 
@@ -143,4 +160,6 @@ step 2, in plain words.
 | Copying ET clock times across a clock change | Convert the end instant from UTC |
 | Treating a ticked Reminder Saved as proof the date is right | The tick is Dan's, for the date the row had when he set it |
 | Wrapped text becoming line breaks in the Description | Join it into one line, then read back |
+| A 300 word Description | At most 600 characters; the facts go in a comment on the issue it names |
+| Moving a Sunday evening end to Monday 9:00 AM | Keep the exact ET time the wait ends |
 | A prompt that leans on this session ("as discussed") | Name every fact, id and time the cold session needs |
