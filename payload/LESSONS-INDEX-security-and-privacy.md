@@ -44,3 +44,4 @@ which is NOT loaded into the session.
 - L757. Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
 - L758. Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
 - L1022. An exception keyed on matched text that is constant (a key header) exempts every match; key it on location and whole value.
+- L802. A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
