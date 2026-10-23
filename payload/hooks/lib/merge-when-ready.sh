@@ -323,7 +323,9 @@ READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
 read_err=""
 reading=""
 announce_retry(){
-  if [ "${2:-}" = "$MT_SIGNIN_RC" ]; then
+  if [ "${2:-}" = "$MT_SIGNIN_RC" ] && [ "${MT_SIGNIN_KIND:-}" = notoken ]; then
+    say "gh read no token to sign in with reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
+  elif [ "${2:-}" = "$MT_SIGNIN_RC" ]; then
     say "GitHub refused the sign in reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}; a token read straight after came back ${MT_SIGNIN_TOKEN:-unread}); asking again in ${READ_WAIT}s."
   else
     say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."

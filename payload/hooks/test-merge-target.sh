@@ -1226,7 +1226,7 @@ for reader in signin_view signin_api signin_runs; do
 done
 said="$(mt_signin_said)"
 case "$said" in
-  "GitHub refused the sign in 3 times"*"Requires authentication"*"token read straight after each refusal came back empty, empty, empty"*) pass ;;
+  "GitHub refused the sign in 3 times"*"Requires authentication"*"token read straight after each came back empty, empty, empty"*) pass ;;
   *) fail "the refused sign in is not said in its own words: $said" ;;
 esac
 case "$said" in *stand-in-token*) fail "the sentence printed the token: $said" ;; *) pass ;; esac
@@ -1239,6 +1239,15 @@ echo 0 > "$MT_401_LEFT"
 PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty mt_api_read /dev/null someone "repos/acme/widget/contents/x"; rc=$?
 eq "$rc" "$MT_SIGNIN_RC" "an account's empty token read is asked again"
 case "$MT_READ_ERR" in *"no token for the account someone"*) pass ;; *) fail "an empty token read is not said as one: $MT_READ_ERR" ;; esac
+signin_notoken(){ mt_api_read /dev/null someone "repos/acme/widget/contents/x"; }
+slept=""
+PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty mt_retry_read 2 5 fake_sleep "" "" signin_notoken; rc=$?
+eq "$rc|$MT_SIGNIN_REFUSALS|$MT_SIGNIN_NOTOKENS" "$MT_SIGNIN_RC|0|2" "empty token reads are counted apart from refusals"
+said="$(mt_signin_said)"
+case "$said" in
+  "gh read no token to sign in with 2 times"*) pass ;;
+  *) fail "an empty token read was said as GitHub refusing the sign in, which it never asked: $said" ;;
+esac
 rm -rf "$ghstub"
 
 echo "merge-target: a gate run by merge-when-ready.sh takes its read budget from it (claude-config#1615)"

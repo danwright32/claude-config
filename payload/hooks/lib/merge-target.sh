@@ -1355,7 +1355,7 @@ mt_gh_signin_refused() {  # $1 = the error text gh printed
 mt_gh_read_class() {  # $1 = the error text gh printed, $2 = account or empty
   mt_gh_transient "$1" && return 2
   if mt_gh_signin_refused "$1"; then
-    MT_SIGNIN_ACCOUNT="${2:-}"
+    MT_SIGNIN_ACCOUNT="${2:-}"; MT_SIGNIN_KIND=refused
     MT_SIGNIN_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
     return "$MT_SIGNIN_RC"
   fi
@@ -1373,11 +1373,16 @@ mt_signin_token_state() {  # $1 = account or empty
 
 # The sentence for a read whose sign in was refused on every try, from what mt_retry_read counted. $1,
 # when given, is what was being read; $2 the last error, else MT_SIGNIN_ERR, the one the reader saw.
+# A refusal GitHub gave (MT_SIGNIN_REFUSALS) and a token gh could not read, so GitHub was never asked
+# (MT_SIGNIN_NOTOKENS), are counted and said apart (L11).
 mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or empty
-  local n="${MT_SIGNIN_REFUSALS:-0}" times="times" what="${1:-}" err="${2:-${MT_SIGNIN_ERR:-}}"
-  [ "$n" = 1 ] && times="time"
-  printf 'GitHub refused the sign in %s %s%s%s; a token read straight after each refusal came back %s. That is gh sending no token, or one GitHub would not take, not GitHub being unable to show it: check gh auth status, then run the same command again' \
-    "$n" "$times" "${what:+ reading $what}" "${err:+ ($err)}" "${MT_SIGNIN_SEEN:-unread}"
+  local n="${MT_SIGNIN_REFUSALS:-0}" m="${MT_SIGNIN_NOTOKENS:-0}" what="${1:-}" err="${2:-${MT_SIGNIN_ERR:-}}" lead=""
+  mt__times() { if [ "$1" = 1 ]; then printf '1 time'; else printf '%s times' "$1"; fi; }
+  [ "$n" -gt 0 ] && lead="GitHub refused the sign in $(mt__times "$n")"
+  [ "$m" -gt 0 ] && lead="${lead:+$lead, and }gh read no token to sign in with $(mt__times "$m")"
+  [ -n "$lead" ] || lead="GitHub refused the sign in"
+  printf '%s%s%s; a token read straight after each came back %s. That is gh sending no token, or one GitHub would not take, not GitHub being unable to show it: check gh auth status, then run the same command again' \
+    "$lead" "${what:+ reading $what}" "${err:+ ($err)}" "${MT_SIGNIN_SEEN:-unread}"
 }
 
 # The read budget for a merge gate (claude-config#1615). A gate run by the harness is killed at its
@@ -1420,12 +1425,13 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
   case "$tries" in ''|*[!0-9]*) tries=1 ;; esac
   [ "$tries" -ge 1 ] || tries=1
   case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
-  MT_SIGNIN_REFUSALS=0; MT_SIGNIN_SEEN=""
+  MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""
   while :; do
-    MT_SIGNIN_ACCOUNT=""
+    MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""
     "$reader"; rc=$?
     if [ "$rc" -eq "$MT_SIGNIN_RC" ]; then
-      MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1))
+      if [ "$MT_SIGNIN_KIND" = notoken ]; then MT_SIGNIN_NOTOKENS=$((MT_SIGNIN_NOTOKENS + 1))
+      else MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1)); fi
       mt_signin_token_state "${MT_SIGNIN_ACCOUNT:-}"
       MT_SIGNIN_SEEN="${MT_SIGNIN_SEEN:+$MT_SIGNIN_SEEN, }$MT_SIGNIN_TOKEN"
     elif [ "$rc" -ne 2 ]; then
@@ -1502,7 +1508,10 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
 # Does a repository on GitHub hold this path? A reader in mt_retry_read's terms (claude-config#1096):
 # sets MT_REMOTE_STATE to present, absent or unknown and MT_REMOTE_ERR to the first line gh printed,
 # and returns 0 when GitHub answered (present or absent), 2 when the read failed transiently
-# (mt_gh_transient), and 1 for any other failure. Call it in this shell, never a subshell, so the
+# (mt_gh_transient), MT_SIGNIN_RC when the sign in was refused or gh read no token (mt_api_read,
+# claude-config#1615), and 1 for any other failure. Every failure leaves MT_REMOTE_STATE unknown, which
+# is what a caller judges by (mt_pinned_tool_remote, block-red-merge.sh's workflows read), so a sign in
+# refused is never read as absent. Call it in this shell, never a subshell, so the
 # globals reach the caller.
 #
 # For a merge that names, with --repo, a repository other than the checkout it
@@ -1547,7 +1556,7 @@ mt_api_read() {  # $1 = file for the answer (/dev/null to keep none), $2 = accou
     # never asked (L11).
     if [ -z "$token" ]; then
       rm -f "$errf"; MT_READ_ERR="gh read no token for the account $account from the keyring"
-      MT_SIGNIN_ACCOUNT="$account"; MT_SIGNIN_ERR="$MT_READ_ERR"
+      MT_SIGNIN_ACCOUNT="$account"; MT_SIGNIN_ERR="$MT_READ_ERR"; MT_SIGNIN_KIND=notoken
       return "$MT_SIGNIN_RC"
     fi
     GH_TOKEN="$token" gh api "$@" >"$out" 2>"$errf"; rc=$?
