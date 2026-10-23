@@ -107,7 +107,10 @@ The work's GitHub organisations are never named in this repository (#1568), whic
 lesson's provenance is `name#123`, never `owner/name#123`, and a fixture invents its owner.
 `hooks/lib/work-names.py` is the one scanner for them. It holds the two organisation names only as
 sha256 hashes, and on a Mac with the dev update registry also checks the owner of every repository
-in it. It never prints a name it found, only where.
+in it. It never prints a name it found, only where. It runs over the whole tree before every push
+and in CI (`tests/test-work-names-tree.sh`), and over what every send is about to publish: a send
+carrying a name is refused, naming the file and line, until it is gone
+(`SYNC_SKIP_WORK_NAMES_SCAN=1` overrides it for one run, said to Dan first).
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
