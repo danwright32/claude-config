@@ -8,7 +8,10 @@
 #      which has none, checks the two built in organisation names and says so.
 #   2. A send refuses to publish a file naming one. A lesson written on a Mac reaches the shared
 #      repository through claude-sync with no pull request, so the whole tree check would only see
-#      it after it was public (L280). The refusal names the file and line, never the name.
+#      it after it was public (L280). The refusal names the file and line, never the name, and a
+#      send the scan cannot judge (an unreadable registry) is refused too.
+#   3. A scan of nothing is no pass: the send scan, cut out of the script by name, refuses a file
+#      listing git could not produce and one that found nothing, and passes a clean one.
 # The suite tests with an invented organisation handed to the scanner by hash
 # (WORK_NAMES_EXTRA_HASHES), as the real two are built in. No work organisation or repository name
 # belongs in this file.
