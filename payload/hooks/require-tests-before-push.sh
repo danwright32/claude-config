@@ -83,6 +83,11 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-changes.sh
 . "$HOOK_DIR/lib/push-changes.sh" 2>/dev/null || fail_open "shared push-changes library missing"
 PC_GATE=tests
+# Whether a file's added code handles failure: the one predicate the lessons advisory and the
+# lessons review read too (claude-config#1477). It tells the judge's failure path SPECIAL CASE which
+# files it applies to, so a label reading "Fail the run" is not error handling.
+# shellcheck source=lib/failure-handling.sh
+. "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null || fail_open "shared failure-handling library missing"
 
 # ---------------------------------------------------------------------------
 # 1. Parse the hook payload (JSON on stdin) -> command + cwd.
@@ -395,6 +400,10 @@ fi
 diff="$(printf '%s\n%s\n\n%s\n%s\n' "$t_label" "$test_diff" "$c_label" "$code_diff")"
 [ -n "$diff_code$test_diff" ] || allow empty
 
+# Read from the WHOLE diff, before the budget cut, so a file past the cut is still named.
+failure_files="$(printf '%s\n%s\n' "$diff_tests" "$diff_code" | fh_files | sed 's/^/  - /')"
+[ -n "$failure_files" ] || failure_files="  none: no file in this push adds error handling or retry code"
+
 RUBRIC="$(cat <<'EOF'
 You are a strict test-coverage gate for a git push. You are given the commit
 messages and the code diff being pushed (the diff includes any test files).
@@ -415,12 +424,18 @@ For each distinct change, decide:
   change exercises the behavior, NOT by whether the test file is new. The test
   files in this push are listed explicitly below; trust that list even if a
   given test diff hunk looks truncated.
-  SPECIAL CASE: if the change touches error handling, a retry, a background or
-  scheduled job, or a call to an external API/service, hasTest is true ONLY if
+  SPECIAL CASE: if the change touches error handling or a retry, or a background
+  or scheduled job, or a call to an external API/service, hasTest is true ONLY if
   at least one of the tests exercises a failure or edge case for that change
   (a rejected/erroring call, a timeout, a duplicate/concurrent invocation, a
   malformed response) -- a test that only exercises the happy path does not
   satisfy hasTest for that change, even if a happy-path test exists.
+  Which files add error handling or a retry is decided from the code, not by
+  you: it is the FAILURE HANDLING FILES list in the input, read with string
+  literals and comments removed. A word such as fail, error or retry in a
+  string, a label, a test name, fixture data or a comment
+  never makes a change error handling. A background or scheduled job or an
+  external call is still judged from the diff.
 
 Output STRICT JSON on a single line, no prose and no code fence:
 {"verdict":"pass"|"block","changes":[{"summary":"...","needsTest":true,"hasTest":false}],"missing":["..."]}
@@ -431,8 +446,8 @@ EOF
 
 test_list_str="$test_list"; [ -n "$test_list_str" ] || test_list_str="  none"
 source_list_str="$source_list"; [ -n "$source_list_str" ] || source_list_str="  none"
-judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\nSOURCE FILES CHANGED IN THIS PUSH:\n%s\nDIFF:\n%s\n' \
-  "$msgs" "$test_list_str" "$source_list_str" "$diff")"
+judge_input="$(printf 'COMMIT MESSAGES:\n%s\n\nTEST FILES CHANGED IN THIS PUSH, new OR modified existing -- all count as tests:\n%s\nSOURCE FILES CHANGED IN THIS PUSH:\n%s\nFAILURE HANDLING FILES (their added code catches, raises, branches on an error or status, or retries):\n%s\nDIFF:\n%s\n' \
+  "$msgs" "$test_list_str" "$source_list_str" "$failure_files" "$diff")"
 
 # One isolated model call, shared with the simplify gate (lib/push-changes.sh, which carries the
 # measurement behind its flags). It names a judge that was missing, timed out (they have different
