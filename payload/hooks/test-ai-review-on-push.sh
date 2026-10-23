@@ -182,7 +182,8 @@ done
 # claude-config#1007), which is a judgement about the machine: on 2026-10-22 the hook took 5736 ms
 # on a saturated Mac and failed, and on 2026-10-23 at 00:50 ET, under 96 busy loops and 36 process
 # launching loops (load average 251 on 12 cores), 12 copies at once failed 12 of 12, the hook taking
-# 8.4 to 14.2 s with nothing wrong (L290). The elapsed time is still printed, as a figure.
+# 8.4 to 14.2 s with nothing wrong (L290). The elapsed time now appears only in the failure
+# message, as a figure for whoever reads it, and decides nothing.
 FIX_HOLD="$WORKDIR/release-fix"
 FAKE_CLAUDE_HOLD="$FIX_HOLD" fire_push "git push origin main" 0
 check_eq "the push hook exits 0" 0 "$RC"
