@@ -446,6 +446,25 @@ plainest reading of the decisions above:
 - **Gone at once.** A job Claude stops with TaskStop is dropped from the reminder and the job list at
   once, and so is one Claude Code reports as ended (its task notification), on the watcher's own
   evidence that its group has ended.
+- **What Claude Code says of a job (#1517).** The engine has no call that asks Claude Code whether
+  it still knows a task id: `$.agent.list()` names agents only, TaskList and TaskGet are the to do
+  list, and TaskStop would stop what it asks about. What it says comes with each subagent's stop,
+  the in flight list (`background_tasks`, the whole session's work, each with a status). A job the
+  list names takes that status; a job the stopping agent started that its own list leaves out reads
+  as no longer known; another's job left out, or a list that cannot be read, says nothing. That
+  word never ends a job: only the measure of its process group (or of who holds its output file)
+  does, as before. Measured on 2.1.309 (2026-10-23): Claude Code reports a job completed as soon as
+  its shell exits, while a process the shell started runs on in the job's group holding its output
+  file, and TaskStop then answers "is not running (status: completed)", or "No task found with ID"
+  for an id it no longer knows. So a job Claude Code has finished whose group still runs is named
+  as finished, with the group and `kill -TERM -<group>` as the remedy instead of TaskStop (L111);
+  one whose group cannot be read is named as such, never as running and never dropped. A job an
+  agent left that is measured as ended is said to this conversation once, with Claude Code's last
+  status for it where it gave one, then never named again, since the agent that would have read
+  Claude Code's own report has ended. The status bar lists it until it is measured as ended, then
+  drops it, as before; it never shows an ended row. The sighting behind the issue (b2kmw3u3u, PET,
+  2026-10-22) was on the work MacBook, whose session record was not read, so which of a lingering
+  process and an unreadable measure it was is not known.
 - **Every result reminds.** A refused tool result carries no context, and one refused by a mod
   outside the watcher never reaches it, so the reminder about unkept jobs goes into such a result's
   row as the conversation keeps it: Claude reads it there, and Dan's screen draws the row as it was.
