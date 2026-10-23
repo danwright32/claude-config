@@ -995,7 +995,18 @@ repository's settings, merges by the one method they allow, and when they allow 
 claude-config allow all three) stops at once naming them rather than at the merge after the wait.
 It does not guess squash from history, which GitHub does not record a method for. While it waits it
 says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
-one can be told apart (claude-config#1476). It accepts only the merge
+one can be told apart (claude-config#1476). Its looks follow the one polling policy,
+`hooks/lib/gh-poll.sh` (claude-config#1482): on 2026-10-22 GitHub's burst limit refused every session
+on the shared account for about 40 minutes while one session's agents ran this helper and `gh pr
+view` loops at once. While a head's checks and review run, each look that sees nothing new doubles
+the wait, up to three minutes (`MWR_POLL_MAX_SECONDS`), and any change, a check finishing included,
+starts it at a minute again, so the look that finds the checks done merges at once. Each look takes a
+place in the session's looks a minute (`GH_POLL_PER_MINUTE`, 4), shared by every loop in the session
+through a small state file under `~/.claude/state/gh-poll/`, keyed on the session. A rate limit
+answer to any read or update pauses every look in the session for GitHub's Retry-After, the reset
+time of an allowance it reports spent, or, for a burst limit naming no time, a minute doubling while
+it holds; the wait is said as a rate limit, with a heartbeat inside any wait longer than two
+minutes. It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run

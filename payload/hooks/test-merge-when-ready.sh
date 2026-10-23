@@ -59,7 +59,15 @@ fail_read(){
 gone(){ : > "$ST/branch-deleted"; printf 'feat/x\n' >> "$ST/deleted"; cat "$ST/stacked" >> "$ST/closed" 2>/dev/null; : > "$ST/stacked"; }
 case "$*" in
   "auth status"*) exit 0 ;;
+  # The rate limit probe (claude-config#1482): probe holds GitHub's whole answer, headers and body,
+  # as `gh api -i` prints it; with none it is a call nothing expected.
+  "api -i rate_limit"*)
+    printf '%s\n' "$(rd clock)" >> "$ST/probe-times"
+    [ -s "$ST/probe" ] || { echo "fake gh: no probe answer set" >&2; exit 3; }
+    cat "$ST/probe"
+    ;;
   "pr view"*)
+    printf '%s\n' "$(rd clock)" >> "$ST/view-times"
     if [ -e "$ST/merged" ]; then fail_read readback; else fail_read view; fi
     state=OPEN; [ -e "$ST/merged" ] && state=MERGED
     ms=CLEAN; [ "$(rd behind)" != 0 ] && ms=BEHIND
@@ -154,6 +162,8 @@ case "$*" in
     ;;
   "pr update-branch"*)
     [ -e "$ST/update-fails" ] && { echo "GraphQL: merge conflict between base and head (updatePullRequestBranch)" >&2; exit 1; }
+    # update-limited: GitHub refuses this one update for its rate limit, updating nothing (#1482).
+    [ -e "$ST/update-limited" ] && { rm -f "$ST/update-limited"; echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)" >&2; exit 1; }
     printf '%s\n' "$(rd clock)" >> "$ST/update-times"
     # update-unseen: GitHub accepts the update, but its record of the pull request never shows it
     # (claude-config#1500, PET #1885 on 2026-10-22): the head and the distance behind stay as they
@@ -213,6 +223,14 @@ export MWR_NOW="$BIN/fake-now"
 export MWR_POLL_SECONDS=30
 export MWR_READ_RETRY_SECONDS=7
 export MWR_NO_CHECKS_GRACE_SECONDS=0
+# The shared polling policy (claude-config#1482, lib/gh-poll.sh): every section but 21 runs at a fixed
+# pace (no growth, a ceiling under the base is the base) with a cap no section reaches, so each keeps
+# measuring what it was written for; section 21 sets each of them itself. Its state is this suite's
+# own, in one session of its own, emptied by fresh().
+export MWR_POLL_MAX_SECONDS=1
+export GH_POLL_PER_MINUTE=1000
+export GH_POLL_STATE_DIR="$WORKDIR/gh-poll"
+export CLAUDE_CODE_SESSION_ID="mwr-suite"
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
@@ -267,7 +285,7 @@ git init -q "$REPO"
 git -C "$REPO" remote add origin https://github.com/acme/widget.git
 
 fresh(){ # fresh <head> <behind> <rollup>
-  rm -rf "$ST"; mkdir -p "$ST"
+  rm -rf "$ST" "$GH_POLL_STATE_DIR"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
@@ -1429,6 +1447,85 @@ wt_fresh; : > "$ST/merged"
 out="$(wrun 7 --squash)"; rc=$?
 check_eq "#1521 a pull request found already merged exits 0" "0" "$rc"
 check_eq "#1521 and its worktree is removed too" "no" "$(there)"
+
+# =================================================================================================
+# 21. The shared polling policy (claude-config#1482, lib/gh-poll.sh). On 2026-10-22 GitHub's
+#     secondary (burst) limit refused every session on the account for about 40 minutes while several
+#     agents ran this helper and gh pr view loops at once. The wait between looks now grows while a
+#     look sees nothing new and starts again at the base on any change; a rate limit answer pauses the
+#     session's looks for as long as GitHub says; and the looks a minute are capped per session, the
+#     cap shared by every loop in it through one state file.
+# =================================================================================================
+TWO_PENDING='[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-06T10:05:00Z"},{"__typename":"CheckRun","name":"lint","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-06T10:05:00Z"}]'
+ONE_DONE='[{"__typename":"CheckRun","name":"tests","workflowName":"ci","status":"IN_PROGRESS","conclusion":"","startedAt":"2026-10-06T10:05:00Z"},{"__typename":"CheckRun","name":"lint","workflowName":"ci","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-06T10:05:00Z"}]'
+printf '%s' "$ONE_DONE" > "$WORKDIR/one-done"
+LIMITED="gh: API rate limit exceeded for user ID 241846707. (HTTP 403)"
+
+# The wait grows while nothing changes, starts again on a change, and the look that sees the checks
+# finished merges with no further wait.
+fresh "$OLD" 0 "$TWO_PENDING"
+printf ':\n:\n:\n%s\n%s\n' "cp '$WORKDIR/one-done' \"\$ST/rollup\"" "cp '$WORKDIR/green' \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(MWR_POLL_MAX_SECONDS=120 MWR_HEARTBEAT_SECONDS=1000 run 7 --squash)"; rc=$?
+check_eq "#1482 a long wait on checks still merges" "0" "$rc"
+check_eq "#1482 the wait doubles on each unchanged look up to its ceiling, and a change starts it again" "30 60 120 120 30" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
+check_eq "#1482 the look that finds the checks done merges at once" "1" "$(count gh-calls 'pr merge')"
+
+# Its default ceiling: three minutes from a one minute base.
+fresh "$OLD" 0 "$PENDING"
+for _ in 1 2 3 4; do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "cp '$WORKDIR/green' \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(env -u MWR_POLL_SECONDS -u MWR_POLL_MAX_SECONDS MWR_HEARTBEAT_SECONDS=1000 bash -c "cd '$REPO' && bash '$HELPER' 7 --squash" 2>&1)"; rc=$?
+check_eq "#1482 default pace: merged" "0" "$rc"
+check_eq "#1482 default pace: 1, 2, then 3 minutes at most" "60 120 180 180 180" "$(tr '\n' ' ' < "$ST/sleeps" | sed 's/ $//')"
+
+# A wait longer than the heartbeat is said again inside it, naming the next look, so the log never
+# goes quiet for longer than the heartbeat.
+fresh "$OLD" 0 "$PENDING"
+for _ in 1 2 3 4 5 6; do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "cp '$WORKDIR/green' \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(MWR_POLL_MAX_SECONDS=120 MWR_HEARTBEAT_SECONDS=100 run 7 --squash)"; rc=$?
+check_eq "#1482 sliced wait: merged" "0" "$rc"
+check "#1482 a heartbeat inside a long wait names the next look" "[3m 10s] Head ${OLD:0:7}: waiting, checks still running (1 of 1). Still waiting, for 3m 10s so far; next look in 20s." "$out"
+
+# A rate limit answer: paused until GitHub's reset time, said as a rate limit, and never as checks.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$LIMITED" > "$ST/view-fails"
+printf 'HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n{"resources":{"core":{"limit":5000,"remaining":4989,"reset":1003600},"graphql":{"limit":5000,"remaining":0,"reset":1000300}}}\n' > "$ST/probe"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1482 rate limited: merged once it lifted" "0" "$rc"
+check "#1482 it says GitHub refused for its rate limit" "for its rate limit" "$out"
+check "#1482 naming the reset time as the reason" "graphql" "$out"
+check_eq "#1482 the next read waits until the reset" "yes" "$( [ "$(sed -n 2p "$ST/view-times")" -ge 1000300 ] && echo yes || echo no)"
+check_eq "#1482 and is not asked again in between: the refused read, the one at the reset, the read back" "3" "$(grep -c . "$ST/view-times")"
+check "#1482 the heartbeat while paused says paused for the rate limit" "Still paused for GitHub's rate limit" "$out"
+check_not "#1482 and never that it waits on checks" "checks still running" "$out"
+check_eq "#1482 the limits are asked once" "1" "$(grep -c . "$ST/probe-times")"
+check_not "#1482 a rate limit is not a stop" "Stopped" "$out"
+
+# An update refused for a burst limit naming no time: paused a minute, then updated once.
+fresh "$OLD" 4 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; : > "$ST/update-limited"
+printf 'HTTP/2.0 200 OK\r\n\r\n{"resources":{"core":{"limit":5000,"remaining":4989,"reset":1003600},"graphql":{"limit":5000,"remaining":4900,"reset":1003600}}}\n' > "$ST/probe"
+printf '%s\n%s\n' ":" "printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1482 an update refused for the rate limit is made once it lifts" "0" "$rc"
+check_eq "#1482 exactly one update landed" "1" "$(grep -c . "$ST/update-times")"
+check "#1482 the pause is a minute when GitHub names no time" "named no time" "$out"
+check_eq "#1482 and the update came a minute after the refusal" "yes" "$( [ "$(head -1 "$ST/update-times")" -ge 1000060 ] && echo yes || echo no)"
+
+# Two loops in one session share the cap: another loop's four looks this minute make this one wait.
+fresh "$OLD" 0 "$GREEN"
+for _ in 1 2 3 4; do CLAUDE_CODE_SESSION_ID=mwr-suite bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#1482 held by the session's cap: still merged" "0" "$rc"
+check "#1482 it says it waits for the session's next look, and why" "the most one session may" "$out"
+check_eq "#1482 its first read waits until the oldest look is a minute old" "1000060" "$(head -1 "$ST/view-times")"
+# Control: another session's looks do not hold it.
+fresh "$OLD" 0 "$GREEN"
+for _ in 1 2 3 4; do CLAUDE_CODE_SESSION_ID=another bash -c ". '$DIR/lib/gh-poll.sh' && ghp_take 1000000" >/dev/null 2>&1; done
+out="$(GH_POLL_PER_MINUTE=4 run 7 --squash)"; rc=$?
+check_eq "#1482 control: another session's looks leave it free" "1000000" "$(head -1 "$ST/view-times")"
+check_not "#1482 control: and it says nothing of a cap" "the most one session may" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
