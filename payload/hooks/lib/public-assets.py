@@ -18,7 +18,7 @@ repo root, whichever exist):
    with the merge-base tree, not a stored baseline: an asset that is unreferenced at HEAD FAILS only
    when this push introduced that state, either by adding the asset or by removing the last reference
    to it. An asset that was already unreferenced at the base is counted and left alone, so a repo's
-   existing dead assets never block a push (Slate deletes its own in Try-Pennie/slate#2561).
+   existing dead assets never block a push (Slate deletes its own in slate#2561).
 
    Files that do NOT count as a reference, each for a reason:
    - anything under the asset directory itself: an asset naming another asset says nothing about

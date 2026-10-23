@@ -13,8 +13,9 @@ import { resolveDir, syncCall } from './overnight.ts'
 //
 // A third, optional list, `waitOwners`, names GitHub owners every one of whose repositories waits
 // overnight, no merge and no deploy, including ones no list names and ones made later (Dan,
-// 2026-10-07: "Move ANYTHING in halo-lab-trypennie to the wait list automatically. Nothing in that
-// account should merge overnight"). It matches the owner in any case and outranks both lists, so an
+// 2026-10-07, in the #843 thread, asked for anything in the agency's organisation to go to the wait
+// list automatically, so that nothing in that account merges overnight; paraphrased here because
+// his words name the organisation, claude-config#1568). It matches the owner in any case and outranks both lists, so an
 // entry under such an owner on either list is a conflict that waits (L42).
 //
 // Everything without an answer fails closed, no merge and no deploy for the night (L42): a file

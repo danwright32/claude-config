@@ -124,7 +124,7 @@ check(r.ok === true, 'the same label applied twice was read as two conflicting l
 
 const REGISTRY = {
   repos: [
-    { name: 'PET', repo: 'Try-Pennie/project-enrollment-tracker', changelogFrom: '2026-09-01' },
+    { name: 'PET', repo: 'Acme-Corp/enrollment-board', changelogFrom: '2026-09-01' },
     { name: 'NoDate', repo: 'acme/nodate' },
     { name: 'Later', repo: 'acme/later', changelogFrom: '2026-12-01' },
     { name: 'Bad', repo: 'acme/bad', changelogFrom: 'December' },
@@ -136,7 +136,7 @@ const REGISTRY = {
 const TODAY = '2026-09-15';
 function scope(slug, today) { return entry.repoScope(REGISTRY, slug, today || TODAY); }
 
-let s = scope('Try-Pennie/project-enrollment-tracker');
+let s = scope('Acme-Corp/enrollment-board');
 check(s.inScope === true && s.from === '2026-09-01',
   'a listed repo carrying a past start date was not in scope: ' + JSON.stringify(s));
 
@@ -144,7 +144,7 @@ s = scope('someone/else');
 check(s.inScope === false, 'an unlisted repo was gated: ' + JSON.stringify(s));
 
 // Case: GitHub slugs are not case sensitive and a remote can be spelled either way.
-s = scope('try-pennie/Project-Enrollment-Tracker');
+s = scope('acme-corp/Enrollment-Board');
 check(s.inScope === true, 'a differently cased slug was not recognised: ' + JSON.stringify(s));
 
 // The date is a START DATE, not merely an on switch. Setting a repo's date to
@@ -187,7 +187,7 @@ check(s.inScope === false && /changelogFrom/.test(s.why || ''),
 // A registry that cannot be read is not the same as a registry saying no. One
 // means the gate is off for this repo, the other means the gate cannot tell,
 // and merging blind on an unreadable registry is the failure worth naming.
-s = entry.repoScope(null, 'Try-Pennie/project-enrollment-tracker');
+s = entry.repoScope(null, 'Acme-Corp/enrollment-board');
 check(s.inScope === false && s.unreadable === true,
   'an unreadable registry read as a deliberate opt out: ' + JSON.stringify(s));
 

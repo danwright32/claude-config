@@ -435,7 +435,7 @@ read_back(){   # sets after
 }
 
 # THE BRANCH IS DELETED HERE, NEVER BY gh (claude-config#1337). On 2026-10-19 this merged
-# Try-Pennie/bidspoke#2478 with --delete-branch passed through to gh pr merge, which deleted the
+# bidspoke#2478 with --delete-branch passed through to gh pr merge, which deleted the
 # branch the moment the merge landed. GitHub closed #2482, which was based on that branch (a branch
 # deleted through the API does not move the pull requests based on it, as one deleted in the web
 # page does), and a closed pull request's base can never be changed, so it was opened again as a

@@ -213,7 +213,7 @@ for n, (label, s, needle) in enumerate([
     check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
 rc, out, _ = make("with-exception", spec(exceptions=[
     {"id": "X1", "frame": "f1", "region": [0, 0, 100, 40], "words": "the clock can differ, it's live",
-     "date": "2026-10-19", "source": "https://github.com/Try-Pennie/slate/issues/3941#issuecomment-1"}]))
+     "date": "2026-10-19", "source": "https://github.com/Acme-Corp/storefront/issues/3941#issuecomment-1"}]))
 check("an exception in Dan's words is kept and shown", rc == 0 and "the clock can differ, it&#x27;s live" in open(
     os.path.join(T, "with-exception.html"), encoding="utf-8").read(), out)
 sm = re.search(r'id="design-frames">(.*?)</script>', src, re.S)
@@ -273,7 +273,7 @@ rc, said = sealed_check(src, args=())
 check("run with no flag it says how it is run, exit 2", rc == 2 and "--sealed" in said, said)
 
 # --- a design whose frames were captured from different pages (claude-config#1474) -------------------
-# Bidspoke's lead validation design (try-pennie/bidspoke#2590) had its panel captured in edit mode and its
+# Bidspoke's lead validation design (bidspoke#2590) had its panel captured in edit mode and its
 # card in view mode, so it was split into two settled files. Each frame now names the captured page it
 # is drawn in, from the spec's "chromes", so one file holds the whole design and one decision map.
 write("view.html", """<!doctype html>

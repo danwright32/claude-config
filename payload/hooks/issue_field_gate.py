@@ -400,7 +400,7 @@ OPEN_QUESTIONS_RULE = {
 }
 
 # A --body-file the gate cannot read (claude-config#1416). Before it, the gate passed one, so
-# Try-Pennie/slate#3924 and #3925 were filed with a body holding only the session line from a path
+# slate#3924 and #3925 were filed with a body holding only the session line from a path
 # through a variable an earlier Bash call had set. `details` names each path and why, and evaluate
 # fills them into {details}.
 BODY_FILE_RULE = {

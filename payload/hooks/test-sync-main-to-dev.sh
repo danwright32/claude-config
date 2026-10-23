@@ -26,7 +26,7 @@ fail=0
 # case writes, and records every api call so a case can assert the merge was or was not requested.
 FIXTURE="$(mktemp -d)"
 mkdir -p "$FIXTURE/tp" "$FIXTURE/other" "$FIXTURE/bin"
-( cd "$FIXTURE/tp" && git init -q && git remote add origin "https://github.com/Halo-lab-Trypennie/trypennie.git" )
+( cd "$FIXTURE/tp" && git init -q && git remote add origin "https://github.com/Studio-Partner/website.git" )
 ( cd "$FIXTURE/other" && git init -q && git remote add origin "https://github.com/acme/widget.git" )
 cat > "$FIXTURE/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -55,6 +55,14 @@ chmod +x "$FIXTURE/bin/gh"
 export FAKE_PR_JSON="$FIXTURE/pr.json"
 export FAKE_API_LOG="$FIXTURE/api.log"
 
+# The list is each Mac's own ~/.claude/hooks/main-to-dev-repos.local.txt (claude-config#1568): it
+# names work repositories, so it left the public payload. A fixture home holds it, in the format the
+# tracked file had (comments, one owner/name a line), since the sync moved that file byte for byte.
+export CLAUDE_HOME="$FIXTURE/home/.claude"
+mkdir -p "$CLAUDE_HOME/hooks"
+LIST="$CLAUDE_HOME/hooks/main-to-dev-repos.local.txt"
+printf '# Repos where every merge to main is followed by merging main INTO dev.\n#\n# website: who asked and when.\nStudio-Partner/website\n' > "$LIST"
+
 holds() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 check() {  # $1 = description, then a command that must succeed
   local desc="$1"; shift
@@ -72,26 +80,26 @@ fire() {  # $1 = repo dir, $2 = command, [$3 = env assignment]
   payload="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$2" "$1")"
   OUT="$(printf '%s' "$payload" | ( cd "$1" && env "PATH=$FIXTURE/bin:$PATH" ${3:+"$3"} "$HOOK" ) 2>/dev/null)"
 }
-called_merge() { [ -f "$FAKE_API_LOG" ] && holds "$(cat "$FAKE_API_LOG")" "repos/Halo-lab-Trypennie/trypennie/merges"; }
+called_merge() { [ -f "$FAKE_API_LOG" ] && holds "$(cat "$FAKE_API_LOG")" "repos/Studio-Partner/website/merges"; }
 no_call() { [ ! -s "$FAKE_API_LOG" ]; }
 quiet() { [ -z "$OUT" ]; }
 
-TP=Halo-lab-Trypennie/trypennie
+TP=Studio-Partner/website
 
-# --- The one case it exists for: a trypennie PR merged into main ---
+# --- The one case it exists for: a PR in a listed repository merged into main ---
 pr "$TP" MERGED main; FAKE_MERGE_STATUS=201; export FAKE_MERGE_STATUS
 fire "$FIXTURE/tp" "gh pr merge 7 --squash"
-check "a trypennie merge to main requests the merges API" called_merge
+check "a listed merge to main requests the merges API" called_merge
 check "it asks to merge main INTO dev, never the reverse" holds "$(cat "$FAKE_API_LOG" 2>/dev/null)" "base=dev"
 check "with main as the head" holds "$(cat "$FAKE_API_LOG" 2>/dev/null)" "head=main"
 check "and says it merged" holds "$OUT" "merged main into dev"
 check "naming the commit it made" holds "$OUT" "abc1234"
 
-# The same merge named with -R from a folder that is not trypennie at all, which is the shape a
-# session outside any trypennie checkout produces.
-fire "$FIXTURE/other" "gh pr merge 7 -R Halo-lab-Trypennie/trypennie --squash"
+# The same merge named with -R from a folder that is not that checkout at all, which is the shape a
+# session outside any such checkout produces.
+fire "$FIXTURE/other" "gh pr merge 7 -R Studio-Partner/website --squash"
 check "a merge named with -R from another folder still syncs" called_merge
-fire "$FIXTURE/other" "gh pr merge 7 -R halo-lab-trypennie/TRYPENNIE --squash"
+fire "$FIXTURE/other" "gh pr merge 7 -R studio-partner/WEBSITE --squash"
 check "the slug is matched case insensitively" called_merge
 
 # --- The outcomes it must say apart ---
@@ -116,7 +124,7 @@ check "and says nothing" quiet
 
 pr "$TP" MERGED dev
 fire "$FIXTURE/tp" "gh pr merge 7 --squash"
-check "a trypennie PR into dev makes no call" no_call
+check "a listed PR into dev makes no call" no_call
 check "and says nothing" quiet
 
 pr "$TP" OPEN main
@@ -143,20 +151,49 @@ check "the documented override makes no call" no_call
 # only under an override, and then it acted on the FIRST alone: a first merge in a repository that is
 # not listed made it say nothing, and the second merge's repository was left with dev behind main.
 printf '{"number":7,"url":"https://github.com/acme/widget/pull/7","state":"MERGED","baseRefName":"main"}' > "$FIXTURE/pr-acme_widget.json"
-printf '{"number":8,"url":"https://github.com/%s/pull/8","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
+printf '{"number":8,"url":"https://github.com/%s/pull/8","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-studio-partner_website.json"
 fire "$FIXTURE/other" "SKIP_PR_REVIEW=1 gh pr merge 7 -R acme/widget --squash && gh pr merge 8 -R $TP --squash"
 check "#1082 the second merge's listed repository is synced" called_merge
 check "#1082 naming that pull request" holds "$OUT" "after PR #8"
 # Two merges into the listed repository: each is acted on and each outcome is said.
-printf '{"number":9,"url":"https://github.com/%s/pull/9","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
+printf '{"number":9,"url":"https://github.com/%s/pull/9","state":"MERGED","baseRefName":"main"}' "$TP" > "$FIXTURE/pr-studio-partner_website.json"
 fire "$FIXTURE/other" "SKIP_PR_REVIEW=1 gh pr merge 8 -R $TP --squash; gh pr merge 9 -R acme/widget --squash"
 check "#1082 a listed first merge is still synced when a second follows" called_merge
 check "#1082 and the unlisted second merge asks for nothing" eval '[ "$(grep -c merges "$FAKE_API_LOG")" = 1 ]'
-rm -f "$FIXTURE/pr-acme_widget.json" "$FIXTURE/pr-halo-lab-trypennie_trypennie.json"
+rm -f "$FIXTURE/pr-acme_widget.json" "$FIXTURE/pr-studio-partner_website.json"
 
-# Positive control for the list file: trypennie is in the SHIPPED list, so the cases above exercised
-# the real registry rather than a fixture copy of it.
-check "trypennie is listed in the shipped repo list" grep -qix "$TP" "$DIR/main-to-dev-repos.txt"
+# --- The list is this Mac's own file (claude-config#1568) ---
+# Control: the cases above synced because the repository is on this Mac's list, not for any other
+# reason. Taken off it, the same merge asks for nothing.
+pr "$TP" MERGED main
+printf 'acme/other\n' > "$LIST"
+fire "$FIXTURE/tp" "gh pr merge 7 --squash"
+check "a repository this Mac's list does not name is not synced" no_call
+check "and nothing is said about it" quiet
+# An empty list is the deliberate way to sync nothing on a Mac, and says nothing.
+: > "$LIST"
+fire "$FIXTURE/tp" "gh pr merge 7 --squash"
+check "an empty list syncs nothing" no_call
+check "and says nothing" quiet
+# A missing list is not the same fact as an empty one (L11): a merge into main says where the list
+# belongs, so a Mac that never got it is told on the first merge rather than skipping silently.
+rm -f "$LIST"
+fire "$FIXTURE/tp" "gh pr merge 7 --squash"
+check "with no list, a merge makes no call" no_call
+check "and says this Mac has no list, naming where it goes: $OUT" holds "$OUT" "$LIST"
+check "and how to sync nothing on purpose" holds "$OUT" "empty"
+fire "$FIXTURE/tp" "gh pr view 7"
+check "with no list, a command that merges nothing says nothing" quiet
+# The old tracked name beside the hook is never read: only the per Mac file counts.
+mkdir -p "$FIXTURE/hooks-copy/lib"
+cp "$HOOK" "$FIXTURE/hooks-copy/"
+cp "$DIR"/lib/*.sh "$FIXTURE/hooks-copy/lib/" 2>/dev/null
+printf '%s\n' "$TP" > "$FIXTURE/hooks-copy/main-to-dev-repos.txt"
+pr "$TP" MERGED main
+payload="$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "gh pr merge 7 --squash" "$FIXTURE/tp")"
+rm -f "$FAKE_API_LOG"
+OUT="$(printf '%s' "$payload" | ( cd "$FIXTURE/tp" && env "PATH=$FIXTURE/bin:$PATH" "$FIXTURE/hooks-copy/sync-main-to-dev.sh" ) 2>/dev/null)"
+check "a list under the old tracked name beside the hook is not read" no_call
 
 rm -rf "$FIXTURE"
 echo

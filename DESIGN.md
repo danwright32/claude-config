@@ -1301,6 +1301,42 @@ anything reads it), and two releases, one adding the local name and one removing
 as a merge from elsewhere would, and holds that the registry survives, the gate passes, and neither
 the local file nor an old name copy reaches the shared repository.
 
+#1568 moved a second list the same way: `hooks/main-to-dev-repos.txt`, the repositories merged main
+into dev after each merge, which named a work organisation. It is a list of lines, not JSON, and the
+move copies bytes, so `LOCAL_FILE_GLOBS` gained `*.local.txt` and its copies rather than the file
+being reshaped in the same step: a reshape needs a converter in the move, which is a second
+mechanism, and a reader of two formats. Its reader, `sync-main-to-dev.sh`, says a missing list on
+every merge instead of standing down as it did while the file travelled (L11), and an empty list is
+the deliberate way to sync nothing. `tests/test-moved-to-local.sh` reads `MOVED_TO_LOCAL` out of the
+script and proves the move for every pair it lists, so a pair added later is proved on the day it
+lands. Sleep mode's lists (`mods/sleep-repos.json`) are the last tracked list naming an
+organisation; their reader's file name is a constant in a mod hook, and moving them waits on
+Dan's answer to the design round guard.
+
+## The work's organisation names are found by hash (#1568)
+
+The work's private repositories live under two GitHub organisations, and this repository is public.
+`hooks/lib/work-names.py` finds a name wherever it stands as a whole hyphenated run inside a token:
+an owner, a URL, a fixture file name before an underscore, or the tail of a longer login. It holds
+the two names only as sha256 hashes, so it does not publish what it guards and a search for them
+finds nothing in it. On a Mac with the dev update registry it also reads, through that registry's
+one reader, the owner of every repository listed, so an organisation added there is guarded on that
+Mac from the next scan; CI has no registry and checks the hashes only, and says so. It never prints
+the name it found, because CI logs of a public repository are public and a refusal is read in
+transcripts.
+
+Deliberately not a name: a product or repository name on its own (`slate#123`, a checkout folder,
+a product in prose). Without the organisation it locates nothing, it is the vocabulary hundreds of
+lessons are written in, and `name#N` is what `lesson-fanout.sh` parses to skip the repository a
+lesson came from, so provenance drops the owner and keeps the name. The same login without its
+hyphen is a different GitHub account and the company's public web domain. Flagging repository names
+would also flag English words (a colour named in a vendored skill), which only an exemption list
+could quiet, and the scan has none.
+
+Not yet wired, and why: once sleep mode's lists and the lesson provenance are clean, the suite runs
+the scanner over the whole tree and the send runs it over what it publishes. Before then both would
+fail on the names still tracked.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on

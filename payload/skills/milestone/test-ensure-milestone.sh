@@ -131,7 +131,7 @@ check_eq "substring of an existing title exits 4" "4" "$rc"
 check "substring case is a near duplicate" "NEAR-DUPLICATE" "$out"
 
 # --- 3b. two features that share only a common noun are NOT twins (#255) ---
-# "Regal integration" was refused in Try-Pennie/slate on 2026-09-01 as a near duplicate of the open
+# "Regal integration" was refused in slate on 2026-09-01 as a near duplicate of the open
 # "PET integration". They are different features for different external systems and share only the
 # word "integration", which says nothing about which feature either one is. The refusal landed
 # inside a batch of nine milestones Dan had already confirmed by name, so the remedy the message

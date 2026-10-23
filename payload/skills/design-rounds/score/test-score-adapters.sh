@@ -219,7 +219,7 @@ fi
 
 # --- 3g. the chain for a design whose frames were captured from different pages (claude-config#1474) ----
 # One settled file, its f1 drawn in a page captured in edit mode and its f2 in one captured in view mode,
-# as Bidspoke's lead validation design was (try-pennie/bidspoke#2590). The app draws each frame in the
+# as Bidspoke's lead validation design was (bidspoke#2590). The app draws each frame in the
 # matching mode and scores 100% on both halves; drawing f2 in edit mode instead takes f2's picture below
 # 100% and leaves f1's whole, so each frame is scored against its own page and no other.
 if [ -z "$PW" ] || ! command -v node >/dev/null 2>&1 || [ ! -x "$CHROME_APP" ]; then
