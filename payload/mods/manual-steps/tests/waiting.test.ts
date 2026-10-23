@@ -1,14 +1,71 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { waitingPhrase } from '../hooks/waiting.ts'
 
-// #863: what in Claude's own final message says a step is waiting on Dan. Narrow on purpose: it was
-// measured on real turn final messages before it shipped (docs/mods-design.md "Manual steps"), so a
-// change here is measured again rather than widened by guesswork (L172, L36).
+// #863: what in a message of Claude's says a step is waiting on Dan, judged on every message of the
+// turn since #1608. Narrow on purpose: each phrase was measured on real turns before it shipped
+// (docs/mods-design.md "Manual steps"), so a change here is measured again rather than widened by
+// guesswork (L172, L36).
 
 describe('waitingPhrase', () => {
   test('the 2026-10-06 wording that left Dan with a command he never saw', () => {
     const said = "The one thing still waiting on you is the migration command from my earlier message. #3415 merges after that, and it's the last piece of the goal."
     expect(waitingPhrase(said)).toBe('waiting on you')
+  })
+
+  // #1608: the 2026-10-23 Downbeat turn, whose step was in its second to last message and whose
+  // last message, the reflection, pointed back at it. Neither used any phrase of the #863 list.
+  test('the 2026-10-23 Downbeat wording, the step and the reflection after it, each fire (#1608)', () => {
+    const step = "One thing is still yours to do. In Settings, Venues, Carnegie Hall, click the × next to jbentley, then type ... and click Add. Tell me when it's done"
+    const reflection = 'The only thing still open is the Settings swap I described above'
+    expect(waitingPhrase(step)).toBe('yours to do')
+    expect(waitingPhrase(reflection)).toBe('still open is the Settings swap I described above')
+  })
+
+  // #1608's phrases, each measured on the turns of the 30 days to 2026-10-23 (docs/mods-design.md
+  // "Manual steps"). The sentences are paraphrased from what fired, never copied.
+  test('the hand off shapes #1608 added fire, each on the words that make it a step', () => {
+    for (const [said, phrase] of [
+      ['Reinstalling the app is yours to run: `bash scripts/install.sh`.', 'yours to run'],
+      ['The one step left is yours: press Update in the app.', 'step left is yours'],
+      ['3. **One check is still yours:** open the app and import the file again.', 'check is still yours'],
+      ['3. Tell me when that is saved and I will rerun the scan.', 'Tell me when'],
+      ["Tell me once you've signed in and I'll read the thread.", 'Tell me once'],
+      ['1. Click **Deploy**, then **Manage deployments**.', 'Click'],
+      ['3. Click the × next to the old address.', 'Click'],
+      ['2. Choose "claude.ai Google Calendar" from the list.', 'Choose'],
+      ['Type `/goal clear` to release the session.', 'Type'],
+      ['Paste it into the prompt with the `!` and press Return.', 'Paste'],
+      ['In Settings, Venues, the hall, remove the old address.', 'In Settings'],
+      ['2. Go to the **Venues** tab and select **the hall**.', 'Go to the **Venues** tab and select'],
+    ] as const)
+      expect(waitingPhrase(said)).toBe(phrase)
+  })
+
+  // What a wider phrase fired on in the same 30 days that was not a step for Dan (#1608).
+  test('the shapes #1608 measured and left out, and the near misses of those it kept, pass', () => {
+    for (const said of [
+      'The watcher will tell me when each pull request merges.',
+      "Tell me when you'd like the next wave.",
+      'The yes or no call is yours to make.',
+      'The decision is yours whenever the next screen is settled.',
+      'Its heading reads "waiting" while the open step is yours.',
+      'Opening the round in Chrome now. Press 1, 2 or 3 to swap.',
+      'Type checking, then commit:',
+      '- **Type check fix (#953):** it was split into two parts.',
+      'The only window still open is this one.',
+      'After a replacement you would press Connect again in Settings, Integrations.',
+      'The click handler in `pane.tsx` now types the value itself.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test("#1608's phrases negated or quoted pass", () => {
+    for (const said of [
+      'Nothing here is yours to do.',
+      'The card used to say "yours to do" beside each step.',
+      'The draft step read "Tell me when it is done" before I changed it.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
   })
 
   test('the other ways a step is handed over in prose, found in real transcripts', () => {

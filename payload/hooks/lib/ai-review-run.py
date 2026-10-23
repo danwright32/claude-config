@@ -9,18 +9,21 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --model M --prompt-file P --lessons-dir D --diff-file F --deadline SECONDS
                      --started EPOCH
 
-It runs EXACTLY `env -u CLAUDECODE DISABLE_PROMPT_CACHING=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
+It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_PROMPT_CACHE_TTL=5m CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p
+<message> --append-system-prompt <lessons> --exclude-dynamic-system-prompt-sections --model
 <model> --settings {"disableAllHooks":true} --strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with
-the diff on stdin (the last four are explained where the command is built).
+the diff on stdin (each part is explained where the command is built).
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
 environment.
 
-The prompt is the text of ai-review-prompt.txt, verbatim, with one context line in front of it
-naming the framework read from package.json (or saying there was none), and the lessons index in
-between. The file is the prompt the test compares against, so the hook never holds wording of its
-own (L41).
+The lessons index is the appended system prompt. The message is two context lines (the framework
+read from package.json, or that there was none, and which files handle failure), then the text of
+ai-review-prompt.txt, verbatim, with the diff after it on stdin. The file is the prompt the test
+compares against, so the hook never holds wording of its own (L41). The lessons, identical across
+reviews and most of the prompt, come first as the system prompt, so a review started within five
+minutes of another reads them back from the prompt cache (claude-config#1599).
 
 THE LESSONS, on purpose, and nothing else of the global config (claude-config#539). The review used
 to inherit the whole global CLAUDE.md by accident, because a headless claude loads it unless told
@@ -458,7 +461,21 @@ def main(argv):
         if a.scope_file:
             with open(a.scope_file, encoding="utf-8") as f:
                 scope = f.read().strip() + "\n\n"
-        prompt = framework_line(a.repo_dir) + "\n" + failure_line(a.diff_file) + "\n\n" + (lessons + "\n\n" if lessons else "") + scope + prompt_text
+        # THE ORDER, for the prompt cache (claude-config#1599). The lessons, identical in every
+        # review and most of its prompt, are the appended system prompt; the message is the two per
+        # diff context lines, then the scope and the instructions, with the diff after them on stdin.
+        # Reordering inside the message is not enough: the message is ONE content block and a cache
+        # is read back only up to a block boundary, so with the lessons first in it a second review
+        # read back only the 18,902 token tool and system prefix (measured 2026-10-23, Claude Code
+        # 2.1.309). In the system prompt, with the per machine sections moved into the message
+        # (--exclude-dynamic-system-prompt-sections, below), a second review of another diff read
+        # back 56,997. The scope and instructions stay beside the diff on purpose: moved into the
+        # system prompt too, the share of findings citing a lesson fell from 21 of 69 to 11 of 64
+        # over the same cases, and with only the lessons moved it was 18 of 65. Any per diff text
+        # added to `fixed` makes every review write it all again.
+        fixed = lessons
+        prompt = (framework_line(a.repo_dir) + "\n" + failure_line(a.diff_file) + "\n\n"
+                  + scope + prompt_text)
 
         # Hooks OFF (claude-config#560). Measured 2026-09-24, the first real whole branch reviews: the
         # headless claude ran Dan's global hooks, the reviewer's own tool use tripped the end of turn
@@ -482,17 +499,22 @@ def main(argv):
         # an --mcp-config here: one would bring its servers straight back.
         # Skills OFF (hook trim, 2026-10-15). The reviewer invokes no skill, and without the flag the
         # whole skills list, every skill's name and description, rides on each request of the run.
-        # Prompt caching OFF (claude-config#1573). On a Claude subscription a headless run writes its
-        # whole prompt to the ONE HOUR cache, billed at twice the input price. Measured over the 775
-        # reviews on the personal MacBook from 2026-10-16 to 23 (tools/cache-usage.py): 101M tokens
-        # written, and no review's first request read back more than 20k, the tool and system
-        # prefix (likely because the context lines that open the prompt differ per diff, so the
-        # lessons after them never match an earlier review's). In multiples of the input price,
-        # uncached cost 118M against an estimated 134M on the five minute lifetime and 204M as it
-        # was. DISABLE_PROMPT_CACHING is
-        # read by Claude Code 2.1.309 itself (checked in the binary and by a probe run that wrote 0).
-        cmd = ["env", "-u", "CLAUDECODE", "DISABLE_PROMPT_CACHING=1",
+        # Prompt caching on the FIVE MINUTE lifetime (claude-config#1599). On a Claude subscription a
+        # headless run otherwise writes to the ONE HOUR cache at twice the input price; five minutes
+        # costs 1.25 times it, and a read 0.1. #1573 switched caching off (DISABLE_PROMPT_CACHING=1)
+        # while the per diff lines opened the prompt, because then 775 reviews (2026-10-16 to 23)
+        # never read back more than the 20k tool and system prefix. With the identical text now in
+        # the system prompt (THE ORDER, above), a review started within five minutes of another's
+        # first request reads them back; reviews started together, the groups of a branch too large
+        # for one review, each write them, measured. The variable is
+        # read by Claude Code 2.1.309 itself (checked in the binary and by probe runs that wrote
+        # to ephemeral_5m only). --exclude-dynamic-system-prompt-sections moves the working folder,
+        # git status and the rest of the per machine sections out of the system prompt, which
+        # would otherwise differ for every repository and worktree ahead of the lessons.
+        cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
                "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
+               *(["--append-system-prompt", fixed] if fixed else []),
+               "--exclude-dynamic-system-prompt-sections",
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
                "--disable-slash-commands",
                "--disallowedTools", "ReportFindings"]
