@@ -206,6 +206,40 @@ if [ -z "$got" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a FU
 got="$(printf '' | bash "$LIB" files; echo "rc=$?")"
 if [ "$got" = "rc=0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: an empty diff lists nothing and exits 0, got [$got]"; fi
 
+# --- the review runner's context line, in each of its three outcomes ----------------------------
+# Named files, none, and a lib that cannot be read, which must say so rather than read as "none"
+# (L11): an unreadable list is not a finding that nothing handles failure.
+printf '' > "$WORK/empty.diff"
+review_line() {   # $1 diff file  $2 a lib path to use instead, or empty
+  python3 - "$DIR/lib/ai-review-run.py" "$1" "$2" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("air", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+if sys.argv[3]:
+    m.FAILURE_LIB = sys.argv[3]
+print(m.failure_line(sys.argv[2]))
+PY
+}
+line="$(review_line "$WORK/diff" "")"
+case "$line" in
+  *"strings and comments removed: src/send.ts, payload/hooks/poll.sh. Only these files"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: the review line names the failure handling files, got: $line" ;;
+esac
+line="$(review_line "$WORK/empty.diff" "")"
+case "$line" in
+  *"strings and comments removed: none. No file in this diff"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: the review line says none for a diff with no failure handling, got: $line" ;;
+esac
+line="$(review_line "$WORK/diff" "$WORK/no-such-lib.sh")"
+case "$line" in
+  *"could not be read"*"judge failure handling from the code itself"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: an unreadable lib is said to be unreadable, not read as none, got: $line" ;;
+esac
+case "$line" in
+  *"none."*) fail=$((fail+1)); echo "FAIL: an unreadable lib was reported as none" ;;
+  *) pass=$((pass+1)) ;;
+esac
+
 # --- one predicate: nothing else in payload carries its own copy (L613) -------------------------
 # The class this issue came from is a failure question answered by a hand written word list. A new
 # alternation of the failure words in a regex anywhere outside the lib is a second copy, and a second
