@@ -4999,14 +4999,22 @@ scan_work_names(){
     return 0
   fi
   list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
+  # A listing that failed, or that came back empty, is not a clean tree: it is a scan of nothing,
+  # and refuses like any scan that could not judge (L98).
+  local listing="" listed=0
   if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
-    # Listed by git, then only the files that exist: a deletion staged in the index is not content.
-    git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard 2>/dev/null \
-      | while IFS= read -r rel; do [ -f "$SYNC_REPO/$rel" ] && printf '%s\0' "$rel"; done > "$list"
+    if listing="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard 2>&1)"; then listed=1; fi
+    # Only the files that exist: a deletion staged in the index is not content.
+    [ "$listed" -eq 1 ] && printf '%s\n' "$listing" \
+      | while IFS= read -r rel; do [ -n "$rel" ] && [ -f "$SYNC_REPO/$rel" ] && printf '%s\0' "$rel"; done > "$list"
   else
-    ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null
+    if ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null; then listed=1; else listing="find could not list $SYNC_REPO/payload"; fi
   fi
-  if ! command -v python3 >/dev/null 2>&1; then
+  if [ "$listed" -ne 1 ]; then
+    out="the files this send would publish could not be listed: ${listing:0:300}"; rc=2
+  elif [ ! -s "$list" ]; then
+    out="listing the files this send would publish found none, so nothing could be scanned"; rc=2
+  elif ! command -v python3 >/dev/null 2>&1; then
     out="python3, which runs the work names scanner ($lib), is not on PATH"; rc=2
   else
     out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)"; rc=$?
