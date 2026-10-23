@@ -3583,7 +3583,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   through. The container is the domain half of an address, a masked account number, a test account
   wrapper, a reserved TLD, a staging URL.
   (overture#2839. A 2026-08-16 sweep replaced the domain half of every real address in a PUBLIC
-  repository's test data, so caseen.gaines@gmail.com became caseen.gaines@example.com and went on
+  repository's test data, so jordan.lee@gmail.com became jordan.lee@example.com and went on
   naming a real person, alongside 37 display names and 20 references to their personal domain that
   the sweep never looked at. The guard written afterwards judged an address by its TLD, so
   realpersonsname.example passes it cleanly, and two such were already in the tree from an earlier
@@ -6774,7 +6774,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#1891, 2026-09-04: the Team access waiting list rendered each person as one
   `flex flex-wrap items-center` row, so the access pill, the wait text and the "Check this address"
   flag started at a different position on every row, set by the length of the address before them.
-  `alice@example.com` against `bjohansson@example.com` is nine characters, so the three later
+  `a@example.com` against `bjohansson@example.com` is nine characters, so the three later
   fields sat nine characters apart. `flex-wrap` made it worse than a misalignment: on a narrow
   window the flag dropped to a second line on some rows and not others, so the rows stopped
   sharing a shape as well as a grid. Dan reported it from a screenshot of five real rows; two
