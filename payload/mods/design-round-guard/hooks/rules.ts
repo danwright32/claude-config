@@ -996,6 +996,17 @@ export const shellUnread = (file: string): string =>
   `The design round guard cannot read what a shell command leaves in ${file} before it runs, so it judged the whole file as a look change. A change that touches only comments there goes through unasked when it is made with the Edit tool, whose change the guard reads first: if that is all this change does, make it that way rather than asking Dan.`
 
 /**
+ * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
+ * with it cannot be read before it runs, so it was judged as a write of that file, as an Edit of it
+ * would be. Dan's Not a look change lets one such call through where the script only reads it.
+ */
+export const scriptUnread = (script: string, file: string): string =>
+  `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
+
+/** Why a settled design a script run is handed cannot be read before it runs (#1586), said through settledUnread. */
+export const SCRIPT_RECORD = "a script writes it, and what a script writes cannot be read before it runs: write it into this session's scratchpad and copy it in with a cp alone"
+
+/**
  * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files in
  * plain TypeScript (`mods/<mod>/hooks/<file>.ts`, `.mts` or `.cts`, never a `.d.ts`), which
  * drawsChange judges (#1275). As for isModHook, only a folder whose plugin.json makes it a mod counts.
