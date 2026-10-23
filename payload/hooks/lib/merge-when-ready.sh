@@ -153,7 +153,7 @@
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
 # measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+# MWR_VERIFY_GATE, MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
 # check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
