@@ -105,6 +105,12 @@ case "$*" in
     [ -e "$ST/base-hidden" ] && { echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     printf '{"ref":"refs/heads/main","object":{"sha":"%s","type":"commit"}}\n' "$(rd main-tip)"
     ;;
+  # The merged pull requests, as check-stale-worktrees.sh asks for them (claude-config#1521), already
+  # in the shape its --jq makes: merged-list holds "<branch><TAB><head><TAB><number>" lines.
+  "pr list --state merged"*)
+    [ -e "$ST/merged-list-fails" ] && { echo "gh: simulated failure" >&2; exit 1; }
+    cat "$ST/merged-list" 2>/dev/null
+    ;;
   "pr list"*)
     fail_read list
     jq -nc --rawfile s "$ST/stacked" '[$s | split("\n")[] | select(. != "") | {number: tonumber}]'
@@ -1309,6 +1315,120 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#1476 default: merged" "0" "$rc"
 check_eq "#1476 default: one heartbeat in three minutes of waiting" "1" "$(grep -c 'Still waiting' <<<"$out")"
 check "#1476 default: at two minutes" "[2m 00s] Head ${OLD:0:7}: waiting" "$(grep 'Still waiting' <<<"$out")"
+
+# =================================================================================================
+# 20. The merged branch's agent worktree is removed at the merge (claude-config#1521). On 2026-10-22
+#     this repository held 66 agent worktrees, 63 for merged pull requests, because the sweep ran
+#     only at a session's first prompt. Now the merge removes its own branch's worktree, through
+#     check-stale-worktrees.sh --just-merged, so every rule is the check's (L370): only the six hour
+#     recency is off. The caller's own folder is never removed, and nothing here can turn a merge
+#     that landed into a failure.
+# =================================================================================================
+G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+WREPO="$(cd "$WORKDIR" && pwd -P)/wtrepo"
+G init -q -b main "$WREPO"
+G -C "$WREPO" remote add origin https://github.com/acme/widget.git
+printf 'x\n' > "$WREPO/f.txt"; G -C "$WREPO" add f.txt; G -C "$WREPO" commit -qm base
+AGENT="$WREPO/.claude/worktrees/agent-x"
+wt_fresh(){ # a fresh state, and a fresh agent worktree on feat/x whose head the merged list names
+  fresh "$OLD" 0 "$GREEN"
+  G -C "$WREPO" worktree remove --force "$AGENT" >/dev/null 2>&1
+  G -C "$WREPO" branch -q -D feat/x >/dev/null 2>&1
+  mkdir -p "$WREPO/.claude/worktrees"
+  G -C "$WREPO" worktree add -q -b feat/x "$AGENT" >/dev/null 2>&1
+  printf 'feat/x\t%s\t7\n' "$(G -C "$AGENT" rev-parse HEAD)" > "$ST/merged-list"
+}
+wrun(){ (cd "$WREPO" && bash "$HELPER" "$@" 2>&1); }
+there(){ [ -d "$AGENT" ] && echo yes || echo no; }
+CAN_SEE_USE=0
+{ command -v lsof >/dev/null 2>&1 || [ -d /proc/self/cwd ]; } && CAN_SEE_USE=1
+
+# Merged, clean, and every file in it minutes old: removed, its branch kept.
+wt_fresh
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a merge whose branch has a clean agent worktree succeeds" "0" "$rc"
+check "#1521 and says it merged" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1521 the worktree is removed at the merge, although everything in it is new" "no" "$(there)"
+check "#1521 and it says so, in the check's words" "removed agent-x [feat/x]: PR #7 merged" "$out"
+check_eq "#1521 its local branch is kept" "0" "$(G -C "$WREPO" rev-parse -q --verify feat/x >/dev/null; echo $?)"
+
+# Control: a repository with no agent worktree for the branch says nothing about worktrees.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1521 control: a merge with no agent worktree merges" "0" "$rc"
+check_not "#1521 control: and says nothing about a worktree" "worktree" "$out"
+check_eq "#1521 control: nor asks GitHub for the merged list" "0" "$(count gh-calls 'pr list --state merged')"
+
+# Uncommitted work keeps it, and the reason is said.
+wt_fresh; printf 'half done\n' > "$AGENT/wip.txt"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a dirty worktree does not stop the merge" "0" "$rc"
+check_eq "#1521 a worktree holding uncommitted work is kept" "yes" "$(there)"
+check "#1521 saying why" "keeping agent-x [feat/x]: it holds 1 uncommitted change(s)" "$out"
+check_eq "#1521 with the work still in it" "half done" "$(cat "$AGENT/wip.txt")"
+
+# Commits the pull request never held keep it.
+wt_fresh; G -C "$AGENT" commit -q --allow-empty -m "after the merge"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 an unmerged commit does not stop the merge" "0" "$rc"
+check_eq "#1521 a worktree with commits the pull request never held is kept" "yes" "$(there)"
+check "#1521 saying why" "keeping agent-x [feat/x]: it has commits PR #7 never held" "$out"
+
+# A process standing in it keeps it.
+wt_fresh
+(cd "$AGENT" && exec sleep 120) &
+WBUSY=$!
+out="$(wrun 7 --squash)"; rc=$?
+kill "$WBUSY" 2>/dev/null; wait "$WBUSY" 2>/dev/null
+check_eq "#1521 a busy worktree does not stop the merge" "0" "$rc"
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  check_eq "#1521 a worktree a running process stands in is kept" "yes" "$(there)"
+  check "#1521 saying why" "keeping agent-x [feat/x]: a running process is working in it" "$out"
+else
+  echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so a busy worktree at the merge cannot be tested"
+fi
+
+# The caller's own folder: an agent merging from inside its worktree keeps it, and says the sweep
+# will take it, rather than deleting the floor under itself.
+wt_fresh
+out="$(cd "$AGENT" && bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a merge run from inside the worktree succeeds" "0" "$rc"
+check_eq "#1521 the caller's own worktree is never removed" "yes" "$(there)"
+check "#1521 saying it is the folder the merge was run from, left to the sweep" "is the folder this merge was run from" "$out"
+check "#1521 and naming the sweep that takes it later" "stale worktree sweep" "$out"
+mkdir -p "$AGENT/sub"
+out="$(cd "$AGENT/sub" && bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 so is one run from a folder inside it" "yes" "$(there)"
+rmdir "$AGENT/sub"
+
+# A removal that cannot be judged or breaks never turns the merge into a failure.
+wt_fresh; : > "$ST/merged-list-fails"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a merged list GitHub will not give still leaves a merge that landed at exit 0" "0" "$rc"
+check "#1521 and the merge is still said" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+check "#1521 saying it could not be judged" "could not read the merged pull requests" "$out"
+wt_fresh
+printf '#!/usr/bin/env bash\necho "line 3: syntax error" >&2\nexit 3\n' > "$WORKDIR/broken-check.sh"
+out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/broken-check.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a check that breaks still leaves the merge at exit 0" "0" "$rc"
+check "#1521 and says the check broke, with what it said" "syntax error" "$out"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+wt_fresh
+out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/not-there.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a check that is missing still leaves the merge at exit 0" "0" "$rc"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+
+# Merged with the branch left in place (stop 4) still removes the worktree, and so does a run that
+# finds the pull request already merged.
+wt_fresh; printf '%s' "$NEW" > "$ST/tip-after-merge"
+out="$(wrun 7 --squash --delete-branch)"; rc=$?
+check_eq "#1521 merged with the branch left in place exits 4 as before" "4" "$rc"
+check_eq "#1521 and the worktree is still removed" "no" "$(there)"
+wt_fresh; : > "$ST/merged"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a pull request found already merged exits 0" "0" "$rc"
+check_eq "#1521 and its worktree is removed too" "no" "$(there)"
 
 echo
 echo "passed: $pass, failed: $fail"

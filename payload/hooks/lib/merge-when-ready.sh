@@ -121,7 +121,12 @@
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
 # with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_REVIEW_LIB.
+# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+#
+# AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
+# check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
+# (claude-config#1521, see tidy_worktree). What it removed, or why it kept it, is said after the
+# merge's own line, and nothing about it changes the exit.
 
 set -uo pipefail
 
@@ -176,6 +181,9 @@ read_key="${PR_REVIEW_READ:-}"
 case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key is lowercase hex, copied from the review's refusal)." ;; esac
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || usage "run it from a checkout of the repository: the lessons review reads the branch from one."
+# Where the caller stands, read before this moves, so the merged branch's worktree is never removed
+# from under the session that ran it (claude-config#1521, see tidy_worktree).
+caller_dir="$(pwd -P)"
 cd "$top" || usage "could not enter $top."
 
 # shellcheck source=merge-target.sh
@@ -197,7 +205,11 @@ t0="$(now)"
 dur(){ if [ "$1" -ge 60 ]; then printf '%dm %02ds' "$(($1 / 60))" "$(($1 % 60))"; else printf '%ds' "$1"; fi; }
 elapsed(){ dur $(( $(now) - t0 )); }
 say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
-stop(){ say "$2"; exit "$1"; }
+# Every stop after a merge that landed (finish_branch, and a pull request found already merged)
+# tidies the merged branch's agent worktree once its own line is said. The tidy is never able to
+# change the exit: a merge that landed is reported as landed whatever the tidy found.
+merged_now=""
+stop(){ say "$2"; [ -z "$merged_now" ] || { merged_now=""; tidy_worktree || true; }; exit "$1"; }
 
 account=""
 gh_as(){
@@ -409,8 +421,65 @@ retarget(){   # $1 = pull request number
   printf '%s, exit %s' "${out:0:300}" "$rc"
   return 1
 }
+# THE MERGED BRANCH'S AGENT WORKTREE GOES AT THE MERGE (claude-config#1521). On 2026-10-22 this
+# repository held 66 agent worktrees, about 2.5 GB, 63 of them for merged pull requests: the sweep
+# (check-stale-worktrees.sh, started by stale-worktree-nudge.sh) ran only at a session's first
+# prompt, and one coordinator session dispatched over 60 builders in three days without another
+# session starting. So once the merge has landed, the worktree under <repo>/.claude/worktrees/ whose
+# branch is the one just merged is handed to check-stale-worktrees.sh --just-merged, which applies
+# every one of its own rules to that one worktree (merged holding every commit, nothing uncommitted
+# or untracked, no running process in it, no live agent's lock, the progress marker) except the six
+# hour recency, which a worktree merged a moment ago can never pass. The rules are the check's,
+# never a copy here (L370), and its branch is never deleted. What this adds is the one fact only the
+# caller has: the folder it was run from. An agent merging from inside its own worktree keeps it,
+# because removing it would take the floor from under the session still standing in it; the sweep
+# takes it later. Nothing here can change the exit: the merge has landed, and a worktree that could
+# not be judged or removed is said and left for the sweep.
+WT_CHECK="${MWR_WORKTREE_CHECK:-$MWR_HOOKS/check-stale-worktrees.sh}"
+tidy_worktree(){
+  local all line cur="" main="" wt="" real out rc tok="" said_any=""
+  [ -n "${branch:-}" ] || return 0
+  all="$(git -C "$top" worktree list --porcelain 2>/dev/null)" || return 0
+  # The first worktree git lists is the main checkout, whose .claude/worktrees holds the agents'.
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) cur="${line#worktree }"; [ -n "$main" ] || main="$cur" ;;
+      "branch refs/heads/$branch") case "$cur" in "$main/.claude/worktrees/"*) wt="$cur" ;; esac ;;
+    esac
+  done <<<"$all"
+  [ -n "$wt" ] || return 0
+  real="$(cd "$wt" 2>/dev/null && pwd -P)" || real="$wt"
+  case "$caller_dir/" in
+    "$real/"*|"$wt/"*)
+      say "Kept the agent worktree $wt: it is the folder this merge was run from, so removing it would take the floor from under the session that ran it. The stale worktree sweep removes it once nothing is working in it."
+      return 0 ;;
+  esac
+  if [ ! -f "$WT_CHECK" ]; then
+    say "Kept the agent worktree $wt: $WT_CHECK, which judges whether it can go, is missing."
+    return 0
+  fi
+  # The same account the merge used, so the merged list is read as the merge was.
+  [ -z "$account" ] || tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
+  if [ -n "$tok" ]; then
+    out="$(cd "$main" && GH_TOKEN="$tok" bash "$WT_CHECK" --remove --just-merged "$wt" "$main" 2>&1)"; rc=$?
+  else
+    out="$(cd "$main" && bash "$WT_CHECK" --remove --just-merged "$wt" "$main" 2>&1)"; rc=$?
+  fi
+  case "$rc" in
+    0|1)
+      while IFS= read -r line; do
+        case "$line" in "  "*) say "Agent worktree: ${line#  }"; said_any=1 ;; esac
+      done <<<"$out"
+      [ -n "$said_any" ] || say "Kept the agent worktree $wt: check-stale-worktrees.sh said nothing about it (exit $rc)." ;;
+    2) say "Kept the agent worktree $wt: whether it can go could not be judged ($(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)). The stale worktree sweep looks at it again." ;;
+    *) say "Kept the agent worktree $wt: check-stale-worktrees.sh broke (exit $rc, which it never returns on purpose: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-300))." ;;
+  esac
+  return 0
+}
+
 finish_branch(){   # $1 = the sentence saying it merged; always stops
   local said="$1" left n why moved="" failed="" del rrc
+  merged_now=1
   [ -n "$want_delete" ] || stop 0 "$said."
   if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
     stop 0 "$said. Its branch $branch is in a fork, not in $slug, so no branch was deleted."
@@ -568,6 +637,7 @@ while :; do
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
     MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+            merged_now=1
             stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
     OPEN) ;;
     *) stop 1 "Stopped: pull request #$pr in $slug is ${state:-in an unknown state}, not open. Nothing was merged." ;;

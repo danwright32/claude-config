@@ -477,6 +477,65 @@ else
 fi
 kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
 
+# --- one named worktree, just merged (claude-config#1521) --------------------
+# merge-when-ready.sh asks about the one worktree of the branch it has just merged, the moment the
+# merge lands, so the six hour recency rule is off: every file in that worktree is minutes old by
+# construction. Every other rule still holds, and they are this script's, never a copy (L370). The
+# worktrees here are NOT aged, which is the point: the sweep would keep every one of them.
+JREPO="$TMP/justmerged"; mkdir -p "$JREPO"; G -C "$JREPO" init -q -b main
+printf 'x\n' >"$JREPO/f.txt"; G -C "$JREPO" add f.txt; G -C "$JREPO" commit -qm base
+JWT="$JREPO/.claude/worktrees"; mkdir -p "$JWT"
+JREPO_REAL="$(cd "$JREPO" && pwd -P)"
+jadd(){ G -C "$JREPO" worktree add -q -b "$1" "$JWT/$2" >/dev/null 2>&1; merged "$1" "$JWT/$2" HEAD "$3"; }
+jadd fix/700-fresh agent-fresh 700
+jadd fix/701-other agent-other 701; find "$JWT/agent-other" -exec touch -t 202601010000 {} + 2>/dev/null
+jadd fix/702-jdirty agent-jdirty 702; printf 'half done\n' >"$JWT/agent-jdirty/wip.txt"
+jadd fix/703-jnewer agent-jnewer 703; G -C "$JWT/agent-jnewer" commit -q --allow-empty -m "after the merge"
+jadd fix/704-jbusy agent-jbusy 704
+(cd "$JWT/agent-jbusy" && exec sleep 120) &
+JBUSY=$!
+trap 'kill "$JBUSY" 2>/dev/null; kill "$LIVE" 2>/dev/null; chmod -R u+w "$TMP" 2>/dev/null; kill "$BUSY" 2>/dev/null; rm -rf "$TMP"' EXIT
+jgone(){ [ -e "$JWT/$1" ] && echo no || echo yes; }
+
+# Control: the sweep keeps a worktree this fresh, so what removes it below is the mode, not the age.
+# In report mode, so the aged one beside it is still there for the case after.
+run "$JREPO"
+check "control: the sweep keeps a just merged worktree for its recency" "keeping agent-fresh [fix/700-fresh]: something in it changed in the last 360 minutes" "$OUT"
+check_eq "control: and it is still there" no "$(jgone agent-fresh)"
+
+run --remove --just-merged "$JREPO_REAL/.claude/worktrees/agent-fresh" "$JREPO"
+check "#1521 a just merged, clean worktree is removed although every file in it is new" "removed agent-fresh [fix/700-fresh]: PR #700 merged" "$OUT"
+check_eq "#1521 its folder is gone" yes "$(jgone agent-fresh)"
+check_eq "#1521 its branch is kept" 0 "$(G -C "$JREPO" rev-parse -q --verify fix/700-fresh >/dev/null; echo $?)"
+check_not "#1521 no other worktree is judged, so none is named" "agent-other" "$OUT"
+check_eq "#1521 and the other landed one, aged and removable by the sweep, is left for the sweep" no "$(jgone agent-other)"
+check_eq "#1521 the merged pull requests are read once" 1 "$(grep -c 'pr list' "$GH_CALLS" || true)"
+check "#1521 the summary counts the one worktree judged" "removed 1 of 1 agent worktree(s)" "$OUT"
+
+run --remove --just-merged "$JWT/agent-jdirty" "$JREPO"
+check "#1521 a just merged worktree holding uncommitted work is kept, saying so" "keeping agent-jdirty [fix/702-jdirty]: it holds 1 uncommitted change(s)" "$OUT"
+check_eq "#1521 with its work still in it" "half done" "$(cat "$JWT/agent-jdirty/wip.txt")"
+run --remove --just-merged "$JWT/agent-jnewer" "$JREPO"
+check "#1521 a worktree with commits its pull request never held is kept" "keeping agent-jnewer [fix/703-jnewer]: it has commits PR #703 never held" "$OUT"
+check_eq "#1521 and is still there" no "$(jgone agent-jnewer)"
+run --remove --just-merged "$JWT/agent-jbusy" "$JREPO"
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  check "#1521 a just merged worktree a running process stands in is kept" "keeping agent-jbusy [fix/704-jbusy]: a running process is working in it" "$OUT"
+  check_eq "#1521 and is still there" no "$(jgone agent-jbusy)"
+else
+  echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so a busy just merged worktree cannot be tested"
+fi
+kill "$JBUSY" 2>/dev/null; wait "$JBUSY" 2>/dev/null
+
+# A folder that is not one of the repository's agent worktrees is refused, not reported clean (L98).
+run --remove --just-merged "$JREPO_REAL" "$JREPO"
+check_eq "#1521 a folder that is not an agent worktree exits 2" 2 "$RC"
+check "#1521 and says why nothing was judged" "is not an agent worktree git lists under" "$OUT"
+run --remove --just-merged "$JWT/agent-nothing-here" "$JREPO"
+check_eq "#1521 so does a worktree git does not list" 2 "$RC"
+run --just-merged
+check_eq "#1521 --just-merged with no folder named is refused" 2 "$RC"
+
 kill "$BUSY" 2>/dev/null
 echo
 echo "passed: $pass, failed: $fail"

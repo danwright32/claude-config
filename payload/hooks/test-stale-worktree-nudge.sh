@@ -168,6 +168,30 @@ before="$(calls)"
 STUB_RC=1 fire s3; STUB_RC=1 fire s3; settle s3
 check_eq "a session that has started its run starts no other, at any price" "$before" "$(calls)"
 
+# --- and again within a long session, every three hours (claude-config#1521) ---
+# One coordinator session ran for three days, dispatched over 60 builders, and never started the
+# sweep after its first prompt, so 63 merged worktrees piled up. A session now starts it again once
+# three hours have passed since its last start, on the injected clock (L524), and not before.
+T0="$(date +%s)"
+STUB_RC=0 fire r1 STALE_WT_NOW="$T0"; settle r1
+before="$(calls)"
+STUB_RC=0 fire r1 STALE_WT_NOW="$((T0 + 179 * 60))"; settle r1
+check_eq "#1521 a prompt under three hours after the session's run starts no other" "$before" "$(calls)"
+STUB_RC=0 fire r1 STALE_WT_NOW="$((T0 + 181 * 60))"; settle r1
+check_eq "#1521 the first prompt past three hours starts the sweep again" "$((before + 1))" "$(calls)"
+STUB_RC=0 fire r1 STALE_WT_NOW="$((T0 + 182 * 60))"; settle r1
+check_eq "#1521 and the three hours count from that run, not the first" "$((before + 1))" "$(calls)"
+STUB_RC=0 fire r1 STALE_WT_NOW="$((T0 + 362 * 60))"; settle r1
+check_eq "#1521 so the next starts three hours after it" "$((before + 2))" "$(calls)"
+# A record the earlier nudge wrote holds no start time, so its age cannot be read: the next prompt
+# starts a run and records one, rather than never running again in a session open across the change.
+: >"$STATE_DIR/claude-stale-worktrees-$(skey r2).state"
+before="$(calls)"
+STUB_RC=0 fire r2 STALE_WT_NOW="$T0"; settle r2
+check_eq "#1521 a session record with no start time starts a run" "$((before + 1))" "$(calls)"
+STUB_RC=0 fire r2 STALE_WT_NOW="$((T0 + 60))"; settle r2
+check_eq "#1521 and records one, so the prompt after it starts none" "$((before + 1))" "$(calls)"
+
 # --- the next session hears what the last one never came back for ---------
 STUB_RC=1 fire s4; settle s4
 before="$(calls)"
