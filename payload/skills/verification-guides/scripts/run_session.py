@@ -177,6 +177,13 @@ def wait_for_supervisor(rdir, timeout_s):
         f.close()
 
 
+def stop_wait_s(timeouts):
+    """How long a supervisor's stop may take: the project's stop command and serve's group, each up
+    to stop_s, plus settling egress (the end canary and the report stream), with room besides."""
+    return (timeouts["stop_s"] * 2 + 30
+            + egress.finish_budget_s(timeouts.get("egress_s", v.TIMEOUT_DEFAULTS["egress_s"])))
+
+
 def request_stop(rdir, reason):
     try:
         fd = os.open(os.path.join(rdir, "stop-reason"), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
@@ -530,7 +537,7 @@ def start(repo, sha, areas_csv):
     os.close(r_fd)
     if not said.startswith(b"ok"):
         exited = sup.poll()
-        wait_for_supervisor(rdir, timeout_s=120)
+        wait_for_supervisor(rdir, timeout_s=stop_wait_s(doc["timeouts"]))
         v.fail("supervisor-failed", "the supervisor did not start serve (exit %s): %s"
                % (exited, tail(os.path.join(rdir, "supervisor.log"))))
 
@@ -550,7 +557,7 @@ def start(repo, sha, areas_csv):
             nap(t["ready_interval_s"])
     if not ready:
         request_stop(rdir, "ready_failed")
-        wait_for_supervisor(rdir, timeout_s=t["stop_s"] * 2 + 30)
+        wait_for_supervisor(rdir, timeout_s=stop_wait_s(t))
         v.fail("ready-timeout", "the ready command never succeeded in %d attempts over %ss; last output: %s;"
                " serve.log: %s" % (attempts, t["ready_s"], last[-200:] or "(none)", tail(os.path.join(rdir, "serve.log"))))
 
@@ -610,8 +617,8 @@ def stop(rid):
     if not rec.get("stopped_at"):
         request_stop(rdir, "stop")
         with open(os.path.join(rdir, "areas.json")) as f:
-            stop_s = json.load(f)["timeouts"]["stop_s"]
-        wait_for_supervisor(rdir, timeout_s=stop_s * 2 + 30)
+            timeouts = json.load(f)["timeouts"]
+        wait_for_supervisor(rdir, timeout_s=stop_wait_s(timeouts))
         rec = read_receipt(rdir)
         if not rec.get("stopped_at"):
             # The supervisor is gone and stopped nothing: killed outright. Do its work here, holding

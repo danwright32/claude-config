@@ -18,7 +18,8 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     the port but spell the address as `*`, so each report is NAMED by reading that process's open
     sockets with `lsof` the moment it arrives. A connection that closed before then stays in the
     receipt as unnamed, and an unnamed connection is never clean (fail closed).
-  * The stream is proved live by a CANARY, a process under the same profile that connects a UDP
+  * The stream is proved live by a CANARY, a process under a profile of its own (tagged apart, so a
+    reused pid can never pass a real connection off as the canary's) that connects a UDP
     socket to 198.51.100.1 (TEST-NET-2: reserved, and a UDP connect sends no packet at all). The
     monitor counts as started only once the start canary's report arrives, and the run's verdict
     counts only once an end canary, fired after serve's whole process group is gone, has arrived.
@@ -54,6 +55,14 @@ LSOF = "/usr/sbin/lsof"
 MONITOR = "sandbox-exec reports read with log stream, named with lsof"
 CANARY_RETRY_S = 1.0  # how long one canary is waited for before another is fired: never a fixed wait
 STREAM_STOP_S = 10
+CANARY_RUN_MAX_S = 30  # one canary process, which a loaded Mac can take seconds to start
+
+
+def finish_budget_s(egress_s):
+    """The longest Monitor.finish can take: canaries until egress_s, the last one started just before
+    it and running its whole limit, then stopping the stream and joining its reader (which may be in
+    the middle of one lsof). Whoever waits for a supervisor's stop adds this (the #1571 review)."""
+    return egress_s + CANARY_RUN_MAX_S + 3 * STREAM_STOP_S
 CANARY = ("import os, socket\n"
           "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\n"
           "s.connect(('198.51.100.1', 9))\n"
@@ -123,6 +132,11 @@ class Monitor:
     def __init__(self, rdir, receipt_id, allow, egress_s):
         self.rdir = rdir
         self.tag = "vg-egress-" + receipt_id
+        # The canary runs under its own profile with its own tag, so a canary report is told apart by
+        # its TAG: a canary exits at once, and macOS may hand its pid to a serve or drive process,
+        # whose connections must never be discarded as the canary's.
+        self.canary_tag = self.tag + "-canary"
+        self.canary_profile = os.path.join(rdir, "egress-canary.sb")
         self.allow = list(allow)
         self.egress_s = egress_s
         self.profile = os.path.join(rdir, "egress.sb")
@@ -133,8 +147,7 @@ class Monitor:
         self.thread = None
         self.cond = threading.Condition()
         self.reports = []
-        self.seen_pids = set()
-        self.canaries = set()
+        self.canaries_seen = set()
         self.chatter = []
         self.stream_ended = False
         self.failure = None
@@ -164,6 +177,8 @@ class Monitor:
                               " sandbox" % self.sandbox)
         with open(self.profile, "w") as f:
             f.write(profile_text(self.tag))
+        with open(self.canary_profile, "w") as f:
+            f.write(profile_text(self.canary_tag))
         self.allowed_ips, self.unresolved = resolve(self.allow)
         predicate = 'sender == "Sandbox" AND eventMessage CONTAINS "%s"' % self.tag
         try:
@@ -197,19 +212,20 @@ class Monitor:
                     self.chatter = (self.chatter + [line[:200]])[-5:]
                     continue
                 m = REPORT.match(ev.get("eventMessage") or "") if isinstance(ev, dict) else None
-                if not m or m.group(5) != self.tag:
+                if not m or m.group(5) not in (self.tag, self.canary_tag):
                     continue
                 pid, port = int(m.group(3)), int(m.group(4))
-                with self.cond:
-                    self.seen_pids.add(pid)
-                    self.cond.notify_all()
-                    canary = pid in self.canaries
+                if m.group(5) == self.canary_tag:
+                    with self.cond:
+                        self.canaries_seen.add(pid)
+                        self.cond.notify_all()
+                    self._event({"event": "canary", "at": v.utc_now(), "pid": pid})
+                    continue
                 rec = {"event": "report", "at": v.utc_now(), "pid": pid, "process": m.group(2), "port": port,
                        "count": int(m.group(1) or 1)}
-                if not canary:
-                    rec["addresses"], why = self._name(pid, port)
-                    if why:
-                        rec["name_error"] = why
+                rec["addresses"], why = self._name(pid, port)
+                if why:
+                    rec["name_error"] = why
                 with self.cond:
                     self.reports.append(rec)
                 self._event(rec)
@@ -242,18 +258,15 @@ class Monitor:
 
     def _fire_canary(self):
         try:
-            r = subprocess.run([self.sandbox, "-f", self.profile, sys.executable, "-c", CANARY],
-                               capture_output=True, text=True, timeout=30)
+            r = subprocess.run([self.sandbox, "-f", self.canary_profile, sys.executable, "-c", CANARY],
+                               capture_output=True, text=True, timeout=CANARY_RUN_MAX_S)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise Unavailable("the canary could not run under %s: %s" % (self.sandbox, e))
         out = r.stdout.strip()
         if r.returncode != 0 or not out.isdigit():
             raise Unavailable("the canary could not run under %s (exit %s): %s"
                               % (self.sandbox, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
-        pid = int(out)
-        with self.cond:
-            self.canaries.add(pid)
-        return pid
+        return int(out)
 
     def _canary_seen(self):
         """Fire canaries until one's report arrives, the stream ends, or egress_s passes."""
@@ -261,9 +274,9 @@ class Monitor:
         while time.monotonic() < deadline:
             pid = self._fire_canary()
             with self.cond:
-                self.cond.wait_for(lambda: pid in self.seen_pids or self.stream_ended,
+                self.cond.wait_for(lambda: pid in self.canaries_seen or self.stream_ended,
                                    timeout=max(0.0, min(CANARY_RETRY_S, deadline - time.monotonic())))
-                if pid in self.seen_pids:
+                if pid in self.canaries_seen:
                     return True
                 if self.stream_ended:
                     return False
@@ -333,7 +346,7 @@ class Monitor:
         self.unresolved = sorted(set(self.unresolved) | set(unresolved))
         dests, unnamed = {}, {}
         with self.cond:
-            reports = [r for r in self.reports if r["pid"] not in self.canaries]
+            reports = list(self.reports)
         for r in reports:
             if r.get("addresses"):
                 for addr in r["addresses"]:
