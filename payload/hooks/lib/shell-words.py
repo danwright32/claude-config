@@ -39,6 +39,11 @@ hook that slow is killed and the command goes unscreened.
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
+  shell-words.py data-blanked '<path> <subcommand>'...   stdin: a whole command
+      when the command is exactly `bash <path> <subcommand> <words>` for one of the declared pairs
+      (path under ~/), it printed with every argument after the subcommand that is quoted whole
+      replaced by '', exit 0; for any other shape nothing, exit 1 (claude-config#1574). The reader
+      check-wrapped-commands.sh asks before refusing a script file; see data_blanked().
 
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
@@ -1297,8 +1302,8 @@ def main(argv):
     elif mode == "bare":
         sys.stdout.write(bare(data))
     elif mode == "data-blanked":
-        # The declared script subcommands are the arguments; exit 1, printing nothing, for any other
-        # shape (claude-config#1574).
+        # stdin is the command; each argument after the mode is one declared "<path> <subcommand>"
+        # pair. Exit 1, printing nothing, for any other shape (claude-config#1574).
         shown = data_blanked(data, argv[2:], os.environ.get("HOME", ""))
         if shown is None:
             return 1

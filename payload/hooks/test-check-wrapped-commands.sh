@@ -180,6 +180,15 @@ declared="$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK" | grep -c '^  "')"
 check_eq "#1574 one script subcommand is declared as taking data, the spool's note" "1" "$declared"
 check "#1574 and it is the spool's note" '  "~/.claude/hooks/lib/issue-spool.sh note"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
 
+# The reader's module docstring is the list of every mode its main accepts, data-blanked included,
+# so a mode added without its entry fails here rather than going unlisted.
+unlisted="$(python3 -c '
+import ast, re, sys
+src = open(sys.argv[1]).read()
+doc = ast.get_docstring(ast.parse(src)) or ""
+print(" ".join(m for m in re.findall(r"mode == \"([a-z-]+)\"", src) if "shell-words.py " + m not in doc) or "none")' "$DIR/lib/shell-words.py")"
+check_eq "#1574 every mode of lib/shell-words.py is listed in its docstring" "none" "$unlisted"
+
 # A reader that cannot judge the note is a refusal, never a pass: here it lacks the mode that reads
 # the quoting, as an older shell-words.py installed beside a newer guard would.
 OLDREADER="$WORKDIR/oldreader"; mkdir -p "$OLDREADER/lib"
