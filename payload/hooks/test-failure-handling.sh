@@ -153,6 +153,23 @@ code_is payload/hooks/x.sh 'echo "retry $n in ${dir} via $(retry_cmd "a b")" # l
 code_is payload/hooks/x.sh "awk '{ print \$1 }' f" "awk '{ print \$1 }' f" "shell keeps single quoted programs as code"
 code_is README.md "catch (e) { retry() }" "" "prose carries no code"
 
+# claude-config#1540. A shell quoted string is a program only when the command it belongs to runs
+# one (awk, sed, a shell or interpreter, eval, trap, ssh). Handed to any other command it is data:
+# the #1477 push was told its suite "waits a fixed time" because its fixture arguments, in single
+# quotes, say sleep, and the same arguments counted as retries for the same reason.
+code_is payload/hooks/test-x.sh "silent fh_retry p.sh 'sleep 1   # exponential backoff, retry' \"the comment\"" "silent fh_retry p.sh 'S' \"S\"" "a single quoted argument to an ordinary command is data"
+code_is payload/hooks/test-x.sh "R=\$(make_repo sleepy 'sleep 2' hooks/test-lock.sh)" "R=\$(make_repo sleepy 'S' hooks/test-lock.sh)" "a fixture handed to a helper inside a substitution is data"
+code_is payload/hooks/x.sh "bash -c 'sleep 5; echo \"done\"' &" "bash -c 'sleep 5; echo \"done\"' &" "a program handed to bash -c stays code"
+code_is payload/hooks/x.sh 'timeout 9 sh -c "sleep 5 || exit 1"' 'timeout 9 sh -c "sleep 5 || exit 1"' "a double quoted program handed to sh -c stays code"
+code_is payload/hooks/x.sh "trap 'rm -rf \"\$W\"' EXIT" "trap 'rm -rf \"\$W\"' EXIT" "a trap's program stays code"
+code_is payload/hooks/x.sh "printf '%s\\n' \"\$x\" | /usr/bin/python3 -c 'import time; time.sleep(2)'" "printf 'S' \"\$x\" | /usr/bin/python3 -c 'import time; time.sleep(2)'" "each command of a pipeline is judged on its own, an interpreter by its path too"
+code_is payload/hooks/x.sh "echo 'a\\' sleep 5" "echo 'S' sleep 5" "a backslash does not escape inside shell single quotes"
+# A line can CLOSE a single quoted program opened above the hunk. Its quote then reads as an opening
+# that never closes, and what follows it is the code that runs the program (measured: claude-config
+# #1516 test-check-add-scope.sh lost `RC=$?` that way). An unclosed single quote keeps its text as code.
+code_is payload/hooks/test-x.sh "' \"\$1\" | env S=1 bash \"\$HOOK\" 2>&1)\"; RC=\$?" "' \"\$1\" | env S=1 bash \"\$HOOK\" 2>&1)\"; RC=\$?" "the rest of a line closing a program opened above stays code"
+fires fh_handles_failure payload/hooks/test-x.sh "' \"\$f\" > \"\$out\" || exit 1" "an error branch after the close of an awk program opened above"
+
 # --- the diff reader every gate calls --------------------------------------------------------------
 cat > "$WORK/diff" <<'DIFF'
 diff --git a/src/send.ts b/src/send.ts

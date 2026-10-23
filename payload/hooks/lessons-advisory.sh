@@ -225,14 +225,40 @@ TRIG_PATH=(
 # before, so nothing that existed changes shape.
 TRIG_FN=(
   'trig_error_path_returns_empty'
-  ''
+  'trig_background_work'
   ''
   'trig_destructive_data_op'
   'trig_retry_or_failure_handling'
   ''
-  ''
+  'trig_fixed_wait'
   'trig_workflow_job_without_timeout'
 )
+
+# A trigger's regex matched against the added lines READ AS CODE, through the one stripper the
+# failure triggers use (lib/failure-handling.sh, L370): string contents and comments removed, and a
+# shell string kept only when it is a program handed to something that runs it.
+trig_code_matches(){   # $1 = a file holding the added lines  $2 = the path  $3 = the regex
+  # A here-string, never a pipe: `grep -q` leaving on its first match kills the writer with SIGPIPE,
+  # and under pipefail a large file then reads as no match (L183).
+  grep -Eqi -- "$3" <<< "$(fh_code_only "$2" < "$1")"
+}
+
+# The background work and fixed wait triggers were word lists over raw added lines, so the words
+# alone fired them: the #1477 push was told its suite "waits a fixed time" because its fixture
+# arguments say sleep (claude-config#1540). Read as code, a sleep, a setTimeout, a setInterval or a
+# queue in a string or a comment is silent, and the same call in code fires as before. What this can
+# now miss is a wait or a schedule held ONLY inside a string some other code runs: a command string
+# given to subprocess, exec or system, a script a test writes out with printf or an escaped heredoc
+# and runs later, a shell string run through a variable or piped into bash, and a schedule named only
+# by a string or a JSON key (`add_job(fn, "cron")`, `"crons": [...]`). Measured on 150 claude-config
+# and 60 Overture merges before it shipped; the pull request records what each dropped flag was.
+trig_background_work(){   # $1 = a file holding the added lines  $2 = the path
+  trig_code_matches "$1" "$2" "${TRIG_RE1[1]}"
+}
+
+trig_fixed_wait(){   # $1 = a file holding the added lines  $2 = the path
+  trig_code_matches "$1" "$2" "${TRIG_RE1[6]}"
+}
 
 # The two failure triggers ask lib/failure-handling.sh, the predicate the push gate and the lessons
 # review read too (claude-config#1477, L261, L370). They were word lists over every added line, so a
@@ -242,9 +268,7 @@ TRIG_FN=(
 # beside a catch is matched on those same code only lines, so a "return []" in a comment is not one.
 trig_error_path_returns_empty(){   # $1 = a file holding the added lines  $2 = the path
   fh_catch "$2" "$1" || return 1
-  # A here-string, never a pipe: `grep -q` leaving on its first match kills the writer with SIGPIPE,
-  # and under pipefail a large file then reads as no match (L183).
-  grep -Eqi -- "${TRIG_RE2[0]}" <<< "$(fh_code_only "$2" < "$1")"
+  trig_code_matches "$1" "$2" "${TRIG_RE2[0]}"
 }
 
 trig_retry_or_failure_handling(){   # $1 = a file holding the added lines  $2 = the path
