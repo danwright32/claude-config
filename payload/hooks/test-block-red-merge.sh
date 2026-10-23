@@ -1559,8 +1559,8 @@ rm -f "$f"
 
 echo "block-red-merge: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
 # Asked by merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a
-# retry 20 seconds out is refused inside this gate's own 12 and made inside 60. A read that never
-# answers still refuses either way.
+# retry 20 seconds out is refused inside this gate's own 12 and made inside 60, settings the test
+# chooses, not a measurement. A read that never answers still refuses either way.
 : > "$BRM_SLEEP_LOG"
 f=$(fails_file "$RESET")
 out=$(BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")

@@ -39,8 +39,8 @@
 #                      transport or GitHub's own server failed, rather than
 #                      GitHub answering no
 #   mt_gh_read_class the one reading of a failed gh read every reader returns
-#                      through: transient, GitHub refusing the sign in (a 401,
-#                      MT_SIGNIN_RC, #1615), or an answer to believe
+#                      through: transient, GitHub refusing the sign in (a 401
+#                      with no token, MT_SIGNIN_RC, #1615), or an answer to believe
 #   mt_retry_read    asks a read again while it fails transiently or its sign in
 #                      is refused, through an injected sleep, and never on a
 #                      refusal (#1081, #1615); mt_signin_said says a sign in
@@ -1334,19 +1334,24 @@ mt_gh_transient() {  # $1 = the error text gh printed
 # requests. The token read made after each refusal (mt_signin_token_state) is what will tell the
 # two apart the next time it happens (L177).
 #
-# So a 401 is neither believed the first time, as mt_gh_transient's allow list believes every answer
+# So that 401 is neither believed the first time, as mt_gh_transient's allow list believes every answer
 # GitHub gave, nor counted as a transport fault: it is asked again by mt_retry_read as MT_SIGNIN_RC,
 # each try a new gh run with a fresh keyring read, and a refusal that outlasts the tries is said as
 # GitHub refusing the sign in N times (mt_signin_said), distinctly from a pull request GitHub could not
 # show (L11). 6, because every code below it already means something to a reader or a caller:
 # 3 (merge-when-ready's compare: 404), 4 and 5 (pr-review.sh: a library or a tool missing), 5
 # (merge-when-ready: a rate limit).
+#
+# Only the no token answer counts. "Bad credentials" is a token GitHub looked at and refused, which
+# asking again in seconds does not change, and pr-review.sh's pull request read has believed it the
+# first time since claude-config#1161 (its test "a refusal is read once"), so it stays believed (L542).
 MT_SIGNIN_RC=6
 mt_gh_signin_refused() {  # $1 = the error text gh printed
   local t
   t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
   case "$t" in
-    *"http 401"*|*"requires authentication"*|*"bad credentials"*) return 0 ;;
+    *"bad credentials"*) return 1 ;;
+    *"requires authentication"*) return 0 ;;
   esac
   return 1
 }
@@ -1391,8 +1396,8 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
 # The read budget for a merge gate (claude-config#1615). A gate run by the harness is killed at its
 # timeout and says nothing, which for a PreToolUse gate can read as an allow, so it keeps a budget well
 # inside that timeout (#1081). merge-when-ready.sh asks the same gates itself, under no harness timeout,
-# and at a load average of 342 a 15 second budget was spent before require-verification-run.sh could
-# read areas.json, twice, so it names a longer one in MT_GATE_READ_BUDGET_SECONDS. A budget only bounds
+# and on 2026-10-23, at a load average of 342, a 15 second budget was spent before
+# require-verification-run.sh could read areas.json, twice, so it names a longer one in MT_GATE_READ_BUDGET_SECONDS. A budget only bounds
 # how long a read is asked again; a read that never answers refuses either way. $1 is the gate's own
 # setting (a test seam), which wins; $2 the gate's default.
 mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its default

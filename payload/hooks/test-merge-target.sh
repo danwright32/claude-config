@@ -1176,10 +1176,12 @@ echo "merge-target: a sign in GitHub refused is its own outcome, asked again wit
 # (MT_SIGNIN_RC), never as a transport fault and never believed the first time.
 for e in \
   'HTTP 401: Requires authentication (https://api.github.com/graphql)' \
-  'gh: Requires authentication (HTTP 401)' \
-  'HTTP 401: Bad credentials (https://api.github.com/graphql)'; do
+  'gh: Requires authentication (HTTP 401)'; do
   mt_gh_read_class "$e"; eq "$?" "$MT_SIGNIN_RC" "a refused sign in is its own outcome: $e"
 done
+# A token GitHub looked at and refused does not change in seconds, and pr-review.sh has believed it the
+# first time since #1161, so it stays an answer to believe.
+mt_gh_read_class 'HTTP 401: Bad credentials (https://api.github.com/graphql)'; eq "$?" "1" "bad credentials are believed the first time"
 mt_gh_read_class 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout'; eq "$?" "2" "a transport fault stays transient"
 mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "an answer GitHub gave is believed"
 mt_gh_read_class ''; eq "$?" "1" "an empty error is believed"
@@ -1252,8 +1254,8 @@ rm -rf "$ghstub"
 
 echo "merge-target: a gate run by merge-when-ready.sh takes its read budget from it (claude-config#1615)"
 # A typed merge's gate is killed by the harness at its timeout, so it keeps a budget well inside it;
-# the same gate asked by merge-when-ready.sh runs under no such timeout, and at a load average of 342
-# its 15 seconds were spent before it could read areas.json, twice.
+# the same gate asked by merge-when-ready.sh runs under no such timeout, and on 2026-10-23, at a load
+# average of 342, its 15 seconds were spent before it could read areas.json, twice.
 eq "$(mt_gate_read_budget "" 15)" "15" "a gate's own budget when nothing names another"
 eq "$(MT_GATE_READ_BUDGET_SECONDS=90 mt_gate_read_budget "" 15)" "90" "the budget merge-when-ready.sh hands it"
 eq "$(MT_GATE_READ_BUDGET_SECONDS=90 mt_gate_read_budget 3 15)" "3" "a test's own setting wins"

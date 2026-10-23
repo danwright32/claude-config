@@ -234,7 +234,7 @@ out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-comm
 expect_deny "areas.json refused on every try" "$out" "GitHub refused the sign in 3 times reading .claude/verification/areas.json at the base commit"
 
 echo "require-verification-run: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
-# At a load average of 342 its own 15 seconds were spent before it read areas.json, twice. Asked by
+# On 2026-10-23, at a load average of 342, its own 15 seconds were spent before it read areas.json, twice. Asked by
 # merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a retry
 # 20 seconds out is made inside 60 and refused inside the default 15. Either way nothing allows on a
 # read that never answered.

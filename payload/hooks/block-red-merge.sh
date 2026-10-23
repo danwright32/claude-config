@@ -123,7 +123,7 @@ esac
 # (2), BRM_READ_BUDGET_SECONDS (12) and BRM_SLEEP (sleep), all chosen, not measured. None can let a
 # merge through: the fewest tries is one, as before.
 #
-# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same loop, and one that outlasts the tries
+# A SIGN IN GITHUB REFUSED (a 401 "Requires authentication") is asked again by the same loop, and one that outlasts the tries
 # refuses as GitHub refusing the sign in N times (lib/merge-target.sh's mt_signin_said), never as gh
 # failing to read the pull request (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs
 # this under no harness timeout, the budget is the one it names (mt_gate_read_budget); BRM_READ_BUDGET_SECONDS,

@@ -312,7 +312,7 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # last error: nothing merges on an unconfirmed read. A write (update-branch, the merge) is never
 # asked again here: its failure can be a refusal, and it is judged by reading the state it left.
 #
-# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same rule (claude-config#1615): on 2026-10-23,
+# A SIGN IN GITHUB REFUSED (a 401 "Requires authentication") is asked again by the same rule (claude-config#1615): on 2026-10-23,
 # at load averages up to 342, three runs stopped on "HTTP 401: Requires authentication" while waiting
 # their turn, and a read seconds later answered. The reading of it is lib/merge-target.sh's
 # (mt_gh_read_class, MT_SIGNIN_RC), every retry says it as the sign in refused with what a token read

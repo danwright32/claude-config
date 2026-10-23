@@ -140,11 +140,11 @@ pr=$(mt_pr_number "$command")
 # shell's own SECONDS: no read starts once it is spent, and no retry is made whose wait would end
 # past it. A read that still fails refuses, in block mode or wherever the mode cannot yet be read.
 #
-# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same loop, and one that outlasts the tries
+# A SIGN IN GITHUB REFUSED (a 401 "Requires authentication") is asked again by the same loop, and one that outlasts the tries
 # refuses as GitHub refusing the sign in N times (lib/merge-target.sh's mt_signin_said), never as GitHub
 # being unreadable (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs this under no
-# harness timeout, the budget is the one it names (mt_gate_read_budget): at a load average of 342 the
-# 15 seconds kept for the harness were spent before areas.json could be read, twice.
+# harness timeout, the budget is the one it names (mt_gate_read_budget): on 2026-10-23, at a load
+# average of 342, the 15 seconds kept for the harness were spent before areas.json could be read, twice.
 vr_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(vr_num "${VR_READ_TRIES:-}" 3)"
 READ_WAIT="$(vr_num "${VR_READ_RETRY_SECONDS:-}" 2)"

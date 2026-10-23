@@ -594,8 +594,8 @@ check "#1615 and says the sign in was refused" "GitHub refused the sign in 4 tim
 check_eq "#1615 and nothing merged" "0" "$(count gh-calls 'pr merge')"
 
 # The gates it asks run under no harness timeout, so they are handed a longer read budget than a typed
-# merge's gate keeps: at a load average of 342 require-verification-run.sh spent its 15 seconds before
-# it could read areas.json, twice (claude-config#1615).
+# merge's gate keeps: on 2026-10-23, at a load average of 342, require-verification-run.sh spent its 15
+# seconds before it could read areas.json, twice (claude-config#1615).
 fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1615 a green merge" "0" "$rc"
