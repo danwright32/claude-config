@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { capture, findPlaywright, frameUrl, parseArgs, runChecks } from "../capture-web.mjs";
+import { capture, chromeLaunchOptions, findPlaywright, frameUrl, parseArgs, runChecks } from "../capture-web.mjs";
 
 const SCORE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PIN = JSON.parse(readFileSync(join(SCORE_DIR, "shared-playwright.json"), "utf8"));
@@ -335,4 +335,30 @@ test("the capture records which Playwright drew it", async () => {
   assert.deepEqual(cap.playwright, pw);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "cap", "capture.json"), "utf8")).playwright, pw);
   rmSync(dir, { recursive: true, force: true });
+});
+
+// Every Chrome the score draws in is started through headless-dom.sh in Chrome's place, so a killed
+// run leaves no copy of Chrome behind (claude-config#1537); the real launch is in test-headless-chrome.sh.
+test("Chrome is launched through headless-dom.sh in its place, with the copy switched off and Chrome named", () => {
+  const o = chromeLaunchOptions("chrome", ["--disable-gpu"], { platform: "darwin", env: { KEEP: "1" } });
+  assert.equal(realpathSync(o.executablePath), realpathSync(join(SCORE_DIR, "..", "headless-dom.sh")));
+  assert.equal(o.channel, undefined);
+  assert.deepEqual(o.args, ["--disable-gpu"]);
+  assert.deepEqual(o.env, { KEEP: "1", HEADLESS_DOM_EXEC: "1", HEADLESS_DOM_CHROME: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" });
+  assert.equal(chromeLaunchOptions("chrome", [], { platform: "linux", env: {} }).env.HEADLESS_DOM_CHROME, "/opt/google/chrome/chrome");
+});
+
+test("Playwright's own Chromium, which makes no copy, is launched as it was", () => {
+  assert.deepEqual(chromeLaunchOptions("bundled", ["--disable-gpu"]), { args: ["--disable-gpu"] });
+});
+
+test("with no headless-dom.sh to start Chrome through, the launch is refused by name, never made around it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "no-headless-dom-"));
+  mkdirSync(join(dir, "score"));
+  assert.throws(() => chromeLaunchOptions("chrome", [], { here: join(dir, "score"), platform: "darwin" }), /headless-dom\.sh is not beside/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("on a platform with no known Chrome, the launch is refused, naming the bundled channel", () => {
+  assert.throws(() => chromeLaunchOptions("chrome", [], { platform: "win32" }), /--channel bundled/);
 });

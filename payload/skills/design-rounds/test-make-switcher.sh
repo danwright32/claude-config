@@ -349,10 +349,10 @@ unset HEADLESS_DOM_CLONE_DIR
 
 REAL_CHROME="${SWITCHER_TEST_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 CHROME="$REAL_CHROME"
+# Every real Chrome run below is this, so each one names headless-dom.sh where it runs and
+# check-chrome-launches.py can tell it from a Chrome started around it (claude-config#1537).
+headless_dom(){ HEADLESS_DOM_CHROME="$REAL_CHROME" bash "$HEADLESS_DOM" "$@"; }
 if [[ -x "$REAL_CHROME" ]]; then
-  CHROME="$TMP/chrome"
-  printf '#!/bin/bash\nHEADLESS_DOM_CHROME=%q exec bash %q "$@"\n' "$REAL_CHROME" "$HEADLESS_DOM" > "$CHROME"
-  chmod +x "$CHROME"
 
   # And once on the real Chrome: a run leaves the real per user clone folder as it found it (#988).
   # The folder is found here from TMPDIR, and in headless-dom.sh from getconf, so the two do not
@@ -376,7 +376,7 @@ if [[ -x "$REAL_CHROME" ]]; then
     left="not run"; page=""
     for attempt in 1 2 3; do
       ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.before"
-      page="$("$CHROME" --headless --disable-gpu --no-sandbox --dump-dom "file://$TMP/clone-probe.html" 2>/dev/null)"
+      page="$(headless_dom --headless --disable-gpu --no-sandbox --dump-dom "file://$TMP/clone-probe.html" 2>/dev/null)"
       ls -1 "$real_clones" 2>/dev/null | LC_ALL=C sort > "$TMP/real-clones.after"
       left="$(LC_ALL=C comm -13 "$TMP/real-clones.before" "$TMP/real-clones.after" | tr '\n' ' ')"
       [ -z "$left" ] && break
@@ -404,7 +404,7 @@ document.body.append(out);
 """
 open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page + harness)
 PROBEPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+  headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
     --dump-dom "file://$1.probe.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
@@ -479,7 +479,7 @@ document.body.append(out);
 """
 open(sys.argv[1] + ".scroll.html", "w", encoding="utf-8").write(page + harness)
 SCROLLPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+  headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
     --dump-dom "file://$1.scroll.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
@@ -537,7 +537,7 @@ document.body.append(out);
 """
 open(sys.argv[1] + ".two.html", "w", encoding="utf-8").write(page + harness)
 TWOPY
-  got2="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC2/out.html.two.html" 2>/dev/null \
+  got2="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC2/out.html.two.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")')"
   check_eq "a region keeps its own scroll when an earlier region of the other option does not overflow" "300" "$got2"
 fi
@@ -553,7 +553,7 @@ printf '.screen { color: #111; }\n' > "$SC3/screen.css"
 spec "$SC3/spec.json" "$TWO"
 run "$SC3/spec.json" "$SC3/out.html" >/dev/null
 if [[ -x "$CHROME" ]]; then
-  strip3="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC3/out.html" 2>/dev/null \
+  strip3="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 --dump-dom "file://$SC3/out.html" 2>/dev/null \
     | python3 -c 'import sys,re
 m = re.search(r"<p class=\"dr-sameness\">(.*?)</p>", sys.stdin.read(), re.S)
 print(re.sub(r"\s+", " ", m.group(1)).strip() if m else "NO-STRIP")')"
@@ -608,7 +608,7 @@ document.body.append(out);
 """
 open(sys.argv[1] + ".geom.html", "w", encoding="utf-8").write(page + harness)
 GEOMPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1440,"$2" \
+  headless_dom --headless --disable-gpu --no-sandbox --window-size=1440,"$2" \
     --virtual-time-budget=2000 --dump-dom "file://$1.geom.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"G\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-GEOM")'
 }
@@ -756,7 +756,7 @@ document.body.append(out);
 """
 open(sys.argv[1] + ".w.html", "w", encoding="utf-8").write(page + harness)
 WIDTHPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1900,900 \
+  headless_dom --headless --disable-gpu --no-sandbox --window-size=1900,900 \
     --virtual-time-budget=2000 --dump-dom "file://$TMP/collide.html.w.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"W\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1).strip() if m else "NO-WIDTH")')"
   check_eq "a project element named like the chrome keeps its own width" "1400" "$width"
@@ -810,7 +810,7 @@ check "the page checks its options actually differ" "draw the same" "$(cat "$TMP
 
 if [[ -x "$CHROME" ]]; then
   render() { # render <page> -> the stage's markup after load
-    "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
       --dump-dom "file://$1" 2>/dev/null \
       | python3 -c 'import sys,re; m=re.search(r"<div class=\"dr-stage\"[^>]*>(.*?)</div>\s*<p class=\"dr-hint\"", sys.stdin.read(), re.S); print((m.group(1).strip() if m else "NO-STAGE")[:200])'
   }
@@ -868,7 +868,7 @@ spec["builder"] = "same-builder.js"
 json.dump(spec, open(sys.argv[2], "w"))
 SAME
   python3 "$SCRIPT" "$TMP/same.json" "$TMP/same.html" || fail=$((fail + 1))
-  same_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+  same_dom="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
     --dump-dom "file://$TMP/same.html" 2>/dev/null)"
   # Matched on the RENDERED attribute, not the bare class name: the script that can build
   # the strip names it too, and a check the source satisfies would pass on every page.
@@ -877,7 +877,7 @@ SAME
 
   # The control: options that genuinely differ must NOT carry the warning, or the notice
   # is on every page and means nothing (L36, L159).
-  differ_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+  differ_dom="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
     --dump-dom "file://$TMP/collide-js.html" 2>/dev/null)"
   check_not "a page whose options differ carries no warning" 'class="dr-sameness"' "$differ_dom"
 else
@@ -1026,7 +1026,7 @@ TJ
   # Read the STRIP's own text, not the whole document: the script that can build either
   # sentence carries both of them, so a check against the raw dump passes on every page.
   strip_text() { # strip_text <page> -> what the warning strip actually says, or NO-STRIP
-    "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+    headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
       --dump-dom "file://$1" 2>/dev/null \
       | python3 -c 'import sys,re
 m = re.search(r"<p class=\"dr-sameness\">(.*?)</p>", sys.stdin.read(), re.S)
@@ -1424,7 +1424,7 @@ harness = """
 """ % ('"%s"' % key if key != "none" else "null")
 open(sys.argv[1] + ".tr.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
 TRPY
-    "$CHROME" --headless --disable-gpu --no-sandbox --window-size=1440,900 --virtual-time-budget=2000 \
+    headless_dom --headless --disable-gpu --no-sandbox --window-size=1440,900 --virtual-time-budget=2000 \
       --dump-dom "file://$1.tr.html" 2>/dev/null \
       | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"TR\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-REPORT")'
   }
@@ -1559,7 +1559,7 @@ setTimeout(function () {
 """
 open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
 PROBEPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
+  headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
     --dump-dom "file://$1.probe.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")'
 }
@@ -1618,7 +1618,7 @@ probe = """<script>setTimeout(function () {
 }, 800);</script>"""
 open(sys.argv[2], "w").write(page.replace("</body>", probe + "</body>"))
 PY
-  ex="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 --dump-dom "file://$TMP/example-probe.html" 2>/dev/null \
+  ex="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 --dump-dom "file://$TMP/example-probe.html" 2>/dev/null \
     | python3 -c 'import sys,re; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(m.group(1) if m else "NO-PROBE")')"
   check_eq "the committed example draws its fixture's four rows inside the captured header, in both options" "Invoices:4,Invoices:4" "$ex"
 fi
@@ -1706,7 +1706,7 @@ setTimeout(function () {
 """
 open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
 PROBEPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
+  headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 \
     --dump-dom "file://$1.probe.html" 2>/dev/null \
     | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")'
 }
@@ -1744,7 +1744,7 @@ setTimeout(function () {
 """ % sys.argv[2]
 open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", harness + "</body>"))
 PROBEPY
-  "$CHROME" --headless --disable-gpu --no-sandbox --window-size="$2",900 --virtual-time-budget=6000 \
+  headless_dom --headless --disable-gpu --no-sandbox --window-size="$2",900 --virtual-time-budget=6000 \
     --dump-dom "file://$1.probe.html" 2>/dev/null \
     | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")'
 }
@@ -1933,7 +1933,7 @@ check_eq "the committed terminal example's picker matches too" \
   "$(shasum "$TMP/term-example-now.picker.json" 2>/dev/null | cut -d' ' -f1)x"
 check "the terminal example really asks for the terminal" '"screen": "terminal"' "$(cat "$TEX/spec.json" 2>/dev/null)"
 if [[ -x "$CHROME" && -s "$TEX/switcher.html" ]]; then
-  ex_dom="$("$CHROME" --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
+  ex_dom="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=2000 \
     --dump-dom "file://$TEX/switcher.html" 2>/dev/null)"
   check "the terminal example draws a terminal" 'class="term-window' "$ex_dom"
   check_not "the terminal example's options differ and nothing threw" 'class="dr-sameness"' "$ex_dom"

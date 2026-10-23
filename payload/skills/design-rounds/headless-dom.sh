@@ -38,12 +38,44 @@
 #                          at a folder of their own). Copies are only ever removed when it exists
 #                          and sits inside this user's own per user temp folder, by real path.
 #   HEADLESS_DOM_LSOF      the lsof to tell this run's copy by, default lsof
+#   HEADLESS_DOM_EXEC      1 to run Chrome IN PLACE of this script instead, for a caller that starts
+#                          and stops Chrome itself (below)
+#
+# IN CHROME'S PLACE (claude-config#1537). Playwright starts and stops its own Chrome, and a run of it
+# that was killed, or whose close was cut short under load, left a copy every time: 3 from one full
+# run of this repository's suites on 2026-10-22, and 16 from another builder's run beside it, all
+# from capture-web.mjs and capture-terminal.mjs. Playwright puts its own --disable-features early in
+# Chrome's arguments and a caller's later, so a caller's own switch would REPLACE Playwright's list
+# rather than add to it. Given HEADLESS_DOM_EXEC=1, this folds every --disable-features it is handed
+# into the one switch, with the copy switched off, and becomes HEADLESS_DOM_CHROME by exec: the same
+# pid and the same open pipes, with nothing else added (no profile, no deadline, no dump), so
+# Playwright drives and ends it as it would Chrome. capture-web.mjs's launchChrome hands this file to
+# Playwright as the browser's executable path. check-chrome-launches.py fails on a headless Chrome
+# started any other way, and test-headless-chrome.sh holds both.
 #
 # Exit 0 with the page; 124 when no complete page came within the deadline; Chrome's own exit code
 # when it ended without one, or 1 when that code was 0. Nothing is printed on stdout unless the page
 # is complete.
 set -u
 REAL="${HEADLESS_DOM_CHROME:?headless-dom.sh: set HEADLESS_DOM_CHROME to the Chrome binary}"
+
+# Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
+# too: a second such switch replaces the first, so two would silently drop one caller's list.
+args=()
+features=""
+for a in "$@"; do
+  case "$a" in
+    --disable-features=*) [ -n "${a#--disable-features=}" ] && features="$features${a#--disable-features=}," ;;
+    *) args+=("$a") ;;
+  esac
+done
+args=("--disable-features=${features}MacAppCodeSignClone" ${args[@]+"${args[@]}"})
+
+if [ "${HEADLESS_DOM_EXEC:-}" = 1 ]; then
+  [ -x "$REAL" ] || { echo "headless-dom.sh: no Chrome to run at $REAL (HEADLESS_DOM_CHROME)" >&2; exit 127; }
+  exec "$REAL" "${args[@]}"
+fi
+
 LIMIT="${HEADLESS_DOM_DEADLINE:-60}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KILL_TREE="$HERE/../../hooks/lib/kill-tree.sh"
@@ -78,18 +110,6 @@ fi
 LSOF="${HEADLESS_DOM_LSOF:-lsof}"
 list_clones(){ ls -1 "$clone_dir" 2>/dev/null | grep '^code_sign_clone\.' | LC_ALL=C sort; }
 [ -n "$clone_dir" ] && list_clones > "$work/clones.before"
-
-# Told not to copy itself, in ONE --disable-features carrying every feature the caller disabled
-# too: a second such switch replaces the first, so two would silently drop one caller's list.
-args=()
-features=""
-for a in "$@"; do
-  case "$a" in
-    --disable-features=*) [ -n "${a#--disable-features=}" ] && features="$features${a#--disable-features=}," ;;
-    *) args+=("$a") ;;
-  esac
-done
-args=("--disable-features=${features}MacAppCodeSignClone" ${args[@]+"${args[@]}"})
 
 "$REAL" --user-data-dir="$work/profile" --no-first-run --no-default-browser-check "${args[@]}" > "$work/out" 2> "$work/err" &
 pid=$!

@@ -89,7 +89,9 @@ launches, and a Chrome that is force quit leaves its clone behind. On 2026-10-08
 each, apparently 60 GB of growth in five hours; deleting 90 of them freed 0 bytes by `df`. They are
 clones of Chrome.app, so they cost almost no real space. Rule this folder out rather than in. Most
 of those came from design rounds' headless Chrome, which since claude-config#988 is told not to make
-one (`--disable-features=MacAppCodeSignClone`, in `skills/design-rounds/headless-dom.sh`).
+one (`--disable-features=MacAppCodeSignClone`, in `skills/design-rounds/headless-dom.sh`). The
+288 found from 2026-10-20 to 22 came from the design score's Playwright runs, which since
+claude-config#1537 start Chrome through that same file.
 
 ### 4. The sync and backup clients, before anything else you find
 

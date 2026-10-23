@@ -25,6 +25,7 @@ EXPECTED = {
     "pngio.py": os.path.join(SCORE_DIR, "pngio.py"),
     "score_github.py": os.path.join(SCORE_DIR, "score_github.py"),
     "design_file.py": os.path.join(SKILL_DIR, "design_file.py"),
+    "headless-dom.sh": os.path.join(SKILL_DIR, "headless-dom.sh"),
     "shared-playwright.json": os.path.join(SCORE_DIR, "shared-playwright.json"),
     "vendor-score.py": TOOL,
 }
@@ -67,8 +68,8 @@ def upstream(name):
     root = os.path.join(T, name, "design-rounds")
     os.makedirs(os.path.join(root, "score"))
     for dest, src in EXPECTED.items():
-        to = os.path.join(root, dest) if dest == "design_file.py" else os.path.join(root, "score", dest)
-        shutil.copyfile(src, to)
+        to = os.path.join(root, dest) if dest in ("design_file.py", "headless-dom.sh") else os.path.join(root, "score", dest)
+        shutil.copy(src, to)
     return os.path.join(root, "score")
 
 
@@ -121,8 +122,18 @@ if shutil.which("node"):
                         "--design-only", "--repo", app], capture_output=True, text=True, env=ENV, cwd=T)
     check("the vendored capture-web.mjs loads, and with no Playwright says so and exits 2",
           p.returncode == 2 and "install-playwright.sh" in p.stderr, "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
+    # Chrome is started through headless-dom.sh beside it (claude-config#1537), which Playwright runs
+    # as the browser itself, so the copy must be there and runnable.
+    p = subprocess.run(["node", "--input-type=module", "-e",
+                        "const m = await import(process.argv[1]); console.log(m.chromeLaunchOptions('chrome', [], {platform: 'darwin'}).executablePath)",
+                        "file://" + os.path.join(V, "capture-web.mjs")], capture_output=True, text=True, env=ENV, cwd=T)
+    check("the vendored capture-web.mjs starts Chrome through the headless-dom.sh beside it",
+          p.returncode == 0 and os.path.realpath(p.stdout.strip()) == os.path.realpath(os.path.join(V, "headless-dom.sh")), "rc=%d %s" % (p.returncode, p.stdout + p.stderr))
 else:
     print("SUITE-PART-UNMEASURED node is not on PATH, so the vendored capture-web.mjs was not loaded")
+check("and the vendored headless-dom.sh can be run as a program, as Playwright runs it",
+      os.access(os.path.join(V, "headless-dom.sh"), os.X_OK), oct(os.stat(os.path.join(V, "headless-dom.sh")).st_mode)
+      if os.path.exists(os.path.join(V, "headless-dom.sh")) else "missing")
 # Running the score in the folder leaves nothing behind there (python writes __pycache__ beside a
 # module it imports unless told not to), so a CI job that scores and then checks still matches.
 p = subprocess.run([sys.executable, os.path.join(V, "design_score.py"), "frames", design],
