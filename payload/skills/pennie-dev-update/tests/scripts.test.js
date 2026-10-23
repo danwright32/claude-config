@@ -629,7 +629,7 @@ function sonarGather(checkRuns, extra) {
 {
   const ws = workspace({ pulls: {} }, { repos: [{ name: 'Sonar', repo: 'not a slug' }] }, {});
   const r = gather(ws);
-  check(r.code === 1 && /not a slug/.test(r.err), 'a repos.json entry that is not owner/name refuses the run', r.all);
+  check(r.code === 1 && /not a slug/.test(r.err), 'a registry entry that is not owner/name refuses the run', r.all);
 }
 
 // The registry is this Mac's own file, never one shipped beside the skill (claude-config#1526). With
@@ -669,7 +669,7 @@ function sonarGather(checkRuns, extra) {
 
 // ---------------------------------------------------------------- accounts (claude-config#1182)
 //
-// Each repo is read as the account repos.json names for it, through that account's token in the
+// Each repo is read as the account the registry names for it, through that account's token in the
 // one call's own environment, whichever account gh has active. On the personal MacBook the active
 // account is danwright32, which GitHub answers 404 for Try-Pennie's private repos.
 
@@ -720,7 +720,7 @@ function noTokenIn(r, ws, name) {
   const petCalls = api.filter(function (c) { return slugOf(c) === PET; });
   const sonarCalls = api.filter(function (c) { return slugOf(c) === SONAR; });
   check(petCalls.length > 0 && petCalls.every(function (c) { return c.as === WORK; }),
-    'every read of a repo is made as the account repos.json names for it', JSON.stringify(petCalls));
+    'every read of a repo is made as the account the registry names for it', JSON.stringify(petCalls));
   check(sonarCalls.length > 0 && sonarCalls.every(function (c) { return c.as === PERSONAL; }),
     'a second account\'s repo is read as that second account in the same run', JSON.stringify(sonarCalls));
   check(api.length === petCalls.length + sonarCalls.length, 'every read names the repo it is made for', JSON.stringify(api));
@@ -771,7 +771,7 @@ function noTokenIn(r, ws, name) {
 {
   const ws = workspace({ pulls: { [SONAR]: [] } }, { repos: [{ name: 'Sonar', repo: SONAR, account: undefined }] }, {});
   const r = gather(ws);
-  check(r.code === 1 && /Sonar/.test(r.err) && /account/.test(r.err), 'a repos.json entry with no account refuses the run', r.all);
+  check(r.code === 1 && /Sonar/.test(r.err) && /account/.test(r.err), 'a registry entry with no account refuses the run', r.all);
   check(calls(ws).length === 0, 'nothing is read when an entry names no account', JSON.stringify(calls(ws)));
 }
 {
@@ -814,7 +814,7 @@ function ghVia(ws, ghArgs, extra) {
   const ws = twoAccountWorkspace({ issueCommands: true });
   [
     [['issue', 'edit', '5', '--add-label', 'user-facing'], /names no repo/, 'a command naming no repo is refused'],
-    [['issue', 'edit', '5', '--repo', 'acme/other'], /acme\/other/, 'a repo not in repos.json is refused, by name'],
+    [['issue', 'edit', '5', '--repo', 'acme/other'], /acme\/other/, 'a repo not in the registry is refused, by name'],
     [['issue', 'edit', '5', '--repo', PET, '-R', SONAR], /acme\/pet.*acme\/sonar|acme\/sonar.*acme\/pet/, 'a command naming two repos is refused'],
     [['auth', 'switch', '--user', WORK], /auth/, 'a gh auth command is refused, so nothing switches the active account'],
     [[], /gh/, 'gather.js gh with no command is refused'],
@@ -1072,7 +1072,7 @@ const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
 }
 {
   const r = lintWith(multi([MULTI_OPENER, 'PET | Slate | Sonar'], ['PET', 'Slate', 'Sonar']));
-  check(r.code === 1 && /order/i.test(r.out) && /Slate, PET, Sonar/.test(r.out), 'product sections out of the repos.json order are refused', r.all);
+  check(r.code === 1 && /order/i.test(r.out) && /Slate, PET, Sonar/.test(r.out), 'product sections out of the order the registry lists them are refused', r.all);
 }
 {
   const r = lintWith(multi([MULTI_OPENER, 'Slate | PET | Sonar'], ['Slate', 'PET', 'Sonar'], '\n\n'));

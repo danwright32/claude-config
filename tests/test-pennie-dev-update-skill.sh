@@ -141,7 +141,7 @@ done
 # ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
 # personal MacBook is danwright32, and GitHub answers it 404 for Try-Pennie's private repos. So
 # every gh command the skill shows runs through `gather.js gh`, which runs it as the account
-# registry names for the repo. The bare form is a code block line that STARTS with gh, or an
+# the registry names for the repo. The bare form is a code block line that STARTS with gh, or an
 # inline command in backticks that starts with gh and names its repo with --repo (every command
 # the skill gives does, section 1). A prose mention such as "never `gh pr list`" names no repo.
 bare_gh="$(grep -n -E '^[[:space:]]*gh (issue|label|api|pr|search|repo|run|workflow) ' "$SKILL" || true)"
