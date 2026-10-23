@@ -6,9 +6,9 @@
 # rules pile up and warn at every session start, and in Bidspoke one held a live token in plain text.
 # The sweep flags them and says so once; the remove command takes out only what Dan picked.
 #
-# Every settings file here is invented. A key or token is assembled at run time from pieces, so no
-# line of this file is shaped like one (the push scan reads this file too), and the test asserts it
-# never reaches any output, record or log.
+# Every settings file here is invented. Each fake key or token is written whole, in a shape the push
+# scan accepts by its own rules (see the FAKE_ values below), and the test asserts none of them ever
+# reaches any output, record or log.
 set -uo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/suite-deadline.sh" || {
