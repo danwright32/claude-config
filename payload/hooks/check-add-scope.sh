@@ -23,7 +23,9 @@
 # time instead: changed while one of this session's own Bash calls was running (claude-config#585).
 # In a SUBAGENT the payload's transcript is the dispatching session's, so the agent's own transcript
 # is read beside it, never a sibling's, and every change in the isolated worktree Claude Code was
-# recorded spawning it with is its own (claude-config#1513).
+# recorded spawning it with is its own (claude-config#1513). So is every change in a worktree the
+# main session made itself with EnterWorktree and is still in, proven by its own records
+# (claude-config#1523).
 #
 # The match is deliberately GENEROUS, on the side of allowing: a path counts as this session's if
 # the session mentioned it anywhere. Being wrong that way lets one unscoped add through; being
@@ -144,6 +146,8 @@ if not isinstance(d, dict):
     d = {}
 tr = d.get("transcript_path") or ""
 tr = tr if isinstance(tr, str) else ""
+sid = d.get("session_id")
+sid = sid if isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9_-]+", sid) else ""
 is_agent = "agent_id" in d
 aid = d.get("agent_id")
 aid = aid if isinstance(aid, str) else ""
@@ -165,9 +169,9 @@ if is_agent and tr.endswith(".jsonl"):
                 agent_wt = m["worktreePath"]
         except Exception:
             pass
-print("\x1f".join([tr, "1" if is_agent else "0", agent_tr, agent_wt, looked]))
+print("\x1f".join([tr, "1" if is_agent else "0", agent_tr, agent_wt, looked, sid]))
 ' 2>/dev/null || true)"
-IFS=$'\x1f' read -r transcript is_agent agent_transcript agent_worktree agent_looked <<IDS || true
+IFS=$'\x1f' read -r transcript is_agent agent_transcript agent_worktree agent_looked session_id <<IDS || true
 $ids
 IDS
 
@@ -197,17 +201,20 @@ fi
 # which no time window below can see. Only a LINKED worktree qualifies: the main checkout is the one
 # concurrent sessions share, and no record naming it is ever a blanket credit. Only the CALLING
 # agent's own meta is read, so a worktree another agent was spawned with credits nothing here.
-if [ -n "$agent_worktree" ]; then
+# is_linked_worktree_top <path>: the add runs at the top of <path>, and <path> is a LINKED worktree.
+# One predicate for both whole worktree credits, an agent's and a session's own (claude-config#1523).
+is_linked_worktree_top(){
+  local top top_real wt_real git_dir common_dir
+  [ -n "$1" ] || return 1
   top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
   top_real="$(cd "$top" 2>/dev/null && pwd -P || true)"
-  wt_real="$(cd "$agent_worktree" 2>/dev/null && pwd -P || true)"
+  wt_real="$(cd "$1" 2>/dev/null && pwd -P || true)"
   git_dir="$(git -C "$repo" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
   common_dir="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  if [ -n "$top_real" ] && [ "$top_real" = "$wt_real" ] && [ -n "$git_dir" ] && [ -n "$common_dir" ] \
-     && [ "$git_dir" != "$common_dir" ]; then
-    exit 0
-  fi
-fi
+  [ -n "$top_real" ] && [ "$top_real" = "$wt_real" ] && [ -n "$git_dir" ] && [ -n "$common_dir" ] \
+    && [ "$git_dir" != "$common_dir" ]
+}
+is_linked_worktree_top "$agent_worktree" && exit 0
 
 # The cache of what this session has mentioned, topped up from wherever the last read stopped. One
 # cache per transcript read: the session's, and in a subagent its own beside it.
@@ -223,6 +230,10 @@ OFFSET="$STATE_DIR/claude-add-scope-$key.offset"
 # When each of this session's Bash calls started and finished, as "S id epoch" and "E id epoch"
 # lines, read in the same pass as the mentions (claude-config#585).
 WINDOWS="$STATE_DIR/claude-add-scope-$key.windows"
+# The records that say which worktree this session made and is in, one JSON line each, in transcript
+# order (claude-config#1523).
+WORKTREE="$STATE_DIR/claude-add-scope-$key.worktree"
+WORKTREE_FILE="$WORKTREE"
 MENTIONS_FILES+=("$MENTIONS")
 WINDOWS_FILES+=("$WINDOWS")
 
@@ -234,13 +245,14 @@ case "$size" in ''|*[!0-9]*) size=0 ;; esac
 # A transcript that SHRANK is a different file under the same name (a compaction, a fresh session
 # reusing the path), and reading on from the old offset would read the middle of a line. Start over
 # rather than carry a stale cache forward.
-if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; : > "$WINDOWS"; fi
+if [ "$size" -lt "$from" ]; then from=0; : > "$MENTIONS"; : > "$WINDOWS"; : > "$WORKTREE"; fi
 
 if [ "$size" -gt "$from" ]; then
-  tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | ADD_SCOPE_WINDOWS="$WINDOWS" python3 -c '
+  tail -c "+$(( from + 1 ))" "$transcript" 2>/dev/null | ADD_SCOPE_WINDOWS="$WINDOWS" ADD_SCOPE_WORKTREE="$WORKTREE" python3 -c '
 import datetime, json, os, sys
 out = []
 windows = []
+worktree = []
 def epoch(ts):
     try:
         return datetime.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S").replace(
@@ -269,6 +281,23 @@ for line in sys.stdin:
                 windows.append("S %s %d" % (c["id"], int(t)))
             elif c.get("type") == "tool_result" and c.get("tool_use_id"):
                 windows.append("E %s %d" % (c["tool_use_id"], int(t)))
+    # Which worktree this session made (claude-config#1523): its EnterWorktree calls, their results
+    # (toolUseResult carries the path and a message saying Created, Resumed, Reused or Entered), and
+    # every worktree-state record, each with the session id of the record it came from.
+    if isinstance(rec, dict):
+        rsid = rec.get("sessionId")
+        if rec.get("type") == "worktree-state":
+            worktree.append({"k": "S", "sid": rsid, "ws": rec.get("worktreeSession")})
+        tur = rec.get("toolUseResult")
+        for c in (content if isinstance(content, list) else []):
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == "EnterWorktree" and c.get("id"):
+                worktree.append({"k": "U", "id": c["id"], "sid": rsid})
+            elif c.get("type") == "tool_result" and c.get("tool_use_id") and isinstance(tur, dict) \
+                    and isinstance(tur.get("worktreePath"), str) and isinstance(tur.get("message"), str):
+                worktree.append({"k": "R", "id": c["tool_use_id"], "sid": rsid, "path": tur["worktreePath"],
+                                 "created": tur["message"].startswith("Created worktree at ")})
     stack = [rec]
     while stack:
         node = stack.pop()
@@ -287,6 +316,9 @@ sys.stdout.write("\n" if out else "")
 if windows:
     with open(os.environ["ADD_SCOPE_WINDOWS"], "a") as fh:
         fh.write("\n".join(windows) + "\n")
+if worktree:
+    with open(os.environ["ADD_SCOPE_WORKTREE"], "a") as fh:
+        fh.write("\n".join(json.dumps(w) for w in worktree) + "\n")
 ' >> "$MENTIONS" 2>/dev/null || true
   printf '%s' "$size" > "$OFFSET" 2>/dev/null || true
 fi
@@ -294,7 +326,51 @@ fi
 }
 
 topup_cache "$transcript"
+SESSION_WORKTREE_FILE="$WORKTREE_FILE"
 [ -n "$agent_transcript" ] && topup_cache "$agent_transcript"
+
+# THE WORKTREE THIS SESSION MADE ITSELF IS ITS OWN (claude-config#1523), under the same rule as an
+# agent's: a linked worktree only, never the shared main checkout, and only the session that made
+# it. What Claude Code 2.1.307 records for that (measured 2026-10-22 with throwaway headless sessions
+# and read from its own code): a `worktree-state` record whose `worktreeSession` names the path and
+# the session, with `enteredExisting: true` when the session went into one that already existed; and
+# EnterWorktree's result, whose message begins "Created worktree at" only when that call made it.
+# The record ALONE proves nothing: a worktree resumed by name gets one identical to a created one,
+# and was measured holding a file an earlier session had left in it. So credit needs both, from this
+# session's own id: the latest record says the session is in the worktree and did not enter it as a
+# guest, and the latest EnterWorktree result says Created for that same path. `claude --worktree`
+# makes no tool call and leaves only the record, so it gets no credit and is judged as before.
+# A SUBAGENT never gets this credit, even in its session's worktree: sibling agents share that tree,
+# which is the hazard this gate is for, and an agent's own worktree is credited by its meta above.
+if [ "$is_agent" = 0 ] && [ -n "$session_id" ] && [ -s "$SESSION_WORKTREE_FILE" ]; then
+  own_worktree="$(ADD_SCOPE_SID="$session_id" python3 -c '
+import json, os, sys
+sid = os.environ["ADD_SCOPE_SID"]
+uses, result, state = {}, None, None
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            w = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(w, dict):
+            continue
+        if w.get("k") == "U":
+            uses[w.get("id")] = w.get("sid")
+        elif w.get("k") == "R" and w.get("id") in uses:
+            result = dict(w, use_sid=uses[w.get("id")])
+        elif w.get("k") == "S":
+            state = w
+ws = state.get("ws") if state else None
+if (isinstance(ws, dict) and state.get("sid") == sid and ws.get("sessionId") == sid
+        and ws.get("enteredExisting") is not True and ws.get("hookBased") is not True
+        and isinstance(ws.get("worktreePath"), str) and result is not None
+        and result.get("created") is True and result.get("sid") == sid and result.get("use_sid") == sid
+        and result.get("path") == ws["worktreePath"]):
+    print(ws["worktreePath"])
+' "$SESSION_WORKTREE_FILE" 2>/dev/null || true)"
+  is_linked_worktree_top "$own_worktree" && exit 0
+fi
 
 # Every changed path sorted into exactly ONE bucket, in one pass. A second loop asking the inverse
 # question would be a second reading of the same evidence and the two drift (L16, L517).
