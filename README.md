@@ -1022,6 +1022,22 @@ has been still for five minutes (`MWR_SETTLE_SECONDS`), so a burst of merges cos
 run rather than one each, and only the deadline bounds how many updates it makes. is-it-live's
 window for a merge made in the background (`WAIT_MS`) is kept at twice that deadline, which the
 helper's suite checks.
+Settling answered a base that moves, but not the helpers moving it: on 2026-10-22 PET #1885 sat in
+the helper about 112 minutes while four other pull requests merged under its 23 minute checks, each
+one restarting them (claude-config#1515). So each run now takes its repository's turn
+(`hooks/lib/merge-turn.sh`) at its first look, once the merge method and changelog record have
+passed, and holds it through the update, the checks, the review and the merge; another run waits,
+updating, reviewing and merging nothing, and says it is waiting for its turn, naming the holder and
+how long it has held it, which the heartbeat repeats as it grows. The turn is a queue of numbered
+tickets under this Mac's own state (`~/.claude/state/merge-turns/<owner>/<name>/`, never synced),
+each claimed with `ln` so two runs racing never take the same place. A ticket names its run's pid and
+start time, so one whose run has gone (or whose pid was reused) is passed over at once, and a run
+waiting passes over a holder that has held the turn for an hour (`MWR_TURN_HOLD_SECONDS`, a
+setting), which then joins the line again; the turn is asked again just before the gates, so a run
+that lost it never merges under the one that has it. Different repositories have different queues.
+It orders only this Mac's helpers: the other MacBook's, a typed merge and GitHub's merge queue never
+see it, and settling still answers those. It decides the order of merges, never whether one is
+right, so a run that cannot take a turn says so and goes on as before.
 A GitHub read that fails in transit or on GitHub's server (a timeout, a reset connection, an HTTP
 5xx) is asked again, four times over about a minute, before it stops naming the last error; an
 answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a

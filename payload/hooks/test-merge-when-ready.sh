@@ -213,6 +213,8 @@ export MWR_NOW="$BIN/fake-now"
 export MWR_POLL_SECONDS=30
 export MWR_READ_RETRY_SECONDS=7
 export MWR_NO_CHECKS_GRACE_SECONDS=0
+# The per repository turn (claude-config#1515) is kept here, never in this Mac's own state.
+export MWR_TURN_DIR="$WORKDIR/turns"
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
@@ -234,6 +236,8 @@ printf '%s PR_REVIEW_READ=%s\n' "$*" "${PR_REVIEW_READ:-}" >> "$ST/review-calls"
 case "$1" in
   start) echo "The lessons review started."; exit 0 ;;
   check)
+    # on-review: a step run once, while the review is asked, the last thing before the merge's gates.
+    if [ -s "$ST/on-review" ]; then s="$(cat "$ST/on-review")"; : > "$ST/on-review"; eval "$s"; fi
     if [ -s "$ST/review-answers" ]; then
       rc="$(head -1 "$ST/review-answers")"; tail -n +2 "$ST/review-answers" > "$ST/review-answers.tmp"; mv "$ST/review-answers.tmp" "$ST/review-answers"
     else rc=0; fi
@@ -267,7 +271,7 @@ git init -q "$REPO"
 git -C "$REPO" remote add origin https://github.com/acme/widget.git
 
 fresh(){ # fresh <head> <behind> <rollup>
-  rm -rf "$ST"; mkdir -p "$ST"
+  rm -rf "$ST" "$MWR_TURN_DIR"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
@@ -1429,6 +1433,124 @@ wt_fresh; : > "$ST/merged"
 out="$(wrun 7 --squash)"; rc=$?
 check_eq "#1521 a pull request found already merged exits 0" "0" "$rc"
 check_eq "#1521 and its worktree is removed too" "no" "$(there)"
+
+# =================================================================================================
+# 21. A per repository turn (claude-config#1515). On 2026-10-22 PET #1885 sat here about 112 minutes:
+#     four other pull requests merged under it while its 23 minute checks ran, each one restarting
+#     them. Now a run takes the repository's turn before it updates, waits or merges, and holds it
+#     until it has merged or stopped; another run waits for it, saying so as its own state with the
+#     holder and how long it has held it. A holder whose run has gone is passed over at once, and
+#     one that has held it past MWR_TURN_HOLD_SECONDS is passed over by a run waiting for it. The
+#     queue itself is proved in test-merge-turn.sh; here, what the helper does with it.
+# =================================================================================================
+TURN_LIB="$DIR/lib/merge-turn.sh"
+LIVE_START="$(ps -o lstart= -p 1 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//')"
+# take-turn <slug> <pr> [pid] [start]: another run joins the line, by default a live one (pid 1,
+# which always runs, with its own start time).
+cat > "$BIN/take-turn" <<EOS
+#!/usr/bin/env bash
+. "$TURN_LIB"
+TURN_PID="\${3:-1}"; TURN_PID_START="\${4:-$LIVE_START}"
+turn_open "\$1" && turn_join "\$2" "\$(cat "\$ST/clock")"
+EOS
+chmod +x "$BIN/take-turn"
+tickets(){ ls "$MWR_TURN_DIR/${1:-acme/widget}" 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ $//'; }
+ticket_prs(){ local t out=""; for t in $(tickets "$@"); do out="$out $(sed -n 's/^pr //p' "$MWR_TURN_DIR/${1:-acme/widget}/$t")"; done; printf '%s' "${out# }"; }
+
+# A live run holds the turn: this one waits, updating and merging nothing, and says it is waiting for
+# its turn, naming the holder and how long it has held it, never as a wait on checks.
+fresh "$OLD" 2 "$GREEN"; printf '%s\n' "$NEW" > "$ST/next-heads"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_MAX_POLLS=3 run 7 --squash)"; rc=$?
+check_eq "#1515 behind a live holder it is still waiting when its looks run out" "3" "$rc"
+check "#1515 saying it waits for its turn, and who holds it" "waiting for its turn to merge in acme/widget, which #9 holds (1 ahead of it in line)." "$out"
+check "#1515 and how long #9 has held it" "#9 has held it for 0s, of the 60m any one pull request may hold it." "$out"
+check_not "#1515 a wait for the turn is never said as a wait on checks" "checks still running" "$out"
+check "#1515 out of time, it names the turn it was waiting for" "is waiting for its turn to merge in acme/widget, which #9 holds" "$out"
+check_eq "#1515 nothing was updated while another held the turn" "0" "$(count gh-calls 'pr update-branch')"
+check_eq "#1515 nothing was merged" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1515 no lessons review was started for a head it may not merge yet" "0" "$(count review-calls 'start')"
+check_eq "#1515 on stopping it gave up its place, and #9's is kept" "9" "$(ticket_prs)"
+
+# The heartbeat says the holder's time again as it grows, though the wait's own line is unchanged.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_MAX_POLLS=6 MWR_HEARTBEAT_SECONDS=60 run 7 --squash)"; rc=$?
+check "#1515 a heartbeat names how long the holder has held it by then" "#9 has held it for 1m 00s, of the 60m any one pull request may hold it. Still waiting, for 1m 00s so far." "$out"
+check_eq "#1515 and the wait's line is said once, then only on the heartbeat" "1" "$(grep -c 'which #9 holds' <<<"$(grep -v 'Still waiting' <<<"$out" | grep -v 'Out of time')")"
+
+# The holder finishes: the turn passes, and this one merges.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1515 once the holder leaves, the next in line merges" "0" "$rc"
+check "#1515 saying it is its turn now, after how long" "It is #7's turn to merge in acme/widget now, after waiting 30s for it" "$out"
+check "#1515 and merging that head" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1515 its place is given up once merged" "" "$(tickets)"
+
+# A holder whose run has gone (L409): passed over at once, with no wait at all.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9 99999999 "Thu Jan  1 00:00:00 1970"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1515 a dead holder does not hold up a merge" "0" "$rc"
+check "#1515 saying whose place was passed over, and why" "#9's place in line was passed over: its run (pid 99999999) is no longer running." "$out"
+check_eq "#1515 without a single wait" "0" "$(count sleeps .)"
+check_eq "#1515 and leaves no ticket behind" "" "$(tickets)"
+
+# A live holder past the bound (L523): the waiting run takes the turn over, on the injected clock.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_TURN_HOLD_SECONDS=90 run 7 --squash)"; rc=$?
+check_eq "#1515 a holder past its bound does not hold up a merge for ever" "0" "$rc"
+check "#1515 saying whose turn ran out, after how long" "#9's turn ran out after 1m 30s, past the 1m 30s any one pull request may hold it" "$out"
+check_eq "#1515 after waiting the bound, in fake time" "3" "$(count sleeps 30)"
+check "#1515 and merging" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+
+# Different repositories never block each other.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/other 9
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1515 a holder in another repository does not hold up this one" "0" "$rc"
+check_not "#1515 and this one never waits for it" "waiting for its turn" "$out"
+check_eq "#1515 the other repository's holder is untouched" "9" "$(ticket_prs acme/other)"
+
+# Its own turn taken over while it waits on its checks: it joins the line again and never merges
+# under the run that took it over, though its checks have gone green.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"; \"\$BIN_DIR/take-turn\" acme/widget 9; printf '%s' '$GREEN' > \"\$ST/rollup\"" > "$ST/on-sleep"
+out="$(BIN_DIR="$BIN" MWR_MAX_POLLS=4 run 7 --squash)"; rc=$?
+check_eq "#1515 a run whose turn was taken over does not merge" "3" "$rc"
+check "#1515 it took the turn first" "Took the turn to merge in acme/widget" "$out"
+check "#1515 then says its place is gone and joins the line again" "#7's place in the line to merge in acme/widget is gone" "$out"
+check "#1515 and waits behind the run that took it" "which #9 holds (1 ahead of it in line)" "$out"
+check_eq "#1515 nothing merged under #9" "0" "$(count gh-calls 'pr merge')"
+
+# The same, at the last moment: taken over while its review is asked, just before the gates.
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"; \"\$BIN_DIR/take-turn\" acme/widget 9" > "$ST/on-review"
+out="$(BIN_DIR="$BIN" MWR_MAX_POLLS=2 run 7 --squash)"; rc=$?
+check_eq "#1515 the turn is asked again right before the merge" "3" "$rc"
+check_eq "#1515 so nothing merged under the run that took it" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1515 and no gate was asked about a merge it may not make" "" "$(cat "$ST/red-gate-payloads" 2>/dev/null)"
+
+# A run stopped by a signal while it holds the turn gives it up, so the next in line is not left to
+# wait for the bound. The step signals the helper itself, the fake sleep's parent.
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "kill -TERM \$PPID" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1515 a holder sent TERM stops" "143" "$rc"
+check "#1515 having held the turn" "Took the turn to merge in acme/widget" "$out"
+check_eq "#1515 and gives its place up as it goes" "" "$(tickets)"
+
+# A turn that cannot be taken is said, and the merge goes on as it did before: the turn decides only
+# the order helpers merge in, and every gate still judges the merge.
+fresh "$OLD" 0 "$GREEN"
+: > "$WORKDIR/turns-not-a-folder"
+out="$(MWR_TURN_DIR="$WORKDIR/turns-not-a-folder" run 7 --squash)"; rc=$?
+check_eq "#1515 a turn folder that cannot be made does not stop a merge" "0" "$rc"
+check "#1515 but says it goes on without a turn, and where" "Could not take a turn to merge in acme/widget (could not make $WORKDIR/turns-not-a-folder/acme/widget)" "$out"
+check "#1515 and merges through the gates as before" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
