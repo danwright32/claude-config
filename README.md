@@ -2287,6 +2287,32 @@ button style the terminal has no drawing for is no score for its frame, never dr
 section 3f (the status bar's real rows against a settled design in Chrome: 100%, then one character
 changed and below it) hold it. The adapter is not vendored into apps: only claude-config has mods.
 
+## A project's local allow rules are swept at session start
+
+Every "Yes, don't ask again" saves that exact command as an allow rule in the project's
+`.claude/settings.local.json`, which is out of git and never syncs. `hooks/local-allow-sweep.sh`, a
+SessionStart hook, reads that one file and, when any rule is one off (a `*` inside the command, a path
+into `dist/` or a temp folder, or an exact command with literal arguments) or holds a key or token,
+tells you once and offers a picker to remove them (#1582). It removes nothing on its own.
+
+- **What is said.** Each flagged rule by position, tool, the first word of its command and why, such as
+  `rule 6 (Bash curl): holds a key or token`. No rule's text is ever printed, secret or not. A key is
+  whatever `lib/review-redact.sed` would redact, the same rules the lessons review uses.
+- **Once.** The flagged set it said is kept as hashes in `~/.claude/state/local-allow-sweep/`. It says
+  it again only when a rule is flagged that it has not said before; keeping them, or removing some, is
+  not repeated. Delete that folder to hear everything again.
+- **Removing.** The picker's options carry the command, which you can also run by hand:
+  `python3 ~/.claude/hooks/lib/local-allow-rules.py remove --project <dir> --rules <pos:fingerprint,...>`.
+  It takes a backup first, to `~/.claude-allow-rule-backups/` (never inside `~/.claude`, which syncs to
+  a public repository), removes only the rules named, leaves every other byte of the file as it was,
+  and prints the `cp` that puts the backup back. A file that changed since the sweep, cannot be parsed,
+  or cannot be backed up is refused with nothing changed. Backups are never deleted automatically.
+- **A file it cannot judge** (unreadable, not JSON, an allow that is not a list) is said once in those
+  words and left alone. A detached headless run says nothing.
+- **Cost.** No process at all for a project without the file; otherwise one read of it and three
+  processes whatever the rule count, about 80 ms (DESIGN.md has the measurements).
+- Tests: `hooks/test-local-allow-sweep.sh`, and the process counts in `hooks/test-per-prompt-hook-cost.sh`.
+
 ## Mods
 
 A mod is a Claude Code plugin folder (`.claude-plugin/plugin.json` plus a hooks module) kept in
