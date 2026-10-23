@@ -2,6 +2,7 @@ import type { EngineInterface, Hook, Register } from 'claude-code'
 import type { ManualSteps, StepsCard, StepsPaneId } from '../types/index.d.ts'
 import { cardFrom, cardLines, carriedNote, donePrompt, DROPPED_AFTER_MS, finish, fold, keepAdded, keepFinished, nextStep, paneColumns, pressed, sent, VERDICTS } from './card.ts'
 import type { DrawnAt, StepsVerdict } from './card.ts'
+import { PROSE_MARK, turnAt } from './turn.ts'
 import { waitingPhrase } from './waiting.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 
@@ -421,12 +422,16 @@ export const VERDICT_INPUT = {
   required: ['step', 'checked'],
 }
 
-// #863: a step handed to Dan in prose scrolls away unseen, so Claude's final message saying one
-// waits on him, with no unfinished step on the card he can see, sends Claude back to pin it. Once a
-// chain of turn ends (stop_hook_active), so it can never loop, and only where the steps tool exists.
+// #863: a step handed to Dan in prose scrolls away unseen, so a message of Claude's saying one waits
+// on him (any message of the turn since #1608), with no unfinished step on the card he can see,
+// sends Claude back to pin it. Once a turn, so it can never loop, and only where the steps tool exists.
 let interactive = false
+// How long the turn's transcript may take to read at a turn end: chosen, not measured, at well over
+// the 15 ms the largest transcript on this Mac took (200 MB, measured 2026-10-23).
+const TURN_TIMEOUT_MS = 2_000
+
 const proseStep = (phrase: string) =>
-  `Your reply leaves Dan a step in prose ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
+  `${PROSE_MARK} ("${phrase}"), and no steps card holds it, so he may never see it once the reply scrolls away. Check it against the current state, then put it on the card with the ${TOOL} tool: its direct link or a location Dan can find, its actions one per item, and any value to paste. Then say in one line that it is on the card. Only a step he can do now goes on the card; one waiting on something else stays in the issue. If nothing is actually left for Dan to do now, say so in one line instead.`
 
 // A step another mod hands the card (#1107), answered by the hooks on the noun's events below, which
 // have the whole engine; the noun's own methods answer only when those hooks failed, and say so.
@@ -644,13 +649,25 @@ export const register: Register = on => {
     return { text: failed ? `The steps card could not be shown: ${failed}.` : 'The steps card is in the band above the prompt.' }
   })
 
-  // #863: the turn's end, judged on Claude's own final message. A step left waiting on Dan in prose,
-  // with no unfinished step on a card he can see (a carried card is held, not shown), is sent back
-  // to be pinned. A block from a hook beneath is kept beside this one.
+  // #863: the turn's end, judged on what Claude wrote. A step left waiting on Dan in prose, with no
+  // unfinished step on a card he can see (a carried card is held, not shown), is sent back to be
+  // pinned. A block from a hook beneath is kept beside this one.
+  // #1608: every message of the turn is read from the transcript, not only the last, since the step
+  // can sit in an earlier one while the last is the session reflection. Once the turn is read, the
+  // turn itself says whether this mod already blocked in it, so it blocks at most once per turn even
+  // in a chain another Stop hook started; unread, it falls back to the last message and to that chain.
   on('classic.Stop', async ($, e, next) => {
     const r = await next(e)
-    if (!interactive || e.stop_hook_active) return r
-    const phrase = typeof e.last_assistant_message === 'string' ? waitingPhrase(e.last_assistant_message) : null
+    if (!interactive) return r
+    const last = typeof e.last_assistant_message === 'string' ? e.last_assistant_message : null
+    const turn = await turnAt(typeof e.transcript_path === 'string' ? e.transcript_path : '', argv => $.process.run(argv, { timeoutMs: TURN_TIMEOUT_MS }))
+    if (turn.state === 'unreadable') $.ui.log(`Manual steps could not read this turn from its transcript, so only its last message was checked for a step left in prose: ${turn.why}`)
+    const isTurnRead = turn.state === 'read' && turn.promptId !== null
+    if (isTurnRead ? turn.isOurs : e.stop_hook_active) return r
+    const texts = turn.state === 'read' ? turn.texts : []
+    // The transcript may not yet hold the last message when the turn ends, so it is added unless it is there.
+    const said = last !== null && texts.at(-1) !== last ? [...texts, last] : texts
+    const phrase = said.map(waitingPhrase).find(p => p !== null) ?? null
     if (!phrase) return r
     let card: StepsCard | null
     try {

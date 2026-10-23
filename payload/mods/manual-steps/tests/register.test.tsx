@@ -172,9 +172,11 @@ const ROOT = '/repo'
 // `placesNoPanes` is a session whose attached surfaces place no panes at all, asked or not.
 // `opened` is how /usr/bin/open answers a press of Open: its exit code and what it printed, or an
 // Error the engine raises in its place.
-type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean }
+// `turn` is what the transcript reader prints for the turn (#1608): its records, or the reason the
+// read failed (exit 1 and that on stderr), or 'truncated' for output the engine cut short.
+type World = { opened: { exitCode: number; stderr: string } | Error; wide: boolean; copied: boolean; submitFails: boolean; storeFails: boolean; root: string; repoRoot: string | null; repoFails: boolean; isAsking: boolean; placesNoPanes: boolean; turn: string | { fails: string } | 'truncated' }
 const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown> = {}, env: Record<string, string> = {}) => {
-  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, ...init }
+  const w: World = { opened: { exitCode: 0, stderr: '' }, wide: false, copied: true, submitFails: false, storeFails: false, root: ROOT, repoRoot: ROOT, repoFails: false, isAsking: false, placesNoPanes: false, turn: '', ...init }
   const mem: Record<string, unknown> = { ...store }
   const asked = new Set<string>()
   const opens: { id: string; columns?: number }[] = []
@@ -186,6 +188,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   const runs: { argv: readonly string[]; timeoutMs?: number }[] = []
   const tools: string[] = []
   const commands: string[] = []
+  const logs: string[] = []
   // Read at each call, so a test can change one part way through.
   on('env.get', ($, e) => ({ value: env[e.name] }) as never)
   on('store.get', ($, e) => ({ value: mem[e.key] }) as never)
@@ -240,6 +243,12 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
   })
   on('process.run', ($, e) => {
     runs.push({ argv: e.argv, timeoutMs: e.init?.timeoutMs })
+    if (e.argv[0] === 'perl' && e.argv[3] === '--') {
+      const t = w.turn
+      if (t === 'truncated') return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: true, isStderrTruncated: false } } as never
+      if (typeof t === 'object') return { value: { exitCode: 1, stdout: '', stderr: t.fails, isStdoutTruncated: false, isStderrTruncated: false } } as never
+      return { value: { exitCode: 0, stdout: t, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    }
     if (w.opened instanceof Error) throw w.opened
     return { value: { exitCode: w.opened.exitCode, stdout: '', stderr: w.opened.stderr, isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
@@ -247,7 +256,10 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     toasts.push(String((e as { text?: string }).text))
     return { value: undefined } as never
   })
-  on('ui.log', () => ({ value: undefined }) as never)
+  on('ui.log', ($, e) => {
+    logs.push(e.text)
+    return { value: undefined } as never
+  })
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
   // The settings Stop hooks beneath the mods: they block nothing, unless STOP_BLOCK names a block.
   on('classic.Stop', () => (env.STOP_BLOCK ? { block: env.STOP_BLOCK } : {}) as never)
@@ -255,7 +267,7 @@ const world = (on: On, init: Partial<World> = {}, store: Record<string, unknown>
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, mem, opened, opens, closed, prompts, toasts, copies, runs, tools, commands }
+  return { w, mem, opened, opens, closed, prompts, toasts, copies, runs, tools, commands, logs }
 }
 
 type Mounted = Pick<KitMounted<'terminal'>, 'press' | 'find' | 'unmount'>
@@ -1025,6 +1037,59 @@ test('a block another Stop hook gives is kept beside this one (#863)', withKit, 
   const r = await turnStop($, PROSE_STEP)
   expect(r.block).toMatch(/^Winding down is not finished: PR #12 is not merged yet\./)
   expect(r.block).toMatch(/steps tool/)
+})
+
+// ---- #1608: every message of the turn is read, not only the last ----
+
+// The turn as the transcript reader prints it: Dan's prompt, then Claude's messages, each record
+// carrying the prompt's promptId as Claude Code writes it, Stop hook feedback included.
+const prompt = (isOurs = false) => JSON.stringify({ type: 'user', promptId: 'p1', isOurs })
+const wrote = (text: string) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
+const DOWNBEAT_STEP = "One thing is still yours to do. In Settings, Venues, Carnegie Hall, click the × next to jbentley, then type ... and click Add. Tell me when it's done"
+const DOWNBEAT_REFLECTION = 'The only thing still open is the Settings swap I described above'
+
+test('a step in an earlier message of the turn blocks, though the last message is a reflection that names no step (#1608)', withKit, async ($, on) => {
+  const reflection = 'I am least sure about the venue cache. Nothing else to add.'
+  world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(), wrote(reflection)].join('\n') })
+  await start($)
+  // The reflection is written after another Stop hook blocked, so this chain of turn ends is active.
+  const r = await turnStop($, reflection, true)
+  expect(r.block).toMatch(/mcp__manual-steps__steps\b/)
+})
+
+test('the 2026-10-23 Downbeat turn blocks: the step second to last, the reflection last (#1608)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(), wrote(DOWNBEAT_REFLECTION)].join('\n') })
+  await start($)
+  expect((await turnStop($, DOWNBEAT_REFLECTION, true)).block).toMatch(/steps tool/)
+})
+
+test('once this mod has blocked in a turn, it never blocks that turn again, so it cannot loop (#1608)', withKit, async ($, on) => {
+  world(on, { turn: [prompt(), wrote(DOWNBEAT_STEP), prompt(true), wrote('Nothing is left for Dan to do now.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Nothing is left for Dan to do now.', true)).block).toBeUndefined()
+})
+
+test('a step said in the turn before this one is not judged again (#1608)', withKit, async ($, on) => {
+  const earlier = JSON.stringify({ type: 'user', promptId: 'p0', isOurs: false })
+  world(on, { turn: [earlier, wrote(DOWNBEAT_STEP), prompt(), wrote('Merged #12 and the deploy is live.')].join('\n') })
+  await start($)
+  expect((await turnStop($, 'Merged #12 and the deploy is live.')).block).toBeUndefined()
+})
+
+test('a transcript that cannot be read is said in the log, and the last message alone is still judged (#1608)', withKit, async ($, on) => {
+  const w = world(on, { turn: { fails: '/t: No such file or directory' } })
+  await start($)
+  expect((await turnStop($, PROSE_STEP)).block).toMatch(/steps tool/)
+  expect(w.logs.some(l => /could not read this turn/.test(l) && l.includes('No such file or directory'))).toBe(true)
+  // As before #1608, with nothing read the chain's next turn end is not blocked again.
+  expect((await turnStop($, PROSE_STEP, true)).block).toBeUndefined()
+})
+
+test('output the engine cut short is said in the log rather than read as the whole turn (#1608)', withKit, async ($, on) => {
+  const w = world(on, { turn: 'truncated' })
+  await start($)
+  expect((await turnStop($, 'The tests pass.')).block).toBeUndefined()
+  expect(w.logs.some(l => /more than could be read whole/.test(l))).toBe(true)
 })
 
 test('the band says the card is waiting on Dan while any step is his to do, and clears once none is (#863, #1239)', withKit, async ($, on) => {
