@@ -501,20 +501,25 @@ function buildScreen(variant) {
        built, and a click in the one showing redrew another off the stage. screenShown is read from
        the top level, as buildScreen is. One that throws leaves the screen looking finished while
        the redraw it asked for never happened, so the first throw is said on the page, as a
-       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). */
+       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). The third
+       argument says a throw that comes later, for a builder told only once the option can be: a
+       captured page's, inside an option's frame still loading (claude-config#1522). */
     if (typeof screenShown === "function") {
       try {
-        screenShown(variant, incoming);
+        screenShown(variant, incoming, hookThrew);
       } catch (err) {
-        if (!hookSaid) {
-          hookSaid = true;
-          warn("The builder's screenShown threw when " + variant.name + " was shown: "
-               + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
-               + "switch did not happen, so the screen showing may not be this option's.");
-        }
+        hookThrew(variant, err);
       }
     }
     fit();
+  }
+
+  function hookThrew(variant, err) {
+    if (hookSaid) return;
+    hookSaid = true;
+    warn("The builder's screenShown threw when " + variant.name + " was shown: "
+         + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
+         + "switch did not happen, so the screen showing may not be this option's.");
   }
 
   /* Every element in a screen that is scrolled away from its start, each named by its path from

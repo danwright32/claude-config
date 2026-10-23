@@ -1840,6 +1840,85 @@ else
   echo "SUITE-PART-UNMEASURED no browser at $CHROME, so switching to a frame still loading was not tried"
 fi
 
+# claude-config#1522: in a round drawn in captured chrome the builder's own screenShown ran once in each
+# option's frame as it loaded, hidden ones included, its throw kept where nothing read it, and was never
+# called on a switch, so the builder was not told which option was showing, as SKILL.md promises (#1206).
+# Each frame's builder writes to the switcher's own log: the option it was told of, the text of the element
+# it was handed, and the id of what holds that element (the captured page's slot).
+cat > "$CF/told-builder.js" <<'BUILDER'
+function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }
+function screenShown(variant, element) {
+  var log = window.top.DR_TOLD = window.top.DR_TOLD || [];
+  log.push(variant.name + ":" + (element ? element.textContent + "@" + element.parentNode.id : "nothing"));
+}
+BUILDER
+cat > "$CF/told-throw-builder.js" <<'BUILDER'
+function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }
+function screenShown(variant) { if (variant.key === "2") throw new Error("no partner list for " + variant.name); }
+BUILDER
+cat > "$CF/told-first-throw-builder.js" <<'BUILDER'
+function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }
+function screenShown(variant) { throw new Error("no partner list for " + variant.name); }
+BUILDER
+cat > "$CF/grow-builder.js" <<'BUILDER'
+function buildScreen(variant) { var d = document.createElement("div"); d.textContent = variant.name; return d; }
+function screenShown(variant, element) {
+  if (element.querySelector(".grown")) return;
+  var g = document.createElement("div"); g.className = "grown"; g.style.height = "300px"; element.append(g);
+}
+BUILDER
+for b in told told-throw told-first-throw grow; do
+  spec "$CF/$b.json" "$TWO" '{"builder": "'"$b"'-builder.js", "chrome": {"captured": "chrome.html", "from": "x", "slot": "#main", "width": 640}}'
+  run "$CF/$b.json" "$CF/$b.html" >/dev/null
+done
+if [[ -x "$CHROME" ]]; then
+  got="$(frame_probe "$CF/told.html" 1440 'said = (window.DR_TOLD || []).join(",") + ";";
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "1", bubbles: true}));
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true}));
+  said += (window.DR_TOLD || []).join(",");')"
+  check_eq "a captured page round's builder is told of the option shown at load, and of each option switched to, inside its frame (#1522)" \
+    "Espresso:Espresso@main;Espresso:Espresso@main,Ink:Ink@main,Espresso:Espresso@main,Ink:Ink@main|" "$got"
+  got="$(frame_probe "$CF/told-throw.html" 1440 'document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  said = document.querySelector(".dr-readout h2").textContent;')"
+  check_eq "a captured page builder's screenShown throwing on a switch is said in the banner a plain round uses (#1522)" \
+    "Ink|The builder's screenShown threw when Ink was shown: no partner list for Ink. Whatever it redraws after a switch did not happen, so the screen showing may not be this option's." "$got"
+  got="$(frame_probe "$CF/told-first-throw.html" 1440 'said = "loaded";')"
+  check_eq "and throwing for the option shown as its frame loads is said too, once (#1522)" \
+    "loaded|The builder's screenShown threw when Espresso was shown: no partner list for Espresso. Whatever it redraws after a switch did not happen, so the screen showing may not be this option's." "$got"
+  # A frame still loading has nothing to tell yet: the switch is quiet, and the frame's own load tells
+  # the builder, once, while that option is still the one showing.
+  got="$(frame_probe "$CF/told.html" 1440 'var f = document.querySelectorAll("#dr-stage iframe")[1];
+  window.DR_TOLD = [];
+  f.contentDocument.open();
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  said = document.querySelector(".dr-readout h2").textContent + ";" + window.DR_TOLD.join(",");
+  f.srcdoc = f.srcdoc;
+  setTimeout(function () { said += ";" + window.DR_TOLD.join(","); }, 300);')"
+  check_eq "switching to a captured page option still loading tells its builder once it loads, and says nothing (#1522)" \
+    "Ink;;Ink:Ink@main|" "$got"
+  # And a frame loading while another option shows is not told it is showing.
+  got="$(frame_probe "$CF/told.html" 1440 'var f = document.querySelectorAll("#dr-stage iframe")[1];
+  window.DR_TOLD = [];
+  f.srcdoc = f.srcdoc;
+  setTimeout(function () { said = "reloaded hidden;" + window.DR_TOLD.join(","); }, 300);')"
+  check_eq "a captured page option loading while hidden does not tell its builder it is shown (#1522)" \
+    "reloaded hidden;|" "$got"
+  # What the builder draws when it is told is inside the frame: the frame is sized after the call.
+  got="$(frame_probe "$CF/grow.html" 1440 'function fits(f) {
+    var h = f.getBoundingClientRect().height, p = Math.ceil(f.contentDocument.documentElement.getBoundingClientRect().height);
+    return Math.abs(h - p) <= 1 ? "fits" : "frame " + h + " page " + p;
+  }
+  var all = document.querySelectorAll("#dr-stage iframe");
+  said = fits(all[0]);
+  document.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  said += "," + fits(all[1]);')"
+  check_eq "a captured page option is sized after its builder is told, so what it draws then is not cut off (#1522)" \
+    "fits,fits|" "$got"
+else
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so telling a captured page round's builder which option shows was not tried"
+fi
+
 # --- the committed terminal example is what the tool produces today ---
 
 TEX="$DIR/example-terminal"

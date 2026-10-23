@@ -61,7 +61,9 @@ A builder may also define screenShown(variant, element), which the page calls af
 every switch (the first included) with the option on the stage and its element. Every
 option is built once at load, so a global set in buildScreen holds the LAST option
 built: a builder that redraws on a click redraws from what screenShown gave it, never
-from such a global (claude-config#1206). Each switch also keeps how far every scrolling
+from such a global (claude-config#1206). With a captured chrome it is called inside the
+option's own frame, with the element drawn in the slot, once that frame has loaded
+(claude-config#1522). Each switch also keeps how far every scrolling
 region was scrolled, matched by where each sits in the screen, so options are compared at the same place.
 
 A "screen" puts one of the shared screens that ship beside this script, in screens/,
@@ -349,20 +351,25 @@ __BUILDER__
        built, and a click in the one showing redrew another off the stage. screenShown is read from
        the top level, as buildScreen is. One that throws leaves the screen looking finished while
        the redraw it asked for never happened, so the first throw is said on the page, as a
-       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). */
+       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). The third
+       argument says a throw that comes later, for a builder told only once the option can be: a
+       captured page's, inside an option's frame still loading (claude-config#1522). */
     if (typeof screenShown === "function") {
       try {
-        screenShown(variant, incoming);
+        screenShown(variant, incoming, hookThrew);
       } catch (err) {
-        if (!hookSaid) {
-          hookSaid = true;
-          warn("The builder's screenShown threw when " + variant.name + " was shown: "
-               + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
-               + "switch did not happen, so the screen showing may not be this option's.");
-        }
+        hookThrew(variant, err);
       }
     }
     fit();
+  }
+
+  function hookThrew(variant, err) {
+    if (hookSaid) return;
+    hookSaid = true;
+    warn("The builder's screenShown threw when " + variant.name + " was shown: "
+         + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
+         + "switch did not happen, so the screen showing may not be this option's.");
   }
 
   /* Every element in a screen that is scrolled away from its start, each named by its path from
@@ -576,17 +583,35 @@ function buildScreen(variant) {
 }
 /* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
    options drawing the same thing are said, as the page says it for a round with no captured chrome. */
-/* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
-   again each time it is shown: the page calls screenShown after every switch, as it does for any
-   builder, and the frame's own load calls it too. */
-function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
+/* The page calls screenShown after every switch, as it does for any builder, with the frame shown. Two
+   things happen to it. It is sized, since a frame hidden while it loaded has no layout and measures 0
+   tall. And the round's own screenShown, inside the frame, is told this option is showing, with the
+   element it drew in the slot (claude-config#1522). A throw there goes up to the page's banner. Sized
+   after it is told, throw or not, so whatever the builder draws then is inside the frame. */
+var DR_SAID = null;
+function screenShown(_variant, frame, said) {  /* the page hands the option first; only its frame is needed here */
+  DR_SAID = said;
+  try { drTell(frame); } finally { drSize(frame); }
+}
+/* A frame still loading its page has no root yet, and is left alone: its own load sizes it and tells
+   its builder. Reading the root anyway threw, and the page said the builder's screenShown had, whenever
+   an option was chosen before its frame loaded (claude-config#1467). */
+function drReady(frame) {
   var doc = frame.contentDocument;
-  /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
-     so a short screen would keep whatever height its frame started at. A frame still loading its page
-     has no root yet, and is left alone: its own load sizes it. Reading the root anyway threw, and the
-     page said the builder's screenShown had, whenever an option was chosen before its frame loaded
-     (claude-config#1467). */
-  if (!DR_HEIGHT && doc && doc.documentElement && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+  return !!(doc && doc.documentElement && !frame.hidden);
+}
+/* The page's own height, not its scroll height, which never reads less than the frame it sits in, so a
+   short screen would keep whatever height its frame started at. */
+function drSize(frame) {
+  if (!DR_HEIGHT && drReady(frame)) frame.style.height = Math.ceil(frame.contentDocument.documentElement.getBoundingClientRect().height) + "px";
+}
+/* Told only once its builder has run, through the frame's DR_FRAME.tell. Until then a frame shown is
+   owed the call and its load makes it, so an option is told once each time it is shown, never while
+   it is hidden. */
+function drTell(frame) {
+  var report = drReady(frame) && frame.contentWindow && frame.contentWindow.DR_FRAME;
+  frame.drOwed = !frame.hidden && !(report && report.tell);
+  if (report && report.tell) report.tell();
 }
 /* What an option draws, for telling two options apart. Its whole document, not only its slot: a round
    set on the page root (the theme, the spacing) or in a stylesheet the builder adds draws different
@@ -613,7 +638,16 @@ function drPicture(doc, key) {
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
   var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
-  screenShown(variant, frame);
+  /* An option shown while its frame was loading: the page's said is the banner its switch would have
+     used. It is always set by then, since a frame loads only once the page's first switch puts it on
+     the stage; the throw is left loud all the same if it is not. */
+  try {
+    if (frame.drOwed) {
+      try { drTell(frame); } catch (err) { if (DR_SAID) DR_SAID(variant, err); else throw err; }
+    }
+  } finally {
+    drSize(frame);
+  }
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
   DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? drPicture(doc, variant.key) : null };
@@ -759,7 +793,7 @@ def main(argv):
     if chrome:
         # The round's builder and stylesheet run inside each option's own document; this page gets
         # the small builder that draws those documents.
-        template = chrome_frame.frame_document(chrome, builder, styles, "__DR_VARIANT__", fixture)
+        template = chrome_frame.frame_document(chrome, builder, styles, "__DR_VARIANT__", fixture, told_by_page=True)
         options = {v["key"]: chrome_frame.script_text(json.dumps(v)) for v in variants}
         values = {"TEMPLATE": chrome_frame.script_text(json.dumps(template)),
                   "OPTIONS": chrome_frame.script_text(json.dumps(options)),
