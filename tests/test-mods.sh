@@ -901,6 +901,51 @@ printf '%s\n' "$out" | grep 'own-core' | grep 'tests/register.test.tsx:3' | grep
   && check "#1484: naming the file and line, and pointing at mod-kit's standInCore" ok \
   || check "#1484: naming the file and line, and pointing at mod-kit's standInCore" "$out"
 case "$out" in *"check-mod-shared-parts: shared-core"*|*"check-mod-shared-parts: mod-kit"*) check "#1484: a query, a comment and mod-kit's own stand-in pass" "$out" ;; *) check "#1484: a query, a comment and mod-kit's own stand-in pass" ok ;; esac
+# #1577: the runner gives every test 5,000 ms of wall clock unless told otherwise, and has no file
+# wide or global setting, so a test file taking `test` from 'claude-code/testing' itself is judged
+# by how busy the Mac is (twenty copies of mod-kit's tests under load failed 20 of 20 on
+# 2026-10-23, nothing broken). Every test file takes it from mod-kit's tests/hang-ceiling.ts, whose
+# limit only a hang reaches; mod-kit's own tests included, and in any spelling of the import: on
+# its own line, across lines, renamed, or the whole module. Types alone, a comment, and the shared
+# file itself pass.
+M9T7="$TMPROOT/m9t7"
+mkmodsrc "$M9T7" mod-kit "export const reader = 1"
+mkdir -p "$M9T7/mod-kit/tests"
+printf "import { test as kitTest } from 'claude-code/testing'\nexport const test = (n, b) => kitTest(n, { timeoutMs: 120000 }, b)\n" > "$M9T7/mod-kit/tests/hang-ceiling.ts"
+printf "import { expect, test } from 'claude-code/testing'\n" > "$M9T7/mod-kit/tests/own.test.ts"
+printf "import { expect } from 'claude-code/testing'\nimport { test } from './hang-ceiling.ts'\n" > "$M9T7/mod-kit/tests/kit-shared.test.ts"
+mkmodsrc "$M9T7" plain "export const register = () => {}"
+mkdir -p "$M9T7/plain/tests"
+printf "import { expect, mock, test } from 'claude-code/testing'\n" > "$M9T7/plain/tests/register.test.ts"
+mkmodsrc "$M9T7" spread "export const register = () => {}"
+mkdir -p "$M9T7/spread/tests"
+printf "import type { Engine } from 'claude-code/testing'\nimport {\n  expect,\n  test,\n} from 'claude-code/testing'\n" > "$M9T7/spread/tests/a.test.tsx"
+printf "import { describe, test as t } from \"claude-code/testing\"\n" > "$M9T7/spread/tests/b.test.ts"
+printf "import * as kit from 'claude-code/testing'\n" > "$M9T7/spread/tests/c.test.ts"
+mkmodsrc "$M9T7" shared "export const register = () => {}"
+mkdir -p "$M9T7/shared/tests/mod-kit/tests"
+cp "$M9T7/mod-kit/tests/hang-ceiling.ts" "$M9T7/shared/tests/mod-kit/tests/hang-ceiling.ts"
+printf "import type { Engine } from 'claude-code/testing'\nimport { expect, mock } from 'claude-code/testing'\n// it used to import { test } from 'claude-code/testing'\n/* and import { expect, test } from 'claude-code/testing' */\nimport { test } from './mod-kit/tests/hang-ceiling.ts'\nimport { latest } from './contest.ts'\n" > "$M9T7/shared/tests/register.test.ts"
+out="$(bash "$SHARED" "$M9T7" 2>&1)"; code=$?
+[ "$code" -eq 1 ] && check "#1577: a test file taking test from claude-code/testing itself fails the run" ok \
+  || check "#1577: a test file taking test from claude-code/testing itself fails the run" "exit=$code out=$out"
+for at in "plain's tests/register.test.ts:1" "spread's tests/a.test.tsx:2" "spread's tests/b.test.ts:1" "spread's tests/c.test.ts:1" "mod-kit's tests/own.test.ts:1"; do
+  printf '%s\n' "$out" | grep -F "$at" | grep -q 'hang-ceiling.ts' \
+    && check "#1577: $at is named, pointing at mod-kit's tests/hang-ceiling.ts" ok \
+    || check "#1577: $at is named, pointing at mod-kit's tests/hang-ceiling.ts" "$out"
+done
+printf '%s\n' "$out" | grep -F "plain's tests/register.test.ts:1" | grep -qF "cp \"$M9T7/mod-kit/tests/hang-ceiling.ts\" \"$M9T7/plain/tests/mod-kit/tests/hang-ceiling.ts\"" \
+  && check "#1577: and names the cp that brings the shared file in" ok || check "#1577: and names the cp that brings the shared file in" "$out"
+case "$out" in *"shared's tests"*|*"kit-shared"*|*"hang-ceiling.ts:"*) check "#1577: types alone, a comment, the shared file and its users pass" "$out" ;; *) check "#1577: types alone, a comment, the shared file and its users pass" ok ;; esac
+rm -f "$M9T7/mod-kit/tests/own.test.ts" "$M9T7/plain/tests/register.test.ts" "$M9T7/spread/tests/"*.ts*
+out="$(bash "$SHARED" "$M9T7" 2>&1)"; code=$?
+[ "$code" -eq 0 ] && check "#1577: with every test file on the shared test, the run passes" ok \
+  || check "#1577: with every test file on the shared test, the run passes" "exit=$code out=$out"
+# The shared file holds the hang ceiling the real tests run under, and nothing else sets a lower one.
+HC="$ROOT/payload/mods/mod-kit/tests/hang-ceiling.ts"
+grep -qE '^export const HANG_MS = 120_000$' "$HC" 2>/dev/null \
+  && check "#1577: mod-kit's tests/hang-ceiling.ts sets two minutes, which only a hang reaches" ok \
+  || check "#1577: mod-kit's tests/hang-ceiling.ts sets two minutes, which only a hang reaches" "$(grep -n 'HANG_MS =' "$HC" 2>&1)"
 # #698: the band and result row were caught in one literal form on one line; a probe of 11 hand
 # rolled forms caught 3. The engine takes an unfiltered ui.render hook that tests e.component, and a
 # filter however it is spelled, so each form a mod could write is caught, with the remedy for it.
