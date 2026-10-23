@@ -1103,6 +1103,79 @@ test('no build refuses an edit with the grey card, and tells Claude to ask Dan "
   expect(w.reached).toEqual([])
 })
 
+// #1483, Dan's sign off of 2026-10-22 (picker answer "Let the approved lesson edit through"): with no
+// build on, the single Edit of ~/.claude/LESSONS.md matched to an approval from the lesson check or ask
+// before saving goes through; every other edit stays refused. Ask before saving's noun, standing in as
+// its own plugin so a test can leave it out: it answers approved while the world holds /abs/approved,
+// throws while it holds /abs/throws, and logs each call it is asked (ABS asked). Ask before saving's
+// own tests prove the real noun's matching, and that an approval answers once.
+const absNoun: { name: string; register: Register } = {
+  name: 'ask-before-saving',
+  register: on => {
+    on('engine.create', async ($, e, next) => {
+      const built = await next(e)
+      return {
+        ...built,
+        askBeforeSaving: {
+          isApproved: async (call: { tool: string; input: Record<string, unknown> }) => {
+            built.ui.log('ABS asked ' + JSON.stringify(call))
+            if (await built.fs.exists('/abs/throws')) throw new Error('the approvals could not be read')
+            return { isApproved: await built.fs.exists('/abs/approved') }
+          },
+        },
+      }
+    })
+  },
+}
+const withAbs = { plugins: [deps, isItLive, absNoun] }
+const LESSONS_FILE = '/Users/x/.claude/LESSONS.md'
+const lessonEditCall = (path = LESSONS_FILE, id = 'l1') => ({ tool: 'Edit', file_path: path, old_string: '## Data safety', new_string: '- **L9. A rule.**\n\n## Data safety', tool_use_id: id }) as never
+
+test('no build lets the one Edit of ~/.claude/LESSONS.md through when ask before saving holds its approval (#1483)', withAbs, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  // No approval: refused as any edit is.
+  expect(await call($ as never, lessonEditCall())).toMatch(/^Blocked: no build is on, so this did not edit LESSONS\.md\./)
+  w.files['/abs/approved'] = ''
+  expect(await call($ as never, lessonEditCall(LESSONS_FILE, 'l2'))).toBe('ran')
+  // What the noun was asked is the call as Claude sent it, its arguments only.
+  expect(w.logs.filter(l => l.startsWith('ABS asked ')).pop()).toBe(`ABS asked ${JSON.stringify({ tool: 'Edit', input: { file_path: LESSONS_FILE, old_string: '## Data safety', new_string: '- **L9. A rule.**\n\n## Data safety' } })}`)
+})
+
+test('an approval lets no other edit through under no build, and the noun is asked only about the lessons file (#1483)', withAbs, async ($, on) => {
+  const { w, clock } = world(on, { files: { '/abs/approved': '' } })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, lessonEditCall('/repo/app.ts'))).toMatch(/did not edit app\.ts/)
+  expect(await call($ as never, lessonEditCall('/repo/LESSONS.md'))).toMatch(/did not edit LESSONS\.md/)
+  expect(await call($ as never, { tool: 'Write', file_path: LESSONS_FILE, content: 'x', tool_use_id: 'w1' } as never)).toMatch(/did not edit LESSONS\.md/)
+  expect(await call($ as never, bash(`printf x >> ${LESSONS_FILE}`))).toMatch(/did not write to LESSONS\.md/)
+  expect(w.logs.filter(l => l.startsWith('ABS asked '))).toEqual([])
+})
+
+test('ask before saving not loaded, or its noun failing, leaves the lessons Edit refused (#1483)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { '/abs/approved': '' } })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, lessonEditCall())).toMatch(/^Blocked: no build is on, so this did not edit LESSONS\.md\./)
+})
+
+test('a noun that throws leaves the lessons Edit refused, and says it could not ask (#1483)', withAbs, async ($, on) => {
+  const { w, clock } = world(on, { files: { '/abs/approved': '', '/abs/throws': '' } })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  expect(await call($ as never, lessonEditCall())).toMatch(/^Blocked: no build is on, so this did not edit LESSONS\.md\./)
+  expect(w.logs.join('\n')).toMatch(/could not ask ask before saving whether Dan approved this edit to LESSONS\.md/)
+})
+
+test('without no build the lessons Edit is never asked about here (#1483)', withAbs, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  expect(await call($ as never, lessonEditCall())).toBe('ran')
+  expect(w.logs.filter(l => l.startsWith('ABS asked '))).toEqual([])
+})
+
 test('no build allows reading, tests, scratchpad notes and issue work, and refuses commits and a shell route around it', withDeps, async ($, on) => {
   const { w, clock } = world(on)
   await start($ as never, clock)

@@ -316,14 +316,31 @@ export const dbToolRefusal = (tool: string, input: Record<string, unknown>): Ref
 }
 
 /**
- * Why no build refuses this call, as the action it would have taken ("edit app.ts", "run git
- * commit"), or undefined when no build allows it.
+ * Whether a call is the one edit no build lets through on an approval (#1483): a single Edit, never
+ * replace_all, of the user's own lessons file, `<home>/.claude/LESSONS.md` spelled exactly so. A
+ * project's LESSONS.md, a Write, a MultiEdit and every shell route are not it. Asked before the
+ * approval is read, so only this call ever asks ask before saving.
  */
-export const noBuildRefusal = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[]; writes: ModKitWrites }): Refusal | undefined => {
+export const lessonsEdit = (tool: string, input: Record<string, unknown>, home: string): boolean =>
+  tool === 'Edit' && /^\/./.test(home) && input.replace_all !== true && input.file_path === `${home.replace(/\/+$/, '')}/.claude/LESSONS.md`
+
+/**
+ * Why no build refuses this call, as the action it would have taken ("edit app.ts", "run git
+ * commit"), or undefined when no build allows it. `lesson` is what ask before saving answered about
+ * this call (#1483): whether it carries a live, unspent approval Dan gave, in the durable lesson
+ * picker or by For good, for exactly this edit, and the home its lessons file is under.
+ *
+ * #1483, Dan's sign off of 2026-10-22 (picker answer "Let the approved lesson edit through"): "with no
+ * build on, the single Edit of ~/.claude/LESSONS.md matched to an approval from the lesson check or
+ * ask-before-saving is let through; every other edit stays refused."
+ */
+export const noBuildRefusal = (call: { tool: string; input: Record<string, unknown>; commands: Cmd[]; writes: ModKitWrites; lesson?: { home: string; approved: boolean } }): Refusal | undefined => {
   const { tool, input } = call
   if (EDITORS.has(tool)) {
     const path = String(input.file_path ?? input.notebook_path ?? '')
-    return inNotes(path) ? undefined : { what: `edit ${base(path)}` }
+    if (inNotes(path)) return undefined
+    if (call.lesson?.approved === true && lessonsEdit(tool, input, call.lesson.home)) return undefined
+    return { what: `edit ${base(path)}` }
   }
   if (tool === 'EnterWorktree') return { what: 'enter a new worktree' }
   const db = dbToolRefusal(tool, input)

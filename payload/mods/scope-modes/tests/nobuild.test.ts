@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { inScratch, noBuildRefusal } from '../hooks/nobuild.ts'
+import { inScratch, lessonsEdit, noBuildRefusal } from '../hooks/nobuild.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { readCommands } from './read.ts'
 
@@ -256,6 +256,48 @@ describe('still refused, beside what the audit opened up (#702)', () => {
     expect(what(tool('Write', { file_path: '/Users/x/proj/.claude/projects/p/memory/a.ts' }))).toBe('edit a.ts')
     expect(what(tool('Write', { file_path: '/Users/x/.claude/projects/p/memory/../../../proj/a.ts' }))).toBe('edit a.ts')
     expect(what(tool('Write', { file_path: '/Users/x/.claude/settings.json' }))).toBe('edit settings.json')
+  })
+})
+
+// #1483, Dan's sign off of 2026-10-22 (picker answer "Let the approved lesson edit through"): with no
+// build on, the single Edit of ~/.claude/LESSONS.md matched to an approval from the lesson check or ask
+// before saving is let through; every other edit stays refused. Whether the call carries a live,
+// unspent approval is ask before saving's answer, read through its noun and handed in as `approved`.
+describe('an approved lesson under no build (#1483)', () => {
+  const LESSONS = '/Users/x/.claude/LESSONS.md'
+  const lessonEdit = { file_path: LESSONS, old_string: '## Data safety', new_string: '- **L9. A rule.**\n\n## Data safety' }
+  const judged = (name: string, input: Record<string, unknown>, approved: boolean) =>
+    noBuildRefusal({ tool: name, input, commands: [], writes: { files: [], changes: [], unnamed: [] }, lesson: { home: HOME, approved } })?.what
+  test('the approved Edit of the lessons file goes through', () => {
+    expect(judged('Edit', lessonEdit, true)).toBeUndefined()
+    expect(lessonsEdit('Edit', lessonEdit, HOME)).toBe(true)
+  })
+  test('the same Edit with no live approval is refused', () => {
+    expect(judged('Edit', lessonEdit, false)).toBe('edit LESSONS.md')
+    // And with nothing read about an approval at all.
+    expect(tool('Edit', lessonEdit)?.what).toBe('edit LESSONS.md')
+  })
+  test('an approval lets no other file through, however it is spelled', () => {
+    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/proj/app.ts' }, true)).toBe('edit app.ts')
+    // A project's own lessons file, the config repository's payload copy among them.
+    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/claude-config/payload/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/.claude/projects/p/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    // A path that climbs out and back, a relative one, another home's, and an empty home.
+    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/x/.claude/../.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: '.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(judged('Edit', { ...lessonEdit, file_path: '/Users/y/.claude/LESSONS.md' }, true)).toBe('edit LESSONS.md')
+    expect(lessonsEdit('Edit', { ...lessonEdit, file_path: '/.claude/LESSONS.md' }, '')).toBe(false)
+  })
+  test('only the single Edit: a Write, a MultiEdit or a notebook edit of the lessons file is refused', () => {
+    expect(judged('Write', { file_path: LESSONS, content: 'x' }, true)).toBe('edit LESSONS.md')
+    expect(judged('MultiEdit', { file_path: LESSONS, edits: [] }, true)).toBe('edit LESSONS.md')
+    expect(judged('NotebookEdit', { notebook_path: LESSONS }, true)).toBe('edit LESSONS.md')
+    // replace_all edits every match, which no approval names.
+    expect(judged('Edit', { ...lessonEdit, replace_all: true }, true)).toBe('edit LESSONS.md')
+  })
+  test('an approval passes no shell route to the lessons file', () => {
+    const command = `printf '%s\\n' '- a rule' >> ${LESSONS}`
+    expect(noBuildRefusal({ tool: 'Bash', input: { command }, commands: readCommands(command), writes: commandWrites(command, CWD, HOME), lesson: { home: HOME, approved: true } })?.what).toBe('write to LESSONS.md')
   })
 })
 

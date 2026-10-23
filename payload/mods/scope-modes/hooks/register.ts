@@ -12,7 +12,7 @@ import type {
   ScopeModesTarget,
 } from '../types/index.d.ts'
 import { awayAllows, heldCard, heldRefusal, heldTool, isTestBuild, needsTheMac, typedTarget, type TestBuildFs } from './away.ts'
-import { EDITORS, ghWords, noBuildRefusal, type Cmd } from './nobuild.ts'
+import { EDITORS, ghWords, lessonsEdit, noBuildRefusal, type Cmd } from './nobuild.ts'
 import {
   addAnswer,
   closedSentence,
@@ -3961,6 +3961,29 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
 
 // What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
 // or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
+/** Ask before saving's noun (#1483), as its contract has it; it may not be loaded at all. */
+type AskBeforeSavingNoun = { isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }> }
+
+// What no build hands noBuildRefusal about the one edit it lets through on an approval (#1483, Dan's
+// sign off of 2026-10-22): asked of ask before saving only for the main session's single Edit of
+// ~/.claude/LESSONS.md (lessonsEdit), whose approvals and their matching are that mod's alone (L370).
+// It only looks; that mod takes the approval as the call passes its own check, so it answers once.
+// Not loaded, out of step, or failing is not approved, the edit refused as before, and a failure is
+// logged (L42: a guard that cannot check refuses).
+const lessonApproval = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<{ home: string; approved: boolean } | undefined> => {
+  const home = (await $.env.get('HOME')) ?? ''
+  if (input.agentId !== undefined || !lessonsEdit(tool, input, home)) return undefined
+  const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+  try {
+    // A noun of $ is spelled at its call site, as the engine requires.
+    const r = await ($ as unknown as { askBeforeSaving: AskBeforeSavingNoun }).askBeforeSaving.isApproved({ tool, input: args })
+    return { home, approved: r.isApproved === true }
+  } catch (err) {
+    if (missingOf(err)?.kind !== 'noun') $.ui.log(`scope-modes: no build could not ask ask before saving whether Dan approved this edit to LESSONS.md (${msg(err)}), so it stays refused`)
+    return { home, approved: false }
+  }
+}
+
 type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
 type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[] } | undefined
 const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
@@ -3971,7 +3994,7 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
 
   if (scope === 'NO BUILD') {
     const writes = raw ? await readWrites($, raw) : NO_WRITES
-    const r = noBuildRefusal({ tool, input, commands, writes })
+    const r = noBuildRefusal({ tool, input, commands, writes, lesson: await lessonApproval($, tool, input) })
     if (r) {
       await $.modkit.blocked({ toolUseId, guard: 'No build', reason: `No build is on, so this would not ${r.what}.`, safeWay: 'Claude asks you: Switch to build?' })
       return {

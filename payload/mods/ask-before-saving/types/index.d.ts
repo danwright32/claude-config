@@ -38,7 +38,24 @@ export type AskBeforeSavingApproval = {
   lesson?: string
 }
 
+/**
+ * Called from another mod (#1483: no build asks it before letting the one approved Edit of
+ * ~/.claude/LESSONS.md through): await it.
+ */
+export type AskBeforeSaving = {
+  /**
+   * Whether this call carries a live, unspent approval Dan gave for exactly what it writes: For good
+   * on this save, or Add to LESSONS.md in the durable lesson picker for the lesson it adds. It only
+   * looks: the approval is spent by this mod as the call passes its check, so a call sent again after
+   * one that landed is answered false. `input` is the tool's arguments as Claude sent them.
+   */
+  isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }>
+}
+
 declare module 'claude-code' {
+  interface EngineInterface {
+    askBeforeSaving: AskBeforeSaving
+  }
   interface PluginState {
     /**
      * In $.state so a reload of the mod keeps them, and dropped at session end: the refused saves
