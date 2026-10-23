@@ -81,7 +81,11 @@ receipt folder holds screenshots of private apps. Beside it are the screenshots,
 `drives.jsonl` (every drive call, its area, arguments and exit), and the copies of areas.json and
 the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
-`recovered`, `start_failed`, `supervisor_error`), the build stamp, and `egress`.
+`recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
+stamp, and `egress`. The three `start_` reasons mean setup failed before serve started, and
+`worktree_removed` says whether the worktree went: `start_failed` a named refusal, `start_error` any other error (a full disk, a
+failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any
+cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`.
 
 ## CREATE
 
