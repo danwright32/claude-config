@@ -1109,6 +1109,79 @@ config on every rewrite, so a running session uses the new list at once and the 
 session; the write is not counted as config received, because a Mac whose own list drifted receives
 nothing by having it put back.
 
+## A project's local allow rules are swept at session start, and removed only on Dan's answer (#1582)
+
+Answering a permission prompt with "Yes, don't ask again" saves that exact command as an allow rule in
+the project's `.claude/settings.local.json`, out of git and read by nothing we own. On 2026-10-21 to 23
+Slate, Bidspoke and PET each opened every session with Claude Code's "allows any option at its *"
+warnings for one off rules, and Bidspoke's held a live Cloudflare and Supabase token in plain text.
+Dan chose "Sweep and report" on 2026-10-23: flag, say once, remove only what he picks. Allowing read
+only commands everywhere was offered and not chosen, so this adds no allow rule of its own.
+
+`hooks/local-allow-sweep.sh` (SessionStart) only decides whether there is a file; the judging, the
+record and the removal are `hooks/lib/local-allow-rules.py`, whose header is the full rule.
+
+**What counts as holding a key or token is the one redactor, not a second list (L370, L655).**
+`lib/review-redact.sed`, applied through `ar_redact` in `ai-review-common.sh`, is already trusted with
+exactly this case (a Supabase key inside a curl rule, Bidspoke 2026-09-24, which is why `ar_redact
+--stderr` drops permission rule lines). A rule it would change holds a key. claude-sync's `scan_secrets`
+was the other candidate and was not used: it lives outside the payload, so no installed hook can read
+it, and it has no rule for a bearer header, which is how tokens reach curl rules. Two shapes the
+redactor could not see were added to it, not to this hook, so the review's redaction gained them too
+(#1585): a secret after a flag and a space (`--token VALUE`, `--api-key VALUE`, `--auth VALUE`, unless
+the value starts like a path, a variable, a placeholder or the next flag), and a bare 40 character
+Cloudflare API token, the shape Bidspoke's rules held. A commit id is 40 characters too, so a run
+counts only when it holds a digit, an upper case and a lower case letter, and a run beside `+` or `/`
+is base64 and is left alone. Measured on 2026-10-23 over the repository's 1044 tracked text files
+(349,776 lines): the two rules changed only the two invented fixtures written for them, after the
+base64 exclusion took out the one other line (a package lock integrity hash); and they flagged no
+additional rule in the 1011 real ones counted above.
+
+**No rule's text is ever printed, flagged as a secret or not.** A rule is named by position, tool and
+the first word of its command (`rule 6 (Bash curl)`), and its kinds. Printing the text of the rules
+flagged only as one off would rest the promise "a secret is never printed" on the detector being
+complete, which the gap above shows it is not (L27).
+
+**One off**, by shape: a `*` anywhere but a trailing prefix wildcard; a path into `dist/` or a temp
+folder (tmp, var/folders, TMPDIR, a scratchpad, an agent worktree); and, for an exact Bash rule,
+literal arguments (a quote, a path argument, a number of three or more digits such as a process id, an
+env assignment, a pipe or chain, or more than four words). A prefix rule is one off only when its
+prefix carries a quoted string. Measured by counts only on 2026-10-23 against the four local settings
+files on the personal MacBook (Downbeat, NurseDex, PostRoll, playeditapp): 1011 rules, 688 exact Bash,
+250 prefix Bash, 73 other tools. 605 flagged: 566 literal, 76 temp or dist, 33 a `*` inside, 1
+holding a key (a rule can carry several). Of the literal ones, 28 fired on the word count alone and 17
+on a process id alone (the process id rule was added after the first count showed 14 exact `kill
+<pid>` rules passing as clean); the rest carried a quote, a path or a chain. The largest single group is exact `xcodebuild` commands (104),
+which may be a repeated build line rather than a one off, which is why the picker offers removal by
+kind and never removes on its own.
+
+**Once per set.** The 12 character sha256 prefixes of the flagged rules last said are kept in
+`~/.claude/state/local-allow-sweep/<key>` (hashes only, never rule text). It speaks again only when a
+flagged rule is not in that set, so keeping them, or removing some, is not repeated every session. A
+file that cannot be judged (unreadable, not JSON, allow not a list) is said once per content, in its own
+words, and changes nothing (L11). A redactor that cannot run is said every session and never recorded,
+since that is our install that is broken. A detached headless run says nothing and records nothing.
+
+**Cost.** With no local settings file, one test of a path and no process. With one, python3 reads it
+once and runs the redactor once over every rule together, so three processes whatever the rule count;
+the record is read only when something is flagged. Measured in `test-per-prompt-hook-cost.sh` (0
+processes with no file; 3 with 2 rules and with 200, clean and flagged) and by wall clock on 2026-10-23,
+15 samples each at load average 85: no file 4 ms median, 40 clean rules 78 ms, 430 clean rules 85 ms,
+430 flagged rules already said 84 ms.
+
+**Removal (L5, L9, L237).** The picker carries ready commands naming each rule as position and
+fingerprint. The remove refuses, changing nothing, when the rule at a position is not the one
+fingerprinted (the file changed since the sweep), when the file cannot be parsed, or when the backup
+cannot be written. The backup goes to `~/.claude-allow-rule-backups/<project>-<key>/` (folder 700, file
+600) and is read back before anything changes; never inside `~/.claude`, whose sync keeps out only
+names ending exactly in `.local.json` and publishes to a public repository, and never inside the
+project, where git would see it. Backups are never deleted automatically (L9). The picked strings are
+cut out of the raw text with the comma and spacing that went with them, so every byte outside the
+allow list is unchanged; the result must parse to the original document minus exactly those rules,
+and is written to a temporary file beside the original and renamed over it, so a failed write leaves
+the original as it was, then read back. Two sessions starting in one project at the same moment can
+both say it; that is the cost of not taking a lock at session start.
+
 ## A fixture home touches nothing that belongs to the Mac (#1453, #1470, #1486)
 
 rtk's config is one of several things `claude-sync` reaches that belong to the Mac rather than to
