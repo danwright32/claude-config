@@ -10,13 +10,19 @@ Serve must stop on every path, so every way a run can end is driven here: a norm
 command that never succeeds, serve dying by itself, the deadline, and the supervisor killed outright.
 """
 
+import contextlib
+import errno
+import fcntl
+import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -83,7 +89,9 @@ def live_members(pgid):
     return live
 
 
-class RunSessionTests(unittest.TestCase):
+class RunFixture(unittest.TestCase):
+    """The throwaway repository and the helpers both test classes use; it holds no tests."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = os.path.realpath(self.tmp.name)
@@ -171,6 +179,8 @@ class RunSessionTests(unittest.TestCase):
         listed = git(self.repo, "worktree", "list", "--porcelain")
         self.assertNotIn(rec["worktree"], listed)
 
+
+class RunSessionTests(RunFixture):
     def test_start_drive_stop(self):
         sha = self.commit()
         r = self.start(sha)
@@ -312,6 +322,199 @@ class RunSessionTests(unittest.TestCase):
         r = self.start(git(self.repo, "rev-parse", "HEAD"))
         self.assertEqual(r.returncode, 3)
         self.assertIn("areas-missing", r.stderr)
+
+
+# The real functions, taken before any test patches them, so an injected failure can let every
+# other call through untouched.
+REAL_GIT = run_session.git
+REAL_UPDATE_RECEIPT = run_session.update_receipt
+REAL_DUMP = json.dump
+REAL_POPEN = subprocess.Popen
+REAL_MAKEDIRS = os.makedirs
+
+DISK_FULL = OSError(errno.ENOSPC, "No space left on device")
+
+
+def fail_initial_receipt(rdir, **fields):
+    if "schema" in fields:
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return REAL_UPDATE_RECEIPT(rdir, **fields)
+
+
+def fail_after_worktree_add(repo, *args, check=True):
+    r = REAL_GIT(repo, *args, check=check)
+    if args[:2] == ("worktree", "add"):
+        raise OSError(errno.EIO, "Input/output error")
+    return r
+
+
+def fail_areas_copy(obj, f, *args, **kwargs):
+    if getattr(f, "name", "").endswith(os.sep + "areas.json"):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return REAL_DUMP(obj, f, *args, **kwargs)
+
+
+def fail_supervisor_launch(argv, *args, **kwargs):
+    if "_supervise" in argv:
+        raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
+    return REAL_POPEN(argv, *args, **kwargs)
+
+
+def fail_guides_dir(path, *args, **kwargs):
+    if path.endswith(os.sep + "guides"):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    return REAL_MAKEDIRS(path, *args, **kwargs)
+
+
+class StartSetupFailureTests(RunFixture):
+    """Any failure while start sets a run up runs the same cleanup as a named refusal (#1570).
+
+    start is called in process so a failure can be injected at each setup step; an injection after
+    a step lets that step's real work happen first, so the worktree is really there to be left
+    behind. Nothing here starts serve: each failure lands before the supervisor exists.
+    """
+
+    def start_in_process(self, sha, *patches):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, self.env()))
+            for p in patches:
+                stack.enter_context(p)
+            return run_session.start(self.repo, sha, "invoices")
+
+    def worktree_of(self, rid):
+        return os.path.join(self.home, "receipts", rid, "worktree")
+
+    def assert_lock_released(self):
+        fd = os.open(run_session.repo_lock(self.home, self.repo), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # BlockingIOError while still held
+        finally:
+            os.close(fd)
+
+    def assert_abandoned(self, stopped_by, detail_has):
+        rid = self.only_receipt_id()
+        rec = self.receipt(rid)
+        self.assertEqual(rec["stopped_by"], stopped_by, rec)
+        self.assertTrue(rec["stopped_at"], rec)
+        self.assertIn(detail_has, rec["stop_detail"])
+        wt = self.worktree_of(rid)
+        self.assertFalse(os.path.exists(wt), "worktree left behind")
+        self.assertTrue(rec["worktree_removed"], rec)
+        self.assertNotIn(wt, git(self.repo, "worktree", "list", "--porcelain"))
+        self.assert_lock_released()
+        return rec
+
+    def assert_refused(self, ctx, kind, message_has):
+        problems = ctx.exception.problems
+        self.assertEqual(problems[0][0], kind, problems)
+        self.assertIn(message_has, problems[0][1])
+        return problems
+
+    def test_a_disk_full_writing_the_first_receipt(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session, "update_receipt",
+                                                         side_effect=fail_initial_receipt))
+        self.assert_refused(ctx, "disk-full", "No space left on device")
+        self.assert_abandoned("start_error", "OSError")
+
+    def test_an_error_after_the_worktree_was_added(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session, "git", side_effect=fail_after_worktree_add))
+        self.assert_refused(ctx, "start-error", "Input/output error")
+        self.assert_abandoned("start_error", "Input/output error")
+
+    def test_a_disk_full_copying_areas_json(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session.json, "dump", side_effect=fail_areas_copy))
+        self.assert_refused(ctx, "disk-full", "No space left on device")
+        self.assert_abandoned("start_error", "No space left on device")
+
+    def test_a_disk_full_copying_a_guide(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session.shutil, "copyfile", side_effect=DISK_FULL))
+        self.assert_refused(ctx, "disk-full", "No space left on device")
+        self.assert_abandoned("start_error", "No space left on device")
+
+    def test_the_supervisor_failing_to_launch(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session.subprocess, "Popen",
+                                                         side_effect=fail_supervisor_launch))
+        self.assert_refused(ctx, "start-error", "Resource temporarily unavailable")
+        self.assert_abandoned("start_error", "Resource temporarily unavailable")
+
+    def test_an_interrupt_during_setup_is_cleaned_up_and_raised_again(self):
+        sha = self.commit()
+        with self.assertRaises(KeyboardInterrupt):
+            self.start_in_process(sha, mock.patch.object(run_session.shutil, "copyfile",
+                                                         side_effect=KeyboardInterrupt()))
+        self.assert_abandoned("start_interrupted", "KeyboardInterrupt")
+
+    def test_a_named_refusal_during_setup_keeps_its_own_name(self):
+        sha = self.commit()
+        refusal = v.VerificationError(("guide-unreadable", "the guide could not be read"))
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session.v, "load_guide", side_effect=refusal))
+        self.assert_refused(ctx, "guide-unreadable", "the guide could not be read")
+        self.assert_abandoned("start_failed", "the guide could not be read")
+
+    def test_a_cleanup_that_fails_is_reported_beside_the_original_error(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha,
+                                  mock.patch.object(run_session.shutil, "copyfile", side_effect=DISK_FULL),
+                                  mock.patch.object(run_session, "remove_worktree",
+                                                    side_effect=OSError(errno.EACCES, "Permission denied")))
+        problems = self.assert_refused(ctx, "disk-full", "No space left on device")
+        cleanup = [m for k, m in problems if k == "start-cleanup-failed"]
+        self.assertEqual(len(cleanup), 1, problems)
+        self.assertIn("Permission denied", cleanup[0])
+        rec = self.receipt(self.only_receipt_id())
+        self.assertEqual(rec["stopped_by"], "start_error", rec)
+        self.assertFalse(rec["worktree_removed"], rec)
+        self.assertIn("Permission denied", rec["stop_detail"])
+        self.assert_lock_released()
+        shutil.rmtree(self.worktree_of(self.only_receipt_id()), ignore_errors=True)
+
+    def test_a_worktree_that_will_not_go_is_reported(self):
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha,
+                                  mock.patch.object(run_session.shutil, "copyfile", side_effect=DISK_FULL),
+                                  mock.patch.object(run_session, "remove_worktree", return_value=False))
+        problems = self.assert_refused(ctx, "disk-full", "No space left on device")
+        cleanup = [m for k, m in problems if k == "start-cleanup-failed"]
+        self.assertEqual(len(cleanup), 1, problems)
+        self.assertIn(self.worktree_of(self.only_receipt_id()), cleanup[0])
+        self.assert_lock_released()
+
+    def test_a_stop_that_cannot_be_recorded_is_reported(self):
+        # The receipt folder itself could not be made, so there is nowhere to record the stop: the
+        # refusal says so rather than implying the receipt holds one.
+        sha = self.commit()
+        with self.assertRaises(v.VerificationError) as ctx:
+            self.start_in_process(sha, mock.patch.object(run_session.os, "makedirs", side_effect=fail_guides_dir))
+        problems = self.assert_refused(ctx, "disk-full", "No space left on device")
+        cleanup = [m for k, m in problems if k == "start-cleanup-failed"]
+        self.assertEqual(len(cleanup), 1, problems)
+        self.assertIn("stop could not be recorded", cleanup[0])
+        self.assert_lock_released()
+
+    def test_the_cli_names_the_original_error(self):
+        sha = self.commit()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                mock.patch.object(run_session.shutil, "copyfile", side_effect=DISK_FULL), \
+                mock.patch.dict(os.environ, self.env()):
+            code = run_session.main(["start", "--repo", self.repo, "--sha", sha, "--areas", "invoices"])
+        self.assertEqual(code, 8, err.getvalue())
+        self.assertIn("disk-full", err.getvalue())
+        self.assertIn("No space left on device", err.getvalue())
+        self.assert_abandoned("start_error", "No space left on device")
 
 
 if __name__ == "__main__":

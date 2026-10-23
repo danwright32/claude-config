@@ -40,6 +40,7 @@ Exit codes are verification.py's: 0 ok, 2 usage, 3 not found, 4 refused, 5 busy,
 """
 
 import argparse
+import contextlib
 import errno
 import fcntl
 import hashlib
@@ -349,6 +350,61 @@ def repo_lock(home, repo):
     return os.path.join(home, "locks", key + ".lock")
 
 
+def abandon_start(err, repo, rdir, wt, lock_fd, opened=()):
+    """Undo a start whose setup failed, record why, and raise the failure. Never returns.
+
+    Runs for every failure, a named refusal or not (claude-config#1570). The original error is never
+    replaced (L11): a VerificationError keeps its own problems, any other Exception becomes a named
+    refusal carrying its own type and message, and an interrupt is raised again as itself. A cleanup
+    step that fails is reported beside the original rather than hiding it, the steps after it still
+    run, and the project's lock is released whatever happens.
+    """
+    if isinstance(err, v.VerificationError):
+        stopped_by, detail = "start_failed", str(err)
+    else:
+        stopped_by = "start_error" if isinstance(err, Exception) else "start_interrupted"
+        detail = "%s: %s" % (type(err).__name__, err) if str(err) else type(err).__name__
+    detail = detail[:500]
+    cleanup = []
+    removed = False
+    try:
+        try:
+            removed = remove_worktree(repo, wt)
+            if not removed:
+                cleanup.append("the worktree %s is still there or still listed by git; remove it with:"
+                               " git -C %s worktree remove --force %s" % (wt, repo, wt))
+        except Exception as e:
+            cleanup.append("removing the worktree %s failed: %s: %s" % (wt, type(e).__name__, e))
+        try:
+            update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=stopped_by, worktree_removed=removed,
+                           stop_detail="; ".join([detail] + cleanup))
+        except Exception as e:
+            cleanup.append("the stop could not be recorded in %s: %s: %s"
+                           % (receipt_path(rdir), type(e).__name__, e))
+    finally:
+        for f in opened:
+            # A descriptor this process opened a moment ago; closing it cannot lose anything, and
+            # the cleanup's outcome is already decided above.
+            with contextlib.suppress(OSError):
+                if isinstance(f, int):
+                    os.close(f)
+                else:
+                    f.close()
+        os.close(lock_fd)
+    problems = [("start-cleanup-failed", m) for m in cleanup]
+    if isinstance(err, v.VerificationError):
+        if not problems:
+            raise err
+        raise v.VerificationError(err.problems + problems) from err
+    if isinstance(err, Exception):
+        kind = "disk-full" if isinstance(err, OSError) and err.errno == errno.ENOSPC else "start-error"
+        raise v.VerificationError([(kind, "setting up run %s failed before serve started: %s"
+                                    % (os.path.basename(rdir), detail))] + problems) from err
+    for kind, message in problems:
+        print("verification: %s: %s" % (kind, message), file=sys.stderr)
+    raise err
+
+
 def start(repo, sha, areas_csv):
     if not v.SHA_RE.match(sha or ""):
         v.fail("bad-sha", "%r is not a full 40 character commit SHA (use the PR's headRefOid)" % sha)
@@ -385,26 +441,22 @@ def start(repo, sha, areas_csv):
 
     rid = "%s-%s-%s" % (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), sha[:7], secrets.token_hex(3))
     rdir = v.receipt_dir(rid, home)
-    os.makedirs(os.path.join(rdir, "guides"))
-    os.ftruncate(lock_fd, 0)
-    os.lseek(lock_fd, 0, os.SEEK_SET)
-    os.write(lock_fd, rid.encode())
     wt = os.path.join(rdir, "worktree")
-    update_receipt(rdir, schema=v.RECEIPT_SCHEMA, receipt_id=rid, machine=v.machine_name(), repo=repo,
-                   head_sha=sha, checkout_sha=None, areas=wanted, url=doc["url"], started_at=v.utc_now(),
-                   ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
-                   stop_command_exit=None, worktree=wt, worktree_removed=False, supervisor_pid=None,
-                   serve_pid=None, serve_pgid=None, build_stamp=None, build_stamp_source="none",
-                   egress={"verdict": "unmeasured", "why": EGRESS_WHY}, drives="drives.jsonl")
-
-    def abandon(err):
-        removed = remove_worktree(repo, wt)
-        update_receipt(rdir, stopped_at=v.utc_now(), stopped_by="start_failed",
-                       stop_detail=str(err)[:500], worktree_removed=removed)
-        os.close(lock_fd)
-        raise err
-
+    # Everything from here until the supervisor exists is setup, and ANY failure in it (a named
+    # refusal, a full disk, an interrupt) gets the same cleanup: nothing else would remove the
+    # worktree or record why the run never started (claude-config#1570).
+    opened = []  # descriptors and files setup opened, closed again if it fails
     try:
+        os.makedirs(os.path.join(rdir, "guides"))
+        os.ftruncate(lock_fd, 0)
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+        os.write(lock_fd, rid.encode())
+        update_receipt(rdir, schema=v.RECEIPT_SCHEMA, receipt_id=rid, machine=v.machine_name(), repo=repo,
+                       head_sha=sha, checkout_sha=None, areas=wanted, url=doc["url"], started_at=v.utc_now(),
+                       ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
+                       stop_command_exit=None, worktree=wt, worktree_removed=False, supervisor_pid=None,
+                       serve_pid=None, serve_pgid=None, build_stamp=None, build_stamp_source="none",
+                       egress={"verdict": "unmeasured", "why": EGRESS_WHY}, drives="drives.jsonl")
         git(repo, "worktree", "add", "--detach", wt, sha)
         checkout = git(wt, "rev-parse", "HEAD").stdout.strip()
         update_receipt(rdir, checkout_sha=checkout)
@@ -417,14 +469,15 @@ def start(repo, sha, areas_csv):
             if area["name"] in wanted:
                 v.load_guide(os.path.join(wt, area["guide"]))
                 shutil.copyfile(os.path.join(wt, area["guide"]), os.path.join(rdir, "guides", area["name"] + ".md"))
-    except v.VerificationError as e:
-        abandon(e)
-
-    r_fd, w_fd = os.pipe()
-    log = open(os.path.join(rdir, "supervisor.log"), "ab")
-    sup = subprocess.Popen([sys.executable, os.path.abspath(__file__), "_supervise", rdir, str(lock_fd), str(w_fd)],
-                           pass_fds=(lock_fd, w_fd), start_new_session=True, stdin=subprocess.DEVNULL,
-                           stdout=log, stderr=subprocess.STDOUT, cwd=rdir)
+        r_fd, w_fd = os.pipe()
+        opened.extend((r_fd, w_fd))
+        log = open(os.path.join(rdir, "supervisor.log"), "ab")
+        opened.append(log)
+        sup = subprocess.Popen([sys.executable, os.path.abspath(__file__), "_supervise", rdir, str(lock_fd),
+                                str(w_fd)], pass_fds=(lock_fd, w_fd), start_new_session=True,
+                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=rdir)
+    except BaseException as e:
+        abandon_start(e, repo, rdir, wt, lock_fd, opened)
     os.close(w_fd)
     os.close(lock_fd)  # the supervisor holds the project's lock from here on
     said = b""
