@@ -31,10 +31,15 @@ T="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/local-allow-sweep-test.XXXXXXXX")" && pwd 
 case "${T%/}" in ''|/|"${HOME%/}") echo "refusing: scratch came back as '$T'" >&2; exit 2 ;; esac
 trap 'chmod -R u+rwx "$T" 2>/dev/null; rm -rf "$T"' EXIT
 
-# Invented secrets, built from pieces so no line here is shaped like one.
-FAKE_BEARER="Zq7$(printf 'Kp9w%.0s' 1 2 3 4 5 6 7 8)Xv"
-FAKE_ASSIGN="$(printf 'Ty4m%.0s' 1 2 3 4 5 6 7 8 9)Q"
-TOKEN_NAME="CLOUDFLARE_API_$(printf 'TOK')EN"
+# Invented secrets, each written whole in a shape the push's secret scan accepts by its own rules,
+# never assembled from pieces to get past it (claude-config#1125): a bearer value (the scan has no
+# bearer rule), an assigned value under the 24 characters the scan reads as a credential, a value
+# after a --token flag with a space, and a bare 40 character token of Cloudflare's shape (#1585).
+FAKE_BEARER="Zq7Kp9wKp9wKp9wKp9wKp9wKp9wKp9wKp9wXv"
+FAKE_ASSIGN="RGsbDJuyuFSMCiK4gnZm"
+FAKE_FLAG="TARKU4xHlfoL8Ld3pIAvjkaeiElo8X5Y6hvV"
+FAKE_CF="Mu2Q7bFErl22VHXrRzdRySqGZ7eUhA6SpanQFtu0"
+TOKEN_NAME="CLOUDFLARE_API_TOKEN"
 
 fp(){ printf '%s' "$1" | shasum -a 256 | cut -c1-12; }
 # Permission bits as octal digits, read the same way on macOS and Linux (stat's flags differ).
@@ -69,8 +74,8 @@ remove(){ # remove <rules arg> [env...] -> OUT, RC
 has(){ case "$OUT" in *"$1"*) echo ok ;; *) echo "output lacks '$1': ${OUT:0:600}" ;; esac; }
 lacks(){ case "$OUT" in *"$1"*) echo "output carries '$2'" ;; *) echo ok ;; esac; }
 same_file(){ cmp -s "$1" "$2" && echo ok || echo "the file changed"; }
-no_secret_under(){ # no_secret_under <dir>: neither fake secret is in any file there
-  if grep -r -l -F -e "$FAKE_BEARER" -e "$FAKE_ASSIGN" "$1" >/dev/null 2>&1; then echo "a secret was written under $1"; else echo ok; fi
+no_secret_under(){ # no_secret_under <dir>: no fake secret is in any file there
+  if grep -r -l -F -e "$FAKE_BEARER" -e "$FAKE_ASSIGN" -e "$FAKE_FLAG" -e "$FAKE_CF" "$1" >/dev/null 2>&1; then echo "a secret was written under $1"; else echo ok; fi
 }
 
 # --- wiring ------------------------------------------------------------------------------------
@@ -173,6 +178,19 @@ check "malformed: is not changed" "$(same_file "$F" "$W/orig")"
 sweep
 check "malformed: says it once" "$([ -z "$OUT" ] && echo ok || echo "said: $OUT")"
 
+# A file broken for a moment and then mended does not make its flagged rules new again.
+world mended
+fixture 'Bash(grep -n "x" a/b.ts)'
+cp "$F" "$W/good"
+sweep
+check "mended: the flagged rule is said first" "$(has 'rule 1 (Bash grep)')"
+printf '{ "permissions": ' > "$F"
+sweep
+check "mended: the broken file is said" "$(has 'could not be read as JSON')"
+cp "$W/good" "$F"
+sweep
+check "mended: the same flagged rule is not said again" "$([ -z "$OUT" ] && echo ok || echo "said: ${OUT:0:300}")"
+
 world notalist
 printf '{ "permissions": { "allow": "Bash(ls)" } }\n' > "$F"
 sweep
@@ -190,6 +208,22 @@ else
   echo "SUITE-PART-UNMEASURED the unreadable file case: running as root, which reads a file with mode 000"
 fi
 
+# A token after a flag and a space, and a bare token of Cloudflare's shape, are keys too (#1585):
+# Bidspoke's saved rules held exactly such a Cloudflare token. A commit id and a long plain name
+# beside them are not.
+world flagtokens
+fixture "Bash(npx wrangler whoami --api-key $FAKE_FLAG)" \
+  "Bash(printf %s $FAKE_CF | npx wrangler secret put CF_KEY)" \
+  'Bash(git show 4dbee97a1c2e3f4a5b6c7d8e9f00112233445566:*)' \
+  'Bash(npm run run_every_hook_against_its_own_suite_now:*)'
+sweep
+check "a token after --api-key: flagged" "$(has 'rule 1 (Bash npx): holds a key or token')"
+check "a bare Cloudflare shaped token: flagged" "$(has 'rule 2 (Bash printf): holds a key or token')"
+check "a commit id: not flagged" "$(lacks 'rule 3 ' 'rule 3')"
+check "a long plain name: not flagged" "$(lacks 'rule 4 ' 'rule 4')"
+check "the flag token is not printed" "$(lacks "$FAKE_FLAG" 'the flag token')"
+check "the Cloudflare shaped token is not printed" "$(lacks "$FAKE_CF" 'the Cloudflare token')"
+check "flag tokens: the record holds no secret" "$(no_secret_under "$W/home")"
 # The detector is the one redactor (lib/review-redact.sed, through ar_redact). Without it nothing can
 # say whether a rule holds a key, and that is said rather than passed as clean.
 world noredactor
@@ -197,6 +231,8 @@ mkdir -p "$W/lib"; cp "$DIR/lib/ai-review-common.sh" "$W/lib/"
 fixture 'Bash(npm run test:*)'
 sweep LOCAL_ALLOW_REVIEW_COMMON="$W/lib/ai-review-common.sh"
 check "no redactor: says the keys could not be checked" "$(has 'could not check')"
+sweep LOCAL_ALLOW_REVIEW_COMMON="$W/lib/ai-review-common.sh"
+check "no redactor: says it again next session, since it is never recorded" "$(has 'could not check')"
 
 # --- remove -------------------------------------------------------------------------------------------
 # Hand formatted, with tabs, odd spacing, a key after the rules and a non ASCII escape, so any

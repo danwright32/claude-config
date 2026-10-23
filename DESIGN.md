@@ -1126,9 +1126,16 @@ record and the removal are `hooks/lib/local-allow-rules.py`, whose header is the
 exactly this case (a Supabase key inside a curl rule, Bidspoke 2026-09-24, which is why `ar_redact
 --stderr` drops permission rule lines). A rule it would change holds a key. claude-sync's `scan_secrets`
 was the other candidate and was not used: it lives outside the payload, so no installed hook can read
-it, and it has no rule for a bearer header, which is how tokens reach curl rules. What the redactor
-cannot see (a bare token after a flag, `--token VALUE`) is a gap in the redactor, filed rather than
-patched here with a pattern only this hook would know.
+it, and it has no rule for a bearer header, which is how tokens reach curl rules. Two shapes the
+redactor could not see were added to it, not to this hook, so the review's redaction gained them too
+(#1585): a secret after a flag and a space (`--token VALUE`, `--api-key VALUE`, `--auth VALUE`, unless
+the value starts like a path, a variable, a placeholder or the next flag), and a bare 40 character
+Cloudflare API token, the shape Bidspoke's rules held. A commit id is 40 characters too, so a run
+counts only when it holds a digit, an upper case and a lower case letter, and a run beside `+` or `/`
+is base64 and is left alone. Measured on 2026-10-23 over the repository's 1044 tracked text files
+(349,776 lines): the two rules changed only the two invented fixtures written for them, after the
+base64 exclusion took out the one other line (a package lock integrity hash); and they flagged no
+additional rule in the 1011 real ones counted above.
 
 **No rule's text is ever printed, flagged as a secret or not.** A rule is named by position, tool and
 the first word of its command (`rule 6 (Bash curl)`), and its kinds. Printing the text of the rules

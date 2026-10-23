@@ -92,6 +92,10 @@ class Unjudgeable(Exception):
     """The file could not be read or is not the shape a settings file has. Its text is the reason."""
 
 
+class DetectorBroken(Unjudgeable):
+    """The redactor could not run: our install is broken, not Dan's file, so it is never recorded."""
+
+
 def read_bytes(path):
     try:
         with open(path, "rb") as f:
@@ -294,7 +298,7 @@ def secret_flags(rules, common):
         return []
     lines = [r.replace("\r", " ").replace("\n", " ") for r in rules]
     if not os.path.isfile(common):
-        raise Unjudgeable("could not check its rules for keys or tokens: %s is missing" % common)
+        raise DetectorBroken("could not check its rules for keys or tokens: %s is missing" % common)
     try:
         p = subprocess.run(
             ["bash", "-c", '. "$1" && ar_redact', "_", common],
@@ -303,10 +307,10 @@ def secret_flags(rules, common):
             input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        raise Unjudgeable("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
+        raise DetectorBroken("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
     out = p.stdout.split("\n")
     if p.returncode != 0 or len(out) < len(lines):
-        raise Unjudgeable("could not check its rules for keys or tokens: the redactor (lib/review-redact.sed through ar_redact) did not run (exit %d)" % p.returncode)
+        raise DetectorBroken("could not check its rules for keys or tokens: the redactor (lib/review-redact.sed through ar_redact) did not run (exit %d)" % p.returncode)
     return [out[k] != lines[k] for k in range(len(lines))]
 
 
@@ -374,16 +378,18 @@ def sweep(settings_file, project, common):
         flagged = judge(rules, common)
     except Unjudgeable as e:
         reason = str(e)
-        if reason.startswith("could not check"):
+        if isinstance(e, DetectorBroken):
             # Our own tooling is broken: said every session until it is fixed, never recorded.
             print("Local allow rules (%s): %s %s, so they were not checked. Nothing was changed. Tell Dan." % (ISSUE, shown, reason))
             return 0
         # Keyed on the reason and the bytes, so the same broken file is said once, and an edit to it
-        # (which may break it differently) is said again.
+        # (which may break it differently) is said again. Added to what was said, never replacing
+        # it, so a file broken for a moment and mended does not make its flagged rules new again.
         raw_key = "unjudgeable:" + hashlib.sha256((reason + "\0").encode("utf-8") + raw).hexdigest()[:FP_LEN]
-        if raw_key in read_said(settings_file):
+        said = read_said(settings_file)
+        if raw_key in said:
             return 0
-        note = write_said(settings_file, {raw_key})
+        note = write_said(settings_file, said | {raw_key})
         print("Local allow rules (%s): %s %s, so its allow rules were not checked, and nothing was changed. "
               "Claude Code may be ignoring that file too. Tell Dan once, in plain words.%s"
               % (ISSUE, shown, reason, (" " + note) if note else ""))
@@ -394,7 +400,9 @@ def sweep(settings_file, project, common):
     said = read_said(settings_file)
     if keys <= said:
         return 0
-    note = write_said(settings_file, keys)
+    # The rules said become exactly the set said now (a rule removed and later re-added is new
+    # again); what was said about the file being unjudgeable is kept.
+    note = write_said(settings_file, keys | set(k for k in said if k.startswith("unjudgeable:")))
 
     n_secret = sum(1 for f in flagged if SECRET in f[3])
     lines = [
