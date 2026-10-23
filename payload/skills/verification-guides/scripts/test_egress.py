@@ -95,6 +95,53 @@ class ReaderAndJudgment(unittest.TestCase):
         self.assertIn("before the egress monitor had proved", out["why"])
 
 
+class ExitStatuses(unittest.TestCase):
+    """A tool that failed is a failure to read, never an answer (L184)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.m = egress.Monitor(self.tmp.name, RID, list(v.EGRESS_LOCAL_HOSTS), 30)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def lsof(self, code, out="", err=""):
+        done = egress.subprocess.CompletedProcess(["lsof"], code, out, err)
+        with mock.patch.object(egress.subprocess, "run", return_value=done):
+            return self.m._name(77, 443)
+
+    def test_lsof_finding_the_socket(self):
+        self.assertEqual(self.lsof(0, "p77\nn10.0.0.2:5->203.0.113.1:443\n"), (["203.0.113.1"], None))
+
+    def test_lsof_finding_nothing_is_an_answer(self):
+        self.assertEqual(self.lsof(1), ([], None))
+
+    def test_lsof_failing_is_a_naming_error(self):
+        names, why = self.lsof(1, err="lsof: WARNING: can't stat() vmhgfs file system")
+        self.assertEqual(names, [])
+        self.assertIn("lsof exited 1", why)
+        names, why = self.lsof(2, err="lsof: illegal option")
+        self.assertIn("lsof exited 2", why)
+
+    def test_a_stream_that_dies_right_after_the_start_canary_is_unavailable(self):
+        class Died:
+            stdout = io.BytesIO(b"")
+            pid = 0
+            returncode = 3
+
+            def poll(self):
+                return 3
+
+        with mock.patch.object(egress.sys, "platform", "darwin"), \
+                mock.patch.object(egress.os, "access", return_value=True), \
+                mock.patch.object(egress.subprocess, "Popen", return_value=Died()), \
+                mock.patch.object(self.m, "_canary_seen", return_value=True):
+            why = self.m.start()
+        self.assertIn("exited with 3 right after the start canary", why or "")
+        self.assertIsNone(self.m.started_at)
+        self.assertEqual(self.m.finish()["verdict"], "unmeasured")
+
+
 class StopBudget(unittest.TestCase):
     def test_a_stop_waits_long_enough_to_settle_egress(self):
         # Waiting less than the egress monitor's own finish can take would report a supervisor that
