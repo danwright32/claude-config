@@ -5862,7 +5862,6 @@ report_rtk_exclusions(){
   return 0
 }
 
-# copy repo payload -> local config, merging the hooks block (no git)
 # Move each file listed in MOVED_TO_LOCAL from its old shared name to its new local one, on this Mac,
 # before the apply's mirror runs (claude-config#1526). Nothing is ever destroyed before its
 # replacement is verified (L5):
@@ -5914,6 +5913,7 @@ move_shared_files_to_local(){
   return 0
 }
 
+# copy repo payload -> local config, merging the hooks block (no git)
 apply_payload_to_local(){
   # A TEST RUN may not write into the real config (claude-config#277, L2). This is the one place
   # the payload is installed, so it is the one place the refusal can live and the one place it can
