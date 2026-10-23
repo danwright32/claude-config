@@ -106,5 +106,34 @@ printf -- '---\nname: fixture-skill\ndescription: a fixture skill for the suite\
 out_fixed="$(syncA sync)"
 check "once the name is gone the same send goes through: $out_fixed" has "$(git -C "$BARE" show main:payload/skills/fixture-skill/SKILL.md 2>/dev/null)" "from widget#4"
 
+# ---------------------------------------------------------------- 3. a scan of nothing is no pass
+# The function itself, cut out of the script by name and run with the send's variables, for the two
+# ways its file list can fail to exist: git could not list the clone, and a listing that found
+# nothing. Each is a refusal handed back, never a clean pass over zero files (L98).
+SWN="$(sed -n '/^scan_work_names(){/,/^}/p' "$SCRIPT")"
+check "scan_work_names was cut from claude-sync whole" has "$SWN" 'die "$refusal"'
+run_swn(){   # $1 = SYNC_REPO  $2 = SYNC_NO_GIT -> SEND_REFUSED, or "passed"
+  ( SYNC_REPO="$1" PAYLOAD="$1/payload" SYNC_SELF_PAYLOAD="$ROOT/payload" SYNC_NO_GIT="$2" \
+    SCAN_REFUSAL_DEFERRED=1 SEND_REFUSED="" SEND_REFUSED_FILE=""
+    die(){ echo "DIED: $*"; exit 1; }
+    eval "$SWN"
+    scan_work_names
+    printf '%s' "${SEND_REFUSED:-passed}" )
+}
+BROKEN="$WORK/broken-clone"; mkdir -p "$BROKEN/payload"
+printf 'x\n' > "$BROKEN/payload/a.md"
+printf 'not a gitdir\n' > "$BROKEN/.git"
+out_broken="$(run_swn "$BROKEN" 0)"
+check "a clone git cannot list is refused, not passed: $out_broken" has "$out_broken" "could not be listed"
+EMPTY="$WORK/empty-clone"; mkdir -p "$EMPTY/payload"
+out_empty="$(run_swn "$EMPTY" 1)"
+check "a listing that found nothing is refused, not passed: $out_empty" has "$out_empty" "found none"
+printf 'x\n' > "$EMPTY/payload/a.md"
+out_one="$(run_swn "$EMPTY" 1)"
+check "(control) the same clone with a clean file in it passes: $out_one" [ "$out_one" = passed ]
+# The scratch file the scan makes is one the reaper sweeps (#36 in test-claude-sync.sh derives the
+# same from every mktemp; this names the one this scan added).
+check "the scan's scratch name is one the reaper sweeps" has "$(grep -E '^SYNC_SCRATCH_NAMES=' "$SCRIPT")" "claude-sync-work-names."
+
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
