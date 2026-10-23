@@ -631,7 +631,7 @@ test('each main request restarts the hour; a subagent request and the turn endin
   expect(cacheIn(files)).toBe(T0 + 30 * MIN + HOUR)
 })
 
-test('while a turn runs no cache toast or cache Compact row, however long since its last request; idle, both come on time', withKit, async ($, on) => {
+test('while a turn runs no cache toast or cache row, however long since its last request; idle, both come on time', withKit, async ($, on) => {
   const { toasts, clock, w } = world(on)
   w.usage = 30
   await start($, clock)

@@ -75,7 +75,7 @@ let shownCompact = ''
 let writtenId: string | undefined
 let toldSave = false
 // Whether a main turn is running: from its first request to its end. Every request it makes keeps
-// the cache warm, so the cache warning and a cache Compact row wait for it to end (#697).
+// the cache warm, so the cache warning and the cache row wait for it to end (#697).
 let turnRunning = false
 // A Compact pressed while a turn ran, to run when it ends (#1278); cleared by Cancel or by running.
 let compactQueued = false
