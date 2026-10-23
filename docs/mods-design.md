@@ -1487,13 +1487,11 @@ is still asked once at bedtime and closed if unanswered.
   outranks both lists, so an entry under such an owner on either list is a conflict that waits, and
   a repository under it is never asked about at bedtime (a bedtime answer for one is refused). A
   `waitOwners` that is not a list of owner names makes the whole file untrusted, as any other bad
-  entry does. It sits beside `account-room-nicknames.json` for the same reason: a
-  file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
-  reaches the repository and the other Mac, and each repository is asked once. (The issue had the
-  answer committed to the development checkout instead; a file the sync carries both ways needs no
-  second writer.) #1568 gave that up: the file names work repositories and this repository is
-  public, so claude-sync moved each Mac's installed copy to the local name (MOVED_TO_LOCAL), and an
-  answer is now kept on the Mac that asked it, the other Mac asking its own. Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
+  entry does. Until #1568 it sat beside `account-room-nicknames.json` and travelled both ways, so
+  an answer one Mac wrote reached the other and each repository was asked once. It names work
+  repositories and this repository is public, so since #1568 it is each Mac's own file, never sent:
+  claude-sync moved each Mac's installed copy to the local name (MOVED_TO_LOCAL), an answer is kept
+  on the Mac that asked it, and the other Mac asks its own. Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
   unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
   record whether a merge there deploys (L72). Bidspoke and Slate are `mergeOnly` with
   `mergeDeploys: true` (Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
