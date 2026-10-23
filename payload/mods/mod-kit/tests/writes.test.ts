@@ -447,6 +447,8 @@ describe('writes: a script run from a file, with the arguments it is handed (#15
     expect(runs('cd /w/shop && python3 gen.py app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
     expect(runs('P=/w/shop/app/page.tsx; python3 gen.py "$P"').map(r => r.args)).toEqual([[{ word: '$P', path: '/w/shop/app/page.tsx' }]])
     expect(runs("python3 gen.py 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+    // The script named through a variable the command set (lessons review at 856eb73): found by its value.
+    expect(runs('S=scripts/gen.py; python3 "$S" app/page.tsx').map(r => [r.script, r.path, r.args.map(a => a.word)])).toEqual([['$S', `${CWD}/scripts/gen.py`, ['app/page.tsx']]])
   })
   test('options, standard input, output redirects, addresses and the interpreter options before the script are no argument', () => {
     expect(runs('python3 -W ignore gen.py -v -o app/page.tsx < in.txt > log.txt 2>&1').map(r => r.args.map(a => a.word))).toEqual([['app/page.tsx']])
