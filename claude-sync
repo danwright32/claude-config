@@ -150,6 +150,12 @@ RECONCILE_OUTCOME_FILE="$SYNC_REPO/.reconcile-outcome"
 SEND_REFUSED_FILE="$SYNC_REPO/.send-refused"   # the secret scan's last refusal, until a scan passes (#947)
 CI_UNREADABLE_SINCE_FILE="$SYNC_REPO/.ci-unreadable-since"   # since when no CI verdict could be read (#327)
 CI_RED_SINCE_FILE="$SYNC_REPO/.ci-red-since"   # since when the shared repo's head has been red (#336)
+# A change watcher running an older claude-sync than the one on disk, which cannot restart onto it
+# because that one is broken: "<first refused tick> <count> <runs> <on disk> <fault>" (#1569).
+WATCH_STALE_FILE="$SYNC_REPO/.watch-stale"
+# Left by a change watcher exiting to restart onto a newer claude-sync, and consumed by the watcher
+# launchd starts next: "<when> <from> <to>" (#1569).
+WATCH_RESTARTED_FILE="$SYNC_REPO/.watch-restarted"
 MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 UNLOADABLE_NOTIFIED_FILE="$SYNC_REPO/.unloadable-notified"   # skills entries the cannot load notice already named (#968)
@@ -8308,31 +8314,54 @@ reexec_after_self_update(){   # $1 before  $2 after  $3 command for the child
 # this Mac's config frozen until someone fixed the other Mac. Degrading to the
 # copy already loaded keeps the sync working with older logic in the meantime.
 SCRIPT_SELF_BROKEN=0
+# THE SELF TEST ITSELF, shared by the two places that hand control to a newer copy of this tool: a
+# pull re-executing onto what it pulled, and a change watcher restarting onto what is on disk
+# (claude-config#1569). One test, so the two cannot come to disagree about what "runs" means (L41).
+#
+# Returns 0 when the script at $1 parses and finishes a harmless read only run, and 1 otherwise with
+# SCRIPT_TEST_FAULT saying which: `parse`, or `run:<exit code>`.
+SCRIPT_TEST_FAULT=""
+script_self_test(){   # $1 = the claude-sync file to test
+  local s="$1" d rc=0
+  SCRIPT_TEST_FAULT=""
+  if ! bash -n "$s" 2>/dev/null; then SCRIPT_TEST_FAULT="parse"; return 1; fi
+  # Parsing is not enough. A script can parse and still die on its first real step: an
+  # unbound variable under `set -u`, a helper that was renamed, a command absent from THIS
+  # Mac. This path then re-execs automatically on both Macs with nobody watching, and a
+  # bad version breaks the very thing that would otherwise deliver the fix. So run it, in
+  # throwaway directories where it can touch nothing real, and require it to finish. (#28)
+  # Named, not a bare `mktemp -d`: an anonymous directory cannot be attributed to this tool
+  # afterwards, so a run killed here leaves scratch nothing can ever reclaim (#36).
+  d="$(mktemp -d "$(scratch_home_ready)/claude-sync-selftest.XXXXXXXX")" || return 0
+                                  # cannot test it: fall back to the parse result, which is
+                                  # what this gate did before, rather than block an update
+                                  # over a temp directory problem
+  mkdir -p "$d/home" "$d/repo/payload" 2>/dev/null && printf '{"hooks":{}}\n' > "$d/home/settings.json" 2>/dev/null || { rm -rf "$d"; return 0; }
+  CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+    SYNC_LOCK="$d/lock" bash "$s" status >/dev/null 2>&1 || rc=$?
+  rm -rf "$d" 2>/dev/null || true
+  [ "$rc" -eq 0 ] && return 0
+  SCRIPT_TEST_FAULT="run:$rc"
+  return 1
+}
+# The fault in words, for whichever sentence names the copy that failed. Distinct, because a script
+# that will not parse and one that parses but cannot run are different faults with different causes.
+script_fault_words(){   # $1 = a SCRIPT_TEST_FAULT value
+  case "${1:-}" in
+    parse) printf 'does not parse' ;;
+    run:*) printf 'parses but exited %s on a harmless read only run' "${1#run:}" ;;
+    *)     printf 'failed its self test in a way that was not recorded' ;;
+  esac
+}
 pulled_script_ok(){
   [ "$SCRIPT_SELF_BROKEN" -eq 1 ] && return 1
-  if bash -n "$SYNC_REPO/claude-sync" 2>/dev/null; then
-    # Parsing is not enough. A script can parse and still die on its first real step: an
-    # unbound variable under `set -u`, a helper that was renamed, a command absent from THIS
-    # Mac. This path then re-execs automatically on both Macs with nobody watching, and a
-    # bad version breaks the very thing that would otherwise deliver the fix. So run it, in
-    # throwaway directories where it can touch nothing real, and require it to finish. (#28)
-    local d rc=0
-    # Named, not a bare `mktemp -d`: an anonymous directory cannot be attributed to this tool
-    # afterwards, so a run killed here leaves scratch nothing can ever reclaim (#36).
-    d="$(mktemp -d "$(scratch_home_ready)/claude-sync-selftest.XXXXXXXX")" || return 0
-                                    # cannot test it: fall back to the parse result, which is
-                                    # what this gate did before, rather than block an update
-                                    # over a temp directory problem
-    mkdir -p "$d/home" "$d/repo/payload" 2>/dev/null && printf '{"hooks":{}}\n' > "$d/home/settings.json" 2>/dev/null || { rm -rf "$d"; return 0; }
-    CLAUDE_HOME="$d/home" SYNC_REPO="$d/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
-      SYNC_LOCK="$d/lock" bash "$SYNC_REPO/claude-sync" status >/dev/null 2>&1 || rc=$?
-    rm -rf "$d" 2>/dev/null || true
-    [ "$rc" -eq 0 ] && return 0
+  script_self_test "$SYNC_REPO/claude-sync" && return 0
+  if [ "$SCRIPT_TEST_FAULT" != parse ]; then
     SCRIPT_SELF_BROKEN=1
     # Deliberately its own message. A script that will not parse and one that parses but
     # cannot run are different faults with different causes, and reporting them identically
     # sends the diagnosis to the wrong place.
-    echo "claude-sync: the pulled claude-sync parses but cannot complete a run (it exited $rc on a harmless read-only check), so this run kept the copy already running and left the watch daemon alone. That version is on disk here and later runs of it will fail until the Mac that pushed it pushes a fix; recover with: git -C $SYNC_REPO pull" >&2
+    echo "claude-sync: the pulled claude-sync parses but cannot complete a run (it exited ${SCRIPT_TEST_FAULT#run:} on a harmless read-only check), so this run kept the copy already running and left the watch daemon alone. That version is on disk here and later runs of it will fail until the Mac that pushed it pushes a fix; recover with: git -C $SYNC_REPO pull" >&2
     notify "pulled claude-sync fails to run; kept the older copy"
     return 1
   fi
@@ -11280,7 +11309,9 @@ report_ci_unreadable(){
 # One line per condition, tab separated: kind, count, first, sentence.
 #   sending      sends are being skipped because this clone is behind (claude-config#323)
 #   receiving    the shared repo's newest commit keeps failing its tests (claude-config#336)
-#   sending-unreadable, receiving-unreadable
+#   watcher-stale  the change watcher runs an older claude-sync and cannot restart onto the one on
+#                disk, because that one fails its self test (claude-config#1569)
+#   sending-unreadable, receiving-unreadable, watcher-stale-unreadable
 #                the record is THERE and its count will not parse, so whether anything is stuck
 #                cannot be answered from it. Said rather than read as zero: a record nobody can
 #                read and a sync with nothing wrong must not arrive as the same silence (L98, L11).
@@ -11326,6 +11357,22 @@ sync_stuck_records(){
           printf 'receiving\t%s\t%s\t%s\n' "$n" "${first:--}" \
             "receiving is stuck: the shared repo's newest commit has failed its tests $n time(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))"). Nothing here receives config until a green commit lands. Look at the failing run: $(ci_run_hint)"
         fi ;;
+    esac
+  fi
+  # A change watcher that cannot restart onto the claude-sync on disk because that copy is broken
+  # (claude-config#1569). Every other stale watcher restarts by itself within a change or two, so
+  # this is the one that needs a person, and it needs one at once: no wait clears it.
+  if [ -f "$WATCH_STALE_FILE" ]; then
+    local runs="" disk="" fault=""
+    first=""; n=""
+    read -r first n runs disk fault < "$WATCH_STALE_FILE" 2>/dev/null || true
+    case "$n" in
+      ''|*[!0-9]*)
+        printf 'watcher-stale-unreadable\t-\t-\t%s\n' "the record of a change watcher that could not restart onto the claude-sync on disk, at $WATCH_STALE_FILE, could not be read, so whether it is still stuck on an older copy cannot be told from it. The watcher rewrites it on its next refused change and removes it once it runs the copy on disk." ;;
+      *)
+        case "$first" in ''|*[!0-9]*) first="" ;; esac
+        printf 'watcher-stale\t%s\t%s\t%s\n' "$n" "${first:--}" \
+          "the change watcher is stuck on an older claude-sync, so config edited on this Mac is not reaching the other Mac: it runs ${runs:-an unrecorded copy}, and the newer one on disk, ${disk:-an unrecorded copy}, $(script_fault_words "$fault"), so it cannot restart onto it. It has refused $n change(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))"), and restarts by itself once a claude-sync that runs is in $SYNC_REPO; a fixed version arrives with: git -C $SYNC_REPO pull" ;;
     esac
   fi
   return 0
@@ -12813,11 +12860,13 @@ watch_should_stop(){
 # A CONTENT hash rather than an mtime, because a checkout can restore an older mtime and a rewrite
 # with identical content moves it while changing nothing that matters (L40).
 WATCH_LOADED_DIGEST=""
+# BASH_SOURCE[0] inside a function is the file the function was DEFINED in, which is this script
+# however it was invoked. SYNC_SELF is the seam, for a fixture that has to name a copy. One helper,
+# because the file whose hash is compared and the file a restart is self tested on must be the same.
+script_self_path(){ printf '%s' "${SYNC_SELF:-${BASH_SOURCE[0]}}"; }
 script_digest(){   # -> a content hash of the claude-sync file this process was started from
   local self out
-  # BASH_SOURCE[0] inside a function is the file the function was DEFINED in, which is this script
-  # however it was invoked. SYNC_SELF is the seam, for a fixture that has to name a copy.
-  self="${SYNC_SELF:-${BASH_SOURCE[0]}}"
+  self="$(script_self_path)"
   [ -f "$self" ] || return 1
   out="$({ shasum -a 256 "$self" 2>/dev/null || sha256sum "$self" 2>/dev/null; } | awk 'NR==1{print $1}')"
   case "$out" in ''|*[!0-9a-f]*) return 1 ;; esac
@@ -12879,11 +12928,34 @@ do_watch(){
   # Removed on the way out however this ends, so the next watcher is not refused by a record of
   # one that has gone. Only OUR own record: a file another live watcher wrote must survive us.
   trap 'if [ "$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)" = "$$" ]; then rm -f "$SYNC_WATCH_PID_FILE"; fi' EXIT
+  # A watcher that has just started is running whatever is on disk, so a record saying the watcher
+  # here could not restart onto it describes a process that has gone (claude-config#1569).
+  rm -f "$WATCH_STALE_FILE" 2>/dev/null || true
+  # THE WATCHER BEFORE THIS ONE EXITED TO RESTART ONTO A NEWER claude-sync (claude-config#1569). It
+  # said so on its way out; this is the other half, from the process that actually runs the newer
+  # copy, so the log shows the restart LANDED rather than only that one was attempted (L3). And it
+  # sends once on the way up: the edit that showed the old watcher was stale was refused, not sent,
+  # and fswatch reports only changes made after it starts, so that edit would otherwise wait for the
+  # next one (L368).
+  local restart_tick="" restarted_from=""
+  if [ -f "$WATCH_RESTARTED_FILE" ]; then
+    restarted_from="$(awk 'NR==1{print $2}' "$WATCH_RESTARTED_FILE" 2>/dev/null)"
+    case "$restarted_from" in ''|*[!0-9a-f]*) restarted_from="a version it did not record" ;; esac
+    rm -f "$WATCH_RESTARTED_FILE" 2>/dev/null || true
+    restart_tick="restarted"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: restarted onto claude-sync ${WATCH_LOADED_DIGEST:0:12} from $restarted_from, and sends once now for anything that changed while it was down."
+  fi
   local paths=() d
   for d in "${MIRROR_DIRS[@]}" skills; do [ -d "$CLAUDE_HOME/$d" ] && paths+=("$CLAUDE_HOME/$d"); done
   [ -f "$CLAUDE_HOME/settings.json" ] && paths+=("$CLAUDE_HOME/settings.json")
   for f in $(top_files_in "$CLAUDE_HOME"); do [ -f "$CLAUDE_HOME/$f" ] && paths+=("$CLAUDE_HOME/$f"); done
-  echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
+  # Which claude-sync this watcher runs, on the line every start writes, so the log can say which
+  # version each stretch of it was written by (L715).
+  if [ -n "$WATCH_LOADED_DIGEST" ]; then
+    echo "Watching ${#paths[@]} path(s) for changes (fswatch), running claude-sync ${WATCH_LOADED_DIGEST:0:12}…"
+  else
+    echo "Watching ${#paths[@]} path(s) for changes (fswatch)…"
+  fi
   # -o coalesces a burst into one event; `$(...)` runs do_send in its own
   # subshell so a conflict's or scan_secrets' die() can't kill the watch loop.
   # A failure already triggers die()'s own desktop notification, but that is
@@ -12891,10 +12963,20 @@ do_watch(){
   # line to this command's own output, which the launchd plist already sends
   # to ~/.claude-sync.log, so a silently-broken sync leaves a durable trail
   # instead of just a notification nobody saw.
-  local again
+  local again watch_fs_pid="" watch_rc=0
   # Started at the clock, so the first sweep happens one interval in rather than on the first edit
   # of the day: a daemon restarted often would otherwise sweep on every restart.
-  "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" | while IFS= read -r _; do
+  #
+  # fswatch is started through `sh -c`, which prints its own pid and then EXECS fswatch, so the pid
+  # stays fswatch's (claude-config#1569). A watcher restarting onto a newer claude-sync has to end
+  # fswatch itself: fswatch writes only when a file changes, so left to die of its next write it
+  # would hold this whole process open, logged as restarting and running in fact, until somebody
+  # saved something. That line is written before fswatch can write anything, so it is always the
+  # first the loop reads; the restart tick, when there is one, is the second.
+  sh -c 'printf "%s\n" "$1 $$"; [ -z "$2" ] || printf "%s\n" "$2"; shift 2; exec "$@"' \
+    sh "$WATCH_FS_PID_TAG" "$restart_tick" "$fs" -o -l "${SYNC_WATCH_LATENCY:-2}" "${paths[@]}" \
+    | while IFS= read -r _ev; do
+    case "$_ev" in "$WATCH_FS_PID_TAG "*) watch_fs_pid="${_ev#"$WATCH_FS_PID_TAG "}"; continue ;; esac
     watch_should_stop && break
     again=1
     while [ "$again" -eq 1 ]; do
@@ -12950,16 +13032,31 @@ do_watch(){
           # refused it (claude-config#327).
           *"SEND-OUTCOME ci-unreadable-expired"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: applied WITHOUT a CI verdict, because none could be read for long enough that none is coming" ;;
           *"SEND-OUTCOME ci-unreadable"*) echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT applied, could not read whether the shared repo's head passed its tests" ;;
-          # The two versions travel INTO the log, not just the fact that they differ. Every other
-          # arm here can be acted on from the summary alone; this one cannot, because which way
-          # round the divergence is and how far apart they are is the whole of what a person does
-          # next (L11, L80). watch_tick's own sentence is what carries them, and the loop otherwise
-          # keeps $out to itself, so it is folded onto this line rather than left unread.
-          *"SEND-OUTCOME stale-daemon"*)
-            stale_said="${out//SEND-OUTCOME stale-daemon/}"
-            stale_said="${stale_said//$'\n'/ }"
+          # A DAEMON OLDER THAN THE claude-sync ON DISK (claude-config#420, #1569). The newer copy
+          # ran its self test under the sync lock and passed, and the lock is released by now,
+          # because the tick that took it was a subshell that has ended. So this process ends here,
+          # cleanly, and launchd starts it again on the newer copy (its KeepAlive is unconditional).
+          # None of the patterns above occurs in these markers ("SEND-OUTCOME held" is not inside
+          # "SEND-OUTCOME stale-daemon-held"), so where they sit among them decides nothing.
+          *"SEND-OUTCOME stale-daemon-restart "*)
+            restart_pair="$(awk 'sub(/^SEND-OUTCOME stale-daemon-restart /, "") && !done { print; done = 1 }' <<< "$out")"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: restarting from claude-sync ${restart_pair% *} to ${restart_pair#* }, the newer copy on disk, which parsed and finished a read only run. This daemon exits now and launchd starts it again on the newer one."
+            watch_end_fswatch "$watch_fs_pid"
+            exit "$WATCH_RESTART_RC" ;;
+          # The three ways a stale daemon does NOT restart, each in its own words because each has
+          # its own remedy (L11): a broken newer copy needs a person, a held lock and a hold each
+          # clear by themselves. The two versions travel INTO the log, not just the fact that they
+          # differ, because which way round they are is the whole of what a person does next (L80).
+          # watch_tick's own sentence carries them and is folded onto the summary line.
+          *"SEND-OUTCOME stale-daemon-broken"*|*"SEND-OUTCOME stale-daemon-waits"*|*"SEND-OUTCOME stale-daemon-held"*)
+            stale_said="$(printf '%s\n' "$out" | awk '!/^SEND-OUTCOME /' | tr '\n' ' ')"
             while [ "${stale_said# }" != "$stale_said" ]; do stale_said="${stale_said# }"; done
-            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk. $stale_said"
+            stale_said="${stale_said%"${stale_said##*[! ]}"}"
+            case "$out" in
+              *"SEND-OUTCOME stale-daemon-broken"*) stale_head="NOT sent and NOT restarted" ;;
+              *) stale_head="NOT sent" ;;
+            esac
+            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: $stale_head: $stale_said"
             said_logged=1 ;;
           # A send that exited 0 and said nothing about what it did. Recorded as unknown rather
           # than as success: that is the state this whole line exists to stop being invisible
@@ -12989,7 +13086,31 @@ do_watch(){
       # sends the loop round once more and that send carries all of them.
       while IFS= read -r -t "${SYNC_WATCH_DRAIN:-1}" _; do again=1; done
     done
-  done
+  done || watch_rc=$?
+  # The loop's own exit code survives pipefail, because it is the rightmost part of the pipeline and
+  # pipefail reports the rightmost failure, whatever fswatch died of after the loop ended it.
+  # Returned as success: a restart is this watcher doing its job, and launchd restarts it either way.
+  [ "$watch_rc" -eq "$WATCH_RESTART_RC" ] && return 0
+  return "$watch_rc"
+}
+
+# The loop's exit code for "restart onto the newer claude-sync" (claude-config#1569), chosen to be one
+# nothing else in the loop exits with. 75 is EX_TEMPFAIL.
+WATCH_RESTART_RC=75
+# The first line of the watcher's event stream, carrying fswatch's pid. Not something fswatch -o can
+# print, which writes only a count per batch of changes.
+WATCH_FS_PID_TAG="claude-sync-fswatch-pid"
+
+# Ends the fswatch a restarting watcher started, by the pid it traced, and only after confirming that
+# pid is still a child of this watcher: an fswatch that already exited has had its number freed, and
+# a signal sent to the number alone could reach whatever was given it next (L1011).
+watch_end_fswatch(){   # $1 = fswatch's pid, as its own first line said
+  local p="${1:-}" parent
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  parent="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ' || true)"
+  [ "$parent" = "$$" ] || return 0
+  kill "$p" 2>/dev/null || true
+  return 0
 }
 
 # What one turn of the watch loop DOES. Named so the loop's shape (how many times it acts on a
@@ -13003,22 +13124,111 @@ watch_tick(){
   # stop this Mac publishing over the ordinary race that every legitimate update passes through.
   # This says only what it measured (L11).
   #
-  # It does NOT restart the daemon. Refusing and saying so is the part that cannot be wrong, and a
-  # process that replaces itself while holding the loop is a separate decision. Recovery is the
-  # daily timer, which is a fresh process that pulls and restarts the daemon, or any pull by hand.
+  # And then RESTARTS onto the newer copy when it is safe to (claude-config#1569). #420 deliberately
+  # stopped at refusing, and left recovery to the daily timer or a pull by hand: from 2026-10-22
+  # 16:44 to 2026-10-23 08:22 ET the personal MacBook refused 84 times in a row that way and sent and
+  # received nothing, with a log line as the only signal (L13, L357). Dan decided on 2026-10-23:
+  # "Restart itself". watch_stale_tick says which of the four outcomes this tick is.
   if [ -n "${WATCH_LOADED_DIGEST:-}" ] && now_digest="$(script_digest)" \
      && [ "$now_digest" != "$WATCH_LOADED_DIGEST" ]; then
-    SYNC_IN_WATCH=1 send_outcome stale-daemon
-    # Written to be read APPENDED to the loop's own summary line, which is the only place it ever
-    # goes, so it repeats neither the refusal nor the name of the tool (L605).
-    echo "It loaded ${WATCH_LOADED_DIGEST:0:12} and the file on disk is now ${now_digest:0:12}, so a send would run logic that may be missing guards shipped since it started. It picks the newer one up when the daemon restarts: claude-sync install-autosync, or any claude-sync pull that updates the script." >&2
-    return 0
+    watch_stale_tick && return 0
   fi
+  # Running what is on disk, so a record that this watcher could not restart describes a state that
+  # has ended (the file went back to the copy it runs).
+  rm -f "$WATCH_STALE_FILE" 2>/dev/null || true
   if [ -n "${SYNC_WATCH_SEND:-}" ]; then
     bash -c "$SYNC_WATCH_SEND"
     return $?
   fi
   SYNC_IN_WATCH=1 with_lock do_send
+}
+
+# WHAT A WATCHER OLDER THAN THE claude-sync ON DISK DOES WITH THIS TICK (claude-config#1569). It never
+# sends on its old code. It prints one marker for the loop, and on stderr a sentence the loop folds
+# onto its summary line, written to be read there:
+#   stale-daemon-held            a hold is in force. A hold is taken while somebody commits by hand,
+#                                often in this very clone, so the file may be mid change; a held
+#                                watcher sends nothing anyway, so restarting can wait for it to lift.
+#   stale-daemon-waits           another run holds the sync lock, which is what a pull applying a
+#                                newer claude-sync looks like. Restarting under it would start the new
+#                                watcher on a file still being written. It tries again next change.
+#   stale-daemon-broken          the newer copy fails the self test a pull uses before handing over to
+#                                what it pulled. Exiting into it would leave launchd starting a script
+#                                that dies at once, every ten seconds, so it keeps refusing, records
+#                                the stretch for status and the session notice, and notifies once.
+#   stale-daemon-restart <from> <to>
+#                                the newer copy passed, tested under the sync lock so no pull could
+#                                change it meanwhile, and the lock is released before this returns.
+#                                The loop ends the process; launchd starts it again on <to>.
+# Returns 1, having done nothing, when the file under the lock is the very copy this watcher runs
+# (it moved back), so the tick goes on as an ordinary send.
+watch_stale_tick(){
+  local from="${WATCH_LOADED_DIGEST:0:12}" digest to left holder self fault
+  if left="$(hold_remaining)"; then
+    to="$(script_digest || true)"
+    SYNC_IN_WATCH=1 send_outcome stale-daemon-held
+    echo "a hold is in force, and this daemon runs claude-sync $from while the file on disk is now ${to:0:12}. It restarts onto it once the hold lifts, in $(duration_in_words "$left"), and sends nothing meanwhile, as the hold asks." >&2
+    return 0
+  fi
+  if ! acquire_lock; then
+    holder="$(lock_holder_words "$(cat "$SYNC_LOCK/pid" 2>/dev/null || true)")"
+    to="$(script_digest || true)"
+    SYNC_IN_WATCH=1 send_outcome stale-daemon-waits
+    echo "this daemon runs claude-sync $from and the file on disk is now ${to:0:12}, and the restart onto it waits: $holder holds the sync lock and may be applying a newer claude-sync right now. It tries again on the next change." >&2
+    return 0
+  fi
+  LOCK_HELD=1
+  # This tick is a subshell of its own, so the trap is its own too, and a tick that fails anywhere
+  # below cannot leave the lock held behind it.
+  trap 'release_lock' EXIT
+  digest="$(script_digest || true)"
+  if [ -n "$digest" ] && [ "$digest" = "$WATCH_LOADED_DIGEST" ]; then
+    release_lock
+    return 1
+  fi
+  if [ -z "$digest" ]; then
+    release_lock
+    SYNC_IN_WATCH=1 send_outcome stale-daemon-waits
+    echo "this daemon runs claude-sync $from and the file on disk could not be read just now, most likely mid replacement, so the restart onto it waits for the next change." >&2
+    return 0
+  fi
+  to="${digest:0:12}"
+  self="$(script_self_path)"
+  if script_self_test "$self"; then
+    rm -f "$WATCH_STALE_FILE" 2>/dev/null || true
+    release_lock
+    # Written AFTER the lock is released: it is a note to the next watcher, not shared sync state.
+    printf '%s %s %s\n' "$(date +%s)" "$from" "$to" > "$WATCH_RESTARTED_FILE" 2>/dev/null || true
+    SYNC_IN_WATCH=1 send_outcome "stale-daemon-restart $from $to"
+    return 0
+  fi
+  fault="$SCRIPT_TEST_FAULT"
+  release_lock
+  if watch_stale_record "$from" "$to" "$fault"; then
+    notify "the change watcher cannot restart: the newer claude-sync on disk $(script_fault_words "$fault"), so nothing is sent from this Mac"
+  fi
+  SYNC_IN_WATCH=1 send_outcome stale-daemon-broken
+  echo "this daemon runs claude-sync $from, and the newer one on disk, $to, $(script_fault_words "$fault"), so restarting onto it would leave no watcher running at all. It goes on refusing to send, and restarts by itself once a claude-sync that runs is on disk in $(cd "$(dirname "$self")" 2>/dev/null && pwd || dirname "$self")." >&2
+  return 0
+}
+
+# The stretch a watcher has spent unable to restart onto a broken claude-sync, for status and the
+# session notice (claude-config#1569). The start is kept for as long as the stretch lasts, whichever
+# broken copy is on disk now, and only the count moves, so a notice keyed on it is said once. Returns
+# 0 when this tick STARTS a stretch, which is the one moment a desktop notification is posted (L36).
+watch_stale_record(){   # $1 = the copy this watcher runs  $2 = the copy on disk  $3 = its fault
+  local first="" count="" now new=1
+  now="$(date +%s)"
+  if [ -f "$WATCH_STALE_FILE" ]; then
+    first="$(awk 'NR==1{print $1}' "$WATCH_STALE_FILE" 2>/dev/null || true)"
+    count="$(awk 'NR==1{print $2}' "$WATCH_STALE_FILE" 2>/dev/null || true)"
+  fi
+  case "$first" in ''|*[!0-9]*) first="$now" ;; *) new=0 ;; esac
+  case "$count" in ''|*[!0-9]*) count=0 ;; esac
+  if printf '%s %s %s %s %s\n' "$first" "$(( count + 1 ))" "$1" "$2" "$3" > "$WATCH_STALE_FILE.$$" 2>/dev/null; then
+    mv -f "$WATCH_STALE_FILE.$$" "$WATCH_STALE_FILE" 2>/dev/null || rm -f "$WATCH_STALE_FILE.$$" 2>/dev/null || true
+  fi
+  [ "$new" -eq 1 ]
 }
 
 # THE LAUNCH AGENTS THIS SCRIPT WOULD WRITE, defined once (claude-config#328).

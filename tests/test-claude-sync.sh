@@ -18145,8 +18145,8 @@ out_ws_ok="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WS_HITS'" 
 dbg "#420 watcher whose file has not moved: $out_ws_ok"
 check "#420 a watcher running the file on disk sends normally" \
   "[ \"\$(grep -c . '$WS_HITS' 2>/dev/null || true)\" = '1' ]"
-check "#420 and says nothing about being stale" \
-  "! grep -q 'this daemon is older than the claude-sync on disk' <<< \"\$out_ws_ok\""
+check "#420 and neither restarts nor says it is stale" \
+  "! grep -q -e 'claude-sync watch: restarting' -e 'NOT sent' <<< \"\$out_ws_ok\""
 
 # THE DEFECT. The file is REPLACED rather than appended to, because that is how it really moves: a
 # pull writes a new file and renames it over the old one, so the running process keeps reading its
@@ -18161,8 +18161,12 @@ echo one
 FSEOF
 chmod +x "$WS_FS"
 : > "$WS_HITS"
+# A clone directory that EXISTS, because since #1569 a stale daemon takes the sync lock in it before
+# it restarts, and a lock that cannot be made in a missing directory is waited on for the whole
+# lock deadline.
+mkdir -p "$WS/repo"
 out_ws="$(SYNC_FSWATCH="$WS_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WS_HITS'" \
-  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WORK/watch-stale-repo-unused" SYNC_NO_NOTIFY=1 \
+  CLAUDE_HOME="$WS_HOME" SYNC_REPO="$WS/repo" SYNC_NO_NOTIFY=1 \
   bash "$WS_SELF" watch 2>&1 || true)"
 dbg "#420 watcher whose file moved under it: $out_ws"
 # The fixture is checked for having actually moved the file, because a replacement that did not
@@ -18173,14 +18177,15 @@ check "#420 the fixture really replaced the tool under the running daemon" \
 check "#420 a daemon older than the file on disk sends nothing" \
   "[ \"\$(grep -c . '$WS_HITS' 2>/dev/null || true)\" = '0' ]"
 # Naming BOTH versions is the whole point: "something is stale" cannot be acted on, and the two
-# hashes are what say which way round it is (L11).
+# hashes are what say which way round it is (L11). Since #1569 the newer copy here runs, so the
+# daemon restarts onto it rather than refusing for ever, and the same two hashes are on that line.
 check "#420 and it names the version it loaded and the one on disk, each in its own place" \
-  "line_has \"\$out_ws\" 'It loaded [0-9a-f]{12}' 'on disk is now [0-9a-f]{12}'"
+  "line_has \"\$out_ws\" 'restarting from claude-sync [0-9a-f]{12}' ' to [0-9a-f]{12}'"
 # A refusal that looked like an ordinary quiet tick would be the defect again in another form: the
 # log has to carry its own outcome, or a daemon that stopped sending reads like one with nothing to
 # send (L98, L622).
 check "#420 the watch log carries its own outcome for it" \
-  "grep -q 'claude-sync watch: NOT sent, this daemon is older than the claude-sync on disk' <<< \"\$out_ws\""
+  "grep -q 'claude-sync watch: restarting from claude-sync' <<< \"\$out_ws\""
 # The positive first, in this same fixture, or the absence below is a needle that
 # appears nowhere and passes however the wording moves (L159, and the absence needle
 # scan is what caught exactly that here). A tick that really had nothing to send is
@@ -18197,6 +18202,210 @@ check "#420 a tick with nothing to send is logged as exactly that" \
   "grep -q 'watch: nothing to send' <<< \"\$out_ws_none\""
 check "#420 and never reports it as nothing to send" \
   "! grep -q 'watch: nothing to send' <<< \"\$out_ws\""
+
+
+section "== a watch daemon older than the claude-sync on disk restarts onto it, or says why it cannot (#1569) =="
+# #420 made a stale daemon refuse to send, and left recovery to the daily timer or a pull by hand.
+# From 2026-10-22 16:44 to 2026-10-23 08:22 ET the personal MacBook logged that refusal 84 times and
+# sent and received nothing, with a log line as the only signal (L13, L357). Dan decided on
+# 2026-10-23: "Restart itself". So a stale daemon whose newer copy RUNS exits cleanly, after
+# releasing the sync lock, and launchd starts it again on the newer one; one whose newer copy is
+# broken keeps refusing, because exiting into it would crash loop, and says so where a person looks.
+#
+# No clock is involved anywhere below and nothing waits on time: the only deadline the tick reaches
+# is the sync lock's, set to zero where a held lock is the point (L290, L524).
+WR="$WORK/watch-restart"; mkdir -p "$WR/home/hooks" "$WR/clone" "$WR/agents"
+WR_SELF="$WR/clone/claude-sync"; WR_HITS="$WR/hits"; WR_FS="$WR/fake-fswatch"
+WR_NOTES="$WR/notes"; WR_NOTIFIER="$WR/notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$WR_NOTES" > "$WR_NOTIFIER"; chmod +x "$WR_NOTIFIER"
+wr_sha(){ { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk 'NR==1{print substr($1,1,12)}'; }
+# Every case starts from the tool as it ships, a free lock, no hold and no records.
+wr_fresh(){
+  cp "$SCRIPT" "$WR_SELF"; chmod +x "$WR_SELF"
+  rm -rf "$WR/clone/.sync-lock" "$WR/clone/.watch-restarted" "$WR/clone/.watch-stale" \
+    "$WR/hold" "$WR/watch.pid" "$WR/fs.pid" "$WR/next"
+  : > "$WR_HITS"; : > "$WR_NOTES"
+}
+# How the file under the running daemon moves before an event, written by REPLACING it, which is how
+# a pull really moves it (#420's fixture says why appending would be a different fault).
+#   $1 newer | unparseable | failing | none     $2 exit | linger | two
+# linger leaves the stand in for fswatch running after its one event, as the real one does, so a
+# daemon that waited for fswatch's next write to end it would sit here until the stand in's own
+# sleep ran out. two sends a second event straight after the first.
+wr_fake(){
+  local move=""
+  case "$1" in
+    newer)       move="cp '$WR_SELF' '$WR/next'; printf '\\n# a later version of the tool\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'" ;;
+    unparseable) move="cp '$WR_SELF' '$WR/next'; printf '\\nif then\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'" ;;
+    failing)     move="awk 'NR==2{print \"exit 7\"} {print}' '$WR_SELF' > '$WR/next'; mv '$WR/next' '$WR_SELF'" ;;
+  esac
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'echo "$$" > "%s"\n' "$WR/fs.pid"
+    [ -n "$move" ] && printf '%s\n' "$move"
+    case "$1" in none) ;; *) printf 'echo one\n' ;; esac
+    case "$2" in
+      linger) printf 'exec sleep 20\n' ;;
+      two)    printf 'echo two\n' ;;
+    esac
+  } > "$WR_FS"
+  chmod +x "$WR_FS"
+}
+wr_watch(){
+  SYNC_FSWATCH="$WR_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WR_HITS'" CLAUDE_HOME="$WR/home" \
+    SYNC_REPO="$WR/clone" SYNC_NO_NOTIFY=1 SYNC_NOTIFIER="$WR_NOTIFIER" SYNC_HOSTNAME=wr-mac \
+    SYNC_WATCH_PID_FILE="$WR/watch.pid" SYNC_HOLD_FILE="$WR/hold" env "$@" bash "$WR_SELF" watch 2>&1
+}
+# grep -c prints 0 AND fails on an empty file, so a `|| echo 0` would print a second zero.
+wr_lines(){ local n; n="$(grep -c . "$1" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+
+# A NEWER COPY THAT RUNS: exit cleanly, after the lock, and without waiting on fswatch.
+wr_fresh; WR_OLD="$(wr_sha "$WR_SELF")"
+wr_fake newer linger
+wr_t0="$(date +%s)"
+out_wr_a="$(wr_watch)"; rc_wr_a=$?
+wr_secs=$(( $(date +%s) - wr_t0 ))
+WR_NEW="$(wr_sha "$WR_SELF")"
+dbg "#1569 restart: rc=$rc_wr_a secs=$wr_secs: $out_wr_a"
+check "#1569 the fixture really moved the file under the running daemon" "[ '$WR_OLD' != '$WR_NEW' ]"
+check "#1569 a daemon older than a working claude-sync on disk exits, and exits cleanly" "[ '$rc_wr_a' = 0 ]"
+check "#1569 and sends nothing on its old code on the way out" "[ \"\$(wr_lines '$WR_HITS')\" = 0 ]"
+check "#1569 the log says it is restarting, from which script to which" \
+  "line_has \"\$out_wr_a\" 'claude-sync watch: restarting' 'from claude-sync $WR_OLD to $WR_NEW'"
+check "#1569 it released the sync lock before it exited" "[ ! -e '$WR/clone/.sync-lock' ]"
+check "#1569 and removed its pid file, so the watcher launchd starts next is not refused" "[ ! -e '$WR/watch.pid' ]"
+# The real fswatch writes only when a file changes, so a daemon that left fswatch to die of its next
+# write would sit there, exited in its own log and running in fact, until somebody saved something.
+check "#1569 it ends fswatch itself rather than waiting for its next event" "[ '$wr_secs' -lt 15 ]"
+check "#1569 and the stand in for fswatch is no longer running" \
+  "! kill -0 \"\$(cat '$WR/fs.pid' 2>/dev/null || echo 999999)\" 2>/dev/null"
+check "#1569 it leaves a record for the next watcher of what it restarted from" "[ -s '$WR/clone/.watch-restarted' ]"
+
+# THE WATCHER LAUNCHD STARTS NEXT. The edit that revealed the stale daemon was refused, not sent, and
+# fswatch reports only changes made after it starts, so without a send of its own on the way up that
+# edit would wait for the next one (L368).
+wr_fake none exit
+out_wr_b="$(wr_watch)"
+dbg "#1569 next watcher: $out_wr_b"
+check "#1569 the next watcher says it restarted, onto which script and from which" \
+  "line_has \"\$out_wr_b\" 'claude-sync watch: restarted' 'onto claude-sync $WR_NEW from $WR_OLD'"
+check "#1569 and sends what changed while it was down, with no edit to prompt it" "[ \"\$(wr_lines '$WR_HITS')\" = 1 ]"
+check "#1569 the record of the restart is consumed" "[ ! -e '$WR/clone/.watch-restarted' ]"
+# The control: a watcher started any other way (a login, a pull's kickstart) does not send on its own.
+: > "$WR_HITS"
+out_wr_b2="$(wr_watch)"
+check "#1569 a watcher started with no restart behind it sends nothing until an edit" "[ \"\$(wr_lines '$WR_HITS')\" = 0 ]"
+check "#1569 and does not claim to have restarted" "! grep -q 'claude-sync watch: restarted' <<< \"\$out_wr_b2\""
+
+# A NEWER COPY THAT DOES NOT PARSE. Exiting into it would leave launchd starting a script that dies at
+# once, every ten seconds, so the daemon keeps refusing and the case is reported where people look.
+wr_fresh; WR_OLD="$(wr_sha "$WR_SELF")"
+wr_fake unparseable two
+out_wr_c="$(wr_watch SYNC_NO_NOTIFY=0)"; rc_wr_c=$?
+WR_BAD="$(wr_sha "$WR_SELF")"
+dbg "#1569 unparseable: rc=$rc_wr_c: $out_wr_c"
+check "#1569 the fixture's newer copy really does not parse" "! bash -n '$WR_SELF' 2>/dev/null"
+check "#1569 a daemon whose newer claude-sync does not parse does not restart onto it" \
+  "! grep -q 'claude-sync watch: restarting' <<< \"\$out_wr_c\""
+check "#1569 and leaves no restart record behind" "[ ! -e '$WR/clone/.watch-restarted' ]"
+check "#1569 it still refuses to send on its old code" "[ \"\$(wr_lines '$WR_HITS')\" = 0 ]"
+check "#1569 the log says why, naming both scripts" \
+  "line_has \"\$out_wr_c\" 'NOT sent and NOT restarted' 'does not parse' '$WR_OLD' '$WR_BAD'"
+check "#1569 it released the lock it tested under" "[ ! -e '$WR/clone/.sync-lock' ]"
+check "#1569 it is recorded, for status and the session notice" "[ -s '$WR/clone/.watch-stale' ]"
+check "#1569 the record counts both refused ticks" \
+  "[ \"\$(awk 'NR==1{print \$2}' '$WR/clone/.watch-stale')\" = 2 ]"
+check "#1569 a desktop notification is posted once for the stretch, not on every tick" \
+  "[ \"\$(wr_lines '$WR_NOTES')\" = 1 ]"
+stuck_wr_c="$(CLAUDE_HOME="$WR/home" SYNC_REPO="$WR/clone" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1)"
+dbg "#1569 stuck: $stuck_wr_c"
+check "#1569 claude-sync stuck reports it as its own kind, in words" \
+  "line_has \"\$stuck_wr_c\" '^watcher-stale' 'does not parse' '$WR_BAD'"
+wr_sentence="$(printf '%s\n' "$stuck_wr_c" | awk -F'\t' '$1=="watcher-stale"{print $4}')"
+st_wr_c="$(CLAUDE_HOME="$WR/home" SYNC_REPO="$WR/clone" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_CLONE_REGISTRY="$WR/noreg" bash "$SCRIPT" status 2>&1)"
+check "#1569 and status prints exactly that sentence" \
+  "[ -n \"\$wr_sentence\" ] && grep -qF -- \"\$wr_sentence\" <<< \"\$st_wr_c\""
+
+# A NEWER COPY THAT PARSES BUT CANNOT RUN: its own words, because the cause is different (L11).
+wr_fresh
+wr_fake failing exit
+out_wr_d="$(wr_watch)"
+dbg "#1569 failing: $out_wr_d"
+check "#1569 a newer claude-sync that exits on a harmless run is not restarted onto either" \
+  "! grep -q 'claude-sync watch: restarting' <<< \"\$out_wr_d\""
+check "#1569 and the log says it parses but exited, and with what" \
+  "line_has \"\$out_wr_d\" 'NOT sent and NOT restarted' 'exited 7'"
+
+# THE STRETCH ENDS IN THE SAME DAEMON: the broken copy is replaced by one that runs, and the next tick
+# restarts and clears the record. The stand in waits for the record the first tick writes, rather
+# than for a length of time (L290), and gives up after its own bound so a fault cannot hang the run.
+wr_fresh
+cat > "$WR_FS" <<FSEOF
+#!/usr/bin/env bash
+cp '$WR_SELF' '$WR/good'
+cp '$WR_SELF' '$WR/next'; printf '\\nif then\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'
+echo one
+n=0
+while [ ! -s '$WR/clone/.watch-stale' ] && [ "\$n" -lt 200 ]; do sleep 0.1; n=\$((n+1)); done
+cp '$WR/good' '$WR/next'; printf '\\n# fixed\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'
+echo two
+FSEOF
+chmod +x "$WR_FS"
+out_wr_e="$(wr_watch)"; rc_wr_e=$?
+dbg "#1569 recovery: rc=$rc_wr_e: $out_wr_e"
+check "#1569 set up: the first tick refused onto the broken copy" "grep -q 'NOT sent and NOT restarted' <<< \"\$out_wr_e\""
+check "#1569 once a copy that runs is on disk the same daemon restarts onto it" \
+  "grep -q 'claude-sync watch: restarting' <<< \"\$out_wr_e\" && [ '$rc_wr_e' = 0 ]"
+check "#1569 and the record of the stuck stretch is gone" "[ ! -e '$WR/clone/.watch-stale' ]"
+
+# MID APPLY IT WAITS. Another run on this Mac holds the sync lock, which is what a pull applying a
+# newer claude-sync looks like, so the daemon neither exits under it nor breaks the lock.
+wr_fresh
+mkdir -p "$WR/clone/.sync-lock"
+printf '%s\n' "$$" > "$WR/clone/.sync-lock/pid"
+printf 'wr-mac\n' > "$WR/clone/.sync-lock/host"
+printf 'a claude-sync pull\n' > "$WR/clone/.sync-lock/command"
+wr_fake newer exit
+out_wr_f="$(wr_watch SYNC_LOCK_WAIT=0)"
+dbg "#1569 lock held: $out_wr_f"
+check "#1569 a daemon that finds the sync lock held does not restart" "! grep -q 'claude-sync watch: restarting' <<< \"\$out_wr_f\""
+check "#1569 and says it waits, naming the run holding the lock" \
+  "line_has \"\$out_wr_f\" 'restart onto it waits' 'a claude-sync pull \\(process $$'"
+check "#1569 it left the other run's lock exactly as it found it" \
+  "[ \"\$(cat '$WR/clone/.sync-lock/pid' 2>/dev/null)\" = '$$' ]"
+check "#1569 it sends nothing meanwhile" "[ \"\$(wr_lines '$WR_HITS')\" = 0 ]"
+check "#1569 and leaves no restart record" "[ ! -e '$WR/clone/.watch-restarted' ]"
+rm -rf "$WR/clone/.sync-lock"
+
+# A HOLD IN FORCE. A hold is taken while somebody commits by hand, often in this very clone, so the
+# file on disk may be mid change; a held daemon sends nothing anyway, so it restarts once it lifts.
+wr_fresh
+printf '%s %s %s %s\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" wr-mac "committing by hand" > "$WR/hold"
+wr_fake newer exit
+out_wr_g="$(wr_watch)"
+dbg "#1569 held: $out_wr_g"
+check "#1569 a held daemon does not restart while the hold lasts" "! grep -q 'claude-sync watch: restarting' <<< \"\$out_wr_g\""
+check "#1569 and says the restart waits for the hold" "line_has \"\$out_wr_g\" 'NOT sent' 'once the hold lifts'"
+check "#1569 the hold is left in place" "[ -f '$WR/hold' ]"
+check "#1569 and nothing is sent" "[ \"\$(wr_lines '$WR_HITS')\" = 0 ]"
+
+# LAUNCHD STARTS IT AGAIN. A clean exit is only a restart if the installed agent keeps the job alive
+# UNCONDITIONALLY: a KeepAlive dictionary with SuccessfulExit false would leave an exit 0 dead. No
+# ThrottleInterval is set, so launchd's default of ten seconds applies, which delays a respawn only
+# for a job that ran under ten seconds; a daemon old enough to be stale has run far longer.
+SYNC_LAUNCHAGENTS="$WR/agents" SYNC_NO_LAUNCHCTL=1 SYNC_FSWATCH="$WR_FS" CLAUDE_HOME="$WR/home" \
+  SYNC_ZSHRC="$WR/zshrc" bash "$SCRIPT" install-autosync >/dev/null 2>&1
+WR_PL="$WR/agents/com.claudesync.watch.plist"
+check "#1569 the watch agent keeps the job alive unconditionally, so a clean exit is restarted" \
+  "grep -q '<key>KeepAlive</key><true/>' '$WR_PL'"
+if command -v plutil >/dev/null 2>&1; then
+  check "#1569 and launchd's own parser reads KeepAlive as the boolean true" \
+    "[ \"\$(plutil -extract KeepAlive raw -o - '$WR_PL' 2>/dev/null)\" = true ]"
+fi
+check "#1569 with no SuccessfulExit condition and no ThrottleInterval of its own" \
+  "! grep -q -e SuccessfulExit -e ThrottleInterval '$WR_PL'"
+check "#1569 and it starts at load, so a login brings it up too" "grep -q '<key>RunAtLoad</key><true/>' '$WR_PL'"
 
 
 section "== the index generator, against the wrap shapes it actually meets (#192, #194, #195) =="

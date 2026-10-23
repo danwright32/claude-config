@@ -193,6 +193,15 @@ while IFS= read -r clone; do
         esac
         say "claude-sync: $what. From the automatic sync in $clone: ${sentence}${unread} This is said once in this session, and again here when it clears."
         remember "$entry" ;;
+      watcher-stale)
+        # The change watcher runs an older claude-sync and cannot restart onto the one on disk,
+        # because that one is broken (claude-config#1569). Said AT ONCE, with no threshold: every
+        # other stale watcher restarts by itself, so this one is already the case that did not clear,
+        # and no wait will clear it. Once per stretch, keyed on its start, like the two above.
+        case "$first" in ''|*[!0-9]*) entry="$clone$T$kind$T?" ;; *) entry="$clone$T$kind$T$first" ;; esac
+        if in_list "$told" "$entry"; then remember "$entry"; continue; fi
+        say "claude-sync: in the automatic sync at $clone, ${sentence} This is said once in this session, and again here when it clears."
+        remember "$entry" ;;
       *)
         # An unreadable record, or a kind added to the tool after this hook was written: said once
         # in the tool's own words rather than dropped, because a kind nobody handles would otherwise
@@ -206,8 +215,8 @@ while IFS= read -r clone; do
   done <<< "$recs"
 
   # Every stretch this session was told about that the clone no longer reports has ENDED. Only the
-  # two stuck directions have an end worth saying; an unreadable record that became readable is
-  # followed by whatever it now says, which is its own notice if anything is wrong.
+  # two stuck directions and a stuck watcher have an end worth saying; an unreadable record that
+  # became readable is followed by whatever it now says, which is its own notice if anything is wrong.
   while IFS= read -r t; do
     case "$t" in "$clone$T"*) ;; *) continue ;; esac
     in_list "$keep" "$t" && continue
@@ -215,6 +224,7 @@ while IFS= read -r clone; do
     case "$kind" in
       sending)   say "claude-sync: sending from this Mac is moving again. The stuck stretch reported earlier in this session, in the automatic sync at $clone, has ended." ;;
       receiving) say "claude-sync: receiving on this Mac is moving again. The stuck stretch reported earlier in this session, in the automatic sync at $clone, has ended." ;;
+      watcher-stale) say "claude-sync: the change watcher in the automatic sync at $clone is no longer stuck on an older claude-sync. The stretch reported earlier in this session has ended." ;;
     esac
   done <<< "$told"
 done <<< "$clones"
