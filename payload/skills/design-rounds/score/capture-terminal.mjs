@@ -38,7 +38,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LAUNCH_ARGS, designFrames, drawDesignFrame, findPlaywright, gitState, loadPlaywright, openDesign, runChecks, settle } from "./capture-web.mjs";
+import { LAUNCH_ARGS, designFrames, drawDesignFrame, findPlaywright, gitState, launchChrome, loadPlaywright, openDesign, runChecks, settle } from "./capture-web.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCORE = join(HERE, "design_score.py");
@@ -299,7 +299,7 @@ async function main() {
     return 2;
   }
   const frames = designFrames(o.design);
-  const browser = await pw.chromium.launch({ ...(o.channel === "chrome" ? { channel: "chrome" } : {}), args: LAUNCH_ARGS });
+  const browser = await launchChrome(pw, o.channel, LAUNCH_ARGS);
   try {
     await capture(o, browser, frames);
   } finally {

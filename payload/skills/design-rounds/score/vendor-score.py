@@ -9,7 +9,8 @@ Dan's decision, 2026-10-20: Slate COPIES the score tools into its repository, si
 ~/.claude, with a check that they still match claude-config's copy.
 
 COPY writes every file the score needs, flat in one folder (capture-web.mjs, design_score.py and the
-helpers it imports, including design_file.py from the design rounds skill one folder up, the shared
+helpers it imports, including design_file.py from the design rounds skill one folder up, the
+headless-dom.sh Chrome is started through (copied runnable, claude-config#1537), the shared
 Playwright's settings, and this tool itself), then vendor-manifest.json: the sha256 of each file as
 claude-config had it. It copies from the folder this script is in, or from --from, which must be
 claude-config's own copy (the score folder with design_file.py one folder up), never another vendored
@@ -50,6 +51,9 @@ FILES = {
     "pngio.py": "pngio.py",
     "score_github.py": "score_github.py",
     "design_file.py": os.path.join("..", "design_file.py"),
+    # What capture-web.mjs starts Chrome through, run by Playwright as the browser itself, so it is
+    # copied runnable (claude-config#1537).
+    "headless-dom.sh": os.path.join("..", "headless-dom.sh"),
     "shared-playwright.json": "shared-playwright.json",
     "vendor-score.py": "vendor-score.py",
 }
@@ -83,10 +87,12 @@ def is_claude_config_copy(score_dir):
     return all(os.path.isfile(p) for p in sources(score_dir).values())
 
 
-def write_atomic(path, data):
+def write_atomic(path, data, mode=None):
     tmp = path + ".tmp-%d" % os.getpid()
     with open(tmp, "wb") as fh:
         fh.write(data)
+    if mode is not None:
+        os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
@@ -102,7 +108,8 @@ def copy(folder, from_dir):
     for name, path in sources(src).items():
         with open(path, "rb") as fh:
             data = fh.read()
-        write_atomic(os.path.join(folder, name), data)
+        # With its own permissions, so a file run as a program (headless-dom.sh) still can be.
+        write_atomic(os.path.join(folder, name), data, os.stat(path).st_mode & 0o777)
         hashes[name] = "sha256:" + hashlib.sha256(data).hexdigest()
     # The manifest last, so a copy that stopped partway is caught by the next check. It carries no
     # path from this Mac: it is committed in another repository.
