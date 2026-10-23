@@ -167,16 +167,21 @@ class Monitor:
         self.allowed_ips, self.unresolved = resolve(self.allow)
         predicate = 'sender == "Sandbox" AND eventMessage CONTAINS "%s"' % self.tag
         try:
-            self.proc = subprocess.Popen([self.log, "stream", "--style", "ndjson", "--predicate", predicate],
-                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT, start_new_session=True)
+            proc = subprocess.Popen([self.log, "stream", "--style", "ndjson", "--predicate", predicate],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as e:
             raise Unavailable("the report stream %s could not start: %s" % (self.log, e))
+        self.proc = proc
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
         if not self._canary_seen():
             raise Unavailable("the report stream showed no report of the start canary within %ss, so it cannot be"
                               " shown to see this run's connections%s" % (self.egress_s, self._stream_state()))
+        exited = proc.poll()
+        if exited is not None:  # it reported the canary and then died: nothing would see serve
+            raise Unavailable("the report stream exited with %s right after the start canary%s"
+                              % (exited, self._stream_state()))
         self.started_at = v.utc_now()
         self._event({"event": "started", "at": self.started_at})
 
@@ -220,6 +225,10 @@ class Monitor:
                                capture_output=True, text=True, timeout=10)
         except (OSError, subprocess.TimeoutExpired) as e:
             return [], "lsof could not read the sockets of pid %d: %s" % (pid, e)
+        # lsof exits 1 when the process holds no matching socket any more, which is an answer (the
+        # connection closed first); anything else, or 1 with an error said, is a failure to read.
+        if r.returncode not in (0, 1) or (r.returncode == 1 and r.stderr.strip()):
+            return [], "lsof exited %d reading pid %d: %s" % (r.returncode, pid, r.stderr.strip()[-200:])
         return sorted(remote_addresses(r.stdout, port)), None
 
     def _event(self, obj):
