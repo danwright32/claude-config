@@ -211,17 +211,20 @@ ghp__said_wait(){   # $1 = the text, $2 = now
 # when the answer itself names no time (rate_limit costs no allowance, and refused, its own headers
 # carry Retry-After). Sets GHP_WAIT and GHP_SAID; the pause never shortens one already in force.
 ghp_rate_pause(){
-  local text="$1" now="$2" probe="${3:-}" s first max strikes wait said until
+  local text="$1" now="$2" probe="${3:-}" s first max strikes wait="" said="" until
   first="$(ghp__num "${GH_POLL_RATE_FIRST_SECONDS:-}" 60)"; [ "$first" -ge 1 ] || first=1
   max="$(ghp__num "${GH_POLL_RATE_MAX_SECONDS:-}" 960)"; [ "$max" -ge "$first" ] || max="$first"
-  s="$(ghp__session_dir)" || s=""
-  if [ -n "$s" ]; then ghp__lock "$s"; ghp__read_pause "$s"; else GHP_P_UNTIL=0; GHP_P_STRIKES=0; fi
-  strikes=$(( GHP_P_STRIKES + 1 ))
+  # GitHub's own time, read BEFORE the lock: the probe is a network call, and the lock covers only
+  # the few file reads and writes below, so no other loop waits on GitHub through it.
   if ghp__said_wait "$text" "$now"; then
     wait="$GHP_H_WAIT"; said="$GHP_H_SAID"
   elif [ -n "$probe" ] && ghp__said_wait "$("$probe" 2>&1)" "$now"; then
     wait="$GHP_H_WAIT"; said="$GHP_H_SAID"
-  else
+  fi
+  s="$(ghp__session_dir)" || s=""
+  if [ -n "$s" ]; then ghp__lock "$s"; ghp__read_pause "$s"; else GHP_P_UNTIL=0; GHP_P_STRIKES=0; fi
+  strikes=$(( GHP_P_STRIKES + 1 ))
+  if [ -z "$wait" ]; then
     wait="$first"; local k=1
     while [ "$k" -lt "$strikes" ] && [ "$wait" -lt "$max" ]; do wait=$(( wait * 2 )); k=$((k + 1)); done
     [ "$wait" -le "$max" ] || wait="$max"

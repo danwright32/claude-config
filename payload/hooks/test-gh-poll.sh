@@ -148,6 +148,18 @@ unset GH_POLL_RATE_MAX_SECONDS
 rm -rf "$GH_POLL_STATE_DIR"; printf 'gh: connection reset by peer\n' > "$probe_file"
 check_eq "#1482 an unreadable probe falls back to the burst wait" "60" "$(loop s1 "ghp_rate_pause '$LIMITED' 1000 '$WORKDIR/probe.sh'; echo \"\$GHP_WAIT\"")"
 
+# The probe is a network call, so it runs with the session's lock NOT held: another loop never
+# waits on GitHub through the lock, nor breaks it as stale while the probe is out.
+rm -rf "$GH_POLL_STATE_DIR"; mkdir -p "$GH_POLL_STATE_DIR/s1"
+cat > "$WORKDIR/probe-lock.sh" <<EOS
+#!/usr/bin/env bash
+if [ -d "$GH_POLL_STATE_DIR/s1/.lock" ]; then echo held > "$WORKDIR/lock-seen"; else echo free > "$WORKDIR/lock-seen"; fi
+printf 'HTTP/2.0 403 Forbidden\r\nRetry-After: 30\r\n\r\n{}\n'
+EOS
+chmod +x "$WORKDIR/probe-lock.sh"
+loop s1 "ghp_rate_pause '$SECONDARY' 1000 '$WORKDIR/probe-lock.sh'" >/dev/null
+check_eq "#1482 the probe runs with the session's lock free" "free" "$(cat "$WORKDIR/lock-seen" 2>/dev/null)"
+
 # A pause is never shortened by a later, shorter one.
 rm -rf "$GH_POLL_STATE_DIR"; probe_ok 0 1300 4989 4000
 loop s1 "ghp_rate_pause '$LIMITED' 1000 '$WORKDIR/probe.sh'" >/dev/null
