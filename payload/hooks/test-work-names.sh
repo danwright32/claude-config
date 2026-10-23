@@ -11,10 +11,9 @@
 #      registry is said rather than read as empty, and an unreadable one is refused.
 #   4. Nothing the scanner prints repeats a name it found (CI logs of a public repository are
 #      public too), only where it is.
-# Two more parts arrive once the lesson provenance, the last tracked text that still names an
-# organisation, is clean (claude-config#1568): (1) nothing this repository publishes names one,
-# over the whole tree, and (5) a send refuses to publish a file naming one. Both would fail on it
-# while it is tracked.
+# The two parts that need the repository, (1) nothing this repository publishes names one and (5) a
+# send refuses to publish a file naming one, are tests/test-work-names-tree.sh, since this suite is
+# also installed beside the hooks, where there is no repository.
 #
 # The scanner holds the two organisation names only as sha256 hashes, and this suite tests with an
 # invented organisation handed in the same way (WORK_NAMES_EXTRA_HASHES). No work organisation or

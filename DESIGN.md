@@ -1336,9 +1336,13 @@ hyphen is a different GitHub account and the company's public web domain. Flaggi
 would also flag English words (a colour named in a vendored skill), which only an exemption list
 could quiet, and the scan has none.
 
-Not yet wired, and why: once the lesson provenance is clean, the suite runs
-the scanner over the whole tree and the send runs it over what it publishes. Before then both would
-fail on the names still tracked.
+Where it runs: `tests/test-work-names-tree.sh` runs it over every file git would publish, before
+every push (it lists the tree, so the pre push scanner gate runs it) and in CI; and every send runs
+it, as `scan_work_names` in `claude-sync`, over what it is about to publish, after the secret scan
+and the same way: a refusal names file and line, is recorded in `.send-refused` as its own cause,
+and stops the send. That second place is the one that matters most, because lessons are written on
+a Mac and published by the sync with no pull request in between (L280). It could only be wired once
+the last tracked mention was gone, or every send would have been refused.
 
 ## One watcher, and a leftover loop stops itself (#604)
 

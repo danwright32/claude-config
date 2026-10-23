@@ -4972,7 +4972,50 @@ $pf"*) continue ;; esac
   # A refusal handed back to a sync ends the staging here: nothing staged is going anywhere, so
   # there is nothing left for the check below to protect (claude-config#947).
   if [ -n "$SEND_REFUSED" ]; then return 0; fi
+  scan_work_names  # nor a work organisation's name (claude-config#1568), on the same finished state
+  if [ -n "$SEND_REFUSED" ]; then return 0; fi
   refuse_resurrected_deletions
+}
+
+# Refuse to publish a file that names a work GitHub organisation (claude-config#1568). The repository
+# is public and the work's repositories are private: an owner name tells a stranger where to look.
+# A lesson written on a Mac reaches the shared repository through this send without any pull request,
+# so the suite that scans the whole tree (tests/test-work-names-tree.sh) would only find it after it
+# was published; this is the same scanner, hooks/lib/work-names.py, asked before (L280, L450). It
+# reads everything the push would publish: every file the clone tracks or would add, the staged
+# payload included. It names where each one is, never the name it found, since a refusal is read in
+# transcripts. The scanner, its python and the registry it reads are all required: a scan that
+# could not run is a refusal, never a pass (L98). Override, for one run and said to the person
+# first: SYNC_SKIP_WORK_NAMES_SCAN=1.
+scan_work_names(){
+  [ "${SYNC_SKIP_WORK_NAMES_SCAN:-0}" = "1" ] && return 0
+  [ -d "$PAYLOAD" ] || return 0
+  local lib="$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py" list out rc refusal found
+  list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
+  if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
+    # Listed by git, then only the files that exist: a deletion staged in the index is not content.
+    git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard 2>/dev/null \
+      | while IFS= read -r rel; do [ -f "$SYNC_REPO/$rel" ] && printf '%s\0' "$rel"; done > "$list"
+  else
+    ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null
+  fi
+  if [ ! -f "$lib" ] || ! command -v python3 >/dev/null 2>&1; then
+    out="the work names scanner ($lib) or python3 to run it is missing"; rc=2
+  else
+    out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)"; rc=$?
+  fi
+  rm -f "$list"
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 1 ]; then
+    found="$(printf '%s\n' "$out" | grep -v '^work-names:' | cut -d: -f1,2 | sort -u | tr '\n' ' ')"
+    refusal="a file this send would publish names a work organisation, at: ${found% }. Drop the organisation from prose and provenance (write name#123, never owner/name#123) or invent one in a fixture, then sync again. SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one run"
+    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\twork-names\n' "$(date +%s)" "${found% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  else
+    refusal="the work names scan could not judge what this send would publish, so nothing is sent: $(printf '%s' "$out" | tr '\n' ' ')"
+    [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t\twork-names-unjudged\n' "$(date +%s)" > "$SEND_REFUSED_FILE" 2>/dev/null || true
+  fi
+  if [ "${SCAN_REFUSAL_DEFERRED:-0}" = "1" ]; then SEND_REFUSED="$refusal"; return 0; fi
+  die "$refusal"
 }
 
 # Block obvious credentials from being published, with this one set of rules and no external
@@ -8651,6 +8694,15 @@ pending_edits_cause(){
       # The scan refused without finding anything: git could not list what the send would publish
       # outside the payload (#1133).
       printf 'the secret scan last refused a send from this clone%s (git could not list the files outside the payload it would publish, so they went unscanned), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "$SYNC_REPO"
+      return 0
+    fi
+    # The work names scan's refusals share the record (claude-config#1568), each said as itself.
+    if [ "$why" = work-names ]; then
+      printf 'the work names scan last refused a send from this clone%s (a work organisation named at: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
+      return 0
+    fi
+    if [ "$why" = work-names-unjudged ]; then
+      printf 'the work names scan last refused a send from this clone%s (it could not run, so nothing was judged), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "$SYNC_REPO"
       return 0
     fi
     printf 'the secret scan last refused a send from this clone%s (possible secret in: %s), which leaves the edits it staged uncommitted, and %s holds uncommitted edits' "$when" "${found:-?}" "$SYNC_REPO"
