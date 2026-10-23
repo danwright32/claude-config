@@ -216,14 +216,51 @@ check_eq "exactly one review was started for the push" 1 "$(calls)"
 grep -q '^AI_REVIEW_STATE_DIR=' "$FAKE_LOG/env" \
   && ok || bad "and the rest of the environment reached claude (a positive control for the env file)"
 
-# The prompt sent is the FILE's text, verbatim, so the file is the prompt and not a copy of it.
-python3 - "$FAKE_LOG/args" "$PROMPT" <<'EOF' && ok || bad "the prompt sent to claude is the exact text of lib/ai-review-prompt.txt, after -p"
-import sys
+# The prompt sent is the FILE's text, verbatim, so the file is the prompt and not a copy of it. And
+# THE ORDER, for the prompt cache (claude-config#1599): the lessons, identical across reviews and
+# most of the prompt, are the appended system prompt, built from the index files and nothing else,
+# while the message is the two per diff context lines and then the prompt file, with the diff after
+# them on stdin. Measured 2026-10-23 on Claude Code 2.1.309: with the identical text first but inside
+# the one user message, a second run read back only the tool and system prefix (18,902 tokens),
+# because a cache is read back only up to a content block boundary and the message is one block. As
+# the appended system prompt, with the per machine sections moved out of it, a second review of
+# another diff read back 56,997. The instructions stay beside the diff: in the system prompt too,
+# fewer findings cited a lesson (11 of 64, against 21 of 69 before and 18 of 65 this way).
+python3 - "$FAKE_LOG/args" "$PROMPT" "$DIR/.." <<'EOF' && ok || bad "the appended system prompt is exactly the lessons, and the message is the context lines then lib/ai-review-prompt.txt (#1599)"
+import glob, os, sys
 args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
 prompt = open(sys.argv[2], encoding="utf-8").read()
-i = args.index("-p")
-sent = args[i + 1]
-sys.exit(0 if sent.endswith(prompt) and prompt.strip() in sent else 1)
+files = sorted(glob.glob(os.path.join(sys.argv[3], "LESSONS-INDEX-*.md")))
+if not files:
+    print("  no LESSONS-INDEX-*.md beside the hooks, so there was nothing to check against")
+    sys.exit(1)
+if args.count("--append-system-prompt") != 1:
+    print(f"  --append-system-prompt appeared {args.count('--append-system-prompt')} times")
+    sys.exit(1)
+fixed = args[args.index("--append-system-prompt") + 1]
+expected = "===== LESSONS\n\n" + "\n\n".join(open(f, encoding="utf-8").read().strip() for f in files)
+if fixed != expected:
+    at = next((i for i, (a, b) in enumerate(zip(fixed, expected)) if a != b), min(len(fixed), len(expected)))
+    print(f"  the appended system prompt differs from the lessons index at character {at}"
+          f" (sent {len(fixed)}, expected {len(expected)})")
+    sys.exit(1)
+sent = args[args.index("-p") + 1]
+lines = sent.split("\n")
+if not (lines[0].startswith("Context: this repository") and lines[1].startswith("Context: failure handling")):
+    print("  the message does not open with the two context lines")
+    sys.exit(1)
+if not sent.endswith("\n\n" + prompt):
+    print("  the message does not end with the prompt file, verbatim")
+    sys.exit(1)
+# The heading on a line of its own (the prompt file names it inside quotes).
+if "\n===== LESSONS\n" in sent:
+    print("  the message carries the lessons, which belong in the appended system prompt")
+    sys.exit(1)
+EOF
+python3 - "$FAKE_LOG/args" <<'EOF' && ok || bad "the per machine sections are moved out of the system prompt: --exclude-dynamic-system-prompt-sections exactly once (#1599)"
+import sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+sys.exit(0 if args.count("--exclude-dynamic-system-prompt-sections") == 1 else 1)
 EOF
 args_blob="$(tr '\036' '\n' < "$FAKE_LOG/args")"
 check "the framework line names Next.js, read from package.json" "Next.js/React application" "$args_blob"
@@ -263,17 +300,21 @@ check "the diff of the push went to claude on stdin" "+    throw new CalendarErr
 # and every lessons index file is read at run time into the prompt, never a copy of it (L41).
 grep -qx 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1' "$FAKE_LOG/env" \
   && ok || bad "the review's claude runs with the global config switched off"
-# And with prompt caching off (claude-config#1573). On a subscription a headless run writes its whole
-# prompt to the one hour cache, billed at twice the input price, and measured over 775 reviews on the
-# personal MacBook (2026-10-16 to 23) no review ever read back more than the 20k token tool and system
-# prefix: about 101M tokens a week written and never read. Uncached input was the cheapest of the
-# three lifetimes on those numbers (118M against 134M for five minutes and 204M for one hour).
-grep -qx 'DISABLE_PROMPT_CACHING=1' "$FAKE_LOG/env" \
-  && ok || bad "the review's claude runs with prompt caching off (#1573)"
-python3 - "$FAKE_LOG/args" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the prompt, verbatim"
+# And with prompt caching on the FIVE MINUTE lifetime (claude-config#1599). #1573 switched caching
+# off while the per diff context lines opened the prompt, because then no review could read the
+# lessons back: on a subscription a headless run writes to the one hour cache at twice the input
+# price, and 775 reviews (2026-10-16 to 23) never read back more than the 20k token tool and system
+# prefix. With the identical text now in the appended system prompt (checked above), a review
+# started within five minutes of another reads it back, and the five minute write costs 1.25 times
+# the input price, not 2.
+grep -qx 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m' "$FAKE_LOG/env" \
+  && ok || bad "the review's claude runs with the five minute prompt cache (#1599)"
+grep -q '^DISABLE_PROMPT_CACHING=' "$FAKE_LOG/env" \
+  && bad "and caching is no longer switched off (#1599)" || ok
+python3 - "$FAKE_LOG/args" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the appended system prompt, verbatim"
 import glob, os, sys
 args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
-sent = args[args.index("-p") + 1]
+sent = args[args.index("--append-system-prompt") + 1]
 files = sorted(glob.glob(os.path.join(sys.argv[2], "LESSONS-INDEX-*.md")))
 if not files:
     print("  no LESSONS-INDEX-*.md beside the hooks, so there was nothing to check against")
