@@ -132,11 +132,13 @@ class Monitor:
     def __init__(self, rdir, receipt_id, allow, egress_s):
         self.rdir = rdir
         self.tag = "vg-egress-" + receipt_id
-        # The canary runs under its own profile with its own tag, so a canary report is told apart by
-        # its TAG: a canary exits at once, and macOS may hand its pid to a serve or drive process,
-        # whose connections must never be discarded as the canary's.
+        # Every canary runs under a profile of its own whose tag carries its own sequence number, so a
+        # canary is known by that TAG and never by its pid: a canary exits at once, and macOS may hand
+        # its pid to serve, to the drive helper or to the next canary. Neither a real connection nor an
+        # earlier canary's report can ever be taken for the canary being waited on.
         self.canary_tag = self.tag + "-canary"
         self.canary_profile = os.path.join(rdir, "egress-canary.sb")
+        self.canaries_fired = 0
         self.allow = list(allow)
         self.egress_s = egress_s
         self.profile = os.path.join(rdir, "egress.sb")
@@ -177,8 +179,6 @@ class Monitor:
                               " sandbox" % self.sandbox)
         with open(self.profile, "w") as f:
             f.write(profile_text(self.tag))
-        with open(self.canary_profile, "w") as f:
-            f.write(profile_text(self.canary_tag))
         self.allowed_ips, self.unresolved = resolve(self.allow)
         predicate = 'sender == "Sandbox" AND eventMessage CONTAINS "%s"' % self.tag
         try:
@@ -212,15 +212,16 @@ class Monitor:
                     self.chatter = (self.chatter + [line[:200]])[-5:]
                     continue
                 m = REPORT.match(ev.get("eventMessage") or "") if isinstance(ev, dict) else None
-                if not m or m.group(5) not in (self.tag, self.canary_tag):
+                tag = m.group(5) if m else None
+                if tag is not None and tag.startswith(self.canary_tag + "-"):
+                    with self.cond:
+                        self.canaries_seen.add(tag)
+                        self.cond.notify_all()
+                    self._event({"event": "canary", "at": v.utc_now(), "canary": tag})
+                    continue
+                if tag != self.tag:
                     continue
                 pid, port = int(m.group(3)), int(m.group(4))
-                if m.group(5) == self.canary_tag:
-                    with self.cond:
-                        self.canaries_seen.add(pid)
-                        self.cond.notify_all()
-                    self._event({"event": "canary", "at": v.utc_now(), "pid": pid})
-                    continue
                 rec = {"event": "report", "at": v.utc_now(), "pid": pid, "process": m.group(2), "port": port,
                        "count": int(m.group(1) or 1)}
                 rec["addresses"], why = self._name(pid, port)
@@ -257,6 +258,11 @@ class Monitor:
     # -- the canary ------------------------------------------------------------------------------
 
     def _fire_canary(self):
+        """Run one canary under a profile tagged for it alone, and return that tag."""
+        self.canaries_fired += 1
+        tag = "%s-%d" % (self.canary_tag, self.canaries_fired)
+        with open(self.canary_profile, "w") as f:
+            f.write(profile_text(tag))
         try:
             r = subprocess.run([self.sandbox, "-f", self.canary_profile, sys.executable, "-c", CANARY],
                                capture_output=True, text=True, timeout=CANARY_RUN_MAX_S)
@@ -266,17 +272,17 @@ class Monitor:
         if r.returncode != 0 or not out.isdigit():
             raise Unavailable("the canary could not run under %s (exit %s): %s"
                               % (self.sandbox, r.returncode, (r.stderr or r.stdout).strip()[-300:]))
-        return int(out)
+        return tag
 
     def _canary_seen(self):
         """Fire canaries until one's report arrives, the stream ends, or egress_s passes."""
         deadline = time.monotonic() + self.egress_s
         while time.monotonic() < deadline:
-            pid = self._fire_canary()
+            tag = self._fire_canary()
             with self.cond:
-                self.cond.wait_for(lambda: pid in self.canaries_seen or self.stream_ended,
+                self.cond.wait_for(lambda: tag in self.canaries_seen or self.stream_ended,
                                    timeout=max(0.0, min(CANARY_RETRY_S, deadline - time.monotonic())))
-                if pid in self.canaries_seen:
+                if tag in self.canaries_seen:
                     return True
                 if self.stream_ended:
                     return False

@@ -54,15 +54,15 @@ class ReaderAndJudgment(unittest.TestCase):
 
     def test_a_reused_canary_pid_never_hides_a_real_connection(self):
         # The canary exits at once and macOS hands its pid to serve, which then reaches an outside host.
-        self.read([report(500, 9, self.m.canary_tag, process="Python"), report(500, 443, self.m.tag)],
+        self.read([report(500, 9, self.m.canary_tag + "-1", process="Python"), report(500, 443, self.m.tag)],
                   {500: ["203.0.113.7"]})
-        self.assertEqual(self.m.canaries_seen, {500})
+        self.assertEqual(self.m.canaries_seen, {self.m.canary_tag + "-1"})
         out = self.m.judge()
         self.assertEqual(out["verdict"], "not-clean", out)
         self.assertEqual([(d["address"], d["port"]) for d in out["destinations"]], [("203.0.113.7", 443)])
 
     def test_canary_reports_alone_are_clean(self):
-        self.read([report(501, 9, self.m.canary_tag, process="Python")], {})
+        self.read([report(501, 9, self.m.canary_tag + "-1", process="Python")], {})
         out = self.m.judge()
         self.assertEqual((out["verdict"], out["destinations"], out["unnamed"]), ("clean", [], []))
 
@@ -140,6 +140,21 @@ class ExitStatuses(unittest.TestCase):
         self.assertIn("exited with 3 right after the start canary", why or "")
         self.assertIsNone(self.m.started_at)
         self.assertEqual(self.m.finish()["verdict"], "unmeasured")
+
+
+class CanaryIdentity(unittest.TestCase):
+    def test_an_earlier_canarys_report_never_proves_a_later_one(self):
+        # The start canary ran as pid 500 and was seen; macOS gives the end canary pid 500 again, and
+        # no report of the end canary arrives. The end must not count as proved (the #1571 review).
+        with tempfile.TemporaryDirectory() as tmp:
+            m = egress.Monitor(tmp, RID, list(v.EGRESS_LOCAL_HOSTS), 0.3)
+            ran = egress.subprocess.CompletedProcess(["canary"], 0, "500\n", "")
+            with mock.patch.object(egress.subprocess, "run", return_value=ran):
+                m.canaries_seen.add(m._fire_canary())  # the start canary, seen
+                self.assertFalse(m._canary_seen())
+            self.assertGreater(m.canaries_fired, 1)
+            with open(m.canary_profile) as f:
+                self.assertIn(m.canary_tag + "-%d" % m.canaries_fired, f.read())
 
 
 class StopBudget(unittest.TestCase):
