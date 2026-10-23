@@ -41,6 +41,8 @@ state/
 .resurrected-reported
 .unloadable-notified*
 .ci-red-since
+.watch-stale
+.watch-restarted
 .my-push
 .mods-seen
 .trees-seen

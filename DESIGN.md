@@ -1349,6 +1349,59 @@ so two watchers starting together cannot both run. Status judges watchers by roo
 is several nested command substitutions carrying the watcher's own command line, so one healthy
 watcher mid send reads three or four deep, which was the "nested up to 4 deep" of that report.
 
+## A watcher older than the claude-sync on disk restarts itself (#420, #1569)
+
+#420 made the watcher record a content hash of the `claude-sync` it loaded and refuse to send on any
+tick where the file on disk differs, because a guard shipped into the script is inert in a process
+that parsed the file before it existed (L715). It deliberately stopped there: refusing was the part
+that could not be wrong, and a process replacing itself was called a separate decision, with
+recovery left to the daily timer or a pull by hand. That left a Mac able to sit silent for a day.
+From 2026-10-22 16:44 to 2026-10-23 08:22 ET the personal MacBook logged the refusal 84 times, sent
+and received nothing, and told nobody (L13, L357). Dan decided on 2026-10-23: "Restart itself".
+
+So a stale tick now has four outcomes, decided in `watch_stale_tick`:
+
+- **Restart.** The newer copy is self tested under the sync lock, with the same `script_self_test`
+  a pull uses before re-executing onto what it pulled (parse, then a full `status` run in throwaway
+  directories), so no pull can change the file between the test and the decision. The lock is
+  released, a `.watch-restarted` note is left for the next watcher, the loop ends fswatch by the pid
+  it traced (fswatch is started through `sh -c` that prints its own pid and then execs it), and the
+  process exits 0. Ending fswatch matters: it writes only on a change, so a watcher left to let it
+  die of its next write would be logged as restarting and still running until somebody saved
+  something.
+- **Wait for the lock.** Another run holding the lock is what a pull applying a newer copy looks
+  like, and the pull restarts the watcher itself when it finishes. The watcher waits the usual lock
+  deadline, then gives up for this change and tries again on the next.
+- **Wait for a hold.** A hold is taken while somebody commits by hand, often in the very clone the
+  watcher runs, so the file may be mid change. A held watcher sends nothing anyway, so its staleness
+  costs nothing until the hold lifts.
+- **Refuse, and say so.** A newer copy that fails its self test would crash at every launch, and
+  with an unconditional `KeepAlive` launchd would respawn it every ten seconds for ever. So the
+  watcher keeps the #420 behaviour, and because no restart and no wait can clear this case it is the
+  one that needs a person: `.watch-stale` records the stretch, `claude-sync stuck` reports it as
+  `watcher-stale` (so status and the per prompt notice say it, the notice at once rather than after
+  its hour), and one desktop notification is posted per stretch.
+
+Why launchd brings it back: the watch agent's plist has `KeepAlive` as the boolean `true`, which
+keeps the job alive unconditionally, exit 0 included (a dictionary with `SuccessfulExit` false would
+not), and sets no `ThrottleInterval`, so launchd's default of ten seconds applies. That throttle
+delays a respawn only for a job that ran under ten seconds since it last started; a watcher old
+enough to be stale has run far longer, so it comes back at once. The plist is unchanged by this, so
+no Mac needs `install-autosync` re-run for it (L423). The suite pins all of that against the plist
+`install-autosync` writes.
+
+The watcher launchd starts next reads `.watch-restarted`, logs `restarted onto claude-sync <new>
+from <old>`, so the log shows the restart landed and not only that one was attempted, and sends once
+on the way up: the change that revealed the stale watcher was refused rather than sent, and fswatch
+reports only changes made after it starts, so without that send the change would wait for the next
+one. A watcher started any other way (a login, a pull's kickstart) does not send until a change.
+
+What this does not cover: a newer copy that passes the self test and then fails only as a watcher
+would be restarted into, and crash loop at launchd's throttle. That is the same exposure a pull's
+own restart of the watcher already had, and the self test is the guard both share. The first
+version of the watcher to carry this code has to be started by something else (a pull's restart, as
+always); only from then on does a stale watcher restart itself.
+
 ## The hooks block is merged in BOTH directions, against the same base
 
 `settings.json` is not mirrored like the rest of the config. Its `hooks` block is extracted into
