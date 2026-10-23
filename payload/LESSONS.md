@@ -7927,6 +7927,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   which asks the server for the page again first)
 
 ## Building with AI
+- **L1029. In a prompt sent to a model with prompt caching, put everything identical across calls first and anything that varies per call after it, because the cache only reuses an unchanged opening, so one varying line ahead of a large fixed block makes every call pay for the whole block again.**
+  (claude-config#1599, 2026-10-23)
+  SHORT: Put a prompt's fixed text first and the per call parts after: the cache reuses only an unchanged opening, so one early varying line re-bills it all.
 - **L768. An AI check that reads a large artifact once is a sample, not a sweep, so a fix and recheck loop around it finds a fresh batch every round and never converges; verify concrete references mechanically and split the rest so each reviewer's share is small enough to read whole.**
   (claude-config#1208, 2026-10-15)
   SHORT: An AI check reading a large artifact once is a sample, so recheck loops never converge: verify references by script and split the rest.
