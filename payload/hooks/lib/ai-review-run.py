@@ -9,7 +9,7 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --model M --prompt-file P --lessons-dir D --diff-file F --deadline SECONDS
                      --started EPOCH
 
-It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
+It runs EXACTLY `env -u CLAUDECODE DISABLE_PROMPT_CACHING=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p <prompt> --model
 <model> --settings {"disableAllHooks":true} --strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with
 the diff on stdin (the last four are explained where the command is built).
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
@@ -482,7 +482,17 @@ def main(argv):
         # an --mcp-config here: one would bring its servers straight back.
         # Skills OFF (hook trim, 2026-10-15). The reviewer invokes no skill, and without the flag the
         # whole skills list, every skill's name and description, rides on each request of the run.
-        cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
+        # Prompt caching OFF (claude-config#1573). On a Claude subscription a headless run writes its
+        # whole prompt to the ONE HOUR cache, billed at twice the input price. Measured over the 775
+        # reviews on the personal MacBook from 2026-10-16 to 23 (tools/cache-usage.py): 101M tokens
+        # written, and no review's first request read back more than 20k, the tool and system
+        # prefix (likely because the context lines that open the prompt differ per diff, so the
+        # lessons after them never match an earlier review's). In multiples of the input price,
+        # uncached cost 118M against an estimated 134M on the five minute lifetime and 204M as it
+        # was. DISABLE_PROMPT_CACHING is
+        # read by Claude Code 2.1.309 itself (checked in the binary and by a probe run that wrote 0).
+        cmd = ["env", "-u", "CLAUDECODE", "DISABLE_PROMPT_CACHING=1",
+               "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
                "--disable-slash-commands",
                "--disallowedTools", "ReportFindings"]
