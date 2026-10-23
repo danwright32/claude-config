@@ -41,7 +41,7 @@ import {
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
 import { wakeCheck } from './wakecheck.ts'
-import { powerOf, sleepRefusal, type Power } from './power.ts'
+import { lastSource, powerChange, powerOf, sleepRefusal, type Power } from './power.ts'
 import {
   answerKey,
   askOptions,
@@ -1070,8 +1070,9 @@ const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { rep
 }
 
 // This mod's one notifier, titled Sleep mode: null once sent, else why not, for the caller to say.
-// Sent only while no record holds: when the night ends by itself (endIfOver), and when /sleep
-// refuses to start (#1545), before any record is written.
+// Sent when the night ends by itself (endIfOver), when /sleep refuses to start (#1545), before any
+// record is written, and, the one send while asleep, when the Mac's power source changes overnight
+// (powerMinute, #1545: Dan asked to be woken for a pulled charger).
 const notify = async ($: EngineInterface, message: string): Promise<string | null> => {
   const r = await run($, ['terminal-notifier', '-title', 'Sleep mode', '-message', message])
   return r.exitCode === 0 ? null : r.stderr.trim() || `terminal-notifier exited ${r.exitCode}`
@@ -2964,6 +2965,68 @@ const caffeinatePid = (dir: string) => `${dir}/caffeinate.pid`
 // What this Mac draws from now, read by power.ts from pmset (#844, #1545).
 const powerNow = async ($: EngineInterface): Promise<Power> => powerOf(await run($, ['pmset', '-g', 'batt']))
 
+// The overnight power watch (#1545), each minute in every session while asleep: a change of source
+// is recorded as the next numbered file in the night's power folder, placed with `ln`, so of two
+// sessions ticking at once exactly one records it, and only that one notifies. Recorded first and
+// notified after, so a session started again reads the change and never sends it twice. Anything
+// that cannot be read or written is logged and sends nothing, and the next minute tries again; a
+// notifier that fails is logged. None of it ever ends sleep mode.
+const powerMinute = async ($: EngineInterface, seen: SleepReading) => {
+  if (seen.state !== 'asleep') return
+  const now = await powerNow($)
+  if (now.state === 'unknown') {
+    $.ui.log(`scope-modes: the overnight power check could not tell what this Mac draws from: ${now.why}`, { to: 'debug' })
+    return
+  }
+  const folder = `${(await sleepPaths($)).dir}/power/${seen.record.generation.replace(/[^\w.-]/g, '_')}`
+  const ls = await run($, ['ls', folder])
+  if (ls.exitCode !== 0 && !/No such file/i.test(ls.stderr)) {
+    $.ui.log(`scope-modes: the overnight power check could not list tonight's power changes: ${ls.stderr.trim() || `ls exited ${ls.exitCode}`}`, { to: 'debug' })
+    return
+  }
+  const changes: { name: string; text: string }[] = []
+  for (const name of ls.exitCode === 0 ? ls.stdout.split('\n').filter(n => /^\d+$/.test(n)) : []) {
+    try {
+      changes.push({ name, text: await $.fs.read(`${folder}/${name}`) })
+    } catch (err) {
+      $.ui.log(`scope-modes: the overnight power check could not read tonight's power change ${name}: ${msg(err)}`, { to: 'debug' })
+      return
+    }
+  }
+  const last = lastSource(changes)
+  if ('unknown' in last) {
+    $.ui.log(`scope-modes: the overnight power check could not tell the last power source recorded: ${last.unknown}`, { to: 'debug' })
+    return
+  }
+  const change = powerChange(last.last, now)
+  if (!change) return
+  const mk = await run($, ['mkdir', '-p', folder])
+  if (mk.exitCode !== 0) {
+    $.ui.log(`scope-modes: the overnight power check could not make tonight's power folder: ${mk.stderr.trim() || `mkdir exited ${mk.exitCode}`}`, { to: 'debug' })
+    return
+  }
+  const tmp = `${folder}/.${last.n + 1}.${Math.random().toString(36).slice(2, 10)}.tmp`
+  try {
+    try {
+      await $.fs.write(tmp, change.to)
+    } catch (err) {
+      $.ui.log(`scope-modes: the overnight power check could not record the change onto ${change.to}: ${msg(err)}`, { to: 'debug' })
+      return
+    }
+    const ln = await run($, ['ln', tmp, `${folder}/${last.n + 1}`])
+    // Another session recorded it first, and notifies for both.
+    if (ln.exitCode !== 0 && /File exists/i.test(ln.stderr)) return
+    if (ln.exitCode !== 0) {
+      $.ui.log(`scope-modes: the overnight power check could not record the change onto ${change.to}: ${ln.stderr.trim() || `ln exited ${ln.exitCode}`}`, { to: 'debug' })
+      return
+    }
+  } finally {
+    await run($, ['rm', '-f', tmp])
+  }
+  const failed = await notify($, change.notice)
+  if (failed) $.ui.log(`scope-modes: the Mac's power changed to ${change.to} while asleep, and the notification saying so could not be sent: ${failed}`, { to: 'debug' })
+}
+
 // Starts the hold; null when held, else why not (said in /sleep's answer).
 const holdAwake = async ($: EngineInterface, dir: string, untilMs: number, now: number): Promise<string | null> => {
   const secs = Math.max(60, Math.ceil((untilMs - now) / 1000))
@@ -4192,6 +4255,12 @@ export const register: Register = on => {
           if (seen.state === 'asleep') await driverTick($, seen)
         } catch (err) {
           $.ui.log(`scope-modes: the overnight driver's minute failed: ${msg(err)}`, { to: 'debug' })
+        }
+        // Asleep, a change of power source is notified once (#1545).
+        try {
+          await powerMinute($, seen)
+        } catch (err) {
+          $.ui.log(`scope-modes: the overnight power check's minute failed: ${msg(err)}`, { to: 'debug' })
         }
         // The night remembered while asleep, and this session's own morning put to Dan once it is
         // over (#1285), with what it held overnight (#1284).

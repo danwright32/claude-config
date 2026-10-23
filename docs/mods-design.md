@@ -1294,6 +1294,18 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   in a session Dan may not be looking at: on battery it says to plug in and run `/sleep` again, and
   a reading pmset does not give is said as unreadable in both, never as battery. A notifier that
   fails is said in the reply and the debug log, and the refusal stands.
+- Power overnight (#1545): while asleep, the minute's existing tick in every session reads pmset
+  again (no timer of its own), and a change of source is notified once: onto battery, and back onto
+  mains. Each change is the next numbered file in `state/sleep/power/<generation>/`, holding `ac` or
+  `battery`, placed with `ln` so of two sessions ticking at once one records it and only that one
+  notifies; recorded before the notification, so a run of minutes, a second session or a session
+  started again sends it once. No file is mains, since `/sleep` starts only on mains. A reading pmset
+  does not give changes nothing and is logged, never guessed; a folder or file that cannot be read
+  or written is logged and tried again the next minute; a notifier that fails is logged. None of it
+  ends sleep mode. This is the one notification sent while asleep, an exception to #841's silence
+  that Dan asked for in #1545 and that the sleep silence suite's exempt reason for `notify` names.
+  No evening reminder about the charger was built: the issue's open question was answered with the
+  two notifications alone.
 - Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
   hour of work in an interactive session, a real model following the rules for that long, and what
   a real usage limit looks like. The engine's side of the driver (a Stop blocked with the rules
@@ -1542,6 +1554,9 @@ is still asked once at bedtime and closed if unanswered.
   session reflection and issue review, the PR quiz and the lesson fan out stand down; claude-sync
   writes what it would have said to its log. Other mods ask `$.scopeModes.isAsleep()` and note through
   `$.scopeModes.sleepNote`.
+- The one exception (#1545, Dan's own ask): scope modes notifies once when the Mac goes onto battery
+  while asleep and once when it comes back (see Power overnight under phase 8), through its one
+  notifier, whose exempt reason in the silence suite names it.
 - Findings reach the report through the overnight rules' `sleep_note`, not the reflection hooks,
   which stand down on `stop_hook_active` and would run once a night (H5).
 - Nothing is handed to Dan overnight (#1284; Dan, 2026-10-17: "some sessions give me something to
