@@ -106,10 +106,26 @@
 # HOW OFTEN IT LOOKS. Each look reads the pull request through GitHub's GraphQL allowance, 5,000
 # points an hour that every session on the Mac shares, so it looks once a minute: about 60 points an
 # hour while it waits, where every 30 seconds was 120 (claude-config#1014, measured 2026-10-09: one
-# waiter was a third of this Mac's GraphQL spend at that moment). A check run takes minutes, so a
-# merge lands at most a minute after it could have.
+# waiter was a third of this Mac's GraphQL spend at that moment).
 #
-# Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_DEADLINE_SECONDS (10800),
+# AND BY THE ONE POLLING POLICY, lib/gh-poll.sh (claude-config#1482). On 2026-10-22 GitHub's burst
+# limit refused every session on the account for about 40 minutes while a PET session's agents ran
+# this helper and gh pr view loops at once. So: while a head's checks and review are waited on, each
+# look that sees what the last one saw doubles the wait, up to MWR_POLL_MAX_SECONDS, and any change
+# (a check finishing, the review finishing, a workflow run appearing) starts it at a minute again, so
+# the checks still running are watched at the base pace and the look that finds them done merges with
+# no further wait. A merge lands at most the ceiling, three minutes, after it could have, and only
+# when the checks ran a long while with nothing at all changing. The shorter bounded waits (a head
+# lagging its branch, an update GitHub has not shown, main settling) keep the base pace, since each
+# ends at a time of its own. Every look first takes a place in the session's looks a minute, which
+# every loop in the session shares (two agents' helpers among them), and a rate limit answer to any
+# read or update pauses every look in the session until GitHub's Retry-After or reset time has
+# passed. Each of those waits is said as what it is, and its heartbeat says paused for the rate
+# limit, never waiting on checks.
+#
+# Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_POLL_MAX_SECONDS (180: the ceiling
+# the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
+# GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800),
 # MWR_MAX_POLLS (derived from the two, bounding the loop by count as well as by clock, L704),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
@@ -148,7 +164,7 @@ MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $((DEADLINE / POLL + 10)))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
-HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"
+HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
@@ -188,6 +204,10 @@ cd "$top" || usage "could not enter $top."
 
 # shellcheck source=merge-target.sh
 . "$MWR_LIB/merge-target.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-target.sh is missing, so the pull request cannot be read. Nothing was merged." >&2; exit 1; }
+# shellcheck source=gh-poll.sh
+. "$MWR_LIB/gh-poll.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/gh-poll.sh, the polling policy every look follows, is missing. Nothing was merged." >&2; exit 1; }
+POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MAX" -ge "$POLL" ] || POLL_MAX="$POLL"
+interval="$POLL"
 for t in gh jq git; do
   command -v "$t" >/dev/null 2>&1 || { echo "merge-when-ready: $t is not on PATH. Nothing was merged." >&2; exit 1; }
 done
@@ -260,9 +280,27 @@ read_err=""
 reading=""
 announce_retry(){ say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."; }
 # The loop itself is mt_retry_read, shared with block-red-merge.sh's own reads (claude-config#1081).
+# A reader answering 5 was refused for GitHub's rate limit (claude-config#1482, lib/gh-poll.sh's
+# ghp_rate_limited): never asked again here, since asking again in seconds is what a rate limit
+# forbids. The session's looks are paused (rate_pause), and the caller goes round, where the next
+# look waits out the pause.
 with_retries(){   # $1 = what is being read, for the line it says; $2 = the reader
+  local rc
   reading="$1"
-  mt_retry_read "$READ_TRIES" "$READ_WAIT" "$SLEEP" "" announce_retry "$2"
+  mt_retry_read "$READ_TRIES" "$READ_WAIT" "$SLEEP" "" announce_retry "$2"; rc=$?
+  [ "$rc" -eq 5 ] && rate_pause "reading $1" "$read_err"
+  return "$rc"
+}
+# The limits as the account that was refused sees them, headers and all, for the pause's length.
+probe_limits(){ gh_as api -i rate_limit 2>&1; }
+# A rate limit answer to $1 (what was asked): every loop in the session pauses (lib/gh-poll.sh), and
+# this says so as a rate limit, starting the wait the next look's slot is held for.
+rate_pause(){   # $1 = what was asked, $2 = GitHub's answer
+  local t
+  ghp_rate_pause "$2" "$(now)" probe_limits
+  t="$(now)"
+  say "GitHub refused $1 for its rate limit (${2:0:200}): $GHP_SAID. This session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
+  wait_key="pause"; wait_since="$t"; last_said="$t"; last_status=""
 }
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
 read_pr(){   # sets view_env
@@ -270,6 +308,7 @@ read_pr(){   # sets view_env
   view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
   mt_view_class "$view_env"; rc=$?
   read_err="$MT_VIEW_ERR"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$read_err" && return 5
   [ "$rc" -eq 1 ] && read_err="${read_err:-no answer}"
   return "$rc"
 }
@@ -279,6 +318,7 @@ read_runs(){
   local rc
   mt_unfinished_runs "$slug" "$head" "$account"; rc=$?
   runs_pending="$MT_RUNS_PENDING"; read_err="$MT_RUNS_ERR"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$read_err" && return 5
   return "$rc"
 }
 read_compare(){   # sets compare, crc, behind, base_tip
@@ -289,6 +329,7 @@ read_compare(){   # sets compare, crc, behind, base_tip
   base_tip="$(printf '%s' "$compare" | jq -r '.base_commit.sha // ""' 2>/dev/null)"
   case "$behind" in ''|*[!0-9]*) ;; *) return 0 ;; esac
   read_err="${compare:0:300}, exit $crc"
+  [ "$crc" -ne 0 ] && ghp_rate_limited "$compare" && return 5
   [ "$crc" -ne 0 ] && mt_gh_transient "$compare" && return 2
   # 3: GitHub cannot find what it was asked to compare. Just after an update that is GitHub not
   # having caught up with the branch (claude-config#1500), which the caller waits through; at any
@@ -310,6 +351,7 @@ read_methods(){
   fi
   methods_said=""
   read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
   [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
   return 1
 }
@@ -337,6 +379,8 @@ method_name(){ case "$1" in merge) printf 'merge commit' ;; *) printf '%s' "$1" 
 choose_method(){
   local rrc am names=() others="" m
   with_retries "which merge methods $slug allows" read_methods; rrc=$?
+  # Refused for the rate limit: paused, and asked again at the next look.
+  [ "$rrc" -eq 5 ] && return 5
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and could not read which merge methods $slug allows ($read_err$(tried "$rrc")). Nothing was merged; pass --squash, --merge or --rebase."
   [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch} (or --merge, or --rebase)."
   read -r -a am <<<"$allowed"
@@ -355,6 +399,7 @@ read_back(){   # sets after
   after="$(printf '%s' "$env" | jq -c '.view // {}' 2>/dev/null)"
   [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
+  ghp_rate_limited "$read_err" && return 5
   mt_gh_transient "$read_err" && return 2
   return 1
 }
@@ -395,6 +440,7 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
     return 1 ;;
   esac
   read_err="${out:0:300}, exit $rc"
+  ghp_rate_limited "$out" && return 5
   mt_gh_transient "$out" && return 2
   return 1
 }
@@ -409,6 +455,7 @@ read_stacked(){
   fi
   stacked=""
   read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
   [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
   return 1
 }
@@ -548,16 +595,60 @@ not_caught_up(){   # $1 = what GitHub shows
 # it does not restart its clock. Two minutes is two looks at the default pace: a setting, not a
 # measurement, on the injected clock (L524), and checked at each look, so it falls on the first look
 # at or after it.
+#
+# THE WAIT GROWS (claude-config#1482): with $3 set (the wait on a head's checks and review, the one
+# that runs for many minutes), a look whose line is the last one's doubles the wait, up to POLL_MAX,
+# through lib/gh-poll.sh's ghp_next_interval, and a changed line starts it at POLL again. The other
+# waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
+# it (nap), so the log is never quiet for longer than the heartbeat whatever the wait.
 wait_key=""; wait_since=0
-wait_a_look(){   # $1 = what is being waited on, $2 = the status line
-  local t; t="$(now)"
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow
+  local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
   if [ "$2" != "$last_status" ]; then
-    say "$2"; last_status="$2"; last_said="$t"
-  elif [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
-    say "$2 Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
+    say "$2"; last_status="$2"; last_said="$t"; interval="$POLL"
+  else
+    [ -n "${3:-}" ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
+    if [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
+      say "$2 Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
+    fi
   fi
-  "$SLEEP" "$POLL"
+  [ -n "${3:-}" ] && pause="$interval"
+  nap "$pause" "$2 Still waiting"
+}
+# Sleep the wait it is given through the injected sleep, in one call when it is no longer than the heartbeat,
+# and otherwise a heartbeat at a time, saying $2 with how long this wait has lasted and when the next
+# look is, so a long wait (a grown one, or a rate limit's pause) still says it is alive.
+nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on
+  local left="$1" t
+  while [ "$left" -gt "$HEARTBEAT" ]; do
+    "$SLEEP" "$HEARTBEAT"; left=$(( left - HEARTBEAT ))
+    t="$(now)"
+    say "$2, for $(dur $(( t - wait_since ))) so far; next look in $(dur "$left")."; last_said="$t"
+  done
+  [ "$left" -le 0 ] || "$SLEEP" "$left"
+}
+# Every look first takes its place in the session's looks (lib/gh-poll.sh's ghp_take), waiting while
+# a rate limit pause is in force or while the session's loops have used their looks for this minute,
+# each said as what it is (claude-config#1482).
+take_a_look(){
+  local key line still
+  while ! ghp_take "$(now)"; do
+    [ $(( $(now) - t0 )) -lt "$DEADLINE" ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s). Nothing was merged; run the same command again to resume."
+    if [ "$GHP_WHY" = pause ]; then
+      key="pause"; still="Still paused for GitHub's rate limit"
+      line="Paused for GitHub's rate limit (${GHP_SAID:-it refused a read}): this session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
+    else
+      key="cap"; still="Still waiting for this session's next look at GitHub"
+      line="Waiting $(dur "$GHP_WAIT") to look at GitHub again: this session's loops have looked $GHP_CAP times in the last minute, the most one session may (GH_POLL_PER_MINUTE), so other sessions on the account are not refused for them."
+    fi
+    if [ "$key" != "$wait_key" ]; then
+      wait_key="$key"; wait_since="$(now)"; say "$line"; last_said="$(now)"; last_status=""
+    fi
+    nap "$GHP_WAIT" "$still"
+  done
+  # A pause or a full minute over is a wait ended: the next one is said afresh.
+  case "$wait_key" in pause|cap) wait_key="" ;; esac
 }
 mins(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $1 / 60 ))"; else printf '%ds' "$1"; fi; }
 
@@ -588,6 +679,8 @@ head_is_tip(){
   fi
   [ -n "$branch" ] || stop 1 "Stopped: GitHub did not name the branch of #$pr, so head ${head:0:7} cannot be confirmed as its tip. Nothing was merged."
   with_retries "the tip of $where" read_ref; rrc=$?
+  # Refused for the rate limit: paused, and looked at again (claude-config#1482).
+  [ "$rrc" -eq 5 ] && return 1
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read the tip of $where ($read_err$(tried "$rrc")), so nothing here can confirm head ${head:0:7} is what the branch holds. Nothing was merged."
   [ -z "$ref_gone" ] || stop 1 "Stopped: $where of #$pr is not on GitHub, so there is no tip to merge. Nothing was merged; push the branch again, then run the same command again."
   if [ "$ref_tip" = "$head" ]; then lag_since=""; resynced_at=""; return 0; fi
@@ -606,7 +699,11 @@ head_is_tip(){
       wait_a_look "$waitkey" "$waitline"
       return 1
     fi
-    why="$(retarget "$pr")" || stop 1 "Stopped: after $(mins "$LAG_WAIT") $lagged, and GitHub refused to set its base again, the write that makes it read the branch again: $why. Nothing was merged."
+    if ! why="$(retarget "$pr")"; then
+      # Refused for the rate limit, which sets nothing: paused, and set at a later look (#1482).
+      if ghp_rate_limited "$why"; then rate_pause "setting the base of #$pr again" "$why"; return 1; fi
+      stop 1 "Stopped: after $(mins "$LAG_WAIT") $lagged, and GitHub refused to set its base again, the write that makes it read the branch again: $why. Nothing was merged."
+    fi
     resynced_at="$(now)"
     say "After $(mins "$LAG_WAIT"), $lagged, so its base was set again to $base, which makes GitHub read the branch again. Looking again for the real head."
     "$SLEEP" "$POLL"
@@ -624,10 +721,14 @@ tip_ok_for=""
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
+  take_a_look
   with_retries "pull request #$pr" read_pr; rrc=$?
+  [ "$rrc" -eq 5 ] && continue
   if [ "$rrc" -ne 0 ]; then
     stop 1 "Stopped: could not read pull request #$pr in $slug from GitHub ($read_err$(tried "$rrc")). Nothing was merged."
   fi
+  # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
+  ghp_answered
   account="$(printf '%s' "$view_env" | jq -r '.account // ""')"
   view="$(printf '%s' "$view_env" | jq -c '.view')"
   state="$(printf '%s' "$view" | jq -r '.state // ""')"
@@ -647,7 +748,7 @@ while :; do
 
   # No method passed: the repository's settings choose one, or it stops here, before the changelog
   # gate judges a merge command and before any update or wait (claude-config#1476, L667).
-  [ -n "$method" ] || choose_method
+  [ -n "$method" ] || choose_method || continue
 
   # The changelog record, once, at the first look that finds the pull request open: before any
   # update, wait or lessons review, since none of them can change it (#1178, L667).
@@ -667,6 +768,7 @@ while :; do
 
   # Behind its base: update, and go round for the new head.
   with_retries "whether #$pr contains the tip of $base" read_compare; rrc=$?
+  [ "$rrc" -eq 5 ] && continue
   if [ "$rrc" -eq 3 ] && [ -n "$catching_up" ]; then
     not_caught_up "GitHub answers 404 comparing head ${head:0:7} with $base"
     continue
@@ -699,7 +801,12 @@ while :; do
       wait_a_look "settle:$base" "Head ${head:0:7}: behind $base, with $base still moving; updating once it has been still for $(mins "$SETTLE")."
       continue
     fi
-    upd="$(gh_as pr update-branch "$pr" --repo "$slug" 2>&1)" || stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. Nothing was merged; resolve it by hand."
+    if ! upd="$(gh_as pr update-branch "$pr" --repo "$slug" 2>&1)"; then
+      # Refused for the rate limit, which updates nothing: paused, and made at a later look
+      # (claude-config#1482). Any other refusal is a conflict or a rule, for a person.
+      if ghp_rate_limited "$upd"; then rate_pause "the update of #$pr with $base" "$upd"; continue; fi
+      stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. Nothing was merged; resolve it by hand."
+    fi
     updates=$((updates + 1))
     # The next look confirms the head against the branch again even if GitHub shows the same one,
     # since that is how an update GitHub has not shown looks (claude-config#1500).
@@ -735,6 +842,7 @@ while :; do
     # checks will carry. Read only here, where the head would otherwise read as finished, so it costs
     # one REST call a look at the end of a wait, never during it.
     with_retries "which workflow runs #$pr's head ${head:0:7} has" read_runs; rrc=$?
+    [ "$rrc" -eq 5 ] && continue
     [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read which workflow runs GitHub has for #$pr's head ${head:0:7} ($read_err$(tried "$rrc")), so nothing here can tell whether CI is still to report on it. Nothing was merged."
     if [ -n "$runs_pending" ]; then
       waiting="checks still running (workflow runs not finished: $runs_pending)"
@@ -765,7 +873,7 @@ while :; do
 
   if [ -n "$waiting" ]; then
     out_of_time "still has $waiting"
-    wait_a_look "head:$head" "Head ${head:0:7}: waiting, $waiting."
+    wait_a_look "head:$head" "Head ${head:0:7}: waiting, $waiting." grows
     continue
   fi
 
@@ -806,5 +914,8 @@ while :; do
     say "The head moved while it was being merged (GitHub refused the pin on ${head:0:7}); judging the new head."
     continue
   fi
+  # Refused for the rate limit, which merges nothing: paused, and judged again at a later look
+  # (claude-config#1482).
+  if ghp_rate_limited "$merge_out"; then rate_pause "the merge of #$pr" "$merge_out"; continue; fi
   stop 1 "Stopped: gh pr merge did not merge #$pr at ${head:0:7}: ${merge_out:0:500}"
 done

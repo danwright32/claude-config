@@ -114,6 +114,10 @@ type World = {
   remote: Run | 'throws' | null
   revList: Run | 'throws' | null
   gh: { exitCode: number; stdout: string; stderr: string }
+  // The polling policy's answers (hooks/lib/gh-poll.sh, #1482), in the lines its command prints:
+  // a look taken or held, the next wait in seconds for a wait and whether the look changed, and
+  // what a failed read's error text is to it. By default every look is taken at a minute's pace.
+  poll: { take: Run | 'throws'; next: (wait: string, changed: string) => string; failed: Run }
   usage: number | undefined
   compact: () => unknown
   // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
@@ -127,6 +131,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     remote: null,
     revList: null,
     gh: { exitCode: 1, stdout: '', stderr: 'no pull requests found for branch "x"' },
+    poll: { take: { exitCode: 0, stdout: 'ok\n', stderr: '' }, next: () => '60', failed: { exitCode: 0, stdout: 'other\n', stderr: '' } },
     usage: undefined,
     compact: () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }),
     writeFails: '',
@@ -140,6 +145,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   const debug: string[] = []
   const compacts: number[] = []
   const runs: string[][] = []
+  const polls: { argv: string[]; env?: Record<string, string> }[] = []
   mock.env(on, { HOME: '/Users/x' })
   const clock = mock.clock(on, { now: T0 })
   on('fs.write', ($, e) => {
@@ -164,6 +170,13 @@ const world = (on: On, init: Partial<World> = {}) => {
     const answer = (got: Run | 'throws') => {
       if (got === 'throws') throw new Error('git did not answer within 10 seconds')
       return r(got.exitCode, got.stdout, got.stderr)
+    }
+    if (cmd === 'bash' && rest[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
+      polls.push({ argv: [...e.argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
+      if (rest[1] === 'take') return answer(w.poll.take)
+      if (rest[1] === 'next') return r(0, `${w.poll.next(rest[2] as string, rest[3] as string)}\n`)
+      if (rest[1] === 'failed') return answer(w.poll.failed)
+      if (rest[1] === 'answered') return r(0, 'ok\n')
     }
     if (cmd === 'mkdir') return w.mkdirFails ? r(1, '', w.mkdirFails) : r(0)
     if (cmd === 'mv') {
@@ -209,7 +222,7 @@ const world = (on: On, init: Partial<World> = {}) => {
     const { Text } = $.ui.resolve(e)
     return <Text>engine band</Text>
   })
-  return { w, files, toasts, logs, debug, compacts, runs, clock }
+  return { w, files, toasts, logs, debug, compacts, runs, polls, clock }
 }
 
 const start = async ($: { session: { start: (e: never) => Promise<unknown> } }, clock: { settle: () => Promise<void> }) => {
@@ -340,6 +353,71 @@ test("a turn's end asks about the PR at once, whatever the wait, since the turn 
   const ui = await $.ui.mount(band)
   expect(await shown(ui as never)).toBe('PR #636 checks failing')
   await ui.unmount()
+})
+
+// The one polling policy (hooks/lib/gh-poll.sh, #1482). On 2026-10-22 GitHub's burst limit refused
+// every session on the account for about 40 minutes while one session's loops polled at once. The
+// status bar's read of a PR whose checks run is one of those loops, so it asks the library, through
+// mod-kit's ghpoll.ts, whether a look may be made and how long to wait after one, as the session.
+const PR_ONE_DONE = JSON.stringify({ number: 649, state: 'OPEN', statusCheckRollup: [{ status: 'IN_PROGRESS' }, { status: 'COMPLETED', conclusion: 'SUCCESS' }] })
+const OK = { exitCode: 0, stdout: 'ok\n', stderr: '' }
+const nexts = (polls: { argv: string[] }[]) => polls.filter(p => p.argv[2] === 'next').map(p => p.argv.slice(3))
+
+test('while checks run and nothing on the PR changes, it is read as the polling policy spaces it, and a change brings it back to a minute (#1482)', withKit, async ($, on) => {
+  const { w, clock, runs, polls } = world(on, { gh: { exitCode: 0, stdout: PR_RUNNING, stderr: '' } })
+  w.poll.next = (_wait, changed) => (changed === '1' ? '60' : '120')
+  await start($, clock)
+  expect(ghAsks(runs)).toBe(1)
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(2)
+  // Unchanged: the policy said two minutes.
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(2)
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(3)
+  // A check finishes: a change, so the next read comes a minute after it.
+  w.gh = { exitCode: 0, stdout: PR_ONE_DONE, stderr: '' }
+  await clock.advance(2 * MIN)
+  expect(ghAsks(runs)).toBe(4)
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(5)
+  expect(nexts(polls).slice(0, 4)).toEqual([['60', '1'], ['60', '0'], ['120', '0'], ['120', '1']])
+})
+
+test("a look the policy holds, for a rate limit or the session's cap, is not made, a turn end's included, and is made once free (#1482)", withKit, async ($, on) => {
+  const { w, clock, runs } = world(on)
+  w.poll.take = { exitCode: 0, stdout: 'wait\tpause\t300\tGitHub said to wait 300s (Retry-After)\n', stderr: '' }
+  await start($, clock)
+  expect(ghAsks(runs)).toBe(0)
+  await turn($)
+  await clock.settle()
+  expect(ghAsks(runs)).toBe(0)
+  w.poll.take = OK
+  await clock.advance(MIN)
+  expect(ghAsks(runs)).toBe(1)
+})
+
+test("each look is the session's: the policy is asked as this session, and an answer and a refusal are both handed back (#1482)", withKit, async ($, on) => {
+  const limited = 'gh: API rate limit exceeded for user ID 241846707. (HTTP 403)'
+  const { w, clock, polls } = world(on, { gh: { exitCode: 1, stdout: '', stderr: limited } })
+  w.poll.failed = { exitCode: 0, stdout: 'paused\t60\ta burst limit\n', stderr: '' }
+  await start($, clock)
+  expect(polls[0]?.argv).toEqual(['bash', '/Users/x/.claude/hooks/lib/gh-poll.sh', 'take', String(T0 / SEC)])
+  expect(polls[0]?.env).toEqual({ CLAUDE_CODE_SESSION_ID: 's1' })
+  expect(polls.find(p => p.argv[2] === 'failed')?.argv.slice(3)).toEqual([String(T0 / SEC), limited])
+  w.gh = { exitCode: 0, stdout: PR_FAILING, stderr: '' }
+  await clock.advance(MIN)
+  expect(polls.some(p => p.argv[2] === 'answered')).toBe(true)
+})
+
+test('a polling policy that cannot be asked never stops the read, and is said once in the debug log (#1482)', withKit, async ($, on) => {
+  const { w, clock, runs, debug } = world(on)
+  w.poll.take = { exitCode: 127, stdout: '', stderr: 'bash: /Users/x/.claude/hooks/lib/gh-poll.sh: No such file or directory' }
+  await start($, clock)
+  expect(ghAsks(runs)).toBe(1)
+  await clock.advance(10 * MIN)
+  expect(ghAsks(runs)).toBe(2)
+  expect(debug.filter(l => l.includes('gh-poll.sh')).length).toBe(1)
 })
 
 test('a repository with no remote has nothing to push to, so no unpushed item', withKit, async ($, on) => {
