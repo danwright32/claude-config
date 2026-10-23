@@ -8,6 +8,9 @@
 #   require-tests-before-push.sh the judge's failure path SPECIAL CASE is told which files these are
 #                                (fh_files)
 #   lib/ai-review-run.py         the lessons review is told the same list (`failure-handling.sh files`)
+#   lessons-advisory.sh          its background work and fixed wait triggers read fh_code_only too
+#                                (claude-config#1540), so every advisory trigger that matches words
+#                                in code reads the same code
 #
 # WHY IT EXISTS. On 2026-10-21 Bidspoke PR #2630 was held because a test file was "new retry or
 # failure-handling logic" needing a failure path test. The file held none: the advisory's word list
@@ -41,6 +44,14 @@
 # no code. Measured against 150 merged pull requests in claude-config and 60 in Overture before it
 # shipped: every flag it dropped was a word in a comment, string, label, doc or fixture.
 #
+# SHELL STRINGS (claude-config#1540). A quoted shell string is a PROGRAM when the command it belongs
+# to runs one (awk, sed, jq, a shell, python, node, perl, ruby, eval, trap, ssh, watch): its text
+# stays code. Handed to any other command (a test helper, printf, echo, grep) it is data, which is
+# what the #1477 suite fixtures were. A single quote left open at the end of a line keeps its text as
+# code, because it usually closes a program opened above the hunk and what follows is the code that
+# runs it. What this reads as data although it runs: a script written out by printf or an escaped
+# heredoc and run later, and a command string piped into a shell or run through a variable.
+#
 # Sourced by the shell callers; run as `bash failure-handling.sh files < diff` by the rest, which
 # prints each file whose added code handles failure, one per line, in diff order.
 
@@ -50,7 +61,7 @@ FH_LIB_DIR="${BASH_SOURCE[0]%/*}"; [ "$FH_LIB_DIR" != "${BASH_SOURCE[0]}" ] || F
 declare -F is_test >/dev/null 2>&1 || . "$FH_LIB_DIR/source-class.sh"
 
 # The language family a path is read as. prose has no code; shell keeps $expansions inside double
-# quotes and single quoted text (an awk or python program) as code; hash languages comment with #;
+# quotes, and a string handed to a program runner, as code (SHELL STRINGS above); hash languages comment with #;
 # slash languages with // and /* */; sql with --.
 fh_lang() {   # $1 = path
   local base="${1##*/}"
@@ -133,14 +144,19 @@ function normalize(s,   out, i, c, n, nx, k) {
       qn++; i++; continue
     }
     if (q != "") {
-      if (c == "\\") { qn++; i += 2; continue }
+      if (qcode) {
+        # A program handed to a command that runs it: its text is code, copied as it stands.
+        if (q == "\"" && c == "\\") { out = out substr(s, i, 2); i += 2; continue }
+        if (c == q) { out = out q; q = ""; qcode = 0; i++; continue }
+        out = out c; i++; continue
+      }
+      # Inside shell single quotes a backslash is an ordinary character, never an escape.
+      if (c == "\\" && !(lang == "shell" && q == "\x27")) { qn++; i += 2; continue }
       if (c == q) { out = out (qn ? "S" : "") q; q = ""; i++; continue }
       if (lang == "shell" && q == "\"" && (c == "$") && substr(s, i + 1, 1) ~ /[A-Za-z_({]/) {
         k = keep_expansion(s, i); out = out substr(s, i, k - i + 1); i = k + 1; continue
       }
-      if (lang == "shell" && q == "\x27") out = out c
-      else qn++
-      i++; continue
+      qn++; i++; continue
     }
     # Outside any string or comment.
     if (lang == "slash" && nx == "//") break
@@ -160,14 +176,30 @@ function normalize(s,   out, i, c, n, nx, k) {
     }
     if (lang == "slash" && c == "`") { tmpl = 1; qn = 0; out = out c; i++; continue }
     if (c == "\"" || c == "\x27") {
-      # Shell single quotes hold awk and python programs here, so their text stays code.
-      q = c; qn = 0; out = out c; i++; continue
+      # In shell, a quoted string handed to a command that runs it (awk, a shell, python -c, trap,
+      # eval) is a program, so its text stays code; handed to any other command it is data.
+      q = c; qn = 0; qcode = (lang == "shell" && runs_program(out)); out = out c; qi = i; qo = length(out); i++; continue
     }
     out = out c; i++
   }
-  if (q != "" && qn) out = out "S"
-  q = ""   # an ordinary string never runs past its line
+  # A shell single quote still open at the end of the line most often CLOSES a program opened above
+  # the hunk (an awk program whose last line reads: quote, "$f" || exit 1), so what follows it is the code that runs it, kept as
+  # it stands; when it opens one instead, the text after it is the first line of that program.
+  if (lang == "shell" && q == "\x27" && !qcode) out = substr(out, 1, qo) substr(s, qi + 1)
+  else if (q != "" && qn) out = out "S"
+  q = ""; qcode = 0   # an ordinary string never runs past its line
   return out
+}
+function runs_program(p,   k, n, t, j, w) {
+  # The simple command a quote belongs to is the text after the last | ; & ( or backtick; it runs a
+  # program when any of its words, read without a leading path, names something that runs one.
+  for (k = length(p); k > 0; k--) if (index("|;&(`", substr(p, k, 1))) break
+  n = split(substr(p, k + 1), t, /[ \t]+/)
+  for (j = 1; j <= n; j++) {
+    w = t[j]; sub(/^.*\//, "", w)
+    if (w ~ /^(awk|gawk|mawk|nawk|sed|jq|perl|ruby|node|deno|bun|python[0-9.]*|bash|sh|zsh|dash|ksh|fish|pwsh|osascript|eval|trap|ssh|watch)$/) return 1
+  }
+  return 0
 }
 function is_retry_token(t) { return tolower(t) ~ /retr(y|ies|ied|ying)/ }
 function is_attempt_token(t) {
@@ -214,7 +246,7 @@ function has_error_branch(low) {
   }
   return 0
 }
-BEGIN { block = 0; triple = ""; tmpl = 0; q = ""; found = 0 }
+BEGIN { block = 0; triple = ""; tmpl = 0; q = ""; qcode = 0; found = 0 }
 {
   if (lang == "prose") next
   code = normalize($0)
