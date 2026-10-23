@@ -70,6 +70,7 @@ for entry in "${MOVED_TO_LOCAL[@]}"; do
   old="${entry%%|*}"; new="${entry#*|}"
   check "$new is a name each Mac keeps for itself" is_local_name "${new##*/}"
   check "$old is not tracked here" [ -z "$(git -C "$ROOT" ls-files --cached --others --exclude-standard -- "payload/$old")" ]
+  check "$new is not tracked here, even force added" [ -z "$(git -C "$ROOT" ls-files --cached --others --exclude-standard -- "payload/$new")" ]
   check "$old is ignored by git here" git -C "$ROOT" check-ignore -q --no-index "payload/$old"
   check "$new is ignored by git here" git -C "$ROOT" check-ignore -q --no-index "payload/$new"
 done
