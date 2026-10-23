@@ -1679,6 +1679,12 @@ mrefused "one captured page and several at once" 's["chrome"] = dict(s["chromes"
 mrefused "several captured pages beside the shared terminal" 's["screen"] = "terminal"' "keep one"
 mrefused "several captured pages beside a kind with no product page" 's["screen"] = "email"; s["width"] = 600' "keep one"
 mrefused "an option naming a page in a round of one" 's["chrome"] = dict(s.pop("chromes")[0]); del s["chrome"]["name"]' 'option "Espresso" names the chrome "edit", and the spec names one captured page'
+# Options are told apart by their keys, never their names, so two options sharing a name on different
+# pages are two pages in use, not one page left out (lessons review of #1536).
+mspec "$MC/same-name.json" 's["variants"][1]["name"] = "Espresso"'
+out="$(run "$MC/same-name.json" "$MC/same-name.html")"; rc=$?
+check_eq "two options sharing a name, each on its own page, still build" "0" "$rc"
+check_not "and neither page is said to be drawn by no option" "drawn by no option" "$out"
 # One page is the round it always was: the same page, byte for byte, the committed example included
 # (section 12), and nothing of the several pages' wiring in it.
 check_not "a round of one captured page carries none of the several pages' wiring" "DR_PAGE_OF" "$(cat "$NS/out.html" 2>/dev/null)"

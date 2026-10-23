@@ -451,7 +451,7 @@ def chrome_names(items, chromes, noun, whole, one_page):
                 raise ChromeError('%s %s names the chrome %s, and %s, so there is none to choose: list the captured pages '
                                   'in "chromes" for each %s to name its own' % (noun, iid, json.dumps(named), one_page, noun))
         return {}
-    of = {}
+    of, used = {}, set()
     for iid, named in items:
         if named is None:
             raise ChromeError('%s %s names no chrome, and this %s is drawn in %d captured pages (%s); give it "chrome": '
@@ -460,8 +460,11 @@ def chrome_names(items, chromes, noun, whole, one_page):
             raise ChromeError("%s %s names the chrome %s, and the %s's chromes are %s"
                               % (noun, iid, json.dumps(named), whole, ", ".join(chromes)))
         of[iid] = named
+        # From every item, never from of: a round's options are named for the reader, and two may share a
+        # name (only their keys are unique), which would leave one page looking unused (lessons review of #1536).
+        used.add(named)
     for name in chromes:
-        if name not in of.values():
+        if name not in used:
             raise ChromeError('the chrome %s is drawn by no %s: name it on the %ss captured in it, or take it out of '
                               '"chromes"' % (name, noun, noun))
     return of
