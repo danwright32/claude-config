@@ -244,8 +244,9 @@ def find_chrome():
                       % (MAC_CHROME, ", ".join(CHROME_ON_PATH)))
 
 
-# Added to the settled page, which holds designFrameDocument: each frame drawn in an iframe at its declared
-# width, as the score's web adapter draws it, and its terminal window's drawn width read back.
+# Added to the settled page, which holds designFrameDocument and designFrameTrouble: each frame drawn in an
+# iframe at its declared width, as the score's web adapter draws it, and its terminal window's drawn width
+# read back, or, for a frame not drawn whole, designFrameTrouble's reading of it (claude-config#1539).
 MEASURE = """<script>
 (function () {
   var frames = __FRAMES__, out = {}, left = frames.length;
@@ -260,9 +261,9 @@ MEASURE = """<script>
     var f = document.createElement("iframe");
     f.style.cssText = "width:" + pair[1] + "px;height:400px;border:0";
     f.onload = function () {
-      var w = f.contentWindow, d = f.contentDocument, report = (w && w.DR_FRAME) || {};
+      var w = f.contentWindow, d = f.contentDocument, trouble = designFrameTrouble(w && w.DR_FRAME);
       var slot = d && d.getElementById("dr-slot"), win = slot && slot.querySelector(".term-window");
-      if (!report.built) out[pair[0]] = {why: report.why || "its builder never ran"};
+      if (trouble) out[pair[0]] = {why: trouble};
       else out[pair[0]] = {width: win ? win.getBoundingClientRect().width : null};
       if (--left === 0) done();
     };
@@ -274,9 +275,9 @@ MEASURE = """<script>
 
 
 def measure_screen_windows(page, frames, chrome_bin, deadline=60):
-    """{frame id: {"width": pixels or None} or {"why": the builder's error}} for a terminal design: the
-    settled page as written, each frame drawn in headless Chrome at its declared width and its terminal
-    window's width read, None where the frame draws no window. One Chrome run for every frame."""
+    """{frame id: {"width": pixels or None} or {"why": what kept it from being drawn whole}} for a terminal
+    design: the settled page as written, each frame drawn in headless Chrome at its declared width and its
+    terminal window's width read, None where the frame draws no window. One Chrome run for every frame."""
     at = page.rfind("</body>")
     if at < 0:
         raise ChromeError("the settled page has no </body> to measure its frames from")
@@ -318,12 +319,13 @@ def pixels(value):
 
 def window_width_problems(frames, measured):
     """One sentence for each terminal frame whose declared width is not the width its window draws, or
-    whose window could not be measured, naming the frame, both numbers and the fix (claude-config#1422)."""
+    that is not drawn whole, naming the frame, both numbers and the fix (claude-config#1422). A frame not
+    drawn whole is said in designFrameTrouble's words, its builder or its screenShown throwing (#1539)."""
     problems = []
     for f in frames:
         got = measured[f["id"]]
         if "why" in got:
-            problems.append("frame %s could not be measured, because its builder threw: %s" % (f["id"], got["why"]))
+            problems.append("frame %s is not the design, because %s" % (f["id"], got["why"]))
         elif got.get("width") is None:
             problems.append("frame %s draws no terminal window, so the width it is scored at cannot be held to the "
                             "width it draws: its builder returns no Terminal.screen(...)" % f["id"])
@@ -450,12 +452,6 @@ __SHOWN__
   });
 })();"""
 
-# A frame drawn alone, as each frame of a settled design is, is shown once, as it loads, so its builder's
-# screenShown is called then.
-SHOWN_AT_LOAD = """  if (report.built && typeof screenShown === "function") {
-    try { screenShown(V, slot.firstElementChild); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }
-  }"""
-
 # An option in the switcher is one of several frames on its stage, one shown at a time, so the switcher
 # tells the builder, through report.tell, each time this option is shown, and says a throw on its page
 # (claude-config#1522). Calling it as the frame loaded told every hidden option it was showing, and kept
@@ -463,6 +459,32 @@ SHOWN_AT_LOAD = """  if (report.built && typeof screenShown === "function") {
 SHOWN_BY_PAGE = """  if (report.built) report.tell = function () {
     if (typeof screenShown === "function") screenShown(V, slot.firstElementChild);
   };"""
+
+# A frame drawn alone, as each frame of a settled design is, is shown once, as it loads, so it tells its
+# builder then, through the same report.tell the switcher calls. A throw is kept as report.shownWhy, which
+# designFrameTrouble reads, so the settled page, the terminal measurement and the score all say it
+# (claude-config#1539): before, nothing read it, and the frame was drawn with no word of it.
+SHOWN_AT_LOAD = SHOWN_BY_PAGE + """
+  if (report.tell) {
+    try { report.tell(); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }
+  }"""
+
+# The one reading of a frame's report (claude-config#1539): what kept a settled frame from being drawn
+# whole, as the end of a sentence, or "" when nothing did. The settled file carries it, so its own page
+# says it beside the frame, make-settled.py's measurement of a terminal design (MEASURE, run on that page)
+# refuses on it, and the score's adapters ask the settled file for it, each in the same words. Every cause
+# is said as itself (L11): nowhere to draw, the builder throwing, or its screenShown throwing.
+FRAME_TROUBLE = """/* What kept a frame of this design from being drawn whole, from the report its document leaves as
+   window.DR_FRAME, or "" when nothing did (claude-config#1539). This page says it beside the frame, and the
+   design match score asks this file for it, so the two never word a frame differently. */
+function designFrameTrouble(report) {
+  if (!report) return "its builder never ran, so nothing of the round is drawn in it";
+  if (report.noSlot) return String(report.why) + ", so there is nowhere in it to draw the round";
+  if (!report.built) return "its builder threw (" + String(report.why) + "), so nothing of the round is drawn in it";
+  if (report.shownWhy) return "its builder's screenShown threw (" + String(report.shownWhy) + "), so whatever that draws once the frame is shown is missing from it";
+  return "";
+}
+"""
 
 
 def frame_document(chrome, builder, styles, variant, fixture=None, told_by_page=False):

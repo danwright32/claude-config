@@ -11,6 +11,9 @@ switcher. It holds, in one self contained file:
     committed fixture data the built page also renders (the score's two sides draw the same data);
   - designFrameDocument(<id>), which gives a frame's whole document, for the web adapter to draw as a
     page of its own at the frame's width;
+  - designFrameTrouble(report), what kept a frame from being drawn whole (its builder, or its
+    screenShown, threw), said beside that frame on the page and read by the score in the same words
+    (claude-config#1539);
   - the decision record and its map (decision-map), each decision written so a check can be authored
     from it: what is on screen, on which frames, and how it is verified;
   - the frames (design-frames) and Dan's exceptions (design-exceptions), in his words.
@@ -72,7 +75,7 @@ sharing a name, or one no frame is drawn in, a frame naming a chrome the design 
 none in a design of several, or naming one in a design of one, a builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
 no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a
 terminal frame whose window draws at a width other than the frame's own, that draws no window, or whose
-builder throws, a decision with no owner (check-decision-map.py's rule), a decision a
+builder or its screenShown throws, a decision with no owner (check-decision-map.py's rule), a decision a
 check would verify with no "check" sentence or no frames, a decision naming a frame the design does
 not hold, an intro that is not text, a requirements list that is empty or not in the shape above (a
 number not written as text, a requirement with no sentence, two sharing a number), a decision naming a
@@ -344,12 +347,12 @@ DOC_STYLE = """
   :root {
     color-scheme: light dark;
     --dr-bg: #F4F1ED; --dr-text: #1B1613; --dr-muted: #665A51; --dr-border: #DDD5CD;
-    --dr-frame: #FFFFFF; --dr-link: #1D5A96; --dr-target: #F7E3BE;
+    --dr-frame: #FFFFFF; --dr-link: #1D5A96; --dr-target: #F7E3BE; --dr-warn: #A3260F;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --dr-bg: #171412; --dr-text: #EDE6DF; --dr-muted: #ADA197; --dr-border: #3F3731;
-      --dr-frame: #FFFFFF; --dr-link: #8FBDEB; --dr-target: #3D3122;
+      --dr-frame: #FFFFFF; --dr-link: #8FBDEB; --dr-target: #3D3122; --dr-warn: #F29A80;
     }
   }
   body { margin: 0; background: var(--dr-bg); color: var(--dr-text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -361,6 +364,7 @@ DOC_STYLE = """
   .dr-decisions li { margin: 0 0 10px; }
   .dr-how { color: var(--dr-muted); font-size: 13px; }
   .dr-frame { border: 1px solid var(--dr-border); background: var(--dr-frame); display: block; }
+  .dr-trouble { color: var(--dr-warn); font-weight: 600; max-width: 72ch; margin: 0 0 8px; }
 """
 
 # The ids the page itself writes, which no requirement's anchor may take.
@@ -463,11 +467,21 @@ function designFrameDocument(id) {
 }
 """ % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps(variants)),
        json.dumps(json.dumps(TOKEN)))
-    script += """Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
+    # A frame its builder did not draw whole is said right above it, in designFrameTrouble's words, the
+    # ones the score says too (claude-config#1539).
+    script += chrome_frame.FRAME_TROUBLE + """Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
   frame.addEventListener("load", function () {
     var fixed = %s;
     var d = frame.contentDocument;
     if (d && !fixed[frame.dataset.frame]) frame.style.height = d.documentElement.scrollHeight + "px";
+    var trouble = designFrameTrouble(frame.contentWindow && frame.contentWindow.DR_FRAME);
+    var said = frame.previousElementSibling;
+    if (said && said.classList.contains("dr-trouble")) said.remove();
+    if (!trouble) return;
+    var note = document.createElement("p");
+    note.className = "dr-trouble";
+    note.textContent = "This frame is not the design: " + trouble + ".";
+    frame.before(note);
   });
   frame.srcdoc = designFrameDocument(frame.dataset.frame);
 });
