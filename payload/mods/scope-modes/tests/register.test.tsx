@@ -1165,7 +1165,7 @@ test("a subagent's lessons Edit is refused under no build however approved, and 
   expect(w.logs.filter(l => l.startsWith('ABS asked '))).toEqual([])
 })
 
-test('ask before saving not loaded, or its noun failing, leaves the lessons Edit refused (#1483)', withDeps, async ($, on) => {
+test('ask before saving not loaded leaves the lessons Edit refused (#1483)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { '/abs/approved': '' } })
   await start($ as never, clock)
   await command($ as never, 'nobuild')
