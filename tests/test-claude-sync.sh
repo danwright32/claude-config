@@ -219,6 +219,16 @@ $_SEC_TITLE
 # `-` and not `:-`, so an empty value means OFF rather than default. A run that must leave no trace
 # needs that, and so does CI until its cache is warm.
 SUITE_SECTION_TIMINGS="${SUITE_SECTION_TIMINGS-${XDG_CACHE_HOME:-$HOME/.cache}/claude-config/section-timings}"
+# How many of a section's readings its record keeps, newest first (claude-config#1541). The store is
+# shared by every run on this Mac, every worktree's included, so ten readings are usually the last
+# hour or two of runs: enough that one run on a quieter machine among them gives the section's real
+# cost, and few enough that a section which genuinely grew is judged by its new cost within ten runs.
+SUITE_SECTION_SAMPLES="${SUITE_SECTION_SAMPLES:-10}"
+case "$SUITE_SECTION_SAMPLES" in
+  ''|*[!0-9]*|0)
+    echo "test suite: SUITE_SECTION_SAMPLES='$SUITE_SECTION_SAMPLES' is not a positive whole number of readings. Refusing rather than keeping none, which would leave the stall bound's check judging one reading again." >&2
+    exit 4 ;;
+esac
 
 # A record is keyed on the section's TITLE, never its position. Sections are added and removed
 # constantly and every index after the insertion point shifts, so an index keyed store would
@@ -254,20 +264,59 @@ suite_section_key(){   # suite_section_key <section title> -> the record's file 
 # another by losing a blank line. A record that is not a whole number of seconds is treated as no
 # record rather than guessed at as a number: the store is a cache, and being wrong about it costs the
 # shard balance and nothing else. With the store switched off every title comes back empty.
-suite_section_seconds_each(){
+#
+# A record holds the section's last few readings, newest first (claude-config#1541). By default this
+# answers with the NEWEST, which is what the shard deal has always used. Given `quickest` it answers
+# with the lowest whole number among them instead, and the count of readings it chose from as a third
+# field, for the stall bound's check below; a field that is not a whole number is skipped there, never
+# read as zero.
+suite_section_seconds_each(){   # [quickest]
   if [ -z "$SUITE_SECTION_TIMINGS" ]; then
-    awk '{ printf "%d\t\n", NR }'
+    if [ "${1:-}" = quickest ]; then awk '{ printf "%d\t\t0\n", NR }'; else awk '{ printf "%d\t\n", NR }'; fi
     return 0
   fi
-  suite_section_key_lines | awk -v d="$SUITE_SECTION_TIMINGS" '
-    { v = ""
+  suite_section_key_lines | awk -v d="$SUITE_SECTION_TIMINGS" -v mode="${1:-newest}" '
+    { v = ""; n = 0
       if ($0 != "") {
         f = d "/" $0; line = ""
-        if ((getline line < f) > 0) { split(line, a, " "); v = a[1] }
+        if ((getline line < f) > 0) {
+          k = split(line, a, " ")
+          if (mode == "quickest") {
+            for (i = 1; i <= k; i++) if (a[i] ~ /^[0-9]+$/) { n++; if (v == "" || a[i] + 0 < v + 0) v = a[i] + 0 }
+          } else v = a[1]
+        }
         close(f)
       }
       if (v !~ /^[0-9]+$/) v = ""
-      printf "%d\t%s\n", NR, v }'
+      if (mode == "quickest") printf "%d\t%s\t%d\n", NR, v, n
+      else printf "%d\t%s\n", NR, v }'
+}
+
+# What the costliest section costs at its QUICKEST recent reading, which is what the stall bound is
+# judged against (claude-config#1541). Profile lines ("<seconds><TAB><title>", as _SEC_PROFILE holds
+# them) on stdin. Each section is taken at the lowest of this run's reading and the ones its record
+# keeps, and the section whose lowest is highest is printed as "<seconds><TAB><readings><TAB><title>".
+# Fails, printing nothing, when there is no section at all, so no caller can read an empty profile as
+# a section costing nothing (L90).
+#
+# Why the lowest: load only ever ADDS time to a section, never takes it away, so the quickest of
+# several readings is the nearest to what the section costs on a quiet machine, while a section that
+# genuinely grew is slow in every reading and its quickest rises with it (L294, L656). One run's own
+# reading is that run's worst stall: on 2026-10-22 a saturated Mac stretched one section to 466 s
+# against the 1200 s bound, and on 2026-10-23 at 04:26 ET, beside 96 busy loops and 36 process
+# launching loops, a section that takes 2 s took 28 s.
+suite_section_yardstick(){
+  local _sy_prof _sy_rec
+  _sy_prof="$(cat)"
+  [ -n "$_sy_prof" ] || return 1
+  _sy_rec="$(printf '%s\n' "$_sy_prof" | awk -F'\t' 'NF >= 2 { print $2 }' | suite_section_seconds_each quickest)"
+  SY_REC="$_sy_rec" awk -F'\t' '
+    BEGIN { n = split(ENVIRON["SY_REC"], r, "\n")
+            for (i = 1; i <= n; i++) { split(r[i], f, "\t"); q[f[1]] = f[2]; c[f[1]] = f[3] } }
+    NF >= 2 { k++; y = $1 + 0; m = 1
+              if (q[k] != "") { m += c[k]; if (q[k] + 0 < y) y = q[k] + 0 }
+              if (!found || y > best) { best = y; bm = m; bt = $2; found = 1 } }
+    END { if (!found) exit 1; printf "%d\t%d\t%s\n", best, bm, bt }' <<< "$_sy_prof"
 }
 
 # What this run measured, written down for the next one. Called from suite_profile, so it happens
@@ -287,15 +336,31 @@ suite_record_sections(){
     echo "test suite: could not create $SUITE_SECTION_TIMINGS, so nothing was recorded and the next run will deal its shards by counting sections. Set SUITE_SECTION_TIMINGS somewhere writable, or to empty to turn the record off." >&2
     return 0
   }
-  local _sr_d _sr_t _sr_k _sr_tmp _sr_bad=0
+  local _sr_d _sr_t _sr_k _sr_tmp _sr_bad=0 _sr_prev _sr_line _sr_n _sr_v
+  local -a _sr_old
   while IFS="$(printf '\t')" read -r _sr_d _sr_t; do
     [ -n "$_sr_t" ] || continue
     _sr_k="$(suite_section_key "$_sr_t")"
     _sr_tmp="$SUITE_SECTION_TIMINGS/.writing.$$.$_sr_k"
+    # The new reading first, then the readings already there, up to SUITE_SECTION_SAMPLES in all
+    # (claude-config#1541). First is still the newest, so the shard deal reads what it always read;
+    # the older ones are what lets the stall bound's check judge a section by its quickest recent
+    # reading rather than by one run's. Only whole numbers are carried forward.
+    _sr_prev=""
+    [ -f "$SUITE_SECTION_TIMINGS/$_sr_k" ] && IFS= read -r _sr_prev < "$SUITE_SECTION_TIMINGS/$_sr_k" 2>/dev/null
+    _sr_line="$((10#$_sr_d))"; _sr_n=1
+    _sr_old=()
+    read -r -a _sr_old <<< "$_sr_prev"
+    for _sr_v in ${_sr_old[@]+"${_sr_old[@]}"}; do
+      [ "$_sr_n" -lt "$SUITE_SECTION_SAMPLES" ] || break
+      case "$_sr_v" in ''|*[!0-9]*) continue ;; esac
+      _sr_line="$_sr_line $((10#$_sr_v))"; _sr_n=$((_sr_n + 1))
+    done
     # Written to a temporary name and renamed over the old one, so two runs at once cannot
     # interleave into a half written record. The shards of one run write disjoint sets of sections,
-    # so they never contend for the same record at all.
-    if printf '%s\n' "$((10#$_sr_d))" > "$_sr_tmp" 2>/dev/null && mv -f "$_sr_tmp" "$SUITE_SECTION_TIMINGS/$_sr_k" 2>/dev/null; then
+    # so they never contend for the same record at all. Two whole runs at once can each read the
+    # same old record and one reading is then lost, which costs one sample and nothing else.
+    if printf '%s\n' "$_sr_line" > "$_sr_tmp" 2>/dev/null && mv -f "$_sr_tmp" "$SUITE_SECTION_TIMINGS/$_sr_k" 2>/dev/null; then
       :
     else
       rm -f "$_sr_tmp" 2>/dev/null
@@ -16953,14 +17018,70 @@ fi
 # And the bound that actually catches a hang (claude-config#152). The stall timeout is only
 # meaningful while it is longer than the longest SECTION: the run is judged to have stopped when it
 # has not reached a new one, so a single section growing past it would make the watchdog kill
-# healthy runs. Compared against what the sections in THIS run really took, never against the
-# sentence in DESIGN.md that says the same thing, because that sentence cannot notice a section
-# getting slower (L210, and #149's rule that the reference be measured in the same run).
+# healthy runs. Compared against what the sections really take, never against the sentence in
+# DESIGN.md that says the same thing, because that sentence cannot notice a section getting slower
+# (L210).
+#
+# What they really take is each section's QUICKEST recent reading, this run's included, and never
+# this run's reading alone (claude-config#1541). One run's reading carries that run's worst stall: on
+# 2026-10-22 load stretched a section to 466 s, the floor became 1398 s against the 1200 s bound, and
+# the check failed with nothing wrong and passed on a rerun. Load only adds time, so the quickest of
+# several readings is what the section costs, and a section that has really grown is slow in all of
+# them (L656, L294). suite_section_yardstick, beside the store, is where that is worked out.
 #
 # In a filtered run this sees only that shard's sections, which is the right answer rather than a
 # weaker one: whichever shard holds the slowest section is the shard that checks it.
-_hr_longest="$(printf '%s' "$_SEC_PROFILE" | sort -r | awk -F"$(printf '\t')" 'NR==1 {print $1+0}')"
+_hr_raw="$(printf '%s' "$_SEC_PROFILE" | sort -r | awk -F"$(printf '\t')" 'NR==1 {print $1+0}')"
+case "$_hr_raw" in ''|*[!0-9]*) _hr_raw=0 ;; esac
+_hr_longest=0; _hr_readings=0; _hr_title=""
+IFS="$(printf '\t')" read -r _hr_longest _hr_readings _hr_title <<HRYARD
+$(printf '%s' "$_SEC_PROFILE" | suite_section_yardstick 2>/dev/null)
+HRYARD
 case "$_hr_longest" in ''|*[!0-9]*) _hr_longest=0 ;; esac
+case "$_hr_readings" in ''|*[!0-9]*) _hr_readings=0 ;; esac
+
+# The yardstick itself, on fixtures, so the reading the check below relies on is seen choosing the
+# quickest reading and seen refusing a section that is slow in every one (L1). A store of its own,
+# so nothing here touches this Mac's real record.
+_hy_store="$WORK/section-timings-yardstick"; rm -rf "$_hy_store"; mkdir -p "$_hy_store"
+_hy_tab="$(printf '\t')"
+_hy_record(){   # _hy_record <seconds> <title> [samples]: one run recording one section
+  ( SUITE_SECTION_TIMINGS="$_hy_store"; SUITE_SECTION_SAMPLES="${3:-10}"; SUITE_SLOW_IN=""; SUITE_HANG_IN=""
+    _SEC_PROFILE="$(printf '%06d\t%s\n' "$1" "$2")"
+    suite_record_sections ) >/dev/null 2>&1
+}
+_hy_record 120 '== slow =='; _hy_record 98 '== slow =='; _hy_record 466 '== slow =='
+check "#1541 a section's record keeps its readings, newest first" \
+  "[ \"\$(cat \"\$_hy_store/== slow ==\")\" = '466 98 120' ]"
+check "#1541 and the shard deal still reads the newest of them" \
+  "[ \"\$(printf '== slow ==\n' | SUITE_SECTION_TIMINGS=\"\$_hy_store\" suite_section_seconds_each | cut -f2)\" = 466 ]"
+_hy_record 5 '== capped ==' 3; _hy_record 6 '== capped ==' 3; _hy_record 7 '== capped ==' 3; _hy_record 8 '== capped ==' 3
+check "#1541 and keeps no more than SUITE_SECTION_SAMPLES of them" \
+  "[ \"\$(cat \"\$_hy_store/== capped ==\")\" = '8 7 6' ]"
+printf '466 98 x 120\n' > "$_hy_store/== mangled =="
+check "#1541 a reading that is not a whole number is skipped, never read as zero" \
+  "[ \"\$(printf '== mangled ==\n' | SUITE_SECTION_TIMINGS=\"\$_hy_store\" suite_section_seconds_each quickest | cut -f2,3)\" = '98${_hy_tab}3' ]"
+# The incident of 2026-10-22: that run stretched a section to 466 s, and the slowest section a quiet
+# run records is about 98 s (this Mac's store, read 2026-10-23), so here the section is judged at
+# its quickest reading, from four.
+_hy_y="$(printf '000466\t== slow ==\n000010\t== quick ==\n' | SUITE_SECTION_TIMINGS="$_hy_store" suite_section_yardstick)"
+check "#1541 a section one run stretched is judged by its quickest recent reading ($_hy_y)" \
+  "[ \"\$_hy_y\" = '98${_hy_tab}4${_hy_tab}== slow ==' ]"
+# The other direction (L497): a section slow in EVERY reading is judged slow, so a section that has
+# really grown still fails the check below.
+printf '450 470 460\n' > "$_hy_store/== grown =="
+_hy_g="$(printf '000466\t== grown ==\n' | SUITE_SECTION_TIMINGS="$_hy_store" suite_section_yardstick)"
+check "#1541 and a section slow in every reading is judged slow ($_hy_g)" \
+  "[ \"\${_hy_g%%\${_hy_tab}*}\" = 450 ] && ! [ 1200 -ge \$(( \${_hy_g%%\${_hy_tab}*} * 3 )) ]"
+_hy_n="$(printf '000042\t== never recorded ==\n' | SUITE_SECTION_TIMINGS="$_hy_store" suite_section_yardstick)"
+check "#1541 a section with no record is judged by this run's reading alone ($_hy_n)" \
+  "[ \"\$_hy_n\" = '42${_hy_tab}1${_hy_tab}== never recorded ==' ]"
+_hy_off="$(printf '000042\t== slow ==\n' | SUITE_SECTION_TIMINGS= suite_section_yardstick)"
+check "#1541 and so is every section when the store is switched off ($_hy_off)" \
+  "[ \"\$_hy_off\" = '42${_hy_tab}1${_hy_tab}== slow ==' ]"
+check "#1541 an empty profile is refused, never read as a section costing nothing" \
+  "! printf '' | suite_section_yardstick >/dev/null 2>&1"
+rm -rf "$_hy_store"
 # The margin as a NUMBER every run prints, not only as a pass or a fail (claude-config#179).
 #
 # The bound was 600 against a floor of 3x, so it went red the moment the slowest section passed 200
@@ -16988,9 +17109,9 @@ check "#179 and refuses when no section was measured" "! _hr_margin 1200 0"
 if [ "$SUITE_STALL_TIMEOUT" -gt 0 ]; then
   _hr_m="$(_hr_margin "$SUITE_STALL_TIMEOUT" "$_hr_longest" 2>/dev/null || true)"
   if [ -n "$_hr_m" ]; then
-    echo "  (#179 the stall bound is ${SUITE_STALL_TIMEOUT}s, which is $(( _hr_m / 10 )).$(( _hr_m % 10 ))x this run's slowest section (${_hr_longest}s))"
+    echo "  (#179 the stall bound is ${SUITE_STALL_TIMEOUT}s, which is $(( _hr_m / 10 )).$(( _hr_m % 10 ))x the costliest section at its quickest recent reading (${_hr_longest}s, the quickest of ${_hr_readings} for '${_hr_title}'); this run's slowest section took ${_hr_raw}s)"
   fi
-  check "#152 the stall timeout is at least three times the slowest section this run had (${_hr_longest}s)" \
+  check "#152 the stall timeout is at least three times the costliest section at its quickest recent reading (${_hr_longest}s, the quickest of ${_hr_readings} for '${_hr_title}'; this run's slowest took ${_hr_raw}s)" \
     "[ '$SUITE_STALL_TIMEOUT' -ge $(( _hr_longest * 3 )) ]"
   # Watched refusing, or any stall timeout large enough satisfies it, which is every one (L1).
   check "#152 and a stall timeout one second under that floor is refused" \
