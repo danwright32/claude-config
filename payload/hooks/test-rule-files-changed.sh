@@ -158,6 +158,97 @@ gone_code=$?
   && check "a missing config directory exits cleanly and quietly" ok \
   || check "a missing config directory exits cleanly and quietly" "exit=$gone_code out=$gone_out"
 
+# ---------------------------------------------------------------------------
+# MODS (claude-config#1535). A session names its mods once, at its start, from
+# CLAUDE_CODE_PLUGIN_DIRS, so a mod that arrives on disk later is not loaded in
+# it until a new session. Claude Code itself reloads a CHANGED mod in a running
+# session and says so in the transcript ("hooks.json changed, reloaded", or that
+# the earlier version is still running when a reload fails), so a code change is
+# not this hook's to report: saying it would repeat Claude Code's own line on
+# every pull that touches a mod, and claim staleness that the reload has already
+# cured (L11, L36). What it reports is the set of mods: one added or removed.
+# ---------------------------------------------------------------------------
+MODHOME="$TMPROOT/mods-home"
+mkdir -p "$MODHOME"
+printf '# global rules\n' > "$MODHOME/CLAUDE.md"
+mkmod() { # mkmod <name>: a mod folder as the sync names it, a manifest under .claude-plugin
+  mkdir -p "$MODHOME/mods/$1/.claude-plugin" "$MODHOME/mods/$1/hooks"
+  printf '{ "name": "%s" }\n' "$1" > "$MODHOME/mods/$1/.claude-plugin/plugin.json"
+  printf 'export const register = () => {}\n' > "$MODHOME/mods/$1/hooks/register.ts"
+}
+mkmod alpha-mod
+modprompt() { # modprompt <session-id>
+  python3 - "$1" <<'PY' | CLAUDE_RULES_DIR="$MODHOME" bash "$HOOK" 2>/dev/null
+import json, sys
+print(json.dumps({"session_id": sys.argv[1], "cwd": ".", "prompt": "carry on"}))
+PY
+}
+
+m1="$(modprompt mod-session)"
+[ -z "$m1" ] \
+  && check "#1535 the first prompt of a session with mods is silent" ok \
+  || check "#1535 the first prompt of a session with mods is silent" "said: $m1"
+
+# A change to a mod this session already loaded: Claude Code reloads it and says
+# so itself, so this hook stays quiet rather than announcing it a second time.
+printf 'export const register = () => { return 2 }\n' > "$MODHOME/mods/alpha-mod/hooks/register.ts"
+m2="$(modprompt mod-session)"
+[ -z "$m2" ] \
+  && check "#1535 an edit to a mod the session loaded is left to Claude Code's own reload line" ok \
+  || check "#1535 an edit to a mod the session loaded is left to Claude Code's own reload line" "said: $m2"
+
+# A mod that arrives after the session started is not loaded in it.
+mkmod beta-mod
+m3="$(modprompt mod-session)"
+grep -q "beta-mod" <<< "$m3" \
+  && check "#1535 a mod added after the session started is named" ok \
+  || check "#1535 a mod added after the session started is named" "said: $m3"
+grep -q "alpha-mod" <<< "$m3" \
+  && check "#1535 and a mod that was there all along is not" "named alpha-mod too: $m3" \
+  || check "#1535 and a mod that was there all along is not" ok
+grep -q "not loaded" <<< "$m3" && grep -q "new session" <<< "$m3" \
+  && check "#1535 the notice says this session has not loaded it and a new session does" ok \
+  || check "#1535 the notice says this session has not loaded it and a new session does" "said: $m3"
+grep -q "rule files" <<< "$m3" \
+  && check "#1535 and it is not worded as a rule file change" "said: $m3" \
+  || check "#1535 and it is not worded as a rule file change" ok
+
+m4="$(modprompt mod-session)"
+[ -z "$m4" ] \
+  && check "#1535 the same added mod is not reported twice" ok \
+  || check "#1535 the same added mod is not reported twice" "said again: $m4"
+
+# A folder with no manifest is not a mod: the sync does not name it in
+# CLAUDE_CODE_PLUGIN_DIRS either, so no session would load it.
+mkdir -p "$MODHOME/mods/half-made/hooks"
+printf 'x\n' > "$MODHOME/mods/half-made/hooks/register.ts"
+m5="$(modprompt mod-session)"
+[ -z "$m5" ] \
+  && check "#1535 a folder with no manifest is not reported as a mod" ok \
+  || check "#1535 a folder with no manifest is not reported as a mod" "said: $m5"
+
+# A mod removed from disk is named too, in words of its own.
+rm -rf "$MODHOME/mods/alpha-mod"
+m6="$(modprompt mod-session)"
+grep -q "alpha-mod" <<< "$m6" && grep -q "removed" <<< "$m6" \
+  && check "#1535 a mod removed from disk is named as removed" ok \
+  || check "#1535 a mod removed from disk is named as removed" "said: $m6"
+
+# A rule file and a mod changing before one prompt are both said, each in its own words.
+mkmod gamma-mod
+printf '# global rules, edited\n' > "$MODHOME/CLAUDE.md"
+m7="$(modprompt mod-session)"
+grep -q "gamma-mod" <<< "$m7" && grep -q "CLAUDE.md" <<< "$m7" \
+  && check "#1535 a rule file and a mod changing together are both reported" ok \
+  || check "#1535 a rule file and a mod changing together are both reported" "said: $m7"
+
+# A config directory with no mods folder at all has nothing to report and must not crash.
+nomods="$(printf '{"session_id":"no-mods","cwd":"."}' | CLAUDE_RULES_DIR="$RULES" bash "$HOOK" 2>&1)"
+nomods_code=$?
+[ "$nomods_code" -eq 0 ] && [ -z "$nomods" ] \
+  && check "#1535 a config directory with no mods folder is quiet" ok \
+  || check "#1535 a config directory with no mods folder is quiet" "exit=$nomods_code out=$nomods"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
