@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST } from '../hooks/classify.ts'
 import { isDans } from './mod-kit/hooks/origin.ts'

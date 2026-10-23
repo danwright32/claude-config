@@ -207,7 +207,9 @@ done
 # nothing broken (measured 2026-10-09, when the runner's own error named the 5,000 ms). Timing is performance.now, process.hrtime, or Date.now arithmetic, in the test
 # itself or in a helper it calls, however many helpers deep. A test's limit is the timeoutMs in its
 # options, written in place or in the named object it passes; a timeoutMs elsewhere in its body
-# (a command's bound) is not its limit. Tests and helpers are found by indentation, as every mod
+# (a command's bound) is not its limit. Since #1577 every test file takes `test` from mod-kit's
+# tests/hang-ceiling.ts (tools/check-mod-shared-parts.sh holds them to it), which sets that limit on
+# every test, so a file importing it has every test limited. Tests and helpers are found by indentation, as every mod
 # here is formatted: one ends at the next line indented no deeper that does not close a bracket.
 # Whole comment lines are taken out first, so a comment naming a clock is not timing. Prints
 # "<file>:<line><TAB><test name><TAB><what times>" for each test without a limit.
@@ -223,6 +225,9 @@ untimed_of(){   # $1 = mod dir
       my @l = <$h>; close $h;
       chomp @l;
       s{^\s*//.*}{} for @l;
+      # A file taking `test` from the tests/hang-ceiling.ts of mod-kit (#1577) gives every test in it a
+      # limit only a hang reaches, without the test writing one.
+      my $ceiling = join("\n", @l) =~ /\bimport\s*\{[^}]*(?<![\w\$])test(?![\w\$])[^}]*\}\s*from\s*[\x27"][^\x27"]*\/hang-ceiling\.ts[\x27"]/;
       my $indent = sub { $_[0] =~ /^(\s*)/; length $1 };
       # The text of the statement starting on line $i: to the next line indented no deeper that
       # does not close a bracket.
@@ -264,8 +269,9 @@ untimed_of(){   # $1 = mod dir
         next unless $via;
         $t =~ /^\s*(?:test|it)\s*\(\s*\Q$q\E((?:[^\\\Q$q\E]|\\.)*)\Q$q\E\s*,\s*/s or next;
         my ($name, $rest) = ($1, substr($t, $+[0]));
-        my $limited = 0;
-        if ($rest =~ /^(\{(?:[^{}]|(?1))*\})/) { $limited = $1 =~ /\btimeoutMs\b/ }
+        my $limited = $ceiling ? 1 : 0;
+        if ($limited) {}
+        elsif ($rest =~ /^(\{(?:[^{}]|(?1))*\})/) { $limited = $1 =~ /\btimeoutMs\b/ }
         elsif ($rest =~ /^([A-Za-z_\$][\w\$]*)\s*,/) { $limited = ($def{$1} // "") =~ /\btimeoutMs\b/ }
         print "$rel:", $i + 1, "\t$name\t$via\n" unless $limited;
       }

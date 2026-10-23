@@ -1,4 +1,5 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 
 // #1205: a /login in this session changes the account it runs on, and two mods followed it, each

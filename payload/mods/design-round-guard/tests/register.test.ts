@@ -1,4 +1,5 @@
-import { expect, mock, test, type Engine } from 'claude-code/testing'
+import { expect, mock, type Engine } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES, settledNotYet } from '../hooks/rules.ts'

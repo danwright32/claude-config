@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { waitingPhrase } from '../hooks/waiting.ts'
 
 // #863: what in a message of Claude's says a step is waiting on Dan, judged on every message of the

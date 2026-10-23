@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { BBEDIT, morningPrompt, openers, othersSaid, pickerTags, proposalsIn, type ProposedIssue } from '../hooks/wake.ts'
 
 // Sleep mode phase 9 (#837): what wake does once the record is moved aside, as pure decisions.

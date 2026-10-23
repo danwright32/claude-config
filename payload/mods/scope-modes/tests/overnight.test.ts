@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type Look } from '../hooks/overnight.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { ghRepo, githubRepo } from './mod-kit/hooks/repo.ts'
