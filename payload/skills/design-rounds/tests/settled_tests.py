@@ -282,6 +282,11 @@ for n, (label, s, needle) in enumerate([
 ]):
     rc, out, path = make("bad-multi-%d" % n, s)
     check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
+# The frames' pages are checked by chrome_frame.chrome_names, the code a round's options are checked by
+# too (claude-config#1536), and a picture's width after it, said alike for a design of one page or several.
+rc, out, path = make("bad-one-picture", spec(chrome={"captured": "window.png", "from": "Ovation", "slot": [4, 6, 30, 20]}))
+check("a frame wider than the one chrome picture is refused in the words a design of several uses, writing nothing",
+      rc == 2 and "frame f1 is 1280 wide, and its chrome is a picture 40 wide" in out and not os.path.exists(path), out)
 
 # --- a design with no product page around it (claude-config#1393) ------------------------------------
 # Dan, 2026-10-20, on #1393: "allow named kinds". An email, a document or a new product names its kind
