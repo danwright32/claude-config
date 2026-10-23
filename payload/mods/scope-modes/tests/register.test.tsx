@@ -4081,7 +4081,7 @@ test('a worker repository on neither list is asked about at bedtime, and the ans
   const r = await command($ as never, 'sleep')
   expect(w.asked).toEqual(['Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do?'])
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }], mayDeploy: ['o/r'] })
-  // Slate is seen only by the work account, and is found there rather than closed.
+  // The storefront repository is seen only by the work account, and is found there rather than closed.
   expect(recordOf(w).repos).toEqual({ mayDeploy: ['o/r'], mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }], closed: [] })
   expect(r.text).not.toMatch(/No merge and no deploy/)
   expect(await call($ as never, bash('npx wrangler deploy'))).toBe('ran')
