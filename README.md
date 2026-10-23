@@ -846,12 +846,18 @@ never ends, an eval that changes directory, wrapping past five deep) is reported
 naming it, and `check-wrapped-commands.sh` refuses any such command that names git, gh or rtk, once
 for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bash ./build.sh && git
 push` is refused, since what the script does is not in the command: run the script and the push as
-two commands. One narrowing (#1574): a script subcommand the gate declares, in
-`DATA_ARGUMENT_SCRIPTS`, as running none of its arguments (only `issue-spool.sh note` so far) is not
-refused for git, gh or rtk inside an argument quoted whole, when the call stands alone with nothing a
-shell would do beyond splitting words and removing quotes. So a spool note about those tools passes;
-the same words unquoted, a substitution, another script, another subcommand or a second command are
-refused as before.
+two commands. One narrowing (#1574, #1610): a script, or one subcommand of it, that the gate
+declares in `DATA_ARGUMENT_SCRIPTS` as running none of its arguments (`issue-spool.sh note`, and
+every argument of the milestone duplicate check `milestone-candidates.sh`) is not refused for git,
+gh or rtk inside an argument quoted whole, when the call stands alone with nothing a shell would do
+beyond splitting words and removing quotes. In front of it only the account rule's
+`GH_TOKEN=$(gh auth token -u <login>)` may stand, with a plain login; behind it only `2>&1` and
+pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
+tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
+check of an idea about them piped to grep, for another account too; the same words unquoted, a
+substitution, another script, another subcommand, any other assignment in front, a pipe into
+anything else or a second command are refused as before, and a declared script refused for its
+shape is told the shapes its declared call passes in.
 
 Every refusal it makes is recorded, overrides included (#1492), one line each in
 `~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category

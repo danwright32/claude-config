@@ -156,7 +156,7 @@ allowed "a spool note through the absolute path" "bash $HOME/.claude/hooks/lib/i
 allowed "a real refused note from 2026-10-23, a quote inside the text" "bash $SPOOL note . \"gh's own fixed interval in 'gh pr checks --watch --interval 60', at ~/.claude/state/gh-poll/<session>/pause\" \"builder #1482\""
 refused "the words outside the quotes" "bash $SPOOL note . git push \"builder\"" "bash"
 refused "a word half quoted" "bash $SPOOL note . git\" push\" \"builder\"" "bash"
-refused "a different script" "bash ~/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"a git push guard\"" "bash"
+refused "a different script" "bash ~/.claude/skills/milestone/ensure-milestone.sh \"owner/repo\" \"a git push guard\"" "bash"
 refused "the spool's other subcommands" "bash $SPOOL clear . \"git push\"" "bash"
 refused "a script of the same name elsewhere" "bash ./issue-spool.sh note . \"git push\" \"builder\"" "bash"
 refused "the spool's path through a variable" "bash \$HOME/.claude/hooks/lib/issue-spool.sh note . \"git push\" \"builder\"" "bash"
@@ -174,11 +174,98 @@ rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
 judge "bash $SPOOL note . \"git push was refused\" \"builder #1574\""
 check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
 
-# The scripts whose arguments are data are declared in one place, the guard, and a second entry is
+# 4c. The milestone duplicate check is data too (claude-config#1610). milestone-candidates.sh hands
+# the repository to gh as --repo and into the path of a GET, the title to python as a string, and its
+# other options to python's int(), gh's --limit, cat and a date pattern; it runs none of them and
+# writes nothing but its own temp files. So the whole script is declared, every argument data, under
+# the same rules as the spool's note: called alone, each of git, gh and rtk wholly inside a quoted
+# argument. In front of it, and of nothing else, exactly one shape may stand: the account rule's
+# GH_TOKEN=$(gh auth token -u <login>), with a plain login, to read another account's repository.
+# Behind a declared call, its output may be piped into grep, head, tail or cut, which only read
+# what they are given and print it; `2>&1` may stand before the first pipe. Nothing else follows.
+MC='~/.claude/skills/milestone/milestone-candidates.sh'
+# head is named through a variable, so the pipefail ratchet does not read these command strings as
+# this suite's own pipelines.
+HEAD=head
+allowed "the duplicate check, as the docs give it" "bash $MC \"danwright32/claude-config\" --like \"Stop the gh poll loop before git push\""
+allowed "the duplicate check through the absolute path" "bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"an rtk rewrite\""
+allowed "the duplicate check with the repository unquoted" "bash $MC danwright32/claude-config --like 'a gh issue title'"
+allowed "the duplicate check with its other options" "bash $MC \"owner/repo\" --like \"a git title\" --closed-since 2026-10-01 --limit 500"
+allowed "the duplicate check for another account" "GH_TOKEN=\$(gh auth token -u other-acct) bash $MC \"example-org/enrollment-tracker\" --like \"Delete the stale gh allow rules\""
+allowed "another account, the absolute path" "GH_TOKEN=\$(gh auth token -u danwright32) bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"o/r\" --like \"git\""
+allowed "another account, a spool note" "GH_TOKEN=\$(gh auth token -u danwright32) bash $SPOOL note . \"git push\" \"builder #1610\""
+# The two real refusals of the duplicate check, 2026-10-23, as they were run (the second with an
+# invented account and repository standing for the real ones): each piped its output to grep.
+allowed "a real refused duplicate check, piped to grep" "bash $MC \"danwright32/claude-config\" --like \"Stop the wrapped command guard refusing an issue spool note that mentions gh git or rtk\" 2>&1 | grep -E \"DUPLICATE|CLOSE-MATCH\""
+allowed "the real refused check for another account, piped to grep" "GH_TOKEN=\$(gh auth token -u other-acct) bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"example-org/enrollment-tracker\" --like \"Delete the stale wildcard allow rules from local Claude settings\" | grep -v -E \"^\\\\s+DESC\""
+allowed "the check piped to head" "bash $MC \"o/r\" --like \"a gh title\" | $HEAD -20"
+allowed "the check piped to tail" "bash $MC \"o/r\" --like \"a gh title\" | tail -n 5"
+allowed "the check piped to cut" "bash $MC \"o/r\" --like \"a gh title\" | cut -c1-200"
+allowed "the check piped through grep then head" "bash $MC \"o/r\" --like \"a gh title\" 2>&1 | grep -E 'DUPLICATE|CLOSE' | $HEAD -5"
+allowed "a filter whose quoted pattern says gh" "bash $MC \"o/r\" --like \"x\" | grep 'gh pr'"
+allowed "a spool note piped to tail" "bash $SPOOL note . \"git push\" \"builder\" | tail -1"
+refused "the check piped to a shell" "bash $MC \"o/r\" --like \"gh\" | sh" "bash"
+refused "the check piped to xargs" "bash $MC \"o/r\" --like \"gh\" | xargs gh issue close" "bash"
+refused "the check piped to sed, which can write and run" "bash $MC \"o/r\" --like \"gh\" | sed -n '1p'" "bash"
+refused "the check piped to awk, which can run" "bash $MC \"o/r\" --like \"gh\" | awk '{print}'" "bash"
+refused "the check piped to tee, which writes" "bash $MC \"o/r\" --like \"gh\" | tee out.txt" "bash"
+refused "the check piped to python" "bash $MC \"o/r\" --like \"gh\" | python3 -c 'print(1)'" "bash"
+refused "a filter given by its path" "bash $MC \"o/r\" --like \"gh\" | /usr/bin/grep x" "bash"
+refused "a filter redirected" "bash $MC \"o/r\" --like \"gh\" | grep x > out.txt" "bash"
+refused "a filter with a substitution" "bash $MC \"o/r\" --like \"gh\" | grep \"\$(git push)\"" "bash"
+refused "a filter chained to a push" "bash $MC \"o/r\" --like \"gh\" | grep x && git push" "bash"
+refused "a filter followed by a second command" "bash $MC \"o/r\" --like \"gh\" | grep x; git push" "bash"
+refused "an or in place of a pipe" "bash $MC \"o/r\" --like \"gh\" || git push" "bash"
+refused "a pipe of stderr too" "bash $MC \"o/r\" --like \"gh\" |& grep x" "bash"
+refused "an empty pipe" "bash $MC \"o/r\" --like \"gh\" |" "bash"
+refused "an assignment before a filter" "bash $MC \"o/r\" --like \"gh\" | GH_TOKEN=x grep y" "bash"
+refused "stderr sent elsewhere before the pipe" "bash $MC \"o/r\" --like \"gh\" 2>/dev/null | grep x" "bash"
+refused "2>&1 after a filter" "bash $MC \"o/r\" --like \"gh\" | grep x 2>&1" "bash"
+refused "a script piped into the check" "bash ./build.sh | bash $MC \"o/r\" --like \"gh\"" "bash"
+judge "bash $MC \"o/r\" --like \"gh\" | sh"
+check "#1610 a declared call in another shape is told the shapes it passes in" "passes only called alone, or piped into grep, head, tail or cut" "$out"
+judge "bash $SPOOL clear . \"git push\""
+check "#1610 a spool subcommand that is not declared is told which one is" "\`bash ~/.claude/hooks/lib/issue-spool.sh note\`, passes only called alone" "$out"
+judge "bash ./build.sh && git push"
+told=no; [[ $out == *"passes only called alone"* ]] && told=yes
+check_eq "#1610 control: an undeclared script is refused but not told that" "2 no" "$rc $told"
+refused "the check's words outside the quotes" "bash $MC \"owner/repo\" --like git push" "bash"
+refused "a substitution in the check's title" "bash $MC \"owner/repo\" --like \"\$(git push)\"" "bash"
+refused "a script of the check's name elsewhere" "bash ./milestone-candidates.sh \"owner/repo\" --like \"git push\"" "bash"
+refused "the script beside it that writes" "bash ~/.claude/skills/milestone/ensure-milestone.sh \"owner/repo\" \"gh title\" --create-approved" "bash"
+refused "the check chained to a push" "bash $MC \"owner/repo\" --like \"a title\" && git push" "bash"
+refused "the check redirected" "bash $MC \"owner/repo\" --like \"gh\" > out.txt" "bash"
+refused "the token with no account named" "GH_TOKEN=\$(gh auth token) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token's account quoted" "GH_TOKEN=\$(gh auth token -u \"danwright32\") bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token's account a variable" "GH_TOKEN=\$(gh auth token -u \$USER) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token's account a substitution" "GH_TOKEN=\$(gh auth token -u \$(whoami)) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token's account starting with a hyphen" "GH_TOKEN=\$(gh auth token -u -x) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token's account long form" "GH_TOKEN=\$(gh auth token --user danwright32) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token from another host" "GH_TOKEN=\$(gh auth token -u danwright32 --hostname example.com) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "a second command inside the token" "GH_TOKEN=\$(gh auth token -u danwright32; git push) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token quoted" "GH_TOKEN=\"\$(gh auth token -u danwright32)\" bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token in backticks" "GH_TOKEN=\`gh auth token -u danwright32\` bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "a token from somewhere else" "GH_TOKEN=\$(cat token.txt) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "a token written out" "GH_TOKEN=abc123 bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "another variable's token" "GITHUB_TOKEN=\$(gh auth token -u danwright32) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "a second assignment after the token" "GH_TOKEN=\$(gh auth token -u danwright32) FOO=1 bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "an assignment before the token" "FOO=1 GH_TOKEN=\$(gh auth token -u danwright32) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token twice" "GH_TOKEN=\$(gh auth token -u a) GH_TOKEN=\$(gh auth token -u b) bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token exported first" "export GH_TOKEN=\$(gh auth token -u danwright32); bash $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token before a different script" "GH_TOKEN=\$(gh auth token -u danwright32) bash ./build.sh \"gh\"" "bash"
+refused "the token before another shell" "GH_TOKEN=\$(gh auth token -u danwright32) sh $MC \"o/r\" --like \"gh\"" "sh"
+refused "the token before a shell option" "GH_TOKEN=\$(gh auth token -u danwright32) bash -x $MC \"o/r\" --like \"gh\"" "bash"
+refused "the token before a substitution in the title" "GH_TOKEN=\$(gh auth token -u danwright32) bash $MC \"o/r\" --like \"\$(git push)\"" "bash"
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "GH_TOKEN=\$(gh auth token -u other-acct) bash $MC \"o/r\" --like \"git push\" | grep x"
+check_eq "#1610 a duplicate check that passes is not recorded as a refusal" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
+
+# The scripts whose arguments are data are declared in one place, the guard, and another entry is
 # a decision to review, never a line to slip in: this fails until the test is changed with it.
 declared="$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK" | grep -c '^  "')"
-check_eq "#1574 one script subcommand is declared as taking data, the spool's note" "1" "$declared"
-check "#1574 and it is the spool's note" '  "~/.claude/hooks/lib/issue-spool.sh note"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
+check_eq "#1610 two scripts are declared as taking data, the spool's note and the duplicate check" "2" "$declared"
+check "#1574 one is the spool's note" '  "~/.claude/hooks/lib/issue-spool.sh note"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
+check "#1610 the other is the whole duplicate check" '  "~/.claude/skills/milestone/milestone-candidates.sh"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
 
 # The reader's module docstring is the list of every mode its main accepts, data-blanked included,
 # so a mode added without its entry fails here rather than going unlisted.
@@ -199,6 +286,43 @@ out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/
 check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
 out="$(payload "bash $SPOOL note . \"a finding\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1574 control: a note naming none of the three passes with that reader" "0|" "$rc|$out"
+out="$(payload "GH_TOKEN=\$(gh auth token -u danwright32) bash $MC \"o/r\" --like \"a title\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1610 a reader that cannot read the duplicate check refuses it" "2" "$rc"
+# And a reader from before #1610, which reads only "<path> <subcommand>" pairs and nothing in front:
+# a whole script entry, or the token in front, is no match there, so it refuses rather than passes.
+PRE1610="$WORKDIR/pre1610"; mkdir -p "$PRE1610/lib"
+cp "$HOOK" "$PRE1610/"
+cp "$DIR/lib/push-scope.sh" "$PRE1610/lib/"
+python3 -c '
+import re, sys
+src = open(sys.argv[1]).read()
+# The #1574 data_blanked, as it shipped: path and subcommand both required, bash first, nothing before.
+old = """def data_blanked(s, declared, home):
+    words = _data_words(s)
+    if not words or len(words) < 3 or words[0][0] != "bash" or not home.startswith("/"):
+        return None
+    raw_path, path, _ = words[1]
+    if raw_path.startswith("~/"):
+        path = home.rstrip("/") + raw_path[1:]
+    for entry in declared:
+        script, _, sub = entry.rpartition(" ")
+        if not script.startswith("~/") or not sub:
+            continue
+        if path == home.rstrip("/") + script[1:] and words[2][1] == sub:
+            kept = [w[0] for w in words[:3]] + ["\x27\x27" if whole else r for r, _, whole in words[3:]]
+            return " ".join(kept)
+    return None
+
+
+def main("""
+src = re.sub(r"def data_blanked\(.*?\n\n\ndef main\(", lambda m: old, src, count=1, flags=re.S)
+open(sys.argv[2], "w").write(src)' "$DIR/lib/shell-words.py" "$PRE1610/lib/shell-words.py"
+out="$(payload "bash $MC \"o/r\" --like \"git push\"" | bash "$PRE1610/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1610 a reader from before the duplicate check was declared refuses it" "2" "$rc"
+out="$(payload "GH_TOKEN=\$(gh auth token -u danwright32) bash $SPOOL note . \"git push\" \"builder\"" | bash "$PRE1610/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1610 and refuses the token in front of a note" "2" "$rc"
+out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$PRE1610/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1610 control: that reader still passes a plain note" "0" "$rc"
 
 # 5. Every refusal is recorded (claude-config#1492): one tab separated line of time, Mac, wrapper,
 # reason category and outcome, so how often the refusal fires, and on what, can be read after a week
