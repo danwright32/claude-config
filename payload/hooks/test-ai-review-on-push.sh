@@ -263,6 +263,13 @@ check "the diff of the push went to claude on stdin" "+    throw new CalendarErr
 # and every lessons index file is read at run time into the prompt, never a copy of it (L41).
 grep -qx 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1' "$FAKE_LOG/env" \
   && ok || bad "the review's claude runs with the global config switched off"
+# And with prompt caching off (claude-config#1573). On a subscription a headless run writes its whole
+# prompt to the one hour cache, billed at twice the input price, and measured over 775 reviews on the
+# personal MacBook (2026-10-16 to 23) no review ever read back more than the 20k token tool and system
+# prefix: about 101M tokens a week written and never read. Uncached input was the cheapest of the
+# three lifetimes on those numbers (118M against 134M for five minutes and 204M for one hour).
+grep -qx 'DISABLE_PROMPT_CACHING=1' "$FAKE_LOG/env" \
+  && ok || bad "the review's claude runs with prompt caching off (#1573)"
 python3 - "$FAKE_LOG/args" "$DIR/.." <<'EOF' && ok || bad "every lessons index file beside the hooks reached the prompt, verbatim"
 import glob, os, sys
 args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")

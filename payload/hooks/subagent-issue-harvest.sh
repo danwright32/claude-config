@@ -445,8 +445,11 @@ else
   # server (--strict-mcp-config, naming none) and no hook (disableAllHooks, which also keeps every
   # per prompt nudge out of its prompt). The skills list and the deferred tool list were about half
   # of each harvest's input. `--bare` would drop all of it too but refuses the subscription login.
+  # And no prompt caching (claude-config#1573): on a subscription a headless run writes its prompt
+  # to the one hour cache at twice the input price, and over 164 harvests (2026-10-16 to 23) only the
+  # small shared prefix was ever read back, so uncached input was the cheapest lifetime measured.
   out=$(printf '%s\n\n%s\n' "$PROMPT" "$digest" \
-    | CLAUDE_DETACHED_RUN=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 with_deadline "$harvest_timeout" claude -p --model haiku \
+    | CLAUDE_DETACHED_RUN=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 DISABLE_PROMPT_CACHING=1 with_deadline "$harvest_timeout" claude -p --model haiku \
         --tools "" --disable-slash-commands --strict-mcp-config --settings '{"disableAllHooks":true}')
 fi
 status=$?
