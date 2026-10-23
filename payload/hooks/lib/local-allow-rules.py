@@ -30,9 +30,12 @@ WHAT IS FLAGGED, per rule:
                          MacBook, by counts only (1011 rules): the numbers are in DESIGN.md.
 
 WHAT IS NEVER PRINTED: the text of any rule. A rule is named by its position, its tool and the first
-word of its command, and its kinds. Not only the secret ones: a key the redactor has no shape for
-(a bare token after a flag) would otherwise be printed beside a rule flagged only as one off, so the
-rule that nothing is printed is structural rather than resting on the detector being complete (L27).
+word of its command, and its kinds. Not only the secret ones: since claude-config#1585 the redactor
+also has a shape for a token after a flag named for one (--token, --api-key, --auth, a secret or a
+password, then a space) and for a bare Cloudflare token, but a key in a shape it still lacks (after a
+flag named otherwise, or in a format it has never seen) would otherwise be printed beside a rule
+flagged only as one off, so the rule that nothing is printed is structural rather than resting on
+the detector being complete (L27).
 
 ONCE PER SET. The fingerprints (a 12 character sha256 prefix of each flagged rule) last said are kept
 in ~/.claude/state/local-allow-sweep/<key>, which holds hashes only. It speaks again only when a rule

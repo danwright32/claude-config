@@ -796,7 +796,12 @@ never ends, an eval that changes directory, wrapping past five deep) is reported
 naming it, and `check-wrapped-commands.sh` refuses any such command that names git, gh or rtk, once
 for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bash ./build.sh && git
 push` is refused, since what the script does is not in the command: run the script and the push as
-two commands.
+two commands. One narrowing (#1574): a script subcommand the gate declares, in
+`DATA_ARGUMENT_SCRIPTS`, as running none of its arguments (only `issue-spool.sh note` so far) is not
+refused for git, gh or rtk inside an argument quoted whole, when the call stands alone with nothing a
+shell would do beyond splitting words and removing quotes. So a spool note about those tools passes;
+the same words unquoted, a substitution, another script, another subcommand or a second command are
+refused as before.
 
 Every refusal it makes is recorded, overrides included (#1492), one line each in
 `~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category
@@ -1198,7 +1203,7 @@ Eleven of them came after the 2026-09-21 timing further down, which measured the
 | `require-verification-run.sh` (#1529) | 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
-| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3) |
+| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23) |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
