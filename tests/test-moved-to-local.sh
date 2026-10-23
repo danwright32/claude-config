@@ -57,6 +57,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # ---------------------------------------------------------------- 1. the pairs
 pairs=" ${MOVED_TO_LOCAL[*]} "
+check "the sleep mode repository lists are moved to a Mac's own file" has "$pairs" " mods/sleep-repos.json|mods/sleep-repos.local.json "
 check "the main into dev repository list is moved to a Mac's own file" has "$pairs" " hooks/main-to-dev-repos.txt|hooks/main-to-dev-repos.local.txt "
 is_local_name(){   # $1 = a file name -> 0 when LOCAL_FILE_GLOBS keeps it on each Mac
   local g

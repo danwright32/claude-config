@@ -468,13 +468,24 @@ reset_spool
 CLAUDE_STUB_DIR="$TMPROOT/claude-stub"; mkdir -p "$CLAUDE_STUB_DIR"
 CLAUDE_ENV_SEEN="$TMPROOT/claude-env-seen"; rm -f "$CLAUDE_ENV_SEEN"
 CLAUDE_ARGS_SEEN="$TMPROOT/claude-args-seen"; rm -f "$CLAUDE_ARGS_SEEN"
-printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_DISABLE_CLAUDE_MDS:-unset}" > "%s"\nprintf "%%s\\036" "$@" > "%s"\necho NONE\n' "$CLAUDE_ENV_SEEN" "$CLAUDE_ARGS_SEEN" > "$CLAUDE_STUB_DIR/claude"
+CLAUDE_CACHE_SEEN="$TMPROOT/claude-cache-seen"; rm -f "$CLAUDE_CACHE_SEEN"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_DISABLE_CLAUDE_MDS:-unset}" > "%s"\nprintf "%%s\\n" "${DISABLE_PROMPT_CACHING:-unset}" > "%s"\nprintf "%%s\\036" "$@" > "%s"\necho NONE\n' "$CLAUDE_ENV_SEEN" "$CLAUDE_CACHE_SEEN" "$CLAUDE_ARGS_SEEN" > "$CLAUDE_STUB_DIR/claude"
 chmod +x "$CLAUDE_STUB_DIR/claude"
 ( unset CLAUDE_ISSUE_HARVEST_CMD; payload "$REPO" | PATH="$CLAUDE_STUB_DIR:$PATH" bash "$HARVEST" >/dev/null 2>&1 )
 seen="$(cat "$CLAUDE_ENV_SEEN" 2>/dev/null || echo 'claude never ran')"
 [ "$seen" = "1" ] \
   && check "the default harvest launch switches the global config off" ok \
   || check "the default harvest launch switches the global config off" "CLAUDE_CODE_DISABLE_CLAUDE_MDS=$seen"
+
+# And prompt caching off (claude-config#1573). On a subscription a headless run writes its prompt to
+# the one hour cache at twice the input price. Measured over 164 harvests on the personal MacBook
+# (2026-10-16 to 23): 1.14M tokens written, 0.43M read back (only the small shared prefix), and
+# uncached input was the cheapest of the three lifetimes (1.6M against 1.9M for five minutes and
+# 2.3M for one hour, in multiples of the input price).
+seen_cache="$(cat "$CLAUDE_CACHE_SEEN" 2>/dev/null || echo 'claude never ran')"
+[ "$seen_cache" = "1" ] \
+  && check "the default harvest launch switches prompt caching off (#1573)" ok \
+  || check "the default harvest launch switches prompt caching off (#1573)" "DISABLE_PROMPT_CACHING=$seen_cache"
 
 # And it loads nothing else it never uses (hook trim, 2026-10-15). The harvest reads one digest on
 # stdin and answers in text: it needs no tool, no skill, no MCP server and no hook, yet the skills

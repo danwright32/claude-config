@@ -320,11 +320,12 @@ unset _lg
 # The new name must be a Mac's own file by LOCAL_FILE_GLOBS, or the move would publish what it exists
 # to keep out (move_shared_files_to_local refuses one that is not). The old name's exclusion is
 # anchored at each tree's root, so it reaches only <tree>/<that path>; only skills/ holds the folder.
-# claude-config#1568 moved another list of work repositories the code reads the same way: the
-# repositories merged main into dev after each merge (hooks/, read by sync-main-to-dev.sh). Its old
-# name sits at the top of its tree, so the anchored exclusion reaches only that file.
+# claude-config#1568 moved the two other lists of work repositories the code reads the same way:
+# the repositories merged main into dev after each merge (hooks/, read by sync-main-to-dev.sh) and
+# sleep mode's per repository merge and deploy lists (mods/, read by the scope-modes mod). Their old
+# names sit at the top of their trees, so the anchored exclusion reaches only those two files.
 # tests/test-moved-to-local.sh proves the move for every pair listed here, read from this line.
-MOVED_TO_LOCAL=('skills/pennie-dev-update/repos.json|skills/pennie-dev-update/repos.local.json' 'hooks/main-to-dev-repos.txt|hooks/main-to-dev-repos.local.txt')
+MOVED_TO_LOCAL=('skills/pennie-dev-update/repos.json|skills/pennie-dev-update/repos.local.json' 'hooks/main-to-dev-repos.txt|hooks/main-to-dev-repos.local.txt' 'mods/sleep-repos.json|mods/sleep-repos.local.json')
 for _mv in "${MOVED_TO_LOCAL[@]}"; do _mv="${_mv%%|*}"; COMMON_EXCLUDES+=(--exclude="/${_mv#*/}"); done
 unset _mv
 # *.local.json is a file one Mac keeps for itself, often holding a secret: the tracker skill's
