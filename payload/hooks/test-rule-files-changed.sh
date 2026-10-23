@@ -249,6 +249,103 @@ nomods_code=$?
   && check "#1535 a config directory with no mods folder is quiet" ok \
   || check "#1535 a config directory with no mods folder is quiet" "exit=$nomods_code out=$nomods"
 
+# ---------------------------------------------------------------------------
+# THE BASELINE IS TAKEN AT SESSION START (claude-config#1544). A session loads its
+# rule files and names its mods when it starts, not at its first prompt, so a rule
+# file changed or a mod added in between was loaded in its EARLIER state and must be
+# reported. The first prompt stays the fallback for a session with no start record.
+# ---------------------------------------------------------------------------
+START="$TMPROOT/start-home"
+mkdir -p "$START"
+cat > "$START/CLAUDE.md" <<'MD'
+@RTK.md
+
+# global rules
+MD
+printf 'rtk one\n' > "$START/RTK.md"
+smod() { # smod <name>: a mod folder under the start fixture
+  mkdir -p "$START/mods/$1/.claude-plugin"
+  printf '{ "name": "%s" }\n' "$1" > "$START/mods/$1/.claude-plugin/plugin.json"
+}
+smod first-mod
+event() { # event <session-id> <hook_event_name> [source] -> stdout of one run
+  python3 - "$1" "$2" "${3:-}" <<'PY' | CLAUDE_RULES_DIR="$START" bash "$HOOK" 2>/dev/null
+import json, sys
+d = {"session_id": sys.argv[1], "cwd": ".", "hook_event_name": sys.argv[2]}
+if sys.argv[2] == "SessionStart":
+    d["source"] = sys.argv[3]
+else:
+    d["prompt"] = "carry on"
+print(json.dumps(d))
+PY
+}
+
+s1="$(event start-session SessionStart startup)"
+[ -z "$s1" ] \
+  && check "#1544 session start says nothing, it only records" ok \
+  || check "#1544 session start says nothing, it only records" "said: $s1"
+
+printf 'rtk changed before the first prompt\n' > "$START/RTK.md"
+smod late-mod
+s2="$(event start-session UserPromptSubmit)"
+grep -q "RTK.md" <<< "$s2" \
+  && check "#1544 a rule file changed between start and the first prompt is reported" ok \
+  || check "#1544 a rule file changed between start and the first prompt is reported" "said: $s2"
+grep -q "late-mod" <<< "$s2" \
+  && check "#1544 a mod added between start and the first prompt is reported" ok \
+  || check "#1544 a mod added between start and the first prompt is reported" "said: $s2"
+grep -q "first-mod" <<< "$s2" \
+  && check "#1544 and a mod there at start is not" "named first-mod too: $s2" \
+  || check "#1544 and a mod there at start is not" ok
+
+# A resumed or compacted session is the SAME session: Claude Code runs SessionStart
+# again with source resume or compact, and that must not move the baseline to what
+# is on disk now, or a change made before it would never be reported. Nor may it
+# speak or consume the change: the next prompt is where the notice is said.
+for src in resume compact; do
+  sid="kept-$src"
+  event "$sid" SessionStart startup >/dev/null
+  printf 'rtk before %s\n' "$src" > "$START/RTK.md"
+  smod "mod-before-$src"
+  r1="$(event "$sid" SessionStart "$src")"
+  [ -z "$r1" ] \
+    && check "#1544 a $src start is silent" ok \
+    || check "#1544 a $src start is silent" "said: $r1"
+  r2="$(event "$sid" UserPromptSubmit)"
+  grep -q "RTK.md" <<< "$r2" && grep -q "mod-before-$src" <<< "$r2" \
+    && check "#1544 a $src keeps the original baseline, so a change before it is still reported" ok \
+    || check "#1544 a $src keeps the original baseline, so a change before it is still reported" "said: $r2"
+  r3="$(event "$sid" UserPromptSubmit)"
+  [ -z "$r3" ] \
+    && check "#1544 and reported once, after a $src as before it" ok \
+    || check "#1544 and reported once, after a $src as before it" "said again: $r3"
+done
+
+# A resume with no record at all (a session from before this hook, or a temp
+# directory cleared since) takes its baseline there, so its first prompt is quiet.
+event never-recorded SessionStart resume >/dev/null
+nr="$(event never-recorded UserPromptSubmit)"
+[ -z "$nr" ] \
+  && check "#1544 a resume with no record takes its baseline then" ok \
+  || check "#1544 a resume with no record takes its baseline then" "said: $nr"
+
+# Wired: the hook is in BOTH events of the hooks block that ships, or the start
+# record above is never written on a real Mac and only the fallback runs (L3).
+. "$DIR/lib/settings-file.sh"
+SETTINGS="$(hook_settings_file "$DIR/..")"
+wired="$(python3 - "$SETTINGS" <<'PY' 2>&1
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]
+for ev in ("SessionStart", "UserPromptSubmit"):
+    hit = any("/hooks/rule-files-changed.sh" in h.get("command", "")
+              for m in d.get(ev, []) for h in m.get("hooks", []))
+    print("%s=%s" % (ev, "yes" if hit else "no"))
+PY
+)"
+grep -q "SessionStart=yes" <<< "$wired" && grep -q "UserPromptSubmit=yes" <<< "$wired" \
+  && check "#1544 the hook is wired to SessionStart and UserPromptSubmit" ok \
+  || check "#1544 the hook is wired to SessionStart and UserPromptSubmit" "read: $wired"
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -17,6 +17,11 @@
 # cannot reload anything (only a new session picks these up), but it can stop the
 # staleness being silent.
 #
+# It runs on SessionStart too, where it says nothing and only records "what this
+# session first saw" (claude-config#1544). That is the moment the session loads its
+# rule files and names its mods; taken at the first prompt instead, the baseline
+# already held whatever changed in between, so that change was never reported.
+#
 # ONE notice per divergence, not one per prompt: after speaking it records the new
 # state, so the next prompt is quiet until something changes again. A notice on
 # every prompt would be the noise it exists to prevent.
@@ -60,14 +65,23 @@ RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 # the check says on stderr that it could not run rather than reporting silence as
 # a clean answer (L98). stderr on a UserPromptSubmit hook is not shown to the
 # person, which is why this is the one path that stays quiet to them.
-session="$(printf '%s' "$input" | python3 -c '
+#
+# The same one python3 reads which event this is, so the start path costs no extra process. The
+# fields are joined with the unit separator, never a tab: `read` folds a run of tabs into one, so an
+# empty field in the middle would hand its neighbour's value to the wrong name.
+fields="$(printf '%s' "$input" | python3 -c '
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
 except Exception:
     d = {}
-print(d.get("session_id") or d.get("transcript_path") or "")
+def one(v):
+    return str(v or "").replace("\x1f", " ").replace("\n", " ")
+print("\x1f".join(one(x) for x in (d.get("session_id") or d.get("transcript_path"),
+                                   d.get("hook_event_name"))))
 ' 2>/dev/null || true)"
+session="" event=""
+IFS=$'\x1f' read -r session event <<< "$fields" || true
 if [ -z "$session" ]; then
   echo "rule-files-changed: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and no comparison was made." >&2
   exit 0
@@ -82,19 +96,31 @@ MODS_STATE="$STATE_DIR/claude-mods-${key}.state"
 # ONE baseline rule for both snapshots, so the rule files and the mods cannot come to disagree about
 # what a first prompt, an unreadable record or a repeated notice means (L370).
 #
-# since_baseline <state file> <current snapshot>: prints each line on one side only, as
-# "gone<TAB><line>" or "new<TAB><line>", and nothing when the two agree.
+# since_baseline <state file> <snapshot function>: prints each line on one side only, as
+# "gone<TAB><line>" or "new<TAB><line>", and nothing when the two agree. The snapshot is taken
+# here, by name, so a start that keeps its record never pays for one.
 #
-# No baseline yet (the first prompt of this session), or one that cannot be read, re-seeds and
-# stays quiet: reporting everything as changed because the record of what it used to be is missing
-# would be a false alarm about the one subject this hook has to stay credible on (L36).
+# At SessionStart it only records, and only when there is no record yet (claude-config#1544). A
+# session loads its rule files and names its mods when it starts, so that is the state to compare
+# against; taken at the first prompt instead, a change in between was never reported. A start that
+# finds a record keeps it: Claude Code runs SessionStart again on a resume or a compaction of the
+# SAME session, and moving the baseline to what is on disk then would silence a change made before
+# it. It never compares or speaks there either, so the change is said at the next prompt.
+#
+# No baseline yet at a prompt (a session started before this hook was wired, or whose start could
+# not write), or one that cannot be read, re-seeds and stays quiet: reporting everything as changed
+# because the record of what it used to be is missing would be a false alarm about the one subject
+# this hook has to stay credible on (L36).
 #
 # The new state is recorded BEFORE anything is said, so a notice cannot repeat itself if anything
 # after fails: the safe direction here is saying it once too few, not once per prompt for the rest
 # of the session. ONE notice per divergence.
 since_baseline() {
-  local state="$1" current="$2" previous
+  local state="$1" current previous
+  [ "$event" = "SessionStart" ] && [ -s "$state" ] && return 0
+  current="$("$2")"
   [ -n "$current" ] || return 0
+  [ "$event" = "SessionStart" ] && { printf '%s\n' "$current" > "$state" 2>/dev/null || true; return 0; }
   if [ ! -s "$state" ]; then
     printf '%s\n' "$current" > "$state" 2>/dev/null || true
     return 0
@@ -168,16 +194,24 @@ mod_snapshot() {
 # superlinear in the number of matches under the bash macOS ships (claude-config#117).
 words() { tr '\n' ' ' | sed 's/ $//'; }
 
+# At a start there is nothing to say, only the record to take, and SessionStart's stdout would go
+# into the session's context, so it goes no further than that.
+if [ "$event" = "SessionStart" ]; then
+  [ -f "$RULES_DIR/CLAUDE.md" ] && since_baseline "$STATE" snapshot
+  since_baseline "$MODS_STATE" mod_snapshot
+  exit 0
+fi
+
 if [ -f "$RULES_DIR/CLAUDE.md" ]; then
   # Lines on either side that the other does not have, which covers an edited file, one that
   # appeared, and one that went away. The name is the last field of a "<hash>  <name>" line.
-  changed="$(since_baseline "$STATE" "$(snapshot)" | awk '{print $NF}' | sort -u | words)"
+  changed="$(since_baseline "$STATE" snapshot | awk '{print $NF}' | sort -u | words)"
   case "$changed" in *[![:space:]]*)
     echo "claude-sync: these rule files changed on disk after this session loaded them, so what is in this session's context is the older copy: ${changed}. Start a new session to pick them up, or read the changed file directly before relying on anything it says." ;;
   esac
 fi
 
-mods_diff="$(since_baseline "$MODS_STATE" "$(mod_snapshot)")"
+mods_diff="$(since_baseline "$MODS_STATE" mod_snapshot)"
 added="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "new" && $2 != "#mods" { print $2 }' | words)"
 removed="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "gone" && $2 != "#mods" { print $2 }' | words)"
 case "$added" in *[![:space:]]*)

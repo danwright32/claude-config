@@ -2307,6 +2307,10 @@ holding a manifest, from one glob, so it starts no process however many mods the
 nothing about an EDIT to a mod the session already loaded: Claude Code reloads that mod itself and
 prints its own line ("hooks.json changed, reloaded"), or says the earlier version is still running
 when a reload fails, so a second notice would only repeat it, on every pull that touches a mod.
+Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
+so a change between starting a session and its first prompt is reported too (#1544); the first
+prompt takes them only for a session with no start record. A start that finds a record already
+there, which is what a resume or a compaction of the same session is, keeps it and says nothing.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
 
