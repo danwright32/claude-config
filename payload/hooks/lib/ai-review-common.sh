@@ -190,13 +190,26 @@ ar_redact() {   # [--stderr]
 # over the review cap. Read from the attributes AT the head being reviewed, never the checkout's,
 # which may be on another branch entirely (L398). Prints the changed paths so marked, one per line.
 ar_generated_paths() {   # $1 = base, $2 = head, $3.. = pathspecs (none means every file)
-  local base="$1" head="$2" names attrs
+  local base="$1" head="$2" names
   shift 2
   names="$(git -c core.quotepath=false diff --name-only "$base" "$head" -- "$@" 2>/dev/null)"
+  ar_generated_among "$names" "$head"
+}
+
+# Which of the newline separated names in $1 the repository marks generated, one per line in the
+# order asked, read from the attributes at commit $2, or from the working tree when $2 is empty (a
+# change not yet committed, which is what the push lessons advisory reads for a commit then push,
+# claude-config#1525). The one reader of the signal: the push review and the advisory both ask here.
+ar_generated_among() {   # $1 = names, $2 = a commit, or empty for the working tree
+  local names="$1" attrs
   [ -n "$names" ] || return 0
-  # --source needs git 2.40; an older git reads the working tree's attributes instead, which is the
-  # checkout rather than the head and is said nowhere, so it is the fallback and not the rule.
-  attrs="$(ar__check_attr "$names" --source "$head")" || attrs="$(ar__check_attr "$names")"
+  if [ -n "${2:-}" ]; then
+    # --source needs git 2.40; an older git reads the working tree's attributes instead, which is the
+    # checkout rather than the head and is said nowhere, so it is the fallback and not the rule.
+    attrs="$(ar__check_attr "$names" --source "$2")" || attrs="$(ar__check_attr "$names")"
+  else
+    attrs="$(ar__check_attr "$names")"
+  fi
   ar__marked_generated "$attrs"
 }
 
