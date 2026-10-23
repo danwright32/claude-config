@@ -211,6 +211,9 @@ EOF
 args_blob="$(tr '\036' '\n' < "$FAKE_LOG/args")"
 check "the framework line names Next.js, read from package.json" "Next.js/React application" "$args_blob"
 check "the model flag is passed" "--model" "$args_blob"
+# Which files handle failure is read from lib/failure-handling.sh and handed over as a fact, the same
+# predicate the advisory and the push gate read (claude-config#1477): the push adds a throw.
+check "the failure handling line names the file whose added code handles failure" "Context: failure handling, read from the code with strings and comments removed: src/calendar.ts" "$args_blob"
 # No MCP servers (claude-config#956). The reviewer reads a diff and the lessons and calls no tool a
 # server offers, yet a launch without the flag loads every server Dan has connected: 12 in the
 # real run's init event on 2026-10-08, with --strict-mcp-config and no --mcp-config it was 0. The

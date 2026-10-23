@@ -509,6 +509,63 @@ assert_contains "a push adding code and lessons together still advises on the co
 assert_contains "and names the code file" 'payload/hooks/fetch-thing.sh' "$out"
 assert_absent "and does not name the lessons file it also added" 'in: payload/LESSONS.md' "$out"
 
+# --- claude-config#1477: failure handling is judged by code, not by words ----------------------
+# Bidspoke PR #2630 was told it added "new retry or failure-handling logic" for a test file whose
+# only candidates were a mocked response's field (`retries_assumed: 2`) and an option labelled
+# 'Fail the run'. Reproduced against the shipped hook: the field name alone made it fire.
+ISSUE_TEST='vi.mock("@/lib/api", () => ({
+  api: {
+    executions: {
+      stepDurationStats: vi.fn().mockResolvedValue({
+        window_days: 7, source: '"'"'history'"'"', subtype: null, retries_assumed: 2,
+      }),
+    },
+  },
+}))
+it("editing the check", () => {
+  chooseOption(within(editor()).getByRole('"'"'combobox'"'"', { name: '"'"'If the lead has no value'"'"' }), '"'"'Fail the run'"'"')
+  expect(holders(onUpdate)).toEqual(['"'"'Renamed'"'"'])
+})'
+ISSUE_PATH='apps/web/src/components/canvas/__tests__/LeadValidationConfig.carries-fields.test.tsx'
+R=$(make_repo issue1477 "$ISSUE_TEST" "$ISSUE_PATH")
+out=$(run_hook "git push" "$R")
+assert_absent "the issue's test file wording is not retry or failure handling" 'failure-handling' "$out"
+assert_absent "and is not an error path either" 'error path' "$out"
+
+# Real code in a test file still counts: a catch that returns empty, and a retry call.
+R=$(make_repo catchintest 'it("x", async () => {
+  try { await render() } catch (e) { return [] }
+})' "$ISSUE_PATH")
+out=$(run_hook "git push" "$R")
+assert_contains "a real catch returning empty in a test file is still advised on" 'L11' "$out"
+R=$(make_repo retryintest 'it("x", async () => {
+  await retry(() => expect(screen.getByText("Saved")).toBeVisible())
+})' "$ISSUE_PATH")
+out=$(run_hook "git push" "$R")
+assert_contains "a real retry call in a test file is still advised on" 'L524' "$out"
+
+# And in source, the words alone (a label, a comment) are silent while the construct fires.
+R=$(make_repo wordsonly "const label = 'Retry with backoff' // catch (e) and retry later
+export const options = ['Fail the run', 'Skip']" src/panel.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a label and a comment naming retries raise no retry lesson" 'failure-handling' "$out"
+# The empty return is read from the same code only lines: a catch returning a real value is not an
+# empty return, and the check still holds when the file is far larger than a pipe buffer, with the
+# catch first (the shape that once silenced this hook through a pipe, L183).
+R=$(make_repo catchvalue 'try { return await load() } catch (e) { return "the fallback page" }' src/value.ts)
+out=$(run_hook "git push" "$R")
+assert_absent "a catch returning a real string is not an error path returning empty" 'L11' "$out"
+big_catch="$(python3 -c '
+print("try { x() } catch (e) { return [] }")
+print("export const harmless = 1;\n" * 9000)
+')"
+R=$(make_repo bigcatch "$big_catch" src/big.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "a catch returning empty at the top of a file bigger than a pipe buffer is advised on" 'L11' "$out"
+R=$(make_repo retrysource 'export const load = () => withRetry(() => fetch(url), { maxAttempts: 3 })' src/load.ts)
+out=$(run_hook "git push" "$R")
+assert_contains "a retry helper call in source is still advised on" 'L524' "$out"
+
 # ---- the skip and the sync's own derived file list are one set (claude-config#484) ----
 # claude-sync decides the same question with is_derived_rule_file and the LESSONS_FILE beside it,
 # but claude-sync is NOT installed beside these hooks (the config root holds the hooks, not the

@@ -103,6 +103,37 @@ def framework_line(repo_dir):
     return "Context: this repository has no package.json, so treat it as a general code base and apply framework rules only where the code makes the framework obvious."
 
 
+FAILURE_LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "failure-handling.sh")
+
+
+def failure_line(diff_path):
+    """Which files' added code handles failure, from lib/failure-handling.sh (claude-config#1477).
+
+    The same predicate the lessons advisory and the push gate read (L261, L370), handed over as a
+    fact. Bidspoke PR #2630's review called a test file retry or failure handling over a mocked
+    field named retries_assumed and an option labelled 'Fail the run'. When the list cannot be read
+    the line says so, rather than reading as "no file handles failure" (L11)."""
+    try:
+        with open(diff_path, "rb") as diff:
+            r = subprocess.run(["bash", FAILURE_LIB, "files"], stdin=diff,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        if r.returncode != 0:
+            raise OSError(r.stderr.decode("utf-8", errors="replace").strip() or f"exit {r.returncode}")
+        files = [f for f in r.stdout.decode("utf-8", errors="replace").splitlines() if f.strip()]
+    except (OSError, subprocess.SubprocessError) as e:
+        return ("Context: which files handle failure could not be read from lib/failure-handling.sh "
+                f"({type(e).__name__}: {e}), so judge failure handling from the code itself, never from "
+                "words in strings, labels, test names or comments.")
+    head = "Context: failure handling, read from the code with strings and comments removed: "
+    if not files:
+        return (head + "none. No file in this diff adds code that catches, raises, branches on an error "
+                "or a status, or retries. A word such as fail, error or retry in a string, a label, a "
+                "test name, fixture data or a comment does not make a file failure handling.")
+    return (head + ", ".join(files) + ". Only these files add code that catches, raises, branches on an "
+            "error or a status, or retries. A word such as fail, error or retry in a string, a label, a "
+            "test name, fixture data or a comment does not make any other file failure handling.")
+
+
 def lessons_block(lessons_dir):
     """(text for the prompt, note for the answer). The note is empty when the lessons were read."""
     files = sorted(glob.glob(os.path.join(lessons_dir, "LESSONS-INDEX-*.md")))
@@ -427,7 +458,7 @@ def main(argv):
         if a.scope_file:
             with open(a.scope_file, encoding="utf-8") as f:
                 scope = f.read().strip() + "\n\n"
-        prompt = framework_line(a.repo_dir) + "\n\n" + (lessons + "\n\n" if lessons else "") + scope + prompt_text
+        prompt = framework_line(a.repo_dir) + "\n" + failure_line(a.diff_file) + "\n\n" + (lessons + "\n\n" if lessons else "") + scope + prompt_text
 
         # Hooks OFF (claude-config#560). Measured 2026-09-24, the first real whole branch reviews: the
         # headless claude ran Dan's global hooks, the reviewer's own tool use tripped the end of turn
