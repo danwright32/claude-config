@@ -1499,7 +1499,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   floor before trusting any verdict it reaches.** A threshold sitting near the canary's own per
   run volume makes the detector conclude on the canary's schedule rather than on customer
   behaviour, and that conclusion then reads as evidence about production.
-  (Try-Pennie/slate#1616, 2026-08-31: the booking failure rate check needs 20 attempts in a
+  (slate#1616, 2026-08-31: the booking failure rate check needs 20 attempts in a
   rolling hour, and every attempt Slate has before cutover is the canary's. One full canary pass
   records exactly 16 of them inside about two minutes, four short of the floor, so a pass never
   concludes; but the canary runs four or five times a day and two drifting inside one hour clear
@@ -1895,7 +1895,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   last copy of a fact, look for where the fact is SERVED rather than where its wording appears: the
   search that found nothing is the same search whether the thing is missing or merely worded
   differently.
-  (Try-Pennie/slate#1795 then #1836, 2026-09-03: removing an admin panel meant deciding whether its
+  (slate#1795 then #1836, 2026-09-03: removing an admin panel meant deciding whether its
   warning sentence about impersonation was the only explanation of what impersonation does. A grep
   for the sentence found it nowhere else, so I concluded the explanation was unique, lifted it into
   its own module with a docstring arguing for its own necessity, and left it rendering as two lines
@@ -1924,7 +1924,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   that models ONE ideal member against a numerator counting a UNION across many: the two agree
   while the members are identical and diverge as the real population becomes varied, so it ships
   correct and rots without any code changing.
-  (Try-Pennie/slate#1937, 2026-09-04: the bucket availability page rendered 117%, 168% and 189%
+  (slate#1937, 2026-09-04: the bucket availability page rendered 117%, 168% and 189%
   under a header promising "every number is a share of what was possible". The numerator counted
   distinct slot instants offered across a pool of 84 agents; the denominator, named
   `userId: "theoretical-maximum"`, was a single synthetic agent on the org's hours and the event
@@ -2229,7 +2229,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   begin with a WORD, never merely a non-whitespace character, because the syntax wrapping the
   marker satisfies the looser test and the empty exemption then reads as one somebody reasoned
   about.**
-  (Try-Pennie/slate#2200: nineteen convention guards in one repo each let a call site opt out
+  (slate#2200: nineteen convention guards in one repo each let a call site opt out
   by writing a one line reason, and each carries its own copy of the reader. Every one matched
   the reason as the marker followed by `\\s*\\S`. The place these have to be written in JSX is a
   `{/* ... */}` block, where the block's own `*/` is a non-whitespace character sitting right
@@ -2656,7 +2656,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   call site that each state is reachable: a caller passing a constant empty value leaves every
   branch unreachable while every test stays green. The convention itself is right, and it moves the
   whole question of whether the state arrives into the one file nothing tests.
-  (Try-Pennie/PaperBoi#389, 2026-09-18: the mark paid door returned an ActionOutcome for all seven
+  (PaperBoi#389, 2026-09-18: the mark paid door returned an ActionOutcome for all seven
   cases, the view drew a sentence for each, and the page passed `outcome={null}` on every render
   because React discards a form action's return value unless `useActionState` holds it, and there
   was no `useActionState` anywhere in the app. A refusal, a stale view, a bad date, a deadline and
@@ -2672,7 +2672,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   callers (L16), and it is the wrong one here, where the monitor's question is precisely whether
   the gate's answer was correct. Give the monitor a reading the gate never consults, even a coarse
   one, and reconcile the two.
-  (Try-Pennie/bidspoke#1420, 2026-09-21: the worker deploy gate hashed `dist/index.js` to decide
+  (bidspoke#1420, 2026-09-21: the worker deploy gate hashed `dist/index.js` to decide
   whether anything needed shipping. `wrangler.toml` vars, crons, limits and bindings are applied BY
   the deploy and appear nowhere in that bundle, so #1404 turning the reachability probe's alerts on
   left the bundle byte identical, Deploy Worker was skipped, Deploy reported success, and an hour
@@ -3243,7 +3243,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   failure that reads as a broken sign in, so the natural next step is to sign in properly, and then
   it writes. An env file repointed at the hosted project for one task stays repointed for every
   other, and nothing is keyed to notice.
-  (Try-Pennie/PaperBoi#391, 2026-09-18: the suite refuses to start unless SUPABASE_URL is loopback,
+  (PaperBoi#391, 2026-09-18: the suite refuses to start unless SUPABASE_URL is loopback,
   and `pnpm dev:up` starts a local Supabase, applies the migrations, loads a fixture and prints a
   session. The only way to then run the app was `pnpm --filter web dev`, which reads
   `apps/web/.env.local`, holding the HOSTED project's URL since the deploy verification work. Every
@@ -3583,7 +3583,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   through. The container is the domain half of an address, a masked account number, a test account
   wrapper, a reserved TLD, a staging URL.
   (overture#2839. A 2026-08-16 sweep replaced the domain half of every real address in a PUBLIC
-  repository's test data, so caseen.gaines@gmail.com became caseen.gaines@example.com and went on
+  repository's test data, so jordan.lee@gmail.com became jordan.lee@example.com and went on
   naming a real person, alongside 37 display names and 20 references to their personal domain that
   the sweep never looked at. The guard written afterwards judged an address by its TLD, so
   realpersonsname.example passes it cleanly, and two such were already in the tree from an earlier
@@ -4016,7 +4016,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   could-not-measure state on EVERY one of them.** A failure in an ungated read empties the
   joined result, so the surface renders as a genuine all clear, and the gated read's own
   notice sits above it explaining something else entirely, which makes the screen look like
-  it is already telling you what went wrong. (Try-Pennie/slate#1646, 2026-08-31: the admin
+  it is already telling you what went wrong. (slate#1646, 2026-08-31: the admin
   calendar sync health panel gated on the calendar read but not the roster read. With the
   users read failing, every failing calendar mapped to a row with a null email, the dedupe
   dropped all of them for having no email, the panel's length went to zero and the panel was
@@ -4071,7 +4071,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   failed**, because on the action whose whole job is to write that very default, the fallback
   and the saved value render identically. Confirm such a write by reading back the STORED
   value, and make any monitor look for the empty CONTENT rather than the missing container.
-  (Try-Pennie/slate#1670, 2026-08-31: the admin "apply company default hours" button ran a
+  (slate#1670, 2026-08-31: the admin "apply company default hours" button ran a
   delete then an insert with neither error bound and no transaction, while every other writer
   on that path went through an atomic RPC that refuses unless the row count matches. A failed
   insert left the agent with a schedule row holding no rules, so `isWithinWorkingHours`
@@ -4107,7 +4107,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   the first caller that does not honour it.** Enforce the assumption in the type or a guard,
   because the comment explaining the omission makes the gap read as a considered decision and
   nobody re-examines it.
-  (Try-Pennie/slate#1769, 2026-09-02: SubmitButton reports started, still alive, and stalled, and
+  (slate#1769, 2026-09-02: SubmitButton reports started, still alive, and stalled, and
   deliberately has NO success state. Its docstring gives the reason: "A real failure comes back on
   the page as its own message (every admin action redirects with an outcome), so this covers the
   case where nothing comes back at all." True of the actions it was written for. setBookable
@@ -4123,7 +4123,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   because otherwise a perfectly truthful history reads as corrupt.** The numbers change while the
   wall clock does not, so the reader concludes the data is wrong rather than that the reference
   moved, and the record loses its authority at the moment somebody is relying on it.
-  (Try-Pennie/slate#1943, 2026-09-04: a booking's history showed three entries all stamped
+  (slate#1943, 2026-09-04: a booking's history showed three entries all stamped
   `Fri, Sep 4, 11:18am` and then `4 hours before`, `3 hours before`, `2 hours before` down the
   page. Every value was right: `formatLeadTime` measures notice given relative to THE APPOINTMENT,
   and each reschedule had moved the appointment later, so the notice period grew while the
@@ -4139,7 +4139,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   entry point. A record written in the route is lost precisely when somebody bypasses the route,
   which is the occasion it was most needed. This is the prescriptive half of L379, which describes
   the failure; this says where to put the write so it cannot be omitted.
-  (Try-Pennie/slate#1961, 2026-09-04: a data subject erasure is audited in two halves.
+  (slate#1961, 2026-09-04: a data subject erasure is audited in two halves.
   `src/lib/audit.ts:59` records that the Supabase half, `pii.erasure`, is written INSIDE the
   `erase_booking_pii` database function, so it lands however the function is called, including from
   a hand-run statement. The Snowflake half, `pii.warehouse_purge`, is written by
@@ -5313,7 +5313,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   Match each field separately. Note which way this one hides: stripping the separator from the
   query means no query can ever reach it, so the defect is unreachable until somebody removes the
   stripping, and the change that IMPROVES the search is what exposes it.
-  (Try-Pennie/slate#1791, 2026-09-03: the roster search built `${name} ${email}` and substring
+  (slate#1791, 2026-09-03: the roster search built `${name} ${email}` and substring
   matched a trimmed, lowercased query against it. Dan asked for a trailing space to mean end of
   word, so "John " would find John Kite and not Andrew Johnson. Honouring the space makes the
   invented join space reachable too, so "kite jkite" would have matched John Kite across the gap
@@ -5343,7 +5343,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   record that query stopped matching frozen at its last synced values, and a frozen copy is
   indistinguishable from a freshly confirmed one.** Reconcile the rows you already hold
   against the rows the query returned, and either clear what you can no longer confirm or
-  report the divergence. (Try-Pennie/slate#1833, 2026-09-03: the roster sync selects
+  report the divergence. (slate#1833, 2026-09-03: the roster sync selects
   Salesforce users with IsActive true AND at least one debt tier flag set. A Sales Manager
   whose tier flags were all cleared dropped out of the result set, so his Slate row kept its
   2026-08-04 attributes, including a backend servicer of Beyond that Salesforce now says is
@@ -6097,7 +6097,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   fragments from any URL before it is logged or alerted, rather than trusting a pattern scrub to
   catch what is inside.** Distinct from L653, where the redaction never looked at the field: here
   it looked and could not recognise what it saw.
-  (Try-Pennie/slate#3046, 2026-10-02: a harmless ResizeObserver warning on /book carried the page
+  (slate#3046, 2026-10-02: a harmless ResizeObserver warning on /book carried the page
   address as its source file, the scrub matched neither `%40gmail.com` nor `%28201%29`, and a
   lead's name, email and phone reached Slack.)
   SHORT: A shape-matching scrub cannot see percent-encoded data, so strip query strings and fragments from URLs before logging or alerting them.
@@ -6108,7 +6108,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   from L741, which strips addresses your own code logs; here the copy is taken by the platform,
   and the only control is not putting the value in the address. A GET that still carries such a
   value should be refused by name, so a caller building the old address learns the rule.
-  (Try-Pennie/bidspoke#1740 and #1815, 2026-10-06: `GET /api/executions/archive-search?ssn=...`
+  (bidspoke#1740 and #1815, 2026-10-06: `GET /api/executions/archive-search?ssn=...`
   took the SSN from the query string while Workers Logs ran with invocation logs on every request,
   so each SSN searched for sat in Cloudflare's logs even though the route kept it out of the audit
   log.)
@@ -6118,14 +6118,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   in, Slack markup, HTML or email, at the one shared point every message is sent, because escaping
   at each call site is skipped by the next sender written, and the failure is a name that pings a
   whole channel or renders as a link.**
-  (Try-Pennie/bidspoke#1893, 2026-10-08)
+  (bidspoke#1893, 2026-10-08)
   SHORT: Escape person-edited text for its target format (Slack, HTML, email) at the one shared send point, never per call site.
 
 - **L758. Never give the browser a credential for a third party service (a Salesforce, Google or
   vendor API token), even from your own route: anything the browser receives, every visitor and
   anyone calling that route directly receives too, so the browser calls purpose built server routes
   and the credential stays on the server.**
-  (Halo-lab-Trypennie/trypennie#531, 2026-10-09)
+  (trypennie#531, 2026-10-09)
   SHORT: Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
 
 - **L1022. An exception keyed on the text a rule matched exempts every future match whenever that
@@ -6138,7 +6138,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   library loaded from a CDN at runtime, or one shipping a prebuilt bundle with its dependencies
   built in, keeps the vulnerable copy, so confirm a security fix by reading the version in what
   the browser actually loads.**
-  (Try-Pennie/bidspoke#2695, 2026-10-22)
+  (bidspoke#2695, 2026-10-22)
   SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
 
 ## UX completeness
@@ -6740,7 +6740,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   BOTH ships the duplication as a requirement and no implementation can avoid it.** Decide which
   one carries the fact. A per-row mark also needs an axis shared with the rows above and below, or
   it cannot be compared vertically, which is the only thing it can do that the words cannot.
-  (Try-Pennie/slate#1796 then #1812, 2026-09-03: an agent's debt tier coverage was a wrapping comma
+  (slate#1796 then #1812, 2026-09-03: an agent's debt tier coverage was a wrapping comma
   list of raw keys, and the replacement specced a five rung ladder glyph AND the sentence "Covers
   Low to High" in the same cell. Every row then said it twice, so the eye read the words and the
   bars were noise. The rungs ascended in height, so the commonest case, Low only, drew the smallest
@@ -6755,7 +6755,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   and still works, so nothing on screen and no error anywhere reports that a screen reader now
   announces an unnamed box, or no description at all. Before deleting any label, hint or
   placeholder, read what NAMES the control and what POINTS AT the element being deleted.
-  (Try-Pennie/slate#1889, 2026-09-04: Dan asked for three pieces of copy off the Team access email
+  (slate#1889, 2026-09-04: Dan asked for three pieces of copy off the Team access email
   field, the `Work email address` label, a `firstname.lastname@trypennie.com` placeholder that was
   not even our address format, and a hint reading "The address they sign in to Google with". Every
   one of the three was a fair call on its own. The label was also the field's whole accessible name
@@ -6771,10 +6771,10 @@ for reference; L6 was reviewed and deliberately not adopted.
   is.** Where fields are meant to be compared down the page, reach for a table or a grid from the
   start, because no spacing value can align a flow row: there is nothing there to align. This is
   the cross-row twin of L549, which is about alignment INSIDE one row.
-  (Try-Pennie/slate#1891, 2026-09-04: the Team access waiting list rendered each person as one
+  (slate#1891, 2026-09-04: the Team access waiting list rendered each person as one
   `flex flex-wrap items-center` row, so the access pill, the wait text and the "Check this address"
   flag started at a different position on every row, set by the length of the address before them.
-  `geoff@trypennie.com` against `mrasmussen@trypennie.com` is nine characters, so the three later
+  `a@example.com` against `bjohansson@example.com` is nine characters, so the three later
   fields sat nine characters apart. `flex-wrap` made it worse than a misalignment: on a narrow
   window the flag dropped to a second line on some rows and not others, so the rows stopped
   sharing a shape as well as a grid. Dan reported it from a screenshot of five real rows; two
@@ -6787,7 +6787,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   the section or the column header, not the level you happened to notice it on. The placement is
   invisible at the moment of writing, because the row that prompted it is the only one in front of
   you, and it is invisible in review for the same reason.
-  (Try-Pennie/slate#1760 then #1896, 2026-09-04: two numbers on the bucket editor did not say what
+  (slate#1760 then #1896, 2026-09-04: two numbers on the bucket editor did not say what
   they measured, one being the bucket's depth and the other the whole org roster, so #1760 added two
   clarifying paragraphs. They went inside the per bucket form. Against the live 3 digit XBC matrix
   that is about sixty forms in one scroll, so the page carries roughly 120 lines of the same grey
@@ -6802,7 +6802,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   that a single consumer applies, or assert that the two render the same treatment. The failure is
   silent in both directions: the legend draws, the content draws, and only somebody holding the
   two side by side can see they disagree.
-  (Try-Pennie/slate#1927, 2026-09-04: the availability grid's `CELL_TREATMENTS` carries `cell` and
+  (slate#1927, 2026-09-04: the availability grid's `CELL_TREATMENTS` carries `cell` and
   `swatchExtra`, and only the LEGEND applies `swatchExtra`. The Closed state is `cell:
   "bg-transparent"` with `mark: ""`, so its key showed a bordered empty box while the grid cell
   drew no fill, no border and no glyph, indistinguishable from a cell that failed to render. Dan
@@ -6817,7 +6817,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   change.** Gate on whether the value is still being DECIDED, not on whether it exists yet. The
   condition reads as obviously correct at the call site ("show the code when we have one") while
   producing the exact inverse of what is useful, so nothing about the code looks wrong.
-  (Try-Pennie/slate#1947, 2026-09-04: the booking reasons editor gated both its `Code: ...` line
+  (slate#1947, 2026-09-04: the booking reasons editor gated both its `Code: ...` line
   and its usage line on `r.code` being non-empty. A new row is created with a blank code, and
   `reason-options.ts:142` mints the permanent code from the label server side, only for a new row.
   So the code was printed on every existing row, where renaming the label can never change it, and
@@ -6890,7 +6890,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   repeated row (L579), and write nothing about the interface at all. The test before shipping a
   sentence: would a first time reader who knows the business still need it once they can see the
   heading, the row and the shape of the control? If not, delete it.
-  (Try-Pennie/slate#1836, #1877, #1889, #1890, #1892, #1907, #1915, #1923, #1947, 2026-09-03 to
+  (slate#1836, #1877, #1889, #1890, #1892, #1907, #1915, #1923, #1947, 2026-09-03 to
   04: nine issues in one walk removed interface copy, among it a "Work email address" label with a
   hint reading "The address they sign in to Google with", a standing two line warning describing a
   banner the reader was not looking at, "Set in Salesforce (Agent Manager), and synced hourly",
@@ -6911,7 +6911,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   becomes the whole page loses its own heading, a value under a header carrying the noun becomes
   Yes or No, and a set of states gets one vocabulary derived from one list for the summary, the
   headers and the key.
-  (Try-Pennie/slate#1915, 2026-09-04: five admin pages stated their own title twice, header then
+  (slate#1915, 2026-09-04: five admin pages stated their own title twice, header then
   first section, and two duplicated the description too. #1823: a column headed Bookable where
   every value read Bookable. #1878: a role pill in the page header beside a Role select under it.
   #1955: the unit stated three times per row, thirty times per section. #1799 and #1810: "showing
@@ -6929,7 +6929,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   both themes, at a wide window and a laptop window, before merge, and the screenshot goes in the
   PR body so the reviewer judges the picture. When a person finds by eye what a suite passed, the
   suite's blind spot is the finding (L63).
-  (Try-Pennie/slate#1760, #1784, #1794, #1796 then #1812, #1896, #1947, #1955, 2026-09-02 to 04:
+  (slate#1760, #1784, #1794, #1796 then #1812, #1896, #1947, #1955, 2026-09-02 to 04:
   126 raw checkboxes and 8,755 `<option>` elements on one page, "View as Kenneth Johnson"
   wrapping to three lines so every row was a different height, a tier glyph whose own issue said
   to screenshot it against the full roster first and which shipped anyway and was replaced ("I
@@ -6951,7 +6951,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   fallback surface (error, loading, not found) is a design system one from the first commit, with
   its own class wherever its geometry differs (a select is not an input, a textarea is not an
   input). Keep what the native control gave for free when replacing it (L568).
-  (Try-Pennie/slate#1746, #1849, #1854, #1945, #1970, #1848, #1792, 2026-09-02 to 04: a native
+  (slate#1746, #1849, #1854, #1945, #1970, #1848, #1792, 2026-09-02 to 04: a native
   select inside the product's own account menu ("it looks like a piece of the OS pasted into the
   page, not part of Slate"), 19 native selects across 13 files with the timezone one covering the
   whole browser window, every select in the app borrowing `inputCls`, two admin textareas
@@ -6970,7 +6970,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   different mechanisms and the second is the common case in a console. And a key that commits a
   field must not also submit the form, or the difference between picking a value and writing the
   org's hours is one faint highlight.
-  (Try-Pennie/slate#1769, #1922, #1966, #1968, #1873, #1875, #1970, 2026-09-02 to 04: "Make
+  (slate#1769, #1922, #1966, #1968, #1873, #1875, #1970, 2026-09-02 to 04: "Make
   bookable", the slowest admin action in the app with a live Google call inside it, had no pending
   state and returned void with `revalidatePath("/admin")` from a form on another route ("it
   worked but it didn't immediately look like it did anything"); six saves redirected to
@@ -6992,7 +6992,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   treatment so the exceptions are what stand out. Decide the axis by asking what question the
   person arrives with, and write the chosen order down as a convention so the next table copies it
   rather than picking its own.
-  (Try-Pennie/slate#1942, #1963, #1844, #1749, #1875, #1938, #1748, 2026-09-02 to 04: sixty
+  (slate#1942, #1963, #1844, #1749, #1875, #1938, #1748, 2026-09-02 to 04: sixty
   buckets sorted with the backend digit weighted 100 and the debt tier 10 ("that's not the
   important part. we want to see debt bucket desc"); a row menu opening with keyboard focus on
   "View as", the audited impersonation action, above Manage, the routine one; a roster whose Role
@@ -7010,7 +7010,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   applied as firmly: a control used rarely is demoted or deleted rather than kept prominent and
   re-explained, and a page that is empty by construction becomes a panel on the page people
   already land on, not a route somebody has to remember.
-  (Try-Pennie/slate#1943, #1872, #1767, #1960, #1749, #1795, #1836, 2026-09-02 to 04: a booking's
+  (slate#1943, #1872, #1767, #1960, #1749, #1795, #1836, 2026-09-02 to 04: a booking's
   history behind a toggle that fetched only when opened ("don't hide history. there should be no
   toggle there"); nine cron lanes inside a closed `<details>` ("show the cron lanes all the
   time"); a health page whose sync panel and notices rendered nothing when healthy, so the better
@@ -7028,7 +7028,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   sixth value cannot exist in routing and be missing from the form, and the server refuses anything
   outside the set because the form is never the only writer. An identifier nobody knows by heart
   (a channel id, a zone name) is shown and chosen by its name.
-  (Try-Pennie/slate#1874, #1957, #1849, 2026-09-03 to 04: debt team and backend, the two
+  (slate#1874, #1957, #1849, 2026-09-03 to 04: debt team and backend, the two
   attributes every one of sixty buckets matches on, were comma separated text boxes with a
   placeholder, beside a `role` field nothing reads, while `DEBT_TIER` and `BACKEND` sat in
   `src/lib/xbc.ts` ("they should be idiot proof, with no typos possible"); the Slack destination
@@ -7046,7 +7046,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   something exists, the first is deleted along with the module, the comment and the test that
   defended it, because a reason left standing over code nothing needs is read as a decision (L346,
   L562).
-  (Try-Pennie/slate#1838, 2026-09-03: `AdminPageHeader`'s docstring said it existed because
+  (slate#1838, 2026-09-03: `AdminPageHeader`'s docstring said it existed because
   "thirteen copies of it is how the widths in #1745 ended up disagreeing", and ten pages still
   carried the hand written band it replaced, so restyling the component would have left the
   console visibly half converted. #1745, #1765, #1768, #1792 and #1888: thirteen page widths, two
@@ -7085,7 +7085,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   treatment before spending the palette's one alarm colour on an everyday condition, since a
   colour a routine state already uses cannot make the rare one stand out and may end up stacked
   beside it.
-  (Try-Pennie/slate#2037, 2026-09-07: the "Viewing as <name>. Actions you take happen as them."
+  (slate#2037, 2026-09-07: the "Viewing as <name>. Actions you take happen as them."
   banner was bg-pennie-navy with a pn-btn--primary sky button, and navy also drew the login hero,
   the account and roster avatars, two Pill variants and the OOO stat grid, while sky primary
   buttons appeared at nine sites, so the one surface saying every action lands on somebody else
@@ -7102,7 +7102,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   label was carrying, the separation and the meaning of the break, has to be carried by something
   else in the same change, and the omission rule and the spacing live in different files so
   neither call site looks wrong on its own.
-  (Try-Pennie/slate#2043, 2026-09-07: the admin sidebar suppresses a group's heading when the
+  (slate#2043, 2026-09-07: the admin sidebar suppresses a group's heading when the
   group collapses to one item, because a heading over a single entry promises a section that is
   not there (#1790). "Alerts and floors" became the only Monitoring item when #1960 moved stuck
   deliveries to the health page, so the heading vanished while the 24px between groups margin
@@ -7117,7 +7117,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   somebody clicked is delivered by making the things they did not click jump.** Give it a reserved
   or an out of flow slot, and check every surface the shared component lands on, because a
   vertical list hides the fault a row exposes.
-  (Try-Pennie/slate#2045, 2026-09-07: `LinkPending` renders a spinner as an ordinary child of the
+  (slate#2045, 2026-09-07: `LinkPending` renders a spinner as an ordinary child of the
   nav link, and the spinner owns a horizontal margin by design (#1792). In the admin sidebar, a
   stacked list, that is invisible and had been shipped and reviewed. In the header, a flex row,
   clicking "My Availability" pushed "Team Requests" sideways for the length of the navigation.
@@ -7131,7 +7131,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   what is in it**, and the person whose click was never aimed at the picker gets no warning and no
   undo. Closing on a gesture nobody made about the content keeps the content; only the Cancel
   control and Escape restore the snapshot.
-  (Try-Pennie/slate#2048, 2026-09-07: `DateTimeField` snapshots its six segments when the popup
+  (slate#2048, 2026-09-07: `DateTimeField` snapshots its six segments when the popup
   opens and passes `onClose={cancel}` to `AnchoredPanel`, which fires that on an outside mousedown
   AND on any page scroll outside the panel. So picking a date and then clicking anywhere else, or
   merely scrolling, wrote the old value back over it silently. Dan: "unless I click confirm, it
@@ -7143,7 +7143,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   invisible at the declaration site because each element's own classes are individually
   reasonable.** Give the level a treatment the content cannot have (a size step, small capitals, a
   rule) and check it against the content it heads rather than on its own.
-  (Try-Pennie/slate#2069 and #2070, 2026-09-08: Dan on the alert cooldown groups, "these feel like
+  (slate#2069 and #2070, 2026-09-08: Dan on the alert cooldown groups, "these feel like
   they're supposed to be headers but it's not clear". Five hand rolled group labels across the
   admin area, every one a real `h3` so every accessibility check passed, all five styled
   `text-xs font-semibold`: on the alerts page over rows at that same 12px, so weight was the only
@@ -7159,7 +7159,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   component may lead with an icon, mark or badge.** Derive the offset from what actually leads the
   element and assert the leading mark case, because each call site still reads as correct and only
   the composed screen shows the drift.
-  (Try-Pennie/slate#2082, 2026-09-08: `Pill` gained `alignToColumn` in #1821 to put a table cell's
+  (slate#2082, 2026-09-08: `Pill` gained `alignToColumn` in #1821 to put a table cell's
   pill label under its column header rather than 9px right of it, implemented as `-ml-[9px]`
   cancelling the pill's own border plus padding. `BookablePill` then led with an 8px status dot, so
   the nudge lined the header up with the dot and left the word Yes/No about 12px right of it, while
@@ -7354,7 +7354,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   every other outcome where the record may have changed**, so decide per outcome whether to re-read:
   a timeout must, because unknown is the whole content of its message, and a stale view must, because
   the record demonstrably moved. A refusal or an invalid input changed nothing and needs no re-read.
-  (Try-Pennie/PaperBoi#384, 2026-09-18: the mark paid door called `revalidatePath` only on `applied`,
+  (PaperBoi#384, 2026-09-18: the mark paid door called `revalidatePath` only on `applied`,
   so a timed out press showed "it may still have gone through" beside an invoice still reading Unpaid,
   and a stale view carried the fresh record in its outcome while the fields around it stayed on the
   version that had just been refused. Two of the seven outcomes shipped a screen stating one thing in
@@ -8596,7 +8596,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   rule teaches the inverse and is then defended with the rule's own authority.** Check the example
   against the rule when writing it. And when a premise turns out wrong, hunt it down in every place
   it was recorded rather than only where it was implemented.
-  (Try-Pennie/slate#1824, 2026-09-03: a tier coverage column drew five letters, covered ones dark
+  (slate#1824, 2026-09-03: a tier coverage column drew five letters, covered ones dark
   and uncovered ones faint. I claimed the faint letters had to clear 3:1 because they established
   which position was which, and wrote a contrast guard, a component docstring, two design system
   colour entries and a named rule around it. The premise was wrong: the covered letters are their
@@ -8796,26 +8796,26 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2538, 2026-10-20)
   SHORT: A count toward a page or all clear counts only runs that checked the subject; a slower sweep's gaps read as recovery or break the streak.
 - **L789. A pipeline job that must follow another but tolerate it being skipped is gated with always(), which also tolerates the other one FAILING, so its condition must refuse a failed or cancelled predecessor by name, or a later step ships against an earlier one that never landed.**
-  (Try-Pennie/bidspoke#2510, 2026-10-19)
+  (bidspoke#2510, 2026-10-19)
   SHORT: A job gated with always() to tolerate a skipped predecessor also tolerates a failed one, so refuse a failed or cancelled predecessor by name.
 - **L788. A check that reads another system's status for work it already depends on must wait out that system's reporting lag on a readable 'not finished' or 'not listed yet' before refusing, and refuse at once only on a real failure; retrying only unreadable replies turns a few seconds of lag into a refusal that looks like a verdict.**
-  (Try-Pennie/slate#3926, 2026-10-19)
+  (slate#3926, 2026-10-19)
   SHORT: A check reading another system's status must wait out its lag on a readable not finished or not listed, refusing at once only on a real failure.
 
 - **L787. A sync that skips the records your own system wrote into another system, to avoid reading them back, must still compare those records against your copy, because a person editing them there is otherwise invisible and the two drift with no signal.**
-  (Try-Pennie/slate#3919, 2026-10-19)
+  (slate#3919, 2026-10-19)
   SHORT: A sync skipping records you wrote elsewhere must still compare them to your copy, or a person editing them there drifts the two silently.
 
 - **L778. A work queue that retries permanent failures rarely and also orders by least recently attempted puts those failures at the front every time their retry comes up, so a batch fills with work that cannot succeed and reads as the whole queue failing; drop records that can never succeed rather than backing them off.**
-  (Try-Pennie/slate#3805, 2026-10-16)
+  (slate#3805, 2026-10-16)
   SHORT: Rarely retried permanent failures jump to the front of a least recently attempted queue; drop work that can never succeed instead of backing it off.
 
 - **L777. A repair a request triggers must finish before that request's response whenever the client's next read depends on it, because the client's next request arrives within a second and reads the unrepaired state if the repair runs after the response.**
-  (Try-Pennie/slate#3796, 2026-10-16)
+  (slate#3796, 2026-10-16)
   SHORT: A repair a request triggers must finish before its response when the client's next read depends on it, or that read sees unrepaired state.
 
 - **L774. When several unrelated dependencies slow down or time out in the same minutes, split the latency by the location that ran each call before blaming any one of them, because one degraded hosting location looks exactly like every dependency failing at once and each per-dependency alert names a wrong cause.**
-  (Try-Pennie/bidspoke#2209, 2026-10-15)
+  (bidspoke#2209, 2026-10-15)
   SHORT: When unrelated dependencies all slow at once, split latency by the hosting location before blaming one; a bad location looks like all of them failing.
 
 - **L1025. Every build of an app that declares a URL scheme, a test host or Debug product included,
@@ -8826,7 +8826,7 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A dev or test build declaring the production URL scheme competes for its links, so a link opened with the app closed can launch it on real data.
 
 - **L766. When a deadline stops waiting on a write to another system, record that write as UNKNOWN and have a later step read the target back and resend only if it is absent, because an outcome labelled 'may have finished' that nothing re-checks becomes a silent loss on every slow upstream night.**
-  (Try-Pennie/bidspoke#2015, 2026-10-13)
+  (bidspoke#2015, 2026-10-13)
   SHORT: A write a deadline stopped waiting on is UNKNOWN, so record it and read the target back later, resending only if absent; unchecked it is a silent loss.
 
 - **L1020. A GitHub Actions concurrency group holds one running and one pending run, and a third arrival cancels the pending one even with cancel-in-progress set to false, so a workflow that must handle every event (every commit on main, every finished CI run) keys its group on that event's own identity, never one constant name.**
@@ -10474,7 +10474,7 @@ Read alongside L524 (an injectable sleep from day one), L284 (every seam set or 
   cancelled write leaves a partial one that nothing reports. Nearest neighbours are L301, the
   same work done twice per event, and L307, a job priced in the slots it holds, both of which
   are about paying twice and neither of which sees the hazard.
-  (Try-Pennie/project-enrollment-tracker#1420, 2026-09-10: 16 of 20 workflows carried no
+  (project-enrollment-tracker#1420, 2026-09-10: 16 of 20 workflows carried no
   concurrency block, and a push to a branch whose suite was still running left both going, on a
   maxed 2,000 minute cap with a browser suite measured at 10m28s, 9m59s and about 10 minutes
   across three runs. `ci.yml` wants `cancel-in-progress: true`, keyed on the ref so two pull
