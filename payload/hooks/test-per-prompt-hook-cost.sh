@@ -239,20 +239,24 @@ _ctl="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
 # record already there (a resume, a compaction) must keep it without taking a snapshot at all.
 # The snapshot is the hook's second shasum (the first derives the session's key), so the shasum
 # count says whether one was taken, whatever else the run starts.
-start_launches(){ # start_launches <N> -> processes started by the first SessionStart at depth N
+# Called directly, never inside $(...), so the world it makes is still F for the kept start below.
+start_launches(){ # start_launches <N> -> sets S_COUNT, processes started by the first SessionStart at depth N
   fresh "start$1"; populate rule-files-changed.sh "$1"
   : > "$SHIM_LOG"; run_hook SessionStart rule-files-changed.sh
-  grep -c . "$SHIM_LOG" 2>/dev/null
+  S_COUNT="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
 }
-s_small="$(start_launches "$SMALL")"
-s_large="$(start_launches "$LARGE")"
+start_launches "$SMALL"; s_small="$S_COUNT"
+start_launches "$LARGE"; s_large="$S_COUNT"
 s_seed_sums="$(grep -c '^shasum$' "$SHIM_LOG" 2>/dev/null)"
+s_world="$F"
 echo "  SessionStart rule-files-changed.sh: ${s_small:-0} processes with $SMALL, ${s_large:-0} with $LARGE"
 [ "${s_small:-0}" -gt 0 ] && [ "$s_small" = "$s_large" ] \
   && check "SessionStart hook rule-files-changed.sh starts as many processes with $LARGE of what it reads as with $SMALL ($s_small)" ok \
   || check "SessionStart hook rule-files-changed.sh starts as many processes with $LARGE of what it reads as with $SMALL" "${s_small:-0} with $SMALL, ${s_large:-0} with $LARGE"
 : > "$SHIM_LOG"; run_hook SessionStart rule-files-changed.sh
 s_kept_sums="$(grep -c '^shasum$' "$SHIM_LOG" 2>/dev/null)"
+case "$s_world" in *"/run.start$LARGE."*) s_same=ok ;; *) s_same="the kept start ran in $s_world" ;; esac
+check "the kept start runs in the world the $LARGE deep start recorded in" "$s_same"
 [ "${s_seed_sums:-0}" -eq 2 ] && [ "${s_kept_sums:-0}" -eq 1 ] \
   && check "a SessionStart that keeps its record takes no snapshot (1 shasum, the key, against 2 to take one)" ok \
   || check "a SessionStart that keeps its record takes no snapshot" "shasum ran ${s_kept_sums:-0} times keeping and ${s_seed_sums:-0} taking one, expected 1 and 2"
