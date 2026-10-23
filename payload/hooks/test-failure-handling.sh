@@ -187,6 +187,22 @@ if [ "$got" = "$want" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAI
 # Runnable as a command too, for callers that are not shell (the review runner).
 got="$(bash "$LIB" files < "$WORK/diff" | tr '\n' ' ')"
 if [ "$got" = "$want" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: 'failure-handling.sh files' listed [$got], expected [$want]"; fi
+# The lessons review's input carries whole files after the diff, each headed `===== FULL FILE`
+# (lib/ai-review-common.sh). Their lines are not added lines, even one that happens to begin with +.
+cat > "$WORK/fulldiff" <<'FULL'
+diff --git a/src/clean.ts b/src/clean.ts
+--- a/src/clean.ts
++++ b/src/clean.ts
+@@ -1,0 +2,1 @@
++export const b = 2
+
+
+===== FULL FILE at abc1234: src/clean.ts =====
+export const a = 1
++  } catch (e) { return [] }
+FULL
+got="$(bash "$LIB" files < "$WORK/fulldiff" | tr '\n' ' ')"
+if [ -z "$got" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a FULL FILE section after the diff was read as added lines: listed [$got]"; fi
 got="$(printf '' | bash "$LIB" files; echo "rc=$?")"
 if [ "$got" = "rc=0" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: an empty diff lists nothing and exits 0, got [$got]"; fi
 
