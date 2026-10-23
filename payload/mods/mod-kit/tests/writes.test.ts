@@ -418,6 +418,64 @@ describe('writes: what the words do not name', () => {
   })
 })
 
+// #1586: a script run from a file was read as writing nothing, so `python3 gen.py app/page.tsx`, or
+// the design rounds skill's make-settled.py handed a page under docs/design, changed a screen file
+// with no word naming the write. What it writes cannot be read before it runs, so the reader gives
+// each argument the script is handed, in `runs`, apart from files, changes and unnamed, which every
+// guard judges, as byGit is: a guard that judges what a script's arguments name reads them there.
+describe('writes: a script run from a file, with the arguments it is handed (#1586)', () => {
+  const runs = (command: string, cwd = CWD) => read(command, cwd).runs ?? []
+  test('an interpreter running a script file names the script and each argument after it, as paths', () => {
+    expect(runs('python3 scripts/gen.py app/page.tsx')).toEqual([
+      { what: 'a python3 script file', script: 'scripts/gen.py', path: `${CWD}/scripts/gen.py`, args: [{ word: 'app/page.tsx', path: `${CWD}/app/page.tsx` }] },
+    ])
+    expect(runs('python3 ~/.claude/skills/design-rounds/make-settled.py settled.json docs/design/x.html').map(r => r.args)).toEqual([
+      [
+        { word: 'settled.json', path: `${CWD}/settled.json` },
+        { word: 'docs/design/x.html', path: `${CWD}/docs/design/x.html` },
+      ],
+    ])
+    expect(runs('bash ./tools/fix.sh src/app.css').map(r => [r.what, r.args.map(a => a.path)])).toEqual([['a bash script file', [`${CWD}/src/app.css`]]])
+    expect(runs('node build.mjs --out=dist/site.css').map(r => r.args)).toEqual([[{ word: 'dist/site.css', path: `${CWD}/dist/site.css` }]])
+  })
+  test('a script file run directly, by a path or a script name, is one too', () => {
+    expect(runs('./tools/fix app/page.tsx').map(r => [r.what, r.script, r.args.map(a => a.word)])).toEqual([['a script file run directly', './tools/fix', ['app/page.tsx']]])
+    expect(runs('make-settled.py settled.json docs/design/x.html').map(r => r.args.map(a => a.word))).toEqual([['settled.json', 'docs/design/x.html']])
+    expect(runs('/Users/dan/bin/gen.sh app/page.tsx').map(r => r.path)).toEqual(['/Users/dan/bin/gen.sh'])
+  })
+  test('a cd before it is followed, a variable the command set is read, and a pattern keeps its folder', () => {
+    expect(runs('cd /w/shop && python3 gen.py app/page.tsx').map(r => r.args[0]?.path)).toEqual(['/w/shop/app/page.tsx'])
+    expect(runs('P=/w/shop/app/page.tsx; python3 gen.py "$P"').map(r => r.args)).toEqual([[{ word: '$P', path: '/w/shop/app/page.tsx' }]])
+    expect(runs("python3 gen.py 'app/*.tsx'").map(r => r.args)).toEqual([[{ word: 'app/*.tsx', folder: `${CWD}/app` }]])
+  })
+  test('options, standard input, output redirects, addresses and the interpreter options before the script are no argument', () => {
+    expect(runs('python3 -W ignore gen.py -v -o app/page.tsx < in.txt > log.txt 2>&1').map(r => r.args.map(a => a.word))).toEqual([['app/page.tsx']])
+    // Handed nothing that may name a file, it is given nowhere.
+    expect(runs('python3 fetch.py https://x.dev/page.html host:site.css')).toEqual([])
+    expect(runs('python3 fetch.py https://x.dev/page.html app/page.tsx').map(r => r.args.map(a => a.word))).toEqual([['app/page.tsx']])
+    // The redirect is still a write the reader names, as it always was.
+    expect(paths('python3 gen.py > out.html')).toEqual([`${CWD}/out.html`])
+  })
+  test('a script run in a substitution is read too', () => {
+    expect(runs('x=$(python3 gen.py app/page.tsx)').map(r => r.args.map(a => a.path))).toEqual([[`${CWD}/app/page.tsx`]])
+  })
+  test('what is no script file run names no run: inline code, standard input, a module, awk -f, a plain command', () => {
+    for (const command of [
+      "python3 -c 'print(1)' app/page.tsx",
+      'cat gen.py | python3 - app/page.tsx',
+      'python3 -m tool app/page.tsx',
+      'awk -f prog.awk app/site.css',
+      'cat app/page.tsx',
+      'grep -n x app/page.tsx',
+      'bash ./build.sh',
+      'ls -la && git status',
+    ])
+      expect({ command, runs: runs(command) }).toEqual({ command, runs: [] })
+    // A script with no arguments is given nowhere, so every result without one keeps its shape.
+    expect(read('bash ./build.sh')).toEqual({ files: [], changes: [], unnamed: [] })
+  })
+})
+
 // #712: the collision guard and no build read writes here now, so what each kept that this did
 // not moved in: a file removed, stamped, emptied, made or changed in mode (`changes`, beside the
 // files content is put into, which is all ask before saving reads), a folder removal with its tree,
@@ -505,7 +563,11 @@ describe("writes: the collision guard's cases, carried over (#712)", () => {
     expect(paths('(cd a; (cd b); echo > x); echo > y')).toEqual([`${CWD}/a/x`, `${CWD}/y`])
   })
   test('a read only command writes nothing', () => {
-    expect(read(`cat notes.txt | grep x; sed -n '1,5p' notes.txt; ls -la; git diff; perl -ne 'print' notes.txt; wc < notes.txt; perl -Ilib script.pl x.txt`)).toEqual({ files: [], changes: [], unnamed: [] })
+    const w = read(`cat notes.txt | grep x; sed -n '1,5p' notes.txt; ls -la; git diff; perl -ne 'print' notes.txt; wc < notes.txt; perl -Ilib script.pl x.txt`)
+    expect({ files: w.files, changes: w.changes, unnamed: w.unnamed }).toEqual({ files: [], changes: [], unnamed: [] })
+    // #1586: the script file it runs is given apart, with what it is handed, which no guard judging
+    // files, changes or unnamed writes reads.
+    expect(w.runs?.map(r => [r.script, r.args.map(a => a.word)])).toEqual([['script.pl', ['x.txt']]])
   })
 })
 

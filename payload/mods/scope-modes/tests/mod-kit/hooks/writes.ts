@@ -19,8 +19,10 @@ import { kindOf } from './program.ts'
 // carries, and a shell fed its script is read as the commands it runs, so this keeps no list of
 // interpreters or write idioms of its own. A command substitution the shell runs, on the command line,
 // in an unquoted heredoc's body or in a shell's own script, and a process substitution, is read as
-// the command line it is (#965, #974, #975, commandWrites). What it does not report: a script run
-// from a file (python3 build.py), whose writes no word names and which are not guessed at (#654).
+// the command line it is (#965, #974, #975, commandWrites). A script run from a file (python3
+// build.py, bash x.sh, ./tool, make-settled.py) writes what no word names, which is not guessed at
+// (#654); since #1586 each argument it is handed is given apart, in `runs`, for a guard judging what
+// a script's arguments name (scriptRun).
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
@@ -420,6 +422,26 @@ const CHANGERS: Record<string, { does: ModKitChange['does']; valued: ReadonlySet
 }
 const FIND_FILE_ACTIONS = new Set(['-fprint', '-fprint0', '-fprintf', '-fls'])
 
+// A command run as a script file by its own name (#1586): one whose name ends in a script language's
+// extension (make-settled.py, /Users/dan/bin/gen.sh), or one named by a path from the folder it is in
+// (./tools/fix). A system program named by its whole path (/usr/bin/grep) is neither.
+const SCRIPT_NAME = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|mts|cts|rb|pl)$/
+const runsDirectly = (w: string | undefined) => w !== undefined && (SCRIPT_NAME.test(w) || /^\.\.?\//.test(w))
+// An address (https://x.dev/page.html) is no file here.
+const isAddress = (w: string) => /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(w)
+// Each word a script is handed that may name a file (#1586): an option is none, and one written
+// --name=value gives its value; - is standard input; an address or another machine's path is none.
+const scriptArgs = (args: readonly string[]): string[] => {
+  const out: string[] = []
+  for (const a of args) {
+    const value = /^--?[A-Za-z][\w-]*=(.*)$/.exec(a)?.[1]
+    const w = value ?? a
+    if (!w || w === '-' || (value === undefined && a.startsWith('-')) || isAddress(w) || isRemote(w)) continue
+    out.push(w)
+  }
+  return out
+}
+
 /**
  * The files a Bash call changes, read from the reader's commands (`pipeline`, with the assignments it
  * otherwise drops: `commandWrites`): the files it puts content into, each as written and as an
@@ -436,6 +458,8 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
   const unnamed: ModKitWrites['unnamed'] = []
   // What git itself changes (#1123), kept apart from files and changes, which the guards judge.
   const byGit: NonNullable<ModKitWrites['byGit']> = []
+  // The script files a command runs, with what each is handed (#1586), kept apart as byGit is.
+  const runs: NonNullable<ModKitWrites['runs']> = []
   const byGitAdd = (word: string, at: string | undefined, does: 'write' | 'remove', tree: boolean, from: string | undefined) => {
     // A pathspec read from the top of the checkout (`:/docs`) or with magic (`:(glob)x`) is no path
     // here; a pattern git matches itself, across folders, names no one folder (#1123).
@@ -683,6 +707,28 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
         }
       } else if (g?.sub) for (const [word, does, tree, from] of gitOwn(g.sub, g.args)) byGitAdd(word, g.dir === undefined ? dir : absolutePath(g.dir, dir, home), does, tree, from)
     }
+    // A script file it runs (#1586): an interpreter's script operand (never one on standard input, nor
+    // awk's or sed's program file, whose files are read above), or a script run by its own name. Every
+    // word after it is the script's own argument, each given as a file it may write.
+    // The script's word as the command reads it, variables read as their values.
+    const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
+    if (scriptFile) {
+      const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
+      const handed = at < 0 ? [] : scriptArgs(args.slice(at + 1))
+      if (handed.length) {
+        const path = abs(scriptFile)
+        runs.push({
+          what: kind === undefined ? 'a script file run directly' : `a ${name} script file`,
+          script: asWritten.get(scriptFile) ?? scriptFile,
+          ...(path ? { path } : {}),
+          args: handed.map(w => {
+            const p = abs(w)
+            const folder = p ? undefined : patternFolder(w, dir, home)
+            return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
+          }),
+        })
+      }
+    }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
     // piped in from curl). A shell reaches here only when its script could not be read, since the
@@ -714,7 +760,7 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // A command given its operands by xargs changes files no word names (#730).
     if (c.xargs && writer) unnamed.push({ what: `${name} given its files by xargs`, words: written, inputs: [] })
   }
-  return { files, changes, unnamed, ...(byGit.length ? { byGit } : {}) }
+  return { files, changes, unnamed, ...(byGit.length ? { byGit } : {}), ...(runs.length ? { runs } : {}) }
 }
 
 // The options of git mv, rm, checkout and restore that take the next word as their value.
@@ -806,6 +852,10 @@ const merge = (into: ModKitWrites, from: ModKitWrites) => {
   for (const b of from.byGit ?? []) {
     const list = (into.byGit ??= [])
     if (!list.some(x => sameGitChange(x, b))) list.push(b)
+  }
+  for (const r of from.runs ?? []) {
+    const list = (into.runs ??= [])
+    if (!list.some(x => JSON.stringify(x) === JSON.stringify(r))) list.push(r)
   }
 }
 
