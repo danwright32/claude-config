@@ -80,6 +80,24 @@ export const inFlight = (raw: unknown): InFlight[] | undefined => {
   })
 }
 
+// #1517: what Claude Code says of each task in the same list, by id: its status, or '' when an entry
+// names a task but no status, so a task listed without one is still listed, never read as missing.
+// Undefined when the list is missing or is not a list, which is no reading at all (L10).
+export const listedStatuses = (raw: unknown): Map<string, string> | undefined => {
+  if (!Array.isArray(raw)) return undefined
+  const out = new Map<string, string>()
+  for (const t of raw) {
+    const e = typeof t === 'object' && t !== null ? (t as Record<string, unknown>) : {}
+    if (typeof e.id === 'string' && e.id) out.set(e.id, typeof e.status === 'string' ? e.status : '')
+  }
+  return out
+}
+// Whether Claude Code has finished a task, from what it last said of it: a status it ends tasks with
+// (TaskStop's "is not running (status: completed)", measured on 2.1.309), or 'unlisted', the task
+// left out of a list that had to name it. Any other status, unknown ones included, is not finished.
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'killed', 'stopped'])
+export const harnessFinished = (said: string): boolean => said === 'unlisted' || FINISHED_STATUSES.has(said)
+
 // What a subagent is told when its stop is refused for the work it still holds (#1326).
 export const holdRefusal = (held: InFlight[]): string =>
   `You still hold background work you started: ${held.map(t => `${t.id} (${t.what})`).join(', ')}. ` +
