@@ -566,6 +566,62 @@ R=$(make_repo retrysource 'export const load = () => withRetry(() => fetch(url),
 out=$(run_hook "git push" "$R")
 assert_contains "a retry helper call in source is still advised on" 'L524' "$out"
 
+# --- claude-config#1540: fixed waits and background work are judged by code, not by words ------
+# The #1477 push was told its new suite "waits a fixed time": its fixture arguments, in single
+# quotes, say sleep. Both triggers read the same code only lines as the failure triggers above
+# (lib/failure-handling.sh), so a word in a string or a comment is silent and the construct fires.
+# Real waits and real background work, every shape this suite could think of, still fire (L93).
+fixed_wait_fires() {   # $1 repo name  $2 path  $3 the added line  $4 what it is
+  local r o
+  r=$(make_repo "$1" "$3" "$2")
+  o=$(run_hook "git push" "$r")
+  assert_contains "a real fixed wait still fires: $4" 'waits a fixed time' "$o"
+}
+fixed_wait_fires fw-shell hooks/test-wait.sh 'sleep 0.5   # let the watcher start' "a shell sleep with a comment beside it"
+fixed_wait_fires fw-js src/__tests__/poll.test.ts 'await new Promise(r => setTimeout(r, 5000)) // "settle"' "a setTimeout of 5000 in a test"
+fixed_wait_fires fw-bg hooks/test-bg.sh 'sleep 5 &' "a sleep backgrounded with &"
+fixed_wait_fires fw-nohup hooks/test-nohup.sh 'nohup sleep 30 >/dev/null 2>&1 &' "a nohup sleep"
+fixed_wait_fires fw-bashc hooks/test-bashc.sh "bash -c 'sleep 5; echo done'" "a sleep inside a program handed to bash -c"
+fixed_wait_fires fw-shc hooks/test-shc.sh 'timeout 10 sh -c "sleep 5"' "a sleep inside a double quoted program handed to sh -c"
+fixed_wait_fires fw-close hooks/test-close.sh "' \"\$f\" > \"\$out\"; sleep 2" "a sleep after the close of an awk program opened above"
+fixed_wait_fires fw-subst hooks/test-subst.sh 'out="$(sleep 3; date)"' "a sleep inside a command substitution in double quotes"
+fixed_wait_fires fw-py tests/test_wait.py 'time.sleep(2)  # "settle"' "a Python time.sleep"
+fixed_wait_fires fw-swift Tests/AppTests/WaitTests.swift 'try await Task.sleep(for: .seconds(1)) // "sleep"' "a Swift Task.sleep"
+
+# The same words in strings and comments, one repo holding every case: none of them waits.
+R=$(make_repo fw-words '# sleep 5 until the lock frees, then retry' hooks/test-c1.sh)
+printf '%s\n' "silent fh_retry payload/hooks/fetch.sh 'sleep 1   # exponential backoff, retry' \"the same words only in a comment\"" > "$R/hooks/test-c2.sh"
+printf '%s\n' "fires fh_retry payload/hooks/fetch.sh 'out=\"\$(mt_retry_read 3 2 sleep 30 \"\" reader)\"' \"a shell retry call\"" > "$R/hooks/test-c3.sh"
+printf '%s\n' "R=\$(make_repo sleepy-shell 'sleep 2' hooks/test-lock.sh)" > "$R/hooks/test-c4.sh"
+printf '%s\n' 'echo "sleep 5 would be a fixed wait"' > "$R/hooks/test-c5.sh"
+mkdir -p "$R/src/__tests__" "$R/tests"
+printf '%s\n' 'const label = "sleep 5 then setTimeout(r, 500)"' > "$R/src/__tests__/c6.test.ts"
+printf '%s\n' '// await page.waitForTimeout(500) was flaky, so this waits on the row instead' > "$R/src/__tests__/c7.test.ts"
+printf '%s\n' "msg = 'time.sleep(5) is a fixed wait'  # time.sleep(5)" > "$R/tests/test_c8.py"
+git -C "$R" add -A && git -C "$R" commit -qm words
+out=$(run_hook "git push" "$R")
+assert_absent "sleep and setTimeout named only in strings, comments and fixture arguments do not fire" 'waits a fixed time' "$out"
+
+background_fires() {   # $1 repo name  $2 path  $3 the added line  $4 what it is
+  local r o
+  r=$(make_repo "$1" "$3" "$2")
+  o=$(run_hook "git push" "$r")
+  assert_contains "real background work still fires: $4" 'background work' "$o"
+}
+background_fires bg-interval src/poll.ts 'const id = setInterval(poll, 1000) // "cron"' "a setInterval"
+background_fires bg-queue src/jobs.ts 'await queue.add("send", payload)' "a queue.add"
+background_fires bg-cron hooks/install.sh '( crontab -l; echo "$line" ) | crontab -' "a crontab edit"
+background_fires bg-celery src/jobs.py '@celery_app.task(bind=True)  # "nightly"' "a celery task in Python"
+
+R=$(make_repo bg-words '// runs on a cron every hour, through setInterval' src/a.ts)
+printf '%s\n' 'const label = "queue.add(job) and setInterval(poll)"' > "$R/src/b.ts"
+printf '%s\n' 'echo "the cron entry"  # celery, sidekiq' > "$R/src/c.sh"
+printf '%s\n' "fires trig src/x.ts 'setInterval(poll, 1000)' \"a fixture\"" > "$R/src/test-d.sh"
+printf '%s\n' '"""Runs from cron, see BackgroundTasks."""' > "$R/src/e.py"
+git -C "$R" add -A && git -C "$R" commit -qm words
+out=$(run_hook "git push" "$R")
+assert_absent "cron, setInterval and queues named only in strings and comments do not fire" 'background work' "$out"
+
 # ---- the skip and the sync's own derived file list are one set (claude-config#484) ----
 # claude-sync decides the same question with is_derived_rule_file and the LESSONS_FILE beside it,
 # but claude-sync is NOT installed beside these hooks (the config root holds the hooks, not the
