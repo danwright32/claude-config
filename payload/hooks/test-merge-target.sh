@@ -1168,6 +1168,88 @@ mt_retry_read 3 5 fake_sleep "" "" refused; eq "$?|$calls|$slept" "1|1|" "a refu
 tries_left=9; calls=0; slept=""
 mt_retry_read 3 5 fake_sleep "$SECONDS" "" flaky; eq "$?|$calls|$slept" "2|1|" "no retry is made whose wait would end past the deadline"
 
+echo "merge-target: a sign in GitHub refused is its own outcome, asked again with a fresh token read (claude-config#1615)"
+# On 2026-10-23, at load averages up to 342, merge-when-ready.sh 1606 stopped three times on "HTTP 401:
+# Requires authentication (https://api.github.com/graphql)", which GitHub answers to a request that
+# carried NO token (a token it will not take is "Bad credentials"), and a read seconds later worked.
+# gh reads its token from the keyring on every run, so a 401 is asked again, as its own outcome
+# (MT_SIGNIN_RC), never as a transport fault and never believed the first time.
+for e in \
+  'HTTP 401: Requires authentication (https://api.github.com/graphql)' \
+  'gh: Requires authentication (HTTP 401)' \
+  'HTTP 401: Bad credentials (https://api.github.com/graphql)'; do
+  mt_gh_read_class "$e"; eq "$?" "$MT_SIGNIN_RC" "a refused sign in is its own outcome: $e"
+done
+mt_gh_read_class 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout'; eq "$?" "2" "a transport fault stays transient"
+mt_gh_read_class 'gh: Not Found (HTTP 404)'; eq "$?" "1" "an answer GitHub gave is believed"
+mt_gh_read_class ''; eq "$?" "1" "an empty error is believed"
+eq "$MT_SIGNIN_RC" "6" "the sign in outcome is 6, a code no reader or caller already gives a meaning"
+
+ghstub="$(mktemp -d "${TMPDIR:-/tmp}/mt-ghstub.XXXXXX")"
+# The token read gh answers: MT_TOKEN_MODE empty prints nothing (the keyring read came back empty),
+# anything else prints a stand in. Every call is logged, so the tests see the fresh read was made.
+cat > "$ghstub/gh" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$MT_GH_LOG"
+case "$*" in
+  "auth token"*) [ "${MT_TOKEN_MODE:-present}" = empty ] || echo stand-in-token; exit 0 ;;
+  "auth status"*) exit 0 ;;
+esac
+n="$(cat "$MT_401_LEFT" 2>/dev/null || echo 0)"
+if [ "$n" -gt 0 ]; then
+  echo $((n - 1)) > "$MT_401_LEFT"
+  echo 'HTTP 401: Requires authentication (https://api.github.com/graphql)' >&2; exit 1
+fi
+case "$*" in
+  "pr view"*) echo '{"number":7,"state":"OPEN","url":"https://github.com/acme/widget/pull/7"}' ;;
+  *"actions/runs"*) echo '{"total_count":0,"workflow_runs":[]}' ;;
+  *) echo '{}' ;;
+esac
+EOS
+chmod +x "$ghstub/gh"
+export MT_GH_LOG="$ghstub/log" MT_401_LEFT="$ghstub/left"
+signin_view(){ envelope="$(mt_pr_view 7 "number,state,url" acme/widget acme/widget)"; mt_view_class "$envelope"; }
+signin_api(){ mt_api_read /dev/null "" "repos/acme/widget/contents/x"; }
+signin_runs(){ mt_unfinished_runs acme/widget abc123 ""; }
+for reader in signin_view signin_api signin_runs; do
+  # Refused once, then answered: asked again after one wait, and the answer is taken.
+  echo 1 > "$MT_401_LEFT"; : > "$MT_GH_LOG"; slept=""
+  PATH="$ghstub:$PATH" mt_retry_read 3 5 fake_sleep "" "" "$reader"; rc=$?
+  eq "$rc|$slept|$MT_SIGNIN_REFUSALS" "0| 5|1" "$reader: a sign in refused once is asked again after one wait, then answers"
+  # Refused every time: tried three times in all, then reported as the sign in refused, never as
+  # an answer, and a token read was made after each refusal.
+  echo 9 > "$MT_401_LEFT"; : > "$MT_GH_LOG"; slept=""
+  PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty mt_retry_read 3 5 fake_sleep "" "" "$reader"; rc=$?
+  eq "$rc|$slept|$MT_SIGNIN_REFUSALS" "$MT_SIGNIN_RC| 5 5|3" "$reader: a sign in refused every time is tried three times, then reported refused"
+  eq "$(grep -c '^auth token' "$MT_GH_LOG")" "3" "$reader: a fresh token read after each refusal"
+  eq "$MT_SIGNIN_SEEN" "empty, empty, empty" "$reader: what each token read came to, never the token"
+done
+said="$(mt_signin_said)"
+case "$said" in
+  "GitHub refused the sign in 3 times"*"Requires authentication"*"token read straight after each refusal came back empty, empty, empty"*) pass ;;
+  *) fail "the refused sign in is not said in its own words: $said" ;;
+esac
+case "$said" in *stand-in-token*) fail "the sentence printed the token: $said" ;; *) pass ;; esac
+# A deadline still bounds it: no wait is made that would end past it.
+echo 9 > "$MT_401_LEFT"; slept=""
+PATH="$ghstub:$PATH" mt_retry_read 3 5 fake_sleep "$SECONDS" "" signin_api; eq "$?|$slept" "$MT_SIGNIN_RC|" "a refused sign in waits for nothing past the deadline"
+# An account whose token read comes back empty is the same outcome, said as gh having no token, since
+# GitHub was never asked (L11).
+echo 0 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty mt_api_read /dev/null someone "repos/acme/widget/contents/x"; rc=$?
+eq "$rc" "$MT_SIGNIN_RC" "an account's empty token read is asked again"
+case "$MT_READ_ERR" in *"no token for the account someone"*) pass ;; *) fail "an empty token read is not said as one: $MT_READ_ERR" ;; esac
+rm -rf "$ghstub"
+
+echo "merge-target: a gate run by merge-when-ready.sh takes its read budget from it (claude-config#1615)"
+# A typed merge's gate is killed by the harness at its timeout, so it keeps a budget well inside it;
+# the same gate asked by merge-when-ready.sh runs under no such timeout, and at a load average of 342
+# its 15 seconds were spent before it could read areas.json, twice.
+eq "$(mt_gate_read_budget "" 15)" "15" "a gate's own budget when nothing names another"
+eq "$(MT_GATE_READ_BUDGET_SECONDS=90 mt_gate_read_budget "" 15)" "90" "the budget merge-when-ready.sh hands it"
+eq "$(MT_GATE_READ_BUDGET_SECONDS=90 mt_gate_read_budget 3 15)" "3" "a test's own setting wins"
+eq "$(MT_GATE_READ_BUDGET_SECONDS=lots mt_gate_read_budget "" 15)" "15" "a budget that is not a number is not believed"
+
 echo "merge-target: the push library's reading, not one of its own (claude-config#1040)"
 # This file read commands with its own pair, a bash heredoc stripper then a python segment cutter,
 # beside the reader lib/push-scope.sh uses, and two readers of one command drift (L613, L370): the

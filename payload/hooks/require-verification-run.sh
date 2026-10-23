@@ -49,7 +49,8 @@
 # Deliberate override: ALLOW_UNVERIFIED_MERGE=1 <the same command> (visible in the command).
 #
 # Seams, for the tests: VR_READ_TRIES (3 in all), VR_READ_RETRY_SECONDS (2), VR_READ_BUDGET_SECONDS
-# (15, against a hook timeout of 30), VR_SLEEP (sleep), all chosen, not measured; VR_SCRIPTS (the
+# (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which merge-when-ready.sh sets,
+# when it is unset), VR_SLEEP (sleep), all chosen, not measured; VR_SCRIPTS (the
 # skill's scripts folder); VERIFICATION_HOME (where receipts and the tally live, verification.py).
 
 set -uo pipefail
@@ -138,10 +139,16 @@ pr=$(mt_pr_number "$command")
 # other merge gates use (#1061, #1081), inside a BUDGET measured from the start of this hook in the
 # shell's own SECONDS: no read starts once it is spent, and no retry is made whose wait would end
 # past it. A read that still fails refuses, in block mode or wherever the mode cannot yet be read.
+#
+# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same loop, and one that outlasts the tries
+# refuses as GitHub refusing the sign in N times (lib/merge-target.sh's mt_signin_said), never as GitHub
+# being unreadable (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs this under no
+# harness timeout, the budget is the one it names (mt_gate_read_budget): at a load average of 342 the
+# 15 seconds kept for the harness were spent before areas.json could be read, twice.
 vr_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(vr_num "${VR_READ_TRIES:-}" 3)"
 READ_WAIT="$(vr_num "${VR_READ_RETRY_SECONDS:-}" 2)"
-READ_DEADLINE="$(vr_num "${VR_READ_BUDGET_SECONDS:-}" 15)"
+READ_DEADLINE="$(mt_gate_read_budget "${VR_READ_BUDGET_SECONDS:-}" 15)"
 READ_SLEEP="${VR_SLEEP:-sleep}"
 BUDGET_SPENT="this hook's read budget of $READ_DEADLINE seconds was spent before it could be read"
 read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }
@@ -167,6 +174,7 @@ if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" != "true
     deny "Refusing to merge: no $pr_label was found in $searched under any logged-in account, so there is nothing here to judge. It was looked for there because $searched_why. If it lives in another repository, name that repository with --repo owner/name on the merge, or cd into its checkout before the merge."
   fi
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
+  [ "$view_rc" = "$MT_SIGNIN_RC" ] && deny "Cannot tell whether this merge needs verification runs: $(mt_signin_said "the $pr_label in $searched" "$gh_error"), so whether its base branch asks for verification runs is unknown. $OVERRIDE"
   budget=""
   [ "$view_rc" = 2 ] && budget=", and GitHub did not answer within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)"
   deny "Cannot tell whether this merge needs verification runs: GitHub could not be read for the $pr_label in $searched under any logged-in account (${gh_error:-gh printed nothing})$budget, so whether its base branch asks for verification runs is unknown. $OVERRIDE"
@@ -185,7 +193,7 @@ fi
 
 # One gh api read inside the budget, kept in $1. Returns 0 answered, 3 GitHub's own 404, 1 failed,
 # with VR_FAIL the sentence saying what could not be read and why.
-VR_OUT=""; VR_WHAT=""; VR_FAIL=""; VR_ARGS=()
+VR_OUT=""; VR_WHAT=""; VR_FAIL=""; VR_SIGNIN=""; VR_ARGS=()
 vr__read(){
   if [ "$SECONDS" -gt "$READ_DEADLINE" ]; then
     MT_READ_STATE="unknown"; MT_READ_ERR="$BUDGET_SPENT"; return 1
@@ -194,11 +202,12 @@ vr__read(){
 }
 vr_get(){  # $1 = file for the answer, $2 = what is being read, $3.. = gh api arguments
   local rc
-  VR_OUT="$1"; VR_WHAT="$2"; shift 2; VR_ARGS=("$@"); VR_FAIL=""
+  VR_OUT="$1"; VR_WHAT="$2"; shift 2; VR_ARGS=("$@"); VR_FAIL=""; VR_SIGNIN=""
   read_again vr__read; rc=$?
   case "$rc" in
     0) [ "$MT_READ_STATE" = absent ] && return 3; return 0 ;;
     2) VR_FAIL="$VR_WHAT: $MT_READ_ERR, and GitHub did not answer within this hook's read budget ($READ_TRIES tries, $READ_DEADLINE seconds)" ;;
+    "$MT_SIGNIN_RC") VR_SIGNIN="$(mt_signin_said "$VR_WHAT" "$MT_READ_ERR")"; VR_FAIL="$VR_WHAT, because $VR_SIGNIN" ;;
     *) VR_FAIL="$VR_WHAT: $MT_READ_ERR" ;;
   esac
   return 1
@@ -214,7 +223,8 @@ case "$?" in
   0) ;;
   # The commonest answer by far: this repository has not opted in. Nothing to say.
   3) exit 0 ;;
-  *) deny "Cannot tell whether this merge needs verification runs: GitHub could not be read for $VR_FAIL. $OVERRIDE" ;;
+  *) [ -n "$VR_SIGNIN" ] && deny "Cannot tell whether this merge needs verification runs: $VR_SIGNIN. $OVERRIDE"
+     deny "Cannot tell whether this merge needs verification runs: GitHub could not be read for $VR_FAIL. $OVERRIDE" ;;
 esac
 
 # The judge needs python3, asked only now that the rule is known to apply, so a machine without it

@@ -122,10 +122,16 @@ esac
 # is not made. Seams, for the tests and nothing else: BRM_READ_TRIES (3 in all), BRM_READ_RETRY_SECONDS
 # (2), BRM_READ_BUDGET_SECONDS (12) and BRM_SLEEP (sleep), all chosen, not measured. None can let a
 # merge through: the fewest tries is one, as before.
+#
+# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same loop, and one that outlasts the tries
+# refuses as GitHub refusing the sign in N times (lib/merge-target.sh's mt_signin_said), never as gh
+# failing to read the pull request (claude-config#1615, L11). Asked by merge-when-ready.sh, which runs
+# this under no harness timeout, the budget is the one it names (mt_gate_read_budget); BRM_READ_BUDGET_SECONDS,
+# when set, still wins.
 brm_num(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 READ_TRIES="$(brm_num "${BRM_READ_TRIES:-}" 3)"
 READ_WAIT="$(brm_num "${BRM_READ_RETRY_SECONDS:-}" 2)"
-READ_DEADLINE="$(brm_num "${BRM_READ_BUDGET_SECONDS:-}" 12)"
+READ_DEADLINE="$(mt_gate_read_budget "${BRM_READ_BUDGET_SECONDS:-}" 12)"
 READ_SLEEP="${BRM_SLEEP:-sleep}"
 read_again(){ mt_retry_read "$READ_TRIES" "$READ_WAIT" "$READ_SLEEP" "$READ_DEADLINE" "" "$1"; }
 
@@ -293,7 +299,7 @@ read_view(){
   envelope=$(mt_pr_view "$pr" "number,statusCheckRollup,mergeable,url,headRefOid,baseRefName,mergeStateStatus" "$remote_slug" "$repo_flag")
   mt_view_class "$envelope"
 }
-read_again read_view
+read_again read_view; view_rc=$?
 view_account=""
 if [ "$(printf '%s' "$envelope" | jq -r '.found // false' 2>/dev/null)" = "true" ]; then
   rollup=$(printf '%s' "$envelope" | jq -c '.view')
@@ -314,6 +320,7 @@ else
 fi
 if [ -z "$rollup" ]; then
   gh_error=$(printf '%s' "$envelope" | jq -r '.error // ""' 2>/dev/null)
+  [ "$view_rc" = "$MT_SIGNIN_RC" ] && deny "Cannot verify CI for this PR: $(mt_signin_said "the $pr_label in $searched" "$gh_error"). Merging blind is what this gate exists to stop. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   deny "Cannot verify CI for this PR: gh pr view failed for the $pr_label in $searched under every logged-in account${gh_error:+ ($gh_error)}. Check the PR manually, then re-run with ALLOW_RED_MERGE=1 if it is genuinely green."
 fi
 
@@ -561,6 +568,9 @@ if [ -n "$head_sha" ]; then
   [ -z "$slug" ] && deny "Refusing to merge: nothing here could name the repository PR #$number is in (gh reported no url for it, the merge names none with --repo, and this folder has no GitHub remote), so nothing could read whether CI is still to report on its head ${head_sha:0:7}. Name the repository with --repo owner/name on the merge. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   read_runs(){ mt_unfinished_runs "$slug" "$head_sha" "$view_account"; }
   read_again read_runs; runs_rc=$?
+  if [ "$runs_rc" = "$MT_SIGNIN_RC" ]; then
+    deny "Refusing to merge: $(mt_signin_said "which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug" "$MT_RUNS_ERR"), so nothing here can tell whether CI is still to report on it. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
+  fi
   if [ "$runs_rc" -ne 0 ]; then
     deny "Refusing to merge: could not read which workflow runs GitHub has for PR #$number's head ${head_sha:0:7} in $slug (${MT_RUNS_ERR:-no answer}), so nothing here can tell whether CI is still to report on it. Not knowing is not the same as nothing being left to run: the checks reported so far may be a fast few, with the rest not registered yet. Re-run once GitHub answers. Deliberate override: ALLOW_RED_MERGE=1 <the same command>."
   fi
@@ -619,10 +629,12 @@ case "$command" in
       compare_why=$(awk 'NF { print; exit }' "$errf" 2>/dev/null)
       [ "$errf" != /dev/null ] && rm -f "$errf"
       [ "$compare_rc" -eq 0 ] && return 0
-      mt_gh_transient "$errs" && return 2
-      return 1
+      mt_gh_read_class "$errs" "$view_account"
     }
-    read_again read_compare
+    read_again read_compare; compare_read_rc=$?
+    if [ "$compare_rc" != 0 ] && [ "$compare_read_rc" = "$MT_SIGNIN_RC" ]; then
+      deny "Refusing to merge: $(mt_signin_said "whether PR #$number contains the current tip of its base branch $base_ref${slug:+ in $slug}" "$compare_why"). Not knowing is not the same as being up to date. $behind_override"
+    fi
 
     compare_status=$(printf '%s' "$compare" | jq -r '.status // ""' 2>/dev/null)
     behind_by=$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)

@@ -148,8 +148,9 @@
 # has lasted, see wait_a_look), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
 # may lag its branch's tip before the base is set again to resync it, and how long after that before
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
-# is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
-# with_retries), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
+# or whose sign in GitHub refused is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between,
+# so about a minute, see with_retries), MWR_GATE_READ_BUDGET_SECONDS (90: the read budget handed to
+# the gates it asks, see ask_gate), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
 # and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
 # for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
 # measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
@@ -278,10 +279,16 @@ merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "
 # Hand one gate a PreToolUse payload for the merge command; prints its reason when it refuses.
 # MWR_DELETE_BRANCH tells block-red-merge.sh this run was asked for --delete-branch, which the merge
 # command no longer carries, so the rerun command it suggests keeps it (claude-config#1351).
+# MT_GATE_READ_BUDGET_SECONDS hands each gate a longer read budget than it keeps under the harness
+# (lib/merge-target.sh's mt_gate_read_budget, claude-config#1615): asked from here a gate runs under no
+# hook timeout, and at a load average of 342 require-verification-run.sh spent its 15 seconds before it
+# could read areas.json, twice. MWR_GATE_READ_BUDGET_SECONDS (90) is a setting, not a measurement; a
+# budget only bounds how long a read is asked again, and a read that never answers still refuses.
+GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
 ask_gate(){   # $1 = gate script, $2 = command text
   local payload out rc reason context
   payload="$(jq -nc --arg c "$2" --arg d "$top" '{session_id:"merge-when-ready",cwd:$d,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
-  out="$(printf '%s' "$payload" | MWR_DELETE_BRANCH="$want_delete" bash "$1" 2>&1)"; rc=$?
+  out="$(printf '%s' "$payload" | MWR_DELETE_BRANCH="$want_delete" MT_GATE_READ_BUDGET_SECONDS="$GATE_BUDGET" bash "$1" 2>&1)"; rc=$?
   reason="$(printf '%s' "$out" | jq -r 'select(.hookSpecificOutput.permissionDecision == "deny") | .hookSpecificOutput.permissionDecisionReason' 2>/dev/null)"
   if [ "$rc" -ne 0 ] || [ -n "$reason" ]; then
     printf '%s' "${reason:-$out}"
@@ -304,11 +311,24 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # same injected sleep (L524). A read still failing after that stops exactly as before, naming the
 # last error: nothing merges on an unconfirmed read. A write (update-branch, the merge) is never
 # asked again here: its failure can be a refusal, and it is judged by reading the state it left.
+#
+# A SIGN IN GITHUB REFUSED (a 401) is asked again by the same rule (claude-config#1615): on 2026-10-23,
+# at load averages up to 342, three runs stopped on "HTTP 401: Requires authentication" while waiting
+# their turn, and a read seconds later answered. The reading of it is lib/merge-target.sh's
+# (mt_gh_read_class, MT_SIGNIN_RC), every retry says it as the sign in refused with what a token read
+# straight after came to, and one that outlasts the tries stops as GitHub refusing the sign in N times
+# (signin_or_unread), never as a pull request GitHub could not show (L11).
 READ_TRIES="$(num_or "${MWR_READ_TRIES:-}" 4)"; [ "$READ_TRIES" -ge 1 ] || READ_TRIES=1
 READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
 read_err=""
 reading=""
-announce_retry(){ say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."; }
+announce_retry(){
+  if [ "${2:-}" = "$MT_SIGNIN_RC" ]; then
+    say "GitHub refused the sign in reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}; a token read straight after came back ${MT_SIGNIN_TOKEN:-unread}); asking again in ${READ_WAIT}s."
+  else
+    say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
+  fi
+}
 # The loop itself is mt_retry_read, shared with block-red-merge.sh's own reads (claude-config#1081).
 # A reader answering 5 was refused for GitHub's rate limit (claude-config#1482, lib/gh-poll.sh's
 # ghp_rate_limited): never asked again here, since asking again in seconds is what a rate limit
@@ -333,13 +353,22 @@ rate_pause(){   # $1 = what was asked, $2 = GitHub's answer
   wait_key="pause"; wait_since="$t"; last_said="$t"; last_status=""
 }
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
+# The clause a stop names a failed read with: "could not read <what> (<GitHub's error>, still failing
+# after...)", or, when GitHub refused the sign in on every try, that in its own words (#1615).
+signin_or_unread(){   # $1 = what was being read, $2 = what with_retries returned, $3 = the verb (read)
+  if [ "$2" -eq "$MT_SIGNIN_RC" ]; then
+    mt_signin_said "$1" "${read_err:0:300}"
+  else
+    printf 'could not %s %s (%s%s)' "${3:-read}" "$1" "$read_err" "$(tried "$2")"
+  fi
+}
 read_pr(){   # sets view_env
   local rc
   view_env="$(mt_pr_view "$pr" "number,state,headRefOid,headRefName,baseRefName,isCrossRepository,headRepositoryOwner,headRepository,statusCheckRollup,mergeStateStatus,url" "$slug" "$slug")"
   mt_view_class "$view_env"; rc=$?
   read_err="$MT_VIEW_ERR"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$read_err" && return 5
-  [ "$rc" -eq 1 ] && read_err="${read_err:-no answer}"
+  [ "$rc" -eq 0 ] || read_err="${read_err:-no answer}"
   return "$rc"
 }
 # The workflow runs GitHub has created for the head and not finished (claude-config#1087): sets
@@ -352,6 +381,7 @@ read_runs(){
   return "$rc"
 }
 read_compare(){   # sets compare, crc, behind, base_tip
+  local rc
   compare="$(gh_as api "repos/$slug/compare/$base...$head?per_page=1" 2>&1)"; crc=$?
   behind="$(printf '%s' "$compare" | jq -r '.behind_by // ""' 2>/dev/null)"
   # base_commit is the base branch's tip (measured against git ls-remote, 2026-10-16), read here so
@@ -360,7 +390,7 @@ read_compare(){   # sets compare, crc, behind, base_tip
   case "$behind" in ''|*[!0-9]*) ;; *) return 0 ;; esac
   read_err="${compare:0:300}, exit $crc"
   [ "$crc" -ne 0 ] && ghp_rate_limited "$compare" && return 5
-  [ "$crc" -ne 0 ] && mt_gh_transient "$compare" && return 2
+  if [ "$crc" -ne 0 ]; then mt_gh_read_class "$compare" "$account"; rc=$?; [ "$rc" -eq 1 ] || return "$rc"; fi
   # 3: GitHub cannot find what it was asked to compare. Just after an update that is GitHub not
   # having caught up with the branch (claude-config#1500), which the caller waits through; at any
   # other time it stops as any refused read does.
@@ -382,8 +412,8 @@ read_methods(){
   methods_said=""
   read_err="${out:0:300}, exit $rc"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
-  [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
-  return 1
+  [ "$rc" -ne 0 ] || return 1
+  mt_gh_read_class "$out" "$account"
 }
 # "squash", "squash and rebase", "squash, merge and rebase"
 and_list(){
@@ -411,7 +441,7 @@ choose_method(){
   with_retries "which merge methods $slug allows" read_methods; rrc=$?
   # Refused for the rate limit: paused, and asked again at the next look.
   [ "$rrc" -eq 5 ] && return 5
-  [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and could not read which merge methods $slug allows ($read_err$(tried "$rrc")). Nothing was merged; pass --squash, --merge or --rebase."
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and $(signin_or_unread "which merge methods $slug allows" "$rrc"). Nothing was merged; pass --squash, --merge or --rebase."
   [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch} (or --merge, or --rebase)."
   read -r -a am <<<"$allowed"
   for m in ${am[@]+"${am[@]}"}; do names+=("$(method_name "$m")"); done
@@ -430,8 +460,7 @@ read_back(){   # sets after
   [ "$(printf '%s' "$env" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   read_err="$(printf '%s' "$env" | jq -r '.error // ""' 2>/dev/null)"
   ghp_rate_limited "$read_err" && return 5
-  mt_gh_transient "$read_err" && return 2
-  return 1
+  mt_gh_read_class "$read_err" "$(printf '%s' "$env" | jq -r '.errorAccount // ""' 2>/dev/null)"
 }
 
 # THE BRANCH IS DELETED HERE, NEVER BY gh (claude-config#1337). On 2026-10-19 this merged
@@ -471,8 +500,7 @@ read_ref(){   # sets ref_tip, or ref_gone when the branch is not there
   esac
   read_err="${out:0:300}, exit $rc"
   ghp_rate_limited "$out" && return 5
-  mt_gh_transient "$out" && return 2
-  return 1
+  mt_gh_read_class "$out" "$account"
 }
 # The open pull requests based on the branch, one number a line in stacked. An answer that is not a
 # list is a failed read, never an empty one: "could not list" must not read as "nothing stacked".
@@ -486,8 +514,8 @@ read_stacked(){
   stacked=""
   read_err="${out:0:300}, exit $rc"
   [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
-  [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
-  return 1
+  [ "$rc" -ne 0 ] || return 1
+  mt_gh_read_class "$out" "$account"
 }
 # Moves one pull request onto the merged one's base. A write, so never asked again here; prints
 # GitHub's answer when the base it reports is not the one asked for.
@@ -567,11 +595,11 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
   [ -n "$branch" ] || stop 4 "$said, but GitHub did not name its branch, so no branch was deleted."
   ref_repo="$slug"
   with_retries "branch $branch" read_ref; rrc=$?
-  [ "$rrc" -eq 0 ] || stop 4 "$left: could not read it from GitHub ($read_err$(tried "$rrc")). Delete it by hand, or run the same command again to finish."
+  [ "$rrc" -eq 0 ] || stop 4 "$left: $(signin_or_unread "it from GitHub" "$rrc"). Delete it by hand, or run the same command again to finish."
   [ -z "$ref_gone" ] || stop 0 "$said. Its branch $branch was already deleted."
   [ "$ref_tip" = "$head" ] || stop 4 "$left: it now points at ${ref_tip:0:7}, not the merged head ${head:0:7}, so it holds commits the merge did not."
   with_retries "the pull requests based on $branch" read_stacked; rrc=$?
-  [ "$rrc" -eq 0 ] || stop 4 "$left: could not list the open pull requests based on it ($read_err$(tried "$rrc")), and deleting it would close every one. Run the same command again to finish."
+  [ "$rrc" -eq 0 ] || stop 4 "$left: $(signin_or_unread "the open pull requests based on it" "$rrc" list), and deleting it would close every one. Run the same command again to finish."
   for n in $stacked; do
     case "$n" in ''|*[!0-9]*) stop 4 "$left: GitHub listed '$n' among the pull requests based on it, which is not a number." ;; esac
     if why="$(retarget "$n")"; then moved="$moved #$n"; else failed="$failed #$n ($why)"; fi
@@ -581,7 +609,7 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
   # Judged by the state left, never by the answers: a pull request still based on the branch now
   # (one GitHub said yes about, or one opened meanwhile) would be closed by the delete.
   with_retries "the pull requests based on $branch" read_stacked; rrc=$?
-  [ "$rrc" -eq 0 ] || stop 4 "$left: could not list the open pull requests based on it after moving them ($read_err$(tried "$rrc")). Run the same command again to finish."
+  [ "$rrc" -eq 0 ] || stop 4 "$left: $(signin_or_unread "the open pull requests based on it after moving them" "$rrc" list). Run the same command again to finish."
   if [ -n "$stacked" ]; then
     stop 4 "$left: $(printf '#%s ' $stacked)still based on it after the move, and deleting it would close them. Run the same command again to finish."
   fi
@@ -717,7 +745,7 @@ head_is_tip(){
   with_retries "the tip of $where" read_ref; rrc=$?
   # Refused for the rate limit: paused, and looked at again (claude-config#1482).
   [ "$rrc" -eq 5 ] && return 1
-  [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read the tip of $where ($read_err$(tried "$rrc")), so nothing here can confirm head ${head:0:7} is what the branch holds. Nothing was merged."
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: $(signin_or_unread "the tip of $where" "$rrc"), so nothing here can confirm head ${head:0:7} is what the branch holds. Nothing was merged."
   [ -z "$ref_gone" ] || stop 1 "Stopped: $where of #$pr is not on GitHub, so there is no tip to merge. Nothing was merged; push the branch again, then run the same command again."
   if [ "$ref_tip" = "$head" ]; then lag_since=""; resynced_at=""; return 0; fi
   waitkey="lag:$head"
@@ -818,7 +846,7 @@ while :; do
   with_retries "pull request #$pr" read_pr; rrc=$?
   [ "$rrc" -eq 5 ] && continue
   if [ "$rrc" -ne 0 ]; then
-    stop 1 "Stopped: could not read pull request #$pr in $slug from GitHub ($read_err$(tried "$rrc")). Nothing was merged."
+    stop 1 "Stopped: $(signin_or_unread "pull request #$pr in $slug from GitHub" "$rrc"). Nothing was merged."
   fi
   # Answered: a later rate limit starts again at its first wait (lib/gh-poll.sh).
   ghp_answered
@@ -877,7 +905,7 @@ while :; do
     not_caught_up "GitHub answers 404 comparing head ${head:0:7} with $base"
     continue
   fi
-  [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read whether #$pr contains the tip of $base ($read_err$(tried "$rrc")). Nothing was merged."
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: $(signin_or_unread "whether #$pr contains the tip of $base" "$rrc"). Nothing was merged."
   # A compare answering for a head other than the one updated, or showing it no longer behind, is
   # GitHub having caught up, so a 404 after this is a refusal again.
   { [ "$head" != "$updated_from" ] || [ "$behind" -eq 0 ]; } && catching_up=""
@@ -947,7 +975,7 @@ while :; do
     # one REST call a look at the end of a wait, never during it.
     with_retries "which workflow runs #$pr's head ${head:0:7} has" read_runs; rrc=$?
     [ "$rrc" -eq 5 ] && continue
-    [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read which workflow runs GitHub has for #$pr's head ${head:0:7} ($read_err$(tried "$rrc")), so nothing here can tell whether CI is still to report on it. Nothing was merged."
+    [ "$rrc" -eq 0 ] || stop 1 "Stopped: $(signin_or_unread "which workflow runs GitHub has for #$pr's head ${head:0:7}" "$rrc"), so nothing here can tell whether CI is still to report on it. Nothing was merged."
     if [ -n "$runs_pending" ]; then
       waiting="checks still running (workflow runs not finished: $runs_pending)"
     elif [ "$checks_total" -eq 0 ] && [ $(( $(now) - head_since )) -lt "$GRACE" ]; then
@@ -1016,7 +1044,7 @@ while :; do
   if [ "$rrc" -ne 0 ]; then
     # Unreadable is not "the head moved": say what is known and look again, where the read at the
     # top of the loop either finds it merged or stops naming GitHub's error.
-    say "Could not read #$pr back after the merge command (gh exited $merge_rc: ${merge_out:0:200}; read: ${read_err:-no answer}$(tried "$rrc")); looking again."
+    say "After the merge command (gh exited $merge_rc: ${merge_out:0:200}), $(signin_or_unread "#$pr back" "$rrc"); looking again."
     continue
   fi
   if [ "$(printf '%s' "$after" | jq -r '.state // ""')" = "MERGED" ]; then

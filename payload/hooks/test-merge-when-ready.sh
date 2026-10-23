@@ -59,6 +59,9 @@ fail_read(){
 gone(){ : > "$ST/branch-deleted"; printf 'feat/x\n' >> "$ST/deleted"; cat "$ST/stacked" >> "$ST/closed" 2>/dev/null; : > "$ST/stacked"; }
 case "$*" in
   "auth status"*) exit 0 ;;
+  # The token read made after a refused sign in (claude-config#1615): token-empty makes the keyring
+  # read come back empty. A stand in, never a token shape.
+  "auth token"*) [ -e "$ST/token-empty" ] || echo stand-in; exit 0 ;;
   # The rate limit probe (claude-config#1482): probe holds GitHub's whole answer, headers and body,
   # as `gh api -i` prints it; with none it is a call nothing expected.
   "api -i rate_limit"*)
@@ -239,6 +242,7 @@ STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
 cat > "$STUBS/red-gate.sh" <<'EOS'
 #!/usr/bin/env bash
 cat >> "$ST/red-gate-payloads"; printf '\n' >> "$ST/red-gate-payloads"
+printf '%s\n' "${MT_GATE_READ_BUDGET_SECONDS:-unset}" >> "$ST/red-gate-budgets"
 [ -s "$ST/red-gate-deny" ] && jq -nc --arg r "$(cat "$ST/red-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
@@ -282,6 +286,7 @@ EOS
 cat > "$STUBS/verify-gate.sh" <<'EOS'
 #!/usr/bin/env bash
 cat >> "$ST/verify-gate-payloads"; printf '\n' >> "$ST/verify-gate-payloads"
+printf '%s\n' "${MT_GATE_READ_BUDGET_SECONDS:-unset}" >> "$ST/verify-gate-budgets"
 if [ -s "$ST/verify-gate-deny" ]; then
   jq -nc --arg r "$(cat "$ST/verify-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 elif [ -s "$ST/verify-gate-context" ]; then
@@ -545,6 +550,57 @@ check_eq "#1061 a read back that fails once still reports the merge" "0" "$rc"
 check "#1061 as merged" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
 check_not "#1061 never as a head that moved" "head moved" "$out"
 check_eq "#1061 exactly one merge" "1" "$(count gh-calls 'pr merge')"
+
+# A sign in GitHub refused is asked again too, as its own outcome (claude-config#1615). On 2026-10-23,
+# at load averages up to 342, merge-when-ready.sh 1606 stopped three times on "HTTP 401: Requires
+# authentication" while waiting its turn, and a read seconds later answered: the request had gone out
+# with no token. It is asked again by the same rule, a token read is made after each refusal, and a
+# refusal that outlasts the tries says so in its own words, never as a pull request GitHub could not
+# show (L11). Nothing merges on it.
+SIGNIN='HTTP 401: Requires authentication (https://api.github.com/graphql)'
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1615 a pull request read whose sign in is refused once still merges" "0" "$rc"
+check "#1615 and the merge landed" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1615 after one retry wait" "1" "$(count sleeps '^7$')"
+check "#1615 the retry is said as the sign in refused" "GitHub refused the sign in reading pull request #7 (try 1 of 4" "$out"
+check "#1615 with what the token read straight after came to" "a token read straight after came back present" "$out"
+check_eq "#1615 one token read, after the one refusal" "1" "$(count gh-calls '^auth token')"
+check_not "#1615 the token is never printed" "stand-in" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-down"; : > "$ST/token-empty"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1615 a sign in refused on every try still stops" "1" "$rc"
+check "#1615 said as GitHub refusing the sign in, four times" "GitHub refused the sign in 4 times" "$out"
+check "#1615 naming the pull request it was reading" "reading pull request #7 in acme/widget" "$out"
+check "#1615 with what each token read came to" "came back empty, empty, empty, empty" "$out"
+check_not "#1615 never as a pull request that could not be read" "could not read pull request" "$out"
+check_eq "#1615 nothing merged on a refused sign in" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1615 three retry waits, through the injected sleep" "3" "$(count sleeps '^7$')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'gh: Requires authentication (HTTP 401)' > "$ST/compare-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1615 a compare whose sign in is refused once still merges" "0" "$rc"
+check_eq "#1615 the compare was asked twice" "2" "$(count gh-calls 'compare/')"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' 'gh: Requires authentication (HTTP 401)' > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1615 a compare refused on every try stops" "1" "$rc"
+check "#1615 and says the sign in was refused" "GitHub refused the sign in 4 times" "$out"
+check_eq "#1615 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The gates it asks run under no harness timeout, so they are handed a longer read budget than a typed
+# merge's gate keeps: at a load average of 342 require-verification-run.sh spent its 15 seconds before
+# it could read areas.json, twice (claude-config#1615).
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1615 a green merge" "0" "$rc"
+check_eq "#1615 the verification gate is handed the helper's read budget" "90" "$(sort -u "$ST/verify-gate-budgets" | tr '\n' ' ' | sed 's/ $//')"
+check_eq "#1615 and so is the CI gate" "90" "$(sort -u "$ST/red-gate-budgets" | tr '\n' ' ' | sed 's/ $//')"
 
 # Its default retry pace: about a minute in all, through the injected sleep.
 fresh "$OLD" 0 "$GREEN"

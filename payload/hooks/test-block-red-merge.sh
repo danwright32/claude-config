@@ -27,7 +27,7 @@ trap 'rm -rf "$SLEEP_DIR"' EXIT
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "${BRM_SLEEP_LOG:-/dev/null}"\n' > "$SLEEP_DIR/fake-sleep"
 chmod +x "$SLEEP_DIR/fake-sleep"
 export BRM_SLEEP="$SLEEP_DIR/fake-sleep"
-unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS MWR_DELETE_BRANCH 2>/dev/null || true
+unset BRM_READ_TRIES BRM_READ_RETRY_SECONDS BRM_READ_BUDGET_SECONDS MWR_DELETE_BRANCH MT_GATE_READ_BUDGET_SECONDS 2>/dev/null || true
 passed=0
 failed=0
 
@@ -1522,6 +1522,59 @@ out=$(BRM_READ_BUDGET_SECONDS=0 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
 if denied "$out"; then pass; else fail "#1081 with no retry budget left a failed compare was allowed: $out"; fi
 if [ "$(sleeps)" = 0 ]; then pass; else fail "#1081 a retry was made past the budget ($(sleeps) waits)"; fi
 rm -f "$f"
+
+echo "block-red-merge: a refused sign in is asked again, and said as one (claude-config#1615)"
+# GitHub answering 401 to a request that carried no token, as it did to merge-when-ready.sh 1606 three
+# times at a load average of 342 on 2026-10-23, is asked again; one that outlasts the tries refuses in
+# its own words, never as gh failing to read the pull request (L11), and never allows.
+SIGNIN='HTTP 401: Requires authentication (https://api.github.com/graphql)'
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$SIGNIN")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1615 a pull request read refused once refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1615 the refused sign in was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$SIGNIN" "$SIGNIN" "$SIGNIN" "$SIGNIN" "$SIGNIN")
+out=$(GH_VIEW_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "GitHub refused the sign in 3 times reading the pull request #7"; then pass; else fail "#1615 a pull request read refused every time was not refused as a refused sign in: $out"; fi
+if holds "$out" "gh pr view failed"; then fail "#1615 a refused sign in was said as gh failing: $out"; else pass; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Requires authentication (HTTP 401)")
+out=$(GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1615 a compare refused once refused the merge: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1615 the refused compare was not asked again after one wait ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Requires authentication (HTTP 401)" "gh: Requires authentication (HTTP 401)" "gh: Requires authentication (HTTP 401)")
+out=$(GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "GitHub refused the sign in 3 times"; then pass; else fail "#1615 a compare refused every time was not refused as a refused sign in: $out"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "gh: Requires authentication (HTTP 401)" "gh: Requires authentication (HTTP 401)" "gh: Requires authentication (HTTP 401)")
+out=$(GH_RUNS_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && holds "$out" "GitHub refused the sign in 3 times"; then pass; else fail "#1615 a runs read refused every time was not refused as a refused sign in: $out"; fi
+rm -f "$f"
+
+echo "block-red-merge: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
+# Asked by merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a
+# retry 20 seconds out is refused inside this gate's own 12 and made inside 60. A read that never
+# answers still refuses either way.
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out" && [ "$(sleeps)" = 0 ]; then pass; else fail "#1615 a retry past the gate's own budget was made ($(sleeps) waits): $out"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$RESET")
+out=$(MT_GATE_READ_BUDGET_SECONDS=60 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAILS="$f" run_hook "$dir" "$PINNED")
+if denied "$out"; then fail "#1615 a retry inside the helper's budget was not made: $out"; else pass; fi
+if [ "$(sleeps)" = 1 ]; then pass; else fail "#1615 the retry inside the helper's budget was not waited for once ($(sleeps) waits)"; fi
+rm -f "$f"
+: > "$BRM_SLEEP_LOG"
+out=$(MT_GATE_READ_BUDGET_SECONDS=60 BRM_READ_RETRY_SECONDS=20 GH_COMPARE_FAIL=1 run_hook "$dir" "$PINNED")
+if denied "$out"; then pass; else fail "#1615 a compare that never answered was allowed inside the helper's budget: $out"; fi
 rm -rf "$dir"
 
 echo "block-red-merge: a red merge in every command position is refused (#1040)"
