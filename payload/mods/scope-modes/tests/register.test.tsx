@@ -288,6 +288,8 @@ type Opts = {
   work?: Record<number, string>
   /** What pmset says this Mac is drawing power from (#844), or how it fails (#1545). */
   power?: 'ac' | 'battery' | { fails: string }
+  /** Another session records the next power change, with this source, just before this one's ln of it (#1545). */
+  powerRacedBy?: string
   caffeinateFails?: boolean
   /** The session is in no repository (#844). */
   noRepo?: boolean
@@ -432,6 +434,8 @@ const world = (on: On, o: Opts = {}) => {
     workAsked: [] as string[],
     caffeinated: [] as string[],
     killed: [] as string[],
+    /** How many times pmset was asked what the Mac draws from (#1545). */
+    powerReads: 0,
     /** Every opening of a file in BBEdit that succeeded, as run (#837). */
     opened: [] as string[][],
     /** Every transcript whose goal was read (#1242). */
@@ -523,6 +527,10 @@ const world = (on: On, o: Opts = {}) => {
       const [from, to] = ops as [string, string]
       if (o.lnFails && to.endsWith('/current.json')) return fail(1, `ln: ${to}: ${o.lnFails}`)
       if (o.markerFails && !to.endsWith('/current.json')) return fail(1, `ln: ${to}: ${o.markerFails}`)
+      if (o.powerRacedBy && to.includes('/state/sleep/power/')) {
+        w.files[to] = o.powerRacedBy
+        o.powerRacedBy = undefined
+      }
       if (to in w.files) return fail(1, `ln: ${to}: File exists`)
       if (!(from in w.files)) return fail(1, `ln: ${from}: No such file or directory`)
       w.files[to] = w.files[from] as string
@@ -639,6 +647,7 @@ const world = (on: On, o: Opts = {}) => {
       return ok(`${JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, sentinel: true, condition: g } })}\n`)
     }
     if (cmd === 'pmset') {
+      w.powerReads++
       const p = w.o.power
       if (typeof p === 'object') return fail(1, p.fails)
       return ok(p === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
@@ -4884,6 +4893,79 @@ test('a refusal whose notification cannot be sent says so in the reply and the l
   )
   expect(w.logs).toContain('scope-modes: /sleep was refused, and the notification saying so could not be sent: terminal-notifier: no permission to notify')
   expect(w.files[CURRENT]).toBeUndefined()
+})
+
+// The overnight power watch (#1545), on the minute's existing tick: a change of source is notified
+// once, however many minutes, sessions or restarts see it.
+const POWER = `${SLEEP}/power/g0`
+const ONTO_BATTERY = 'This Mac went onto battery power while sleep mode is on, so the night of work will drain it. Plug it back in.'
+const BACK_ON_MAINS = 'This Mac is plugged in again, so sleep mode carries on with the night on mains power.'
+const powerFiles = (w: { files: Record<string, string> }) => Object.keys(w.files).filter(f => f.startsWith(`${POWER}/`)).sort()
+
+test('asleep, a run of minutes on battery notifies once, and coming back onto mains once more (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.powerReads).toBe(1)
+  expect(w.notified).toEqual([])
+  w.o.power = 'battery'
+  for (let n = 0; n < 5; n++) await clock.advance(MIN)
+  expect(w.notified).toEqual([ONTO_BATTERY])
+  expect(w.files[`${POWER}/1`]).toBe('battery')
+  w.o.power = 'ac'
+  for (let n = 0; n < 3; n++) await clock.advance(MIN)
+  expect(w.notified).toEqual([ONTO_BATTERY, BACK_ON_MAINS])
+  expect(w.files[`${POWER}/2`]).toBe('ac')
+  // No temporary file is left beside the changes, and sleep mode carries on through it all.
+  expect(powerFiles(w)).toEqual([`${POWER}/1`, `${POWER}/2`])
+  expect(w.files[CURRENT]).toBeDefined()
+})
+
+test('a session started again after the change was recorded says nothing more (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker(), [`${POWER}/1`]: 'battery' }, power: 'battery' })
+  await start($ as never, clock)
+  for (let n = 0; n < 3; n++) await clock.advance(MIN)
+  expect(w.powerReads).toBe(3)
+  expect(w.notified).toEqual([])
+})
+
+test('a change another session recorded first is not notified again here (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, power: 'battery', powerRacedBy: 'battery' })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.notified).toEqual([])
+  expect(powerFiles(w)).toEqual([`${POWER}/1`])
+})
+
+test('a power reading it cannot make changes nothing and is logged, never guessed (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, power: { fails: 'pmset: IOPS unavailable' } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(w.notified).toEqual([])
+  expect(powerFiles(w)).toEqual([])
+  expect(w.logs).toContain('scope-modes: the overnight power check could not tell what this Mac draws from: whether this Mac is on battery could not be read (pmset: IOPS unavailable)')
+})
+
+test('a notifier that fails is logged, the change stays recorded and is not sent again, and sleep mode carries on (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepWorker() }, power: 'battery', notifyFails: true })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.logs.filter(l => l.includes('while asleep, and the notification'))).toEqual([
+    "scope-modes: the Mac's power changed to battery while asleep, and the notification saying so could not be sent: terminal-notifier: no permission to notify",
+  ])
+  expect(w.files[`${POWER}/1`]).toBe('battery')
+  expect(w.files[CURRENT]).toBeDefined()
+})
+
+test('awake, the minute never reads the power (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { power: 'battery' })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.advance(MIN)
+  expect(w.powerReads).toBe(0)
+  expect(w.notified).toEqual([])
 })
 
 test('wake never stops another caffeinate that took the hold\'s process number (#844)', withDeps, async ($, on) => {
