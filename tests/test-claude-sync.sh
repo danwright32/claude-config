@@ -17061,8 +17061,9 @@ check "#1541 and keeps no more than SUITE_SECTION_SAMPLES of them" \
 printf '466 98 x 120\n' > "$_hy_store/== mangled =="
 check "#1541 a reading that is not a whole number is skipped, never read as zero" \
   "[ \"\$(printf '== mangled ==\n' | SUITE_SECTION_TIMINGS=\"\$_hy_store\" suite_section_seconds_each quickest | cut -f2,3)\" = '98${_hy_tab}3' ]"
-# The incident: this run stretched the slow section to 466 s, and its record holds 98 s from a
-# quieter run, so the section is judged at 98 s, from four readings.
+# The incident of 2026-10-22: that run stretched a section to 466 s, and the slowest section a quiet
+# run records is about 98 s (this Mac's store, read 2026-10-23), so here the section is judged at
+# its quickest reading, from four.
 _hy_y="$(printf '000466\t== slow ==\n000010\t== quick ==\n' | SUITE_SECTION_TIMINGS="$_hy_store" suite_section_yardstick)"
 check "#1541 a section one run stretched is judged by its quickest recent reading ($_hy_y)" \
   "[ \"\$_hy_y\" = '98${_hy_tab}4${_hy_tab}== slow ==' ]"
