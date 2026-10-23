@@ -449,7 +449,8 @@ SHA_SLOW="$(G rev-parse HEAD)"
 # the fake's own one minute ceiling). Whether the deadline stopped it is judged by what is left, never
 # by elapsed time (#1577, L290): the review never reached its own end, and its process is gone. This
 # was "the finished file lands within 12 s of the push", a fixed time that load can reach with
-# nothing broken. The wait below is on the finished file, with a ceiling only a hang reaches.
+# nothing broken. The wait below is on the finished file, with a ceiling only a hang reaches. Every
+# number here is one the suite sets, not a measurement.
 AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_HOLD="$WORKDIR/never-released" fire_push "git push origin main" 0
 check "the slow review still starts" "started in the background" "$OUT"
 t0="$(ms)"

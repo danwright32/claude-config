@@ -120,7 +120,8 @@
 #
 # And one every mod's tests, mod-kit's own included, must take from mod-kit (#1577): `test` itself,
 # from mod-kit's tests/hang-ceiling.ts, whose limit per test only a hang reaches. The runner's own
-# `test` gives each test 5,000 ms of wall clock and has no file wide or global setting, so a file
+# `test` gives each test 5,000 ms of wall clock (its setting, not a measurement) and has no file
+# wide or global setting, so a file
 # taking it from 'claude-code/testing' is judged by how busy the Mac is. Read by ts_source.py
 # kit-test-takers, comments taken out, in any spelling of the import.
 #

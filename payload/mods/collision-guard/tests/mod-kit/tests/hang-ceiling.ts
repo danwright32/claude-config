@@ -8,11 +8,11 @@
 // it is told otherwise, and has no file wide or global setting (only `timeoutMs` on each test).
 // Nothing in these tests judges real time: they run on the test clock (`mock.clock`), so the 5,000 ms
 // was the only real time limit any of them had, a fixed number, and it measured the machine (L290).
-// On 2026-10-23 at 16:24 ET, twenty copies of mod-kit's tests at once beside 96 busy loops and 60
-// process launching loops (load average 220 to 346 on 12 cores) failed 20 of 20, with 490 tests
+// On 2026-10-23 at 16:39 ET, twenty copies of mod-kit's tests at once beside 96 busy loops and 60
+// process launching loops (load average 80 to 413 on 12 cores) failed 20 of 20, with 754 tests
 // "timed out after 5000 ms" and nothing broken; the slowest of them takes 450 to 500 ms on a quiet
-// Mac. Taking `test` from here, twenty copies under the same load at 16:43 ET passed 20 of 20, the
-// slowest test at 11,910 ms. Account-room's tests failed the same way in #1541, which set two minutes
+// Mac. Taking `test` from here, twenty copies in the same window at 16:43 ET (load 303 to 369)
+// passed 20 of 20, the slowest test at 11,910 ms. Account-room's tests failed the same way in #1541, which set two minutes
 // for that one file, and Dan kept it (2026-10-23). This is that two minutes, for every mod, held once.
 //
 // A test that never finishes still fails, two minutes in, naming itself. A test that is merely slow
