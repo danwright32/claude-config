@@ -143,6 +143,54 @@ check "#1478 and says the payload could not be read" "could not read the hook pa
 out="$(payload "ls -la" | bash "$LONE/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1478 control: a command naming neither passes in silence even with the reader missing" "0|" "$rc|$out"
 
+# 4b. A note to the issue spool is data, not a command (claude-config#1574). `issue-spool.sh note`
+# hands every argument after `note` to python as a string and runs none of them, so a finding whose
+# quoted text names git, gh or rtk passes. Only that script, only that subcommand, only a call of it
+# alone, and only where each of those words sits inside an argument quoted whole: everything else is
+# refused exactly as before. Every command below is one an agent would run; none is run here.
+SPOOL='~/.claude/hooks/lib/issue-spool.sh'
+allowed "a spool note whose text says git push" "bash $SPOOL note . \"git push was refused, gh pr view and rtk too\" \"builder #1574\""
+allowed "a spool note in single quotes" "bash $SPOOL note . 'the gh poll loop' 'builder #1574'"
+allowed "a spool note naming git only in its reporter" "bash $SPOOL note . \"a finding\" \"git builder\""
+allowed "a spool note through the absolute path" "bash $HOME/.claude/hooks/lib/issue-spool.sh note . \"git push\" \"builder\""
+allowed "a real refused note from 2026-10-23, a quote inside the text" "bash $SPOOL note . \"gh's own fixed interval in 'gh pr checks --watch --interval 60', at ~/.claude/state/gh-poll/<session>/pause\" \"builder #1482\""
+refused "the words outside the quotes" "bash $SPOOL note . git push \"builder\"" "bash"
+refused "a word half quoted" "bash $SPOOL note . git\" push\" \"builder\"" "bash"
+refused "a different script" "bash ~/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"a git push guard\"" "bash"
+refused "the spool's other subcommands" "bash $SPOOL clear . \"git push\"" "bash"
+refused "a script of the same name elsewhere" "bash ./issue-spool.sh note . \"git push\" \"builder\"" "bash"
+refused "the spool's path through a variable" "bash \$HOME/.claude/hooks/lib/issue-spool.sh note . \"git push\" \"builder\"" "bash"
+refused "a substitution inside the note" "bash $SPOOL note . \"\$(git push)\" \"builder\"" "bash"
+refused "backticks inside the note" "bash $SPOOL note . \"\`git push\`\" \"builder\"" "bash"
+refused "a quote that never closes" "bash $SPOOL note . \"git push \"x\" \"builder\"" "bash"
+refused "a chained second command" "bash $SPOOL note . \"a finding\" \"builder\" && git push" "bash"
+refused "a chained second command whose words are quoted" "bash $SPOOL note . \"x\" \"y\"; bash ./build.sh \"git\"" "bash"
+refused "a note piped on" "bash $SPOOL note . \"git push\" \"builder\" | sh" "bash"
+refused "an assignment before the spool" "CLAUDE_ISSUE_SPOOL_MIDCLEAR='git push' bash $SPOOL note . \"x\" \"y\"" "bash"
+refused "a shell option before the spool" "bash -x $SPOOL note . \"git push\" \"builder\"" "bash"
+refused "another shell running the spool" "sh $SPOOL note . \"git push\" \"builder\"" "sh"
+refused "a note redirected" "bash $SPOOL note . \"git push\" \"builder\" > out.txt" "bash"
+rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+judge "bash $SPOOL note . \"git push was refused\" \"builder #1574\""
+check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" "$([ -e "$LEDGER" ] && echo present || echo absent)"
+
+# The scripts whose arguments are data are declared in one place, the guard, and a second entry is
+# a decision to review, never a line to slip in: this fails until the test is changed with it.
+declared="$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK" | grep -c '^  "')"
+check_eq "#1574 one script subcommand is declared as taking data, the spool's note" "1" "$declared"
+check "#1574 and it is the spool's note" '  "~/.claude/hooks/lib/issue-spool.sh note"' "$(sed -n '/^DATA_ARGUMENT_SCRIPTS=(/,/^)/p' "$HOOK")"
+
+# A reader that cannot judge the note is a refusal, never a pass: here it lacks the mode that reads
+# the quoting, as an older shell-words.py installed beside a newer guard would.
+OLDREADER="$WORKDIR/oldreader"; mkdir -p "$OLDREADER/lib"
+cp "$HOOK" "$OLDREADER/"
+cp "$DIR/lib/push-scope.sh" "$OLDREADER/lib/"
+sed 's/mode == "data-blanked"/mode == "not-a-mode-1574"/' "$DIR/lib/shell-words.py" > "$OLDREADER/lib/shell-words.py"
+out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1574 a reader that cannot read the note's quoting refuses it" "2" "$rc"
+out="$(payload "bash $SPOOL note . \"a finding\" \"builder\"" | bash "$OLDREADER/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1574 control: a note naming none of the three passes with that reader" "0|" "$rc|$out"
+
 # 5. Every refusal is recorded (claude-config#1492): one tab separated line of time, Mac, wrapper,
 # reason category and outcome, so how often the refusal fires, and on what, can be read after a week
 # of real use. Never the command, never a path: a script file's name is somebody's content.

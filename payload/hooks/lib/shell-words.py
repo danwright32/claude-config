@@ -1204,6 +1204,84 @@ def read(s):
     return "".join(out), 3 if crude else 0
 
 
+# A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
+# commands are in the file, so check-wrapped-commands.sh refuses it beside any word git, gh or rtk,
+# quoted argument text included. A few script subcommands are known to run none of their arguments
+# (issue-spool.sh's note hands each to python as a string), and the guard declares them; for one of
+# them, called alone, the words inside its arguments are data. data_blanked() reads that one shape and
+# nothing else: the command as written with every argument after the subcommand that is quoted whole
+# replaced by '', so the guard can look for git, gh and rtk in what is left; None for any other
+# shape, which the guard refuses exactly as before. Anything a shell would do more than split words
+# and remove quotes ends the reading with None: an operator, a redirection, a substitution or
+# variable (a $ or a backtick, quoted or not), a backslash, a glob or brace outside quotes, a comment,
+# an assignment or option before the script, a newline outside quotes, a quote that never closes.
+DATA_UNQUOTED_REFUSED = set(";&|<>()$`\\*?[]{}!#\n")
+
+
+def _data_words(s):
+    """(raw, value, quoted_whole) for each word of s, or None when s holds anything past plain words
+    and quotes (DATA_UNQUOTED_REFUSED, a $ or backtick inside double quotes, a quote never closed)."""
+    words, raw, value, quoted, unquoted, k = [], "", "", False, False, 0
+    s = s.strip(" \t\n")
+    while k < len(s):
+        ch = s[k]
+        if ch in " \t":
+            if raw:
+                words.append((raw, value, quoted and not unquoted))
+                raw, value, quoted, unquoted = "", "", False, False
+            k += 1
+            continue
+        if ch == "'":
+            end = s.find("'", k + 1)
+            if end < 0:
+                return None
+            raw += s[k:end + 1]; value += s[k + 1:end]; quoted = True
+            k = end + 1
+            continue
+        if ch == '"':
+            j, piece = k + 1, ""
+            while j < len(s) and s[j] != '"':
+                if s[j] in "$`":
+                    return None
+                if s[j] == "\\" and j + 1 < len(s) and s[j + 1] in '"\\\n':
+                    piece += s[j + 1]; j += 2
+                    continue
+                piece += s[j]; j += 1
+            if j >= len(s):
+                return None
+            raw += s[k:j + 1]; value += piece; quoted = True
+            k = j + 1
+            continue
+        if ch in DATA_UNQUOTED_REFUSED:
+            return None
+        raw += ch; value += ch; unquoted = True
+        k += 1
+    if raw:
+        words.append((raw, value, quoted and not unquoted))
+    return words
+
+
+def data_blanked(s, declared, home):
+    """s with every argument quoted whole after a declared script subcommand replaced by '', when s is
+    exactly `bash <script> <subcommand> <arguments>` for one of declared ("<path> <subcommand>", the
+    path under ~/), else None. The script is matched on its whole path, written ~/ or from home, so a
+    script of the same name elsewhere is no match."""
+    words = _data_words(s)
+    if not words or len(words) < 3 or words[0][0] != "bash" or not home.startswith("/"):
+        return None
+    raw_path, path, _ = words[1]
+    if raw_path.startswith("~/"):
+        path = home.rstrip("/") + raw_path[1:]
+    for entry in declared:
+        script, _, sub = entry.rpartition(" ")
+        if not script.startswith("~/") or not sub:
+            continue
+        if path == home.rstrip("/") + script[1:] and words[2][1] == sub:
+            kept = [w[0] for w in words[:3]] + ["''" if whole else r for r, _, whole in words[3:]]
+            return " ".join(kept)
+    return None
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     data = sys.stdin.read()
@@ -1218,6 +1296,13 @@ def main(argv):
         sys.stdout.write(program_field(data)[2])
     elif mode == "bare":
         sys.stdout.write(bare(data))
+    elif mode == "data-blanked":
+        # The declared script subcommands are the arguments; exit 1, printing nothing, for any other
+        # shape (claude-config#1574).
+        shown = data_blanked(data, argv[2:], os.environ.get("HOME", ""))
+        if shown is None:
+            return 1
+        sys.stdout.write(shown)
     elif mode == "read":
         text, rc = read(data)
         sys.stdout.write(text)
@@ -1236,7 +1321,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text, or data-blanked '<path> <subcommand>'... < text\n")
         return 64
     return 0
 
