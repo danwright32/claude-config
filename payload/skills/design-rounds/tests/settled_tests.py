@@ -221,6 +221,57 @@ check("a design in one captured page names no chrome on its frames and keeps one
       sm is not None and '"chrome"' not in sm.group(1) and "DR_TEMPLATES" not in src and "DR_TEMPLATE = " in src,
       sm.group(1) if sm else src[-1500:])
 
+# --- the seal the design round guard reads (claude-config#1524) ---------------------------------------
+# Dan, 2026-10-23, on #1524: "Let it through". A settled design committed under docs/design passes the
+# design round guard only while its text is exactly what make-settled.py sealed. The guard runs this
+# check, `python3 -I design_file.py --sealed` with the text on its standard input, so it is run here in
+# that same form, on make-settled.py's own output.
+DESIGN_FILE = os.path.join(SKILL, "design_file.py")
+
+
+def sealed_check(text, args=("--sealed",)):
+    """design_file.py run as the design round guard runs it: its exit code and what it said."""
+    data = text if isinstance(text, bytes) else text.encode("utf-8")
+    p = subprocess.run(["python3", "-I", DESIGN_FILE] + list(args), input=data, capture_output=True)
+    return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
+
+
+rc, said = sealed_check(src)
+check("make-settled.py's own output reads as a settled design, sealed as written", rc == 0, said)
+check("and the seal is the file's one last line, after the page",
+      src.endswith("\n") and src.rstrip("\n").splitlines()[-1].startswith("<!-- design-settled sha256:")
+      and src.count("<!-- design-settled sha256:") == 1, src[-300:])
+rc, said = sealed_check(src.rstrip("\n"))
+check("a copy that lost its final newline is still the same design", rc == 0, said)
+edited = src.replace("calls open", "calls waiting")
+rc, said = sealed_check(edited)
+check("the same file with one frame's drawing edited is not sealed, saying it changed",
+      edited != src and rc == 1 and "changed since make-settled.py sealed it" in said, said)
+retitled = src.replace("<h3>Tuesday ", "<h3>Tuesday, light ", 1)
+rc, said = sealed_check(retitled)
+check("nor with a frame's heading edited", retitled != src and rc == 1 and "changed since" in said, said)
+unsealed = src[:src.rstrip("\n").rfind("\n") + 1]
+rc, said = sealed_check(unsealed)
+check("a settled design with no seal (one written before #1524) is not sealed, saying so",
+      unsealed.endswith("</body></html>\n") and rc == 1 and "carries no seal" in said, said)
+import design_file  # noqa: E402
+blockless = design_file.seal(unsealed.replace('id="decision-map"', 'id="decision-mop"'))
+rc, said = sealed_check(blockless)
+check("a sealed page with no decision-map block is not a settled design", rc == 1 and "decision-map" in said, said)
+rc, said = sealed_check(design_file.seal(unsealed.replace('id="design-frames"', 'id="design-framez"')))
+check("nor one with no design-frames block", rc == 1 and "design-frames" in said, said)
+check("sealing the page again gives the same file, so the seal is a function of the page alone",
+      design_file.seal(unsealed) == src, src[-200:])
+rc, said = sealed_check(src.encode("utf-8") + b"\xff")
+check("text that is not UTF-8 is not sealed", rc == 1 and "UTF-8" in said, said)
+# What the seal cannot prove: who sealed. A page edited and then sealed again with design_file.seal, as
+# make-settled.py seals, passes. It proves the text is unchanged since sealing, which is the hand edit
+# the guard holds, and says nothing about whether the edit was Dan's design.
+rc, said = sealed_check(design_file.seal(edited[:edited.rstrip("\n").rfind("\n") + 1]))
+check("an edited page sealed again passes, so the seal proves unchanged since sealing, not who sealed", rc == 0, said)
+rc, said = sealed_check(src, args=())
+check("run with no flag it says how it is run, exit 2", rc == 2 and "--sealed" in said, said)
+
 # --- a design whose frames were captured from different pages (claude-config#1474) -------------------
 # Bidspoke's lead validation design (try-pennie/bidspoke#2590) had its panel captured in edit mode and its
 # card in view mode, so it was split into two settled files. Each frame now names the captured page it

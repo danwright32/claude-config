@@ -1907,6 +1907,33 @@ export const unreadPutBack = (file: string, why: string): string =>
   `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
 
 /**
+ * Whether a path inside its checkout is where a settled design is committed (#1524): an HTML page, the
+ * only kind make-settled.py writes, under docs/design at the checkout's top, read in any case, as the
+ * Mac's disk reads it; a stylesheet or component there is judged as any is (lessons review). Such a file passes unasked while
+ * the design rounds skill's own check (sealCheck) says the text the call leaves is exactly what
+ * make-settled.py wrote and sealed. The check is never copied here, so what the seal covers is decided in
+ * one place, the skill's design_file.py, which make-settled.py seals with (L370).
+ */
+export const isDesignRecord = (rel: string): boolean => /^docs\/design\/[^/].*\.html?$/i.test(rel) && !rel.split('/').includes('..')
+
+/** The design rounds skill's check of a settled design's seal (#1524), the text on its standard input; `-I` so nothing in the folder it runs in is imported. */
+export const sealCheck = (home: string): string[] => ['python3', '-I', `${home}/.claude/skills/${SKILL}/design_file.py`, '--sealed']
+
+const SETTLED_WAYS = 'which goes through unasked when it is written with the Write tool, copied in whole by a cp alone, or put back by a git checkout or restore alone'
+
+/** What a refusal says of a file under docs/design the seal check read as no settled design, in its words (#1524). */
+export const settledNotSealed = (file: string, why: string): string =>
+  `${file} is not a settled design exactly as make-settled.py wrote it (${why}), so it was judged as any look change is.`
+
+/** What a refusal says of a file under docs/design whose text the call leaves could not be read before it runs (#1524). */
+export const settledUnread = (file: string, why: string): string =>
+  `The design round guard could not read what this call leaves in ${file} (${why}), so it could not tell whether it is a settled design exactly as make-settled.py wrote it, ${SETTLED_WAYS}.`
+
+/** What a refusal says of a file under docs/design whose seal could not be checked (#1524): held, never passed. */
+export const settledUnchecked = (file: string, why: string): string =>
+  `Whether ${file} is a settled design exactly as make-settled.py wrote it could not be checked (${why}), so it was judged as any look change is.`
+
+/**
  * Where a design round's own files go (#1191), said wherever an edit is held: a round's files held
  * in the project sent Claude to /design-rounds, which it was already running, so every way on led
  * back to the refusal.

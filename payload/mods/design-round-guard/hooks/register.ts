@@ -37,6 +37,11 @@ import {
   drawnParts,
   drawsChange,
   isOwnRecord,
+  isDesignRecord,
+  sealCheck,
+  settledNotSealed,
+  settledUnchecked,
+  settledUnread,
   isSwiftUI,
   joinedOnly,
   judgedByText,
@@ -502,6 +507,95 @@ const drawingChange = async (
   return drawsChange(files, name, now, after) ? 'held' : 'pass'
 }
 
+// The file a command copies whole into `path`, when the command is one cp alone with no option, naming
+// its source and destination in plain words (no variable, pattern or brace the shell would change), so
+// the source as it is now is what lands (#1524); else why what it leaves cannot be read before it runs.
+const copiedFrom = async ($: EngineInterface, command: string, path: string, at: Where): Promise<string | { why: string }> => {
+  const shell = { why: 'a shell command, whose result cannot be read before it runs unless it is one plain cp alone' }
+  let cmds: Awaited<ReturnType<EngineInterface['modkit']['pipeline']>>
+  try {
+    cmds = await $.modkit.pipeline({ command })
+  } catch (err) {
+    return { why: `mod-kit could not read the command: ${message(err)}` }
+  }
+  const only = cmds.length === 1 ? cmds[0] : undefined
+  const [cp, src, dest, ...more] = only?.words ?? []
+  if (!only || cp !== 'cp' || src === undefined || dest === undefined || more.length || only.pipedFrom || only.heredocs || only.xargs || only.substitution) return shell
+  if ([src, dest].some(w => w.startsWith('-') || /[$`*?[\]{}]/.test(w))) return shell
+  if (resolvePath(dest, at.cwd, at.home) !== path) return shell
+  return resolvePath(src, at.cwd, at.home)
+}
+
+// What a call leaves in a settled design's place under docs/design (#1524), read before it runs: a
+// Write's content; an Edit's or MultiEdit's change applied to the file as it is; what a git checkout or
+// restore alone puts back (putBack, `notAlone` being restoreAlone's answer); what a cp alone copies in
+// whole, read from its source. Anything else is why it cannot be read.
+const recordText = async (
+  $: EngineInterface,
+  t: Target & { path: string },
+  tree: string,
+  tool: string,
+  input: Record<string, unknown>,
+  at: Where,
+  notAlone: string | undefined,
+): Promise<{ text: string } | { why: string }> => {
+  if (tool !== 'Bash') {
+    if (pathsOf(input).length !== 1) return { why: 'the call names more than one file' }
+    let before = ''
+    if (tool !== 'Write') {
+      try {
+        if (!(await $.fs.exists(t.path))) return { why: 'the file is not there to change' }
+        before = String(await $.fs.read(t.path))
+      } catch (err) {
+        return { why: `the file could not be read: ${message(err)}` }
+      }
+    }
+    const after = editedText(before, tool, input)
+    return after === undefined ? { why: 'what the call writes could not be read from it' } : { text: after }
+  }
+  if (t.from !== undefined) {
+    if (notAlone !== undefined) return { why: notAlone }
+    const back = await putBack($, t.path, tree, t.from)
+    return 'why' in back ? { why: back.why } : { text: back.text }
+  }
+  const src = await copiedFrom($, String(input.command ?? ''), t.path, at)
+  if (typeof src !== 'string') return src
+  try {
+    return { text: String(await $.fs.read(src)) }
+  } catch (err) {
+    return { why: `${src}, which it copies, could not be read: ${message(err)}` }
+  }
+}
+
+// Whether a call writes a settled design under docs/design exactly as make-settled.py wrote and sealed
+// it (#1524, Dan, 2026-10-23: "Let it through"): true, judged by the design rounds skill's own check
+// of the text the call leaves (rules.ts sealCheck), never by the blocks being there, since a hand edited
+// file still carries them. Otherwise what the refusal says of the file: the check's own reason, why the
+// text could not be read first, or why the check could not be run, each held, never passed.
+const settledRecord = async (
+  $: EngineInterface,
+  t: Target & { path: string },
+  tree: string,
+  tool: string,
+  input: Record<string, unknown>,
+  at: Where,
+  notAlone: string | undefined,
+): Promise<true | string> => {
+  const file = relTo(t.path, tree)
+  const r = await recordText($, t, tree, tool, input, at, notAlone)
+  if ('why' in r) return settledUnread(file, r.why)
+  const argv = sealCheck(at.home)
+  try {
+    const run = await $.process.run(argv, { stdin: r.text, timeoutMs: 10_000 })
+    if (run.exitCode === 0 && run.stdout.trim() === 'sealed') return true
+    const said = run.stdout.trim().replace(/^not sealed: /, '')
+    if (run.exitCode === 1 && said) return settledNotSealed(file, said)
+    return settledUnchecked(file, `${argv.join(' ')} exited ${run.exitCode}: ${run.stderr.trim().split('\n')[0] || 'with no message'}`)
+  } catch (err) {
+    return settledUnchecked(file, message(err))
+  }
+}
+
 type Verdict =
   | { pass: true; watch?: Watched[] }
   | { forged: string }
@@ -612,6 +706,18 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // A test of a screen passes (Dan, 2026-10-08: "On, but let tests through"), judged by the path
     // inside its project, so a folder named tests above the checkout lets nothing through.
     if (modTs ? isTestPath(relTo(t.path, tree)) || !isModHookTs(relTo(t.path, tree)) : lookKindIn(t.path, tree) === null) continue
+    // A settled design make-settled.py wrote, under docs/design exactly as it sealed it, passes unasked
+    // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
+    // the product, and the design it holds was settled on the issue it came from. Any other text there,
+    // a hand edit included, is judged as before, and the refusal says why it was not let through.
+    if (!modTs && isDesignRecord(relTo(t.path, tree))) {
+      if (tool === 'Bash' && t.from !== undefined && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
+      const sealed = await settledRecord($, { ...t, path: t.path }, tree, tool, input, at, notAlone ?? undefined)
+      if (sealed === true) continue
+      const notes = unreadIn.get(tree) ?? []
+      if (!notes.includes(sealed)) notes.push(sealed)
+      unreadIn.set(tree, notes)
+    }
     // Only now is a Swift file read for SwiftUI, so a test is never read, nor held when it cannot be
     // (lessons review of #991).
     if (kind === 'swift' && !(await swiftView($, t, tool, input))) continue
