@@ -203,6 +203,18 @@ PY
   DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled.html" --build "file://$CH/app/index.html" \
     --fixture "$CH/fixture.json" --out "$CH/off" --channel chrome --repo "$APP" > "$CH/off.log" 2>&1; rc=$?
   if [ "$rc" -eq 1 ] && said "UNMET D1" "$CH/off.log" && said "Capacity" "$CH/off.log"; then ok; else bad "the same app with its heading changed fails the decision, naming what it found (rc=$rc)" "$(cat "$CH/off.log")"; fi
+  # The same design written from a builder whose screenShown throws on f2 (claude-config#1539): its f2 is
+  # drawn without whatever screenShown draws, so it is not the design, and the score says so by frame in
+  # the builder's own words, as no score, though the app draws exactly the same pictures.
+  { cat "$CH/builder.js"; printf '%s\n' 'function screenShown(variant) { if (variant.day === "Wed") throw new Error("no partner list for Wed"); }'; } > "$CH/builder-shown.js"
+  sed 's/"builder.js"/"builder-shown.js"/' "$CH/settled.json" > "$CH/settled-shown.json"
+  cp "$CH/settled.checks.js" "$CH/settled-shown.checks.js"
+  python3 "$SKILL/make-settled.py" "$CH/settled-shown.json" "$CH/settled-shown.html" > "$CH/make-shown.log" 2>&1 \
+    || bad "make-settled.py writes the design whose screenShown throws on f2" "$(cat "$CH/make-shown.log")"
+  build_app "Team capacity"
+  DESIGN_SCORE_PLAYWRIGHT="$PW" node "$ADAPTER" --design "$CH/settled-shown.html" --build "file://$CH/app/index.html" \
+    --fixture "$CH/fixture.json" --out "$CH/shown" --channel chrome --repo "$APP" > "$CH/shown.log" 2>&1; rc=$?
+  if [ "$rc" -eq 2 ] && said "frame f2" "$CH/shown.log" && said "screenShown threw (no partner list for Wed)" "$CH/shown.log" && ! said "frame f1:" "$CH/shown.log"; then ok; else bad "a settled frame whose builder's screenShown throws is no score, naming that frame and the builder's words (rc=$rc)" "$(cat "$CH/shown.log")"; fi
 fi
 
 # --- 3g. the chain for a design whose frames were captured from different pages (claude-config#1474) ----

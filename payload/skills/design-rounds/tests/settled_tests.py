@@ -473,6 +473,17 @@ else:
     rc, out, path = make("width-threw", on_t1(builder="term-default.js", frames=[wide("t1", 820, boom=True)]))
     check("a frame whose builder throws is refused with the builder's own words, never as a width",
           rc == 2 and "the band has no room data" in out and "frame t1" in out and not os.path.exists(path), out)
+    # A screenShown that throws leaves the window drawn and measurable, and the frame still not the
+    # design, since whatever it draws once shown is missing (claude-config#1539). Before, the throw was
+    # kept where nothing read it, and the design was written.
+    write("term-shown.js", TERM_DEFAULT + "function screenShown(variant) {\n"
+          "  if (variant.late) throw new Error('the band was told too late');\n}\n")
+    rc, out, path = make("width-shown-threw", on_t1(builder="term-shown.js", frames=[wide("t1", 820, late=True)]))
+    check("a terminal frame whose builder's screenShown throws is refused with its own words, never written",
+          rc == 2 and "the band was told too late" in out and "screenShown" in out and "frame t1" in out
+          and not os.path.exists(path), out)
+    rc, out, path = make("width-shown-ok", on_t1(builder="term-shown.js", frames=[wide("t1", 820)]))
+    check("and the same builder whose screenShown does not throw is written", rc == 0 and os.path.isfile(path), out)
 
 # --- the design's requirements and its opening paragraph (claude-config#1401) -------------------------
 # Slate's Team capacity design, regenerated with make-settled, lost its Requirements list (which the
@@ -653,11 +664,44 @@ for label, page_src in (("a page with requirements", rsrc), ("a page without", b
     check("%s uses no colour outside its tokens, so nothing stays light in the dark scheme" % label,
           not re.search(r"#[0-9A-Fa-f]{3,8}\b|rgb\(", rules) and "var(--dr-bg)" in rules, rules)
     for scheme, tokens in (("light", light), ("dark", dark)):
+        # --dr-warn is the sentence said beside a frame whose builder threw (claude-config#1539).
         for fg, bg in (("--dr-text", "--dr-bg"), ("--dr-muted", "--dr-bg"), ("--dr-link", "--dr-bg"),
-                       ("--dr-text", "--dr-target")):
+                       ("--dr-text", "--dr-target"), ("--dr-warn", "--dr-bg")):
             ratio = contrast(tokens[fg], tokens[bg]) if fg in tokens and bg in tokens else 0
             check("%s, %s: %s on %s reads at 4.5 to 1 or better" % (label, scheme, fg, bg), ratio >= 4.5,
                   "%.2f" % ratio)
+
+# --- a frame whose builder throws, said beside it (claude-config#1539) --------------------------------
+# Each frame of a settled design calls its builder's screenShown as it loads, and a throw there was kept
+# as DR_FRAME.shownWhy, which nothing read, so the frame was drawn with no word of it; a throwing
+# buildScreen was not said on the page either. The settled file now carries designFrameTrouble, the one
+# reading of a frame's report, which its own page, the terminal measurement and the score all use.
+write("told.js", """function buildScreen(variant) {
+  if (variant.boom === "build") throw new Error("no open calls for " + variant.day);
+  var box = document.createElement("div");
+  var h = document.createElement("h1");
+  h.textContent = "Team capacity";
+  box.append(h);
+  return box;
+}
+function screenShown(variant, element) {
+  if (variant.boom === "shown") throw new Error("no partner list for " + variant.day);
+  var p = document.createElement("p");
+  p.className = "told";
+  p.textContent = "told " + variant.day;
+  element.append(p);
+}
+""")
+TOLD_FRAMES = [{"id": "f1", "title": "Tuesday", "width": 640, "variant": {"day": "Tue"}},
+               {"id": "f2", "title": "Wednesday", "width": 640, "variant": {"day": "Wed", "boom": "shown"}},
+               {"id": "f3", "title": "Thursday", "width": 640, "variant": {"day": "Thu", "boom": "build"}}]
+rc, out, told_path = make("told", spec(builder="told.js", frames=TOLD_FRAMES, decisions=[
+    {"id": "D1", "decision": "The page is called Team capacity", "requirement": "1", "frames": ["f1"],
+     "check": "main h1 reads Team capacity"}]))
+told_src = open(told_path, encoding="utf-8").read() if os.path.isfile(told_path) else ""
+check("a design whose frames' builders throw is still written, since only Chrome can see a throw", rc == 0, out)
+check("the settled file gives designFrameTrouble, the one reading of a frame's report",
+      "function designFrameTrouble(report)" in told_src, told_src[-2500:])
 
 # --- in a real browser, where there is one ------------------------------------------------------------
 # Found by the same lookup as every other block (claude-config#1452): the Mac's Chrome, or one on
@@ -805,6 +849,36 @@ var out = [], left = 2;
           proc.returncode == 0 and m and m.group(1) == ("t1:bare|window|640x0,0|rgb(27, 27, 29)|drawn;"
                                                          "t2:bare|window|820x0,0|rgb(27, 27, 29)|drawn"),
           (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
+
+    # The settled page itself, opened as a reader opens it: each frame's builder told it is shown, and a
+    # frame whose builder or screenShown threw said right beside that frame, in the builder's own words,
+    # and nothing said beside a frame drawn whole (claude-config#1539).
+    sprobe = told_src.replace("</body></html>", """<script>
+window.addEventListener("load", function () {
+  var out = [];
+  Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (f) {
+    var told = f.contentDocument && f.contentDocument.querySelector(".told");
+    var note = f.previousElementSibling && f.previousElementSibling.classList.contains("dr-trouble") ? f.previousElementSibling.textContent : "none";
+    out.push(f.dataset.frame + ":" + (told ? told.textContent : "-") + "|" + note);
+  });
+  var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join(";"); document.body.append(pre);
+});
+</script></body></html>""")
+    with open(os.path.join(T, "sprobe.html"), "w", encoding="utf-8") as fh:
+        fh.write(sprobe)
+    proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                           "--dump-dom", "file://" + os.path.join(T, "sprobe.html")], capture_output=True, text=True,
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
+    m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+    seen = dict(part.split(":", 1) for part in html_unescape(m.group(1)).split(";")) if m and proc.returncode == 0 else {}
+    check("in Chrome, a settled frame's builder is told it is shown, and nothing is said beside it",
+          seen.get("f1") == "told Tue|none", repr(seen) or proc.stdout[-500:] + proc.stderr[-500:])
+    check("a frame whose builder's screenShown throws is said beside that frame, in the builder's own words",
+          seen.get("f2", "").startswith("-|") and "screenShown threw" in seen.get("f2", "")
+          and "no partner list for Wed" in seen.get("f2", ""), repr(seen))
+    check("a frame whose builder throws is said beside that frame too, as the builder throwing",
+          seen.get("f3", "").startswith("-|") and "no open calls for Thu" in seen.get("f3", "")
+          and "screenShown" not in seen.get("f3", ""), repr(seen))
 
     # capture-chrome.js, run in a page as Playwright's browser_evaluate would: the page's own rules
     # inlined, its scripts taken out, and a stylesheet it cannot read NAMED, never silently dropped.

@@ -15,7 +15,10 @@ const PIN = JSON.parse(readFileSync(join(SCORE_DIR, "shared-playwright.json"), "
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 
 /** A stand in browser: records every page's viewport, what it drew and its screenshot options. */
-function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverReady = false } = {}) {
+// reports: {frame id: the DR_FRAME report its design document leaves}, none when left out, as a
+// document made by hand has; reader: the settled file's designFrameTrouble, none when left out, as a
+// file made by hand or before claude-config#1539 has.
+function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverReady = false, reports = null, reader = null } = {}) {
   const log = [];
   const page = (viewport) => {
     const me = { viewport, url: null, content: null, shots: [], scripts: [], waited: [], steps: [] };
@@ -30,6 +33,11 @@ function fakeBrowser({ failBuilt = null, checks = null, noFrames = false, neverR
       evaluate: async (fn, arg) => {
         // The checks file, evaluated as source; a script tag is refused, as a strict policy refuses it.
         if (typeof fn === "string") { me.scripts.push(fn); return undefined; }
+        if (arg && typeof arg === "object" && "designReport" in arg) {
+          const id = /frame (\w+)/.exec(me.content || "");
+          return reports && id && reports[id[1]] !== undefined ? reports[id[1]] : null;
+        }
+        if (arg && typeof arg === "object" && "troubleOf" in arg) return reader ? reader(arg.troubleOf) : undefined;
         if (arg && typeof arg === "object" && "frame" in arg) {
           return checks ? checks(arg.frame, me.content !== null ? "design" : "built") : [];
         }
@@ -115,6 +123,44 @@ test("a built page that cannot be loaded is recorded by frame, for the score to 
     fakeBrowser({ failBuilt: "net::ERR_CONNECTION_REFUSED at http://127.0.0.1:9/p" }), FRAMES, { gitState: GIT });
   assert.match(cap.frames[0].builtError, /ERR_CONNECTION_REFUSED/);
   assert.deepEqual(cap.frames[0].checks, []);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// A settled frame whose builder or screenShown threw was pictured as if whole: the frame's report was
+// read by nothing (claude-config#1539). Its words come from the settled file's own reader, the one its
+// page says beside the frame, so the score and the page can never word a frame differently.
+test("a design frame its builder did not draw whole is recorded by frame, in the settled file's own words", async () => {
+  const dir = setup();
+  const asked = [];
+  const reader = (r) => { asked.push(r); return r.shownWhy ? `the builder's screenShown threw: ${r.shownWhy}` : ""; };
+  const reports = { f1: { built: true, why: "", noSlot: false, shownWhy: "" }, f2: { built: true, why: "", noSlot: false, shownWhy: "no partner list" } };
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap") },
+    fakeBrowser({ reports, reader }), FRAMES, { gitState: GIT });
+  assert.equal(cap.frames[0].designError, undefined, "a frame drawn whole records nothing");
+  assert.equal(cap.frames[1].designError, "the builder's screenShown threw: no partner list");
+  assert.deepEqual(asked, [reports.f1, reports.f2], "each frame's own report is what the reader is handed");
+  assert.ok(existsSync(join(dir, "cap", "f2-design.png")), "it is still pictured, for whoever looks");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a settled file older than its reader, whose frames do report, is said once, never read as whole", async () => {
+  const dir = setup();
+  const reports = { f1: { built: true, why: "", noSlot: false, shownWhy: "x" }, f2: { built: true, why: "", noSlot: false, shownWhy: "" } };
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap") },
+    fakeBrowser({ reports }), FRAMES, { gitState: GIT });
+  assert.ok(cap.frames.every((f) => f.designError === undefined));
+  const said = cap.notes.filter((n) => /designFrameTrouble/.test(n));
+  assert.equal(said.length, 1, cap.notes.join("\n"));
+  assert.match(said[0], /make-settled\.py/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a design made by hand, whose frames report nothing, is drawn as before with nothing said", async () => {
+  const dir = setup();
+  const cap = await capture({ design: join(dir, "settled.html"), build: "http://127.0.0.1:3000/p", out: join(dir, "cap") },
+    fakeBrowser(), FRAMES, { gitState: GIT });
+  assert.ok(cap.frames.every((f) => f.designError === undefined));
+  assert.ok(!cap.notes.some((n) => /designFrameTrouble/.test(n)), cap.notes.join("\n"));
   rmSync(dir, { recursive: true, force: true });
 });
 
