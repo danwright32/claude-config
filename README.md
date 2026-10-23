@@ -2040,10 +2040,17 @@ rather than the synced config. Which branch counts as main is one rule both read
 `tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
-Agent worktrees are also removed automatically. On the first prompt of a session
-`hooks/stale-worktree-nudge.sh` starts `hooks/check-stale-worktrees.sh --remove` in the
-background. It removes a worktree only when its PR merged holding every commit, nothing in it is
-uncommitted, nothing changed in the last six hours, and no running process is working in it. A locked worktree is kept, with one exception:
+Agent worktrees are also removed automatically, at two moments (#1521). When
+`hooks/lib/merge-when-ready.sh` merges a pull request, it removes that branch's agent worktree
+through `hooks/check-stale-worktrees.sh --remove --just-merged <worktree>`, which applies every rule
+below except the six hour one, and never removes the folder the merge was run from: an agent merging
+from inside its own worktree keeps it, and the sweep takes it later. What it removed, or why it kept
+it, is printed after the merge line, and nothing about it turns a merge that landed into a failure.
+And on the first prompt of a session, then again on the first prompt at least three hours after the
+session's last run (`STALE_WT_RERUN_MINUTES`), `hooks/stale-worktree-nudge.sh` starts
+`hooks/check-stale-worktrees.sh --remove` in the background. It removes a worktree only when its PR
+merged holding every commit, nothing in it is uncommitted, nothing changed in the last six hours,
+and no running process is working in it. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a
