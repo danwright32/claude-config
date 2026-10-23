@@ -629,24 +629,56 @@ function sonarGather(checkRuns, extra) {
 {
   const ws = workspace({ pulls: {} }, { repos: [{ name: 'Sonar', repo: 'not a slug' }] }, {});
   const r = gather(ws);
-  check(r.code === 1 && /not a slug/.test(r.err), 'a repos.json entry that is not owner/name refuses the run', r.all);
+  check(r.code === 1 && /not a slug/.test(r.err), 'a registry entry that is not owner/name refuses the run', r.all);
 }
 
-// The repos.json that ships is one gather.js accepts, with every repo still listed.
+// The registry is this Mac's own file, never one shipped beside the skill (claude-config#1526). With
+// no --config gather.js reads it from HOME, through the one reader the merge gate uses too, and a
+// Mac without one is refused with the path to create, never read as a world with no repos.
 {
-  const shipped = JSON.parse(fs.readFileSync(path.join(SKILL, 'repos.json'), 'utf8'));
-  const ws = workspace({ pulls: {} }, shipped, {});
-  fs.copyFileSync(path.join(SKILL, 'repos.json'), ws.config);
-  // --live is only for a record read by hand (PET's build_history); the others are read from GitHub.
-  const r = gather(ws, shipped.repos.filter(function (x) { return typeof x.deployRecord === 'string'; })
-    .reduce(function (a, x) { return a.concat(['--live', x.repo + '=' + sha(900) + '@2026-10-08T10:00:00Z']); }, []));
-  check(r.code === 0 && r.json && r.json.repos.length === shipped.repos.length,
-    'the shipped repos.json is accepted, every repo in it gathered', r.all);
+  const ws = workspace({ pulls: {} }, null, {});
+  const bare = path.join(SCRATCH, 'home with no registry');
+  fs.mkdirSync(bare, { recursive: true });
+  const want = path.join(bare, '.claude', 'skills', 'pennie-dev-update', 'repos.local.json');
+  const r = run(GATHER, ['gather', '--now', NOW, '--out', ws.out, '--state', ws.state], ws, { HOME: bare });
+  check(r.code === 1 && r.err.indexOf(want) !== -1 && /"repos"/.test(r.err) && /changelogFrom/.test(r.err),
+    'with no registry on this Mac gather.js refuses, naming the path to create and what goes in it', r.all);
+  check(!fs.existsSync(path.join(SKILL, 'repos.json')) && !fs.existsSync(path.join(SKILL, 'repos.local.json')),
+    'no registry ships beside the skill', fs.readdirSync(SKILL).join(', '));
+}
+{
+  const ws = workspace({ pulls: {} }, null, {});
+  const home = path.join(SCRATCH, 'home with a registry');
+  const reg = path.join(home, '.claude', 'skills', 'pennie-dev-update', 'repos.local.json');
+  fs.mkdirSync(path.dirname(reg), { recursive: true });
+  fs.copyFileSync(ws.config, reg);
+  const r = run(GATHER, ['gather', '--now', NOW, '--out', ws.out, '--state', ws.state,
+    '--live', PET + '=' + sha(900) + '@2026-10-08T10:00:00Z'], ws, { HOME: home });
+  let json = null; try { json = JSON.parse(fs.readFileSync(ws.out, 'utf8')); } catch (e) { json = null; }
+  check(r.code === 0 && json && json.configPath === reg && json.repos.length === 2,
+    "with no --config gather.js reads this Mac's own registry from HOME", r.all);
+}
+// The paths the entries used to carry were typed by hand and pointed at nothing after a move
+// (claude-config#679). The suite that checked the shipped file for them cannot read a Mac's own
+// file, so the check moved to where the file is read.
+{
+  const ws = workspace({ pulls: {} }, { repos: [{ name: 'PET', repo: PET, path: 'Documents/pet' }] }, {});
+  const r = gather(ws);
+  check(r.code === 1 && /path/.test(r.err) && /PET/.test(r.err), 'a registry entry carrying a machine path refuses the run', r.all);
+}
+// {"repos": []} is the registry's deliberate "gate nothing" for the merge gate, so gather.js refuses it
+// in words that say what it is, never as a file with no list at all, which would contradict the
+// message that told the person to write it.
+{
+  const ws = workspace({ pulls: {} }, { repos: [] }, {});
+  const r = gather(ws);
+  check(r.code === 1 && /lists no repos/.test(r.err) && !/holds no/.test(r.err),
+    'a registry listing no repos is refused as listing none, not as having no list', r.all);
 }
 
 // ---------------------------------------------------------------- accounts (claude-config#1182)
 //
-// Each repo is read as the account repos.json names for it, through that account's token in the
+// Each repo is read as the account the registry names for it, through that account's token in the
 // one call's own environment, whichever account gh has active. On the personal MacBook the active
 // account is danwright32, which GitHub answers 404 for Try-Pennie's private repos.
 
@@ -697,7 +729,7 @@ function noTokenIn(r, ws, name) {
   const petCalls = api.filter(function (c) { return slugOf(c) === PET; });
   const sonarCalls = api.filter(function (c) { return slugOf(c) === SONAR; });
   check(petCalls.length > 0 && petCalls.every(function (c) { return c.as === WORK; }),
-    'every read of a repo is made as the account repos.json names for it', JSON.stringify(petCalls));
+    'every read of a repo is made as the account the registry names for it', JSON.stringify(petCalls));
   check(sonarCalls.length > 0 && sonarCalls.every(function (c) { return c.as === PERSONAL; }),
     'a second account\'s repo is read as that second account in the same run', JSON.stringify(sonarCalls));
   check(api.length === petCalls.length + sonarCalls.length, 'every read names the repo it is made for', JSON.stringify(api));
@@ -748,7 +780,7 @@ function noTokenIn(r, ws, name) {
 {
   const ws = workspace({ pulls: { [SONAR]: [] } }, { repos: [{ name: 'Sonar', repo: SONAR, account: undefined }] }, {});
   const r = gather(ws);
-  check(r.code === 1 && /Sonar/.test(r.err) && /account/.test(r.err), 'a repos.json entry with no account refuses the run', r.all);
+  check(r.code === 1 && /Sonar/.test(r.err) && /account/.test(r.err), 'a registry entry with no account refuses the run', r.all);
   check(calls(ws).length === 0, 'nothing is read when an entry names no account', JSON.stringify(calls(ws)));
 }
 {
@@ -791,7 +823,7 @@ function ghVia(ws, ghArgs, extra) {
   const ws = twoAccountWorkspace({ issueCommands: true });
   [
     [['issue', 'edit', '5', '--add-label', 'user-facing'], /names no repo/, 'a command naming no repo is refused'],
-    [['issue', 'edit', '5', '--repo', 'acme/other'], /acme\/other/, 'a repo not in repos.json is refused, by name'],
+    [['issue', 'edit', '5', '--repo', 'acme/other'], /acme\/other/, 'a repo not in the registry is refused, by name'],
     [['issue', 'edit', '5', '--repo', PET, '-R', SONAR], /acme\/pet.*acme\/sonar|acme\/sonar.*acme\/pet/, 'a command naming two repos is refused'],
     [['auth', 'switch', '--user', WORK], /auth/, 'a gh auth command is refused, so nothing switches the active account'],
     [[], /gh/, 'gather.js gh with no command is refused'],
@@ -924,10 +956,16 @@ function commitCase(extraState) {
 
 // ---------------------------------------------------------------- lint-post
 
+// The products, in their order. No registry ships beside the skill (claude-config#1526), so every
+// case names one, listing the three products the post examples cover.
+const LINT_CONFIG = path.join(SCRATCH, 'lint repos.json');
+fs.writeFileSync(LINT_CONFIG, JSON.stringify({ repos: [
+  { name: 'Slate', repo: 'acme/slate' }, { name: 'PET', repo: PET }, { name: 'Sonar', repo: SONAR },
+] }));
 function lint(text) {
   const file = path.join(SCRATCH, 'post ' + (++caseNo) + ' Dan' + APOS + 's.txt');
   fs.writeFileSync(file, text);
-  return run(LINT, [file], { scenario: '', ghLog: '' });
+  return run(LINT, ['--config', LINT_CONFIG, file], { scenario: '', ghLog: '' });
 }
 const CLEAN = [
   'Updates for September 15 to 28 :thread:',
@@ -996,11 +1034,7 @@ expectFinding('a heading with no item on the next line is refused', CLEAN.replac
 }
 // The product line (Dan, 2026-10-13): a post covering two or more products opens with
 // "Updates for <period> :thread:" and then the products it covers, joined with " | ", in the
-// order repos.json lists them, which is also the order of their sections below.
-const LINT_CONFIG = path.join(SCRATCH, 'lint repos.json');
-fs.writeFileSync(LINT_CONFIG, JSON.stringify({ repos: [
-  { name: 'Slate', repo: 'acme/slate' }, { name: 'PET', repo: PET }, { name: 'Sonar', repo: SONAR },
-] }));
+// order the registry lists them, which is also the order of their sections below.
 function lintWith(text) {
   const file = path.join(SCRATCH, 'post ' + (++caseNo) + ' Dan' + APOS + 's.txt');
   fs.writeFileSync(file, text);
@@ -1047,7 +1081,7 @@ const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
 }
 {
   const r = lintWith(multi([MULTI_OPENER, 'PET | Slate | Sonar'], ['PET', 'Slate', 'Sonar']));
-  check(r.code === 1 && /order/i.test(r.out) && /Slate, PET, Sonar/.test(r.out), 'product sections out of the repos.json order are refused', r.all);
+  check(r.code === 1 && /order/i.test(r.out) && /Slate, PET, Sonar/.test(r.out), 'product sections out of the order the registry lists them are refused', r.all);
 }
 {
   const r = lintWith(multi([MULTI_OPENER, 'Slate | PET | Sonar'], ['Slate', 'PET', 'Sonar'], '\n\n'));
@@ -1086,7 +1120,7 @@ const MULTI_OPENER = 'Updates for September 29 to October 13 :thread:';
   check(r.code === 2 && /repos\.json/.test(r.err), 'a config that cannot be read is refused, never read as no products', r.all);
 }
 {
-  const r = run(LINT, [path.join(SCRATCH, 'no such draft.txt')], { scenario: '', ghLog: '' });
+  const r = run(LINT, ['--config', LINT_CONFIG, path.join(SCRATCH, 'no such draft.txt')], { scenario: '', ghLog: '' });
   check(r.code === 2 && /no such draft/.test(r.err), 'a draft that cannot be read is its own exit, named', r.all);
 }
 

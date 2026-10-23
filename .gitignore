@@ -13,6 +13,11 @@ __pycache__/
 *.local.json
 *.local.json.*
 *.local.json~
+# The /pennie-dev-update registry under the name it was tracked by until claude-config#1526. It names
+# work repositories, so it is each Mac's own skills/pennie-dev-update/repos.local.json now, caught by
+# the lines above. claude-sync excludes the old name too (MOVED_TO_LOCAL); this keeps a copy that
+# arrives by any other route out of a commit.
+/payload/skills/pennie-dev-update/repos.json
 .last-success
 .sync-lock/
 state/

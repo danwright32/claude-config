@@ -300,6 +300,21 @@ COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.
   --exclude=.claude-plugin/types/)
 for _lg in "${LOCAL_FILE_GLOBS[@]}"; do COMMON_EXCLUDES+=(--exclude="$_lg"); done
 unset _lg
+# FILES THAT USED TO TRAVEL AND NOW BELONG TO EACH MAC (claude-config#1526). "<old>|<new>", both
+# relative to ~/.claude. The /pennie-dev-update registry names work repositories, so it left the
+# public payload and became each Mac's own *.local.json. The mirror deletes on a Mac whatever the
+# payload stops carrying, so leaving the old file out of the payload alone would have deleted every
+# Mac's registry on its next pull, and the merge gate, which refuses a missing registry, would then
+# have refused every merge there (L5). So, for each pair:
+#   the apply MOVES this Mac's copy to the new name before its mirror runs (move_shared_files_to_local)
+#   and the OLD name is excluded both ways, so a copy recreated under it by old habit is never sent,
+#   and is never deleted either, only moved by the next apply.
+# The new name must be a Mac's own file by LOCAL_FILE_GLOBS, or the move would publish what it exists
+# to keep out (move_shared_files_to_local refuses one that is not). The old name's exclusion is
+# anchored at each tree's root, so it reaches only <tree>/<that path>; only skills/ holds the folder.
+MOVED_TO_LOCAL=('skills/pennie-dev-update/repos.json|skills/pennie-dev-update/repos.local.json')
+for _mv in "${MOVED_TO_LOCAL[@]}"; do _mv="${_mv%%|*}"; COMMON_EXCLUDES+=(--exclude="/${_mv#*/}"); done
+unset _mv
 # *.local.json is a file one Mac keeps for itself, often holding a secret: the tracker skill's
 # config.local.json carries its Apps Script write token, and the repository is public
 # (claude-config#675). Excluded here, at any depth in every mirrored tree, so the send never stages
@@ -5847,6 +5862,57 @@ report_rtk_exclusions(){
   return 0
 }
 
+# Move each file listed in MOVED_TO_LOCAL from its old shared name to its new local one, on this Mac,
+# before the apply's mirror runs (claude-config#1526). Nothing is ever destroyed before its
+# replacement is verified (L5):
+#   only the old copy exists     it is copied, the copy compared byte for byte, then the old removed
+#   both exist and are the same  the old one is removed
+#   both exist and differ        the local one is kept, and the old one is set aside beside it under
+#                                <new>.shared-copy-<time>, a Mac's own name too, so it never travels
+# Each move is said on stderr and recorded for the summary (MOVED_LOCAL_RECORDS), because a file
+# changing its name with nothing said is a file somebody goes looking for under the old one.
+MOVED_LOCAL_RECORDS=""
+move_shared_files_to_local(){
+  local entry old new o n g ok aside
+  MOVED_LOCAL_RECORDS=""
+  for entry in "${MOVED_TO_LOCAL[@]}"; do
+    old="${entry%%|*}"; new="${entry#*|}"
+    o="$CLAUDE_HOME/$old"; n="$CLAUDE_HOME/$new"
+    [ -f "$o" ] || continue
+    ok=""
+    for g in "${LOCAL_FILE_GLOBS[@]}"; do
+      # shellcheck disable=SC2254 # the pattern is meant to match as a glob
+      case "${new##*/}" in $g) ok=1; break ;; esac
+    done
+    if [ -z "$ok" ]; then
+      echo "claude-sync: did not move $old to $new: that name is not one this sync keeps on each Mac (LOCAL_FILE_GLOBS), so the moved file would be sent. $old was left where it is." >&2
+      continue
+    fi
+    if [ ! -e "$n" ]; then
+      if cp -p "$o" "$n.moving" 2>/dev/null && cmp -s "$o" "$n.moving" && mv "$n.moving" "$n" 2>/dev/null && cmp -s "$o" "$n"; then
+        rm -f "$o"
+        echo "claude-sync: moved $old to $new, which stays on this Mac and is never sent to the shared config (claude-config#1526)." >&2
+        MOVED_LOCAL_RECORDS="$MOVED_LOCAL_RECORDS$new (moved from $old)"$'\n'
+      else
+        rm -f "$n.moving" 2>/dev/null || true
+        echo "claude-sync: could not copy $o to $n, so it was left where it is. Copy it there by hand: nothing reads it under its old name any more." >&2
+      fi
+    elif cmp -s "$o" "$n"; then
+      rm -f "$o"
+      MOVED_LOCAL_RECORDS="$MOVED_LOCAL_RECORDS$old (the same as $new)"$'\n'
+    else
+      aside="$n.shared-copy-$(date '+%Y%m%d%H%M%S')"
+      if mv "$o" "$aside" 2>/dev/null; then
+        echo "claude-sync: $old and $new both exist on this Mac and differ. $new is the one read, and was left as it is; the other was set aside as ${aside#"$CLAUDE_HOME"/}, which stays on this Mac. Compare the two and delete the set aside copy once nothing in it is needed." >&2
+        MOVED_LOCAL_RECORDS="$MOVED_LOCAL_RECORDS${aside#"$CLAUDE_HOME"/} (set aside from $old)"$'\n'
+      else
+        echo "claude-sync: $old and $new both exist on this Mac and differ, and $old could not be set aside, so both were left as they are. $new is the one read." >&2
+      fi
+    fi
+  done
+  return 0
+}
+
 # copy repo payload -> local config, merging the hooks block (no git)
 apply_payload_to_local(){
   # A TEST RUN may not write into the real config (claude-config#277, L2). This is the one place
@@ -5863,6 +5929,7 @@ apply_payload_to_local(){
   fi
   [ -d "$PAYLOAD" ] || die "no payload in repo — run 'claude-sync push' on your other Mac first"
   mkdir -p "$CLAUDE_HOME"
+  move_shared_files_to_local # before anything reads or mirrors them (claude-config#1526)
   merge_rule_files           # entry level merge first: what merges is no conflict
   preserve_local_conflicts   # then whatever genuinely clashed, before it is overwritten
   # Hold back local edits the repo has not seen (see locally_ahead_paths): the
@@ -5898,6 +5965,12 @@ apply_payload_to_local(){
   done <<MERGED
 ${MERGED_RULE_FILES:-}
 MERGED
+  while IFS= read -r mp; do
+    [ -n "$mp" ] || continue
+    record_applied moved "$mp"
+  done <<MOVED
+${MOVED_LOCAL_RECORDS:-}
+MOVED
   # -i itemizes so we can report the real writes; -c because -a quick-checks on
   # size plus mtime, and a same-size edit whose mtime git happens to preserve
   # would otherwise be neither copied nor reported. These trees are small.

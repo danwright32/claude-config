@@ -178,7 +178,7 @@ function parseEntry(input) {
 
 // Is this repo gated, and from when?
 //
-// A repo opts in by being listed in the /pennie-dev-update skill's repos.json
+// A repo opts in by being listed in the /pennie-dev-update registry (each Mac's own repos.local.json, claude-config#1526)
 // with a changelogFrom date. That file already exists and already names the
 // repos the update covers, so a second registry beside it would be one more
 // place to add Slate to, and the two would disagree the first time only one was
@@ -205,7 +205,7 @@ function repoScope(registry, slug, today) {
     return {
       inScope: false,
       unreadable: true,
-      why: 'the /pennie-dev-update repos.json could not be read, so whether this repo is gated is unknown',
+      why: 'the /pennie-dev-update registry could not be read, so whether this repo is gated is unknown',
     };
   }
   const want = String(slug || '').trim().toLowerCase();
@@ -216,13 +216,13 @@ function repoScope(registry, slug, today) {
   })[0];
 
   if (!found) {
-    return { inScope: false, why: slug + ' is not listed in the /pennie-dev-update repos.json' };
+    return { inScope: false, why: slug + ' is not listed in the /pennie-dev-update registry' };
   }
   if (!found.changelogFrom) {
     // Listed with no start date is an UNFINISHED SETUP, not an opt out. Standing down here was a
     // bare exit 0, indistinguishable from a working gate on a repo whose start date has not
     // arrived (L98). The PET entry lost this field twice on 2026-08-31 to sessions that
-    // regenerated repos.json instead of read-modify-writing it, and nothing reported either loss.
+    // regenerated the registry instead of read-modify-writing it, and nothing reported either loss.
     // The repos nobody gated are the ones NOT listed at all, which is the branch above.
     return {
       inScope: false,
