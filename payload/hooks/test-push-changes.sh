@@ -142,6 +142,26 @@ STUB_OUT='{"result":"[1,2,3]"}' judge_case "an answer that is not an object" "$S
 STUB_OUT='<html>502 Bad Gateway</html>' judge_case "a garbage envelope" "$STUB:$PATH_BASE" 1 'not readable JSON'
 STUB_OUT='' STUB_EXIT=3 judge_case "nothing returned" "$STUB:$PATH_BASE" 1 'returned nothing \(exit 3\)'
 STUB_OUT='' judge_case "a timeout" "$TO:$STUB:$PATH_BASE" 1 'timed out after 7s'
+# The judge runs on the FIVE MINUTE prompt cache (claude-config#1600). On a subscription a headless
+# run otherwise writes to the one hour cache at twice the input price; 392 of 670 judge runs in the
+# week to 2026-10-23 started within five minutes of the one before, so five minutes was estimated at
+# 16.8M input units a week against 20.7M. Read from the environment the judge's claude actually
+# received, on both launches: through a timeout command, and with none on PATH.
+CACHE_STUB="$TMPROOT/cachestub"; mkdir -p "$CACHE_STUB"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_PROMPT_CACHE_TTL:-unset}" > "%s/ttl"\nprintf "%%s" "{\\"result\\":\\"{}\\"}"\n' "$TMPROOT" > "$CACHE_STUB/claude"
+chmod +x "$CACHE_STUB/claude"
+PASS_TO="$TMPROOT/passto"; mkdir -p "$PASS_TO"
+printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$PASS_TO/timeout"; chmod +x "$PASS_TO/timeout"
+for judge_path in "$PASS_TO:$CACHE_STUB:$PATH_BASE" "$CACHE_STUB:$PATH_BASE"; do
+  rm -f "$TMPROOT/ttl"
+  PATH="$judge_path" pc_judge sonnet 7 "rubric" "input" >/dev/null 2>&1
+  case "$judge_path" in "$PASS_TO"*) how="through a timeout command" ;; *) how="with no timeout command" ;; esac
+  if [ "$(cat "$TMPROOT/ttl" 2>/dev/null)" = 5m ]; then ok; else no "the judge launched $how ran with CLAUDE_CODE_PROMPT_CACHE_TTL=[$(cat "$TMPROOT/ttl" 2>/dev/null || echo 'not reached')], want 5m (#1600)"; fi
+done
+# The no timeout arm means something only when PATH_BASE really has none.
+if PATH="$PATH_BASE" command -v timeout >/dev/null 2>&1 || PATH="$PATH_BASE" command -v gtimeout >/dev/null 2>&1; then
+  no "PATH_BASE holds a timeout command, so the launch without one was not exercised"
+else ok; fi
 judge_case "no CLI" "$PATH_BASE" 1 'no claude CLI'
 if [ -z "$PC_JUDGE_MODEL" ]; then ok; else no "a judge that never launched still names a model ($PC_JUDGE_MODEL), so it would be counted as a call"; fi
 # The CLI on PATH below has to be absent for that case to mean anything.

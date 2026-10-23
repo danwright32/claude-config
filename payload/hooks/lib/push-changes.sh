@@ -163,14 +163,19 @@ pc_judge() {   # $1 = model  $2 = timeout seconds  $3 = system prompt (the rubri
   tbin="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
   jtmp="$(mktemp -d)" || { PC_JUDGE_ERR="judge could not start: no scratch directory"; return 1; }
   PC_JUDGE_START="$(date +%s)"; PC_JUDGE_MODEL="$1"
+  # The FIVE MINUTE prompt cache (claude-config#1600). On a subscription a headless run otherwise
+  # writes to the one hour cache at twice the input price; a five minute write costs 1.25 times it.
+  # 392 of 670 judge runs in the week to 2026-10-23 started within five minutes of the one before,
+  # estimated at 16.8M input units a week against 20.7M (PR #1602). Exported in the subshell so it
+  # reaches claude through `timeout` too; read by Claude Code 2.1.309 itself (checked in its binary).
   if [ -n "$tbin" ]; then
     # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
-    envelope="$(printf '%s' "$4" | ( cd "$jtmp" && "$tbin" "$2" \
+    envelope="$(printf '%s' "$4" | ( export CLAUDE_CODE_PROMPT_CACHE_TTL=5m; cd "$jtmp" && "$tbin" "$2" \
       claude -p --model "$1" --output-format json \
         --strict-mcp-config --setting-sources local --system-prompt "$3" ) 2>/dev/null )"
   else
     # claude-mds-ok: --setting-sources local keeps the global config out, measured above (#540).
-    envelope="$(printf '%s' "$4" | ( cd "$jtmp" && \
+    envelope="$(printf '%s' "$4" | ( export CLAUDE_CODE_PROMPT_CACHE_TTL=5m; cd "$jtmp" && \
       claude -p --model "$1" --output-format json \
         --strict-mcp-config --setting-sources local --system-prompt "$3" ) 2>/dev/null )"
   fi
