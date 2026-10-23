@@ -4984,13 +4984,20 @@ $pf"*) continue ;; esac
 # was published; this is the same scanner, hooks/lib/work-names.py, asked before (L280, L450). It
 # reads everything the push would publish: every file the clone tracks or would add, the staged
 # payload included. It names where each one is, never the name it found, since a refusal is read in
-# transcripts. The scanner, its python and the registry it reads are all required: a scan that
-# could not run is a refusal, never a pass (L98). Override, for one run and said to the person
-# first: SYNC_SKIP_WORK_NAMES_SCAN=1.
+# transcripts. Python and the registry the scanner reads are required: a scan that could not run
+# is a refusal, never a pass (L98). The scanner itself ships in the same commit as this script, so
+# its absence means a copy of the tool run outside its own checkout, which several suites do on
+# purpose (as for unmanaged-skills.sh above): that send goes ahead and says, every time, that it
+# was not scanned, and the whole tree check in CI stays the second line. Override, for one run and
+# said to the person first: SYNC_SKIP_WORK_NAMES_SCAN=1.
 scan_work_names(){
   [ "${SYNC_SKIP_WORK_NAMES_SCAN:-0}" = "1" ] && return 0
   [ -d "$PAYLOAD" ] || return 0
   local lib="$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py" list out rc refusal found
+  if [ ! -f "$lib" ]; then
+    echo "claude-sync: this send was NOT scanned for work organisation names: the scanner is not beside this copy of the tool ($lib). Run claude-sync from its own checkout, where it ships." >&2
+    return 0
+  fi
   list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
   if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
     # Listed by git, then only the files that exist: a deletion staged in the index is not content.
@@ -4999,8 +5006,8 @@ scan_work_names(){
   else
     ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null
   fi
-  if [ ! -f "$lib" ] || ! command -v python3 >/dev/null 2>&1; then
-    out="the work names scanner ($lib) or python3 to run it is missing"; rc=2
+  if ! command -v python3 >/dev/null 2>&1; then
+    out="python3, which runs the work names scanner ($lib), is not on PATH"; rc=2
   else
     out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)"; rc=$?
   fi
@@ -12269,7 +12276,7 @@ case "$SYNC_SCRATCH_MAX_AGE" in
 esac
 # Overridable so a test can point the scan at names of its own. It is not a knob anybody needs in
 # normal use: the default IS the list of every prefix this tool creates.
-SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-run. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run.}"
+SYNC_SCRATCH_NAMES="${SYNC_SCRATCH_NAMES:-claude-sync-applied. claude-sync-selftest. claude-sync-work. claude-sync-expand. claude-sync-run. claude-sync-suite-work. claude-sync-suite-section. claude-sync-suite-run. claude-sync-work-names.}"
 
 # ---------- a directory of the tool's own, inside the temp root (#116) ----------
 # The sweep above globs the temp root, and that root belongs to the whole machine: 113,912 entries

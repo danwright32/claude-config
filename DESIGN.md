@@ -1342,7 +1342,11 @@ it, as `scan_work_names` in `claude-sync`, over what it is about to publish, aft
 and the same way: a refusal names file and line, is recorded in `.send-refused` as its own cause,
 and stops the send. That second place is the one that matters most, because lessons are written on
 a Mac and published by the sync with no pull request in between (L280). It could only be wired once
-the last tracked mention was gone, or every send would have been refused.
+the last tracked mention was gone, or every send would have been refused. A scan that cannot judge
+(no python3, an unreadable registry) refuses the send. A copy of the tool with no scanner beside it
+sends and says it was not scanned: the scanner ships in the same commit as the script, so only a
+copy run outside its checkout lacks it, which several suites do on purpose, as they do for
+`unmanaged-skills.sh`; refusing there would have failed them for a state the real clone never has.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
