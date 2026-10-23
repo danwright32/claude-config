@@ -25,6 +25,20 @@
 # commit message, a heredoc body) is no wrapper. A command naming no wrapper and none of the three
 # passes before anything is loaded.
 #
+# A SCRIPT WHOSE ARGUMENTS ARE DATA (claude-config#1574). A script file cannot be read, so `bash x.sh`
+# beside git, gh or rtk is refused, and that included those words inside a quoted argument: the
+# documented `bash ~/.claude/hooks/lib/issue-spool.sh note . "<finding>" "<who>"` was refused for any
+# finding about the three tools (4 of the first 14 refusals recorded, 2026-10-22 to 23). A script
+# could run an argument, so a quoted argument is never data in general. It is data only for a script
+# subcommand declared below, whose argument handling has been read and runs none of them, and only
+# when the command is that call alone, read by lib/shell-words.py data_blanked: `bash`, the declared
+# path (~/ or the home directory written out), the subcommand, then words, and nothing a shell would do
+# beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the command
+# passes only if what is left names none of the three. Every other shape is refused as before, and so
+# is a note the reader cannot judge.
+#
+# The declared subcommands are DATA_ARGUMENT_SCRIPTS, below.
+#
 # When it cannot read the command at all (no python3, a missing lib, a payload nothing can read) and
 # the text names both a wrapper and one of the three, it refuses, saying it could not judge.
 #
@@ -48,6 +62,16 @@
 
 OVERRIDE=SKIP_WRAPPED_CHECK
 ASK="Write out the command it runs in full, as a command of its own or as a literal string, so every gate can read it. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
+
+# The script subcommands whose arguments are data (claude-config#1574), each "<path under ~/>
+# <subcommand>". issue-spool.sh note: issue_spool_note hands the text and the reporter to python as
+# argv strings, and the directory to cd and git -C as a path; none is run as a command. A new entry
+# needs the same reading of its script, and test-check-wrapped-commands.sh fails until it is changed
+# with it. The ~/ is literal: the reader matches it as written, and against the home directory.
+# shellcheck disable=SC2088
+DATA_ARGUMENT_SCRIPTS=(
+  "~/.claude/hooks/lib/issue-spool.sh note"
+)
 
 payload="$(cat)"
 # Every Bash call passes through here, and nearly none name a wrapper beside git, gh or rtk: answer
@@ -159,6 +183,14 @@ esac
 
 ps_unreadable "$cmd" || exit 0
 why_category "$PS_UNREAD_WHY"
+# A declared script subcommand called alone, whose git, gh and rtk all sit inside arguments quoted
+# whole, is no refusal (claude-config#1574). A reader that fails or prints nothing is no pass.
+if [ "$REASON" = script-file ]; then
+  shown="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-blanked "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
+    && [ -n "$shown" ] \
+    && ! [[ $shown =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] \
+    && exit 0
+fi
 if [ "$overridden" = 1 ]; then
   record_refusal "$PS_UNREAD_WRAPPER" "$REASON" overridden
   say_record_note

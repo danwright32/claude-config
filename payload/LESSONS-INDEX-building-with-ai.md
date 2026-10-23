@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L1029. Put a prompt's fixed text first and the per call parts after: the cache reuses only an unchanged opening, so one early varying line re-bills it all.
 - L768. An AI check reading a large artifact once is a sample, so recheck loops never converge: verify references by script and split the rest.
 - L270. A rule stated in a prompt is contradicted by every example that breaks it, and the demonstration outweighs the instruction.
 - L27. A rule that lives only in a prompt is a hope.
