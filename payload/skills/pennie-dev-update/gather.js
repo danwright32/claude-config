@@ -209,7 +209,7 @@ function loadEntry() {
 // Every repo is read as the GitHub account the registry names for it (claude-config#1182), never as
 // whichever account gh has active. Dan runs sessions under different accounts at once, so the
 // active one is whatever the last switch left, and on the personal MacBook it is danwright32,
-// which GitHub answers 404 for Try-Pennie's private repos: every Pennie repo read as unreachable.
+// which GitHub answers 404 for the work organisation's private repos: every Pennie repo read as unreachable.
 // So the account's token is taken from gh's own store and handed to each call in that call's
 // environment only, as hooks/lib/merge-target.sh and hooks/lib/lesson-fanout.sh scope theirs. The
 // active account is never switched, and a token is never printed, logged or written anywhere.

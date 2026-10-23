@@ -1471,11 +1471,11 @@ first, each with "Go to sleep now"; answers are posted on the issue as dated dec
 
 Both sides are listed, and a repository on neither is asked about, never let through (Dan,
 2026-10-06). The lists are the ones Dan confirmed word for word on 2026-10-07 (#843). Wait overnight (no merge, no
-deploy, a green PR stays open until morning): `Try-Pennie/bidspoke`, `Try-Pennie/slate`, and every
-repository owned by `Halo-lab-Trypennie`, now and any made later (his words: "Move ANYTHING in
-halo-lab-trypennie to the wait list automatically. Nothing in that account should merge
+deploy, a green PR stays open until morning): `bidspoke`, `slate`, and every
+repository owned by the agency's organisation, now and any made later (his words: "Move ANYTHING in
+[the agency's organisation] to the wait list automatically. Nothing in that account should merge
 overnight"). Merge and deploy as in the daytime: `danwright32/claude-config`,
-`Try-Pennie/project-enrollment-tracker`, `Try-Pennie/paperboi`, `Try-Pennie/sonar`,
+`project-enrollment-tracker`, `paperboi`, `sonar`,
 `dwright-pennie/new-agent-onboarding`, `dwright-pennie/repo-digest`, `danwright32/overture`,
 `danwright32/ovation`, `danwright32/downbeat`, `danwright32/PostRoll`, `danwright32/backstage`,
 `PlayedItApp/playedit` and `nursedexapp/nursedex`. Any other repository (eavesly-web-app, for one)
@@ -1495,9 +1495,9 @@ is still asked once at bedtime and closed if unanswered.
   unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
   record whether a merge there deploys (L72). Bidspoke and Slate are `mergeOnly` with
   `mergeDeploys: true` (Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
-  main), the thirteen above are `mayDeploy`, and `waitOwners` is `["Halo-lab-Trypennie"]`.
+  main), the thirteen above are `mayDeploy`, and `waitOwners` names the agency's organisation.
   `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape and to exactly that
-  decision, including that a Halo-lab-Trypennie repository no list names, or named in another case,
+  decision, including that a repository of the agency's organisation no list names, or named in another case,
   waits; the mod's own tests prove the reader applies the owner rule that way.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on

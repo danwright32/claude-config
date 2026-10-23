@@ -152,19 +152,19 @@ reset_world() {
 ]}}
 JSON
   cat >"$FAKE/digest/repos.json" <<'JSON'
-{"repos":[{"owner":"Try-Pennie","name":"bidspoke","label":"bidspoke"},
-          {"owner":"Try-Pennie","name":"slate","label":"SL"}]}
+{"repos":[{"owner":"Acme-Corp","name":"bidboard","label":"bidboard"},
+          {"owner":"Acme-Corp","name":"storefront","label":"SL"}]}
 JSON
   cat >"$FAKE/digest/repos-weekly.json" <<'JSON'
 {"repos":[{"owner":"danwright32","name":"overture","label":"overture"}]}
 JSON
-  touch "$FAKE/push/tok-work/Try-Pennie_bidspoke" "$FAKE/push/tok-work/Try-Pennie_slate" \
+  touch "$FAKE/push/tok-work/Acme-Corp_bidboard" "$FAKE/push/tok-work/Acme-Corp_storefront" \
         "$FAKE/push/tok-personal/danwright32_overture"
   cat >"$FAKE/lessons/L900.txt" <<'TXT'
 id: abc1234567 (this survives a renumber; L900 may not)
 - **L900. A partitioned query bounded by the clock locks every
   partition, so pass literal bounds.** More explanation of the rule.
-  (bidspoke#1720, 2026-10-02: SECRET-EVIDENCE refresh_field_presence_daily held 430 locks.)
+  (bidboard#1720, 2026-10-02: SECRET-EVIDENCE refresh_field_presence_daily held 430 locks.)
   SHORT: A clock bounded partitioned query locks every partition; pass literal bounds.
 TXT
   cat >"$FAKE/lessons/L902.txt" <<'TXT'
@@ -186,25 +186,25 @@ reset_world happy
 run L900
 check_eq "happy: exits 0 when every repo is covered" "0" "$rc"
 created="$(cat "$FAKE/created" 2>/dev/null)"
-check "happy: files in slate" "--repo Try-Pennie/slate" "$created"
+check "happy: files in storefront" "--repo Acme-Corp/storefront" "$created"
 check "happy: files in overture" "--repo danwright32/overture" "$created"
-check_not "happy: never files in the repo the lesson came from" "Try-Pennie/bidspoke" "$created"
-check "happy: says it skipped the source repo" "Try-Pennie/bidspoke" "$out"
+check_not "happy: never files in the repo the lesson came from" "Acme-Corp/bidboard" "$created"
+check "happy: says it skipped the source repo" "Acme-Corp/bidboard" "$out"
 check "happy: title names the lesson and uses the short form" \
   "Lesson L900 sweep: A clock bounded partitioned query locks every partition; pass literal bounds." "$created"
 check "happy: priority and category labels" "priority-p2,lesson-sweep" "$created"
 check "happy: catch-all milestone" "--milestone Ungrouped" "$created"
 calls="$(cat "$FAKE/calls")"
-check "happy: slate is written as the account that can push to it" "tok-work issue create --repo Try-Pennie/slate" "$calls"
+check "happy: storefront is written as the account that can push to it" "tok-work issue create --repo Acme-Corp/storefront" "$calls"
 check "happy: overture is written as the account that can push to it" "tok-personal issue create --repo danwright32/overture" "$calls"
 check "happy: priority labels ensured per repo" "tok-personal ensure-priority-labels.sh danwright32/overture" "$calls"
-check "happy: milestone ensured per repo" "tok-work ensure-milestone.sh Try-Pennie/slate Ungrouped" "$calls"
+check "happy: milestone ensured per repo" "tok-work ensure-milestone.sh Acme-Corp/storefront Ungrouped" "$calls"
 bodies="$(cat "$FAKE/bodies")"
 check "happy: body carries the rule sentence, whitespace collapsed" \
   "A partitioned query bounded by the clock locks every partition, so pass literal bounds." "$bodies"
 check "happy: body carries the stable id marker" "<!-- lesson-id: abc1234567 -->" "$bodies"
 check_not "happy: body never carries the evidence (public repos)" "SECRET-EVIDENCE" "$bodies"
-check_not "happy: body never names the source repo (public repos)" "bidspoke" "$bodies"
+check_not "happy: body never names the source repo (public repos)" "bidboard" "$bodies"
 # Every issue carries an Open questions section (claude-config#1279), and the filing gate never sees
 # this script's body file (claude-config#1321), so each body sent is judged here by the gate's own
 # reader rather than a copy of its rule. The count first, so a loop over no bodies cannot pass.
@@ -225,16 +225,16 @@ reset_world noshort
 run L901
 check_eq "noshort: exits 0" "0" "$rc"
 check "noshort: title uses the rule" "Lesson L901 sweep: Short rule with no short form." "$(cat "$FAKE/created")"
-check "noshort: a non digest source excludes nothing" "--repo Try-Pennie/bidspoke" "$(cat "$FAKE/created")"
+check "noshort: a non digest source excludes nothing" "--repo Acme-Corp/bidboard" "$(cat "$FAKE/created")"
 
 # ---- 3. a rerun files nothing twice: matched by number ----
 reset_world rerun
-echo '[{"number":5,"title":"Lesson L900 sweep: older wording","body":"x"}]' >"$FAKE/issues-Try-Pennie_slate.json"
+echo '[{"number":5,"title":"Lesson L900 sweep: older wording","body":"x"}]' >"$FAKE/issues-Acme-Corp_storefront.json"
 run L900
 check_eq "rerun: exits 0" "0" "$rc"
-check_not "rerun: no second issue in slate" "Try-Pennie/slate" "$(cat "$FAKE/created")"
+check_not "rerun: no second issue in storefront" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
 check "rerun: still files where it is missing" "danwright32/overture" "$(cat "$FAKE/created")"
-check "rerun: names the existing issue" "Try-Pennie/slate#5" "$out"
+check "rerun: names the existing issue" "Acme-Corp/storefront#5" "$out"
 
 # ---- 4. a renumbered lesson is matched by id ----
 reset_world renum
@@ -245,9 +245,9 @@ check_not "renum: no second issue in overture" "danwright32/overture" "$(cat "$F
 
 # ---- 5. a number that only shares a prefix is not a match ----
 reset_world prefix
-echo '[{"number":3,"title":"Lesson L9001 sweep: other","body":"<!-- lesson-id: zzz -->"}]' >"$FAKE/issues-Try-Pennie_slate.json"
+echo '[{"number":3,"title":"Lesson L9001 sweep: other","body":"<!-- lesson-id: zzz -->"}]' >"$FAKE/issues-Acme-Corp_storefront.json"
 run L900
-check "prefix: L9001 does not count as L900" "--repo Try-Pennie/slate" "$(cat "$FAKE/created")"
+check "prefix: L9001 does not count as L900" "--repo Acme-Corp/storefront" "$(cat "$FAKE/created")"
 
 # ---- 6. a repo no signed in account can write to ----
 reset_world noaccess
@@ -256,16 +256,16 @@ run L900
 check_eq "noaccess: exits nonzero" "1" "$rc"
 check "noaccess: names the repo it could not reach" "danwright32/overture" "$out"
 check "noaccess: says why" "no signed in account can write" "$out"
-check "noaccess: still files the others" "Try-Pennie/slate" "$(cat "$FAKE/created")"
+check "noaccess: still files the others" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
 check_eq "noaccess: ledger not written, so it is offered again" "" "$(cat "$CLAUDE_HOME/state/lesson-fanout.done" 2>/dev/null)"
 
 # ---- 7. an unreadable existing issue list never creates blind ----
 reset_world listfail
-touch "$FAKE/listfail-Try-Pennie_slate"
+touch "$FAKE/listfail-Acme-Corp_storefront"
 run L900
 check_eq "listfail: exits nonzero" "1" "$rc"
-check_not "listfail: nothing created where the list could not be read" "Try-Pennie/slate" "$(cat "$FAKE/created")"
-check "listfail: names it" "Try-Pennie/slate" "$out"
+check_not "listfail: nothing created where the list could not be read" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
+check "listfail: names it" "Acme-Corp/storefront" "$out"
 
 # ---- 8. a failing create is reported ----
 reset_world createfail
@@ -315,8 +315,8 @@ check "noauth: says so" "no GitHub account is signed in" "$out"
 reset_world bylabel
 run L902
 check_eq "bylabel: exits 0" "0" "$rc"
-check_not "bylabel: no issue in the repo cited by its label" "Try-Pennie/slate" "$(cat "$FAKE/created")"
-check "bylabel: says it skipped it" "SKIPPED L902 Try-Pennie/slate" "$out"
+check_not "bylabel: no issue in the repo cited by its label" "Acme-Corp/storefront" "$(cat "$FAKE/created")"
+check "bylabel: says it skipped it" "SKIPPED L902 Acme-Corp/storefront" "$out"
 check "bylabel: still files elsewhere" "danwright32/overture" "$(cat "$FAKE/created")"
 
 # ---- 14. bad usage ----

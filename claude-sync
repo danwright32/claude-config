@@ -293,8 +293,10 @@ TOP_FILES_SEED=(CLAUDE.md RTK.md LESSONS.md LESSONS-CORE.txt)
 # A Mac's own files, by name: a *.local.json and any copy of one (claude-config#675, #1089). Matched
 # against the file NAME at any depth, as rsync matches a pattern with no slash, and read from here by
 # every reader that asks whether a file is one (tree_holds_files below), so the two can never list
-# different shapes (L41, L370).
-LOCAL_FILE_GLOBS=('*.local.json' '*.local.json.*' '*.local.json~')
+# different shapes (L41, L370). A *.local.txt is the same thing for a list kept as lines
+# (claude-config#1568: hooks/main-to-dev-repos.local.txt, a list of work repositories moved out of
+# the public payload as the text file it already was, so the move copies it byte for byte).
+LOCAL_FILE_GLOBS=('*.local.json' '*.local.json.*' '*.local.json~' '*.local.txt' '*.local.txt.*' '*.local.txt~')
 COMMON_EXCLUDES=(--exclude=.git --exclude=.git/ --exclude=.DS_Store --exclude=*.conflict-* \
   --exclude=__pycache__ --exclude=__pycache__/ --exclude=*.pyc \
   --exclude=.claude-plugin/types/)
@@ -312,7 +314,11 @@ unset _lg
 # The new name must be a Mac's own file by LOCAL_FILE_GLOBS, or the move would publish what it exists
 # to keep out (move_shared_files_to_local refuses one that is not). The old name's exclusion is
 # anchored at each tree's root, so it reaches only <tree>/<that path>; only skills/ holds the folder.
-MOVED_TO_LOCAL=('skills/pennie-dev-update/repos.json|skills/pennie-dev-update/repos.local.json')
+# claude-config#1568 moved another list of work repositories the code reads the same way: the
+# repositories merged main into dev after each merge (hooks/, read by sync-main-to-dev.sh). Its old
+# name sits at the top of its tree, so the anchored exclusion reaches only that file.
+# tests/test-moved-to-local.sh proves the move for every pair listed here, read from this line.
+MOVED_TO_LOCAL=('skills/pennie-dev-update/repos.json|skills/pennie-dev-update/repos.local.json' 'hooks/main-to-dev-repos.txt|hooks/main-to-dev-repos.local.txt')
 for _mv in "${MOVED_TO_LOCAL[@]}"; do _mv="${_mv%%|*}"; COMMON_EXCLUDES+=(--exclude="/${_mv#*/}"); done
 unset _mv
 # *.local.json is a file one Mac keeps for itself, often holding a secret: the tracker skill's
@@ -11409,9 +11415,12 @@ mods_lag_records(){
   # travel, so they are never compared.
   installed=""
   if [ -d "$CLAUDE_HOME/mods" ]; then
+    # The per Mac names from the one list the send excludes (LOCAL_FILE_GLOBS), never a copy of it,
+    # which had already fallen behind it once (claude-config#1568 added *.local.txt).
+    local -a not_local=()
+    for f in "${LOCAL_FILE_GLOBS[@]}"; do not_local+=(! -name "$f"); done
     installed="$(cd "$CLAUDE_HOME/mods" && find . -type f ! -path '*/.claude-plugin/types/*' ! -name .DS_Store \
-      ! -name '*.conflict-*' ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.local.json' \
-      ! -name '*.local.json.*' ! -name '*.local.json~' 2>/dev/null | sed 's|^\./||')"
+      ! -name '*.conflict-*' ! -path '*/__pycache__/*' ! -name '*.pyc' "${not_local[@]}" 2>/dev/null | sed 's|^\./||')"
   fi
   hashes=""
   if [ -n "$installed" ]; then

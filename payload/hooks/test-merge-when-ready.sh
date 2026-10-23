@@ -830,7 +830,7 @@ fi
 
 # =================================================================================================
 # 12. Pull requests stacked on the merged branch are moved onto its base before the branch is
-#     deleted (claude-config#1337). On 2026-10-19 this merged Try-Pennie/bidspoke#2478 with
+#     deleted (claude-config#1337). On 2026-10-19 this merged bidspoke#2478 with
 #     --delete-branch, GitHub closed #2482, which was based on that branch, and a closed pull
 #     request's base can never be changed, so it was opened again as a new one, losing its review
 #     thread and a CI round. The fake gh closes whatever is still based on the branch when it is

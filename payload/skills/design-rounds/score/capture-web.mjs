@@ -16,7 +16,7 @@
 // checks on both, writes the capture design_score.py reads, and then scores it, exiting with the
 // score's own code: 0 matched, 1 not matched yet, 2 no score.
 //
-// Learned in Slate's first trial (Try-Pennie/slate#3934, #3946) and kept here:
+// Learned in Slate's first trial (slate#3934, #3946) and kept here:
 //   - both sides drawn by the same browser with deterministic rasterisation, since the GPU drew
 //     striped gradients a few levels differently between two renders of one frame (99.9% one run
 //     in three);
@@ -28,7 +28,7 @@
 //   - --perturb <css> changes the built side on purpose, the negative control (L1);
 //   - --ready <selector> waits for the built page to show its content before the picture: a streamed
 //     page fired load before its content arrived on a slow runner, and CI pictured the loading
-//     placeholder at 12.9% where every other run read 100% (Try-Pennie/slate#3947). A page that never
+//     placeholder at 12.9% where every other run read 100% (slate#3947). A page that never
 //     shows it within READY_TIMEOUT_MS is recorded as not loaded, which the score reads as no score.
 //
 // THE CHECKS are <design stem>.checks.js beside the design unless --checks names another: a script

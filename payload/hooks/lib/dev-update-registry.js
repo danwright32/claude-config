@@ -78,15 +78,23 @@ module.exports = {
 // The command line, for the merge gate, which is bash.
 //   path          prints where the registry lives on this Mac
 //   state [file]  prints {state, file, why} as JSON for that file (default: the one above)
+//   repos [file]  the same, plus `repos`, every entry's owner/name, for the scan that keeps work
+//                 names out of the public repository (hooks/lib/work-names.py, claude-config#1568)
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === 'path') {
     process.stdout.write(registryPath() + '\n');
-  } else if (cmd === 'state') {
+  } else if (cmd === 'state' || cmd === 'repos') {
     const got = readRegistry(process.argv[3] || registryPath());
-    process.stdout.write(JSON.stringify({ state: got.state, file: got.file, why: got.why || '' }) + '\n');
+    const out = { state: got.state, file: got.file, why: got.why || '' };
+    if (cmd === 'repos') {
+      out.repos = got.state === 'ok'
+        ? got.registry.repos.map(function (e) { return e && typeof e.repo === 'string' ? e.repo : ''; }).filter(Boolean)
+        : [];
+    }
+    process.stdout.write(JSON.stringify(out) + '\n');
   } else {
-    process.stderr.write('Usage: dev-update-registry.js path | state [file]\n');
+    process.stderr.write('Usage: dev-update-registry.js path | state [file] | repos [file]\n');
     process.exit(2);
   }
 }

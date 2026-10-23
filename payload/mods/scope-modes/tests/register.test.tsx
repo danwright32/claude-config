@@ -4076,13 +4076,13 @@ const closedNotes = (w: { appended: { line: string }[] }) =>
 const asRegExp = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
 
 test('a worker repository on neither list is asked about at bedtime, and the answer is saved to the shared file and holds tonight', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'Try-Pennie/slate', mergeDeploys: true }]) }, githubRepos: { default: ['o/r'], work: ['Try-Pennie/slate'] }, repoAnswer: 'Allowed to deploy' })
+  const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'Acme-Corp/storefront', mergeDeploys: true }]) }, githubRepos: { default: ['o/r'], work: ['Acme-Corp/storefront'] }, repoAnswer: 'Allowed to deploy' })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(w.asked).toEqual(['Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do?'])
-  expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }], mayDeploy: ['o/r'] })
+  expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }], mayDeploy: ['o/r'] })
   // Slate is seen only by the work account, and is found there rather than closed.
-  expect(recordOf(w).repos).toEqual({ mayDeploy: ['o/r'], mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }], closed: [] })
+  expect(recordOf(w).repos).toEqual({ mayDeploy: ['o/r'], mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }], closed: [] })
   expect(r.text).not.toMatch(/No merge and no deploy/)
   expect(await call($ as never, bash('npx wrangler deploy'))).toBe('ran')
   expect(await call($ as never, bash('gh pr merge 12 --squash'))).toBe('ran')

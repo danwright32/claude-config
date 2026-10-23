@@ -52,7 +52,7 @@ or, worse, resolves to whatever repo happens to be nearby.
 
 **Every repo is read as the GitHub account the registry names for it (`account`), whichever account
 gh has active** (claude-config#1182). Dan runs sessions under different GitHub accounts at once, and
-on the personal MacBook the active one is danwright32, which GitHub answers 404 for Try-Pennie's
+on the personal MacBook the active one is danwright32, which GitHub answers 404 for the work organisation's
 private repos. `gather.js` takes the named account's token from gh's own store and hands it to each
 call in that call's environment only, the way the merge helper does. **Never switch the active
 account** (`gh auth switch`): other sessions are using it.
@@ -140,7 +140,7 @@ Having no `lastEnd` makes its next run its first appearance, which introduces th
 (section 2) and then behaves exactly like PET forever after.
 
 An entry needs `name`, `repo` and `account`, the GitHub account that can see the repo
-(`dwright-pennie` for Try-Pennie's). Give it `changelogFrom` from the day its pull requests
+(`dwright-pennie` for the work organisation's). Give it `changelogFrom` from the day its pull requests
 carry changelog records (section 3), and `deployRecord` with `deployRecordFrom` only if it has a
 verified deploy record (section 4): a name read by hand and passed with `--live`, or one of the
 records `gather.js` reads from GitHub itself, measured against the repo's real merges first.
@@ -158,7 +158,7 @@ anything under `~/.claude` auto-pushes to Dan's other Mac within seconds and a r
 state, not config.
 
 ```json
-{ "Try-Pennie/project-enrollment-tracker": {
+{ "acme/widget": {
     "lastEnd": "2026-09-08T14:22:00Z",
     "heldBack": [1187, 1190],
     "headings": ["COMMISSION AND FIRST PAY", "GOALS"] } }
@@ -341,7 +341,7 @@ and hand it over as `--live <owner>/<name>=<commit_sha>@<recorded_at>`. A repo w
 
 **Slate, `actions_deploy_job` (read by `gather.js` from GitHub).** Slate deploys from the
 `deploy` job of its CI run on main, through a 10% canary that is probed and then promoted to 100%
-or put back (Try-Pennie/slate#3165). The exit code of the job's "Deploy gradually" step says
+or put back (slate#3165). The exit code of the job's "Deploy gradually" step says
 where production ended (Slate's DEPLOY.md), and GitHub keeps it as the annotation "Process
 completed with exit code N". The live commit is the newest run whose step succeeded or exited
 with a `liveExits` code (the new version serving 100%); an `unchangedExits` code (production put

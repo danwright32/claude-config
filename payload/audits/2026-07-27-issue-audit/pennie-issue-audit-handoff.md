@@ -13,9 +13,9 @@ carried back to the other Mac and merged into the cross-project synthesis there.
 
 ## Repos to triage
 
-1. Try-Pennie/slate
-2. Try-Pennie/project-enrollment-tracker
-3. Try-Pennie/bidspoke
+1. slate
+2. project-enrollment-tracker
+3. bidspoke
 4. dwright-pennie/new-agent-onboarding
 5. The "Manager Goal Tracking" project, if it has a repo: search all accessible repos
    for names matching goal, track, tracking, or manager. If nothing matches, record
@@ -28,7 +28,7 @@ carried back to the other Mac and merged into the cross-project synthesis there.
    issues anywhere during this task.
 2. Never run `gh auth switch`. If more than one account is logged in, scope every call
    instead: `GH_TOKEN=$(gh auth token -u <account>) gh ...` using whichever account can
-   see the Try-Pennie org (check with `gh auth status`).
+   see the work organisation (check with `gh auth status`).
 3. Writing style for everything you produce: no em dashes, no en dashes, no hyphens used
    as sentence connectors or parenthetical breaks (hyphens inside words are fine), no
    emoji. Use commas, colons, parentheses, or separate sentences.

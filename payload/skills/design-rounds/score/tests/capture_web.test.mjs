@@ -170,7 +170,7 @@ test("--ready names what the built page shows once its content is there", () => 
 });
 
 test("with --ready the built page is pictured only once it shows that, and the design side never waits", async () => {
-  // Slate's trial (Try-Pennie/slate#3947): a streamed page fired load before its content arrived on a
+  // Slate's trial (slate#3947): a streamed page fired load before its content arrived on a
   // slow runner, and CI pictured the loading placeholder, 12.9% where every run since reads 100%.
   const dir = setup();
   const b = fakeBrowser();

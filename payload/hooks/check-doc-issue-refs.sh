@@ -8,7 +8,7 @@
 #
 # Slate's docs/pii.md said the booker had no privacy link anywhere and named #1041 as
 # the issue that would add one. #1041 closed on 2026-08-17. A month later an outside
-# reviewer read the doc and reported the gap as open (Try-Pennie/slate#2561, item 7).
+# reviewer read the doc and reported the gap as open (slate#2561, item 7).
 # L32 says docs state testable claims and L244 says a status recorded in a loaded file
 # must be derived or checked; nothing checked a doc's issue references until this.
 #

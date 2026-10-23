@@ -21,7 +21,7 @@
 # And the green has to have been earned against the base the merge lands on: the
 # PR head must contain the base branch's current tip (#766). Two PRs that are each
 # green can merge into a red main when the second was never tested with the first
-# (L85, Try-Pennie/slate 2026-10-04), and on a free plan GitHub offers neither a
+# (L85, slate 2026-10-04), and on a free plan GitHub offers neither a
 # required up to date branch nor a merge queue, so this gate is where it is held.
 #
 # Deliberate overrides, one per rule and all visible in the command, so none can
@@ -571,7 +571,7 @@ fi
 
 # UP TO DATE WITH THE BASE (#766). Green is a verdict on the head commit as it was built, which is
 # on top of whatever base the branch was cut from. If the base has moved since, the combination main
-# will hold after this merge was never tested: on 2026-10-04 Try-Pennie/slate #3237 was green, was
+# will hold after this merge was never tested: on 2026-10-04 slate #3237 was green, was
 # branched before #3231 landed, merged after it, and turned main red (L85). So the head must CONTAIN
 # the base branch's current tip, and with the green rollup above and the commit pin below, a merge
 # then always lands a combination that was tested.

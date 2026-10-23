@@ -6,7 +6,7 @@
 # Goal: block a `git push` whose client bundle has grown past a recorded budget, so a dependency
 # joining the customer facing hot path is caught on the day it lands rather than by an outside
 # reviewer (claude-config#432). Slate shipped Luxon in the embed bundle and nobody knew until
-# Try-Pennie/slate#2566 said so: no project measured what its client bundle weighed, so the
+# slate#2566 said so: no project measured what its client bundle weighed, so the
 # addition passed every green check.
 #
 # WHAT IT MEASURES. The summed gzipped size of the client chunks the build left behind, in exactly
@@ -35,7 +35,7 @@
 #
 # A REPOSITORY THAT COMMITS ITS OWN RECORD is not judged here at all (claude-config#586). Slate
 # keeps .githooks/bundle-budget.txt and judges growth against the copy at the merge base
-# (Try-Pennie/slate PR #2834), which is the stronger design; a global record beside it would be a
+# (slate PR #2834), which is the stronger design; a global record beside it would be a
 # second, drifting answer to the same question. Any tracked file named bundle-budget.txt counts.
 # BUNDLE_BUDGET_STATE_DIR overrides the directory, which is how the test keeps its records out of
 # the real home.

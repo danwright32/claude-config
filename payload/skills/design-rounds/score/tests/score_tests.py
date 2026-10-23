@@ -371,7 +371,7 @@ def shown_but_frame_excepted(s):
     shown_on_both(s)
     s["images"]["f2"] = (rgba_image(FW, FH, DARK), (FW, FH), rgba_image(FW, FH, LIGHT), (FW, FH))
     s["exceptions"] = {"exceptions": [{"id": "X1", "frame": "f2", "words": "the dark frame can wait", "date": "2026-10-19",
-                                       "source": "https://github.com/Try-Pennie/slate/issues/3941#issuecomment-2"}]}
+                                       "source": "https://github.com/Acme-Corp/storefront/issues/3941#issuecomment-2"}]}
 
 
 rc, out, data = score(make("frames-excepted", shown_but_frame_excepted))
@@ -479,7 +479,7 @@ check("and says so, since the score is then tied to no commit", "uncommitted" in
 
 # 9. Exceptions, each in Dan's words, skipped by the score and listed every time.
 EXC = {"id": "X1", "words": "the date picker can use the system font, that's fine", "date": "2026-10-19",
-       "source": "https://github.com/Try-Pennie/slate/issues/3941#issuecomment-1"}
+       "source": "https://github.com/Acme-Corp/storefront/issues/3941#issuecomment-1"}
 
 
 def except_decision(s):

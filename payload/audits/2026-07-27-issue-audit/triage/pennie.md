@@ -4,17 +4,17 @@ Date: 2026-07-27
 
 Repos covered (issue counts verified complete against GitHub's own totals before triage):
 
-1. Try-Pennie/slate: 552 issues
-2. Try-Pennie/project-enrollment-tracker: 489 issues
-3. Try-Pennie/bidspoke: 483 issues
+1. slate: 552 issues
+2. project-enrollment-tracker: 489 issues
+3. bidspoke: 483 issues
 4. dwright-pennie/new-agent-onboarding: 243 issues
-5. Manager Goal Tracking: no repo found. All repos in Try-Pennie, dwright-pennie, and Halo-lab-Trypennie were listed and none match goal, track, tracking, or manager. The project appears to live only as a local data analysis workspace.
+5. Manager Goal Tracking: no repo found. All repos in the work organisation, dwright-pennie, and the agency's organisation were listed and none match goal, track, tracking, or manager. The project appears to live only as a local data analysis workspace.
 
 Total: 1,767 issues classified. Every issue was classified from title and labels; roughly 100 issues per repo (413 total) were deep read (body plus comments) prioritizing likely lessons, a cap Dan raised from the handoff's 40 mid-run. GitHub was touched read-only throughout.
 
 Classification: LESSON (teaches a build-time rule), FEATURE, CHORE, UNCLEAR. Each LESSON carries a root-cause family tag and a one-line forward-looking rule. Family tags were invented independently per repo, so closely related tags differ in name across sections; the final synthesis section clusters them.
 
-## Try-Pennie/slate
+## slate
 
 Counts: total 552 / lesson 190 / feature 228 / chore 134 / unclear 0
 
@@ -149,7 +149,7 @@ Counts: total 552 / lesson 190 / feature 228 / chore 134 / unclear 0
 ### dev-env-parity (1)
 - slate#40: build auth redirects from the request origin, not a prod-pointing env var; otherwise the local flow bounces to production mid-login and the environment cannot exercise its own gated pages.
 
-## Try-Pennie/project-enrollment-tracker
+## project-enrollment-tracker
 
 Counts: total 489 / lesson 194 / feature 146 / chore 149 / unclear 0
 
@@ -325,7 +325,7 @@ Classification notes: milestone and plan phase issues (CSP lockdown, auth rebuil
 
 - project-enrollment-tracker#518: Adopt standard linting from day one instead of guarding individual footguns with bespoke regex tests; a 4030 line unlinted file shipped an ASI bug that eslint's no-unexpected-multiline catches generically.
 
-## Try-Pennie/bidspoke
+## bidspoke
 
 Counts: total 483 / lesson 189 / feature 112 / chore 182 / unclear 0
 

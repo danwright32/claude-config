@@ -680,7 +680,7 @@ function sonarGather(checkRuns, extra) {
 //
 // Each repo is read as the account the registry names for it, through that account's token in the
 // one call's own environment, whichever account gh has active. On the personal MacBook the active
-// account is danwright32, which GitHub answers 404 for Try-Pennie's private repos.
+// account is danwright32, which GitHub answers 404 for the work organisation's private repos.
 
 const WORK = 'pennie-bot';
 const PERSONAL = 'personal-bot';

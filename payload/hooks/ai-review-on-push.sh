@@ -6,7 +6,7 @@
 # Start an advisory AI review of what a `git push` just sent, once per push, in the background
 # (claude-config#433). Two of the ten confirmed findings in the 2026-09-18 Slate review were class
 # fixes that missed a sibling: `deleteEvent` skipped when its twin got a typed error, and the
-# webhook first send skipped when every retry path got the attempt claim (Try-Pennie/slate#2561,
+# webhook first send skipped when every retry path got the attempt claim (slate#2561,
 # #2563). No scan can see that class; an independent reader did, by reading. So this hands the
 # pushed diff to `claude -p` with the review prompt in lib/ai-review-prompt.txt and lets the answer
 # arrive on a later prompt through ai-review-nudge.sh.
