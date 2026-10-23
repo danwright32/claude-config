@@ -1212,15 +1212,17 @@ def read(s):
 
 # A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
 # commands are in the file, so check-wrapped-commands.sh refuses it beside any word git, gh or rtk,
-# quoted argument text included. A few script subcommands are known to run none of their arguments
-# (issue-spool.sh's note hands each to python as a string), and the guard declares them; for one of
-# them, called alone, the words inside its arguments are data. data_blanked() reads that one shape and
-# nothing else: the command as written with every argument after the subcommand that is quoted whole
-# replaced by '', so the guard can look for git, gh and rtk in what is left; None for any other
-# shape, which the guard refuses exactly as before. Anything a shell would do more than split words
-# and remove quotes ends the reading with None: an operator, a redirection, a substitution or
-# variable (a $ or a backtick, quoted or not), a backslash, a glob or brace outside quotes, a comment,
-# an assignment or option before the script, a newline outside quotes, a quote that never closes.
+# quoted argument text included. A few scripts, or subcommands of them, are known to run none of
+# their arguments (issue-spool.sh's note hands each to python as a string; milestone-candidates.sh,
+# #1610, only reads from GitHub), and the guard declares them; for one of them the words inside its
+# arguments are data. data_blanked() reads that one shape and nothing else: the call, with only
+# DATA_TOKEN_PREFIX in front and only 2>&1 and pipes into DATA_FILTERS behind, printed with every
+# argument after the path (or subcommand) that is quoted whole replaced by '', so the guard can look
+# for git, gh and rtk in what is left; None for any other shape, which the guard refuses exactly as
+# before. Anything a shell would do more than split words and remove quotes ends the reading with
+# None: another operator or redirection, a substitution or variable (a $ or a backtick, quoted or
+# not), a backslash, a glob or brace outside quotes, a comment, any other assignment or an option
+# before the script, a newline outside quotes, a quote that never closes.
 DATA_UNQUOTED_REFUSED = set(";&|<>()$`\\*?[]{}!#\n")
 
 # The one thing that may stand in front of a declared call (claude-config#1610): the account rule's
@@ -1364,8 +1366,9 @@ def main(argv):
     elif mode == "bare":
         sys.stdout.write(bare(data))
     elif mode == "data-blanked":
-        # stdin is the command; each argument after the mode is one declared "<path> <subcommand>"
-        # pair. Exit 1, printing nothing, for any other shape (claude-config#1574).
+        # stdin is the command; each argument after the mode is one declared "<path>" or "<path>
+        # <subcommand>" entry. Exit 1, printing nothing, for any other shape (claude-config#1574,
+        # #1610).
         shown = data_blanked(data, argv[2:], os.environ.get("HOME", ""))
         if shown is None:
             return 1

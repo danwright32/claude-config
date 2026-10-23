@@ -195,8 +195,10 @@ esac
 
 ps_unreadable "$cmd" || exit 0
 why_category "$PS_UNREAD_WHY"
-# A declared script subcommand called alone, whose git, gh and rtk all sit inside arguments quoted
-# whole, is no refusal (claude-config#1574). A reader that fails or prints nothing is no pass.
+# A declared script call (or subcommand call), with nothing in front but the GH_TOKEN prefix and
+# nothing behind but 2>&1 and pipes into plain filters, whose git, gh and rtk all sit inside
+# arguments quoted whole, is no refusal (claude-config#1574, #1610). A reader that fails or prints
+# nothing is no pass.
 if [ "$REASON" = script-file ]; then
   shown="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-blanked "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
     && [ -n "$shown" ] \
