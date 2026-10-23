@@ -61,6 +61,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 # shellcheck source=lib/failure-handling.sh
 . "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null || exit 0
+# Which files the repository marks generated, from the reader the push review uses (claude-config#1525).
+# Without it every file is scanned, and the advisory says so rather than reading as having checked.
+# shellcheck source=lib/ai-review-common.sh
+. "$HOOK_DIR/lib/ai-review-common.sh" 2>/dev/null
 
 LESSONS_FILE="${LESSONS_FILE:-$HOME/.claude/LESSONS.md}"
 COOLDOWN=90
@@ -348,6 +352,25 @@ trig_workflow_job_without_timeout(){   # $1 = a file holding the added lines
 
 files="$(printf '%s\n' "$added" | cut -f1 | sort -u)"
 
+# --- Files the repository marks GENERATED (claude-config#1525) -------------------------------
+# A Slate push adding only a design record (docs/design/*.html, linguist-generated) was told it had
+# an error path returning empty and a destructive data operation, both inside the captured product
+# page the record inlines: text nobody wrote in the change. A file .gitattributes marks generated
+# (linguist-generated, or a merge driver of its own: the push review's own definition, read by its
+# own reader, never a second copy) is still matched, so silence keeps meaning "no pattern matched",
+# but a hit there is named in one line instead of raising its lessons. The attributes are read at
+# the head being pushed, or from the working tree when the command commits first.
+generated=""
+generated_unread=0
+if declare -F ar_generated_among >/dev/null 2>&1; then
+  attr_rev=HEAD
+  [ "$commit_in_chain" -eq 1 ] && attr_rev=""
+  generated="$(cd "$repo_root" && ar_generated_among "$files" "$attr_rev")"
+else
+  generated_unread=1
+fi
+gen_hits=""
+
 hit_ids=""
 findings=""
 # One scratch file for the whole scan, removed on the way out. Named, so a run killed part way
@@ -381,6 +404,11 @@ for i in "${!TRIG_IDS[@]}"; do
         grep -Eqi -- "${TRIG_RE2[$i]}" "$LINES_FILE" || continue
       fi
     fi
+    if [ -n "$generated" ] && grep -Fxq -- "$f" <<< "$generated"; then
+      gen_hits="$gen_hits
+$f"
+      continue
+    fi
     hit_files="$hit_files $f"
   done <<< "$files"
   [ -z "$hit_files" ] && continue
@@ -395,7 +423,18 @@ for i in "${!TRIG_IDS[@]}"; do
   hit_ids="$hit_ids,${TRIG_IDS[$i]}"
 done
 
-[ -n "$hit_ids" ] || exit 0
+# One line naming the generated files a pattern matched in, three by name like the findings above.
+gen_line=""
+gen_names="$(printf '%s\n' "$gen_hits" | sed '/^$/d' | awk '!seen[$0]++')"
+if [ -n "$gen_names" ]; then
+  gen_count="$(printf '%s\n' "$gen_names" | wc -l | tr -d ' ')"
+  gen_shown="$(printf '%s\n' "$gen_names" | awk 'NR <= 3' | tr '\n' ' ' | sed 's/ $//')"
+  gen_extra=""
+  [ "$gen_count" -gt 3 ] && gen_extra=" (and $((gen_count - 3)) more)"
+  gen_line="Skipped as generated (.gitattributes marks them), so their matches raise no lessons: ${gen_shown}${gen_extra}"
+fi
+
+[ -n "$hit_ids" ] || [ -n "$gen_line" ] || exit 0
 
 # --- Cooldown, keyed on WHAT WAS FOUND, not merely on the repo ----------------
 # The quiet is for repetition: pushing again after acting on the advice should
@@ -403,7 +442,7 @@ done
 # problem raised minutes later, and this hook's silence is supposed to mean "no
 # pattern matched". Silence that sometimes means "matched, but recently" would
 # make the quiet case unreadable.
-stamp="$stamp_dir/.claude-lessons-advisory-$(printf '%s|%s' "$repo_root" "$hit_ids" | cksum | tr -d ' ')"
+stamp="$stamp_dir/.claude-lessons-advisory-$(printf '%s|%s|%s' "$repo_root" "$hit_ids" "$gen_names" | cksum | tr -d ' ')"
 if [ -f "$stamp" ]; then
   last="$(cat "$stamp" 2>/dev/null || echo 0)"
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
@@ -445,13 +484,22 @@ widened_line=""
 (The git add in this command could not be read, so every change in the working tree was
 scanned as part of the commit it is about to make.)"
 
+gen_block=""
+[ -n "$gen_line" ] && gen_block="
+
+$gen_line"
+[ "$generated_unread" -eq 1 ] && gen_block="$gen_block
+
+(Which files are generated could not be read, because lib/ai-review-common.sh did not load, so
+every file was scanned, generated or not.)"
+
 context="LESSONS CHECK (advisory, from a pattern scan of the lines this push ADDS)
 
 This is a partial pattern check, not a full audit: it can only see the patterns
 it was taught, and most of the recorded lessons are about design, which no
 pattern match can see. It never means the push is clean.
 
-What was spotted:${findings}${widened_line}
+What was spotted:${findings}${widened_line}${gen_block}
 
 The lessons that apply:
 ${lesson_text}
@@ -460,6 +508,10 @@ Before pushing, check each one against what you actually changed. Where it
 applies and the code does not honour it, fix it and push the fix in the same
 breath. Where it does not apply, say so in one line and carry on. Do not
 silently ignore one."
+
+# Only generated files matched: the one line, and no lessons, because nothing written in this
+# change raised any.
+[ -n "$hit_ids" ] || context="LESSONS CHECK (advisory): no pattern matched outside generated files. $gen_line"
 
 # THE EMITTER'S OWN READER, asked here rather than at the top (claude-config#486, L490).
 #
