@@ -238,6 +238,36 @@ itself when that runs out and says so, is listed by `claude-sync status` for as 
 and `claude-sync release` ends it early. A marker nothing can read is cleared and reported in those
 words, never treated as a hold and never treated as absent.
 
+### A watcher older than the claude-sync on disk restarts itself (#420, #1569)
+
+The watcher is one long running process, so it runs the copy of `claude-sync` it loaded when it
+started, however far the file in its clone has moved since (L715). It records a content hash of what
+it loaded, writes it on its `Watching ... running claude-sync <hash>` start line, and compares it with
+the file on every change. When they differ it never sends on its old code. What it does instead
+depends on the newer copy and on what else is happening:
+
+- **The newer copy runs:** the watcher takes the sync lock, runs the same self test a pull runs
+  before handing over to what it pulled (it must parse and finish `status` in throwaway
+  directories), releases the lock, logs `restarting from claude-sync <old> to <new>`, ends its
+  fswatch and exits 0. The launch agent's `KeepAlive` is unconditional, so launchd starts it again
+  at once on the newer copy; launchd's default ten second throttle only delays a job that ran for
+  under ten seconds. The new watcher logs `restarted onto claude-sync <new> from <old>` and sends
+  once on the way up, since the change that revealed the old one was refused rather than sent.
+- **Another run holds the sync lock** (a pull applying a newer `claude-sync` looks like this): it
+  waits, logs `NOT sent: ... the restart onto it waits`, and tries again on the next change.
+- **A hold is in force:** it restarts once the hold lifts. A hold is taken while somebody commits
+  by hand, often in this clone, and a held watcher sends nothing anyway.
+- **The newer copy is broken** (does not parse, or parses and exits on that harmless run): exiting
+  into it would leave launchd starting a script that dies at once, so it keeps refusing, logs
+  `NOT sent and NOT restarted` with both hashes and the fault, posts one desktop notification for
+  the stretch, and records it in the clone's `.watch-stale`, which `claude-sync status` and the per
+  prompt session notice report at once rather than after the usual hour. It restarts by itself once
+  a copy that runs is on disk, and the record goes with it.
+
+Until #1569 it only refused, and recovery waited for the daily timer or a pull by hand: on
+2026-10-22 to 23 the personal MacBook refused 84 times over 16 hours and sent and received nothing.
+Dan chose the restart on 2026-10-23 ("Restart itself").
+
 ### A send does not wait for the shared repo's tests
 
 The watcher only takes in a shared commit whose tests have passed (DESIGN.md, "Config waits for CI
@@ -290,7 +320,9 @@ and nobody ran it, so edits made that day existed on one Mac only.
 is stuck" lines from, so the two cannot disagree. Once a stuck stretch has lasted past the threshold
 it is said once in the session, in status's own words and naming the clone, and when the stretch
 ends that session is told it is moving again. A count going up is the same stretch and is not said
-twice. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
+twice. A change watcher stuck on an older `claude-sync` because the newer one on disk is broken
+(#1569) is said at once rather than after the threshold, since no wait clears it, and its end is
+said too. A record that is there and cannot be read, a stretch whose start cannot be read, and a clone
 too old to have the command are each said once in their own words, never read as a healthy sync.
 It asks nothing of the network and takes no lock: measured 2026-09-17, about 70ms per prompt with
 one clone to ask, and 16ms on a Mac with no automatic sync installed, where there is nothing that
@@ -2735,6 +2767,8 @@ defined answer for being absent or untrustworthy.
 | `.unloadable-notified` | every send and apply, recording which skills folders each cannot load notice (not sent, not applied, kept local files a send will refuse) last named, an empty set included | those same notices, to post the desktop notification only when a folder is new to the set (claude-config#968) | absent or unreadable means the next notice is posted, which is the safe side: a repeated notification is noise, a missing one is a broken skill nobody hears about. Stale costs at most one skipped notification for a folder already named. A `.unloadable-notified.XXXXXX` beside it is a write that died before its rename, and is ignored |
 | `.ci-unreadable-since` | the automatic pull, the first time it cannot read whether the shared repo's head passed its tests | that same gate, to decide when to stop waiting for an answer that is not coming | absent means the last verdict was readable, whatever it said, which is the normal state. It holds when the condition started and, once expired, when that was first reported, so the alert is raised on the transition rather than on every edit. Any readable verdict removes it, including a red one, because those mean the lookup is working. Expiring does NOT remove it: once the verdict is judged unobtainable, config keeps arriving until the lookup works again, since restarting the clock would deliver config in three hour bursts. A value that will not parse is treated as the condition starting now, which errs toward waiting rather than toward applying unjudged config |
 | `.behind-skips` | a watcher send that found itself behind and whose reconcile did not clear it | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, and the escalation that tells you once rather than on every edit | absent means sending is not stuck, which is the normal state and is said by saying nothing. It holds the count, the moment the run of skips started, the moment of the last one, when the reconcile was last attempted, and why that attempt did not clear it (#1398), which is what the notice gives as the reason; a record from before that last field reads as the general reason it always gave. Any run that gets through removes it, and so does a send that put this Mac's changes up on top of a shared commit still being tested, so the count is a measurement of the current state rather than a total that only grows. A count that will not parse is counted from zero again by the next skip, and until then status and the notice say the record could not be read, never that sending is stuck and never nothing |
+| `.watch-stale` | a change watcher running an older `claude-sync` than the one on disk, on each change it refuses because that newer copy fails its self test (#1569) | `claude-sync status`, `claude-sync stuck` and so the per prompt notice, which says it at once | absent means the watcher is not stuck on an older copy, the normal state. It holds the moment the stretch started, how many changes it has refused, the copy the watcher runs, the copy on disk and what is wrong with it. Removed by a watcher starting, by a tick that finds the file back on the copy it runs, and by a restart. A count that will not parse is said as a record that could not be read, never as stuck and never as nothing |
+| `.watch-restarted` | a change watcher exiting to restart onto a newer `claude-sync` that passed its self test (#1569) | the watcher launchd starts next, which logs that it restarted, from which copy, and sends once | absent means the last watcher to start was not a restart, so it waits for a change before sending. Consumed on read, so it describes only the restart that just happened |
 | `.sent-over-untested` | a watcher send that put this Mac's commits up on top of a shared commit still being tested, without taking that commit in (#1398) | the next such send, to send only what is newer; the record of what this clone has sent, and the two hour unsent check, so the commits it names are not counted as waiting; and the sync that finally takes the tested commit in, which moves this clone's commits onto the one they became | absent means nothing went up that way. It names the last local commit sent and the commit it became in the shared repo, and it is believed only while the first is still in this clone's history and the second in the shared repo's; otherwise it is ignored and removed, and the clone's commits are treated as unsent, which sends again rather than missing anything |
 | `.reconcile-outcome` | the sync a send runs to catch up, when it finds itself behind or its own push is refused (#1398, #1402); never a sync typed by hand | that same send, straight after, to report what went (`sent`, `nothing to send`, or the files the hook suite gate held back, which are its lines after the first) or why nothing could, and so what the watcher logs | absent means the sync never decided what to send (it could not fetch, or stopped earlier): a behind send counts a skip with the general reason, and a send whose push was refused says nothing it cannot measure, which the watcher logs as a send that did not say what it did. It is removed before each catch up and after it is read, so it can only describe the run that wrote it |
 | `.send-refused` | the secret scan, whenever it refuses a send (#947) | a `pull` or `sync` that has to set aside the uncommitted edits that refused send left in the clone, to name the scan's finding as the cause rather than leave git's complaint as the only explanation | absent means no send is being refused by the scan, which is the normal state. It holds when the scan last refused and the files it found. The next scan that passes removes it. A time that will not parse is left out of the sentence rather than guessed |

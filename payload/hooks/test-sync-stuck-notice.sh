@@ -89,7 +89,7 @@ prompt() { # prompt <session id> [now]  -> runs the hook as a UserPromptSubmit w
       CLAUDE_SYNC_STUCK_STATE_DIR="$WORK/state" CLAUDE_SYNC_STUCK_NOW="${2:-$NOW}" \
       SYNC_NO_NOTIFY=1 bash "$HOOK" 2>/dev/null
 }
-clear_state() { rm -f "$CLONE/.behind-skips" "$CLONE/.ci-red-since"; }
+clear_state() { rm -f "$CLONE/.behind-skips" "$CLONE/.ci-red-since" "$CLONE/.watch-stale"; }
 
 echo "sync stuck notice: a healthy sync says nothing"
 
@@ -162,6 +162,22 @@ clear_state
 out="$(prompt r1)"
 says "and its end is said" "$out" "moving again"
 says "naming which direction moved" "$out" "receiving"
+
+echo "sync stuck notice: a watcher stuck on an older claude-sync is said at once, and so is its end (#1569)"
+
+# Fields as the watcher writes them: first refused tick, count, the script it runs, the newer one on
+# disk, and what is wrong with that one. Two minutes old, far under the threshold: no restart can fix
+# this and no wait will, so holding it back for an hour would only hide it.
+printf '%s 3 aaaaaaaaaaaa bbbbbbbbbbbb parse\n' "$(( NOW - 120 ))" > "$CLONE/.watch-stale"
+out="$(prompt w1)"
+says "a watcher that cannot restart onto a broken claude-sync is reported without waiting" "$out" "change watcher"
+says "naming the newer copy and what is wrong with it" "$out" "bbbbbbbbbbbb, does not parse"
+says "and what it means for the person" "$out" "not reaching the other Mac"
+out="$(prompt w1)"
+silent "the next prompt is quiet" "$out"
+clear_state
+out="$(prompt w1)"
+says "and its end is said to the session that heard it" "$out" "no longer stuck on an older claude-sync"
 
 echo "sync stuck notice: a record nobody can read is not a healthy sync"
 
