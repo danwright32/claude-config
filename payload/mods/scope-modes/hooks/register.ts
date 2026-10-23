@@ -70,6 +70,7 @@ import { overnightData } from './overnightdata.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
+import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
@@ -3116,6 +3117,41 @@ const closesOf = (pr: PrJson | null) => (pr?.closingIssuesReferences ?? []).map(
 const allSettled = (s: PrSeen, byNumber: boolean) => byNumber && s.pr?.state === 'MERGED' && closesOf(s.pr).every(n => s.issues.get(n) === 'CLOSED')
 const seenSaid = (s: Pick<PrSeen, 'pr' | 'issues'>) => JSON.stringify([s.pr?.number, s.pr?.state, s.pr?.headRefOid, closesOf(s.pr), [...s.issues]])
 
+// THE ONE POLLING POLICY (#1482, hooks/lib/gh-poll.sh, reached through mod-kit's ghpoll.ts). On
+// 2026-10-22 GitHub's burst limit refused every session on the account for about 40 minutes while one
+// session's loops polled at once, and this minute's check is one such loop. So each read first takes
+// a look from the session's shared budget, a failed read's error is handed back (a rate limit answer
+// pauses every loop in the session), and the wait above is the library's: doubled while the PR has
+// not moved, a minute again once it has, within winding down's own ceiling of ten minutes. A look the
+// policy holds keeps the minute's last reading, never a turn end's, which only GitHub's answer now
+// can finish (#1037). A policy that cannot be asked never stops the read: it is said once in the
+// debug log, and the wait falls back to a minute.
+let pollNoted = false
+const pollOf = async ($: EngineInterface): Promise<Poll | undefined> => {
+  const home = await $.env.get('HOME')
+  return home ? { run: (argv, env) => $.process.run(argv, env ? { env } : {}), lib: pollLib(home), session: await $.session.id() } : undefined
+}
+const pollFailed = ($: EngineInterface, err: unknown) => {
+  if (pollNoted) return
+  pollNoted = true
+  $.ui.log(`scope-modes: the polling policy (gh-poll.sh) could not be asked, so winding down reads its PRs without it: ${msg(err)}`, { to: 'debug' })
+}
+/** Why the policy holds this look, or undefined when the look is taken. */
+const heldLook = async ($: EngineInterface, poll: Poll | undefined, now: number): Promise<string | undefined> => {
+  if (!poll) return undefined
+  try {
+    const t = await takeLook(poll, now)
+    if (t.take) return undefined
+    const secs = Math.ceil(t.waitMs / 1000)
+    return t.why === 'pause'
+      ? `GitHub is not being asked: this session's looks are paused for its rate limit (${t.said || 'it refused a read'}), for ${secs}s more`
+      : `GitHub is not being asked: this session's loops have used their looks for this minute, so for ${secs}s more`
+  } catch (err) {
+    pollFailed($, err)
+    return undefined
+  }
+}
+
 /** The files uncommitted in a checkout, by git status (#1051), or why they could not be read. */
 const uncommittedIn = async ($: EngineInterface, root: string): Promise<string[] | { unreadable: string }> => {
   const st = await run($, ['git', '-C', root, 'status', '--porcelain', '--untracked-files=all'])
@@ -3168,7 +3204,11 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
     const seen = prSeen.get(key)
     let pr: PrJson | null
     let issues: Map<number, 'OPEN' | 'CLOSED'>
-    if (seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
+    const poll = seen && (allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait)) ? undefined : await pollOf($)
+    const held = poll ? await heldLook($, poll, now) : undefined
+    // A held look keeps the minute's last reading; a turn end's, or one with none, says why it has none.
+    if (held !== undefined && (fresh || !seen)) return { reading: { ...r, pr: { unreadable: held } } }
+    if (seen && (held !== undefined || allSettled(seen, !!t.pr) || (!fresh && now < seen.askedAt + seen.wait))) {
       pr = seen.pr
       issues = seen.issues
     } else {
@@ -3177,7 +3217,10 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
         const res = t.pr
           ? await gh(['pr', 'view', String(t.pr), ...where, '--json', PR_FIELDS])
           : await gh(['pr', 'list', '--head', t.branch, ...where, '--state', 'all', '--limit', '1', '--json', PR_FIELDS])
-        if (res.exitCode !== 0) return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
+        if (res.exitCode !== 0) {
+          if (poll) await failedLook(poll, now, res.stderr).catch(err => pollFailed($, err))
+          return { reading: { ...r, pr: { unreadable: res.stderr.trim() || `gh exited ${res.exitCode}` } } }
+        }
         try {
           const j = JSON.parse(res.stdout) as PrJson | PrJson[]
           const one = Array.isArray(j) ? j[0] : j
@@ -3192,12 +3235,25 @@ const readWind = async ($: EngineInterface, t: ScopeModesTarget, o: WindOpts = {
         for (const n of closesOf(pr)) {
           if (issues.get(n) === 'CLOSED') continue
           const v = await gh(['issue', 'view', String(n), ...where, '--json', 'state'])
-          if (v.exitCode !== 0) return { reading: { ...r, pr: { unreadable: `issue #${n}: ${v.stderr.trim()}` } } }
+          if (v.exitCode !== 0) {
+            if (poll) await failedLook(poll, now, v.stderr).catch(err => pollFailed($, err))
+            return { reading: { ...r, pr: { unreadable: `issue #${n}: ${v.stderr.trim()}` } } }
+          }
           const s = (JSON.parse(v.stdout) as { state?: string }).state
           issues.set(n, s === 'CLOSED' ? 'CLOSED' : 'OPEN')
         }
       const moved = !seen || seenSaid(seen) !== seenSaid({ pr, issues })
-      prSeen.set(key, { pr, issues, askedAt: now, wait: moved ? MIN : Math.min((seen?.wait ?? MIN) * 2, IDLE_MAX_MS) })
+      let wait = MIN
+      if (poll) {
+        try {
+          wait = await nextWaitMs(poll, seen?.wait ?? MIN, moved, { baseMs: MIN, maxMs: IDLE_MAX_MS })
+          await answeredLook(poll)
+        } catch (err) {
+          wait = MIN
+          pollFailed($, err)
+        }
+      }
+      prSeen.set(key, { pr, issues, askedAt: now, wait })
     }
     if (pr) {
       if (!r.branch && typeof pr.headRefName === 'string') r.branch = pr.headRefName
