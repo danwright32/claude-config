@@ -41,6 +41,7 @@ import {
 } from './mergedeploy.ts'
 import { NEVER_ASKED, overnightRefusal, primaryFrom, repoFromRemotes, type GithubOf, type Look } from './overnight.ts'
 import { wakeCheck } from './wakecheck.ts'
+import { powerOf, sleepRefusal, type Power } from './power.ts'
 import {
   answerKey,
   askOptions,
@@ -1068,6 +1069,9 @@ const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { rep
   }
 }
 
+// This mod's one notifier, titled Sleep mode: null once sent, else why not, for the caller to say.
+// Sent only while no record holds: when the night ends by itself (endIfOver), and when /sleep
+// refuses to start (#1545), before any record is written.
 const notify = async ($: EngineInterface, message: string): Promise<string | null> => {
   const r = await run($, ['terminal-notifier', '-title', 'Sleep mode', '-message', message])
   return r.exitCode === 0 ? null : r.stderr.trim() || `terminal-notifier exited ${r.exitCode}`
@@ -1288,9 +1292,16 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     if (reading.state === 'asleep') return `Sleep mode is already on: ${await startedWhere($, reading.record)}. Nothing changed.`
   }
   const p = await sleepPaths($)
-  // On battery a night of work drains the Mac, so sleep does not start; unknown power is said, never guessed (#844).
-  const power = await powerRefusal($)
-  if (power) return `Sleep mode did not start: ${power}.`
+  // On battery a night of work drains the Mac, so sleep does not start; unknown power is said, never
+  // guessed (#844). The refusal is a notification too, since a /sleep typed while a turn ran answers
+  // only once it ends, in a session Dan may not be looking at (#1545). A notifier that fails is said.
+  const refused = sleepRefusal(await powerNow($))
+  if (refused) {
+    const failed = await notify($, refused.notice)
+    if (!failed) return refused.text
+    $.ui.log(`scope-modes: /sleep was refused, and the notification saying so could not be sent: ${failed}`, { to: 'debug' })
+    return `${refused.text} The notification saying so could not be sent: ${failed}.`
+  }
   const now = await $.clock.now()
   const self = await $.session.id()
   const night = nightOf(now)
@@ -2950,14 +2961,8 @@ const driverTick = async ($: EngineInterface, seen: SleepReading) => {
 
 const caffeinatePid = (dir: string) => `${dir}/caffeinate.pid`
 
-// null when on mains power; otherwise why sleep mode must not start.
-const powerRefusal = async ($: EngineInterface): Promise<string | null> => {
-  const r = await run($, ['pmset', '-g', 'batt'])
-  if (r.exitCode !== 0) return `whether this Mac is on battery could not be read (${r.stderr.trim() || `pmset exited ${r.exitCode}`})`
-  if (/'Battery Power'/.test(r.stdout)) return 'this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again'
-  if (!/'AC Power'/.test(r.stdout)) return `pmset did not say what this Mac is drawing power from (${r.stdout.trim().split('\n')[0]?.slice(0, 120) ?? ''})`
-  return null
-}
+// What this Mac draws from now, read by power.ts from pmset (#844, #1545).
+const powerNow = async ($: EngineInterface): Promise<Power> => powerOf(await run($, ['pmset', '-g', 'batt']))
 
 // Starts the hold; null when held, else why not (said in /sleep's answer).
 const holdAwake = async ($: EngineInterface, dir: string, untilMs: number, now: number): Promise<string | null> => {
