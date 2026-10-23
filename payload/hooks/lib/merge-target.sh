@@ -1325,11 +1325,14 @@ mt_gh_transient() {  # $1 = the error text gh printed
 # (https://api.github.com/graphql)" while waiting its turn, and the same read a few seconds later
 # answered, with GH_TOKEN unset and gh auth status healthy. "Requires authentication" is what GitHub
 # answers a request that carried NO token (one it will not take is "Bad credentials", measured the
-# same day), and gh reads its token from the macOS keyring on every run, through /usr/bin/security,
+# same day). gh reads its token from the macOS keyring on every run, through /usr/bin/security,
 # giving up after three seconds ("timeout while trying to get secret from keyring" is in gh 2.89's
-# own text) and then sending the request with no token at all. 300 token reads in parallel at a load
-# average of 84 all came back with a token, so the cause is inferred, not reproduced; the token read
-# made after each refusal (mt_signin_token_state) is what will say so the next time it happens (L177).
+# own text) and then sending the request with no token, which was the first suspect. It is NOT
+# reproduced: 300 parallel token reads at a load average of 84, and 30 more at an ambient 325 the
+# same evening, all came back with a token inside half a second, so load alone does not cause it.
+# Still open: the keyring failing for another reason, or GitHub briefly answering 401 to good
+# requests. The token read made after each refusal (mt_signin_token_state) is what will tell the
+# two apart the next time it happens (L177).
 #
 # So a 401 is neither believed the first time, as mt_gh_transient's allow list believes every answer
 # GitHub gave, nor counted as a transport fault: it is asked again by mt_retry_read as MT_SIGNIN_RC,
