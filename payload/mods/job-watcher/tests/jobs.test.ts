@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { assess, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
+import { assess, harnessFinished, holdRefusal, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -299,6 +299,19 @@ describe('the background work sent with a stop', () => {
   })
   test('an entry naming no task is passed over', () => {
     expect(inFlight([null, 'b1', { type: 'shell' }, { id: '' }, { id: 'b2' }])).toEqual([{ id: 'b2', what: 'b2' }])
+  })
+  // #1517: what Claude Code says of each task it lists, by id, for the watcher to read beside its
+  // own measure. A task it lists with no status is listed, never read as finished or as missing.
+  test('each listed task is read with its status, and an unreadable list is no reading (#1517)', () => {
+    expect(listedStatuses([{ id: 'b1', status: 'running' }, { id: 'b2', status: 'completed' }, { id: 'b3' }, null, { status: 'failed' }])).toEqual(
+      new Map([['b1', 'running'], ['b2', 'completed'], ['b3', '']]),
+    )
+    expect(listedStatuses(undefined)).toBeUndefined()
+    expect(listedStatuses({ b1: 'running' })).toBeUndefined()
+  })
+  test('a task Claude Code has finished is one it lists as ended or no longer lists; any other status is not (#1517)', () => {
+    for (const s of ['completed', 'failed', 'killed', 'stopped', 'unlisted']) expect(harnessFinished(s)).toBe(true)
+    for (const s of ['running', 'pending', '', 'paused']) expect(harnessFinished(s)).toBe(false)
   })
   test('the refusal names each piece of work and the ways out', () => {
     const said = holdRefusal([{ id: 'b1', what: 'gh pr checks 9 --watch' }, { id: 'mon1', what: 'gh run watch 99' }])
