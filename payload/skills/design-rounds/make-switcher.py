@@ -24,6 +24,11 @@ The spec, with paths resolved against the spec file's own directory:
       "chrome":      {...},                       the product's captured chrome, required
                                                   unless "screen" names the shared one or a
                                                   kind with no product page around it
+                   | "chromes": [{"name": "edit", ...what "chrome" takes...}, {"name": "view", ...}],
+                                                  in place of "chrome", for a round whose options
+                                                  belong to different captured pages: each option
+                                                  names its own in "chrome" (claude-config#1536),
+                                                  read and refused as a settled design's frames are
       "fixture":     "fixture.json",              optional, the data, as window.DESIGN_FIXTURE
       "screen":      "terminal",                  optional, a shared screen from screens/, or the
                                                   kind of a screen with no product page around it:
@@ -32,7 +37,8 @@ The spec, with paths resolved against the spec file's own directory:
       "variants": [
         {"key": "1", "name": "Espresso",
          "why": "what this option is testing",
-         "measured": "the number behind it"}      optional
+         "measured": "the number behind it",      optional
+         "chrome": "edit"}                        with "chromes" only: the page it is drawn in
       ]
     }
 
@@ -562,13 +568,17 @@ def picker_options(spec, variants):
 KIND_STYLE = ".dr-kind { margin: 0 0 6px; max-width: 62ch; color: #3D342E; font-weight: 600; }"
 
 
+# What differs between captured pages (its document, width, height and slot) is written __PAGE:<WHAT>:<the
+# option's key>__ where it is read. A round of one page has it read from DR_<WHAT>, exactly the text this
+# builder always had, so its page is byte for byte as before; a round of several pages (claude-config#1536)
+# has DR_<WHAT> hold each page's, by name, read through DR_PAGE_OF[key]. One builder for both (L370).
 CHROME_BUILDER = r"""/* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
    the captured page with the round's builder drawing into its slot, in an iframe of its own. */
 var DR_TEMPLATE = __TEMPLATE__;
 var DR_OPTION_VARIANTS = __OPTIONS__;
 var DR_WIDTH = __WIDTH__;
 var DR_HEIGHT = __HEIGHT__;
-var DR_SLOT = __SLOT__;
+var DR_SLOT = __SLOT__;__PAGE_OF__
 var DR_SEEN = {};
 function buildScreen(variant) {
   var frame = document.createElement("iframe");
@@ -576,9 +586,9 @@ function buildScreen(variant) {
   frame.setAttribute("data-dr-option", variant.key);
   /* No display set here: an inline display would beat the hidden attribute show() sets, and the stage
      lays its children out itself (lessons review of #1364). */
-  frame.style.cssText = "border:0;background:#fff;width:" + DR_WIDTH + "px;height:" + (DR_HEIGHT || 480) + "px";
+  frame.style.cssText = "border:0;background:#fff;width:" + __PAGE:WIDTH:variant.key__ + "px;height:" + (__PAGE:HEIGHT:variant.key__ || 480) + "px";
   frame.addEventListener("load", function () { drLoaded(frame, variant); });
-  frame.srcdoc = DR_TEMPLATE.split("\"__DR_VARIANT__\"").join(DR_OPTION_VARIANTS[variant.key]);
+  frame.srcdoc = __PAGE:TEMPLATE:variant.key__.split("\"__DR_VARIANT__\"").join(DR_OPTION_VARIANTS[variant.key]);
   return frame;
 }
 /* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
@@ -603,7 +613,7 @@ function drReady(frame) {
 /* The page's own height, not its scroll height, which never reads less than the frame it sits in, so a
    short screen would keep whatever height its frame started at. */
 function drSize(frame) {
-  if (!DR_HEIGHT && drReady(frame)) frame.style.height = Math.ceil(frame.contentDocument.documentElement.getBoundingClientRect().height) + "px";
+  if (!__PAGE:HEIGHT:frame.getAttribute("data-dr-option")__ && drReady(frame)) frame.style.height = Math.ceil(frame.contentDocument.documentElement.getBoundingClientRect().height) + "px";
 }
 /* Told only once its builder has run, through the frame's DR_FRAME.tell. Until then a frame shown is
    owed the call and its load makes it, so an option is told once each time it is shown, never while
@@ -649,7 +659,7 @@ function drLoaded(frame, variant) {
     drSize(frame);
   }
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
-  var slot = doc && doc.getElementById(DR_SLOT);
+  var slot = doc && doc.getElementById(__PAGE:SLOT:variant.key__);
   DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? drPicture(doc, variant.key) : null };
   if (Object.keys(DR_SEEN).length === Object.keys(DR_OPTION_VARIANTS).length) drVerdict();
 }
@@ -659,7 +669,7 @@ function drVerdict() {
   Object.keys(DR_SEEN).forEach(function (key) {
     var seen = DR_SEEN[key];
     if (seen.noSlot) {
-      said.push(seen.name + " has nowhere to draw: its captured chrome holds no element #" + DR_SLOT + ", so nothing of the round is on it. Capture the chrome again, or name its slot.");
+      said.push(seen.name + " has nowhere to draw: its captured chrome holds no element #" + __PAGE:SLOT:key__ + ", so nothing of the round is on it. Capture the chrome again, or name its slot.");
       return;
     }
     if (!seen.report.built) {
@@ -741,6 +751,12 @@ def main(argv):
              "caught here and will simply find nothing when the page opens."
              % (builder_name, ", ".join(reached), reached[0]))
 
+    # A round whose options belong to different captured pages lists them in "chromes", each option naming
+    # its own in "chrome" (claude-config#1536), read and refused as a settled design's frames are (#1474).
+    try:
+        several = chrome_frame.several_chromes(spec, "options")
+    except chrome_frame.ChromeError as err:
+        fail(str(err))
     screen_script, screen_styles = load_screen(spec, builder, builder_name)
     asked = spec.get("screen")
     kind = asked.strip() if isinstance(asked, str) and asked.strip() in NO_PAGE_KINDS else None
@@ -749,6 +765,7 @@ def main(argv):
     # shared screen that ships with this tool, which is itself the chrome, or, for one of the kinds of
     # screen with no product page around it that Dan allowed by name, alone (claude-config#1393).
     chrome = None
+    chromes = None   # {name: chrome}, for a round drawn in several captured pages
     width = spec.get("width")
     if width is not None and not kind:
         fail('"width" is for a round with no product page around it (%s). A round in captured chrome is '
@@ -772,9 +789,19 @@ def main(argv):
                  "chrome as well; keep one" % str(spec.get("screen")).strip())
     else:
         try:
-            chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
+            if several:
+                chromes = chrome_frame.load_chromes(spec["chromes"], base)
+            else:
+                chrome = chrome_frame.load_chrome(spec.get("chrome"), base)
         except chrome_frame.ChromeError as err:
             fail(str(err))
+    try:
+        chrome_frame.chrome_names(
+            [(json.dumps(v["name"]), v.get("chrome")) for v in variants], chromes, "option", "round",
+            'the spec names one captured page, in "chrome", for every option' if chrome and chrome["kind"] != "none"
+            else 'the round is drawn with no captured page ("screen": "%s")' % str(asked).strip())
+    except chrome_frame.ChromeError as err:
+        fail(str(err))
     fixture = None
     fixture_name = str(spec.get("fixture", "")).strip()
     if fixture_name:
@@ -790,23 +817,43 @@ def main(argv):
 
     # The shared screen goes first in both blocks, as it does in a settled design's frames.
     builder, styles = chrome_frame.on_screen(screen_script, screen_styles, builder, styles)
-    if chrome:
+    framed = chrome is not None or chromes is not None
+    if framed:
         # The round's builder and stylesheet run inside each option's own document; this page gets
         # the small builder that draws those documents.
-        template = chrome_frame.frame_document(chrome, builder, styles, "__DR_VARIANT__", fixture, told_by_page=True)
+        def document(c):
+            return chrome_frame.frame_document(c, builder, styles, "__DR_VARIANT__", fixture, told_by_page=True)
+
+        def slot(c):
+            return c["slot"] if c["kind"] == "html" else "dr-slot"
         options = {v["key"]: chrome_frame.script_text(json.dumps(v)) for v in variants}
-        values = {"TEMPLATE": chrome_frame.script_text(json.dumps(template)),
-                  "OPTIONS": chrome_frame.script_text(json.dumps(options)),
-                  "WIDTH": str(chrome["width"]), "HEIGHT": str(chrome["height"] or 0),
-                  "SLOT": json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot"),
-                  # Plain text inside a quoted string of the builder, so it holds no quote or backslash.
-                  "EMPTY": ("That option is empty." if chrome["kind"] == "none"
-                            else "That option shows its captured chrome with nothing in it.")}
+        if chromes is None:
+            values = {"TEMPLATE": chrome_frame.script_text(json.dumps(document(chrome))),
+                      "WIDTH": str(chrome["width"]), "HEIGHT": str(chrome["height"] or 0),
+                      "SLOT": json.dumps(slot(chrome)), "PAGE_OF": ""}
+        else:
+            # Each page's document once, however many options share it, and each option's page by its key.
+            values = {"TEMPLATE": chrome_frame.script_text(json.dumps({n: document(c) for n, c in chromes.items()})),
+                      "WIDTH": json.dumps({n: c["width"] for n, c in chromes.items()}),
+                      "HEIGHT": json.dumps({n: c["height"] or 0 for n, c in chromes.items()}),
+                      "SLOT": json.dumps({n: slot(c) for n, c in chromes.items()}),
+                      "PAGE_OF": "\nvar DR_PAGE_OF = %s;" % chrome_frame.script_text(
+                          json.dumps({v["key"]: v["chrome"] for v in variants}))}
+        values["OPTIONS"] = chrome_frame.script_text(json.dumps(options))
+        # Plain text inside a quoted string of the builder, so it holds no quote or backslash.
+        values["EMPTY"] = ("That option is empty." if chrome is not None and chrome["kind"] == "none"
+                           else "That option shows its captured chrome with nothing in it.")
+
+        def fill(m):
+            if m.group(1):
+                return "DR_" + m.group(1) if chromes is None else "DR_%s[DR_PAGE_OF[%s]]" % (m.group(1), m.group(2))
+            return values[m.group(3)]
         # One pass, so a value holding another placeholder's spelling is never replaced again.
-        builder = re.sub(r"__(TEMPLATE|OPTIONS|WIDTH|HEIGHT|SLOT|EMPTY)__", lambda m: values[m.group(1)], CHROME_BUILDER)
+        builder = re.sub(r"__(?:PAGE:([A-Z]+):(.*?)|(TEMPLATE|OPTIONS|WIDTH|HEIGHT|SLOT|EMPTY|PAGE_OF))__", fill,
+                         CHROME_BUILDER)
         # The round's own stylesheet is in each option's document; this page keeps only the rule for the
         # line naming a kind, added only where there is one, so every other round's page is unchanged.
-        styles = KIND_STYLE if chrome["kind"] == "none" else ""
+        styles = KIND_STYLE if chrome is not None and chrome["kind"] == "none" else ""
 
     asks = str(spec.get("asks", "")).strip()
     measurement = str(spec.get("measurement", "")).strip()
@@ -822,7 +869,7 @@ def main(argv):
                         if measurement else "")
     page = page.replace("__STYLES__", styles)
     page = page.replace("__BUILDER__", builder)
-    page = page.replace("__KEEP_ALL__", "true" if chrome else "false")
+    page = page.replace("__KEEP_ALL__", "true" if framed else "false")
     page = page.replace("__VARIANTS__",
                         json.dumps(variants, indent=2).replace("</", "<\\/"))
 

@@ -312,6 +312,22 @@ it in the spec, with where it came from and where the round draws:
 what goes in the slot, with the product's own classes and controls. A round about a Claude Code mod
 asks for `"screen": "terminal"` instead, the terminal that ships with the tool.
 
+**A round whose options belong to different pages is still one round** (claude-config#1536): a panel
+in edit mode against a card in view mode, say. List every captured page in `"chromes"`, in place of
+`"chrome"`, each with a `"name"`, and have each option name the one it is drawn in, as a settled
+design's frames do (below):
+
+```json
+"chromes": [{"name": "edit", "captured": "edit.html", "from": "<URL, edit mode, date>", "slot": "#panel", "width": 1280},
+            {"name": "view", "captured": "view.html", "from": "<URL, view mode, date>", "slot": "#card", "width": 1280}],
+"variants": [{"key": "1", "name": "Espresso", "why": "...", "chrome": "edit"}, {"key": "2", "name": "Ink", "why": "...", "chrome": "view"}]
+```
+
+Each option is drawn in its own page, into that page's slot, at that page's width, and each page is
+carried once however many options share it. It is read and refused by the same code as a settled
+design's `"chromes"`, with the same refusals, and a round with one `"chrome"` writes exactly the page
+it always did.
+
 **A screen with no product page around it names its kind instead** (Dan, 2026-10-20, on #1393:
 "allow named kinds"). Three kinds, and only these: an email, a document (a PDF, an invoice export),
 and a new product whose page does not exist yet. The round names the kind in `"screen"`, where the

@@ -1623,6 +1623,100 @@ PY
   check_eq "the committed example draws its fixture's four rows inside the captured header, in both options" "Invoices:4,Invoices:4" "$ex"
 fi
 
+# --- a round whose options belong to different captured pages (claude-config#1536) ---
+# A settled design names several captured pages in "chromes", each frame naming its own (#1474), and a
+# round took one "chrome", so a round whose options belong to different pages (a panel in edit mode, a
+# card in view mode) had to be split or drawn outside its real page. A round's spec now lists them in
+# "chromes", each option naming its own in "chrome", read by the same load_chromes and refused the same.
+MC="$TMP/multichrome"; mkdir -p "$MC"
+printf 'function buildScreen(variant) { var d = document.createElement("div"); d.className = "screen"; d.textContent = variant.name; return d; }\n' > "$MC/builder.js"
+cat > "$MC/edit.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>header { height: 40px; }</style></head>
+<body><header>Ovation edit</header><main id="main">the edit panel</main></body></html>
+HTML
+cat > "$MC/view.html" <<'HTML'
+<!doctype html><html><head><meta charset="utf-8"><style>header { height: 64px; }</style></head>
+<body><header>Ovation view</header><section id="card">the view card</section></body></html>
+HTML
+# mspec <file> <python expression changing s, the spec> : a round of two options, Espresso in edit and
+# Ink in view, unless the expression changes it.
+mspec() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+s = {"title": "Ovation, leads", "round": "Which colour carries the card", "builder": "builder.js",
+     "chromes": [{"name": "edit", "captured": "edit.html", "from": "Ovation, a lead in edit mode, 2026-10-23", "slot": "#main", "width": 640},
+                 {"name": "view", "captured": "view.html", "from": "Ovation, a lead in view mode, 2026-10-23", "slot": "#card", "width": 480}],
+     "variants": [{"key": "1", "name": "Espresso", "why": "The warm one, on the panel.", "chrome": "edit"},
+                  {"key": "2", "name": "Ink", "why": "Near black, on the card.", "chrome": "view"}]}
+exec(sys.argv[2])
+open(sys.argv[1], "w").write(json.dumps(s))
+PY
+}
+mspec "$MC/spec.json" "pass"
+out="$(run "$MC/spec.json" "$MC/out.html")"; rc=$?
+check_eq "a round whose options name their own captured pages builds" "0" "$rc"
+mpage="$(cat "$MC/out.html" 2>/dev/null)"
+check "both captured pages are carried" "the edit panel" "$mpage"
+check "the second one too" "the view card" "$mpage"
+check_eq "each captured page is carried once, however many options share it" "1" "$(grep -o 'the view card' "$MC/out.html" 2>/dev/null | wc -l | tr -d ' ')"
+mrefused() { # mrefused <label> <python change> <needle>
+  mspec "$MC/bad.json" "$2"
+  rm -f "$MC/bad.html"
+  local out rc
+  out="$(run "$MC/bad.json" "$MC/bad.html")"; rc=$?
+  check_eq "$1 is refused (exit 2)" "2" "$rc"
+  check "and says so" "$3" "$out"
+  check_eq "and writes no page" "0" "$([ -e "$MC/bad.html" ] && echo 1 || echo 0)"
+}
+mrefused "an option naming a captured page the round does not hold" 's["variants"][1]["chrome"] = "viw"' 'option "Ink" names the chrome "viw", and the round'"'"'s chromes are edit, view'
+mrefused "an option naming no page in a round of several" 'del s["variants"][1]["chrome"]' 'option "Ink" names no chrome'
+mrefused "a captured page no option is drawn in" 's["variants"][1]["chrome"] = "edit"' "the chrome view is drawn by no option"
+mrefused "two captured pages sharing a name" 's["chromes"][1]["name"] = "edit"' "two chromes share the name edit"
+mrefused "a captured page with no name" 'del s["chromes"][1]["name"]' "chrome 2 has no name"
+mrefused "an empty list of captured pages" 's["chromes"] = []' '"chromes"'
+mrefused "a named page whose own capture is wrong" 's["chromes"][1]["slot"] = "#gone"' "chrome view: "
+mrefused "one captured page and several at once" 's["chrome"] = dict(s["chromes"][0]); del s["chrome"]["name"]' "keep one"
+mrefused "several captured pages beside the shared terminal" 's["screen"] = "terminal"' "keep one"
+mrefused "several captured pages beside a kind with no product page" 's["screen"] = "email"; s["width"] = 600' "keep one"
+mrefused "an option naming a page in a round of one" 's["chrome"] = dict(s.pop("chromes")[0]); del s["chrome"]["name"]' 'option "Espresso" names the chrome "edit", and the spec names one captured page'
+# Options are told apart by their keys, never their names, so two options sharing a name on different
+# pages are two pages in use, not one page left out (lessons review of #1536).
+mspec "$MC/same-name.json" 's["variants"][1]["name"] = "Espresso"'
+out="$(run "$MC/same-name.json" "$MC/same-name.html")"; rc=$?
+check_eq "two options sharing a name, each on its own page, still build" "0" "$rc"
+check_not "and neither page is said to be drawn by no option" "drawn by no option" "$out"
+# One page is the round it always was: the same page, byte for byte, the committed example included
+# (section 12), and nothing of the several pages' wiring in it.
+check_not "a round of one captured page carries none of the several pages' wiring" "DR_PAGE_OF" "$(cat "$NS/out.html" 2>/dev/null)"
+if [[ ! -x "$CHROME" ]]; then
+  echo "SUITE-PART-UNMEASURED no browser at $CHROME, so a round of several captured pages was not drawn"
+else
+  python3 - "$MC/out.html" <<'PY'
+import sys
+page = open(sys.argv[1], encoding="utf-8").read()
+probe = """<script>setTimeout(function () {
+  var frames = document.querySelectorAll("#dr-stage iframe");
+  var read = function () { return Array.prototype.map.call(frames, function (f) {
+    var d = f.contentDocument, slot = d && (d.getElementById("main") || d.getElementById("card"));
+    return [d && d.querySelector("header") ? d.querySelector("header").textContent : "noheader",
+            slot ? slot.id + "=" + slot.textContent : "noslot", f.style.width].join("|");
+  }).join(";"); };
+  var out = [read()];
+  frames[0].contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "2", bubbles: true}));
+  setTimeout(function () {
+    out.push(document.querySelector(".dr-readout h2").textContent, frames[1].getBoundingClientRect().height > 20 ? "tall" : "flat");
+    out.push(Array.prototype.map.call(document.querySelectorAll(".dr-sameness"), function (p) { return p.textContent; }).join(" / "));
+    var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.join(","); document.body.append(pre);
+  }, 300);
+}, 800);</script>"""
+open(sys.argv[1] + ".probe.html", "w", encoding="utf-8").write(page.replace("</body>", probe + "</body>"))
+PY
+  got="$(headless_dom --headless --disable-gpu --no-sandbox --virtual-time-budget=5000 --dump-dom "file://$MC/out.html.probe.html" 2>/dev/null \
+    | python3 -c 'import sys,re,html; m=re.search(r"<pre id=\"PROBE\">(.*?)</pre>", sys.stdin.read(), re.S); print(html.unescape(m.group(1)) if m else "NO-PROBE")')"
+  check_eq "each option is drawn in the page it names, into that page's own slot, at that page's width, and a key switches" \
+    "Ovation edit|main=Espresso|640px;Ovation view|card=Ink|480px,Ink,tall," "$got"
+fi
+
 # --- a screen with no product page around it: the three named kinds (claude-config#1393) ---
 # Dan, 2026-10-20, on #1393: "allow named kinds". A round may declare itself an email, a document or a
 # new product in "screen", where the terminal is declared; it is then drawn at its own size with no

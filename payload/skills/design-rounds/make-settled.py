@@ -146,14 +146,11 @@ def main(argv):
                  "well; keep one" % kind)
     # A design whose frames were captured from different pages lists them in "chromes" and each frame
     # names its own (claude-config#1474). Beside "chrome" or a kind, one would win over the other, so
-    # both are refused as above.
-    several = "chromes" in spec
-    if several and kind is not None:
-        fail('the spec names the kind "%s", which is drawn with no captured page, and captured pages in "chromes" '
-             "as well; keep one" % kind)
-    if several and spec.get("chrome") is not None:
-        fail('the spec names one captured page in "chrome" and several in "chromes"; keep one: "chromes" when '
-             "the frames were captured from different pages, each frame naming its own")
+    # both are refused as above, by the reader a round's switcher uses too (claude-config#1536).
+    try:
+        several = chrome_frame.several_chromes(spec, "frames")
+    except chrome_frame.ChromeError as err:
+        fail(str(err))
     builder_name = str(spec.get("builder", "")).strip()
     if not builder_name:
         fail('the spec names no "builder"')
@@ -206,31 +203,19 @@ def main(argv):
             fail("frame %s has no \"variant\", the object its builder is handed" % f["id"])
         if not str(f.get("title", "")).strip():
             fail("frame %s has no title, which is what a reader of the design sees it by" % f["id"])
-        named = f.get("chrome")
-        if chromes is None:
-            if named is not None:
-                fail('frame %s names the chrome %s, and %s, so there is none to choose: list the captured pages in '
-                     '"chromes" for each frame to name its own' % (f["id"], json.dumps(named), (
-                         'the spec names one captured page, in "chrome", for every frame' if kind is None
-                         else 'the design is drawn with no captured page ("screen": "%s")' % kind)))
-            if chrome["kind"] == "png" and w != chrome["width"]:
-                fail("frame %s is %d wide, and its chrome picture is %d: a picture's width is its own" % (f["id"], w, chrome["width"]))
-            continue
-        if named is None:
-            fail('frame %s names no chrome, and this design is drawn in %d captured pages (%s); give it "chrome": '
-                 "the one it was captured in" % (f["id"], len(chromes), ", ".join(chromes)))
-        if not isinstance(named, str) or named not in chromes:
-            fail("frame %s names the chrome %s, and the design's chromes are %s"
-                 % (f["id"], json.dumps(named), ", ".join(chromes)))
-        if chromes[named]["kind"] == "png" and w != chromes[named]["width"]:
-            fail("frame %s is %d wide, and its chrome %s is a picture %d wide: a picture's width is its own"
-                 % (f["id"], w, named, chromes[named]["width"]))
-    if chromes is not None:
-        drawn_in = set(f["chrome"] for f in frames)
-        for name in chromes:
-            if name not in drawn_in:
-                fail('the chrome %s is drawn by no frame: name it on the frames captured in it, or take it out of '
-                     '"chromes"' % name)
+    # Each frame's captured page, refused as a round's options are (claude-config#1474, #1536).
+    try:
+        page_of = chrome_frame.chrome_names(
+            [(f["id"], f.get("chrome")) for f in frames], chromes, "frame", "design",
+            'the spec names one captured page, in "chrome", for every frame' if kind is None
+            else 'the design is drawn with no captured page ("screen": "%s")' % kind)
+    except chrome_frame.ChromeError as err:
+        fail(str(err))
+    for f in frames:
+        own = chromes[page_of[f["id"]]] if chromes is not None else chrome
+        if own["kind"] == "png" and f["width"] != own["width"]:
+            fail("frame %s is %d wide, and its chrome %sis a picture %d wide: a picture's width is its own"
+                 % (f["id"], f["width"], (page_of[f["id"]] + " ") if chromes is not None else "", own["width"]))
 
     decisions = spec.get("decisions")
     if not isinstance(decisions, list) or not decisions:
