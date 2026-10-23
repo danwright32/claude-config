@@ -66,7 +66,7 @@ remove(){ # remove <rules arg> [env...] -> OUT, RC
     python3 "$LIB" remove --project "$P" --rules "$r" 2>&1)"
   RC=$?
 }
-has(){ case "$OUT" in *"$1"*) echo ok ;; *) echo "output lacks '$1': $(printf '%s' "$OUT" | head -c 600)" ;; esac; }
+has(){ case "$OUT" in *"$1"*) echo ok ;; *) echo "output lacks '$1': ${OUT:0:600}" ;; esac; }
 lacks(){ case "$OUT" in *"$1"*) echo "output carries '$2'" ;; *) echo ok ;; esac; }
 same_file(){ cmp -s "$1" "$2" && echo ok || echo "the file changed"; }
 no_secret_under(){ # no_secret_under <dir>: neither fake secret is in any file there
@@ -90,7 +90,7 @@ check "no settings file: says nothing" "$([ -z "$OUT" ] && echo ok || echo "said
 
 world clean
 fixture 'Bash(npm run test:*)' 'Bash(git status)' 'Bash(swift test)' 'Bash(ls *)' \
-  'WebFetch(domain:example.test)' 'mcp__posthog__exec' 'Bash(./scripts/check.sh)' 'Read(//Users/someone/project/**)'
+  'WebFetch(domain:example.test)' 'mcp__posthog__exec' 'Bash(./scripts/check.sh)' 'Read(//srv/project/**)'
 cp "$F" "$W/orig"
 sweep
 check "a clean file: exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC")"
@@ -132,13 +132,13 @@ check "flagged: the record holds no secret" "$(no_secret_under "$W/home")"
 
 # --- once per set ---------------------------------------------------------------------------------
 sweep
-check "the same set again: says nothing" "$([ -z "$OUT" ] && echo ok || echo "said: $(printf '%s' "$OUT" | head -c 300)")"
+check "the same set again: says nothing" "$([ -z "$OUT" ] && echo ok || echo "said: ${OUT:0:300}")"
 python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1])); d["permissions"]["allow"] = d["permissions"]["allow"][:3]
 json.dump(d, open(sys.argv[1], "w"), indent=2)' "$F"
 sweep
-check "a smaller set (some removed): says nothing" "$([ -z "$OUT" ] && echo ok || echo "said: $(printf '%s' "$OUT" | head -c 300)")"
+check "a smaller set (some removed): says nothing" "$([ -z "$OUT" ] && echo ok || echo "said: ${OUT:0:300}")"
 python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1])); d["permissions"]["allow"].append("Bash(cat /tmp/x.log)")
@@ -245,7 +245,8 @@ check "remove: only the picked rules go, every other byte stays" "$(same_file "$
 check "remove: says which rules it removed" "$(has 'Removed rules 2, 4')"
 check "remove: does not print the token" "$(lacks "$FAKE_BEARER" 'the bearer token')"
 check "remove: keeps the file's mode" "$([ "$(mode_of "$F")" = 640 ] && echo ok || echo "mode is now $(mode_of "$F")")"
-bk="$(find "$W/backups" -type f 2>/dev/null | head -1)"
+find "$W/backups" -type f > "$W/backups.list" 2>/dev/null
+IFS= read -r bk < "$W/backups.list" || bk=""
 check "remove: took a backup" "$([ -n "$bk" ] && echo ok || echo "no backup under $W/backups")"
 [ -n "$bk" ] && check "remove: the backup is the original, byte for byte" "$(same_file "$bk" "$W/orig")"
 [ -n "$bk" ] && check "remove: the backup is readable by its owner only" "$([ "$(mode_of "$bk")" = 600 ] && echo ok || echo "mode $(mode_of "$bk")")"

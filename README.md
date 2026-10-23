@@ -2310,7 +2310,8 @@ tells you once and offers a picker to remove them (#1582). It removes nothing on
 - **A file it cannot judge** (unreadable, not JSON, an allow that is not a list) is said once in those
   words and left alone. A detached headless run says nothing.
 - **Cost.** No process at all for a project without the file; otherwise one read of it and three
-  processes whatever the rule count, about 80 ms (DESIGN.md has the measurements).
+  processes whatever the rule count, about 80 ms when measured on 2026-10-23 (DESIGN.md has the
+  measurements).
 - Tests: `hooks/test-local-allow-sweep.sh`, and the process counts in `hooks/test-per-prompt-hook-cost.sh`.
 
 ## Mods
