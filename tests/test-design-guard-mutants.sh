@@ -48,8 +48,10 @@ export CLAUDE_BIN
 # Both tests run and pass on the tree as it is.
 real="$("$CLAUDE_BIN" plugin test "$ROOT/$MOD" 2>&1)"
 for name in "$EDITED" "$OUTSIDE"; do
-  if printf '%s\n' "$real" | grep -qF "(pass) $name"; then check "the guard's suite runs and passes: $name" ok
-  else check "the guard's suite runs and passes: $name" "no (pass) line for it; the suite said: $(printf '%s\n' "$real" | tail -3 | tr '\n' ' ')"; fi
+  case "$real" in
+    *"(pass) $name"*) check "the guard's suite runs and passes: $name" ok ;;
+    *) check "the guard's suite runs and passes: $name" "no (pass) line for it; the suite said: $(printf '%s\n' "$real" | tail -3 | tr '\n' ' ')" ;;
+  esac
 done
 
 # Runs the guard's suite in the broken copy and fails only where the named test FAILED, so a suite
@@ -64,9 +66,9 @@ fails_on(){ # <test name> -> the --run command for prove-it-fails
 mutant(){
   local label="$1" name="$2" want="$3" file="$4" expr="$5" out rc
   out="$(bash "$ROOT/tools/prove-it-fails.sh" --repo "$ROOT" --no-baseline --run "$(fails_on "$name")" --sed "$file" "$expr" 2>&1)"; rc=$?
-  case "$want" in
-    PROVED) [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '^PROVED' && { check "$label" ok; return; } ;;
-    'NOT PROVED') [ "$rc" -eq 1 ] && printf '%s\n' "$out" | grep -q '^NOT PROVED' && { check "$label" ok; return; } ;;
+  case "$want:$rc:$out" in
+    "PROVED:0:"*"PROVED: the check noticed"*) check "$label" ok; return ;;
+    "NOT PROVED:1:"*"NOT PROVED: the check still passed"*) check "$label" ok; return ;;
   esac
   check "$label" "wanted $want, prove-it-fails exited $rc: $(printf '%s\n' "$out" | tail -4 | tr '\n' ' ')"
 }
