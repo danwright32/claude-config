@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L803. A name search must fold accents on both query and stored text, or a plain spelling never finds an accented name and reads as no such person.
 - L485. A minimum size is measured from the content's TALLEST state, usually the one carrying warnings, or it clips exactly when something is wrong.
 - L659. Copy on a surface reachable by more than one route must be true on EVERY route, especially a sentence naming WHO decided something.
 - L651. A control navigating to a route whose guard REDIRECTS an unpermitted viewer is a silent no-op for them, so gate it on the same predicate the guard uses.

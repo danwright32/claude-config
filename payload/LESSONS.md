@@ -7,6 +7,12 @@ for reference; L6 was reviewed and deliberately not adopted.
 
 ## Proof over green
 
+- **L801. When counting commits by what their message says (fixes, reverts, a ticket number), match
+  the title line only, because git log --grep searches the whole message including the body, and a
+  body that merely mentions a fix inflates the count; on 2026-10-22 one file read as 59 fixes when
+  its titles held 5.** (claude-config#1504, 2026-10-22)
+  SHORT: Count commits by message using the title line only; git log --grep also matches bodies and inflates counts.
+
 - **L781. A generated file that a strict consumer accepts in several forms must be proven to give
   ONE output for one input, across several cold-cache runs, before you pin it or guard it, because
   a timing-dependent generator makes every regeneration a coin flip and a guard on it fails at
@@ -6128,7 +6134,18 @@ for reference; L6 was reviewed and deliberately not adopted.
   (danwright32/claude-config#1133, 2026-10-13)
   SHORT: An exception keyed on matched text that is constant (a key header) exempts every match; key it on location and whole value.
 
+- **L802. A lockfile override or dependency bump patches only the copies the build resolves; a
+  library loaded from a CDN at runtime, or one shipping a prebuilt bundle with its dependencies
+  built in, keeps the vulnerable copy, so confirm a security fix by reading the version in what
+  the browser actually loads.**
+  (Try-Pennie/bidspoke#2695, 2026-10-22)
+  SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
+
 ## UX completeness
+- **L803. A search box over people's or places' names must fold accents on both the query and the
+  stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the
+  miss looks exactly like the person not existing.** (slate#4124, 2026-10-22)
+  SHORT: A name search must fold accents on both query and stored text, or a plain spelling never finds an accented name and reads as no such person.
 
 - **L485. A container's minimum size is measured from the TALLEST state its content can
   reach, which is usually the one carrying warnings or errors rather than the filled one.** A size
