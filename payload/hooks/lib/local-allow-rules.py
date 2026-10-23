@@ -236,13 +236,9 @@ def _prefix_part(cmd):
     return cmd, False
 
 
-def _words(cmd):
-    return cmd.split()
-
-
 def _command_word(cmd):
     """The first word that is not an env assignment, if it is a plain word; else None."""
-    for w in _words(cmd):
+    for w in cmd.split():
         if "=" in w:
             continue
         base = w.rsplit("/", 1)[-1]
@@ -271,7 +267,7 @@ def one_off_reasons(rule):
         reasons.append(TEMP)
     if m and WILD not in reasons:
         body, prefixed = _prefix_part(m.group(1))
-        words = _words(body)
+        words = body.split()
         literal = False
         if prefixed:
             literal = '"' in body or "'" in body
@@ -302,7 +298,9 @@ def secret_flags(rules, common):
     try:
         p = subprocess.run(
             ["bash", "-c", '. "$1" && ar_redact', "_", common],
-            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=20,
+            # Five seconds, inside the hook's own ten, so a hung redactor is reported here rather
+            # than the whole hook being killed with nothing said.
+            input="\n".join(lines) + "\n", capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError) as e:
         raise Unjudgeable("could not check its rules for keys or tokens: the redactor did not run (%s)" % e.__class__.__name__)
@@ -371,7 +369,7 @@ def sweep(settings_file, project, common):
     raw = b""
     try:
         raw = read_bytes(settings_file)
-        text, doc, _ = parse(raw)
+        _, doc, _ = parse(raw)
         rules = allow_rules(doc)
         flagged = judge(rules, common)
     except Unjudgeable as e:
@@ -392,7 +390,7 @@ def sweep(settings_file, project, common):
         return 0
     if not flagged:
         return 0
-    keys = set("%s" % fingerprint(r) for _, r, _, _ in flagged)
+    keys = set(fingerprint(r) for _, r, _, _ in flagged)
     said = read_said(settings_file)
     if keys <= said:
         return 0
@@ -513,7 +511,7 @@ def remove(project, rules_arg):
     expect = json.loads(text)
     expect["permissions"]["allow"] = [r for k, r in enumerate(rules) if k not in set(remove_idx)]
     try:
-        got_text, got, got_spans = parse(new.encode("utf-8"))
+        _, got, got_spans = parse(new.encode("utf-8"))
     except Unjudgeable as e:
         return refuse("the edited text did not parse (%s), so the file was not changed. Backup: %s" % (e, backup))
     if got != expect or new[: spans["array"][0]] != text[: spans["array"][0]] \
