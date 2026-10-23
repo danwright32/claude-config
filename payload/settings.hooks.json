@@ -110,6 +110,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/require-verification-run.sh",
+            "timeout": 30,
+            "statusMessage": "Checking each touched area has a passing verification run"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-issue-fields.sh",
             "timeout": 15,
             "statusMessage": "Checking the issue has a milestone, priority and category"
@@ -234,6 +240,11 @@
           {
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/lesson-fanout-notice.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/verification-tally-notice.sh",
             "timeout": 10
           }
         ]

@@ -1417,27 +1417,143 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
 # could tell from a refusal, and the gate refused the merge on the first one
 # with nothing asked again (claude-config#1096).
 mt_remote_path() {  # $1 = owner/name, $2 = a repo relative path, $3 = account or empty for the active one
-  local slug="$1" path="$2" account="${3:-}" token="" errf err rc
-  MT_REMOTE_STATE="unknown"; MT_REMOTE_ERR=""
-  errf=$(mktemp "${TMPDIR:-/tmp}/mt-remote-path.XXXXXX" 2>/dev/null) \
-    || { MT_REMOTE_ERR="could not make a temporary file for gh's answer"; return 1; }
+  local rc
+  mt_api_read /dev/null "${3:-}" "repos/$1/contents/$2"; rc=$?
+  MT_REMOTE_ERR="$MT_READ_ERR"
+  case "$MT_READ_STATE" in
+    ok) MT_REMOTE_STATE="present" ;;
+    *) MT_REMOTE_STATE="$MT_READ_STATE" ;;
+  esac
+  return "$rc"
+}
+
+# One `gh api` read, as the account that could see the pull request, with what GitHub answered kept
+# in the file $1 (claude-config#1529). A reader in mt_retry_read's terms, and the rule mt_remote_path
+# has used since #1096, which now reads through it so the two cannot drift (L370): sets MT_READ_STATE
+# to ok, absent (gh's own 404) or unknown, and MT_READ_ERR to the first non blank line gh printed,
+# and returns 0 when GitHub answered (ok or absent), 2 when the read failed transiently
+# (mt_gh_transient), and 1 for any other failure, which a caller must refuse on rather than read as
+# absent (L42). $3 onward are gh api's own arguments, passed as given. Call it in this shell, never a
+# subshell, so the globals reach the caller.
+mt_api_read() {  # $1 = file for the answer (/dev/null to keep none), $2 = account or empty for the active one, $3.. = gh api arguments
+  local out="$1" account="${2:-}" token="" errf err rc
+  shift 2
+  MT_READ_STATE="unknown"; MT_READ_ERR=""
+  errf=$(mktemp "${TMPDIR:-/tmp}/mt-api-read.XXXXXX" 2>/dev/null) \
+    || { MT_READ_ERR="could not make a temporary file for gh's answer"; return 1; }
   if [ -n "$account" ]; then
     token=$(gh auth token -u "$account" 2>/dev/null) || token=""
-    if [ -z "$token" ]; then rm -f "$errf"; MT_REMOTE_ERR="gh has no token for the account $account"; return 1; fi
-    GH_TOKEN="$token" gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
+    if [ -z "$token" ]; then rm -f "$errf"; MT_READ_ERR="gh has no token for the account $account"; return 1; fi
+    GH_TOKEN="$token" gh api "$@" >"$out" 2>"$errf"; rc=$?
   else
-    gh api "repos/$slug/contents/$path" >/dev/null 2>"$errf"; rc=$?
+    gh api "$@" >"$out" 2>"$errf"; rc=$?
   fi
   # Judged on everything gh printed, reported by its first line.
   err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
-  if [ "$rc" = 0 ]; then MT_REMOTE_STATE="present"; return 0; fi
-  MT_REMOTE_ERR=$(printf '%s\n' "$err" | awk 'NF && !got { print; got = 1 }')
-  MT_REMOTE_ERR="${MT_REMOTE_ERR:-gh exited $rc}"
+  if [ "$rc" = 0 ]; then MT_READ_STATE="ok"; return 0; fi
+  MT_READ_ERR=$(printf '%s\n' "$err" | awk 'NF && !got { print; got = 1 }')
+  MT_READ_ERR="${MT_READ_ERR:-gh exited $rc}"
   case "$err" in
-    *"HTTP 404"*) MT_REMOTE_STATE="absent"; return 0 ;;
+    *"HTTP 404"*) MT_READ_STATE="absent"; return 0 ;;
   esac
   mt_gh_transient "$err" && return 2
   return 1
+}
+
+# Where the gh invocation's OWN words are in the command, as "start end" character offsets (#382).
+# Moved here from block-red-merge.sh for claude-config#1529, so the verification merge check reads a
+# merge's pin exactly as that gate does (L613).
+#
+# The pin has to be read from, and suggested into, exactly that stretch. The whole line used to
+# serve for both, and they failed together: a piped merge was told to run
+# `gh pr merge 305 --squash 2>&1 | cat --match-head-commit <sha>`, which hands the flag to cat, and
+# the reading below then found the flag in that line and let the unpinned merge through with
+# nothing saying so. Fixing only the suggestion would leave the next hand written copy of the same
+# mistake accepted.
+#
+# The invocation ends at the first unquoted pipe, `&`, `;`, redirection, parenthesis or newline, and
+# a file descriptor number written against its redirection (the 2 of `2>&1`) belongs to the
+# redirection. Quotes are tracked, so a `--body` holding a pipe or a semicolon does not end it.
+#
+# Its one blind spot, stated rather than hidden: a heredoc body is scanned as if it were commands, so
+# a body line that itself begins `gh pr merge` would be taken for the invocation. The matcher that
+# decided this is a merge strips bodies first, and in that shape the pin is read from the body line,
+# finds nothing, and refuses, so the blind spot can only refuse a merge, never let one through.
+mt_merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when there is none
+  local cmd="$1" n=${#1} i=0 c="" quote="" start=0 end seg
+  local fd='[[:space:]]([0-9]+)$'
+  while [ "$i" -le "$n" ]; do
+    c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
+    if [ -n "$quote" ]; then
+      if [ "$c" = "\\" ] && [ "$quote" = '"' ]; then i=$((i + 2)); continue; fi
+      [ "$c" = "$quote" ] && quote=""
+      i=$((i + 1)); continue
+    fi
+    case "$c" in
+      "\\") i=$((i + 2)); continue ;;
+      "'"|'"') quote="$c" ;;
+      ""|"|"|"&"|";"|">"|"<"|"("|")"|$'\n')
+        seg="${cmd:$start:$((i - start))}"
+        # Which stretch runs the merge is the one reading of gh's (ps_runs_gh, claude-config#1188):
+        # past assignments, rtk, env and sudo, and gh's flags written in front of the subcommand, so
+        # `gh -R o/x pr merge 7` is told where its flag goes like any other merge.
+        if case "$seg" in *merge*) true ;; *) false ;; esac && ps_runs_gh "$seg" pr merge; then
+          end=$i
+          if [ "$c" = ">" ] || [ "$c" = "<" ]; then
+            [[ "$seg" =~ $fd ]] && end=$((end - ${#BASH_REMATCH[1]}))
+          fi
+          while [ "$end" -gt "$start" ]; do
+            case "${cmd:$((end - 1)):1}" in
+              " "|$'\t') end=$((end - 1)) ;;
+              *) break ;;
+            esac
+          done
+          printf '%s %s' "$start" "$end"
+          return 0
+        fi
+        start=$((i + 1))
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# The commit a merge pins: --match-head-commit on the gh pr merge invocation itself, sha= on a REST
+# merge, expectedHeadOid on a GraphQL one. Sets MT_PIN_SHA (empty when it pins nothing, or pins
+# something that is not hex), MT_PIN_BOUNDS ("start end" of the gh pr merge invocation, empty when
+# none was found) and MT_PIN_INV_END (where that invocation ends, for a suggestion that puts the flag
+# on it). Reads MT_API_ROUTE and MT_API_PIN, so it is called in the gate's own shell AFTER
+# mt_api_merge_untold, which sets them.
+mt_merge_pin() {  # $1 = command
+  local cmd="$1" inv_start invocation=""
+  MT_PIN_SHA=""; MT_PIN_BOUNDS=""; MT_PIN_INV_END=""
+  case "${MT_API_ROUTE:-}" in
+    rest|graphql)
+      # Read from the API call's own words by lib/merge-selector.py: `-f sha=<commit>` on the REST
+      # endpoint, `expectedHeadOid` in the mutation's input (written there or passed as a variable).
+      MT_PIN_SHA="${MT_API_PIN:-}"
+      ;;
+    *)
+      MT_PIN_BOUNDS=$(mt_merge_invocation_bounds "$cmd") || MT_PIN_BOUNDS=""
+      if [ -n "$MT_PIN_BOUNDS" ]; then
+        inv_start=${MT_PIN_BOUNDS% *}
+        MT_PIN_INV_END=${MT_PIN_BOUNDS#* }
+        invocation="${cmd:$inv_start:$((MT_PIN_INV_END - inv_start))}"
+      fi
+      MT_PIN_SHA=$(printf '%s' "$invocation" \
+        | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
+        | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
+      # A merge behind env or sudo is not one this scan finds at the head of a command, so where it
+      # found no invocation the pin is the one lib/merge-selector.py read from the merge's own words,
+      # which stop at the first pipe or separator just as this scan does (claude-config#1181).
+      if [ -z "$MT_PIN_BOUNDS" ] && [ -z "$MT_PIN_SHA" ]; then
+        MT_PIN_SHA="${MT_API_PIN:-}"
+      fi
+      ;;
+  esac
+  case "$MT_PIN_SHA" in *[!0-9a-fA-F]*) MT_PIN_SHA="" ;; esac
+  return 0
 }
 
 # mt_pinned_tool, asked of a repository on GitHub rather than a directory on disk. Sets

@@ -983,9 +983,10 @@ be updated, waited on and merged in one step, run in the background from a check
 repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] --squash`
 (claude-config#851). It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
-then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh` and
-`require-changelog-tag.sh` and merges only when every one allows it, so it decides nothing any gate
-would refuse. The changelog record gate is also asked at the first look, before any update, wait or
+then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
+`require-changelog-tag.sh`, `design-score-gate.sh` and `require-verification-run.sh` and merges only
+when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
+something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
 review, because nothing those do can add a missing label. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
@@ -1173,7 +1174,7 @@ these cases.
 
 ### What a push actually waits on
 
-Twenty-seven PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Twenty-eight PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1185,7 +1186,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Ten of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Eleven of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1194,6 +1195,7 @@ Ten of them came after the 2026-09-21 timing further down, which measured the fi
 | `block-red-merge.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13; it acts on a merge, and since it lost its `if` filter it leaves on a command naming no merge before loading anything |
 | `require-changelog-tag.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13, the same way |
 | `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
+| `require-verification-run.sh` (#1529) | 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3) |
