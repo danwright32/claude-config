@@ -41,6 +41,9 @@ counting here are the same for all of them:
      "frames": [{"id": "f1",
                  "designImage": "f1-design.png", "builtImage": "f1-built.png",
                  "builtError": "<why the build could not be drawn>",      (only when it could not)
+                 "designError": "<what kept the design's own frame from being drawn whole>",
+                                (only then: its builder or its screenShown threw, in the settled file's
+                                own words from designFrameTrouble, claude-config#1539; no score)
                  "checks": [{"id": "D1", "ok": true, "detail": "", "threw": false}],
                  "designChecks": [...the same checks run on the design's frame...]}]}
 
@@ -69,8 +72,9 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
                      optional; the score prints how many it skipped every time, none included
 
 Exit codes, never read alike (L11): 0 matched (both halves 100%), 1 not matched yet, 2 no score: the
-capture or design could not be read, a frame or picture is missing, a check threw or fails on the
-design itself, an exception is malformed, or nothing is left to measure. Unmeasured is never 100.
+capture or design could not be read, a frame or picture is missing, a design frame is not drawn whole
+(its builder or its screenShown threw), a check threw or fails on the design itself, an exception is
+malformed, or nothing is left to measure. Unmeasured is never 100.
 The score file is written in all three cases whenever the folder exists, with "verdict" saying which.
 """
 import hashlib
@@ -562,6 +566,12 @@ def score_capture(folder):
         cf = captured.get(fid)
         if cf is None:
             no.append("the design's frame %s has no picture in the capture" % fid)
+            continue
+        # The design's own frame not drawn whole, in the settled file's words (claude-config#1539): there is
+        # nothing whole to hold the build to there, however alike the two pictures are.
+        if cf.get("designError"):
+            no.append("frame %s cannot be scored, since the design's own frame is not drawn whole: %s"
+                      % (fid, cf["designError"]))
             continue
         if cf.get("builtError"):
             no.append("frame %s: the build could not be drawn (%s)" % (fid, cf["builtError"]))
