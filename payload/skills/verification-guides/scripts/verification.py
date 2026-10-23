@@ -110,7 +110,7 @@ def verification_home():
 
 
 def receipt_dir(receipt_id, home=None):
-    if not RECEIPT_ID_RE.match(receipt_id or ""):
+    if not isinstance(receipt_id, str) or not RECEIPT_ID_RE.match(receipt_id):
         fail("receipt-bad-id", "%r is not a receipt id (shape 20261022T230000Z-0123456-a1b2c3)" % receipt_id)
     return os.path.join(home or verification_home(), "receipts", receipt_id)
 
@@ -492,7 +492,7 @@ def validate_record(rec):
             continue
         edited.add(e["check_id"])
     for c in checks:
-        if c.get("blame") == "guide" and c.get("id") not in edited:
+        if c.get("blame") == "guide" and isinstance(c.get("id"), str) and c["id"] not in edited:
             p.append(("record-guide-blame-without-edit", "check %s is blamed on the guide, so the record must carry"
                       " the guide edit (old check, new check, why)" % c.get("id")))
     if p:
@@ -634,6 +634,11 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
         seen.add(name)
         guide = load_guide(os.path.join(rdir, "guides", name + ".md"))
         gtext = {c["id"]: c["text"] for c in guide["checks"]}
+        not_lists = [k for k in ("checks", "done_when", "screenshots", "guide_edits")
+                     if not isinstance(a.get(k, []), list)]
+        if not_lists:
+            p.append(("render-bad-draft", "area %s: %s must be a list" % (name, " and ".join(not_lists))))
+            continue
         checks = [c for c in a.get("checks", []) if isinstance(c, dict)]
         # Every id as a string, so an entry with no id is a mismatch, never a crash in sorted().
         got = [str(c.get("id")) for c in checks]
@@ -651,7 +656,7 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
             if isinstance(s, str) and SHOT_RE.match(s) and not os.path.isfile(os.path.join(rdir, s)):
                 p.append(("render-screenshot-missing", "screenshot %s is not beside receipt %s" % (s, rid)))
         edits = []
-        for e in a.get("guide_edits", []) or []:
+        for e in a.get("guide_edits", []):
             e = dict(e) if isinstance(e, dict) else {}
             # A check_id that is not a string (a list, a number) names no check: validate_record
             # below refuses it as record-bad-guide-edit rather than this lookup crashing.

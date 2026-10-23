@@ -358,6 +358,8 @@ class RecordParseTests(unittest.TestCase):
             (good_record(area=["invoices"]), "record-bad-field"),
             (good_record(checks=[dict(c0, result=["pass"])]), "record-bad-result"),
             (good_record(checks=[dict(good_record()["checks"][1], blame=["code"])]), "record-missing-blame"),
+            (good_record(checks=[dict(good_record()["checks"][1], id=["C2"], blame="guide")]), "record-bad-field"),
+            (good_record(checks=[dict(good_record()["checks"][1], id={"x": 1}, blame="guide")]), "record-bad-field"),
         ]
         for obj, kind in cases:
             out = v.parse_comment(comment_with(obj))
@@ -598,6 +600,74 @@ class RenderTests(unittest.TestCase):
     def test_guide_blame_needs_an_edit(self):
         stopped_receipt(self.home)
         self.refused(self.draft(guide_edits=[]), "record-guide-blame-without-edit")
+
+
+WRONG_TYPES = [None, 3, 2.5, True, [], ["x"], {}, {"a": 1}, "", "x\ny"]
+
+
+def field_paths(obj, prefix=()):
+    yield prefix
+    if isinstance(obj, dict):
+        for k, val in obj.items():
+            yield from field_paths(val, prefix + (k,))
+    elif isinstance(obj, list):
+        for i, val in enumerate(obj):
+            yield from field_paths(val, prefix + (i,))
+
+
+def with_value(obj, path, val):
+    if not path:
+        return val
+    out = json.loads(json.dumps(obj))
+    cur = out
+    for p in path[:-1]:
+        cur = cur[p]
+    cur[path[-1]] = val
+    return out
+
+
+class WrongTypeSweepTests(unittest.TestCase):
+    """Every field of a record, a draft and areas.json, given every wrong type, is a named refusal.
+
+    The merge check reads what an agent wrote, so a list where a string belongs must be refused by
+    kind, never crash the reader with a traceback that reads as the check being broken. Found one
+    field at a time by three review rounds, so closed for the class here (L30).
+    """
+
+    def crashes(self, obj, call):
+        found = []
+        for path in list(field_paths(obj)):
+            for bad in WRONG_TYPES:
+                try:
+                    call(with_value(obj, path, bad))
+                except v.VerificationError:
+                    pass
+                except Exception as e:  # the defect this sweep exists to find, so it is recorded
+                    found.append((path, bad, repr(e)))
+        return found
+
+    def test_records(self):
+        rec = good_record()
+        self.assertEqual(self.crashes(rec, lambda r: v.parse_comment(comment_with(r), sha=SHA)), [])
+
+    def test_drafts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home, tr = os.path.join(tmp, "home"), os.path.join(tmp, "tr")
+            nonce = v.new_nonce()
+            transcript(os.path.join(tr, "p/s/subagents/agent-a1b2.jsonl"), "brief " + nonce, "a1b2")
+            stopped_receipt(home)
+            case = RenderTests("test_a_missing_receipt")
+            case.nonce = nonce
+            body = "## Done when\n- The list loads\n"
+            found = self.crashes(case.draft(), lambda d: v.render_comment(d, home=home, transcripts=tr, pr_body=body))
+            self.assertEqual(found, [])
+
+    def test_areas(self):
+        with tempfile.TemporaryDirectory() as root:
+            for g in ("invoices", "clients"):
+                write(os.path.join(root, ".claude/verification/guides/%s.md" % g), GUIDE)
+            found = self.crashes(areas_doc(), lambda d: v.parse_areas(json.dumps(d), root=root))
+            self.assertEqual(found, [])
 
 
 class SkillDocTests(unittest.TestCase):
