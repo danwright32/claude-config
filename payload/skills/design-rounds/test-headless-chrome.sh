@@ -89,9 +89,15 @@ check_eq "and nothing else: not a launch through headless-dom.sh, a comment, an 
 check_eq "a folder it cannot read is no pass" "2" "$(python3 -I "$GUARD" "$TMP/no-such-folder" >/dev/null 2>&1; echo $?)"
 
 # --- 2. the guard, on this whole repository ---
-python3 -I "$GUARD" "$REPO" > "$TMP/repo.out" 2>&1; rc=$?
-check_eq "every headless Chrome this repository starts goes through headless-dom.sh" "0" "$rc"
-[ "$rc" -eq 0 ] || sed 's/^/    /' "$TMP/repo.out"
+# Three folders up is the checkout only when this runs from one: from the installed copy in
+# ~/.claude/skills it is the home folder, which is never scanned (check-root-guard.sh, #503).
+if [ -e "$REPO/claude-sync" ] && [ -d "$REPO/payload" ]; then
+  python3 -I "$GUARD" "$REPO" > "$TMP/repo.out" 2>&1; rc=$?
+  check_eq "every headless Chrome this repository starts goes through headless-dom.sh" "0" "$rc"
+  [ "$rc" -eq 0 ] || sed 's/^/    /' "$TMP/repo.out"
+else
+  echo "SUITE-PART-UNMEASURED $REPO is not a claude-config checkout (no claude-sync and payload there), so the repository was not scanned for Chrome started around headless-dom.sh"
+fi
 
 # --- 3. HEADLESS_DOM_EXEC, on a stand in Chrome ---
 cat > "$TMP/fake-chrome" <<'FAKE'
