@@ -20,7 +20,7 @@ const LISTS = JSON.stringify({
   mayDeploy: ['o/deploys'],
 })
 
-describe('the shared lists, read', () => {
+describe('the lists file of this Mac, read', () => {
   test('a good file reads as both lists; a mergeOnly entry that does not say whether a merge deploys reads as unknown, never as safe (L72)', () => {
     const r = readRepoLists(LISTS)
     expect('lists' in r && r.lists.mergeOnly).toEqual([
@@ -44,7 +44,7 @@ describe('the shared lists, read', () => {
   })
 })
 
-describe('a bedtime answer, added to the shared file', () => {
+describe('a bedtime answer, added to the lists file of this Mac', () => {
   const empty = '{"v":1,"mergeOnly":[],"mayDeploy":[]}'
   test('each option means exactly what it says: merge never deploy only where a merge does not deploy, hold merges where it does or is unknown', () => {
     expect(repoQuestion('o/new')).toMatch(/only if a merge there does not itself deploy/)

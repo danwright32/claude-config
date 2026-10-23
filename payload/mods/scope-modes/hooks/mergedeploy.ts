@@ -36,7 +36,7 @@ import { resolveDir, syncCall } from './overnight.ts'
  * not say. Only false lets a merge run overnight.
  */
 export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
-/** The shared file, as read. */
+/** This Mac's lists file, as read. */
 export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[]; waitOwners: string[] }
 /** A repository closed for the night, and why, for the refusal and the morning report. */
 export type ClosedRepo = { repo: string; why: string }
@@ -56,7 +56,7 @@ const waitingOwner = (owners: string[], repo: string): string | undefined => {
   return owners.find(o => key(o) === owner)
 }
 
-/** The shared file's text (null when there is none) as lists, or why it cannot be trusted at all. */
+/** This Mac's lists file's text (null when there is none) as lists, or why it cannot be trusted at all. */
 export const readRepoLists = (text: string | null): { lists: RepoLists } | { why: string } => {
   if (text === null) return { why: `${REPO_LIST_FILE} is missing` }
   let j: unknown
@@ -334,7 +334,7 @@ export const readMarker = (text: string): Marker | { unreadable: string } => {
 export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.claude/${REPO_LIST_FILE}`
 
 
-/** The shared file with one bedtime answer added, or why it cannot be. */
+/** This Mac's lists file with one bedtime answer added, or why it cannot be. */
 export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
   if (!(REPO_ANSWERS as readonly string[]).includes(answer)) return { why: `the answer was none of the choices ("${answer}")` }
   const read = readRepoLists(text)
