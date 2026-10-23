@@ -86,9 +86,18 @@ print(json.dumps({"session_id": "cost-session", "transcript_path": sys.argv[2], 
                   "prompt": "please look at this", "hook_event_name": sys.argv[1], "stop_hook_active": False}))
 ' "$1" "$F/t.jsonl" "$F/proj"
 }
+# Each run logs to a shim log of its OWN, which SHIM_LOG names once it returns (claude-config#1577).
+# A process an earlier run left running (a settling run's detached background job) keeps the log of
+# the run that started it, inherited through its environment, so it can never land in the count of
+# the run being measured. One shared log, emptied between runs, counted whatever the earlier run's
+# job had reached by then: on 2026-10-23 at 17:14 ET, at load average 160 to 220 on 12 cores, the
+# same stale-worktree-nudge.sh run counted 13, 15, 16 or 17 as its settling run's background check
+# got further or not, and the hook's own share was 10 every time (L203, L470).
 run_hook(){ # run_hook <event> <name> -> runs it once in the current world, shims on PATH
   local cmd
+  SHIM_LOG="$(mktemp "$WORK/shim.XXXXXXXX")"
   case "$2" in
+    /*) cmd=("$REAL_BASH" "$2") ;;   # a stand-in of the suite's own, by its full path
     *.py) cmd=(python3 "$DIR/$2") ;;
     *) cmd=("$REAL_BASH" "$DIR/$2") ;;
   esac
@@ -126,9 +135,11 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
         printf 'removed w%d\n' "$i" > "$F/tmp/claude-stale-worktrees-repo-other$i.result.1700000000.$i"
         i=$((i + 1))
       done
-      # This session's record is already there, so neither run measured starts a background run
-      # whose processes would land in the count while it is being read.
-      : > "$F/tmp/claude-stale-worktrees-$(printf '%s' cost-session | shasum | cut -c1-12).state" ;;
+      # This session's record is already there, with a run started this minute, so neither run
+      # starts a background run (#1577). An EMPTY record, as this was, is one the hook treats as due
+      # (it cannot say how old it is), so the settling run started the real cleanup check in the
+      # background every time this suite ran, and its processes landed in the measured count.
+      printf 'started %s\n' "$(date +%s)" > "$F/tmp/claude-stale-worktrees-$(printf '%s' cost-session | shasum | cut -c1-12).state" ;;
     rule-files-changed.sh)
       # The rule files this session loaded: CLAUDE.md and every bare import, which grows with
       # every section the lessons index is split into, and the mods it loaded, which grow with
@@ -187,8 +198,7 @@ launches(){ # launches <event> <name> <N> -> processes started by one settled ru
   fresh "$3"
   populate "$2" "$3"
   run_hook "$1" "$2"          # settles anything a first prompt seeds
-  : > "$SHIM_LOG"
-  run_hook "$1" "$2"
+  run_hook "$1" "$2"          # counted in a log of its own, never the settling run's
   local n
   n="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
   echo "${n:-0}"
@@ -232,6 +242,40 @@ _ctl="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
   || check "the control: the shims count what a hook starts" "they counted nothing, so every equal pair proves nothing"
 [ "$measured" -gt 0 ] && check "at least one hook was measured rather than exempted" ok \
   || check "at least one hook was measured rather than exempted" "none was"
+
+# The control for #1577: what a SETTLING run leaves running never lands in the measured run's count,
+# however late it runs. A stand-in hook whose first run leaves a detached job holding until the suite
+# releases it, after the measured run has returned; released, the job starts two shimmed commands.
+# Judged by the state, never by timing (L290): the job is waited on until it says it has finished,
+# with a one minute ceiling only a hang reaches, and its two commands must be in the settling run's
+# log, so the control knows the straggler really ran (L470) before it reads the measured count.
+STRAGGLER="$WORK/straggler-hook.sh"
+cat > "$STRAGGLER" <<'EOS'
+#!/bin/bash
+cat >/dev/null
+if [ ! -f "$TMPDIR/seeded" ]; then
+  : > "$TMPDIR/seeded"
+  nohup /bin/bash -c '
+    n=0; while [ ! -f "$TMPDIR/release" ] && [ "$n" -lt 1200 ]; do /bin/sleep 0.05; n=$((n + 1)); done
+    cat /dev/null; cat /dev/null; : > "$TMPDIR/straggled"' </dev/null >/dev/null 2>&1 &
+  exit 0
+fi
+cat /dev/null
+EOS
+fresh straggler
+run_hook UserPromptSubmit "$STRAGGLER"; _settle_log="$SHIM_LOG"
+run_hook UserPromptSubmit "$STRAGGLER"; _measured_log="$SHIM_LOG"
+: > "$F/tmp/release"
+_n=0; while [ ! -f "$F/tmp/straggled" ] && [ "$_n" -lt 1200 ]; do sleep 0.05; _n=$((_n + 1)); done
+_late="$(grep -c '^cat$' "$_settle_log" 2>/dev/null)"
+_counted="$(grep -c . "$_measured_log" 2>/dev/null)"
+if [ ! -f "$F/tmp/straggled" ] || [ "${_late:-0}" -lt 3 ]; then
+  check "the control: a job the settling run left running is never counted with the measured run" "the straggler never ran its two commands (finished: $([ -f "$F/tmp/straggled" ] && echo yes || echo no), cat lines in the settling run's log: ${_late:-0} of 3), so this control measured nothing"
+elif [ "${_counted:-0}" -eq 2 ]; then
+  check "the control: a job the settling run left running is never counted with the measured run (2: its own cat and cat)" ok
+else
+  check "the control: a job the settling run left running is never counted with the measured run" "the measured run counted ${_counted:-0}, its own 2 (cat, cat) plus what the settling run's job ran after it returned"
+fi
 
 # rule-files-changed.sh also runs at SessionStart, where it takes the baseline the prompts compare
 # against (claude-config#1544). That is once per session rather than per prompt, but it is the same
