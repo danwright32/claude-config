@@ -20,7 +20,7 @@ const LISTS = JSON.stringify({
   mayDeploy: ['o/deploys'],
 })
 
-describe('the shared lists, read', () => {
+describe('the lists file of this Mac, read', () => {
   test('a good file reads as both lists; a mergeOnly entry that does not say whether a merge deploys reads as unknown, never as safe (L72)', () => {
     const r = readRepoLists(LISTS)
     expect('lists' in r && r.lists.mergeOnly).toEqual([
@@ -34,17 +34,17 @@ describe('the shared lists, read', () => {
       const r = readRepoLists(t)
       return 'why' in r ? r.why : 'read'
     }
-    expect(why(null)).toBe('mods/sleep-repos.json is missing')
-    expect(why('{"v":1,')).toBe('mods/sleep-repos.json is not JSON')
-    expect(why('[]')).toBe('mods/sleep-repos.json is not a record')
-    expect(why('{"mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has no version this reader knows')
-    expect(why('{"v":1,"mergeOnly":[]}')).toBe('mods/sleep-repos.json does not hold both lists')
+    expect(why(null)).toBe('mods/sleep-repos.local.json is missing')
+    expect(why('{"v":1,')).toBe('mods/sleep-repos.local.json is not JSON')
+    expect(why('[]')).toBe('mods/sleep-repos.local.json is not a record')
+    expect(why('{"mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.local.json has no version this reader knows')
+    expect(why('{"v":1,"mergeOnly":[]}')).toBe('mods/sleep-repos.local.json does not hold both lists')
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":["slate"]}')).toMatch(/mayDeploy entry that is not owner\/name/)
     expect(why('{"v":1,"mergeOnly":[{"repo":"o/r","mergeDeploys":"yes"}],"mayDeploy":[]}')).toMatch(/mergeDeploys that is not true or false/)
   })
 })
 
-describe('a bedtime answer, added to the shared file', () => {
+describe('a bedtime answer, added to the lists file of this Mac', () => {
   const empty = '{"v":1,"mergeOnly":[],"mayDeploy":[]}'
   test('each option means exactly what it says: merge never deploy only where a merge does not deploy, hold merges where it does or is unknown', () => {
     expect(repoQuestion('o/new')).toMatch(/only if a merge there does not itself deploy/)
@@ -58,7 +58,7 @@ describe('a bedtime answer, added to the shared file', () => {
   test('anything else, a repository already listed, and a broken file are refused', () => {
     expect(addAnswer(empty, 'o/new', 'maybe')).toEqual({ why: 'the answer was none of the choices ("maybe")' })
     expect(addAnswer('{"v":1,"mergeOnly":[],"mayDeploy":["O/New"]}', 'o/new', MERGE_NO_DEPLOY)).toEqual({ why: 'o/new is already listed' })
-    expect(addAnswer('{"v":1,', 'o/new', HOLD_MERGES)).toEqual({ why: 'mods/sleep-repos.json is not JSON' })
+    expect(addAnswer('{"v":1,', 'o/new', HOLD_MERGES)).toEqual({ why: 'mods/sleep-repos.local.json is not JSON' })
   })
 })
 
@@ -78,23 +78,23 @@ describe('what each repository may do tonight', () => {
     expect(policyOf(night, 'acme-corp/storefront')).toEqual({ kind: 'merge-only', repo: 'acme-corp/storefront', mergeDeploys: true })
     expect(policyOf(night, 'o/unsaid')).toEqual({ kind: 'merge-only', repo: 'o/unsaid', mergeDeploys: 'unknown' })
     // Not known not to deploy: the merge waits for the morning, and the refusal says why.
-    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, policyOf(night, 'o/unsaid'))).toBe('whether a merge in o/unsaid deploys is not recorded in mods/sleep-repos.json, so it is never merged overnight')
+    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, policyOf(night, 'o/unsaid'))).toBe('whether a merge in o/unsaid deploys is not recorded in mods/sleep-repos.local.json, so it is never merged overnight')
   })
   test('a repository on neither list fails closed, with no merge and no deploy', () => {
     const p = policyOf(night, 'o/new')
-    expect(p).toEqual({ kind: 'closed', repo: 'o/new', why: 'o/new is on neither list in mods/sleep-repos.json' })
+    expect(p).toEqual({ kind: 'closed', repo: 'o/new', why: 'o/new is on neither list in mods/sleep-repos.local.json' })
     expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, p)).toMatch(/neither merges nor deploys/)
     expect(refusalOf({ kind: 'deploy', what: 'deploy' }, p)).toMatch(/neither merges nor deploys/)
   })
   test('a list that could not be read fails closed for every repository, the listed ones too', () => {
     const broken = nightRepos(readRepoLists('{"v":1,'), [])
-    for (const repo of ['o/deploys', 'Acme-Corp/storefront', 'o/new']) expect(policyOf(broken, repo)).toEqual({ kind: 'closed', repo, why: 'mods/sleep-repos.json is not JSON' })
+    for (const repo of ['o/deploys', 'Acme-Corp/storefront', 'o/new']) expect(policyOf(broken, repo)).toEqual({ kind: 'closed', repo, why: 'mods/sleep-repos.local.json is not JSON' })
     const missing = nightRepos(readRepoLists(null), [])
-    expect(policyOf(missing, 'o/deploys')).toEqual({ kind: 'closed', repo: 'o/deploys', why: 'mods/sleep-repos.json is missing' })
+    expect(policyOf(missing, 'o/deploys')).toEqual({ kind: 'closed', repo: 'o/deploys', why: 'mods/sleep-repos.local.json is missing' })
   })
   test('a repository on both lists is closed, never given the looser one', () => {
     const both = nightRepos(readRepoLists('{"v":1,"mergeOnly":[{"repo":"o/x","mergeDeploys":false}],"mayDeploy":["o/x"]}'), [])
-    expect(policyOf(both, 'o/x')).toEqual({ kind: 'closed', repo: 'o/x', why: 'o/x is on both lists in mods/sleep-repos.json' })
+    expect(policyOf(both, 'o/x')).toEqual({ kind: 'closed', repo: 'o/x', why: 'o/x is on both lists in mods/sleep-repos.local.json' })
   })
   test('an entry GitHub did not know, a question left unanswered, an untold repository and a record with no lists are all closed', () => {
     expect(policyOf(night, 'o/gone')).toEqual({ kind: 'closed', repo: 'o/gone', why: 'GitHub does not know o/gone' })
@@ -148,7 +148,7 @@ describe('an owner whose every repository waits overnight (waitOwners)', () => {
   })
   test('only that owner: another owner, and a name that merely starts with it, keep their lists', () => {
     expect(policyOf(night, 'o/deploys')).toEqual({ kind: 'deploy', repo: 'o/deploys' })
-    expect(policyOf(night, 'Studio-Partner-other/x')).toMatchObject({ kind: 'closed', why: 'Studio-Partner-other/x is on neither list in mods/sleep-repos.json' })
+    expect(policyOf(night, 'Studio-Partner-other/x')).toMatchObject({ kind: 'closed', why: 'Studio-Partner-other/x is on neither list in mods/sleep-repos.local.json' })
   })
   test('a repository under that owner is decided, so it is never asked about at bedtime, and an answer for it is refused', () => {
     const r = readRepoLists(OWNED)
@@ -160,7 +160,7 @@ describe('an owner whose every repository waits overnight (waitOwners)', () => {
       const r = readRepoLists(t)
       return 'why' in r ? r.why : 'read'
     }
-    expect(why('{"v":1,"waitOwners":"Studio-Partner","mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has a waitOwners that is not a list')
+    expect(why('{"v":1,"waitOwners":"Studio-Partner","mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.local.json has a waitOwners that is not a list')
     expect(why('{"v":1,"waitOwners":["Studio-Partner/website"],"mergeOnly":[],"mayDeploy":[]}')).toMatch(/waitOwners entry that is not an owner name/)
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":[]}')).toBe('read')
   })
@@ -382,7 +382,7 @@ describe('claude-sync pull, the config repository deploy step (#1106)', () => {
     expect(why(lists({ mergeOnly: [{ repo: CONFIG, mergeDeploys: false }] }))).toBe(`${CONFIG} may merge overnight but never deploy`)
     expect(why(lists({ mergeOnly: [{ repo: CONFIG, mergeDeploys: true }] }))).toBe(`${CONFIG} may merge overnight but never deploy`)
     // Another repository allowed to deploy is not the config repository.
-    expect(why(lists({ mayDeploy: ['o/r'] }))).toBe(`${CONFIG} is on neither list in mods/sleep-repos.json, so tonight it neither merges nor deploys`)
+    expect(why(lists({ mayDeploy: ['o/r'] }))).toBe(`${CONFIG} is on neither list in mods/sleep-repos.local.json, so tonight it neither merges nor deploys`)
     expect(why(nightRepos(readRepoLists(JSON.stringify({ v: 1, mergeOnly: [], mayDeploy: [CONFIG] })), [{ repo: CONFIG, why: 'GitHub does not know it' }]))).toBe('GitHub does not know it, so tonight it neither merges nor deploys')
     expect(why(lists({ mayDeploy: [CONFIG], waitOwners: ['danwright32'] }))).toMatch(/^every repository owned by danwright32 waits overnight/)
     expect(why(undefined)).toBe('the sleep record carries no merge and deploy lists, so tonight it neither merges nor deploys')

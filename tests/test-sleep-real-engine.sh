@@ -145,7 +145,10 @@ for m in mod-kit status-bar session-registry is-it-live scope-modes; do
   cp -R "$ROOT/payload/mods/$m" "$HOME/.claude/mods/$m"
   PLUGIN_ARGS+=(--plugin-dir "$HOME/.claude/mods/$m")
 done
-cp "$ROOT/payload/mods/sleep-repos.json" "$HOME/.claude/mods/sleep-repos.json"
+# The lists are each Mac's own file (claude-config#1568), so the fixture home gets an invented one
+# shaped like Dan's: held repositories, an owner that waits, and repositories allowed to deploy.
+printf '%s\n' '{"v":1,"waitOwners":["Studio-Partner"],"mergeOnly":[{"repo":"Acme-Corp/storefront","mergeDeploys":true}],"mayDeploy":["danwright32/claude-config","Acme-Corp/enrollment-board"]}' \
+  > "$HOME/.claude/mods/sleep-repos.local.json"
 for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py branch-issues.mjs; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
 
 # Stand-ins for what lies outside the engine.
@@ -348,7 +351,7 @@ grep -q '^scope-modes: Sleep mode is on until' <<<"$SLEEP_SAID" && check "/sleep
   && check "the record keeps where Dan was before sleep (away here)" ok \
   || check "the record keeps where Dan was before sleep (away here)" "placeBefore=$(jget "$REC" placeBefore)"
 # Every listed repository is checked with GitHub at bedtime; gh failing here, each must close (#843).
-python3 - "$REC" "$HOME/.claude/mods/sleep-repos.json" <<'PY' && check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" ok || check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" "$(clip "$(jget "$REC" repos)" 300)"
+python3 - "$REC" "$HOME/.claude/mods/sleep-repos.local.json" <<'PY' && check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" ok || check "a listed repository GitHub cannot confirm is closed for the night, never let through (#843)" "$(clip "$(jget "$REC" repos)" 300)"
 import json, sys
 rec, lists = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 named = {e if isinstance(e, str) else e.get('repo') for k in ('mergeOnly', 'mayDeploy') for e in lists.get(k, [])}
