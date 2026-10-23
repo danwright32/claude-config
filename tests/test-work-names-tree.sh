@@ -116,9 +116,9 @@ check "once the name is gone the same send goes through: $out_fixed" has "$(git 
 SWN="$(sed -n '/^scan_work_names(){/,/^}/p' "$SCRIPT")"
 check "scan_work_names was cut from claude-sync whole" has "$SWN" 'die "$refusal"'
 run_swn(){   # $1 = SYNC_REPO  $2 = SYNC_NO_GIT -> SEND_REFUSED, or "passed"
-  ( SYNC_REPO="$1" PAYLOAD="$1/payload" SYNC_SELF_PAYLOAD="$ROOT/payload" SYNC_NO_GIT="$2" \
-    SCAN_REFUSAL_DEFERRED=1 SEND_REFUSED="" SEND_REFUSED_FILE=""
-    die(){ echo "DIED: $*"; exit 1; }
+  local SYNC_REPO="$1" PAYLOAD="$1/payload" SYNC_SELF_PAYLOAD="$ROOT/payload" SYNC_NO_GIT="$2"
+  local SCAN_REFUSAL_DEFERRED=1 SEND_REFUSED="" SEND_REFUSED_FILE=""
+  ( die(){ echo "DIED: $*"; exit 1; }
     eval "$SWN"
     scan_work_names
     printf '%s' "${SEND_REFUSED:-passed}" )
