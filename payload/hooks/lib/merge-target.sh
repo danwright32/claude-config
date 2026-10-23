@@ -1293,6 +1293,9 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
 # request that is not mergeable) and any error it does not recognise, an empty one
 # included, are believed the first time. Asking again cannot turn a refusal into a
 # yes, and retrying the unknown would hide a new fault behind a minute of waiting.
+# A rate limit answer is not transient here (asking again in seconds is what it forbids): it is read
+# by lib/gh-poll.sh's ghp_rate_limited, and a loop that follows that policy pauses for it instead
+# (claude-config#1482).
 mt_gh_transient() {  # $1 = the error text gh printed
   local t
   t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')

@@ -381,6 +381,14 @@ type Opts = {
   issueCreated?: string
   /** The engine's clock at the start, in ms; T0 unless said (#1479). */
   now?: number
+  /**
+   * The polling policy's answers (hooks/lib/gh-poll.sh, #1482), as its command prints them: a look
+   * held (`take`, a `wait` line) and what a failed read's error is to it (`failed`). Every look is
+   * taken and every failure is `other` unless said; `next` answers as the library does, the wait
+   * doubled up to the caller's ceiling, or its base on a change (hooks/test-gh-poll.sh holds the
+   * library to that).
+   */
+  poll?: { take?: string; failed?: string }
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -434,6 +442,8 @@ const world = (on: On, o: Opts = {}) => {
     dupChecks: [] as string[][],
     /** Every slash command the mod registered, with the description the menu shows (#1479). */
     commands: [] as { name: string; description: string }[],
+    /** Every call of the polling policy, gh-poll.sh, with the environment it was given (#1482). */
+    polls: [] as { argv: string[]; env?: Record<string, string> }[],
   }
   const clock = mock.clock(on, { now: o.now ?? T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
@@ -649,6 +659,17 @@ const world = (on: On, o: Opts = {}) => {
       const found = o.filedOnGitHub?.[like]
       if (!found) return { value: { exitCode: 1, stdout: `NO-CANDIDATES ${a[1]} has nothing like this.\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
       return ok(`CANDIDATES-FOR ${a[1]}\nHOLDING-PEN Ungrouped open=3\nCLOSE-MATCH 0.900 #${found.number} ${like} [in: Ungrouped] [shares: total]${found.closed ? ' [closed]' : ''}\nCLOSE-MATCH-COUNT 1\n`)
+    }
+    // The polling policy (#1482), answered as Opts.poll says.
+    if (cmd === 'bash' && a[0] === '/Users/x/.claude/hooks/lib/gh-poll.sh') {
+      w.polls.push({ argv: [...argv], ...(e.init?.env ? { env: { ...e.init.env } } : {}) })
+      if (a[1] === 'take') return ok(`${o.poll?.take ?? 'ok'}\n`)
+      if (a[1] === 'failed') return ok(`${o.poll?.failed ?? 'other'}\n`)
+      if (a[1] === 'answered') return ok('ok\n')
+      if (a[1] === 'next') {
+        const [wait, changed, base, max] = a.slice(2).map(Number) as [number, number, number, number]
+        return ok(`${changed === 1 ? base : Math.min(wait * 2, max)}\n`)
+      }
     }
     w.runs.push(argv)
     // A mod's own manifest touched so it loads again (#1281).
@@ -5687,6 +5708,55 @@ test('a PR read GitHub did not answer is asked again the next minute, never back
   const before = ghOf(w).length
   await clock.advance(3 * MIN)
   expect(ghOf(w).length - before).toBe(3)
+})
+
+// ---- The one polling policy (#1482) ----
+// On 2026-10-22 GitHub's burst limit refused every session on the account for about 40 minutes while
+// one session's loops polled at once. Winding down's minute check of the session's PRs is one such
+// loop, so each read takes a look from the session's shared budget through hooks/lib/gh-poll.sh
+// (mod-kit's ghpoll.ts), hands a failed read's error back, and takes its next wait from the library,
+// within winding down's own ceiling of ten minutes.
+const pollsOf = (w: { polls: { argv: string[] }[] }, what: string) => w.polls.filter(p => p.argv[2] === what).map(p => p.argv.slice(3))
+
+test("winding down's wait between reads of an unchanged PR comes from the polling policy, with its own ten minute ceiling, as this session (#1482)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: { ...merged('OPEN') } })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  await clock.advance(6 * MIN)
+  const nexts = pollsOf(w, 'next')
+  // Every wait asked for within winding down's own base and ceiling, and grown while unchanged.
+  expect(nexts.length).toBeGreaterThan(2)
+  expect(nexts.every(n => n[2] === '60' && n[3] === '600')).toBe(true)
+  expect(nexts).toContainEqual(['120', '0', '60', '600'])
+  expect(w.polls.find(p => p.argv[2] === 'take')?.env).toEqual({ CLAUDE_CODE_SESSION_ID: 's1' })
+  expect(pollsOf(w, 'answered').length).toBeGreaterThan(0)
+})
+
+test('a PR read the polling policy holds is not made: the minute keeps its last reading, and a turn end never finishes on one (#1482)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { gh: { ...merged('OPEN') } })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  await clock.advance(MIN)
+  const before = ghOf(w).length
+  w.o.poll = { take: 'wait\tpause\t300\tGitHub said to wait 300s (Retry-After)' }
+  w.o.gh = { ...merged('MERGED') }
+  await clock.advance(3 * MIN)
+  expect(ghOf(w).length).toBe(before)
+  expect(lastModes(w)).toEqual(['WINDING DOWN'])
+  expect((await stop($ as never)).block).toMatch(/rate limit/)
+  expect(ghOf(w).length).toBe(before)
+})
+
+test('a failed PR read is handed to the polling policy, which a rate limit answer pauses (#1482)', withDeps, async ($, on) => {
+  const limited = 'gh: API rate limit exceeded for user ID 241846707. (HTTP 403)'
+  const { w, clock } = world(on, { gh: { ...merged('OPEN'), fails: limited }, poll: { failed: 'paused\t60\ta burst limit' } })
+  await start($ as never, clock)
+  await madeOwn($ as never)
+  await command($ as never, 'winddown')
+  await clock.advance(MIN)
+  expect(pollsOf(w, 'failed')[0]?.[1]).toBe(limited)
 })
 
 // ---- Sleep and wake say what they do, as every other switch does (#1086) ----
