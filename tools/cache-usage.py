@@ -45,9 +45,12 @@ def parse_ts(text):
     if not isinstance(text, str):
         return None
     try:
-        return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        dt = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # A timestamp written without an offset is read as UTC, the zone every transcript line uses,
+    # rather than left naive to crash the comparison against the window.
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=datetime.timezone.utc)
 
 
 def iso(dt):
@@ -137,6 +140,10 @@ def read_transcript(path, since, until, counters):
             counters["lines"] += 1
             if key not in requests:
                 order.append(key)
+                if ts is None:
+                    # No usable timestamp: it cannot be placed in or out of the window, so it is
+                    # counted where the report says so, never silently dropped.
+                    counters["untimed"] += 1
                 if first is None:
                     first = (ts, usage)
             requests[key] = (ts, in_window, usage)
@@ -198,7 +205,7 @@ def main(argv):
 
     paths = glob.glob(os.path.join(a.root, "*", "*.jsonl"))
     paths += glob.glob(os.path.join(a.root, "*", "*", "subagents", "*.jsonl"))
-    counters = {"malformed": 0, "unreadable": 0, "lines": 0}
+    counters = {"malformed": 0, "unreadable": 0, "lines": 0, "untimed": 0}
     rows, unmeasured = [], []
     kinds = {"main": {"usages": [], "transcripts": 0, "unmeasured": 0},
              "subagent": {"usages": [], "transcripts": 0, "unmeasured": 0}}
@@ -288,7 +295,8 @@ def main(argv):
                    "\tmedian_vs_rules=%s" % (len(starts), med, sum(starts), ratio))
     else:
         out.append("STARTUP\tsubagent\tstarts=0\tno subagent made its first request in the window")
-    out.append("MALFORMED\tlines=%d\tunreadable_files=%d" % (counters["malformed"], counters["unreadable"]))
+    out.append("MALFORMED\tlines=%d\tunreadable_files=%d\tuntimed_requests=%d"
+               % (counters["malformed"], counters["unreadable"], counters["untimed"]))
     out.append("END")
     print("\n".join(out))
     return 0

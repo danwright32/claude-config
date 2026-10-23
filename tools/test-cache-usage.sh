@@ -104,6 +104,18 @@ out="$(python3 "$TOOL" --root "$P" --rules "$R/CLAUDE.md" --now 2026-10-01T00:00
 check "a window holding no requests is refused, not reported as zero" "NO REQUESTS IN WINDOW" "$out"
 [ "$rc" -ne 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: an empty window must not exit 0"; }
 
+# A timestamp written without an offset is read as UTC rather than crashing the comparison, and a
+# request with no usable timestamp is counted as untimed rather than silently dropped.
+Q="$WORK/projects-q"; mkdir -p "$Q/-proj-c"
+cat > "$Q/-proj-c/sess4.jsonl" <<'EOF'
+{"type":"assistant","isSidechain":false,"sessionId":"sess4","timestamp":"2026-10-20T10:00:00","message":{"id":"msg_T1","model":"m","usage":{"input_tokens":4,"cache_read_input_tokens":6,"cache_creation_input_tokens":0,"output_tokens":1}}}
+{"type":"assistant","isSidechain":false,"sessionId":"sess4","message":{"id":"msg_T2","model":"m","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}
+EOF
+out="$(python3 "$TOOL" --root "$Q" --rules "$R/CLAUDE.md" --now 2026-10-23T00:00:00Z --days 7 2>&1)"; rc=$?
+check "a timestamp without an offset is read as UTC" $'SESSION\tmain\tsess4\t-proj-c\tentrypoint=unknown\trequests=1\tinput=4\tcache_read=6' "$out"
+check "a request with no timestamp is counted as untimed" $'untimed_requests=1' "$out"
+[ "$rc" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: naive timestamp run exit $rc"; }
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
