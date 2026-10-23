@@ -1,7 +1,7 @@
 import { update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
-import type { AskBeforeSavingApproval, AskBeforeSavingQuestion } from '../types/index.d.ts'
+import type { AskBeforeSaving, AskBeforeSavingApproval, AskBeforeSavingQuestion } from '../types/index.d.ts'
 import {
   APPROVAL_MS,
   FOR_GOOD,
@@ -14,7 +14,7 @@ import {
   LESSON_SOURCE,
   MAX_SHORT,
   MIN_RULE,
-  addsLesson,
+  addsThis,
   lessonAddition,
   lessonOptions,
   lessonsFile,
@@ -40,6 +40,7 @@ import {
   ruleOf,
   saveIdOf,
   saveKey,
+  savesThis,
   stands,
   withoutPythonText,
   writesWhat,
@@ -351,8 +352,9 @@ const takeApproval = async ($: EngineInterface, key: string) => {
     lapsed = []
     const keep: AskBeforeSavingApproval[] = []
     for (const x of a ?? []) {
-      if (x.key === key && !stands(x.until, now)) lapsed.push(x)
-      else if (x.key === key && !live) live = x
+      const fits = savesThis(x, key)
+      if (fits && !stands(x.until, now)) lapsed.push(x)
+      else if (fits && !live) live = x
       else keep.push(x)
     }
     return keep
@@ -367,14 +369,17 @@ const takeApproval = async ($: EngineInterface, key: string) => {
 // read: a Bash call is never looked into here (second lessons review of #869, where a refused shell
 // call's target reads failed and replaced the refusal that stopped it). A file that exists and cannot
 // be read fails the hook, and the hook fails closed.
-const lessonAdded = async ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> => {
+// `now` reads the file as it is (undefined when there is none), handed in so the noun (#1483), which
+// may not pass its engine to a helper, reads through its own.
+const lessonAddedBy = async (tool: string, input: Record<string, unknown>, at: Where, now: (file: string) => Promise<string | undefined>): Promise<string | undefined> => {
   if (tool !== 'Edit' && tool !== 'Write') return undefined
   const file = lessonsFile(at.home)
   if (resolvePath(String(input.file_path ?? ''), at.cwd, at.home) !== file) return undefined
   // The file as it is now: an Edit's kept text is judged against it as well as a Write's content.
-  const old = (await $.fs.exists(file)) ? await $.fs.read(file) : undefined
-  return lessonAddition(tool, input, old)
+  return lessonAddition(tool, input, await now(file))
 }
+const lessonAdded = ($: EngineInterface, tool: string, input: Record<string, unknown>, at: Where): Promise<string | undefined> =>
+  lessonAddedBy(tool, input, at, async file => ((await $.fs.exists(file)) ? await $.fs.read(file) : undefined))
 
 // The approval Dan gave in the durable lesson picker for the lesson this text adds, taken as the call
 // that uses it arrives, and refused on its age there (L567); one past its time is taken out and said.
@@ -387,7 +392,7 @@ const takeLesson = async ($: EngineInterface, added: string) => {
     lapsed = []
     const keep: AskBeforeSavingApproval[] = []
     for (const x of a ?? []) {
-      const fits = x.lesson !== undefined && addsLesson(added, x.lesson)
+      const fits = addsThis(x, added)
       if (fits && !stands(x.until, now)) lapsed.push(x)
       else if (fits && !live) live = x
       else keep.push(x)
@@ -434,6 +439,28 @@ const dansWords = async ($: EngineInterface, origin: { readonly kind?: string } 
 }
 
 export const register: Register = on => {
+  // The noun (#1483): whether a call carries a live, unspent approval Dan gave for exactly what it
+  // writes, For good by what it saves (savesThis) or in the durable lesson picker by the lesson it
+  // adds (addsThis), matched as the tool.check hook below matches a call sent again. It only looks:
+  // the approval is taken there, as the call passes, so it is spent once whoever asked. No build asks
+  // it before letting the one Edit of ~/.claude/LESSONS.md through. The engine refuses handing
+  // `built` to a helper, so everything is read here with its own calls.
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    const askBeforeSaving: AskBeforeSaving = {
+      isApproved: async ({ tool, input }) => {
+        const home = (await built.env.get('HOME')) ?? ''
+        const at: Where = { home, cwd: await built.session.cwd() }
+        const key = saveKey(tool, input, at.cwd, at.home)
+        const added = await lessonAddedBy(tool, input, at, async file => ((await built.fs.exists(file)) ? await built.fs.read(file) : undefined))
+        const now = await built.clock.now()
+        const approvals = (await built.state.get(approvalsRef)).value ?? []
+        return { isApproved: approvals.some(x => stands(x.until, now) && (savesThis(x, key) || addsThis(x, added))) }
+      },
+    }
+    return { ...built, askBeforeSaving }
+  })
+
   // Dan's latest message of his own, typed or from his phone as mod-kit's one reader says (#1135),
   // read for the words that already make a rule permanent. A peer session's or a plugin's message,
   // a handoff's opening prompt included, never counts.
@@ -541,7 +568,7 @@ export const register: Register = on => {
       // Reset at the top of the callback, as takeApproval does, in case update runs it again.
       await update($, approvalsRef, a => {
         hit = undefined
-        return (a ?? []).map(x => (x.key === k ? (hit = { ...x, refused: refusedWhy }) : x))
+        return (a ?? []).map(x => (savesThis(x, k) ? (hit = { ...x, refused: refusedWhy }) : x))
       })
       if (hit) {
         $.ui.toast(`Not saved to ${hit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
@@ -555,7 +582,7 @@ export const register: Register = on => {
       let fit = undefined as AskBeforeSavingApproval | undefined
       await update($, approvalsRef, a => {
         fit = undefined
-        return (a ?? []).map(x => (!fit && x.lesson !== undefined && stands(x.until, now) && addsLesson(added, x.lesson) ? (fit = { ...x, refused: refusedWhy }) : x))
+        return (a ?? []).map(x => (!fit && stands(x.until, now) && addsThis(x, added) ? (fit = { ...x, refused: refusedWhy }) : x))
       })
       if (fit) $.ui.toast(`Not added to ${fit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
       return r

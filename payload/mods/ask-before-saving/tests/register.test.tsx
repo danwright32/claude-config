@@ -1628,6 +1628,74 @@ test('an approved lesson Write into a lessons file of real size goes through, in
 
 // ---- Sleep mode phase 2 (#841): a save waits for the morning report while Dan is asleep ----
 
+// #1483, Dan's sign off of 2026-10-22: with no build on, the single Edit of ~/.claude/LESSONS.md
+// matched to an approval from the lesson check or ask before saving goes through. No build asks this
+// mod through its noun whether the call carries a live, unspent approval, matched the way this mod
+// matches a call sent again, and the approval is still taken here, at tool.check. No build, standing
+// in: while the world holds /nobuild/on, every Edit the noun does not approve is refused, as the real
+// one refuses every edit (its own tests hold the rest of its rule: the lessons file, the Edit tool).
+const noBuild: { name: string; register: Register } = {
+  name: 'scope-modes',
+  register: on => {
+    on('tool.call', async ($, e, next) => {
+      if (e.tool !== 'Edit' || !(await $.fs.exists('/nobuild/on'))) return next(e)
+      const { tool, tool_use_id: _i, agentId: _a, consent: _c, ...input } = e as unknown as Record<string, unknown>
+      let approved: boolean
+      try {
+        approved = (await $.askBeforeSaving.isApproved({ tool: String(tool), input })).isApproved
+      } catch (err) {
+        return { deny: `NO BUILD: could not ask (${String((err as Error)?.message ?? err)})` }
+      }
+      return approved ? next(e) : { deny: 'NO BUILD: refused' }
+    })
+  },
+}
+const withNoBuild = { plugins: [secDefault, modKit, guard, noBuild] }
+
+test('under no build, the lesson Dan approved in the picker is added once; sent again, no build refuses it (#1483)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT, '/nobuild/on': '' } })
+  // Before Dan approves, no build refuses it, and the refusal uses nothing up.
+  expect((await call($, addLesson)).deny).toBe('NO BUILD: refused')
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const added = await call($, addLesson)
+  expect(added.deny).toBeUndefined()
+  expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  // The approval was spent on that write: the same Edit again is refused by no build.
+  expect((await call($, addLesson)).deny).toBe('NO BUILD: refused')
+  expect(w.ran.length).toBe(1)
+})
+
+test('under no build, an approved lesson lets no other Edit through, and does not stand once lapsed (#1483)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT, '/nobuild/on': '' } })
+  await proposeLesson($, w, 'Add to LESSONS.md')
+  const others = [
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '- **L753. Something else entirely, never shown to Dan.**\n\n## Data safety' },
+    { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: `${ENTRY}- **L753. A rule nobody approved.**\n\n## Data safety` },
+    { tool: 'Edit', file_path: `${CWD}/app.ts`, old_string: '## Data safety', new_string: `${ENTRY}## Data safety` },
+  ]
+  for (const input of others) expect(`${input.file_path}: ${(await call($, input)).deny}`).toBe(`${input.file_path}: NO BUILD: refused`)
+  expect(w.ran).toEqual([])
+  await w.clock.advance(APPROVAL_MS)
+  expect((await call($, addLesson)).deny).toBe('NO BUILD: refused')
+  expect(w.ran).toEqual([])
+})
+
+test('a For good approval is answered by the noun the same way: the exact save once, nothing after (#1483)', withNoBuild, async ($, on) => {
+  const w = world($, on, { auto: true, files: { [LESSONS]: LESSONS_TEXT } })
+  const save = { tool: 'Edit', file_path: LESSONS, old_string: '## Data safety', new_string: '- Always ask before merging.\n\n## Data safety' }
+  // Asked and approved For good before no build was on.
+  await askDan($, w, refusalOf(await call($, save)), 'For good', LESSONS_SHOWN)
+  w.files['/nobuild/on'] = ''
+  // Other text to the same file is not the approved save.
+  expect((await call($, { ...save, new_string: '- Never ask.\n\n## Data safety' })).deny).toBe('NO BUILD: refused')
+  const sent = await call($, save)
+  expect(sent.deny).toBeUndefined()
+  expect(contextOf(sent)).toContain(`Saved to ${LESSONS_SHOWN}, as Dan answered For good.`)
+  expect((await call($, save)).deny).toBe('NO BUILD: refused')
+  expect(w.ran.length).toBe(1)
+})
+
 // Scope modes, standing in. An inline plugin cannot reach this file's variables, so the night is in
 // the world's files, read at each call: /night/asleep while the Mac sleeps, /night/note-fails
 // holding why a note cannot be written. A note written comes back to the world as a NOTE toast.
