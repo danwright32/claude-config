@@ -18,19 +18,27 @@
 # what a valid record is. A rule that lives only in a pull request template is a
 # hope (L27): the template is the reminder, this is the enforcement.
 #
-# Scope: a repo is gated only when the /pennie-dev-update skill's repos.json
-# lists it WITH a changelogFrom date. Every other repo on the machine is
-# untouched. That file is the registry the update itself already reads, so Slate
-# is added in one place rather than two.
+# Scope: a repo is gated only when the /pennie-dev-update registry lists it WITH a
+# changelogFrom date. Every other repo on the machine is untouched. That file is the
+# registry the update itself already reads, so a product is added in one place rather
+# than two. It is a file each Mac keeps for itself, ~/.claude/skills/pennie-dev-update/
+# repos.local.json, never the shared config, because it names work repositories and
+# this repository is public (claude-config#1526). Where it lives and how it is read
+# both come from lib/dev-update-registry.js, the one reader the skill uses too.
 #
 # WHICH repo that is comes from the merge, resolved the way gh resolves it: its own --repo, -R
 # or pull request link first, then the directory it runs in (claude-config#470).
 #
 # Fails CLOSED where it can tell there is a problem, and stands down where it
 # genuinely has nothing to say. The three are deliberately different answers: a
-# missing registry means the update tooling is not installed here, an unreadable
-# one means the gate cannot tell whether this repo is in scope, and an unlisted
-# repo means somebody chose not to gate it.
+# MISSING registry and an unreadable one both mean the gate cannot tell whether this
+# repo is in scope, and each is refused with its own message, while an unlisted repo
+# means somebody chose not to gate it. A missing registry used to be a stand down,
+# read as "the update tooling is not installed here", and that was true while the
+# file travelled with the payload. Every Mac carrying this gate carries the skill, so
+# once the file became each Mac's own, its absence is a Mac that lost or never made
+# it, and standing down there would quietly ungate every repo (claude-config#1526,
+# L98). Gating nothing on purpose is a registry listing no repos.
 #
 # Covers every route to a merge, including a repo's own wrapper, because a gate that
 # only knows the direct command is dodged by the very route another gate makes
@@ -56,7 +64,10 @@ case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 
-REGISTRY="${CHANGELOG_REGISTRY:-$HOME/.claude/skills/pennie-dev-update/repos.json}"
+# Where the registry is comes from its one reader (claude-config#1526), resolved once node is known
+# to be here, below. CHANGELOG_REGISTRY names a file for the tests.
+REGISTRY_READER="$HOOK_DIR/lib/dev-update-registry.js"
+REGISTRY="${CHANGELOG_REGISTRY:-}"
 
 # What this gate REFUSES with when a tool it reads through is not installed. On stderr with exit 2
 # rather than through deny() below, because deny() builds its JSON with jq and jq is one of the
@@ -78,12 +89,11 @@ refuse_no_reader() {  # $1 = the absence clause, $2 = what it costs, $3 = what t
 #
 # With NEITHER installed nothing here can tell a merge from an `ls`, so what is refused is narrowed
 # to a payload that could hold one at all, by the same substring the matcher uses as its own first
-# filter. Refusing every Bash command would be a gate nobody keeps (L36, L54). The registry stand
-# down is asked FIRST and needs no reader: on a machine with no dev update tooling there is no rule
-# here to refuse over, and a refusal about a reader would be a refusal about a rule that does not
-# apply (L324).
+# filter. Refusing every Bash command would be a gate nobody keeps (L36, L54). There is no registry
+# stand down ahead of it any more (claude-config#1526): a Mac carrying this gate carries the dev
+# update skill, so the rule applies here whether or not this Mac's registry is in place, and a
+# missing one is refused in its own words once the command can be read.
 if ps_reader_missing jq python3; then
-  [ -f "$REGISTRY" ] || exit 0
   case "$payload" in
     *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
     *)
@@ -127,14 +137,14 @@ case "$command" in
   *ALLOW_UNTAGGED_MERGE=1*) exit 0 ;;
 esac
 
-# No registry at all: the dev update tooling is not installed on this machine, so
-# there is no update for a record to feed and nothing to enforce. This is the one
-# absence that is a genuine stand down rather than a blind spot.
-[ -f "$REGISTRY" ] || exit 0
-
 # node reads the changelog entry itself, so with it absent there is no rule this machine can
-# apply at all, and nothing a person here could do about it (L324).
+# apply at all, and nothing a person here could do about it (L324). It also reads the registry, so
+# it is asked first.
 command -v node >/dev/null 2>&1 || exit 0
+
+# Where this Mac's registry is, from its one reader. A reader that answers nothing cannot say where
+# to look, and cannot tell is never "not gated" (L490).
+[ -n "$REGISTRY" ] || REGISTRY="$(node "$REGISTRY_READER" path 2>/dev/null)"
 
 # jq alone, with python3 present: the command above WAS readable, so this is known to be a merge,
 # and everything left is jq's. The record arrives from gh as JSON, the scope answer is JSON, and
@@ -143,6 +153,18 @@ command -v node >/dev/null 2>&1 || exit 0
 ps_reader_missing jq && refuse_no_reader "jq is not on PATH" \
   "require-changelog-tag.sh reads gh's answer about this pull request with it, and the record it is looking for is inside that answer, so with jq absent nothing here can tell a tagged pull request from an untagged one." \
   "jq"
+
+# The registry, judged before anything else is read, so a Mac that has lost it is told so by name
+# rather than through whichever refusal below happened to need it first (claude-config#1526). Missing
+# is refused like unreadable, with the path to create and what goes in it, because the person who
+# meets it has to make the file and the message is the only place that can say how (L111).
+[ -n "$REGISTRY" ] || deny "Cannot tell whether this repo needs a changelog record: $REGISTRY_READER did not say where this Mac's dev update registry lives, so the gate refuses rather than merging blind. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
+reg_state="$(node "$REGISTRY_READER" state "$REGISTRY" 2>/dev/null)"
+case "$(printf '%s' "$reg_state" | jq -r '.state // ""' 2>/dev/null)" in
+  ok|unreadable) ;;   # unreadable keeps its own refusal below, which names the file
+  missing) deny "Cannot tell whether this repo needs a changelog record. $(printf '%s' "$reg_state" | jq -r '.why') Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." ;;
+  *) deny "Cannot tell whether this repo needs a changelog record: reading $REGISTRY through $REGISTRY_READER produced nothing at all. That is the gate failing, not the repo opting out. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>." ;;
+esac
 
 # The reader the shared library needs for a direct merge's own arguments (claude-config#475).
 # Without python3 the pull request and the repository this command names both come back empty, so
@@ -164,11 +186,9 @@ fi
 # merge below or for each target of a command merging several.
 scope_for() {  # $1 = owner/name
   HOOK_DIR="$HOOK_DIR" REGISTRY_PATH="$REGISTRY" SLUG="$1" node -e '
-    const fs = require("fs");
     const entry = require(process.env.HOOK_DIR + "/lib/changelog-entry.js");
-    let registry = null;
-    try { registry = JSON.parse(fs.readFileSync(process.env.REGISTRY_PATH, "utf8")); }
-    catch (e) { registry = null; }
+    const read = require(process.env.HOOK_DIR + "/lib/dev-update-registry.js").readRegistry(process.env.REGISTRY_PATH);
+    const registry = read.state === "ok" ? read.registry : null;
     process.stdout.write(JSON.stringify(entry.repoScope(registry, process.env.SLUG)));
   ' 2>/dev/null
 }
@@ -235,7 +255,7 @@ scope=$(scope_for "$slug")
 
 unreadable=$(printf '%s' "$scope" | jq -r '.unreadable // false')
 if [ "$unreadable" = "true" ]; then
-  deny "Cannot tell whether this repo needs a changelog record: $REGISTRY exists but does not parse as JSON naming a repos array. An unreadable registry is not the same as a repo nobody gated, and merging on it would silently lose the record for the next manager update. Fix the file, or override deliberately with ALLOW_UNTAGGED_MERGE=1 <the same command>."
+  deny "Cannot tell whether this repo needs a changelog record: $REGISTRY exists but does not parse as JSON naming a repos list. An unreadable registry is not the same as a repo nobody gated, and merging on it would silently lose the record for the next manager update. Fix the file, or override deliberately with ALLOW_UNTAGGED_MERGE=1 <the same command>."
 fi
 
 # A changelogFrom that is not a date is a config error, and it must not read as a

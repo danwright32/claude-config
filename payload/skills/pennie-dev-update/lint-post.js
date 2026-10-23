@@ -5,9 +5,11 @@
 // (claude-config#680). Every rule here is one Dan corrected by hand in a draft (SKILL.md section
 // 6), and a rule that lives only in a prompt is a hope (L27).
 //
-//   lint-post.js [--config <repos.json>] <draft file>
+//   lint-post.js [--config <registry>] <draft file>
 //
-// The config names the products and their order (default: the repos.json beside this file). A post
+// The registry names the products and their order (default: this Mac's own registry,
+// ~/.claude/skills/pennie-dev-update/repos.local.json, read through hooks/lib/dev-update-registry.js,
+// claude-config#1526). A post
 // with sections for two or more of them must open with the product line, and keep their order.
 //
 // Prints one line per finding, "line N: ...", and exits 0 when nothing is refused, 1 when
@@ -125,7 +127,7 @@ function lint(text, products) {
     });
   }
   // The product line (Dan, 2026-10-13): "Updates for <period> :thread:", then the products this
-  // post covers joined with " | ", in the order repos.json lists them, which is also the order of
+  // post covers joined with " | ", in the order the registry lists them, which is also the order of
   // their sections. A product with nothing to report has no section and is left off. A one product
   // post has no product heading, so it carries no product line either.
   const sections = body.filter(function (b) { return isProductHead(b[0]); })
@@ -133,7 +135,7 @@ function lint(text, products) {
   const inOrder = sections.slice().sort(function (a, b) { return products.indexOf(a.name) - products.indexOf(b.name); });
   const misplaced = sections.find(function (s, i) { return s.name !== inOrder[i].name; });
   if (misplaced) {
-    say(refusals, misplaced.n, 'product sections go in the repos.json order (' + products.join(', ') + ')');
+    say(refusals, misplaced.n, 'product sections go in the order the registry lists them (' + products.join(', ') + ')');
   }
   const expected = inOrder.map(function (s) { return s.name; }).join(' | ');
   if (inOrder.length >= 2) {
@@ -158,20 +160,26 @@ function lint(text, products) {
 }
 
 function main(argv) {
-  let configPath = path.join(__dirname, 'repos.json');
+  // The registry's one reader, shared with gather.js and the merge gate (claude-config#1526).
+  let reader;
+  try { reader = require(path.join(__dirname, '..', '..', 'hooks', 'lib', 'dev-update-registry.js')); }
+  catch (e) { process.stderr.write('The dev update registry reader could not be loaded (' + e.message + ').\n'); return 2; }
+  let configPath = reader.registryPath();
   if (argv[0] === '--config') { configPath = argv[1]; argv = argv.slice(2); }
   const file = argv[0];
-  if (!file || !configPath) { process.stderr.write('Usage: lint-post.js [--config <repos.json>] <draft file>\n'); return 2; }
+  if (!file || !configPath) { process.stderr.write('Usage: lint-post.js [--config <registry>] <draft file>\n'); return 2; }
   // An unreadable config is refused, never read as a world with no products, which would pass a
   // multi product post with no product line at all (L98).
   let products;
+  const read = reader.readRegistry(configPath);
+  if (read.state !== 'ok') { process.stderr.write(read.why + '\n'); return 2; }
   try {
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const cfg = read.registry;
     products = cfg.repos.map(function (r) { return r.name; });
     if (!products.length) throw new Error('it lists no products');
     if (!products.every(function (n) { return typeof n === 'string' && n; })) throw new Error('a repo has no name');
   } catch (e) {
-    process.stderr.write('The product list in repos.json at ' + configPath + ' could not be read (' + (e.code || e.message) + ').\n');
+    process.stderr.write('The product list in the dev update registry at ' + configPath + ' could not be read (' + (e.code || e.message) + ').\n');
     return 2;
   }
   let text;

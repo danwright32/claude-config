@@ -214,11 +214,21 @@ if denied "$(run_hook "$dir" "$MERGE 7 --squash")"; then
 else pass; fi
 rm -rf "$dir"
 
-# The registry not being there at all means the dev update skill is not
-# installed, so there is nothing to enforce.
-dir=$(make_repo acme/widget "$UNTAGGED" MISSING)
+# The registry not being there at all used to be a stand down, read as the dev update skill not
+# being installed here. It is each Mac's own file since claude-config#1526, and every Mac carrying
+# this gate carries the skill, so a missing one is a Mac that lost it or never made it, and standing
+# down there would ungate every repo with nothing said (L98). It is refused like an unreadable one,
+# naming the file to create.
+dir=$(make_repo acme/widget "$TAGGED" MISSING)
+out=$(run_hook "$dir" "$MERGE 7 --squash")
+if denied "$out"; then pass; else fail "a missing registry was read as an opt out: $out"; fi
+if says "$out" "$dir/absent.json"; then pass; else fail "the refusal does not name the file to create: $out"; fi
+if says "$out" '{\"repos\": []}'; then pass; else fail "the refusal does not say how to gate nothing on purpose: $out"; fi
+rm -rf "$dir"
+# And gating nothing on purpose is a registry listing no repos, which merges freely.
+dir=$(make_repo acme/widget "$UNTAGGED" '{"repos": []}')
 if denied "$(run_hook "$dir" "$MERGE 7 --squash")"; then
-  fail "a missing registry blocked the merge instead of standing down"
+  fail "a registry listing no repos still gated a merge"
 else pass; fi
 rm -rf "$dir"
 
@@ -610,15 +620,15 @@ if denied "$(run_hook "$dir" "$MERGE 7 --repo acme/widget --squash")"; then
 else pass; fi
 rm -rf "$dir"
 
-# And the one absence that is a genuine stand down stays one: with no registry there is no dev
-# update for a record to feed, so there is no rule here to refuse over, whatever is missing
-# from PATH (L324).
+# A missing registry is no longer a stand down (claude-config#1526), so with no payload reader the
+# merge is refused whether or not the registry is there: the rule applies on every Mac carrying
+# this gate, and nothing here can read the command to say otherwise.
 dir=$(make_repo acme/widget "$TAGGED" "$REGISTRY")
 printf '%s' "$dir/no-such-registry.json" > "$dir/registry-path"
 noread="$(bin_without "$dir" jq python3)"
 run_hook_on "$dir" "$noread" "$MERGE 7 --repo acme/widget --squash"
-if [ "$NOREAD_RC" -eq 0 ] && [ -z "$NOREAD_OUT" ]; then pass; else
-  fail "a machine with no dev update tooling was refused over a rule that does not apply there (rc=$NOREAD_RC): $NOREAD_OUT"; fi
+if [ "$NOREAD_RC" -eq 2 ]; then pass; else
+  fail "with no payload reader and no registry the merge was allowed (rc=$NOREAD_RC): $NOREAD_OUT"; fi
 rm -rf "$dir"
 
 echo "changelog record: every merge in a command is judged, not only the first (#1062)"

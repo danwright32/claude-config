@@ -71,7 +71,6 @@ else check "the claim check fails on loose words that make no claim" "it passed 
 section="$section_real"; paras="$paras_real"
 
 # ---- claude-config#679: the defects the October 2026 skills audit found.
-CONFIG="$DIR/../payload/skills/pennie-dev-update/repos.json"
 
 # The window starts strictly after lastEnd. The skill said so in section 2 and then filtered on
 # `merged_at >= start` in section 3, so the newest change of the last post was listed again. Held
@@ -83,19 +82,9 @@ else check "no merge comparison includes the boundary itself (>=)" "$ge_lines"; 
 # The repo paths were typed by hand as they stood before the work MacBook's Documents move on
 # 2026-10-02, and pointed at nothing after it (L153). Nothing the skill does needs a local checkout
 # once the deploy check asks GitHub, so no entry carries a path at all and no step runs git there.
-if [ ! -f "$CONFIG" ]; then check "repos.json carries no machine path" "repos.json is not at $CONFIG"
-else
-  with_path="$(python3 - "$CONFIG" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1], encoding="utf-8"))
-print(" ".join(r.get("name", "?") for r in data["repos"] if "path" in r))
-PY
-)"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then check "repos.json carries no machine path" "repos.json could not be read (exit $rc)"
-  elif [ -n "$with_path" ]; then check "repos.json carries no machine path" "these entries still carry one: $with_path"
-  else check "repos.json carries no machine path" ok; fi
-fi
+# The registry is each Mac's own file since claude-config#1526, which no suite in the repository can
+# read, so gather.js refuses an entry carrying a path where the file IS read (its own suite,
+# test-pennie-dev-update-scripts.sh, holds that), and the prose is held here.
 gone "no step runs git in a local checkout" "git -C"
 gone "no step reads a configured path" 'configured `path`'
 
@@ -152,7 +141,7 @@ done
 # ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
 # personal MacBook is danwright32, and GitHub answers it 404 for Try-Pennie's private repos. So
 # every gh command the skill shows runs through `gather.js gh`, which runs it as the account
-# repos.json names for the repo. The bare form is a code block line that STARTS with gh, or an
+# registry names for the repo. The bare form is a code block line that STARTS with gh, or an
 # inline command in backticks that starts with gh and names its repo with --repo (every command
 # the skill gives does, section 1). A prose mention such as "never `gh pr list`" names no repo.
 bare_gh="$(grep -n -E '^[[:space:]]*gh (issue|label|api|pr|search|repo|run|workflow) ' "$SKILL" || true)"

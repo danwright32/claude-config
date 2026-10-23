@@ -117,7 +117,7 @@ r = parse(['changelog/visible', 'changelog/visible'], '## Changelog\nA line.');
 check(r.ok === true, 'the same label applied twice was read as two conflicting labels: ' + JSON.stringify(r));
 
 // ------------------------------------------------- which repos are in scope
-// A repo opts in by being listed in the dev update skill's repos.json, which
+// A repo opts in by being listed in the dev update registry, which
 // already exists and already names the repos the post covers. A second registry
 // beside it would be one more thing to add Slate to, and the two would disagree
 // the first time only one was updated.

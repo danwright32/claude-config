@@ -84,6 +84,16 @@ any other way. The tracker's `--scan` keeps its ignore list in `scan-state.local
 `config.local.json` and kept local the same way, and the copy of the sheet it saves before writing
 in `~/.claude-tracker-snapshots`, outside `~/.claude`, so no copy of the sheet ever travels (#1032).
 
+The /pennie-dev-update registry is one of these: `skills/pennie-dev-update/repos.local.json`,
+which names the work repositories the manager update covers and the account that reads each one,
+so it stays out of this public repository (#1526). The skill's scripts and the changelog merge gate
+read it through one reader, `hooks/lib/dev-update-registry.js`, and refuse, naming that path and
+what goes in it, when a Mac has none. It used to travel as `skills/pennie-dev-update/repos.json`.
+A file that leaves the payload is deleted from every Mac by the next pull, so `claude-sync` lists
+such files in `MOVED_TO_LOCAL`: each apply first moves the old copy to its local name (setting it
+aside beside the local one if both exist and differ), and the old name is never sent or deleted
+again. DESIGN.md has the reasoning.
+
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
 folder under `skills/`, where Claude Code sets aside a skill it removes or replaces (#1009). The
