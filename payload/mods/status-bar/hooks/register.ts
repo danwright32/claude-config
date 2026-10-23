@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarMode } from '../types/index.d.ts'
-import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
+import { CACHE_WARN_MS, checksOf, compactLines, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
@@ -60,6 +60,11 @@ let jobsNoted = false
 let agents: QuietAgent[] = []
 let agentsNoted = false
 let context: number | undefined
+// The same reading's size in tokens, which whether compacting saves anything is judged on (#1596):
+// the reading's own figure, or its share of its window when it carries none.
+let contextTokens: number | undefined
+const tokensOf = (c: { tokens?: number; window?: number; percent?: number }): number | undefined =>
+  typeof c.tokens === 'number' ? c.tokens : typeof c.percent === 'number' && typeof c.window === 'number' ? (c.percent * c.window) / 100 : undefined
 // Set by a compaction of this conversation that ran, and cleared by the next measure carrying a
 // context figure: until then usage() may answer the conversation the compaction replaced, so its
 // reading is not taken (#1421).
@@ -316,14 +321,12 @@ const publish = () =>
     const now = await io.now()
     const cache = await io.cache()
     const look = lookParts({ modes: await io.modes(), pr, jobs, agents, unpushed, now })
-    const due = compactDue({ contextPercent: context, cacheExpiresAt: cache, now, isWorking: turnRunning })
-    const ctx = context === undefined ? [] : [{ text: `ctx ${Math.round(context)}% `, color: 'warning' }]
+    const ctx = context === undefined ? [] : [{ text: `context ${Math.round(context)}% `, color: 'warning' }]
     // A press while a turn runs is queued (#1278): the row says so and offers Cancel until it runs.
-    const compact = compactQueued
-      ? [...ctx, { text: 'Compact queued, runs when this reply ends ' }, { button: 'compact-cancel', label: 'Cancel', instead: [{ text: 'type: ', dim: true }, { text: '/press status-bar compact-cancel' }] }]
-      : due
-        ? [...ctx, { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }]
-        : []
+    // Otherwise each line says why it shows, and the cache's says to send a message (#1596).
+    const compact: unknown[][] = compactQueued
+      ? [[...ctx, { text: 'Compact queued, runs when this reply ends ' }, { button: 'compact-cancel', label: 'Cancel', instead: [{ text: 'type: ', dim: true }, { text: '/press status-bar compact-cancel' }] }]]
+      : compactLines({ contextPercent: context, contextTokens, cacheExpiresAt: cache, now, isWorking: turnRunning })
     try {
       const lookKey = JSON.stringify(look)
       if (lookKey !== shownLook) {
@@ -333,7 +336,7 @@ const publish = () =>
       }
       const compactKey = JSON.stringify(compact)
       if (compactKey !== shownCompact) {
-        if (compact.length) await io.show({ mod: MOD, id: 'compact', slot: 'compact', lines: [compact] })
+        if (compact.length) await io.show({ mod: MOD, id: 'compact', slot: 'compact', lines: compact })
         else await io.clear('compact')
         shownCompact = compactKey
       }
@@ -352,7 +355,7 @@ const warnCache = async ($: EngineInterface) => {
   if (left <= 0 || left > CACHE_WARN_MS) return
   toastedFor = cache
   const m = Math.ceil(left / MIN)
-  $.ui.toast(`The prompt cache goes cold in ${m} ${m === 1 ? 'minute' : 'minutes'}.`)
+  $.ui.toast(`The prompt cache goes cold in ${m} ${m === 1 ? 'minute' : 'minutes'}: send any message to keep it warm.`)
 }
 
 // Whether this reading asks GitHub about the PR (#1014): always when told to (a turn just ended),
@@ -386,8 +389,11 @@ const read = async ($: EngineInterface) => {
   // Not asked at all after a compaction until a measure has brought the new conversation's figure.
   if (!usageStale) {
     try {
-      const p = (await $.session.usage()).context.percent
-      if (typeof p === 'number' && !usageStale) context = p
+      const c = (await $.session.usage()).context
+      if (typeof c.percent === 'number' && !usageStale) {
+        context = c.percent
+        contextTokens = tokensOf(c)
+      }
     } catch {
       // The next measurement brings it.
     }
@@ -417,6 +423,7 @@ const cacheReplaced = async ($: EngineInterface) => {
 // replaced, so it goes with the cache clock, and the band is redrawn without it (#1421).
 const conversationCompacted = async ($: EngineInterface) => {
   context = undefined
+  contextTokens = undefined
   usageStale = true
   await cacheReplaced($)
 }
@@ -545,6 +552,7 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     if (typeof e.context.percent === 'number') {
       context = e.context.percent
+      contextTokens = tokensOf(e.context)
       usageStale = false
     }
     await publish()
@@ -591,6 +599,7 @@ export const register: Register = on => {
       turnRunning = false
       compactQueued = false
       context = undefined
+      contextTokens = undefined
       usageStale = true
       // Taken off the band now, not at the next tick, so it never claims a compact that will not run.
       await publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))

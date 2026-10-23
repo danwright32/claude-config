@@ -313,7 +313,7 @@ not recorded, so another session editing that same file is not judged against it
 | Account | The session's own account, the one its limits belong to (#815, Dan 2026-10-05: "the status bar must always name the right account for the session"), superseding the picker's "whatever the login file names now". The mod reads the login file at session start into the facts file, as the account room reads it at its start, so the bar and the rename dialog name the same account; a Switch made in another session no longer changes this one's. A facts file written before #815 falls back to the login file as it stands; one whose start read failed says "account unknown". The account room's nickname for the account replaces the name and org when one is set (live check, 2026-10-05). |
 | Colour | The status line is all grey, but for a limit's share past its threshold: amber over 70% on the 5 hour limit or over 85% on the weekly, red at 100%, the number alone, judged on the share as shown (Dan, 2026-10-05, picked over amber alone and red alone); the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job, a job kept on purpose and a scope mode label are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round) and a mode changes what Claude will do; the scope mode label shows even when nothing else is in the band (scope mode round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
-| The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
+| The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). The Compact row is two lines when it shows for context and the cache at once (#1596). |
 | Order of the amber line | A scope mode (NO BUILD, WINDING DOWN, AWAY) leads it in bold, since it changes what Claude will do (scope mode round). Then most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
 | Compact button | Claude Code's default button, `[ Compact ]` in bold white, pressed by clicking or ctrl+x tab then Enter (design round, styles copied from a live probe) |
 
@@ -350,9 +350,20 @@ the spec rather than chosen afresh, and open to Dan changing:
   tool result, with the agent, how long, and the last tool call it started and whether it returned.
 - A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
   12m ago" (the spec's "stale with its age"). One that last read as passing stays hidden.
-- The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
-  for the cache. A compaction that does not run says why in a toast: "Compact did not run: ...".
-- The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes."
+- The Compact row says why it shows, in amber (#1596, Dan on 2026-10-23, of "ctx 18% [ Compact ]",
+  which he read as the context being full: "Doesn't the cache refresh when I send a message. That's
+  what it should tell me to do."). For context above 70% it reads "context 82%", then `[ Compact ]`.
+  For the cache 5 minutes from cold it reads "cache goes cold in 4m: send any message to keep it
+  warm", since any message's request reads the cache and starts its hour again (the status line's
+  clock moves with it, as the mod's tests hold), and adds ", or `[ Compact ]`" only from 150,000
+  tokens of context, the size from which compacting costs less than the cold re-read it avoids
+  (measured from this Mac's compactions at list prices; the arithmetic is on `COMPACT_SAVES_TOKENS`
+  in `hooks/facts.ts`, and it is judged in tokens, never a share of the window). Both at once are
+  two lines, the context's with Compact, then the cache's, each under 80 columns. A compaction that
+  does not run says why in a toast: "Compact did not run: ...". Built from the issue's wording; Dan
+  chose to skip a design round for it.
+- The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes:
+  send any message to keep it warm."
 - The cache's hour is measured from the last main request, as the spec says, not from the end of
   the turn (#697): each request of a turn starts it again, a subagent's does not (it carries its
   own conversation). While a main turn runs neither the toast nor a Compact row for the cache

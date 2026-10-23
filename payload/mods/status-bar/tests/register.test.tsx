@@ -119,6 +119,9 @@ type World = {
   // what a failed read's error text is to it. By default every look is taken at a minute's pace.
   poll: { take: Run | 'throws'; next: (wait: string, changed: string) => string; failed: Run }
   usage: number | undefined
+  // usage()'s context size in tokens and its window, which the size Compact is offered at is read in (#1596).
+  tokens: number | undefined
+  window: number
   compact: () => unknown
   // A disk that will not take the facts file, or its folder: the reason, or empty when it will.
   writeFails: string
@@ -133,6 +136,8 @@ const world = (on: On, init: Partial<World> = {}) => {
     gh: { exitCode: 1, stdout: '', stderr: 'no pull requests found for branch "x"' },
     poll: { take: { exitCode: 0, stdout: 'ok\n', stderr: '' }, next: () => '60', failed: { exitCode: 0, stdout: 'other\n', stderr: '' } },
     usage: undefined,
+    tokens: undefined,
+    window: 200_000,
     compact: () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }] }),
     writeFails: '',
     mkdirFails: '',
@@ -200,7 +205,7 @@ const world = (on: On, init: Partial<World> = {}) => {
   })
   on('session.id', () => ({ value: 's1' }) as never)
   on('session.root', () => ({ value: '/repo' }) as never)
-  on('session.usage', () => ({ value: { startedAt: T0, context: { window: 200_000, percent: w.usage }, rateLimits: [] } }) as never)
+  on('session.usage', () => ({ value: { startedAt: T0, context: { window: w.window, percent: w.usage, ...(w.tokens === undefined ? {} : { tokens: w.tokens }) }, rateLimits: [] } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('session.measure', ($, e) => ({ changed: e.changed }) as never)
@@ -240,8 +245,10 @@ const step = async ($: unknown, clock: { settle: () => Promise<void> }, agentId?
   await clock.settle()
 }
 const cacheIn = (files: Record<string, string>) => (JSON.parse(files[`${DIR}/s1.json`] as string) as { cacheExpiresAt: number | null }).cacheExpiresAt
-const measure = ($: { session: { measure: (e: never) => Promise<unknown> } }, percent: number) =>
-  $.session.measure({ context: { window: 200_000, percent }, rateLimits: [], changed: ['context'] } as never)
+const measure = ($: { session: { measure: (e: never) => Promise<unknown> } }, percent: number, size?: { tokens: number; window: number }) =>
+  $.session.measure({ context: { window: size?.window ?? 200_000, percent, ...(size ? { tokens: size.tokens } : {}) }, rateLimits: [], changed: ['context'] } as never)
+const COLD_SOON = 'cache goes cold in 4m: send any message to keep it warm'
+const WARNED = 'The prompt cache goes cold in 5 minutes: send any message to keep it warm.'
 
 const band = { plugin: 'mod-kit', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} } } as never
 type Ui = { findAll: (q: { type: string }) => Promise<{ text: string; children: unknown[] }[]>; find: (q: object) => Promise<{ props: Record<string, unknown> } | undefined> }
@@ -434,7 +441,7 @@ test('context above 70% brings the Compact row, which compacts when pressed, and
   await start($, clock)
   await measure($, 74)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('ctx 74% ')
+  expect(await shown(ui as never)).toBe('context 74% ')
   expect((await ui.find({ type: 'Button', key: 'status-bar:compact' }))?.props).toMatchObject({ label: 'Compact' })
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
   // The press is taken at once and the compact runs just after, outside a noun's 10 s (#939).
@@ -506,7 +513,7 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   await clock.settle()
   expect(compacts).toHaveLength(0)
   expect(toasts).toEqual([])
-  expect(await shown(ui as never)).toBe('ctx 80% Compact queued, runs when this reply ends ')
+  expect(await shown(ui as never)).toBe('context 80% Compact queued, runs when this reply ends ')
   expect((await ui.find({ type: 'Button', key: 'status-bar:compact-cancel' }))?.props).toMatchObject({ label: 'Cancel' })
   w.compact = idle
   await turn($)
@@ -562,7 +569,7 @@ test('a queued Compact that fails once the turn ends says so; one cancelled does
   await clock.settle()
   await press({ key: 'status-bar:compact-cancel' })
   await clock.settle()
-  expect(await shown(ui as never)).toBe('ctx 80% ')
+  expect(await shown(ui as never)).toBe('context 80% ')
   const before = compacts.length
   await turn($)
   await clock.settle()
@@ -594,7 +601,7 @@ test('the amber line and the Compact row show together, amber line on top', with
   await start($, clock)
   await measure($, 80)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('1 unpushed commitctx 80% ')
+  expect(await shown(ui as never)).toBe('1 unpushed commitcontext 80% ')
   await ui.unmount()
 })
 
@@ -641,12 +648,12 @@ test('while a turn runs no cache toast or cache Compact row, however long since 
   await step($, clock)
   await turn($)
   await clock.advance(55 * MIN)
-  expect(toasts).toEqual(['The prompt cache goes cold in 5 minutes.'])
-  expect(await shown(ui as never)).toBe('ctx 30% ')
+  expect(toasts).toEqual([WARNED])
+  expect(await shown(ui as never)).toBe('cache goes cold in 5m: send any message to keep it warm')
   await ui.unmount()
 })
 
-test('5 minutes before the cache goes cold: one toast and the Compact row, gone once it is cold', withKit, async ($, on) => {
+test('5 minutes before the cache goes cold: one toast and the cache row, gone once it is cold', withKit, async ($, on) => {
   const { toasts, clock, w } = world(on)
   w.usage = 30
   await start($, clock)
@@ -655,13 +662,64 @@ test('5 minutes before the cache goes cold: one toast and the Compact row, gone 
   await clock.advance(54 * MIN)
   expect(toasts).toEqual([])
   await clock.advance(MIN)
-  expect(toasts).toEqual(['The prompt cache goes cold in 5 minutes.'])
+  expect(toasts).toEqual([WARNED])
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('ctx 30% ')
-  await clock.advance(2 * MIN)
+  expect(await shown(ui as never)).toBe('cache goes cold in 5m: send any message to keep it warm')
+  // 30% of 200,000 is too small for compacting to save anything: no Compact is offered (#1596).
+  expect(await ui.find({ type: 'Button', key: 'status-bar:compact' })).toBeUndefined()
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe(COLD_SOON)
+  await clock.advance(MIN)
   expect(toasts).toHaveLength(1)
   await clock.advance(4 * MIN)
   expect(await shown(ui as never)).toBe('engine band')
+  await ui.unmount()
+})
+
+// #1596, Dan 2026-10-23, of "ctx 18% [ Compact ]": "Doesn't the cache refresh when I send a message.
+// That's what it should tell me to do." The row tells him to, so what it promises is held here: the
+// message's request is a main request like any other, the clock the row and the status line read
+// starts its hour again, and the row goes for that hour.
+test('the message the cache row asks for starts its hour again, and the row goes for that hour (#1596)', withKit, async ($, on) => {
+  const { files, clock } = world(on, { usage: 18 })
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  await turn($)
+  await clock.advance(56 * MIN)
+  expect(await shown(ui as never)).toBe(COLD_SOON)
+  // Dan sends a message: a new turn, whose first request goes out at once.
+  await step($, clock)
+  expect(cacheIn(files)).toBe(T0 + 56 * MIN + HOUR)
+  expect(await shown(ui as never)).toBe('engine band')
+  await turn($)
+  await clock.settle()
+  expect(await shown(ui as never)).toBe('engine band')
+  await clock.advance(54 * MIN)
+  expect(await shown(ui as never)).toBe('engine band')
+  await clock.advance(MIN)
+  expect(await shown(ui as never)).toBe('cache goes cold in 5m: send any message to keep it warm')
+  await ui.unmount()
+})
+
+// #1596: Compact is offered for the cache only once compacting costs less than the cold re-read it
+// avoids, which is a size in tokens, read from the measure; a share of the window says nothing alone.
+test('the cache row offers Compact for a context large enough to save by compacting, and both reasons show on their own lines (#1596)', withKit, async ($, on) => {
+  const { clock } = world(on)
+  await start($, clock)
+  await measure($, 18, { tokens: 36_000, window: 200_000 })
+  const ui = await $.ui.mount(band)
+  await step($, clock)
+  await turn($)
+  await clock.advance(56 * MIN)
+  expect(await shown(ui as never)).toBe(COLD_SOON)
+  expect(await ui.find({ type: 'Button', key: 'status-bar:compact' })).toBeUndefined()
+  await measure($, 18, { tokens: 180_000, window: 1_000_000 })
+  expect(await shown(ui as never)).toBe(`${COLD_SOON}, or `)
+  expect((await ui.find({ type: 'Button', key: 'status-bar:compact' }))?.props).toMatchObject({ label: 'Compact' })
+  await measure($, 82, { tokens: 164_000, window: 200_000 })
+  expect(await shown(ui as never)).toBe(`context 82% ${COLD_SOON}`)
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
   await ui.unmount()
 })
 
@@ -846,14 +904,15 @@ test('a job watcher that fails to answer is named once in the debug log, and the
 // belongs to a conversation that is gone: the clock starts again from nothing, as after a /clear,
 // and a Compact row that showed for the cache goes with it.
 test('a Compact that runs resets the cache clock: the row it showed for goes, and the status line shows no cache', withKit, async ($, on) => {
-  const { files, clock, w, toasts } = world(on)
-  w.usage = 30
+  // A context large enough that compacting it saves something, so the cache row offers Compact (#1596).
+  const { files, clock, w, toasts } = world(on, { usage: 16, tokens: 160_000, window: 1_000_000 })
   await start($, clock)
   await step($, clock)
   await turn($)
   await clock.advance(56 * MIN)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('ctx 30% ')
+  expect(await shown(ui as never)).toBe(`${COLD_SOON}, or `)
+  expect((await ui.find({ type: 'Button', key: 'status-bar:compact' }))?.props).toMatchObject({ label: 'Compact' })
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
   await clock.settle()
   expect(await shown(ui as never)).toBe('engine band')
@@ -861,7 +920,7 @@ test('a Compact that runs resets the cache clock: the row it showed for goes, an
   // The next request starts a fresh hour.
   await step($, clock)
   expect(cacheIn(files)).toBe(T0 + 56 * MIN + HOUR)
-  expect(toasts).toEqual(['The prompt cache goes cold in 5 minutes.'])
+  expect(toasts).toEqual([WARNED])
   await ui.unmount()
 })
 
@@ -899,7 +958,7 @@ test('a compaction that runs takes the context reading with it until a new one i
   await start($, clock)
   await measure($, 75)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await $.session.compact(compactEvent('auto'))
   await clock.settle()
   expect(await shown(ui as never)).toBe('engine band')
@@ -915,9 +974,9 @@ test('a compaction that runs takes the context reading with it until a new one i
   // And a conversation grown full again is offered Compact again.
   w.usage = 75
   await measure($, 75)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await clock.advance(MIN)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await ui.unmount()
 })
 
@@ -938,7 +997,7 @@ test('pressing Compact takes the context reading with it too: the row does not c
   expect(await shown(ui as never)).toBe('engine band')
   w.usage = 75
   await measure($, 75)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await ui.unmount()
 })
 
@@ -948,7 +1007,7 @@ test('a /clear takes the context reading with it too, as a compaction does (#142
   await start($, clock)
   await measure($, 75)
   const ui = await $.ui.mount(band)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await ($ as { session: { end: (e: never) => Promise<unknown> } }).session.end({ sessionId: 's1', reason: 'clear' } as never)
   await clock.settle()
   expect(await shown(ui as never)).toBe('engine band')
@@ -956,7 +1015,7 @@ test('a /clear takes the context reading with it too, as a compaction does (#142
   expect(await shown(ui as never)).toBe('engine band')
   w.usage = 80
   await measure($, 80)
-  expect(await shown(ui as never)).toBe('ctx 80% ')
+  expect(await shown(ui as never)).toBe('context 80% ')
   await ui.unmount()
 })
 
@@ -973,9 +1032,9 @@ test('a compaction that is skipped, a subagent one or a precompute leaves the co
   await (ui as unknown as { press: (t: object) => Promise<unknown> }).press({ key: 'status-bar:compact' })
   await clock.settle()
   expect(toasts).toEqual(['Compact did not run: Not enough messages to compact.'])
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await clock.advance(MIN)
-  expect(await shown(ui as never)).toBe('ctx 75% ')
+  expect(await shown(ui as never)).toBe('context 75% ')
   await ui.unmount()
 })
 
