@@ -1,6 +1,6 @@
 ---
 name: pennie-dev-update
-description: Draft the recurring dev update Dan posts to Pennie's sales managers, covering what shipped since the last update in every internal tool listed in the skill's repos.json. Also runs a user-facing issue check that promotes manager-visible issues in the backlog. Use when Dan asks for a dev update, a changelog for managers, or invokes /pennie-dev-update.
+description: Draft the recurring dev update Dan posts to Pennie's sales managers, covering what shipped since the last update in every internal tool listed in this Mac's dev update registry. Also runs a user-facing issue check that promotes manager-visible issues in the backlog. Use when Dan asks for a dev update, a changelog for managers, or invokes /pennie-dev-update.
 trigger: /pennie-dev-update
 ---
 
@@ -41,7 +41,7 @@ Sonar issues by whether an agent would bump into them.
 ### It does not matter where Dan runs this
 
 **Run it from any directory, including one that is not a git repo at all.** Every repo it
-touches comes from `repos.json`, never from the working directory.
+touches comes from the registry (section 1, "The registry"), never from the working directory.
 
 So **every gh command must carry `--repo <owner>/<name>` explicitly** (or name the repo in its
 API path). This is not a style preference. Dan's usual working directory for PET is the folder
@@ -50,7 +50,7 @@ or, worse, resolves to whatever repo happens to be nearby.
 
 ### Which account reads each repo
 
-**Every repo is read as the GitHub account `repos.json` names for it (`account`), whichever account
+**Every repo is read as the GitHub account the registry names for it (`account`), whichever account
 gh has active** (claude-config#1182). Dan runs sessions under different GitHub accounts at once, and
 on the personal MacBook the active one is danwright32, which GitHub answers 404 for Try-Pennie's
 private repos. `gather.js` takes the named account's token from gh's own store and hands it to each
@@ -59,7 +59,7 @@ account** (`gh auth switch`): other sessions are using it.
 
 So **no gh command in this skill runs bare.** The issue check's commands (section 9) run through
 `gather.js gh`, which runs the command as the account of the repo it names, refuses one that names
-no repo, two repos or a repo missing from `repos.json`, and passes gh's own output and exit code
+no repo, two repos or a repo missing from the registry, and passes gh's own output and exit code
 back unchanged:
 
 ```bash
@@ -71,29 +71,48 @@ the one command that signs it in. Tell Dan exactly that, with the command; never
 quiet, and never read it as another account.
 
 **No step needs a local checkout.** Gathering, the changelog records and the deploy check all ask
-GitHub by `owner/name`, so `repos.json` records no path. The paths it used to carry were typed by
+GitHub by `owner/name`, so the registry records no path, and `gather.js` refuses an entry that carries one. The paths it used to carry were typed by
 hand, pointed at `~/Documents/...`, and stopped existing when the work MacBook's Documents folder
 moved on 2026-10-02 (claude-config#679, L153).
 
-If Dan asks for an update "for Slate" or "for PET" specifically, filter `repos.json` to that
+If Dan asks for an update "for Slate" or "for PET" specifically, filter the registry to that
 one. Otherwise do them all.
 
-### The config
+### The registry
 
-Read `repos.json` beside this file:
+The repos come from this Mac's own registry, the file `repos.local.json` in this skill's folder
+(`~/.claude/skills/pennie-dev-update/`), which no copy of the skill ships with. It names work repositories, so it is **never** in the shared config, which is a public repository
+(claude-config#1526): the sync never sends a `*.local.json` and never deletes one, so each Mac keeps
+its own copy and an edit on one Mac does not reach the other. Edit it on the Mac you run the update
+from, and copy it across by hand when both need the change.
+
+`gather.js`, `lint-post.js` and the merge gate (`hooks/require-changelog-tag.sh`) all read it
+through one reader, `hooks/lib/dev-update-registry.js`, so they can never be reading different
+files. With no registry on this Mac all three refuse, and say where to create it and what goes in
+it; the gate refuses every merge until it exists, because a missing registry cannot tell a gated
+repo from one nobody gated. A registry holding `{"repos": []}` gates nothing, on purpose.
+
+It used to be `repos.json` in this folder, shared through the sync. The first pull of the change
+that moved it renamed each Mac's copy in place, before the sync could remove the shared one, so
+nothing had to be recreated. A copy that turns up under the old name again is never sent, and the
+next pull moves it (or sets it aside beside the registry, if the two differ). If a Mac has none,
+the last shared version is in the sync clone's history, as the parent of the commit that removed
+`payload/skills/pennie-dev-update/repos.json`.
+
+An entry looks like this (an invented repository):
 
 ```json
 { "repos": [
-  { "name": "PET",
-    "repo": "Try-Pennie/project-enrollment-tracker",
-    "account": "dwright-pennie",
+  { "name": "Widget",
+    "repo": "acme/widget",
+    "account": "acme-bot",
     "deployRecord": "build_history",
     "deployRecordFrom": "2026-07-29",
     "changelogFrom": "2026-08-31" }
 ] }
 ```
 
-**Every repo in this file is treated identically, apart from its first appearance.** There is no
+**Every repo in the registry is treated identically, apart from its first appearance.** There is no
 per-repo behaviour of any kind. A product's first appearance (its repo has no `lastEnd` in state)
 introduces it in general and never lists its changes one by one; every run after that is the
 recurring update, exactly as for PET. Section 2, "First appearance", says how.
@@ -103,14 +122,14 @@ recurring update, exactly as for PET. Section 2, "First appearance", says how.
   run for it, and never silently pretend it had nothing.
 - More than one repo means the post gets a top-level section per project, with categories
   nested under each. One repo means no project heading at all.
-- **The products appear in the order `repos.json` lists them**, which is Slate, PET, Sonar
+- **The products appear in the order the registry lists them**, which is Slate, PET, Sonar
   (Dan, 2026-10-13: "put Slate first"). That one order sets the product line in the opener
   (section 6) and the order of the product sections, and `lint-post.js` reads it from this file,
-  so reordering a product means reordering `repos.json`, never only the draft.
+  so reordering a product means reordering the registry, never only the draft.
 
 ### Adding a repo
 
-Add an entry to `repos.json`. That is the entire process. Put a newly launched product at the
+Add an entry to the registry. That is the entire process. Put a newly launched product at the
 top, so its launch section leads the post (section 6), and move it only when Dan asks.
 
 **Add it when you want it appearing in these updates**, which is not the same day its repo is
@@ -248,7 +267,7 @@ Each PR in its output carries `record` (below), `deploy` (section 4), `carried` 
 
 ### The record each change carries (PET #1186)
 
-From a repo's `changelogFrom` date in `repos.json`, every merged pull request carries the
+From a repo's `changelogFrom` date in the registry, every merged pull request carries the
 judgment already, made at merge time by the person who made the change and enforced by
 `~/.claude/hooks/require-changelog-tag.sh`:
 
@@ -304,7 +323,7 @@ So: read every title. No mechanical shortcut is trustworthy.
 A merged PR is not a shipped change (LESSONS L4). A post announcing something managers cannot
 see is the one failure that would make them stop trusting these updates.
 
-Every repo names its deploy record in `repos.json` as `deployRecord`, and each record gives one
+Every repo names its deploy record in the registry as `deployRecord`, and each record gives one
 thing: the **live commit**, the newest commit known to be serving everyone. Three records exist:
 
 **PET, `build_history` (read by hand).** PET records one row per **verified** deploy in
@@ -431,7 +450,7 @@ these on the first draft:
 - He rewrote the opener as `Updates for September 15 to 28 :thread:`, with the detail going in
   the thread, and deleted the line saying some items are backend only. Both are in the structure
   rules below.
-- A product being LAUNCHED goes first, above PET (it sits at the top of `repos.json` for
+- A product being LAUNCHED goes first, above PET (it sits at the top of the registry for
   that). Its section explains what it is, when to
   open it, what it checks and how to share a result. Dan added where it is bookmarked and
   that agents should start with it.
@@ -489,7 +508,7 @@ these on the first draft:
 - The period comes from the actual window: "the week of September 8" for roughly a week,
   "September" for roughly a month, otherwise a range such as "September 15 to 28".
 - **The product line (Dan, 2026-10-13).** A post covering two or more products puts, on the
-  line straight after the opener, the products it covers joined with ` | `, in the `repos.json`
+  line straight after the opener, the products it covers joined with ` | `, in the registry's
   order: `Slate | PET | Sonar`. A product with nothing to report is left off the line, as it is
   left out of the post. A post covering one product has no product heading and so no product
   line.
@@ -608,8 +627,8 @@ It refuses (exit 1, one `line N:` per finding) a dash as punctuation, an item pr
 emoji or a shortcode other than the opener's `:thread:`, a heading that is not bare uppercase or
 ends in a colon or has no item under it, an opener that is not `Updates for <period> :thread:`,
 a bare @channel, @here or @everyone, a multi product post whose product line is missing or does not match its product sections, a
-product line on a one product post, product sections out of the `repos.json` order, and the
-deleted "backend only" line. It reads the products from the `repos.json` beside it (`--config`
+product line on a one product post, product sections out of the registry's order, and the
+deleted "backend only" line. It reads the products from this Mac's registry (`--config`
 points it at another), and refuses to run if that cannot be read. Fix every finding before Dan sees the draft. A hyphenated
 word is only a warning: keep it if it is the literal name of something on screen, such as the
 Top-out column. Then open it:

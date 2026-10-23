@@ -17,12 +17,12 @@
 // any refusal with its reason. It only ever READS from GitHub, through `gh api`, by owner/name,
 // so it runs from any directory and needs no local checkout.
 //
-// Every call is made as the GitHub account repos.json names for the repo, through that account's
+// Every call is made as the GitHub account the registry (this Mac's repos.local.json) names for the repo, through that account's
 // token in the call's own environment, whichever account gh has active (claude-config#1182).
 // `gather.js gh` runs the issue check's own gh commands (SKILL.md section 9) the same way: it is
 // the only part of this file that can change anything on GitHub, and only what it is told to run.
 //
-// Whether a PR reached production comes from the repo's deploy record (repos.json deployRecord).
+// Whether a PR reached production comes from the repo's deploy record (the registry's deployRecord).
 // PET's lives in its database, so it is read by hand and handed over with --live. Slate's and
 // Sonar's live on GitHub, so gather reads them itself (claude-config#1177): Slate's CI deploy job,
 // with the exit code of the step that touches production, plus its Rollback runs; and Sonar's
@@ -43,6 +43,9 @@ const { spawnSync } = require('child_process');
 // (hooks/require-changelog-tag.sh). The skill and the hooks sit side by side both in this
 // repository's payload/ and once installed in ~/.claude, so the path is the same in both.
 const ENTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'changelog-entry.js');
+// The one reader of the registry, shared with the same gate (claude-config#1526): where this Mac
+// keeps it (never the shared config, because it names work repositories) and how it is read.
+const REGISTRY_PATH = path.join(__dirname, '..', '..', 'hooks', 'lib', 'dev-update-registry.js');
 
 const PER_PAGE = 100;
 const MAX_PAGES = 200;             // 20,000 PRs, far past any repo here; a guard against a loop
@@ -117,12 +120,33 @@ function writeJsonAtomic(file, data) {
   fs.renameSync(tmp, file);
 }
 
+function loadRegistryReader() {
+  try { return require(REGISTRY_PATH); }
+  catch (e) { refuse('The dev update registry reader is not at ' + REGISTRY_PATH + ' (' + e.message + '), so no registry can be read.'); }
+}
+
+// The registry this run reads: --config when given, otherwise this Mac's own file.
+function configPathFor(args) {
+  return args.config || loadRegistryReader().registryPath();
+}
+
 function loadConfig(file) {
-  const cfg = readJson(file, 'repos.json');
-  if (cfg === undefined) refuse('repos.json is not at ' + file + '.');
-  if (!cfg || !Array.isArray(cfg.repos) || cfg.repos.length === 0) refuse(file + ' holds no "repos" list.');
+  const read = loadRegistryReader().readRegistry(file);
+  if (read.state !== 'ok') refuse(read.why + (read.state === 'unreadable' ? ' Nothing was changed.' : ''));
+  const cfg = read.registry;
+  if (cfg.repos.length === 0) {
+    refuse(file + ' lists no repos, so there is nothing to gather. An empty list only tells the merge gate to gate nothing on '
+      + 'this Mac; add an entry for each repository the update covers (SKILL.md, "The registry").');
+  }
   cfg.repos.forEach(function (r, i) {
     if (!r || typeof r.name !== 'string' || !r.name.trim()) refuse('Entry ' + (i + 1) + ' in ' + file + ' has no name.');
+    // No step reads a local checkout, and the paths entries used to carry were typed by hand and
+    // pointed at nothing after a folder move (claude-config#679). Checked here since #1526, where
+    // the file is read, because a suite in the repository cannot read a Mac's own registry.
+    if (Object.prototype.hasOwnProperty.call(r, 'path')) {
+      refuse(r.name + ' in ' + file + ' carries a path, and nothing in this skill reads a local checkout: every repo is read '
+        + 'from GitHub by owner/name. Remove its "path".');
+    }
     if (typeof r.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(r.repo)) {
       refuse(r.name + ' in ' + file + ' has repo ' + JSON.stringify(r.repo) + ', which is not owner/name.');
     }
@@ -182,7 +206,7 @@ function loadEntry() {
 
 // ---------------------------------------------------------------- GitHub, read only
 
-// Every repo is read as the GitHub account repos.json names for it (claude-config#1182), never as
+// Every repo is read as the GitHub account the registry names for it (claude-config#1182), never as
 // whichever account gh has active. Dan runs sessions under different accounts at once, so the
 // active one is whatever the last switch left, and on the personal MacBook it is danwright32,
 // which GitHub answers 404 for Try-Pennie's private repos: every Pennie repo read as unreachable.
@@ -233,7 +257,7 @@ function gh(as, apiPath) {
     const said = String(r.stderr || r.stdout || '').trim();
     throw new Unreachable('gh api ' + apiPath + ', read as ' + as.account + ', failed (exit ' + r.status + '): ' + said
       + (/HTTP 404|Not Found/.test(said) ? '. GitHub also answers 404 when ' + as.account + ' cannot see a private repo, so check that it '
-        + 'still has access, and that repos.json names the account that does' : ''));
+        + 'still has access, and that the registry names the account that does' : ''));
   }
   try { return JSON.parse(r.stdout); }
   catch (e) { throw new Unreachable('gh api ' + apiPath + ' returned something that is not JSON: ' + String(r.stdout).slice(0, 200)); }
@@ -317,7 +341,7 @@ function jobOutcome(rc, run, jobName, stepName, liveExits, unchangedExits) {
   if (!step) {
     if (job.conclusion === 'success') {
       refuse('the ' + jobName + ' job of ' + what + ' succeeded but has no step named "' + stepName
-        + '", so the deploy record has changed shape. Update deployRecord in repos.json.');
+        + '", so the deploy record has changed shape. Update deployRecord in the dev update registry.');
     }
     return { outcome: 'none', what: what, at: at };
   }
@@ -582,7 +606,7 @@ function gatherRepo(ctx, repoCfg) {
 // ---------------------------------------------------------------- gather
 
 function cmdGather(args) {
-  const configPath = args.config || path.join(__dirname, 'repos.json');
+  const configPath = configPathFor(args);
   const statePath = args.state || defaultStatePath();
   const nowMs = args.now ? instant(args.now, '--now') : Date.now();
   const cfg = loadConfig(configPath);
@@ -754,9 +778,9 @@ function cmdGh(args) {
   const words = args.rest;
   if (words.length === 0) refuse('gather.js gh was given no gh command after --. ' + usage);
   if (words[0] === 'auth') {
-    refuse('gather.js gh does not run gh auth commands: the account comes from repos.json, and the active account is never switched.');
+    refuse('gather.js gh does not run gh auth commands: the account comes from the dev update registry, and the active account is never switched.');
   }
-  const configPath = args.config || path.join(__dirname, 'repos.json');
+  const configPath = configPathFor(args);
   const cfg = loadConfig(configPath);
   const named = reposNamed(words);
   const distinct = Array.from(new Set(named.map(function (n) { return n.toLowerCase(); })));

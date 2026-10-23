@@ -1194,6 +1194,40 @@ left out of what the apply holds back, so its own `--delete` removes it, and the
 names the commit holding it. With `SYNC_ACCEPT_DELETIONS=0` it stays, and the pull says a send will
 not carry it, once per copy through the same `.resurrected-reported` record the send keeps.
 
+## A shared file that becomes a Mac's own is moved before the mirror runs (#1526)
+
+The /pennie-dev-update registry names work repositories and was tracked in the payload, which is a
+public repository. It is each Mac's own `skills/pennie-dev-update/repos.local.json` now. Taking a
+file out of the payload is not enough to make it local: the apply mirrors with `--delete`, so on the
+next pull every Mac would have deleted its copy, and the changelog gate, which refuses a missing
+registry, would then have refused every merge there (L5). The removal had to be made safe on the
+RECEIVING side, by the version of the tool that arrives with it.
+
+So `MOVED_TO_LOCAL` in `claude-sync` lists `<old>|<new>` pairs, and two things follow from each:
+
+- `move_shared_files_to_local` runs first in every apply, before the rule file merge, the conflict
+  copies and the mirror. It copies the old file to the new name, compares the copy byte for byte,
+  and only then removes the old one. If both exist and match, the old one goes; if they differ, the
+  new one is kept and the old one is set aside beside it as `<new>.shared-copy-<time>`. Every
+  outcome is said and recorded in the summary. It refuses a new name `LOCAL_FILE_GLOBS` does not
+  cover, because that move would publish the file it exists to keep out.
+- The OLD name joins `COMMON_EXCLUDES`, anchored at each tree's root, so in both directions it is
+  never carried and never deleted. A copy recreated under it by old habit is not sent, and the next
+  apply moves it.
+
+The pull that brings the change re-executes into the new script before applying it
+(`reexec_after_self_update`), which is what makes the move run before the mirror on the very pull
+that removes the shared copy. The one window it cannot cover is a pulled script that fails its own
+self test, when the old copy applies: then the old copy's mirror removes the file as any deletion,
+the gate refuses with the path to create, and the last shared version is in the sync clone's history.
+
+Rejected: leaving the move to the skill's reader on first use (the mirror deletes the file before
+anything reads it), and two releases, one adding the local name and one removing the shared file
+(it delays a public disclosure fix by a release, for a window the re-execution already closes).
+`tests/test-dev-update-registry.sh` builds both Macs and the shared repository, applies the removal
+as a merge from elsewhere would, and holds that the registry survives, the gate passes, and neither
+the local file nor an old name copy reaches the shared repository.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on
