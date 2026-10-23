@@ -173,9 +173,9 @@ esac
 # as "no pull request was found", which is a true sentence about a different fault and sends
 # somebody to name a repository that was never the problem (L11).
 #
-# Below the registry check deliberately: on a machine with no dev update tooling this gate has
-# nothing to enforce and stands down, and a refusal about a reader would be a refusal about a rule
-# that does not apply here. Only the direct form, because a wrapper names its number as a
+# Below the registry check deliberately: a Mac whose registry is missing or unreadable is told
+# that first, in its own words, since fixing the registry is the step it needs before anything this
+# check could say matters (claude-config#1526). Only the direct form, because a wrapper names its number as a
 # positional argument the shell reads and names no repository at all.
 if mt_is_pr_merge "$command" && mt_reader_missing; then
   deny "Cannot tell whether this repo needs a changelog record: $(mt_reader_absent_why) Reading another pull request's record while merging this one would lose this change from the next manager update. Deliberate override: ALLOW_UNTAGGED_MERGE=1 <the same command>."
@@ -195,8 +195,8 @@ scope_for() {  # $1 = owner/name
 
 # ONE pull request per command (claude-config#1062): the record read below is the first merge's, so
 # a second merge in the same command went through on it and its own change was lost from the next
-# manager update. Asked after the stand downs above, because on a machine with no dev update tooling
-# this rule does not apply at all.
+# manager update. Asked after the registry check above, so a Mac whose registry is missing or
+# unreadable hears that first (claude-config#1526).
 #
 # And refused only where the rule applies (merge time lessons review of #1072): when EVERY target is a
 # repository the registry plainly does not gate, there is no record to lose, and a refusal about

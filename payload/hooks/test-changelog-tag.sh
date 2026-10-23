@@ -197,8 +197,8 @@ rm -rf "$dir"
 # degraded to reading pull request titles.
 #
 # The remedy stays reachable, which is the condition an exemption would otherwise be needed for
-# (L362): repos.json lives in this repo, whose own slug is not in the registry, so the change that
-# adds the date is not itself gated. ALLOW_UNTAGGED_MERGE=1 remains for anything else.
+# (L362): the registry is each Mac's own file (repos.local.json, claude-config#1526), edited on the
+# Mac with no pull request at all, so adding the date is not itself gated. ALLOW_UNTAGGED_MERGE=1 remains for anything else.
 dir=$(make_repo acme/widget "$UNTAGGED" "$REGISTRY_NO_DATE")
 out=$(run_hook "$dir" "$MERGE 7 --squash")
 if denied "$out"; then pass; else fail "a repo listed without a changelogFrom date silently disabled the gate: $out"; fi
