@@ -2,7 +2,7 @@
 # The scanner that keeps the work GitHub organisations out of this public repository (claude-config#1568).
 #
 # The work's private repositories live under two GitHub organisations, and this repository is
-# public. Their names were written into 37 tracked files and more (lists the code reads, test
+# public. Their names were written into 40 tracked files, counted 2026-10-23 (lists the code reads, test
 # fixtures, comments, lesson provenance), and each one tells a stranger exactly where to look.
 # payload/hooks/lib/work-names.py is the one scanner that finds them, and this suite holds:
 #   2. The scanner can see one: an organisation it is told about by hash is found as an owner, in a
