@@ -294,6 +294,22 @@ check "the Swift file is in the diff (every file type)" "App/Sync.swift" "$stdin
 check "markdown is in the diff too" "+More." "$stdin"
 check "the first commit of the branch is in it, not only the last" "throws" "$stdin"
 check "the reviewer is told this is a whole branch" "WHOLE BRANCH" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
+# Only the lessons ride in the appended system prompt, the part a review started within five minutes
+# of another reads back from the prompt cache; the pr scope stays in the message, after the context
+# lines and in front of the instructions, as it was (claude-config#1599).
+python3 - "$FAKE_LOG/args" "$DIR/lib" <<'EOF' && ok || bad "#1599 the message ends with the pr scope then the prompt file, and the appended system prompt carries neither"
+import os, sys
+args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
+scope = open(os.path.join(sys.argv[2], "ai-review-pr-scope.txt"), encoding="utf-8").read().strip()
+prompt = open(os.path.join(sys.argv[2], "ai-review-prompt.txt"), encoding="utf-8").read()
+if args.count("--append-system-prompt") != 1:
+    sys.exit(1)
+fixed = args[args.index("--append-system-prompt") + 1]
+sent = args[args.index("-p") + 1]
+ok = (sent.endswith("\n\n" + scope + "\n\n" + prompt) and fixed.startswith("===== LESSONS")
+      and "SCOPE OF THIS REVIEW" not in fixed and "Act as a senior developer" not in fixed)
+sys.exit(0 if ok else 1)
+EOF
 # claude-config#1220: on #1217 four pushes each surfaced ONE more description a new button had left
 # stale. The reviewer is asked to report every description of the same behaviour in one review.
 check "the reviewer is asked to report every stale description of one behaviour at once" "every other place that describes the same behaviour" "$(tr '\036' '\n' < "$FAKE_LOG/args")"

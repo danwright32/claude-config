@@ -4,10 +4,9 @@
 claude-config#1568. The work's private repositories live under two GitHub organisations, and this
 repository is public. A name like that, written as an owner, a URL, a fixture or a lesson's
 provenance, tells a stranger exactly where to look. This is the one scanner for it. Its fixtures are
-held by hooks/test-work-names.sh. Once the lesson provenance, the last tracked text naming an
-organisation, is clean (claude-config#1568), the same suite runs it over the whole
-tree (before every push and in CI) and claude-sync runs it over what a send is about to publish, so
-a name written on a Mac is refused before it is published, not found afterwards (L280).
+held by hooks/test-work-names.sh. tests/test-work-names-tree.sh runs it over the whole tree (before
+every push and in CI), and claude-sync's scan_work_names runs it over what a send is about to
+publish, so a name written on a Mac is refused before it is published, not found afterwards (L280).
 
 WHAT COUNTS AS A NAME. An organisation login, in any letter case, wherever it stands as a whole
 hyphenated run inside a token: an owner (`<org>/repo`), a URL, a fixture file name before an
