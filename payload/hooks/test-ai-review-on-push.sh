@@ -66,6 +66,9 @@ export FAKE_LOG="$WORKDIR/fakelog"; mkdir -p "$FAKE_LOG"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
 printf 'called\n' >> "$FAKE_LOG/calls"
+# Which process this review is, and (below) whether it reached its own end, so a review stopped by
+# its deadline is told from one that finished by the state it leaves, not the time (#1577).
+printf '%s\n' "$$" > "$FAKE_LOG/pid"
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin"
@@ -77,6 +80,7 @@ if [ -n "${FAKE_CLAUDE_HOLD:-}" ]; then
   n=0
   while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
 fi
+: > "$FAKE_LOG/finished"
 if [ -n "${FAKE_CLAUDE_OUT:-}" ]; then printf '%s\n' "$FAKE_CLAUDE_OUT"; exit 0; fi
 printf 'src/calendar.ts:12: deleteEvent still throws the raw error while createEvent got the typed one. Should be: the same typed error in both. [severity: major]\n'
 EOS
@@ -440,13 +444,27 @@ printf 'export const slow = true;\n' > "$REPO/src/slow.ts"
 G add src/slow.ts; G commit -q -m slow
 G push -q origin main 2>/dev/null
 SHA_SLOW="$(G rev-parse HEAD)"
-: > "$FAKE_LOG/calls"
-AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_SLEEP=30 fire_push "git push origin main" 0
+: > "$FAKE_LOG/calls"; rm -f "$FAKE_LOG/finished" "$FAKE_LOG/pid"
+# The review is held on a file nobody creates, so it can end only by being stopped (or, broken, at
+# the fake's own one minute ceiling). Whether the deadline stopped it is judged by what is left, never
+# by elapsed time (#1577, L290): the review never reached its own end, and its process is gone. This
+# was "the finished file lands within 12 s of the push", a fixed time that load can reach with
+# nothing broken. The wait below is on the finished file, with a ceiling only a hang reaches.
+AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_HOLD="$WORKDIR/never-released" fire_push "git push origin main" 0
 check "the slow review still starts" "started in the background" "$OUT"
 t0="$(ms)"
-wait_for_final "$SHA_SLOW" 15 && ok || bad "a review past its deadline still produces a finished file"
+wait_for_final "$SHA_SLOW" 120 && ok || bad "a review past its deadline still produces a finished file"
 t1="$(ms)"
-[ $((t1 - t0)) -lt 12000 ] && ok || bad "and it lands near the 1 second deadline, not after the 30 second sleep ($((t1 - t0)) ms)"
+slow_pid="$(cat "$FAKE_LOG/pid" 2>/dev/null)"
+if [ -e "$FAKE_LOG/finished" ]; then
+  bad "and it lands because the deadline stopped the review, which never reached its own end (it did, $((t1 - t0)) ms after the push returned)"
+elif [ -z "$slow_pid" ]; then
+  bad "and it lands because the deadline stopped the review (the fake review never started, so nothing was stopped)"
+elif kill -0 "$slow_pid" 2>/dev/null; then
+  bad "and it lands because the deadline stopped the review (the review, process $slow_pid, is still running after the finished file landed)"
+else
+  ok
+fi
 slow_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_SLOW".txt )
 slow_body="$(cat "${slow_final[0]:-/dev/null}" 2>/dev/null)"
 check "and it records that the review did not finish" "status=timeout" "$slow_body"
