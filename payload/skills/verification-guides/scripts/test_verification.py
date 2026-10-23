@@ -192,6 +192,24 @@ class AreasTests(unittest.TestCase):
     def test_unknown_keys_are_allowed_for_additive_versions(self):
         self.load(areas_doc(note="kept for later"))
 
+    def test_egress_allows_only_this_machine_by_default(self):
+        areas = self.load(areas_doc())
+        self.assertEqual(areas["egress"]["allow"], ["127.0.0.1", "localhost", "::1"])
+        self.assertEqual(areas["timeouts"]["egress_s"], 30)
+
+    def test_egress_allow_adds_hosts_and_keeps_this_machine(self):
+        areas = self.load(areas_doc(egress={"allow": ["db.example.supabase.co", "10.0.0.5", "localhost"]}))
+        self.assertEqual(areas["egress"]["allow"],
+                         ["127.0.0.1", "localhost", "::1", "db.example.supabase.co", "10.0.0.5"])
+
+    def test_egress_allow_refuses_what_is_not_a_host(self):
+        for bad in ("https://api.example.com", "api.example.com:443", "*.example.com", "", "two words",
+                    "api.example.com/path"):
+            self.refused(areas_doc(egress={"allow": [bad]}), "areas-bad-egress-host")
+        self.refused(areas_doc(egress="localhost"), "areas-wrong-type")
+        self.refused(areas_doc(egress={"allow": "api.example.com"}), "areas-wrong-type")
+        self.refused(areas_doc(timeouts={"egress_s": 0}), "areas-bad-timeout")
+
 
 class GlobAndBucketTests(unittest.TestCase):
     def setUp(self):
@@ -666,7 +684,8 @@ class WrongTypeSweepTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             for g in ("invoices", "clients"):
                 write(os.path.join(root, ".claude/verification/guides/%s.md" % g), GUIDE)
-            found = self.crashes(areas_doc(), lambda d: v.parse_areas(json.dumps(d), root=root))
+            found = self.crashes(areas_doc(egress={"allow": ["db.example.com"]}),
+                                 lambda d: v.parse_areas(json.dumps(d), root=root))
             self.assertEqual(found, [])
 
 

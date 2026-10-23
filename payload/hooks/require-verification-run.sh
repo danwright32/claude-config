@@ -37,9 +37,10 @@
 # pull request or areas.json unreadable, areas.json malformed), the gate refuses: cannot tell is
 # never "not gated" (L490).
 #
-# KNOWN TODAY, said rather than hidden: nothing measures network egress for a verification run yet,
-# so every receipt says unmeasured, which is never clean. In block mode that refuses every merge; in
-# warn mode it is named in every verdict.
+# EGRESS: run_session.py's egress monitor (skills/verification-guides/scripts/egress.py, #1571) gives
+# each receipt a verdict. Only `clean` passes; `not-clean` names the hosts reached outside the
+# project's egress.allow, and `unmeasured` (a monitor that could not start or could not prove it
+# saw the whole run) is never clean. In block mode either refuses; in warn mode it is named.
 #
 # Covers every route to a merge (lib/merge-target.sh), refuses a command merging more than one pull
 # request as block-red-merge.sh does, and gives its GitHub reads a budget inside the hook's timeout:

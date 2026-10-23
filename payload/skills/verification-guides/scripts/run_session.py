@@ -27,8 +27,12 @@ second `start` is refused with the live run's receipt id rather than fighting it
 The receipt (verification-receipt/1, read through verification.py) records what the harness
 measured: the machine, the head and the commit actually checked out, when serve started, became
 ready and stopped and why, the build stamp the project's optional stamp command printed, and every
-drive call. It also records `egress: unmeasured`, because nothing in this repository can yet show
-that the served app reached nothing outside this machine; that is stated, never faked.
+drive call. It also records `egress`, the verdict of the egress monitor in egress.py (#1571): serve and
+the drive helper run under a sandbox profile that reports every connection to a host outside this
+machine, and the receipt lists each destination seen with its count, judged against areas.json's
+egress.allow. The verdict is `clean` only when the monitor was proved live from before serve
+started until after it stopped and nothing outside the allowed hosts was reached; `not-clean`
+names what was; `unmeasured` says why the monitor could not see, and never passes for clean.
 
 Env: VERIFICATION_HOME (see verification.py). Two injectable clocks (L524), each a number of at
 least 0 that multiplies seconds, default 1: VERIFICATION_TIME_SCALE scales every poll delay (the
@@ -56,17 +60,20 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import egress  # noqa: E402
 import verification as v  # noqa: E402
 
-EGRESS_WHY = ("no egress monitor exists for verification runs yet, so this run cannot show that the"
-              " served app reached nothing outside this machine")
+EGRESS_WHY = "the run has not stopped yet, and its egress verdict is written when it does"
+EGRESS_RECOVERED = ("the supervisor was gone without stopping serve, and the egress monitor it ran went with"
+                    " it, so this run's connections were not all seen")
 STOP_REASONS = ("stop", "ready_failed")
 READY_ATTEMPT_MAX_S = 30
 GONE_POLL_S = 0.05
 
 
-class StopRequested(Exception):
-    pass
+class StopRequested(BaseException):
+    """A stop signal. A BaseException, so no `except Exception` on the way (the egress monitor's
+    start among them) can swallow it and carry on starting serve."""
 
 
 def time_scale(name="VERIFICATION_TIME_SCALE"):
@@ -256,8 +263,29 @@ def remove_worktree(repo, wt):
     return not os.path.exists(wt) and ("worktree " + wt + "\n") not in listed + "\n"
 
 
-def do_stop(rdir, reason, proc=None, detail=None):
-    """Stop serve, run the project's stop command, remove the worktree, record it all."""
+def finish_egress(rec, monitor, egress_why):
+    """The receipt's egress field, and the report stream stopped, whatever state the monitor is in.
+
+    With a monitor (the supervisor's own path) its end canary is fired now, after serve's whole
+    group is gone. Without one, nothing measured the run: the reason is recorded as unmeasured,
+    and a stream a killed supervisor left running is stopped by the process group it recorded
+    (L1011).
+    """
+    if monitor is not None:
+        return monitor.finish()
+    pgid = rec.get("egress_monitor_pgid")
+    if pgid:
+        try:
+            signal_group(pgid, signal.SIGTERM)
+            if not wait_gone(pgid, egress.STREAM_STOP_S):
+                signal_group(pgid, signal.SIGKILL)
+        except v.VerificationError as e:  # ps failed: said beside the reason, and the stop still recorded
+            egress_why += "; the report stream (process group %s) may still be running: %s" % (pgid, e)
+    return {"verdict": "unmeasured", "why": egress_why, "monitor": egress.MONITOR}
+
+
+def do_stop(rdir, reason, proc=None, detail=None, monitor=None, egress_why=None):
+    """Stop serve, run the project's stop command, settle egress, remove the worktree, record it all."""
     rec = read_receipt(rdir)
     doc = None
     try:
@@ -288,10 +316,11 @@ def do_stop(rdir, reason, proc=None, detail=None):
             signal_group(pgid, signal.SIGKILL)
             wait_gone(pgid, stop_s)
     survivors = live_members(pgid)
+    egress_field = finish_egress(rec, monitor, egress_why or EGRESS_RECOVERED)
     removed = remove_worktree(rec["repo"], wt)
     return update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=reason, stop_detail=detail,
                           serve_exit=serve_exit, stop_command_exit=stop_exit, worktree_removed=removed,
-                          serve_survivors=survivors)
+                          serve_survivors=survivors, egress=egress_field)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -308,13 +337,21 @@ def supervise(rdir, repo_lock_fd, pipe_w):
 
     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(s, on_signal)
-    proc, reason, detail = None, "supervisor_error", None
+    proc, reason, detail, monitor = None, "supervisor_error", None, None
     try:
         with open(os.path.join(rdir, "areas.json")) as f:
             doc = json.load(f)
         rec = read_receipt(rdir)
+        # The egress monitor starts BEFORE serve, so it covers serve's whole life, and is proved live
+        # by its canary first. One that cannot start leaves serve running unwrapped and the verdict
+        # unmeasured with its reason: a run is never refused for it, and never called clean.
+        monitor = egress.Monitor(rdir, rec["receipt_id"], doc["egress"]["allow"], doc["timeouts"]["egress_s"])
+        unavailable = monitor.start()
+        wrap = None if unavailable else [monitor.sandbox, "-f", monitor.profile]
+        update_receipt(rdir, egress_sandbox=wrap,
+                       egress_monitor_pgid=None if unavailable else monitor.proc.pid)
         log = open(os.path.join(rdir, "serve.log"), "ab")
-        proc = subprocess.Popen(["/bin/sh", "-c", doc["commands"]["serve"]], cwd=rec["worktree"],
+        proc = subprocess.Popen((wrap or []) + ["/bin/sh", "-c", doc["commands"]["serve"]], cwd=rec["worktree"],
                                 start_new_session=True, stdin=subprocess.DEVNULL, stdout=log,
                                 stderr=subprocess.STDOUT)
         update_receipt(rdir, supervisor_pid=os.getpid(), serve_pid=proc.pid, serve_pgid=proc.pid)
@@ -336,7 +373,8 @@ def supervise(rdir, repo_lock_fd, pipe_w):
             signal.signal(s, signal.SIG_IGN)
         if pipe_w is not None:
             os.close(pipe_w)  # start reads end of file with no "ok": the supervisor failed
-        do_stop(rdir, reason, proc=proc, detail=detail)
+        do_stop(rdir, reason, proc=proc, detail=detail, monitor=monitor,
+                egress_why="the supervisor stopped (%s) before the egress monitor existed" % reason)
     return 0
 
 
@@ -377,7 +415,9 @@ def abandon_start(err, repo, rdir, wt, lock_fd, opened=()):
             cleanup.append("removing the worktree %s failed: %s: %s" % (wt, type(e).__name__, e))
         try:
             update_receipt(rdir, stopped_at=v.utc_now(), stopped_by=stopped_by, worktree_removed=removed,
-                           stop_detail="; ".join([detail] + cleanup))
+                           stop_detail="; ".join([detail] + cleanup),
+                           egress={"verdict": "unmeasured", "monitor": egress.MONITOR,
+                                   "why": "setup failed before serve started, so nothing was measured"})
         except Exception as e:
             cleanup.append("the stop could not be recorded in %s: %s: %s"
                            % (receipt_path(rdir), type(e).__name__, e))
@@ -456,7 +496,8 @@ def start(repo, sha, areas_csv):
                        ready_at=None, stopped_at=None, stopped_by=None, stop_detail=None, serve_exit=None,
                        stop_command_exit=None, worktree=wt, worktree_removed=False, supervisor_pid=None,
                        serve_pid=None, serve_pgid=None, build_stamp=None, build_stamp_source="none",
-                       egress={"verdict": "unmeasured", "why": EGRESS_WHY}, drives="drives.jsonl")
+                       egress={"verdict": "unmeasured", "why": EGRESS_WHY}, egress_sandbox=None,
+                       egress_monitor_pgid=None, drives="drives.jsonl")
         git(repo, "worktree", "add", "--detach", wt, sha)
         checkout = git(wt, "rev-parse", "HEAD").stdout.strip()
         update_receipt(rdir, checkout_sha=checkout)
@@ -543,7 +584,10 @@ def drive(rid, area, args):
         doc = json.load(f)
     env = dict(os.environ, VERIFICATION_URL=rec["url"], VERIFICATION_RECEIPT_DIR=rdir,
                VERIFICATION_WORKTREE=rec["worktree"], VERIFICATION_AREA=area)
-    r = subprocess.run(["/bin/sh", "-c", doc["commands"]["drive"] + ' "$@"', "sh"] + list(args),
+    # Under the same reporting sandbox as serve, so the run's egress verdict covers the drive helper
+    # too. None when the monitor could not start, and then the verdict is already unmeasured.
+    wrap = rec.get("egress_sandbox") or []
+    r = subprocess.run(list(wrap) + ["/bin/sh", "-c", doc["commands"]["drive"] + ' "$@"', "sh"] + list(args),
                        cwd=rec["worktree"], env=env)
     line = json.dumps({"at": v.utc_now(), "area": area, "args": list(args), "exit": r.returncode}) + "\n"
     fd = os.open(os.path.join(rdir, "drives.jsonl"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

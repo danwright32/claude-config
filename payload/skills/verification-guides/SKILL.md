@@ -32,7 +32,8 @@ starts and stops serve is [scripts/run_session.py](scripts/run_session.py). Both
 | `commands.stop` | The project's own cleanup (containers, a seeded database). Run before serve's process group is stopped. |
 | `commands.drive` | The project's drive helper. Called with the arguments the runner passes, and with `VERIFICATION_URL`, `VERIFICATION_AREA`, `VERIFICATION_WORKTREE` and `VERIFICATION_RECEIPT_DIR` set; it saves screenshots into `VERIFICATION_RECEIPT_DIR`. |
 | `commands.stamp` | Optional. Prints the commit the SERVED build reports (a `/__build` route, a footer). Recorded as the receipt's `build_stamp`; the merge check wants it to equal the head SHA. |
-| `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60. |
+| `timeouts` | Optional seconds: `ready_s` 300, `ready_interval_s` 2, `max_run_s` 3600 (the run's deadline, longer than `ready_s`), `stop_s` 60, `egress_s` 30 (how long the egress monitor's canary may take to show up, at the start and at the end). |
+| `egress` | Optional `{"allow": [<host>, ...]}`: the hosts serve and the drive helper may reach during a run, as bare host names or IP addresses (no scheme, port, path or wildcard). `127.0.0.1`, `localhost` and `::1` are always allowed, and by default nothing else is. A run's egress verdict is `clean` only when nothing outside this list was reached. |
 | `areas` | A list of `{"name", "guide", "owns"}`: a lower case hyphenated name, the guide's repository path, and the glob patterns of the files the area owns. |
 | `exempt` | A list of `{"glob", "why"}`: files no area verifies, each with its reason. |
 
@@ -82,10 +83,27 @@ receipt folder holds screenshots of private apps. Beside it are the screenshots,
 the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
 `recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
-stamp, and `egress`. The three `start_` reasons mean setup failed before serve started, and
+stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
 `worktree_removed` says whether the worktree went: `start_failed` a named refusal, `start_error` any other error (a full disk, a
 failed copy), `start_interrupted` an interrupt. `stop_detail` carries the error itself and any
 cleanup step that also failed, which `start` reports too, as `start-cleanup-failed`.
+
+The receipt's `egress` is the verdict of the egress monitor, [scripts/egress.py](scripts/egress.py),
+which the run's supervisor starts before serve and settles after serve's whole process group is
+gone. Serve and every drive call run under macOS's `sandbox-exec` with a profile that blocks
+nothing but reports each connection to an address other than loopback; `log stream` reads the
+reports (no password), and `lsof` names each one's remote address the moment it arrives. A
+canary connection, a UDP connect to the reserved address 198.51.100.1 that sends no packet,
+proves the stream live at the start and again at the end. The field holds `verdict`, `why`,
+`allowed_hosts`, `destinations` (each `{address, port, reports, processes, allowed}`) and
+`unnamed` (connections that closed before their address could be read). `clean` means the monitor
+was proved live for the whole run and every destination was allowed; `not-clean` names what was
+reached, and an unnamed connection is never clean; `unmeasured` gives the reason the monitor could
+not see (not a Mac, `sandbox-exec` missing or refused, the canary never reported, the supervisor
+killed). A request body or header is never recorded: the monitor never sees one. Two limits,
+stated: a serve or drive helper that applies its own macOS sandbox fails under this one, which
+shows as serve stopping, and the kernel collapses repeated reports, so `reports` is a lower bound.
+`egress.jsonl` beside the receipt is the monitor's own log of every report as it arrived.
 
 ## CREATE
 
@@ -205,10 +223,6 @@ the repository to `block`. The override is `ALLOW_UNVERIFIED_MERGE=1 <the same c
 
 These are what the merge check expects that nothing here can supply yet, said rather than faked:
 
-- **Egress.** Every receipt says `"egress": {"verdict": "unmeasured"}`: no monitor shows that a
-  served app reached nothing outside this machine during a run. The bug-bash skill's egress rule
-  blocks one named host for a read only run against a deployment; it is not a verdict on a local
-  run. A merge check that requires a clean egress verdict refuses every record until one exists.
 - **Build stamp.** Recorded only when the project's `stamp` command prints one; otherwise
   `build_stamp_source` is `none`.
 - **Drive helpers.** Each project supplies its own; none ships here.
