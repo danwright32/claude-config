@@ -4,8 +4,11 @@ import { resolveDir, syncCall } from './overnight.ts'
 
 // Sleep mode phase 7 (#843): what may merge and deploy overnight, per repository.
 //
-// One shared file, mods/sleep-repos.json in the payload (both Macs read it, and an answer one Mac
-// writes reaches the other through the sync, as the account room's nicknames do), holds two lists:
+// One file per Mac, ~/.claude/mods/sleep-repos.local.json, holds two lists. It names work
+// repositories, so it left the public payload (claude-config#1568): claude-sync moved each Mac's
+// installed copy of the old shared mods/sleep-repos.json to this name, and never sends or deletes it.
+// An answer given at bedtime is written to this Mac's copy only, so the other Mac asks its own. The
+// lists:
 // `mergeOnly`, repositories that may merge overnight but never deploy, and `mayDeploy`, those that
 // may merge and run their own deploy step as in the daytime. A mergeOnly entry whose merge itself
 // deploys (`mergeDeploys: true`), or whose file does not say (`unknown`, L72), is refused the merge too, leaving the
@@ -33,7 +36,7 @@ import { resolveDir, syncCall } from './overnight.ts'
  * not say. Only false lets a merge run overnight.
  */
 export type RepoEntry = { repo: string; mergeDeploys: boolean | 'unknown' }
-/** The shared file, as read. */
+/** This Mac's lists file, as read. */
 export type RepoLists = { mayDeploy: string[]; mergeOnly: RepoEntry[]; waitOwners: string[] }
 /** A repository closed for the night, and why, for the refusal and the morning report. */
 export type ClosedRepo = { repo: string; why: string }
@@ -43,7 +46,7 @@ export type NightRepos = { mayDeploy: string[]; mergeOnly: RepoEntry[]; closed: 
 /** What a repository may do tonight. */
 export type Policy = { kind: 'deploy'; repo: string } | { kind: 'merge-only'; repo: string; mergeDeploys: boolean | 'unknown' } | { kind: 'closed'; repo?: string; why: string }
 
-export const REPO_LIST_FILE = 'mods/sleep-repos.json'
+export const REPO_LIST_FILE = 'mods/sleep-repos.local.json'
 const SLUG = /^[\w.-]+\/[\w.-]+$/
 const OWNER = /^[\w.-]+$/
 const key = (repo: string) => repo.toLowerCase()
@@ -53,7 +56,7 @@ const waitingOwner = (owners: string[], repo: string): string | undefined => {
   return owners.find(o => key(o) === owner)
 }
 
-/** The shared file's text (null when there is none) as lists, or why it cannot be trusted at all. */
+/** This Mac's lists file's text (null when there is none) as lists, or why it cannot be trusted at all. */
 export const readRepoLists = (text: string | null): { lists: RepoLists } | { why: string } => {
   if (text === null) return { why: `${REPO_LIST_FILE} is missing` }
   let j: unknown
@@ -327,11 +330,11 @@ export const readMarker = (text: string): Marker | { unreadable: string } => {
   return { owner: m.owner, at: m.at, nonce: m.nonce }
 }
 
-/** The shared file as installed with the rest of the payload on both Macs. */
+/** This Mac's own file (claude-config#1568), never sent between Macs. */
 export const repoListPath = (home: string) => `${home.replace(/\/+$/, '')}/.claude/${REPO_LIST_FILE}`
 
 
-/** The shared file with one bedtime answer added, or why it cannot be. */
+/** This Mac's lists file with one bedtime answer added, or why it cannot be. */
 export const addAnswer = (text: string | null, repo: string, answer: string): { text: string } | { why: string } => {
   if (!(REPO_ANSWERS as readonly string[]).includes(answer)) return { why: `the answer was none of the choices ("${answer}")` }
   const read = readRepoLists(text)

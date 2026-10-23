@@ -1481,24 +1481,25 @@ overnight; paraphrased, because his words name it, #1568). Merge and deploy as i
 `PlayedItApp/playedit` and `nursedexapp/nursedex`. Any other repository (eavesly-web-app, for one)
 is still asked once at bedtime and closed if unanswered.
 
-- One shared file, `payload/mods/sleep-repos.json`, two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
+- One file, `payload/mods/sleep-repos.json` until #1568 and each Mac's own `~/.claude/mods/sleep-repos.local.json` since (it names work repositories), two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
   and `mayDeploy` (owner/name), and an optional third, `waitOwners` (owner names), every repository
   under which waits overnight whether or not a list names it. It matches the owner in any case and
   outranks both lists, so an entry under such an owner on either list is a conflict that waits, and
   a repository under it is never asked about at bedtime (a bedtime answer for one is refused). A
   `waitOwners` that is not a list of owner names makes the whole file untrusted, as any other bad
-  entry does. It sits beside `account-room-nicknames.json` for the same reason: a
-  file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
-  reaches the repository and the other Mac, and each repository is asked once. (The issue had the
-  answer committed to the development checkout instead; a file the sync carries both ways needs no
-  second writer.) Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
+  entry does. Until #1568 it sat beside `account-room-nicknames.json` and travelled both ways, so
+  an answer one Mac wrote reached the other and each repository was asked once. It names work
+  repositories and this repository is public, so since #1568 it is each Mac's own file, never sent:
+  claude-sync moved each Mac's installed copy to the local name (MOVED_TO_LOCAL), an answer is kept
+  on the Mac that asked it, and the other Mac asks its own. Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
   unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
   record whether a merge there deploys (L72). Bidspoke and Slate are `mergeOnly` with
   `mergeDeploys: true` (Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
   main), the thirteen above are `mayDeploy`, and `waitOwners` names the agency's organisation.
-  `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape and to exactly that
-  decision, including that a repository of the agency's organisation no list names, or named in another case,
-  waits; the mod's own tests prove the reader applies the owner rule that way.
+  `tests/test-sleep-repos.sh` holds an invented file shaped like that decision to the reader's shape
+  and precedence (a repository of an owner that waits, named by no list or in another case, waits),
+  and this Mac's own file to the reader's shape when it has one; the mod's own tests prove the
+  reader applies the owner rule that way.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
   neither list is asked about, one picker at a time, all of them sharing one 10 minute wait (a
@@ -1857,7 +1858,8 @@ not settled by either and are waiting on Dan; until he decides, the build does t
 - **A step left in prose** (#863). On 2026-10-06 a session ended a turn with "The one thing still
   waiting on you is the migration command from my earlier message"; the command had only ever been
   prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod
-  reads Claude's own final message (`last_assistant_message`, never Dan's) for a step handed over
+  reads Claude's own final message (`last_assistant_message`, never Dan's; since #1608 every
+  message of the turn, below) for a step handed over
   in prose: "waiting on you", "once you run" (or apply, paste, click, approve), "you'll need to run",
   "needs you to paste" and the like, "your step". One negated right before it, in its own clause
   and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
@@ -1865,8 +1867,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   another clause ("the deploy did not finish, so it's waiting on you") does not hide it. When one is there and no unfinished step is on a card Dan can see
   (a card carried from an earlier session is held, not shown, so it does not count), the turn end
   is blocked with: check it against the current state, pin it with the steps tool, say in one line
-  that it is on the card, or say that nothing is left for Dan. Never twice in one chain of turn
-  ends (`stop_hook_active`), so it cannot loop; never in a -p run or the SDK, which have no steps
+  that it is on the card, or say that nothing is left for Dan. Never twice in one turn, so it cannot
+  loop (since #1608 read from the turn's transcript, `stop_hook_active` only where the transcript
+  cannot be read, below); never in a -p run or the SDK, which have no steps
   tool; a block from a Stop hook beneath (winding down) is kept beside it. A card that cannot be
   read is logged and the turn end passes, rather than sending Claude to pin a card that may be
   there.
@@ -1878,6 +1881,59 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   fired on in the same sample, are passing cases in `tests/waiting.test.ts`, and the 2026-10-06
   wording is the case that must fire.
   The original session ran on the other Mac, so its wording is taken from the issue.
+- **Every message of the turn, in the common wordings** (#1608). On 2026-10-23 a Downbeat turn
+  left its step in its second to last message ("One thing is still yours to do. In Settings, ...
+  Tell me when it's done") and ended on the session reflection ("The only thing still open is the
+  Settings swap I described above"); none of #863's phrases was in either, and only the last was
+  read. So the turn end now reads every message Claude wrote since Dan's prompt, from the
+  transcript (`hooks/turn.ts`): perl seeks to the transcript's last 4 MB and prints Claude's text
+  records whole and each user record cut to its promptId, which Claude Code writes on every user
+  record of a turn, Stop hook feedback included, and changes with the next prompt. The turn is the
+  records after the last user record of another prompt. 4 MB holds 99.7% of the 12,514 turns of
+  the 30 days to 2026-10-23 whole, and the first text of all but 28; a longer turn is read from the
+  window's start. Checked against a full parse of the same window on 340 real transcripts, the
+  largest 200 MB: all 340 agreed. Read and judged, a turn end takes 5.5 ms at the median, 14 ms at
+  p99 and 21 ms on the 200 MB transcript (macOS's `tail -c` alone took 140 ms there, reading the
+  whole file, and awk 90 to 125 ms over its long lines). The last message is added when the
+  transcript does not yet hold it. Once read, the turn itself says whether this mod already blocked
+  in it (its block is in the turn as Stop hook feedback), so it blocks at most once per turn, now
+  also in a chain of turn ends another Stop hook started, which is where the reflection is written.
+  A transcript that cannot be read, or output the engine cut short, is said in the log, and the last
+  message alone is judged as before, with `stop_hook_active` as the loop guard.
+  The phrases were widened, each measured with the matcher itself over the 9,697 turns of those 30
+  days outside the temp folders headless runs use, on every message of the turn, and the hits read
+  one by one (counts are turns; a false alarm is a hit that hands Dan no step):
+
+  | Phrase | Hits | Real | False | Kept |
+  |---|---|---|---|---|
+  | "yours to do / run / check / install ..." | 10 | 9 | 1 | yes |
+  | "step left is yours", "check is still yours" | 4 | 4 | 0 | yes |
+  | "Tell me when / once ..." leading a sentence, not "you'd like", "you want", "you're ready" | 15 | 14 | 1 | yes |
+  | "still open ... described above" | 1 | 1 | 0 | yes |
+  | click, press, tap, select or choose leading a sentence, on a **bold**, quoted or code name or × | 19 | 19 | 0 | yes |
+  | type or paste leading a sentence, with code or bold after it, not "type check" | 13 | 13 | 0 | yes |
+  | "In Settings, ..." leading a sentence | 2 | 2 | 0 | yes |
+  | "go to ... and click / select / type ..." | 1 | 1 | 0 | yes |
+  | "is yours", "are yours" anywhere | 29 | 14 | 15 | no: mostly a decision ("one decision is yours") |
+  | "yours to make" | 1 | 0 | 1 | no: a decision, not a step |
+  | "tell me when" anywhere | 26 | 14 | 12 | no: "the watcher will tell me when" is Claude's own wait |
+  | "let me know when" | 0 | 0 | 0 | no: never said, so nothing to measure |
+  | "still open is" alone | 4 | 1 | 3 | no: agents and windows still open |
+  | "described / gave above" alone | 2 | 1 | 1 | no |
+  | "in Settings," anywhere | 9 | 7 | 2 | no: conditional advice ("you'd press Connect again in Settings") |
+  | click, press or tap leading a sentence, any object | 35 | about 26 | about 9 | no: "Press 1, 2 or 3 to swap" in design rounds, "Click test" as a noun |
+  | type, paste or enter leading a sentence, any object | 43 | about 33 | about 10 | no: "Type check", "Type checking" |
+  | run leading a sentence before code | 12 | 8 | 4 | no: Claude's own remaining steps |
+
+  Together the kept new phrases fire in 53 turns (51 real, 2 false: a request to pause another
+  session, and a design discussion saying "these steps are yours to do"), 50 of them turns #863's
+  list did not fire in. Read over the whole turn rather than the last message, #863's own five fire
+  in 56 turns, up from 25, and measured the same way they are now about half false alarms (31 real,
+  25 false, 23 of the false ones "waiting on you" said of a decision or a question, or in talk about
+  this check itself), where #863 measured 18 of 19 real on final messages; their narrowing is filed
+  separately rather than tuned here. The 2026-10-23 wording, the step second to last and the
+  reflection last, is the case that must fire (`tests/register.test.tsx`), and the sentences in
+  `tests/waiting.test.ts` are paraphrased from the measured hits, never copied.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
