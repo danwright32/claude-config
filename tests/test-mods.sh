@@ -267,6 +267,8 @@ printf '%s\n' "$out" | grep -q "timed-direct/tests/clock.test.ts:3: test 'a comm
   || check "a timing test with its own limit, in place or in a named options object, passes" "$out"
 ! printf '%s\n' "$out" | grep -q "timed-shared" && check "#1577: a timing test whose test comes from mod-kit's hang ceiling passes" ok \
   || check "#1577: a timing test whose test comes from mod-kit's hang ceiling passes" "$out"
+[ "$(printf '%s\n' "$out" | grep 'times its subject' | grep -c 'hang-ceiling.ts')" -eq 3 ] && check "#1577: and each names mod-kit's shared hang ceiling as the remedy" ok \
+  || check "#1577: and each names mod-kit's shared hang ceiling as the remedy" "$out"
 [ "$(printf '%s\n' "$out" | grep -c 'times its subject')" -eq 3 ] && check "and exactly the three bare timing tests are named" ok \
   || check "and exactly the three bare timing tests are named" "$out"
 
