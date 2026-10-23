@@ -65,6 +65,39 @@ const READY_TIMEOUT_MS = 30_000;
 export const LAUNCH_ARGS = ["--disable-gpu", "--force-color-profile=srgb", "--disable-partial-raster",
   "--disable-lcd-text", "--font-render-hinting=none"];
 
+// Where Playwright's own "chrome" channel finds Google Chrome, which launchChrome runs instead.
+export const CHANNEL_CHROME = { darwin: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", linux: "/opt/google/chrome/chrome" };
+
+/** headless-dom.sh: beside this file in a vendored copy, one folder up in claude-config's. */
+export function findHeadlessDom(here = HERE) {
+  const found = [join(here, "headless-dom.sh"), join(here, "..", "headless-dom.sh")].find((p) => existsSync(p));
+  if (!found) throw new Error(`headless-dom.sh is not beside ${here} or one folder up, so Chrome cannot be started without leaving a copy of itself behind (claude-config#1537); copy the score again with vendor-score.py`);
+  return found;
+}
+
+/**
+ * The options every Chrome this score draws in is launched with (claude-config#1537). Google Chrome
+ * copies its app bundle into a per user folder each time it starts and removes the copy only on a
+ * quit it finishes itself, so a run killed, or whose close was cut short under load, left one behind:
+ * 19 from two full suite runs on 2026-10-22, every one from here. So "chrome" is run through
+ * headless-dom.sh in Chrome's place (HEADLESS_DOM_EXEC), which starts it with the copy switched off,
+ * folded into Playwright's own --disable-features; "bundled" is Playwright's own Chromium, which makes
+ * no copy (measured the same day) and is launched as it was. check-chrome-launches.py fails on a real
+ * Chrome launched any other way.
+ */
+export function chromeLaunchOptions(channel, args, { here = HERE, platform = process.platform, env = process.env } = {}) {
+  if (channel !== "chrome") return { args };
+  const chrome = CHANNEL_CHROME[platform];
+  if (!chrome) throw new Error(`no Google Chrome location is known on ${platform}; draw with --channel bundled`);
+  const headlessDom = findHeadlessDom(here);
+  return { executablePath: headlessDom, args, env: { ...env, HEADLESS_DOM_EXEC: "1", HEADLESS_DOM_CHROME: chrome } };
+}
+
+/** Every Chrome this score draws in, started one way (claude-config#1537). */
+export function launchChrome(pw, channel, args) {
+  return pw.chromium.launch(chromeLaunchOptions(channel, args));
+}
+
 export function parseArgs(argv) {
   const want = { "--design": "design", "--build": "build", "--out": "out", "--fixture": "fixture",
     "--checks": "checks", "--storage": "storage", "--channel": "channel", "--repo": "repo", "--perturb": "perturb", "--ready": "ready" };
@@ -308,7 +341,7 @@ async function main() {
     return 2;
   }
   const frames = designFrames(o.design);
-  const browser = await pw.chromium.launch({ ...(o.channel === "chrome" ? { channel: "chrome" } : {}), args: LAUNCH_ARGS });
+  const browser = await launchChrome(pw, o.channel, LAUNCH_ARGS);
   try {
     await capture(o, browser, frames);
   } finally {
