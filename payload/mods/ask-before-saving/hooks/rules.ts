@@ -380,6 +380,19 @@ export const APPROVAL_MS = 10 * 60_000
 export const stands = (until: unknown, now: number): boolean => typeof until === 'number' && Number.isFinite(until) && until > now
 
 /**
+ * Whether an approval is the one Dan gave For good for this save: matched by what it saves (saveKey),
+ * the key of the call sent again. A lesson approval's key is never a save's, so it never matches here.
+ */
+export const savesThis = (x: AskBeforeSavingApproval, key: string): boolean => x.key === key
+
+/**
+ * Whether an approval is the one Dan gave in the durable lesson picker for the lesson this text adds
+ * (#867): `added` is what lessonAddition read the call as adding to the lessons file, undefined when
+ * the call is not one that only adds an entry, which no lesson approval matches.
+ */
+export const addsThis = (x: AskBeforeSavingApproval, added: string | undefined): boolean => x.lesson !== undefined && added !== undefined && addsLesson(added, x.lesson)
+
+/**
  * The wait before an approval lapses, as $.clock.after takes it: what is left of its time, and none
  * for one that no longer stands, never a wait that is not a non-negative number, which $.clock.after
  * refuses by throwing (measured 2026-10-05 with `claude plugin test`: NaN, -1 and Infinity all throw).

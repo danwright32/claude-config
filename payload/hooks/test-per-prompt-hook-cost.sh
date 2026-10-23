@@ -260,6 +260,39 @@ check "the kept start runs in the world the $LARGE deep start recorded in" "$s_s
 [ "${s_seed_sums:-0}" -eq 2 ] && [ "${s_kept_sums:-0}" -eq 1 ] \
   && check "a SessionStart that keeps its record takes no snapshot (1 shasum, the key, against 2 to take one)" ok \
   || check "a SessionStart that keeps its record takes no snapshot" "shasum ran ${s_kept_sums:-0} times keeping and ${s_seed_sums:-0} taking one, expected 1 and 2"
+# local-allow-sweep.sh also runs at SessionStart (claude-config#1582). What it reads that piles up is
+# the project's own .claude/settings.local.json, which gains a rule at every "don't ask again". With no
+# such file it must start nothing at all; with one, the same processes whether it holds 2 rules or 200,
+# clean or flagged: one python3 reading the file once, and the one redactor run once over every rule.
+allow_launches(){ # allow_launches <N> <clean|flagged|none> -> sets A_COUNT
+  fresh "allow$2$1"
+  if [ "$2" != none ]; then
+    mkdir -p "$F/proj/.claude"
+    python3 -c '
+import json, sys
+n, kind = int(sys.argv[2]), sys.argv[3]
+rules = ["Bash(tool%d:*)" % i if kind == "clean" else "Bash(grep -n \"x%d\" a/b.ts)" % i for i in range(n)]
+json.dump({"permissions": {"allow": rules}}, open(sys.argv[1], "w"), indent=2)
+' "$F/proj/.claude/settings.local.json" "$1" "$2"
+  fi
+  EXTRA_ENV=(CLAUDE_PROJECT_DIR="$F/proj")
+  : > "$SHIM_LOG"; run_hook SessionStart local-allow-sweep.sh
+  EXTRA_ENV=()
+  A_COUNT="$(grep -c . "$SHIM_LOG" 2>/dev/null)"
+}
+allow_launches 1 none; a_none="${A_COUNT:-0}"
+echo "  SessionStart local-allow-sweep.sh: $a_none processes with no local settings file"
+[ "$a_none" -eq 0 ] && check "SessionStart hook local-allow-sweep.sh starts nothing when the project has no local settings file" ok \
+  || check "SessionStart hook local-allow-sweep.sh starts nothing when the project has no local settings file" "it started $a_none"
+for _kind in clean flagged; do
+  allow_launches "$SMALL" "$_kind"; a_small="${A_COUNT:-0}"
+  allow_launches "$LARGE" "$_kind"; a_large="${A_COUNT:-0}"
+  echo "  SessionStart local-allow-sweep.sh, $_kind rules: $a_small processes with $SMALL, $a_large with $LARGE"
+  [ "$a_small" -gt 0 ] && [ "$a_small" = "$a_large" ] \
+    && check "SessionStart hook local-allow-sweep.sh starts as many processes with $LARGE $_kind rules as with $SMALL ($a_small)" ok \
+    || check "SessionStart hook local-allow-sweep.sh starts as many processes with $LARGE $_kind rules as with $SMALL" "$a_small with $SMALL, $a_large with $LARGE"
+done
+
 # The exemption pointing elsewhere is only as good as the test it points at.
 for _case in "300 more review files start no more processes" \
              "300 unshown whole branch reviews of this repository start no more processes" \

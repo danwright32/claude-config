@@ -345,6 +345,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/local-allow-sweep.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/rule-files-changed.sh",
             "timeout": 5
           }

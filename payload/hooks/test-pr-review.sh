@@ -500,12 +500,18 @@ SK="sk-ant-fakeFAKEfake0123456789abcdef"
 JWT="eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.c2lnbmF0dXJl"
 BEARER="tokFAKEfake0123456789bearer"
 GHP="ghp_FAKEfake0123456789abcd"
+# A token after a flag and a space, and a bare token of Cloudflare's 40 character shape (#1585), which
+# the sync's scan does not read as credentials (it needs a key name and an = or :), so both are whole.
+FLAGTOK="TARKU4xHlfoL8Ld3pIAvjkaeiElo8X5Y6hvV"
+CFTOK="Mu2Q7bFErl22VHXrRzdRySqGZ7eUhA6SpanQFtu0"
 cat > "$WORKDIR/stderr-secrets" <<EOS
 Warning: permission rule Bash(curl -H "apikey: $SB" https://x.supabase.co/rest/v1/*) uses a wildcard
 Settings warning in .claude/settings.local.json: Bash(curl -H "Authorization: Bearer $BEARER" *)
 Error: request failed: Authorization: Bearer $BEARER
 Error: the key $SK was rejected
 Error: a token $JWT and $GHP were seen
+Error: wrangler deploy --api-key $FLAGTOK was refused
+Error: Cloudflare rejected $CFTOK for this zone
 EOS
 FAKE_CLAUDE_EXIT=1 FAKE_CLAUDE_STDERR_FILE="$WORKDIR/stderr-secrets" prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA" || bad "the failed review with secrets on stderr wrote its file"
@@ -513,7 +519,7 @@ out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 stored="$(cat "$(final_of "$HEAD_SHA")")"
 check_eq "a failed review carrying secrets still refuses" "1" "$rc"
 check "still saying why it failed" "claude exited 1" "$out"
-for secret in "$SB" "$SK" "$JWT" "$BEARER" "$GHP"; do
+for secret in "$SB" "$SK" "$JWT" "$BEARER" "$GHP" "$FLAGTOK" "$CFTOK"; do
   check_not "the merge refusal never echoes a secret from the reviewer's stderr (${secret:0:6})" "$secret" "$out"
   check_not "the stored review never holds a secret from the reviewer's stderr (${secret:0:6})" "$secret" "$stored"
 done
@@ -527,6 +533,11 @@ out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"
 check "an old raw review still refuses with its reason" "claude exited 1" "$out"
 check_not "an old raw review's secret is redacted at display" "$SB" "$out"
 check_not "an old raw review's bearer token is redacted at display" "$BEARER" "$out"
+# The new shapes leave ordinary review text alone (#1585): a commit id, a long plain name, a flag
+# naming a file, a variable, a placeholder, and a short flag value are all kept as written.
+plain='at 4dbee97a1c2e3f4a5b6c7d8e9f00112233445566 run_every_hook_against_its_own_suite_now; use --token-file /tmp/x, --token $CF_API_TOKEN, --api-key <your key>, --auth basic'
+out="$(printf '%s\n' "$plain" | bash -c '. "$1" && ar_redact' _ "$DIR/lib/ai-review-common.sh")"
+check_eq "the redactor leaves a commit id, a long name, and flags without a literal secret alone" "$plain" "$out"
 # With its rule file missing the redactor withholds and fails, never passes the text through (L42).
 mkdir -p "$WORKDIR/norules"
 cp "$DIR/lib/ai-review-common.sh" "$WORKDIR/norules/"
