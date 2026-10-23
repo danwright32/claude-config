@@ -481,10 +481,10 @@ const takeLock = async ($: EngineInterface, lock: string): Promise<Claim> => {
   }
 }
 
-// A bedtime answer written into the shared file under the answers lock, so a late answer and
+// A bedtime answer written into this Mac's lists file under the answers lock, so a late answer and
 // another never read the same file and write over each other; whole beside it and moved into place,
-// so a reader never sees half a file. The sync carries it to the other Mac, so each repository is
-// asked once.
+// so a reader never sees half a file. The file is this Mac's own since claude-config#1568, so the
+// other Mac asks about the repository once itself.
 const recordAnswer = async ($: EngineInterface, path: string, repo: string, answer: string): Promise<string | null> => {
   const lock = `${sleepDir((await $.env.get('HOME')) ?? '')}/repos.lock`
   const claim = await takeLock($, lock)
@@ -536,7 +536,7 @@ const askOne = async ($: EngineInterface, question: string, options: string[], h
   return first
 }
 
-// The question about a repository on neither list. A late answer still goes into the shared file;
+// The question about a repository on neither list. A late answer still goes into this Mac's file;
 // one that cannot be saved is never dropped (L11): it is noted for the morning report as a question
 // still to answer, and said in the session when even that fails.
 const askRepo = ($: EngineInterface, repo: string, path: string, waitMs: number) =>
@@ -598,7 +598,7 @@ const reposWorked = (bySeat: Map<string, string | null>, goals: Record<string, s
   return [...out.values()]
 }
 
-// The night's lists for the sleep record, settled at bedtime: the shared file as read, a question
+// The night's lists for the sleep record, settled at bedtime: this Mac's file as read, a question
 // for each worker's repository on neither list when there is someone to ask, and every entry
 // checked with GitHub. Whatever has no answer is closed for the night (L42).
 const settleNight = async ($: EngineInterface, home: string, repos: string[], round: Round): Promise<NightRepos> => {
@@ -1360,7 +1360,7 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
     const round: Round = { until: (await $.clock.now()) + QUESTION_MS, slept: false }
     goals = await settleGoals($, e.seats, bySeat, self, round)
     const worked = reposWorked(bySeat, goals.goals)
-    // The night's merge and deploy lists (#843), settled before the record exists: the shared file,
+    // The night's merge and deploy lists (#843), settled before the record exists: this Mac's file,
     // a question for each worker's repository on neither list, every entry checked with GitHub.
     repos = await settleNight($, p.home, worked, round)
     // The issues each worker's goal names, whose Open questions are asked too (#1279).

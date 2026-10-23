@@ -2378,8 +2378,8 @@ const asleepRecord = (extra: Record<string, unknown> = {}) =>
   JSON.stringify({ v: 1, generation: 'g0', since: T0 - 5 * MIN, until: UNTIL, night: '1969-12-31', bootTime: BOOT, report: '/Users/x/Downloads/Sleep report 1969-12-31.md', startedBy: { sessionId: 's9', cwd: '/other' }, workers: ['s9'], placeBefore: 'home', ...extra })
 const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scope-modes': { isInteractive: true } } })
 
-// The shared merge and deploy lists (#843), as installed with the payload.
-const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.json'
+// This Mac's own merge and deploy lists (#843, #1568).
+const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.local.json'
 const listsFile = (mergeOnly: { repo: string; mergeDeploys?: boolean }[], mayDeploy: string[] = []) => JSON.stringify({ v: 1, mergeOnly, mayDeploy }, null, 2) + '\n'
 
 test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withSteps, async ($, on) => {
@@ -4075,7 +4075,7 @@ const closedNotes = (w: { appended: { line: string }[] }) =>
   w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /neither merges nor deploys|were off for every repository/.test(String((n.questions as string[] | undefined)?.[0])))
 const asRegExp = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
 
-test('a worker repository on neither list is asked about at bedtime, and the answer is saved to the shared file and holds tonight', withDeps, async ($, on) => {
+test('a worker repository on neither list is asked about at bedtime, and the answer is saved to the lists file of this Mac and holds tonight', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: listsFile([{ repo: 'Acme-Corp/storefront', mergeDeploys: true }]) }, githubRepos: { default: ['o/r'], work: ['Acme-Corp/storefront'] }, repoAnswer: 'Allowed to deploy' })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
@@ -4109,7 +4109,7 @@ test('a question left unanswered for 10 minutes closes that repository for the n
   expect(recordOf(w).repos).toEqual({ mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'the question about o/r was not answered in 10 minutes' }] })
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
   expect(closedNotes(w)[0]?.questions).toEqual(['Choose "Merge, never deploy" only if a merge there does not itself deploy. Overnight in o/r, what may Claude do? Tonight it neither merges nor deploys: the question about o/r was not answered in 10 minutes.'])
-  // The shared file is untouched: the question is asked again next time.
+  // This Mac's lists file is untouched: the question is asked again next time.
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
   expect(await call($ as never, bash('gh pr merge 12 --squash'))).toMatch(
     asRegExp('Blocked overnight: this would merge a PR, and the question about o/r was not answered in 10 minutes, so tonight it neither merges nor deploys.'),
@@ -4124,18 +4124,18 @@ test('a lists file that is missing closes every repository, and asks nothing', w
   const { w, clock } = world(on, { githubRepos: { default: ['o/r'] } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toMatch(asRegExp('Merging and deploying are off for every repository tonight: mods/sleep-repos.json is missing.'))
+  expect(r.text).toMatch(asRegExp('Merging and deploying are off for every repository tonight: mods/sleep-repos.local.json is missing.'))
   expect(w.asked).toEqual([])
-  expect(closedNotes(w).map(n => n.questions)).toEqual([['Merging and deploying were off for every repository tonight: mods/sleep-repos.json is missing. Fix mods/sleep-repos.json.']])
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and mods/sleep-repos.json is missing, so tonight'))
+  expect(closedNotes(w).map(n => n.questions)).toEqual([['Merging and deploying were off for every repository tonight: mods/sleep-repos.local.json is missing. Fix mods/sleep-repos.local.json.']])
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and mods/sleep-repos.local.json is missing, so tonight'))
 })
 
 test('a lists file that does not parse closes every repository, the listed ones too', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: '{"v":1,"mergeOnly":[{"repo":"o/r"' }, githubRepos: { default: ['o/r'] } })
   await start($ as never, clock)
-  expect((await command($ as never, 'sleep')).text).toMatch(asRegExp('every repository tonight: mods/sleep-repos.json is not JSON.'))
+  expect((await command($ as never, 'sleep')).text).toMatch(asRegExp('every repository tonight: mods/sleep-repos.local.json is not JSON.'))
   expect(w.asked).toEqual([])
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('and mods/sleep-repos.json is not JSON, so tonight it neither merges nor deploys'))
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('and mods/sleep-repos.local.json is not JSON, so tonight it neither merges nor deploys'))
 })
 
 test('an entry that could not be checked with GitHub is closed, and said as not checked, never as unknown (L11)', withDeps, async ($, on) => {
@@ -4185,7 +4185,7 @@ test('an entry GitHub does not know under any account is closed for the night', 
 test('a repository first met after sleep began is closed and noted once', withDeps, async ($, on) => {
   const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
   await start($ as never, clock)
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and o/r is on neither list in mods/sleep-repos.json, so tonight it neither merges nor deploys.'))
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and o/r is on neither list in mods/sleep-repos.local.json, so tonight it neither merges nor deploys.'))
   expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
   // Its own --repo is judged by that repository's place on the lists, which lets it merge; it is
@@ -5120,12 +5120,12 @@ test('a bedtime answer given after the wait that cannot be saved is noted for th
   const pending = command($ as never, 'sleep')
   await clock.advance(10 * MIN)
   await pending
-  // The shared file goes before Dan answers, so the save has nothing to add to.
+  // This Mac's lists file goes before Dan answers, so the save has nothing to add to.
   delete w.files[LISTS_PATH]
   answer('Allowed to deploy')
   await clock.settle()
   const lost = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /was not saved/.test(String((n.questions as string[])[0])))
-  expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.json is missing. Choose again at the next /sleep.'])
+  expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.local.json is missing. Choose again at the next /sleep.'])
 })
 
 test('a /sleep that takes the marker just after another finished reads the record again, and asks nothing', withDeps, async ($, on) => {
@@ -5242,7 +5242,7 @@ test('Go to sleep now on the repository question asks no issue question either, 
   await command($ as never, 'sleep')
   expect(w.asked).toEqual([repoQuestion('o/r')])
   expect(recordOf(w).repos).toEqual({ mayDeploy: [], mergeOnly: [], closed: [{ repo: 'o/r', why: 'Dan chose to go to sleep before answering about o/r' }] })
-  // Nothing is written into the shared file: the question is asked again next time.
+  // Nothing is written into this Mac's lists file: the question is asked again next time.
   expect(JSON.parse(w.files[LISTS_PATH] as string)).toEqual({ v: 1, mergeOnly: [], mayDeploy: [] })
   expect(w.files[UNANSWERED]).toBe('o/r#12\no/r#14\no/r#20\n')
 })

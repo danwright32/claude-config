@@ -1309,9 +1309,12 @@ mechanism, and a reader of two formats. Its reader, `sync-main-to-dev.sh`, says 
 every merge instead of standing down as it did while the file travelled (L11), and an empty list is
 the deliberate way to sync nothing. `tests/test-moved-to-local.sh` reads `MOVED_TO_LOCAL` out of the
 script and proves the move for every pair it lists, so a pair added later is proved on the day it
-lands. Sleep mode's lists (`mods/sleep-repos.json`) are the last tracked list naming an
-organisation; their reader's file name is a constant in a mod hook, and moving them waits on
-Dan's answer to the design round guard.
+lands. Sleep mode's lists moved the same way, `mods/sleep-repos.json` to each Mac's own
+`mods/sleep-repos.local.json`, once Dan let the one line naming the file in the scope-modes mod
+change (it is printed in sleep mode's messages, so the design round guard asked him). The cost is
+that a bedtime answer no longer reaches the other Mac, which asks its own; the reader already
+closed every repository for the night on a missing file, which is the fail closed behaviour a
+Mac without its own copy needs.
 
 ## The work's organisation names are found by hash (#1568)
 
@@ -1333,7 +1336,7 @@ hyphen is a different GitHub account and the company's public web domain. Flaggi
 would also flag English words (a colour named in a vendored skill), which only an exemption list
 could quiet, and the scan has none.
 
-Not yet wired, and why: once sleep mode's lists and the lesson provenance are clean, the suite runs
+Not yet wired, and why: once the lesson provenance is clean, the suite runs
 the scanner over the whole tree and the send runs it over what it publishes. Before then both would
 fail on the names still tracked.
 

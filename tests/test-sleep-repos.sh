@@ -1,19 +1,22 @@
 #!/bin/bash
-# Tests for payload/mods/sleep-repos.json, sleep mode's per repository merge and deploy lists
-# (claude-config#843). The mod reads it with readRepoLists (mods/scope-modes/hooks/mergedeploy.ts),
-# which closes every repository for the night when the file does not read, so a shipped file that
-# does not parse would silently stop every overnight merge. This holds the shipped file to the same
-# shape that reader requires, and to Dan's overnight decision as he confirmed it on 2026-10-07,
-# which replaced decision 6 and the list phase 7 first shipped:
-#   wait (no merge, no deploy, the green PR stays open until morning): Try-Pennie/bidspoke,
-#     Try-Pennie/slate, and every repository owned by Halo-lab-Trypennie, now and later ("Move
-#     ANYTHING in halo-lab-trypennie to the wait list automatically. Nothing in that account should
-#     merge overnight");
-#   merge and deploy as in the daytime: the thirteen in MAY_DEPLOY below;
-#   anything else is asked once at bedtime, as before.
-# How the mod applies waitOwners (any case, ahead of both lists) is proved by its own tests in
-# payload/mods/scope-modes/tests/mergedeploy.test.ts; the effect check here reads the shipped file
-# with that same precedence, so the decision is held on CI, where the mod tests cannot run.
+# Tests for sleep mode's per repository merge and deploy lists (claude-config#843), which are each
+# Mac's own ~/.claude/mods/sleep-repos.local.json since claude-config#1568: they name work
+# repositories, and this repository is public, so the lists Dan confirmed on 2026-10-07 live only
+# on his Macs. The mod reads the file with readRepoLists (mods/scope-modes/hooks/mergedeploy.ts),
+# which closes every repository for the night when it does not read, so a file that does not parse
+# would silently stop every overnight merge.
+#
+# What is held here:
+#   1. The shape the reader requires, and the precedence it applies (an owner that waits first, in
+#      any case, then mayDeploy, then mergeOnly, else asked), on an invented fixture shaped like
+#      Dan's decision: two repositories held with mergeDeploys true, every repository of one owner
+#      waiting whether or not a list names it, and the rest allowed to deploy. The mod's own tests
+#      prove the reader; this holds the same rules on CI, where the mod tests cannot run.
+#   2. The checks can fail: a copy on both lists, one that does not parse, one listing a repository
+#      under an owner that waits, and one without the owner rule.
+#   3. This Mac's own file, when it has one, reads as the mod reads it. A Mac without one is said,
+#      not failed: the mod then closes every repository for the night and says why itself.
+# No work organisation or repository name belongs in this file.
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/.." && pwd)"
@@ -23,7 +26,6 @@ ROOT="$(cd "$DIR/.." && pwd)"
   exit 1
 }
 suite_deadline_arm || exit $?
-FILE="${SLEEP_REPOS_FILE:-$ROOT/payload/mods/sleep-repos.json}"
 pass=0; fail=0
 check(){   # $1 = name  $2 = "ok" or the evidence of failure
   if [ "$2" = ok ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1: $2"; fi
@@ -35,11 +37,15 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/sleep-repos.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
 # The reader's rules, as readRepoLists applies them: a record, v >= 1, both lists, every entry
 # owner/name, mergeDeploys true or false when given, waitOwners (when given) a list of owner names,
 # no repository on both lists, and (stricter than the reader, which waits on it) no entry under an
-# owner that waits, so the shipped file never carries a conflict.
-shape="$(python3 - "$FILE" <<'PY' 2>&1
+# owner that waits, so a file never carries a conflict.
+shape_of(){   # $1 = a lists file -> "ok" or what is wrong
+  python3 - "$1" <<'PY' 2>&1
 import json, re, sys
 slug = re.compile(r"^[\w.-]+/[\w.-]+$")
 owner = re.compile(r"^[\w.-]+$")
@@ -67,39 +73,11 @@ under = sorted(r for r in [e["repo"] for e in j["mergeOnly"]] + j["mayDeploy"] i
 if under: print("listed under an owner that waits: %s" % ", ".join(under)); sys.exit(0)
 print("ok")
 PY
-)"
-check "the shipped lists read as the mod reads them" "$shape"
+}
 
-# Dan's decision, exactly: each list holds these and nothing else.
-decided="$(python3 - "$FILE" <<'PY' 2>&1
-import json, sys
-j = json.load(open(sys.argv[1]))
-WAIT_OWNERS = ["Halo-lab-Trypennie"]
-WAIT = ["Try-Pennie/bidspoke", "Try-Pennie/slate"]
-MAY_DEPLOY = [
-    "danwright32/claude-config", "Try-Pennie/project-enrollment-tracker", "Try-Pennie/paperboi",
-    "Try-Pennie/sonar", "dwright-pennie/new-agent-onboarding", "dwright-pennie/repo-digest",
-    "danwright32/overture", "danwright32/ovation", "danwright32/downbeat", "danwright32/PostRoll",
-    "danwright32/backstage", "PlayedItApp/playedit", "nursedexapp/nursedex",
-]
-low = lambda xs: sorted(x.lower() for x in xs)
-bad = []
-if low(j.get("waitOwners", [])) != low(WAIT_OWNERS): bad.append("waitOwners is %s, not %s" % (j.get("waitOwners"), WAIT_OWNERS))
-held = [e for e in j["mergeOnly"]]
-if low(e["repo"] for e in held) != low(WAIT): bad.append("mergeOnly holds %s, not %s" % ([e["repo"] for e in held], WAIT))
-loose = [e["repo"] for e in held if e.get("mergeDeploys") is not True]
-if loose: bad.append("not held (mergeDeploys true): %s" % ", ".join(loose))
-if low(j["mayDeploy"]) != low(MAY_DEPLOY):
-    have, want = set(low(j["mayDeploy"])), set(low(MAY_DEPLOY))
-    bad.append("mayDeploy differs: missing %s, extra %s" % (sorted(want - have), sorted(have - want)))
-print("ok" if not bad else "; ".join(bad))
-PY
-)"
-check "the lists hold exactly Dan's 2026-10-07 decision" "$decided"
-
-# What each repository does overnight, read with the mod's precedence: an owner that waits first,
-# then mayDeploy, then mergeOnly (a merge runs only where mergeDeploys is false), else asked.
-effect="$(python3 - "$FILE" <<'PY' 2>&1
+# What each repository does overnight, read with the mod's precedence.
+effect_of(){   # $1 = a lists file -> "ok" or each repository that does the wrong thing
+  python3 - "$1" <<'PY' 2>&1
 import json, sys
 j = json.load(open(sys.argv[1]))
 waiting = {o.lower() for o in j.get("waitOwners", [])}
@@ -110,51 +88,68 @@ def night(repo):
         if e["repo"].lower() == repo.lower(): return "merge" if e.get("mergeDeploys") is False else "wait"
     return "asked"
 want = {
-    "Halo-lab-Trypennie/trypennie": "wait",
+    "Studio-Partner/website": "wait",
     # a repository made under that owner after today, which no list names
-    "Halo-lab-Trypennie/a-repo-made-next-year": "wait",
+    "Studio-Partner/a-repo-made-next-year": "wait",
     # the owner in another case
-    "HALO-LAB-TRYPENNIE/trypennie": "wait",
-    "halo-lab-trypennie/Another": "wait",
-    "Try-Pennie/bidspoke": "wait",
-    "try-pennie/Slate": "wait",
+    "STUDIO-PARTNER/website": "wait",
+    "studio-partner/Another": "wait",
+    "Acme-Corp/bidboard": "wait",
+    "acme-corp/Storefront": "wait",
     "danwright32/claude-config": "deploy",
     "nursedexapp/nursedex": "deploy",
-    "Try-Pennie/eavesly-web-app": "asked",
-    "dwright-pennie/eavesly-web-app": "asked",
+    "Acme-Corp/listener-app": "asked",
 }
 wrong = ["%s is %s, not %s" % (r, night(r), w) for r, w in want.items() if night(r) != w]
 print("ok" if not wrong else "; ".join(wrong))
 PY
-)"
-check "every Halo-lab-Trypennie repository waits, any case, listed or not; others keep the decision" "$effect"
+}
 
-# The suite is seen to fail: a copy on both lists, one that does not parse, one listing a
-# repository under an owner that waits, and one where a Halo-lab-Trypennie repository could
-# deploy. Only from the top level run, so the runs it starts do not start runs of their own.
-if [ -z "${SLEEP_REPOS_FILE:-}" ]; then
-BAD="$(mktemp "${TMPDIR:-/tmp}/sleep-repos.XXXXXX")"
-trap 'rm -f "$BAD"' EXIT
+# ---------------------------------------------------------------- 1. the rules, on a fixture
+FIX="$WORK/fixture.json"
+cat > "$FIX" <<'JSON'
+{
+  "v": 1,
+  "waitOwners": ["Studio-Partner"],
+  "mergeOnly": [
+    { "repo": "Acme-Corp/bidboard", "mergeDeploys": true },
+    { "repo": "Acme-Corp/storefront", "mergeDeploys": true }
+  ],
+  "mayDeploy": ["danwright32/claude-config", "Acme-Corp/enrollment-board", "nursedexapp/nursedex"]
+}
+JSON
+check "a file shaped like Dan's decision reads as the mod reads it" "$(shape_of "$FIX")"
+check "every repository of an owner that waits waits, in any case, listed or not; others keep their list" "$(effect_of "$FIX")"
+
+# ---------------------------------------------------------------- 2. the checks can fail
+BAD="$WORK/bad.json"
 printf '{"v":1,"mergeOnly":[{"repo":"o/x"}],"mayDeploy":["O/X"]}\n' > "$BAD"
-out="$(SLEEP_REPOS_FILE="$BAD" bash "$0" 2>&1)"
-case "$out" in *"on both lists: o/x"*) check "a repository on both lists fails the suite" ok ;; *) check "a repository on both lists fails the suite" "$out" ;; esac
+out="$(shape_of "$BAD")"
+case "$out" in *"on both lists: o/x"*) check "a repository on both lists is caught" ok ;; *) check "a repository on both lists is caught" "$out" ;; esac
 printf '{"v":1,' > "$BAD"
-out="$(SLEEP_REPOS_FILE="$BAD" bash "$0" 2>&1)"
-case "$out" in *"does not parse"*) check "a file that does not parse fails the suite" ok ;; *) check "a file that does not parse fails the suite" "$out" ;; esac
-python3 - "$ROOT/payload/mods/sleep-repos.json" "$BAD" <<'PY'
+out="$(shape_of "$BAD")"
+case "$out" in *"does not parse"*) check "a file that does not parse is caught" ok ;; *) check "a file that does not parse is caught" "$out" ;; esac
+python3 - "$FIX" "$BAD" <<'PY'
 import json, sys
-j = json.load(open(sys.argv[1])); j["mayDeploy"].append("halo-lab-trypennie/trypennie")
+j = json.load(open(sys.argv[1])); j["mayDeploy"].append("studio-partner/website")
 json.dump(j, open(sys.argv[2], "w"))
 PY
-out="$(SLEEP_REPOS_FILE="$BAD" bash "$0" 2>&1)"
-case "$out" in *"listed under an owner that waits: halo-lab-trypennie/trypennie"*) check "a mayDeploy entry under an owner that waits fails the suite" ok ;; *) check "a mayDeploy entry under an owner that waits fails the suite" "$out" ;; esac
-python3 - "$ROOT/payload/mods/sleep-repos.json" "$BAD" <<'PY'
+out="$(shape_of "$BAD")"
+case "$out" in *"listed under an owner that waits: studio-partner/website"*) check "a mayDeploy entry under an owner that waits is caught" ok ;; *) check "a mayDeploy entry under an owner that waits is caught" "$out" ;; esac
+python3 - "$FIX" "$BAD" <<'PY'
 import json, sys
 j = json.load(open(sys.argv[1])); j.pop("waitOwners", None)
 json.dump(j, open(sys.argv[2], "w"))
 PY
-out="$(SLEEP_REPOS_FILE="$BAD" bash "$0" 2>&1)"
-case "$out" in *"a-repo-made-next-year is asked, not wait"*) check "a file without the owner rule fails the suite" ok ;; *) check "a file without the owner rule fails the suite" "$out" ;; esac
+out="$(effect_of "$BAD")"
+case "$out" in *"a-repo-made-next-year is asked, not wait"*) check "a file without the owner rule is caught" ok ;; *) check "a file without the owner rule is caught" "$out" ;; esac
+
+# ---------------------------------------------------------------- 3. this Mac's own file
+MINE="${SLEEP_REPOS_FILE:-$HOME/.claude/mods/sleep-repos.local.json}"
+if [ -f "$MINE" ]; then
+  check "this Mac's own lists ($MINE) read as the mod reads them" "$(shape_of "$MINE")"
+else
+  echo "note: this machine has no $MINE, so its own lists were not checked here (CI has none). Sleep mode closes every repository for the night without it, and says so."
 fi
 
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
