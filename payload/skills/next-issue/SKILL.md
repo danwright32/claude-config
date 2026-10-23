@@ -10,16 +10,21 @@ Dan does not write code and should never have to pump the loop by typing "what's
 ## 1. Settle the current work
 
 If there is an open PR for the work just finished:
-1. Check CI yourself: `gh pr checks <pr> --watch --interval 60` (run in the background if slow; report elapsed progress, never a silent wait).
-2. When green, merge it yourself, PINNED to the commit whose checks you just read:
-   `gh pr merge <pr> --squash --delete-branch --match-head-commit $(gh pr view <pr> --json headRefOid --jq .headRefOid)`
-   (match the repo's usual merge style if different). The pin is what stops a push that lands
-   between the check reading and the merge being merged unjudged, and the merge gate refuses an
-   unpinned merge for that reason (claude-config#345). The gate also refuses a branch that does
-   not contain the base branch's current tip, because its green was earned against an older base
-   and two green pull requests can merge into a red main (claude-config#766). When it does, run
-   the `gh pr update-branch <pr> --repo <owner/name>` it names, wait for the new checks on the
-   updated head, and pin the merge to that new head. Then CONFIRM it, because a merge command
+1. Wait for CI and merge in one step, through the shared watcher, run from a checkout of the
+   repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> --squash --delete-branch` (match
+   the repo's usual merge method if different). It updates a branch that is behind its base, waits
+   for the head's checks and lessons review, and merges exactly that head, PINNED, only when every
+   merge gate allows it, saying what it waits on as it goes. Never watch checks with gh's own
+   `--watch` loop: the watcher follows the one polling policy every loop in the session shares
+   (`hooks/lib/gh-poll.sh`, claude-config#1482), a wait that grows while nothing changes, a pause
+   on GitHub's rate limit, and a cap on the session's looks a minute, so one session cannot trip
+   the account's burst limit for every other one, as on 2026-10-22.
+2. The pin is what stops a push that lands between the check reading and the merge being merged
+   unjudged, and the merge gate refuses an unpinned merge for that reason (claude-config#345). The
+   gate also refuses a branch that does not contain the base branch's current tip, because its
+   green was earned against an older base and two green pull requests can merge into a red main
+   (claude-config#766); the watcher updates the branch and waits for the new head's checks itself.
+   Then CONFIRM it, because a merge command
    that exits 0 is not a merge. Ask `gh pr view <pr> --json state --jq .state` and treat anything but `MERGED` as
    not merged: say so, do not delete a branch, do not close the issue, and do not move on to the
    next one. Measured 2026-08-13 in Overture: `gh pr merge` failed with a transient

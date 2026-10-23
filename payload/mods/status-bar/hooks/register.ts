@@ -3,6 +3,7 @@ import type { StatusBar, StatusBarAccount, StatusBarFacts, StatusBarMode } from 
 import { CACHE_WARN_MS, checksOf, compactDue, lookParts, unpushedOf } from './facts.ts'
 import type { Job, PrReading, QuietAgent, RollupEntry, UnpushedReading } from './facts.ts'
 import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
+import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
 
 // The status bar (#610), settled with Dan on 2026-10-04 (docs/mods-design.md "Status bar (#610)").
 //
@@ -185,10 +186,52 @@ const readUnpushed = async ($: EngineInterface, root: string) => {
   $.ui.log(`status-bar: could not read the unpushed commits, ${kept}: ${got.unreadable}`, { to: 'debug' })
 }
 
+// THE ONE POLLING POLICY (#1482, hooks/lib/gh-poll.sh, reached through mod-kit's ghpoll.ts). On
+// 2026-10-22 GitHub's burst limit refused every session on the account for about 40 minutes while
+// one session's loops polled at once, and this read of a PR whose checks run is one such loop. So
+// each read first takes a look from the session's shared budget (held while a rate limit pause is in
+// force or the session's minute is full, a turn end's read included, which stays owed), a failed
+// read's error is handed back (a rate limit answer pauses every loop in the session), and after an
+// answer the policy says how long to wait before the next read of running checks: longer while
+// nothing on the PR changes, a minute again once anything does. A policy that cannot be asked never
+// stops the read: it is said once in the debug log and the read goes ahead at a minute's pace.
+let prWaitMs = TICK_MS
+let prSaid: string | undefined
+let pollNoted = false
+const pollOf = async ($: EngineInterface): Promise<Poll | undefined> =>
+  home ? { run: (argv, env) => $.process.run(argv, env ? { env } : {}), lib: pollLib(home), session: await $.session.id() } : undefined
+const pollFailed = ($: EngineInterface, err: unknown) => {
+  if (pollNoted) return
+  pollNoted = true
+  $.ui.log(`status-bar: the polling policy (gh-poll.sh) could not be asked, so the PR is read without it: ${msg(err)}`, { to: 'debug' })
+}
+// An answer GitHub gave: how long until running checks are read again, from whether it changed.
+const prAnswered = async ($: EngineInterface, poll: Poll | undefined, said: string) => {
+  const changed = said !== prSaid
+  prSaid = said
+  if (!poll) return
+  try {
+    prWaitMs = await nextWaitMs(poll, prWaitMs, changed)
+    await answeredLook(poll)
+  } catch (err) {
+    prWaitMs = TICK_MS
+    pollFailed($, err)
+  }
+}
+
 // The branch's PR. A refresh that fails keeps what was last read, marked stale with its age, never
-// blank (L682); only gh saying there is no PR clears it.
-const readPr = async ($: EngineInterface, root: string) => {
+// blank (L682); only gh saying there is no PR clears it. Returns false when the polling policy held
+// the look, so a turn end's read stays owed.
+const readPr = async ($: EngineInterface, root: string): Promise<boolean> => {
   const now = await $.clock.now()
+  const poll = await pollOf($)
+  if (poll) {
+    try {
+      if (!(await takeLook(poll, now)).take) return false
+    } catch (err) {
+      pollFailed($, err)
+    }
+  }
   try {
     const r = await $.process.run(['gh', 'pr', 'view', '--json', 'number,state,statusCheckRollup'], { cwd: root, timeoutMs: 20_000 })
     if (r.exitCode === 0) {
@@ -196,17 +239,21 @@ const readPr = async ($: EngineInterface, root: string) => {
       if (typeof j.number !== 'number') throw new Error('no PR number in gh output')
       pr = j.state === 'OPEN' ? { number: j.number, checks: checksOf(j.statusCheckRollup ?? []), readAt: now, isStale: false } : null
       prAskedAt = now
-      return
+      await prAnswered($, poll, r.stdout)
+      return true
     }
     if (/no pull requests found/i.test(r.stderr)) {
       pr = null
       prAskedAt = now
-      return
+      await prAnswered($, poll, '')
+      return true
     }
+    if (poll) await failedLook(poll, now, r.stderr).catch(err => pollFailed($, err))
     throw new Error(r.stderr.trim() || `gh exited ${r.exitCode}`)
   } catch {
     if (pr) pr = { ...pr, isStale: true }
   }
+  return true
 }
 
 // The job watcher may not be loaded: that is no job item, never an error. One that is loaded and
@@ -309,10 +356,11 @@ const warnCache = async ($: EngineInterface) => {
 }
 
 // Whether this reading asks GitHub about the PR (#1014): always when told to (a turn just ended),
-// on the first reading, and while the last answer had checks running; otherwise once PR_IDLE_MS has
-// passed since GitHub last answered.
+// on the first reading, and while the last answer had checks running once the polling policy's wait
+// has passed (#1482, a minute at first); otherwise once PR_IDLE_MS has passed since GitHub last
+// answered. The policy can still hold a due read (readPr).
 const prDue = (now: number, force: boolean): boolean =>
-  force || prAskedAt === undefined || pr?.checks === 'running' || now - prAskedAt >= PR_IDLE_MS
+  force || prAskedAt === undefined || now - prAskedAt >= (pr?.checks === 'running' ? prWaitMs : PR_IDLE_MS)
 // A turn's end that asked while a reading was already running: kept for the next reading rather
 // than dropped with the tick, so that ask still happens.
 let prForced = false
@@ -332,8 +380,7 @@ const read = async ($: EngineInterface) => {
   const root = await $.session.root().catch(() => startCwd)
   await readUnpushed($, root)
   if (prDue(await $.clock.now(), prForced)) {
-    prForced = false
-    await readPr($, root)
+    if (await readPr($, root)) prForced = false
   }
   await readJobs($)
   // Not asked at all after a compaction until a measure has brought the new conversation's figure.
