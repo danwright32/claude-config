@@ -134,7 +134,14 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     readFailsAfterRun?: string
     unreadable?: string
     branchFails?: boolean
+    // design_file.py --sealed (#1524): the texts it reads as a settled design exactly as sealed, and
+    // whether it cannot be run at all.
+    sealed?: string[]
+    sealFails?: boolean
+    sealSilent?: boolean
   } = { storeGetFails: false, storeSetFails: false, settingsRefuse: false }
+  // Each time the guard asked design_file.py whether a text is sealed: how it ran it, and the text.
+  const sealChecks: { argv: string[]; stdin: string }[] = []
   const writes: string[] = []
   const removed: string[] = []
   const blobs: Record<string, string> = { ...(init.blobs ?? {}) }
@@ -199,6 +206,18 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (cmd === '__modkit' && args[0] === 'repo') {
       const input = JSON.parse(String(args[1])) as { root?: string | null; remote: string | null }
       return ok(JSON.stringify({ github: githubRepo(input.remote), name: repoName(input) }))
+    }
+    // The design rounds skill's check that a settled design is exactly as make-settled.py sealed it
+    // (#1524). Its rule is proven against make-settled.py's own output in the skill's suite
+    // (tests/settled_tests.py); here it reads as sealed only the texts the test names, so any other
+    // text, an edited frame included, is not.
+    if (cmd === 'python3' && args[args.length - 1] === '--sealed') {
+      const stdin = String((e as { init?: { stdin?: string } }).init?.stdin ?? '')
+      sealChecks.push({ argv: e.argv.map(String), stdin })
+      if (ctl.sealFails) throw new Error('spawn python3 ENOENT')
+      if (ctl.sealSilent) return ok('')
+      if (ctl.sealed?.includes(stdin)) return ok('sealed\n')
+      return { value: { exitCode: 1, stdout: 'not sealed: it has changed since make-settled.py sealed it\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     }
     // Taking away a file a shell write made (#1296): `rm -f -- <path>`.
     if (cmd === 'rm' && args[0] === '-f' && args[1] === '--' && args.length === 3) {
@@ -290,7 +309,7 @@ const world = (engine: Engine, on: On, init: Init = {}) => {
     if (tool === 'Bash' && ctl.readFailsAfterRun) ctl.unreadable = ctl.readFailsAfterRun
     return { result: 'written', text: 'written' } as never
   })
-  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed }
+  return { files, branches, store, ctl, ran, asked, dialog, cards, gitRuns, at, reads, clock, storeGets, toasts, blobs, writes, removed, sealChecks }
 }
 type W = ReturnType<typeof world>
 
@@ -2161,4 +2180,101 @@ test('#1194: a look file added onto a folder held in a variable is that folder\'
     `python3 - <<'PY'\nout = '${ROUND}'\nopen(out + "/screen.css", "w").write("a{}")\nPY`,
   ])
     expect({ command, why: await held(command) }).toEqual({ command, why: '' })
+})
+
+// #1524: on 2026-10-22 in Slate, committing the settled design for the Slack channel picker
+// (docs/design/slack-channel-picker.html, written by make-settled.py after Dan answered Settled for
+// #2438) on its follow up issue #4074 was held as a look change and needed his Skip them. Dan,
+// 2026-10-23, on #1524: "Let it through". A settled design under docs/design passes unasked, whatever
+// the issue's answers, while its text is exactly what make-settled.py sealed, which the design rounds
+// skill's own check says (`python3 -I design_file.py --sealed`, the text on its input); any hand edit
+// to it is still held.
+const SETTLED_PAGE =
+  '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>Slack channel picker, the settled design</title></head>\n' +
+  '<body><div class="dr-doc"><h1>Slack channel picker</h1><h2>Frames</h2><h3>Picker open <span class="dr-meta">f1, 1280 wide</span></h3></div>\n' +
+  '<script type="application/json" id="decision-map">\n{"decisions": [{"id": "D1", "decision": "Channels are listed by name", "requirement": "1"}]}\n</script>\n' +
+  '<script type="application/json" id="design-frames">\n{"frames": [{"id": "f1", "title": "Picker open", "width": 1280}]}\n</script>\n' +
+  '</body></html>\n<!-- design-settled sha256:' + 'a'.repeat(64) + ' -->\n'
+const RECORD = '/w/slate/docs/design/slack-channel-picker.html'
+const EDITED_FRAME = SETTLED_PAGE.replace('<h3>Picker open ', '<h3>Picker open, wider ')
+const SEAL_CHECK = ['python3', '-I', `${HOME}/.claude/skills/design-rounds/design_file.py`, '--sealed']
+
+test('#1524: a settled design make-settled.py wrote passes under docs/design, with no answer recorded for the issue', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${ROUND}/settled.html`]: SETTLED_PAGE }, blobs: { '/w/slate 2438-picker:docs/design/slack-channel-picker.html': SETTLED_PAGE } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  w.branches['/w/slate'] = '4074-slack-channel-picker'
+  // Written whole by the Write tool, the skill's check asked, run as the guard runs it, of the text.
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: SETTLED_PAGE }))).toBe('')
+  expect(w.sealChecks).toEqual([{ argv: SEAL_CHECK, stdin: SETTLED_PAGE }])
+  // Put back by a git checkout alone, read from where git puts it back.
+  expect(refusalOf(await call($, { tool: 'Bash', command: 'git checkout 2438-picker -- docs/design/slack-channel-picker.html' }))).toBe('')
+  // Copied in whole by a cp alone from where make-settled.py wrote it, read before it runs.
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${ROUND}/settled.html ${RECORD}` }))).toBe('')
+  expect(w.sealChecks.map(c => c.stdin === SETTLED_PAGE)).toEqual([true, true, true])
+  expect(w.ran.length).toBe(3)
+  // Nothing was recorded, and the issue still holds a look change of its own.
+  expect(Object.keys(w.store)).toEqual([])
+  expect(refusalOf(await call($, PAGE))).toContain('issue #4074 in slate')
+  // On the default branch, where every answer is for the session only, the same.
+  w.branches['/w/slate'] = 'main'
+  expect(refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: SETTLED_PAGE }))).toBe('')
+})
+
+test('#1524: the same path with an edited frame is held, by any tool, and the refusal says why', withKit, async ($, on) => {
+  const w = world($, on, { files: { [RECORD]: SETTLED_PAGE, [`${ROUND}/settled.html`]: EDITED_FRAME } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  const written = refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: EDITED_FRAME }))
+  expect(written).toContain(SKIP_QUESTION)
+  expect(written).toContain('docs/design/slack-channel-picker.html is not a settled design exactly as make-settled.py wrote it (it has changed since make-settled.py sealed it)')
+  // An Edit is judged by the text it leaves: the check is asked of the file with the edit made.
+  expect(refusalOf(await call($, { tool: 'Edit', file_path: RECORD, old_string: '<h3>Picker open ', new_string: '<h3>Picker open, wider ' }))).toContain(SKIP_QUESTION)
+  expect(w.sealChecks[1]?.stdin).toBe(EDITED_FRAME)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp ${ROUND}/settled.html ${RECORD}` }))).toContain(SKIP_QUESTION)
+  expect(w.ran).toEqual([])
+})
+
+test('#1524: a file carrying the blocks and the seal but not under docs/design is held, the check never asked', withKit, async ($, on) => {
+  const w = world($, on)
+  w.ctl.sealed = [SETTLED_PAGE]
+  for (const file_path of ['/w/slate/app/settled.html', '/w/slate/src/docs/design/slack-channel-picker.html', '/w/slate/docs/designs/slack-channel-picker.html'])
+    expect({ file_path, held: refusalOf(await call($, { tool: 'Write', file_path, content: SETTLED_PAGE })).includes(SKIP_QUESTION) }).toEqual({ file_path, held: true })
+  expect(w.sealChecks).toEqual([])
+  expect(w.ran).toEqual([])
+})
+
+test('#1524: what cannot be read or checked before it runs is held as any look change is, saying so', withKit, async ($, on) => {
+  const w = world($, on, { files: { [`${ROUND}/settled.html`]: SETTLED_PAGE } })
+  w.ctl.sealed = [SETTLED_PAGE]
+  // A cp beside another command, with an option, or into a name the shell spells: what it leaves
+  // cannot be read before it runs, so it is held, saying which ways go through.
+  const after = refusalOf(await call($, { tool: 'Bash', command: `cd /w/slate && cp ${ROUND}/settled.html docs/design/slack-channel-picker.html` }))
+  expect(after).toContain(SKIP_QUESTION)
+  expect(after).toContain('could not read what this call leaves in docs/design/slack-channel-picker.html')
+  expect(after).toContain('copied in whole by a cp alone')
+  expect(refusalOf(await call($, { tool: 'Bash', command: `cp -R ${ROUND}/settled.html ${RECORD}` }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `D=/w/slate/docs/design; cp ${ROUND}/settled.html $D/slack-channel-picker.html` }))).toContain(SKIP_QUESTION)
+  expect(refusalOf(await call($, { tool: 'Bash', command: `printf x >> ${RECORD}` }))).toContain(SKIP_QUESTION)
+  expect(w.sealChecks).toEqual([])
+  // A script file run with the record only as its argument is never read as a write of it, so the
+  // seal check is never asked and nothing in #1524 lets it through. That such a run is not held at
+  // all is older than #1524 and holds for any screen file named only as a script's argument (seen
+  // live on 2026-10-23 with a script that wrote nothing); it is recorded as its own finding.
+  await call($, { tool: 'Bash', command: `python3 ~/.claude/skills/design-rounds/make-settled.py ${ROUND}/settled.json ${RECORD}` })
+  await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/gen.py /w/slate/app/page.tsx` })
+  expect(w.sealChecks).toEqual([])
+  expect(Object.keys(w.store)).toEqual([])
+  w.ran.length = 0
+  // A check that cannot be run holds the file, never passes it.
+  w.ctl.sealFails = true
+  const unchecked = refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: SETTLED_PAGE }))
+  expect(unchecked).toContain(SKIP_QUESTION)
+  expect(unchecked).toContain('docs/design/slack-channel-picker.html is a settled design exactly as make-settled.py wrote it could not be checked (')
+  // A design_file.py older than #1524 runs, ignores --sealed and exits 0 saying nothing: no pass.
+  w.ctl.sealFails = false
+  w.ctl.sealSilent = true
+  const silent = refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: SETTLED_PAGE }))
+  expect(silent).toContain(SKIP_QUESTION)
+  expect(silent).toContain('design_file.py --sealed exited 0: with no message')
+  expect(w.ran).toEqual([])
+  expect(w.ran).toEqual([])
 })

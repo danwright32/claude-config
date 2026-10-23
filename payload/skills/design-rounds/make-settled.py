@@ -17,6 +17,9 @@ switcher. It holds, in one self contained file:
   - the decision record and its map (decision-map), each decision written so a check can be authored
     from it: what is on screen, on which frames, and how it is verified;
   - the frames (design-frames) and Dan's exceptions (design-exceptions), in his words.
+  - its seal, the last line, the SHA-256 of everything above it (design_file.seal), which the design
+    round guard checks before letting the file be committed under docs/design unasked
+    (claude-config#1524); any edit to the file breaks it, and running this again reseals it.
 
 The spec, with paths resolved against the spec's own folder:
 
@@ -276,7 +279,9 @@ def main(argv):
         # drawn inside the product (claude-config#1393), and a terminal design's pictures are measured only
         # from the terminal adapter's capture of the mod's band (claude-config#1413, #1414).
         frames_block["kind"] = chrome["page"]
-    page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants, chromes)
+    # Sealed as its last line (claude-config#1524), so the design round guard lets the file be committed
+    # under docs/design unasked while it is exactly what was written here, and holds any hand edit.
+    page = design_file.seal(render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants, chromes))
 
     # The decision map is held to check-decision-map.py's own rule, on the file as written, before it
     # is put where anyone can use it.

@@ -9,8 +9,13 @@ design's numbered requirements is read here too (read_requirements, #1401), by m
 writes it, and check-decision-map.py, which holds every decision's number to it. It also holds the kinds of design drawn with
 no product page around it, and the shared screens a design may be drawn in, which the frames block may
 name, for the same reason: one list, read by the tools that write that block and the score that reads it.
+And the seal make-settled.py puts on the file (seal) and the check the design round guard runs on it
+(`design_file.py --sealed`, claude-config#1524), so writing and checking it are one rule.
 """
+import hashlib
 import json
+import re
+import sys
 from html.parser import HTMLParser
 
 # The kinds of screen a design round may draw with NO product page around it, each with the one plain
@@ -107,3 +112,69 @@ def find_blocks(source, ids):
     finder.feed(source)
     finder.close()
     return finder.blocks
+
+
+# The seal make-settled.py puts on every settled design it writes (claude-config#1524), read by the
+# design round guard, which lets a settled design under docs/design be committed unasked only while
+# its text is exactly what was sealed (Dan, 2026-10-23, on #1524: "Let it through"). It is the file's
+# last line, a comment after the page, holding the SHA-256 of every byte above it as UTF-8. Writing it
+# (seal) and checking it (unsealed_why, run by the guard as `--sealed`) are both here, so what the
+# hash covers is decided in one place. It proves the text is unchanged since it was sealed, so any hand
+# edit is caught; it does not prove who sealed it, since anyone can compute the hash.
+SEAL_LINE = "<!-- design-settled sha256:%s -->\n"
+SEAL_AT_END = re.compile(r"\n<!-- design-settled sha256:([0-9a-f]{64}) -->\n?\Z")
+# The blocks only make-settled.py writes together, which a settled design must carry exactly once each.
+SETTLED_BLOCKS = ("decision-map", "design-frames")
+
+
+def _digest(body):
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def seal(page):
+    """The page with its seal added as its last line: the page itself ends with a newline first."""
+    body = page if page.endswith("\n") else page + "\n"
+    return body + SEAL_LINE % _digest(body)
+
+
+def unsealed_why(text):
+    """None when text is a settled design exactly as it was sealed, else why it is not, in a few words.
+    A copy that lost only its final newline is the same design."""
+    m = SEAL_AT_END.search(text)
+    if not m:
+        return "it carries no seal from make-settled.py"
+    body = text[:m.start() + 1]
+    if _digest(body) != m.group(1):
+        return "it has changed since make-settled.py sealed it"
+    blocks = find_blocks(body, SETTLED_BLOCKS)
+    for name in SETTLED_BLOCKS:
+        if len(blocks[name]) != 1:
+            return "it carries %d %s blocks where a settled design carries one" % (len(blocks[name]), name)
+        try:
+            json.loads(blocks[name][0])
+        except ValueError:
+            return "its %s block is not JSON" % name
+    return None
+
+
+def main(argv):
+    """`design_file.py --sealed`, the text on standard input: exit 0 when it is a settled design exactly
+    as make-settled.py sealed it, 1 saying why not, 2 when run any other way."""
+    if argv[1:] != ["--sealed"]:
+        print("usage: python3 design_file.py --sealed < settled.html", file=sys.stderr)
+        return 2
+    try:
+        text = sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError:
+        print("not sealed: it is not UTF-8 text")
+        return 1
+    why = unsealed_why(text)
+    if why is not None:
+        print("not sealed: " + why)
+        return 1
+    print("sealed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

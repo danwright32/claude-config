@@ -2885,6 +2885,49 @@ guard now works out from the code which parts of a mod's `.ts` hook files feed w
   said in mod-kit's one wording with a toast, and the same question is asked again, since a refused
   edit waits on that answer and there is no round for words to feed.
 
+### What #1524 changed, 2026-10-23
+
+On 2026-10-22 in Slate, committing the settled design for the Slack channel picker
+(`docs/design/slack-channel-picker.html`, written by `make-settled.py` after Dan answered Settled
+for #2438) on its follow up issue #4074 was held as a look change and needed his Skip them. The file
+is the design record itself and changes no screen. Dan, 2026-10-23, on #1524: "Let it through". His
+sign off covers exactly this: a write of a file make-settled.py produced, under `docs/design`, whose
+content is unchanged from what it wrote, passes; any hand edit to such a file is still held.
+
+- **Unchanged is proven by a seal, never read from the blocks.** A hand edited settled design still
+  carries its `decision-map` and `design-frames` blocks, so their presence proves nothing.
+  `make-settled.py` now ends every file with one line, `<!-- design-settled sha256:<hex> -->`, the
+  SHA-256 of every byte above it as UTF-8 (design_file.py `seal`). Regenerating from the recorded
+  inputs was the other way, and was not taken: the spec, builder, chrome and fixture usually sit in a
+  session's scratchpad, gone by the time another issue commits the file, and a terminal design needs
+  Chrome to draw.
+- **One rule, in the skill (L370).** Writing the seal and checking it are both in the design rounds
+  skill's `design_file.py`, the one reader of a settled design's blocks. The guard copies none of
+  it: it runs `python3 -I ~/.claude/skills/design-rounds/design_file.py --sealed` with the text on
+  its input (rules.ts `sealCheck`), and passes the file only on exit 0 saying `sealed`. That also
+  needs exactly one of each block, each JSON. An older design_file.py, which ignores the flag and
+  exits 0 saying nothing, is held, as is a check that cannot run or exits otherwise, each said.
+- **Where, and what is read.** `docs/design/` at the top of the checkout, in any case as the Mac's
+  disk reads it (rules.ts `isDesignRecord`), whatever the issue's answers, the default branch
+  included, since the design was settled on the issue it came from. The text is the one the call
+  leaves, read before it runs: a Write's content, an Edit's or MultiEdit's change applied to the file,
+  what a git checkout or restore alone puts back (`putBack`), or the source of one plain `cp` alone
+  (no option, variable or pattern, nothing else on the line). Any other shell write there cannot be
+  read first and is judged as before; the refusal then names the ways that go through, and for a
+  text the check refused it gives the check's own reason.
+- **What a forged file would need.** The path under `docs/design`, both blocks once each, and a last
+  line holding the SHA-256 of the rest, which anyone who reads design_file.py can compute. The seal
+  proves the text is unchanged since sealing, which is the hand edit Dan asked to keep holding; it
+  does not prove make-settled.py did the sealing, and the skill's suite says so in a test. A forged
+  record still changes no screen: every screen file it would be built into is judged as before.
+- **Already passing, found while building.** Running make-settled.py straight into `docs/design`
+  (`python3 ~/.claude/skills/design-rounds/make-settled.py settled.json docs/design/x.html`), the
+  skill's documented command, is not held, in the guard's test world and live (measured 2026-10-23
+  with a script that wrote nothing): no write is read from a script file's arguments, so the same is
+  true of any screen file a script is handed. That is older than this change, which never runs its
+  seal check for such a call (a test says so) and so neither relies on it nor widens it; it is
+  recorded as its own finding.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
