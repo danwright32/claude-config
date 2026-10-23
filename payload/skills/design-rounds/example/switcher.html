@@ -81,7 +81,7 @@
 <script>
 /* Written by make-switcher.py for a round drawn in captured chrome (claude-config#1364): each option is
    the captured page with the round's builder drawing into its slot, in an iframe of its own. */
-var DR_TEMPLATE = "<!doctype html>\n<!-- The demo invoice app's page, standing as this example's product. A real round saves its own product's page with capture-chrome.js. -->\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invoices<\/title>\n<style>\n  html, body { margin: 0; background: #F4F1ED; color: #1B1613; font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }\n  header { display: flex; align-items: center; height: 44px; padding: 0 16px; background: #1B1613; color: #FBFAF8; font-weight: 600; }\n  main { padding: 16px; }\n<\/style><style>\n.list { width: 520px; background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 8px; overflow: hidden; }\n.row { padding: 9px 14px; border-top: 1px solid #EDE7E1; font-variant-numeric: tabular-nums; }\n.row:first-child { border-top: 0; }\n.row.tight { padding: 4px 14px; }\n\n<\/style>\n<\/head>\n<body><header>Invoices<\/header><main id=\"main\"><\/main><script>window.DESIGN_FIXTURE = {\"invoices\": [{\"client\": \"Client 1\", \"date\": \"Oct 1\", \"amount\": 250}, {\"client\": \"Client 2\", \"date\": \"Oct 2\", \"amount\": 500}, {\"client\": \"Client 3\", \"date\": \"Oct 3\", \"amount\": 750}, {\"client\": \"Client 4\", \"date\": \"Oct 4\", \"amount\": 1000}]};<\/script>\n<script>\n// Draws only what goes in the product's slot: the chrome around it (the header) is the product's\n// own, captured in chrome.html, and the rows come from the round's fixture.\nfunction buildScreen(variant) {\n  var list = document.createElement(\"div\");\n  list.className = \"list\";\n  window.DESIGN_FIXTURE.invoices.forEach(function (invoice) {\n    var row = document.createElement(\"div\");\n    row.className = \"row \" + (variant.density || \"normal\");\n    row.textContent = invoice.client + \"   \" + invoice.date + \"   $\" + invoice.amount;\n    list.append(row);\n  });\n  return list;\n}\n\n<\/script>\n<script>\n(function () {\n  \"use strict\";\n  var V = \"__DR_VARIANT__\";\n  var slot = document.getElementById(\"main\");\n  var report = { built: false, why: \"\" };\n  /* A slot the captured page's text names but its document does not hold (an id inside a comment)\n     is said as that, never as the builder throwing (lessons review of #1364). */\n  if (!slot) {\n    window.DR_FRAME = { built: false, noSlot: true, why: \"the captured page holds no element \" + \"main\" };\n    return;\n  }\n  try {\n    var node = buildScreen(V);\n    if (!node || !node.nodeType) throw new Error(\"buildScreen returned no element\");\n    slot.replaceChildren(node);\n    report.built = true;\n  } catch (err) {\n    report.why = String(err && err.message ? err.message : err);\n  }\n  window.DR_FRAME = report;\n  if (report.built && typeof screenShown === \"function\") {\n    try { screenShown(V, slot.firstElementChild); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }\n  }\n  /* A key pressed while this frame has the focus goes to the page around it, unless the design took\n     it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */\n  document.addEventListener(\"keydown\", function (event) {\n    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;\n    var t = event.target;\n    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(t.tagName || \"\"))) return;\n    if (window.parent && window.parent !== window) window.parent.postMessage({ drKey: event.key }, \"*\");\n  });\n})();\n<\/script>\n<\/body><\/html>\n";
+var DR_TEMPLATE = "<!doctype html>\n<!-- The demo invoice app's page, standing as this example's product. A real round saves its own product's page with capture-chrome.js. -->\n<html lang=\"en\"><head><meta charset=\"utf-8\"><title>Invoices<\/title>\n<style>\n  html, body { margin: 0; background: #F4F1ED; color: #1B1613; font: 14px/1.5 -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; }\n  header { display: flex; align-items: center; height: 44px; padding: 0 16px; background: #1B1613; color: #FBFAF8; font-weight: 600; }\n  main { padding: 16px; }\n<\/style><style>\n.list { width: 520px; background: #FFFDFB; border: 1px solid #DAD1C8; border-radius: 8px; overflow: hidden; }\n.row { padding: 9px 14px; border-top: 1px solid #EDE7E1; font-variant-numeric: tabular-nums; }\n.row:first-child { border-top: 0; }\n.row.tight { padding: 4px 14px; }\n\n<\/style>\n<\/head>\n<body><header>Invoices<\/header><main id=\"main\"><\/main><script>window.DESIGN_FIXTURE = {\"invoices\": [{\"client\": \"Client 1\", \"date\": \"Oct 1\", \"amount\": 250}, {\"client\": \"Client 2\", \"date\": \"Oct 2\", \"amount\": 500}, {\"client\": \"Client 3\", \"date\": \"Oct 3\", \"amount\": 750}, {\"client\": \"Client 4\", \"date\": \"Oct 4\", \"amount\": 1000}]};<\/script>\n<script>\n// Draws only what goes in the product's slot: the chrome around it (the header) is the product's\n// own, captured in chrome.html, and the rows come from the round's fixture.\nfunction buildScreen(variant) {\n  var list = document.createElement(\"div\");\n  list.className = \"list\";\n  window.DESIGN_FIXTURE.invoices.forEach(function (invoice) {\n    var row = document.createElement(\"div\");\n    row.className = \"row \" + (variant.density || \"normal\");\n    row.textContent = invoice.client + \"   \" + invoice.date + \"   $\" + invoice.amount;\n    list.append(row);\n  });\n  return list;\n}\n\n<\/script>\n<script>\n(function () {\n  \"use strict\";\n  var V = \"__DR_VARIANT__\";\n  var slot = document.getElementById(\"main\");\n  var report = { built: false, why: \"\" };\n  /* A slot the captured page's text names but its document does not hold (an id inside a comment)\n     is said as that, never as the builder throwing (lessons review of #1364). */\n  if (!slot) {\n    window.DR_FRAME = { built: false, noSlot: true, why: \"the captured page holds no element \" + \"main\" };\n    return;\n  }\n  try {\n    var node = buildScreen(V);\n    if (!node || !node.nodeType) throw new Error(\"buildScreen returned no element\");\n    slot.replaceChildren(node);\n    report.built = true;\n  } catch (err) {\n    report.why = String(err && err.message ? err.message : err);\n  }\n  window.DR_FRAME = report;\n  if (report.built) report.tell = function () {\n    if (typeof screenShown === \"function\") screenShown(V, slot.firstElementChild);\n  };\n  /* A key pressed while this frame has the focus goes to the page around it, unless the design took\n     it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */\n  document.addEventListener(\"keydown\", function (event) {\n    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;\n    var t = event.target;\n    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|OPTION)$/.test(t.tagName || \"\"))) return;\n    if (window.parent && window.parent !== window) window.parent.postMessage({ drKey: event.key }, \"*\");\n  });\n})();\n<\/script>\n<\/body><\/html>\n";
 var DR_OPTION_VARIANTS = {"1": "{\"key\": \"1\", \"name\": \"Normal\", \"why\": \"The comfortable height, which fits eight rows in the window.\", \"measured\": \"29px per row.\", \"density\": \"normal\"}", "2": "{\"key\": \"2\", \"name\": \"Tight\", \"why\": \"Four pixels off the padding, which is what buys the other three rows.\", \"measured\": \"19px per row.\", \"density\": \"tight\"}"};
 var DR_WIDTH = 640;
 var DR_HEIGHT = 0;
@@ -100,17 +100,35 @@ function buildScreen(variant) {
 }
 /* Every option's frame, once loaded: its height, whether its builder drew, and what it drew, so two
    options drawing the same thing are said, as the page says it for a round with no captured chrome. */
-/* A frame hidden while it loaded has no layout and measures 0 tall, so the frame shown is sized
-   again each time it is shown: the page calls screenShown after every switch, as it does for any
-   builder, and the frame's own load calls it too. */
-function screenShown(_variant, frame) {  /* the page hands the option first; only its frame is needed here */
+/* The page calls screenShown after every switch, as it does for any builder, with the frame shown. Two
+   things happen to it. It is sized, since a frame hidden while it loaded has no layout and measures 0
+   tall. And the round's own screenShown, inside the frame, is told this option is showing, with the
+   element it drew in the slot (claude-config#1522). A throw there goes up to the page's banner. Sized
+   after it is told, throw or not, so whatever the builder draws then is inside the frame. */
+var DR_SAID = null;
+function screenShown(_variant, frame, said) {  /* the page hands the option first; only its frame is needed here */
+  DR_SAID = said;
+  try { drTell(frame); } finally { drSize(frame); }
+}
+/* A frame still loading its page has no root yet, and is left alone: its own load sizes it and tells
+   its builder. Reading the root anyway threw, and the page said the builder's screenShown had, whenever
+   an option was chosen before its frame loaded (claude-config#1467). */
+function drReady(frame) {
   var doc = frame.contentDocument;
-  /* The page's own height, not its scroll height, which never reads less than the frame it sits in,
-     so a short screen would keep whatever height its frame started at. A frame still loading its page
-     has no root yet, and is left alone: its own load sizes it. Reading the root anyway threw, and the
-     page said the builder's screenShown had, whenever an option was chosen before its frame loaded
-     (claude-config#1467). */
-  if (!DR_HEIGHT && doc && doc.documentElement && !frame.hidden) frame.style.height = Math.ceil(doc.documentElement.getBoundingClientRect().height) + "px";
+  return !!(doc && doc.documentElement && !frame.hidden);
+}
+/* The page's own height, not its scroll height, which never reads less than the frame it sits in, so a
+   short screen would keep whatever height its frame started at. */
+function drSize(frame) {
+  if (!DR_HEIGHT && drReady(frame)) frame.style.height = Math.ceil(frame.contentDocument.documentElement.getBoundingClientRect().height) + "px";
+}
+/* Told only once its builder has run, through the frame's DR_FRAME.tell. Until then a frame shown is
+   owed the call and its load makes it, so an option is told once each time it is shown, never while
+   it is hidden. */
+function drTell(frame) {
+  var report = drReady(frame) && frame.contentWindow && frame.contentWindow.DR_FRAME;
+  frame.drOwed = !frame.hidden && !(report && report.tell);
+  if (report && report.tell) report.tell();
 }
 /* What an option draws, for telling two options apart. Its whole document, not only its slot: a round
    set on the page root (the theme, the spacing) or in a stylesheet the builder adds draws different
@@ -137,7 +155,16 @@ function drPicture(doc, key) {
 function drLoaded(frame, variant) {
   var doc = frame.contentDocument;
   var report = (frame.contentWindow && frame.contentWindow.DR_FRAME) || { built: false, why: "its frame never ran the builder" };
-  screenShown(variant, frame);
+  /* An option shown while its frame was loading: the page's said is the banner its switch would have
+     used. It is always set by then, since a frame loads only once the page's first switch puts it on
+     the stage; the throw is left loud all the same if it is not. */
+  try {
+    if (frame.drOwed) {
+      try { drTell(frame); } catch (err) { if (DR_SAID) DR_SAID(variant, err); else throw err; }
+    }
+  } finally {
+    drSize(frame);
+  }
   if (Object.prototype.hasOwnProperty.call(DR_SEEN, variant.key)) return;
   var slot = doc && doc.getElementById(DR_SLOT);
   DR_SEEN[variant.key] = { name: variant.name, report: report, noSlot: !!report.noSlot || (report.built && !slot), drawn: report.built && slot ? drPicture(doc, variant.key) : null };
@@ -317,20 +344,25 @@ window.addEventListener("message", function (event) {
        built, and a click in the one showing redrew another off the stage. screenShown is read from
        the top level, as buildScreen is. One that throws leaves the screen looking finished while
        the redraw it asked for never happened, so the first throw is said on the page, as a
-       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). */
+       throwing buildScreen is, and the switch itself goes on (lessons review of #1206). The third
+       argument says a throw that comes later, for a builder told only once the option can be: a
+       captured page's, inside an option's frame still loading (claude-config#1522). */
     if (typeof screenShown === "function") {
       try {
-        screenShown(variant, incoming);
+        screenShown(variant, incoming, hookThrew);
       } catch (err) {
-        if (!hookSaid) {
-          hookSaid = true;
-          warn("The builder's screenShown threw when " + variant.name + " was shown: "
-               + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
-               + "switch did not happen, so the screen showing may not be this option's.");
-        }
+        hookThrew(variant, err);
       }
     }
     fit();
+  }
+
+  function hookThrew(variant, err) {
+    if (hookSaid) return;
+    hookSaid = true;
+    warn("The builder's screenShown threw when " + variant.name + " was shown: "
+         + String(err && err.message ? err.message : err) + ". Whatever it redraws after a "
+         + "switch did not happen, so the screen showing may not be this option's.");
   }
 
   /* Every element in a screen that is scrolled away from its start, each named by its path from

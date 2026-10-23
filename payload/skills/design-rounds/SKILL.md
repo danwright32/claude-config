@@ -126,7 +126,9 @@ partner, redraws a list) keeps no single global redraw function and reads no glo
 option 4, off the stage, and the screen showing does not move (claude-config#1206, from
 Dan's Bidspoke partners rounds). Define `screenShown(variant, element)` instead, which the
 page calls with the option on the stage and its element after every switch, the first one
-included, and redraw from those. The page also keeps how far each scrolling region was
+included, and redraw from those. In a round drawn in captured chrome it runs inside the option's
+own frame, with the element drawn in the slot, each time that option is shown, once its frame
+has loaded (claude-config#1522); a throw is said on the page either way. The page also keeps how far each scrolling region was
 scrolled across a switch, matched by where each sits in the screen, so no builder needs its own scroll listener.
 
 `bash test-make-switcher.sh` runs its checks, and `run-all-tests.sh` finds that suite on its own. The refusals above each have a test that produces them, including the unwired key.

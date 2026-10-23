@@ -439,9 +439,7 @@ BOOT = """(function () {
     report.why = String(err && err.message ? err.message : err);
   }
   window.DR_FRAME = report;
-  if (report.built && typeof screenShown === "function") {
-    try { screenShown(V, slot.firstElementChild); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }
-  }
+__SHOWN__
   /* A key pressed while this frame has the focus goes to the page around it, unless the design took
      it or it was typed into a field, as the switcher's own keys yield (claude-config#356). */
   document.addEventListener("keydown", function (event) {
@@ -452,16 +450,33 @@ BOOT = """(function () {
   });
 })();"""
 
+# A frame drawn alone, as each frame of a settled design is, is shown once, as it loads, so its builder's
+# screenShown is called then.
+SHOWN_AT_LOAD = """  if (report.built && typeof screenShown === "function") {
+    try { screenShown(V, slot.firstElementChild); } catch (err) { report.shownWhy = String(err && err.message ? err.message : err); }
+  }"""
 
-def frame_document(chrome, builder, styles, variant, fixture=None):
-    """The whole document for one option or frame: the captured chrome with the round drawn in it."""
+# An option in the switcher is one of several frames on its stage, one shown at a time, so the switcher
+# tells the builder, through report.tell, each time this option is shown, and says a throw on its page
+# (claude-config#1522). Calling it as the frame loaded told every hidden option it was showing, and kept
+# a throw where nothing read it.
+SHOWN_BY_PAGE = """  if (report.built) report.tell = function () {
+    if (typeof screenShown === "function") screenShown(V, slot.firstElementChild);
+  };"""
+
+
+def frame_document(chrome, builder, styles, variant, fixture=None, told_by_page=False):
+    """The whole document for one option or frame: the captured chrome with the round drawn in it.
+    told_by_page: the page around it calls the builder's screenShown each time it shows this frame, as
+    the switcher does, rather than the frame calling it once as it loads."""
     if chrome["kind"] == "screen":
         builder, styles = on_screen(chrome["script"], chrome["styles"], builder, styles)
     scripts = ""
     if fixture is not None:
         scripts += "<script>window.DESIGN_FIXTURE = %s;</script>\n" % script_text(json.dumps(fixture))
     scripts += "<script>\n%s\n</script>\n" % script_text(builder)
-    boot = BOOT.replace("__VARIANT__", script_text(json.dumps(variant))).replace(
+    boot = BOOT.replace("__SHOWN__", SHOWN_BY_PAGE if told_by_page else SHOWN_AT_LOAD)
+    boot = boot.replace("__VARIANT__", script_text(json.dumps(variant))).replace(
         "__SLOT__", json.dumps(chrome["slot"] if chrome["kind"] == "html" else "dr-slot"))
     scripts += "<script>\n%s\n</script>\n" % boot
     style = "<style>\n%s\n</style>\n" % styles if styles else ""
