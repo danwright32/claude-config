@@ -622,6 +622,39 @@ git -C "$R" add -A && git -C "$R" commit -qm words
 out=$(run_hook "git push" "$R")
 assert_absent "cron, setInterval and queues named only in strings and comments do not fire" 'background work' "$out"
 
+# --- claude-config#1525: files the repository marks generated are not scanned -----------------
+# A Slate push adding only a design record (docs/design/*.html, linguist-generated in .gitattributes)
+# was told it had an error path returning empty and a destructive data operation: both were inside
+# the captured product page the record inlines. A generated file is skipped and named in one line,
+# the same pattern in an ordinary file is still flagged, and a repo with no .gitattributes is as before.
+GEN_PAGE='<script>try { load() } catch (e) { return [] }</script>
+<pre>DROP TABLE users;</pre>'
+R=$(make_repo gen-only "$GEN_PAGE" docs/design/picker.html)
+printf '%s\n' 'docs/design/*.html linguist-generated=true' > "$R/.gitattributes"
+git -C "$R" add -A && git -C "$R" commit -qm attributes
+out=$(run_hook "git push" "$R")
+assert_absent "a generated file's error path is not reported" 'error path' "$out"
+assert_absent "nor its destructive data operation" 'destructive data' "$out"
+assert_contains "the skipped generated file is named" 'docs/design/picker.html' "$out"
+assert_contains "and said to be generated" 'generated' "$out"
+
+R=$(make_repo gen-and-code "$GEN_PAGE" docs/design/picker.html)
+printf '%s\n' 'docs/design/*.html linguist-generated=true' > "$R/.gitattributes"
+mkdir -p "$R/src"
+printf '%s\n' 'try { load() } catch (e) { return [] }' > "$R/src/load.ts"
+git -C "$R" add -A && git -C "$R" commit -qm attributes
+out=$(run_hook "git push" "$R")
+assert_contains "the same pattern in an ordinary file is still flagged" 'error path' "$out"
+assert_contains "and names the ordinary file" 'in: src/load.ts' "$out"
+assert_absent "but not the generated one beside it" 'in: docs/design/picker.html' "$out"
+assert_contains "while the generated one is named as skipped" 'docs/design/picker.html' "$out"
+
+R=$(make_repo gen-none "$GEN_PAGE" docs/design/picker.html)
+out=$(run_hook "git push" "$R")
+assert_contains "with no .gitattributes the page is scanned as before" 'error path' "$out"
+assert_contains "and named where it was found" 'in: docs/design/picker.html' "$out"
+assert_absent "and nothing is said to be skipped" 'Skipped' "$out"
+
 # ---- the skip and the sync's own derived file list are one set (claude-config#484) ----
 # claude-sync decides the same question with is_derived_rule_file and the LESSONS_FILE beside it,
 # but claude-sync is NOT installed beside these hooks (the config root holds the hooks, not the
