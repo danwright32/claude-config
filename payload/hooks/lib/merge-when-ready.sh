@@ -616,7 +616,7 @@ wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-
   [ -n "${3:-}" ] && pause="$interval"
   nap "$pause" "$2 Still waiting"
 }
-# Sleep $1 seconds through the injected sleep, in one call when it is no longer than the heartbeat,
+# Sleep the wait it is given through the injected sleep, in one call when it is no longer than the heartbeat,
 # and otherwise a heartbeat at a time, saying $2 with how long this wait has lasted and when the next
 # look is, so a long wait (a grown one, or a rate limit's pause) still says it is alive.
 nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on

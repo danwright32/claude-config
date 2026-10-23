@@ -155,6 +155,52 @@ printf 'HTTP/2.0 403 Forbidden\r\nRetry-After: 10\r\n\r\n{}\n' > "$probe_file"
 loop s1 "ghp_rate_pause '$SECONDARY' 1010 '$WORKDIR/probe.sh'" >/dev/null
 check_eq "#1482 a later shorter pause keeps the longer one" "wait 290" "$(loop s1 'ghp_take 1010 || echo "wait $GHP_WAIT"')"
 
+# =================================================================================================
+# 5. Run as a command, for the loops written in TypeScript (the status bar's and scope modes' reads
+#    of a pull request), so they follow this one policy rather than a copy of it (L370). One line
+#    out, tab separated; a non zero exit only when it was called wrongly.
+# =================================================================================================
+cli(){ local s="$1"; shift; CLAUDE_CODE_SESSION_ID="$s" bash "$LIB" "$@" 2>&1; }
+rm -rf "$GH_POLL_STATE_DIR"; export GH_POLL_PER_MINUTE=2
+check_eq "#1482 take: a look is taken" "ok" "$(cli s1 take 1000)"
+check_eq "#1482 take: and another" "ok" "$(cli s1 take 1001)"
+check_eq "#1482 take: the minute full says wait, why and how long" "$(printf 'wait\tcap\t58\t')" "$(cli s1 take 1002)"
+check_eq "#1482 next: unchanged doubles, from the policy's own base and ceiling" "120" "$(cli s1 next 60 0)"
+check_eq "#1482 next: up to the policy's ceiling" "180" "$(cli s1 next 120 0)"
+check_eq "#1482 next: changed starts again at the base" "60" "$(cli s1 next 180 1)"
+check_eq "#1482 next: a caller's own ceiling (scope modes keeps ten minutes)" "600" "$(cli s1 next 480 0 60 600)"
+check_eq "#1482 next: and its own base" "30" "$(cli s1 next 480 1 30 600)"
+cat > "$WORKDIR/probe-cli.sh" <<'EOS'
+#!/usr/bin/env bash
+printf 'HTTP/2.0 403 Forbidden\r\nRetry-After: 75\r\n\r\n{}\n'
+EOS
+chmod +x "$WORKDIR/probe-cli.sh"
+export GH_POLL_PROBE="$WORKDIR/probe-cli.sh"
+out="$(cli s1 failed 1100 "$SECONDARY")"
+check_eq "#1482 failed: a rate limit pauses the session, saying for how long and why" "$(printf 'paused\t75\tGitHub said to wait 75s (Retry-After)')" "$out"
+check_eq "#1482 take: then waits out the pause" "$(printf 'wait\tpause\t75\tGitHub said to wait 75s (Retry-After)')" "$(cli s1 take 1100)"
+check_eq "#1482 failed: any other failure is not a pause" "other" "$(cli s1 failed 1100 'gh: Not Found (HTTP 404)')"
+check_eq "#1482 answered" "ok" "$(cli s1 answered)"
+unset GH_POLL_PROBE GH_POLL_PER_MINUTE
+out="$(cli s1 sideways 2>&1)"; rc=$?
+check_eq "#1482 a command it does not know exits 64" "64" "$rc"
+check "#1482 and names what it knows" "take" "$out"
+
+# =================================================================================================
+# 6. No instruction tells a session to run gh's own checks watcher (`gh pr checks --watch`, `gh run
+#    watch`), whose loop is gh's and so can follow none of this policy: no growing wait, no pause on a
+#    rate limit, not counted in the session's looks. The skills, commands, agents and the global
+#    CLAUDE.md are read, since they are what sessions do; the shared watcher is merge-when-ready.sh.
+#    Read by what an instruction does (L247): either spelling, any flags between.
+# =================================================================================================
+PAYLOAD="$(cd "$DIR/.." && pwd)"
+told="$(grep -rn -E 'gh (-R [^ ]+ )?pr checks [^`]*--watch|gh (-R [^ ]+ )?run watch' \
+  "$PAYLOAD/skills" "$PAYLOAD/commands" "$PAYLOAD/agents" "$PAYLOAD/CLAUDE.md" --include='*.md' 2>/dev/null)"
+check_eq "#1482 no skill, command, agent or global rule tells a session to run gh's own watcher (use merge-when-ready.sh)" "" "$told"
+# Control: the same search finds such an instruction when one is there, so its silence means none.
+mkdir -p "$WORKDIR/skills/x"; printf 'Wait: `gh pr checks 7 --watch --interval 60`.\n' > "$WORKDIR/skills/x/SKILL.md"
+check "#1482 control: the search finds a watcher instruction" "SKILL.md" "$(grep -rn -E 'gh (-R [^ ]+ )?pr checks [^`]*--watch|gh (-R [^ ]+ )?run watch' "$WORKDIR/skills" --include='*.md')"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

@@ -179,16 +179,18 @@ ghp_answered(){
 # (X-RateLimit-Remaining: 0) or in a rate_limit body. Sets GHP_H_WAIT and GHP_H_SAID; returns 1 when
 # it says neither.
 ghp__said_wait(){   # $1 = the text, $2 = now
-  local text="$1" now="$2" ra rem rst body spent
+  local text="$1" now="$2" low ra rem rst body spent
   GHP_H_WAIT=""; GHP_H_SAID=""
-  ra="$(printf '%s\n' "$text" | tr -d '\r' | sed -nE 's/^[Rr][Ee][Tt][Rr][Yy]-[Aa][Ff][Tt][Ee][Rr]: *([0-9]+) *$/\1/p' | head -1)"
+  # Header names in any case, read once in lower case; the first of each is the one taken.
+  low="$(printf '%s\n' "$text" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
+  ra="$(printf '%s\n' "$low" | sed -nE 's/^retry-after: *([0-9]+) *$/\1/p')"; ra="${ra%%$'\n'*}"
   if [ -n "$ra" ]; then
     GHP_H_WAIT="$ra"; [ "$GHP_H_WAIT" -ge 1 ] || GHP_H_WAIT=1
     GHP_H_SAID="GitHub said to wait ${ra}s (Retry-After)"
     return 0
   fi
-  rem="$(printf '%s\n' "$text" | tr -d '\r' | sed -nE 's/^[Xx]-[Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt]-[Rr][Ee][Mm][Aa][Ii][Nn][Ii][Nn][Gg]: *([0-9]+) *$/\1/p' | head -1)"
-  rst="$(printf '%s\n' "$text" | tr -d '\r' | sed -nE 's/^[Xx]-[Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt]-[Rr][Ee][Ss][Ee][Tt]: *([0-9]+) *$/\1/p' | head -1)"
+  rem="$(printf '%s\n' "$low" | sed -nE 's/^x-ratelimit-remaining: *([0-9]+) *$/\1/p')"; rem="${rem%%$'\n'*}"
+  rst="$(printf '%s\n' "$low" | sed -nE 's/^x-ratelimit-reset: *([0-9]+) *$/\1/p')"; rst="${rst%%$'\n'*}"
   if [ "$rem" = 0 ] && [ -n "$rst" ] && [ "$rst" -gt "$now" ]; then
     GHP_H_WAIT=$(( rst - now )); GHP_H_SAID="its allowance is spent until GitHub's reset time"
     return 0
@@ -231,3 +233,34 @@ ghp_rate_pause(){
   GHP_WAIT=$(( until - now )); GHP_SAID="$said"
   return 0
 }
+
+# RUN AS A COMMAND, for a loop written in TypeScript (a mod), which cannot source this file, so it
+# follows this policy rather than a copy of it (L370). The mods reach it through mod-kit's
+# hooks/ghpoll.ts. One line out, tab separated; exit 64 only when called wrongly.
+#   take NOW               ok | wait<TAB>pause|cap<TAB>SECONDS<TAB>WHY
+#   failed NOW TEXT        paused<TAB>SECONDS<TAB>WHY when TEXT is a rate limit answer, else other
+#   answered               ok
+#   next WAIT CHANGED [BASE MAX]
+#                          the next wait in seconds, between the caller's base and ceiling when it
+#                          names them (scope modes keeps its own ten minutes), else
+#                          GHP_BASE_DEFAULT and GHP_MAX_DEFAULT
+# The session is CLAUDE_CODE_SESSION_ID, which the mod passes. The limits are probed with
+# `gh api -i rate_limit` as the active account, or the command GH_POLL_PROBE names (a test seam).
+ghp__probe(){ if [ -n "${GH_POLL_PROBE:-}" ]; then "$GH_POLL_PROBE"; else gh api -i rate_limit; fi; }
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  case "${1:-}" in
+    take)
+      if ghp_take "$(ghp__num "${2:-}" 0)"; then echo ok; else printf 'wait\t%s\t%s\t%s\n' "$GHP_WHY" "$GHP_WAIT" "$GHP_SAID"; fi ;;
+    failed)
+      if ghp_rate_limited "${3:-}"; then
+        ghp_rate_pause "${3:-}" "$(ghp__num "${2:-}" 0)" ghp__probe
+        printf 'paused\t%s\t%s\n' "$GHP_WAIT" "$GHP_SAID"
+      else echo other; fi ;;
+    answered) ghp_answered; echo ok ;;
+    next)
+      if [ "${3:-0}" = 1 ]; then ghp_next_interval "${2:-}" "${4:-$GHP_BASE_DEFAULT}" "${5:-$GHP_MAX_DEFAULT}" 1
+      else ghp_next_interval "${2:-}" "${4:-$GHP_BASE_DEFAULT}" "${5:-$GHP_MAX_DEFAULT}" 0; fi
+      echo ;;
+    *) echo "usage: gh-poll.sh take NOW | failed NOW TEXT | answered | next WAIT CHANGED" >&2; exit 64 ;;
+  esac
+fi
