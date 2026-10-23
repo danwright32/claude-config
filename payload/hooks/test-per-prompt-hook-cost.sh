@@ -131,11 +131,15 @@ populate(){ # populate <name> <N> -> 0, or 1 with REASON set when the hook reads
       : > "$F/tmp/claude-stale-worktrees-$(printf '%s' cost-session | shasum | cut -c1-12).state" ;;
     rule-files-changed.sh)
       # The rule files this session loaded: CLAUDE.md and every bare import, which grows with
-      # every section the lessons index is split into.
+      # every section the lessons index is split into, and the mods it loaded, which grow with
+      # every mod written.
       : > "$F/home/.claude/CLAUDE.md"
       i=0; while [ "$i" -lt "$n" ]; do
         printf '@RULES-%d.md\n' "$i" >> "$F/home/.claude/CLAUDE.md"
         printf 'rule %d\n' "$i" > "$F/home/.claude/RULES-$i.md"
+        # And the mods it named at its start (claude-config#1535), one folder per mod.
+        mkdir -p "$F/home/.claude/mods/mod-$i/.claude-plugin"
+        printf '{ "name": "mod-%d" }\n' "$i" > "$F/home/.claude/mods/mod-$i/.claude-plugin/plugin.json"
         i=$((i + 1))
       done ;;
     payload-revert-warning.sh)

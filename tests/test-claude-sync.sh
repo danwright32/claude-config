@@ -22199,6 +22199,108 @@ check "#850 a place held by a process that has gone is ignored" "[ $rc_qw4 -eq 0
 check "#850 and removed" "[ ! -e '$QWLOCK.next' ]"
 kill "$QW_HOLDER" 2>/dev/null; wait "$QW_HOLDER" 2>/dev/null
 
+section "== status says when this Mac's mods are older than the shared repo's, and the likely cause (claude-config#1535) =="
+# On 2026-10-21 the work MacBook ran a mod-kit from before #1306, merged four days earlier, and
+# nothing on that Mac said so. Every session started there loads whatever ~/.claude/mods holds, so a
+# Mac whose installed mods lag the shared repo runs old mod code in every new session, and the fact
+# was readable only by comparing trees by hand. status now compares the installed mods with the
+# shared repo's own copy, says how long the oldest missing change has been there, and names the
+# causes it can read.
+MLB="$WORK/modlag-bare.git"; git init -q --bare -b main "$MLB"
+MLS="$WORK/modlag-sender"; git clone -q "$MLB" "$MLS" 2>/dev/null
+mlcommit(){   # $1 = how many seconds ago it landed  $2 = message; commits and pushes what is staged
+  local at=$(( $(date +%s) - $1 ))
+  GIT_AUTHOR_DATE="@$at" GIT_COMMITTER_DATE="@$at" git -C "$MLS" -c user.name=t -c user.email=t@t commit -q -m "$2"
+  git -C "$MLS" push -q origin HEAD:main 2>/dev/null
+}
+mkdir -p "$MLS/payload/mods/kit-mod/.claude-plugin" "$MLS/payload/mods/kit-mod/hooks" "$MLS/payload/mods/side-mod/.claude-plugin"
+printf '{ "name": "kit-mod" }\n' > "$MLS/payload/mods/kit-mod/.claude-plugin/plugin.json"
+printf 'export const v = 1\n' > "$MLS/payload/mods/kit-mod/hooks/branch.ts"
+printf '{ "name": "side-mod" }\n' > "$MLS/payload/mods/side-mod/.claude-plugin/plugin.json"
+# A mod file holding the home path placeholder, which this Mac installs with its own home path in it,
+# so its installed bytes never equal any version the repo holds unless the comparison puts the
+# placeholder back.
+mkdir -p "$MLS/payload/mods/path-mod/hooks"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 1\n' > "$MLS/payload/mods/path-mod/hooks/paths.ts"
+printf '# rules\n' > "$MLS/payload/CLAUDE.md"
+git -C "$MLS" add -A; mlcommit 864000 "mods v1"
+# This Mac: a clone of the shared repo and a home that has applied it.
+MLR="$WORK/modlag-repo"; git clone -q "$MLB" "$MLR" 2>/dev/null
+MLH="$WORK/modlag-home"; mkdir -p "$MLH"; echo '{"hooks":{}}' > "$MLH/settings.json"
+MLAG="$WORK/modlag-agents"; mkdir -p "$MLAG"
+mlenv(){ echo "CLAUDE_HOME=$MLH SYNC_REPO=$MLR SYNC_LAUNCHAGENTS=$MLAG SYNC_HOLD_FILE=$WORK/modlag-hold SYNC_WATCH_PID_FILE=$WORK/modlag-watch.pid SYNC_CLAUDE_BIN=$WORK/no-such-claude-here SYNC_NO_NOTIFY=1 SYNC_NO_HOOK_TESTS=1"; }
+env $(mlenv) bash "$SCRIPT" pull >/dev/null 2>&1
+check "#1535 the fixture: this Mac has applied the shared repo's mods" \
+  "cmp -s '$MLS/payload/mods/kit-mod/hooks/branch.ts' '$MLH/mods/kit-mod/hooks/branch.ts'"
+# A mod written on this Mac and not yet sent is this Mac's own work, never a lag behind the repo.
+mkdir -p "$MLH/mods/own-mod/.claude-plugin"; printf '{ "name": "own-mod" }\n' > "$MLH/mods/own-mod/.claude-plugin/plugin.json"
+out_ml0="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
+dbg "#1535 status with mods level with the repo: $out_ml0"
+check "#1535 a Mac whose mods match the shared repo hears nothing about mods lagging" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ml0\""
+# The shared repo moves on, twice: a change to kit-mod two days ago, and a newer one to side-mod an
+# hour ago. This Mac receives neither.
+printf 'export const v = 2\n' > "$MLS/payload/mods/kit-mod/hooks/branch.ts"
+printf 'export const at = "__CLAUDE_HOME__/hooks" // 2\n' > "$MLS/payload/mods/path-mod/hooks/paths.ts"
+git -C "$MLS" add -A; mlcommit 172800 "kit-mod v2"
+printf '{ "name": "side-mod", "description": "two" }\n' > "$MLS/payload/mods/side-mod/.claude-plugin/plugin.json"
+git -C "$MLS" add -A; mlcommit 3600 "side-mod v2"
+out_ml1="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
+dbg "#1535 status with mods two days behind: $out_ml1"
+check "#1535 status says this Mac's mods are behind the shared repo, naming the mods" \
+  "line_has \"\$out_ml1\" 'mods behind the shared repo' 'kit-mod' 'side-mod'"
+check "#1535 and how long the oldest missing change has been there, not the newest" \
+  "line_has \"\$out_ml1\" 'mods behind the shared repo' 'oldest change it is missing landed 2 days ago'"
+check "#1535 and what that means for sessions here" \
+  "line_has \"\$out_ml1\" 'mods behind the shared repo' 'Every session started on this Mac'"
+check "#1535 a file installed with this Mac's home path in it is matched to the version the repo held" \
+  "line_has \"\$out_ml1\" 'mods behind the shared repo' 'path-mod'"
+check "#1535 a mod this Mac wrote and has not sent is not called a lag" \
+  "! line_has \"\$out_ml1\" 'mods behind the shared repo' 'own-mod'"
+# The causes it can read, each in its own words. Here neither launch agent is installed.
+check "#1535 it names a missing launch agent as the likely cause" \
+  "line_has \"\$out_ml1\" 'likely cause' 'neither launch agent is installed'"
+check "#1535 and says what brings the mods level" \
+  "line_has \"\$out_ml1\" 'mods behind the shared repo' 'claude-sync pull'"
+# A lag shorter than the window is ordinary: the receive timer runs daily, so a Mac with no edits
+# of its own can be a day behind and healthy. The same fixture with a wider window is silent, which
+# is what shows the line above answers to the age rather than to any difference at all (L159).
+out_ml2="$(env $(mlenv) SYNC_MODS_LAG_AFTER=604800 bash "$SCRIPT" status 2>&1 || true)"
+check "#1535 a lag inside the window is not reported" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ml2\""
+out_mlbad="$(env $(mlenv) SYNC_MODS_LAG_AFTER=soon bash "$SCRIPT" status 2>&1 || true)"
+check "#1535 a window that is not a whole number of seconds is refused in words, not guessed at" \
+  "line_has \"\$out_mlbad\" 'SYNC_MODS_LAG_AFTER' 'not a whole number'"
+# Each readable cause, said when it is true and only then.
+printf '%s %s\n' "$(( $(date +%s) + 3600 ))" "$(date +%s)" > "$WORK/modlag-hold"
+printf '%s 3\n' "$(( $(date +%s) - 7200 ))" > "$MLR/.ci-red-since"
+printf '<plist><string>%s</string></plist>\n' "$SCRIPT" > "$MLAG/com.claudesync.watch.plist"
+printf '<plist><string>%s</string></plist>\n' "$SCRIPT" > "$MLAG/com.claudesync.timer.plist"
+out_ml3="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
+dbg "#1535 status with every cause present: $out_ml3"
+check "#1535 a held watcher is named as a cause" \
+  "line_has \"\$out_ml3\" 'likely cause' 'held'"
+check "#1535 a shared repo failing its tests is named as a cause" \
+  "line_has \"\$out_ml3\" 'likely cause' 'failed its tests'"
+check "#1535 an installed watcher that is not running is named as a cause" \
+  "line_has \"\$out_ml3\" 'likely cause' 'watcher is installed but not running'"
+check "#1535 and a cause that is no longer true is no longer named" \
+  "! line_has \"\$out_ml3\" 'likely cause' 'neither launch agent is installed'"
+rm -f "$WORK/modlag-hold" "$MLR/.ci-red-since"
+# Once this Mac receives, the line goes away.
+env $(mlenv) bash "$SCRIPT" pull >/dev/null 2>&1
+out_ml4="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
+check "#1535 the fixture: the pull brought this Mac level" \
+  "cmp -s '$MLS/payload/mods/kit-mod/hooks/branch.ts' '$MLH/mods/kit-mod/hooks/branch.ts'"
+check "#1535 and status stops saying the mods are behind" \
+  "! grep -q 'mods behind the shared repo' <<< \"\$out_ml4\""
+# A mod REMOVED from the shared repo and still installed here is a lag too.
+git -C "$MLS" rm -q -r payload/mods/side-mod; mlcommit 172800 "remove side-mod"
+out_ml5="$(env $(mlenv) bash "$SCRIPT" status 2>&1 || true)"
+dbg "#1535 status with a removal not received: $out_ml5"
+check "#1535 a mod the shared repo removed and this Mac still runs is named" \
+  "line_has \"\$out_ml5\" 'mods behind the shared repo' 'side-mod'"
+
 suite_profile
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

@@ -11289,6 +11289,188 @@ report_watcher_hold(){
   return 0
 }
 
+# ---------- this Mac's mods against the shared repo's (claude-config#1535) ----------
+#
+# On 2026-10-21 the work MacBook ran a mod-kit from before #1306, merged four days earlier, and
+# nothing said so. Every session loads its mods from ~/.claude/mods when it starts, so a Mac whose
+# installed mods lag the shared repo runs old mod code in every new session, however current the
+# repo is. Nothing compared the two: the drift report compares ~/.claude with this clone's payload
+# (what a SEND would carry), and a clone that has stopped receiving holds the same old copy, so it
+# reads as level.
+#
+# So this compares what is INSTALLED with the shared repo's own tip, never with the clone's working
+# tree, and dates the lag by when the oldest change this Mac lacks landed there (L689: the gap, not
+# whether a receive happened). A file is lagging only when the installed copy is one the shared repo
+# HELD at some earlier commit: a copy it never held is this Mac's own unsent work, which the drift
+# report already lists, and calling it a lag would blame the repo for it (L111).
+#
+# How long a lag is ordinary: a day, which is the receive timer's default interval, so a Mac making
+# no edits of its own is a day behind on a healthy day, plus an hour for a CI run or two to finish
+# before the gated receive takes a commit in. A chosen number, not a measurement. Being wrong costs
+# an hour of old mods unremarked in one direction and a line about a lag the next timer run was
+# about to clear in the other.
+
+# One line per lagging file: "<epoch>\t<path under mods/>", the epoch being when the oldest change
+# this Mac lacks landed on the shared tip. Prints nothing when it cannot read the tip, because there
+# is then nothing to compare with, and status says what it can about the repo elsewhere.
+#
+# A file is compared by its git hash, and a file holding this Mac's home path also by the hash of
+# its text with the placeholder put back, which is how a tokenized file is held in the repo.
+#
+# COST, measured on Daniels-MacBook-Pro-2 on 2026-10-22 against 370 installed mod files, 30 of them
+# behind (one reading each): status took 28.5 seconds with a first cut that hashed one file per
+# process, 12.5 with this, and 10.8 with no comparison at all. So the listing,
+# the hashes and the three way split (same, differs, only on one side) are one process each, and
+# only a file that differs costs a walk of its own history.
+mods_lag_records(){
+  local branch up tip installed hashes tokhashes split kind rel blob mine mine2 since line h ct seen prev f
+  have_git || return 0
+  branch="$(sync_branch)" || return 0
+  [ -n "$branch" ] || return 0
+  up="origin/$branch"
+  git -C "$SYNC_REPO" rev-parse -q --verify "$up" >/dev/null 2>&1 || return 0
+  # "<blob>\t<path under mods/>" for every file the tip holds there.
+  tip="$(git -C "$SYNC_REPO" ls-tree -r "$up" -- payload/mods 2>/dev/null \
+    | awk -F '\t' '{ split($1, a, " "); p = $2; sub(/^payload\/mods\//, "", p); print a[3] "\t" p }')"
+  # Every installed file the sync carries. The engine's generated types and the per Mac files never
+  # travel, so they are never compared.
+  installed=""
+  if [ -d "$CLAUDE_HOME/mods" ]; then
+    installed="$(cd "$CLAUDE_HOME/mods" && find . -type f ! -path '*/.claude-plugin/types/*' ! -name .DS_Store \
+      ! -name '*.conflict-*' ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name '*.local.json' \
+      ! -name '*.local.json.*' ! -name '*.local.json~' 2>/dev/null | sed 's|^\./||')"
+  fi
+  hashes=""
+  if [ -n "$installed" ]; then
+    # Absolute paths, because -C moves where a relative one would be read from.
+    hashes="$(paste <(printf '%s\n' "$installed" | while IFS= read -r f; do printf '%s/mods/%s\n' "$CLAUDE_HOME" "$f"; done \
+      | git -C "$SYNC_REPO" hash-object --stdin-paths 2>/dev/null) <(printf '%s\n' "$installed"))"
+  fi
+  # The few files holding this Mac's home path, hashed again with the placeholder put back.
+  tokhashes=""
+  if [ -d "$CLAUDE_HOME/mods" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      tokhashes="${tokhashes}$(tok < "$f" | git -C "$SYNC_REPO" hash-object --stdin 2>/dev/null)	${f#"$CLAUDE_HOME/mods/"}
+"
+    done < <(grep -rIlF --exclude-dir=types -- "$CLAUDE_HOME" "$CLAUDE_HOME/mods" 2>/dev/null)
+  fi
+  # "<kind>\t<rel>\t<hash>\t<hash with the placeholder>": missing (on the tip only), differs, or
+  # local (installed only). A file the same on both sides is dropped here.
+  split="$(awk -F '\t' '
+    FILENAME == ARGV[1] { if ($2 != "") tip[$2] = $1; next }
+    FILENAME == ARGV[2] { if ($2 != "") mine[$2] = $1; next }
+    { if ($2 != "") tokd[$2] = $1 }
+    END {
+      for (r in tip) {
+        if (!(r in mine)) { print "missing\t" r "\t-\t-"; continue }
+        t = (r in tokd) ? tokd[r] : mine[r]
+        if (tip[r] != mine[r] && tip[r] != t) print "differs\t" r "\t" mine[r] "\t" t
+      }
+      for (r in mine) if (!(r in tip)) print "local\t" r "\t" mine[r] "\t" ((r in tokd) ? tokd[r] : mine[r])
+    }' <(printf '%s\n' "$tip") <(printf '%s\n' "$hashes") <(printf '%s' "$tokhashes"))"
+  while IFS=$'\t' read -r kind rel mine mine2; do
+    [ -n "$rel" ] || continue
+    case "$kind" in
+      missing)
+        # Lagging since the shared repo last added it.
+        since="$(git -C "$SYNC_REPO" log -1 --format=%ct --diff-filter=A "$up" -- "payload/mods/$rel" 2>/dev/null)"
+        [ -n "$since" ] && printf '%s\t%s\n' "$since" "$rel" ;;
+      differs)
+        # Walk the tip's history of this file, newest first. The first version that matches what is
+        # installed is the one this Mac has, and the change just after it is the oldest it lacks. No
+        # match at all is a copy the repo never held: this Mac's own work, not a lag.
+        since=""; seen=""; prev=""; ct=""
+        while IFS= read -r line; do
+          case "$line" in
+            'C '*) ct="${line#C }" ;;
+            :*)
+              h="${line#* * * }"; h="${h%% *}"
+              if [ "$h" = "$mine" ] || [ "$h" = "$mine2" ]; then seen=1; since="$prev"; break; fi
+              prev="$ct" ;;
+          esac
+        done < <(git -C "$SYNC_REPO" log --format='C %ct' --raw --no-abbrev "$up" -- "payload/mods/$rel" 2>/dev/null)
+        [ -n "$seen" ] && [ -n "$since" ] && printf '%s\t%s\n' "$since" "$rel" ;;
+      local)
+        # Lagging since the shared repo removed it, if what is installed is what it removed.
+        line="$(git -C "$SYNC_REPO" log -1 --format='%H %ct' --diff-filter=D "$up" -- "payload/mods/$rel" 2>/dev/null)"
+        [ -n "$line" ] || continue
+        h="$(git -C "$SYNC_REPO" rev-parse -q --verify "${line%% *}^:payload/mods/$rel" 2>/dev/null)"
+        { [ "$h" = "$mine" ] || [ "$h" = "$mine2" ]; } && printf '%s\t%s\n' "${line##* }" "$rel" ;;
+    esac
+  done <<< "$split"
+  return 0
+}
+
+# What this clone and this Mac's launch agents record that would leave the mods behind, one
+# sentence per line, each only when it is true now. The last is a fact about the clone itself and
+# one of its two forms always holds while a lag stands, so the list is never empty: a lag with no
+# cause named would read as nothing being wrong (L98).
+mods_lag_causes(){
+  local branch behind kind count first sentence agentdir left tp wp
+  case "$(sync_rebase_state)" in
+    concludable|conflict) echo "this clone is stopped part way through a rebase, so it applies nothing it receives (said above)" ;;
+  esac
+  while IFS=$'\t' read -r kind count first sentence; do
+    [ "$kind" = receiving ] && echo "the CI gate is holding every receive: the shared repo's newest commit has failed its tests $count time(s) in a row"
+  done <<CAUSEEOF
+$(sync_stuck_records)
+CAUSEEOF
+  [ -f "$CI_UNREADABLE_SINCE_FILE" ] && echo "the CI gate is holding config back, because no test verdict for the shared repo could be read (said above)"
+  if left="$(hold_remaining 2>/dev/null)"; then
+    echo "the watcher is held for another $(duration_in_words "$left"), and its send is also what catches this Mac up between timer runs (claude-sync release ends it)"
+  fi
+  agentdir="$(launchagents_for_this_home)"
+  if [ -n "$agentdir" ]; then
+    tp="$agentdir/com.claudesync.timer.plist"; wp="$agentdir/com.claudesync.watch.plist"
+    if [ ! -f "$tp" ] && [ ! -f "$wp" ]; then
+      echo "neither launch agent is installed, so nothing here receives unless somebody runs a pull (claude-sync install-autosync)"
+    else
+      [ -f "$tp" ] || echo "the receive timer is not installed, so nothing here receives on a schedule (claude-sync install-autosync)"
+      if [ ! -f "$wp" ]; then
+        echo "the change watcher is not installed, so no edit here catches this Mac up (claude-sync install-autosync)"
+      elif ! watch_already_running >/dev/null; then
+        echo "the change watcher is installed but not running, so no edit here catches this Mac up (claude-sync install-autosync starts it again)"
+      fi
+    fi
+  fi
+  branch="$(sync_branch)" || branch=""
+  behind=""
+  [ -n "$branch" ] && behind="$(git -C "$SYNC_REPO" rev-list --count "HEAD..origin/$branch" 2>/dev/null || true)"
+  case "$behind" in
+    ''|*[!0-9]*) ;;
+    0) echo "this clone already holds the newer mods and they are not applied here, which is what a pull that stops before its apply leaves (the hook suite result above and ~/.claude-sync.log say why)" ;;
+    # Said as the two facts it is, without a verdict on why: a clone that received an hour ago and
+    # one that has received nothing for a week are both behind, and only the date tells them apart.
+    *) echo "this clone is $(commits_in_words "$behind") behind the shared repo, and last received $(stamp_in_words "$LAST_RECEIVED_FILE" "$(date +%s)" 'nothing has come down into this clone')" ;;
+  esac
+  return 0
+}
+
+report_mods_behind_main(){
+  local window recs now oldest age n mods branch causes
+  window="${SYNC_MODS_LAG_AFTER:-90000}"
+  case "$window" in
+    ''|*[!0-9]*)
+      echo "whether this Mac's mods lag the shared repo was not checked, because SYNC_MODS_LAG_AFTER='$window' is not a whole number of seconds. Unset it for the default of a day and an hour."
+      return 0 ;;
+  esac
+  recs="$(mods_lag_records)"
+  [ -n "$recs" ] || return 0
+  now="$(date +%s)"
+  oldest="$(printf '%s\n' "$recs" | awk -F '\t' 'NR == 1 || $1 < m { m = $1 } END { print m }')"
+  case "$oldest" in ''|*[!0-9]*) return 0 ;; esac
+  age=$(( now - oldest ))
+  [ "$age" -gt "$window" ] || return 0
+  n="$(printf '%s\n' "$recs" | grep -c .)"
+  mods="$(printf '%s\n' "$recs" | awk -F '\t' '{ split($2, p, "/"); print p[1] }' | sort -u | paste -sd ',' - | sed 's/,/, /g')"
+  branch="$(sync_branch)"
+  echo "mods behind the shared repo: $n file(s) in $CLAUDE_HOME/mods ($mods) are older than origin/$branch, and the oldest change it is missing landed $(age_in_words "$age") ($(date_from_epoch "$oldest" '+%Y-%m-%d %H:%M')), past the $(duration_in_words "$window") this allows. Every session started on this Mac loads these older mods until it receives them; '$(receive_command)' brings them level."
+  causes="$(mods_lag_causes | awk 'NF' | paste -sd ';' - | sed 's/;/; /g')"
+  echo "  likely cause, read from this clone ($SYNC_REPO) and this Mac's launch agents: $causes."
+  return 0
+}
+
 # Where the OTHER clones on this Mac stand against the shared repo (claude-config#266).
 #
 # `pull` reports what changed in the deployed copy under ~/.claude, and rule-files-changed.sh
@@ -11804,6 +11986,7 @@ payload/$rel
   report_sync_stuck
   report_my_push
   report_watcher_hold
+  report_mods_behind_main
   report_automatic_jobs
   report_hook_suite_result
   report_outage_tally
