@@ -35,7 +35,7 @@
 #
 # Settings, each also a test seam: GH_POLL_STATE_DIR (the state, ${CLAUDE_HOME:-~/.claude}/state/gh-poll),
 # GH_POLL_PER_MINUTE (4), GH_POLL_RATE_FIRST_SECONDS (60), GH_POLL_RATE_MAX_SECONDS (960, sixteen
-# minutes, five doublings), GH_POLL_LOCK_SLEEP (sleep, the command the state lock waits through).
+# minutes, four doublings of the first wait), GH_POLL_LOCK_SLEEP (sleep, the command the state lock waits through).
 # The interval's base and ceiling are the caller's (merge-when-ready.sh: MWR_POLL_SECONDS, 60, and
 # MWR_POLL_MAX_SECONDS, 180); GHP_BASE_DEFAULT and GHP_MAX_DEFAULT are the defaults it reads. All are
 # settings chosen on 2026-10-22, not measurements.
