@@ -286,7 +286,7 @@ for d in "${mods[@]}"; do
   fi
   while IFS=$'\t' read -r where test via; do
     [ -n "$where" ] || continue
-    echo "check-mods: $name/$where: test '$test' times its subject (through $via) under the test runner's fixed 5,000 ms limit, which measures how busy the machine is, not the code (#1016, L224). Let a comparison against a yardstick from the same run be the judgement, and give the test a timeoutMs only a hang reaches."
+    echo "check-mods: $name/$where: test '$test' times its subject (through $via) under the test runner's fixed 5,000 ms limit, which measures how busy the machine is, not the code (#1016, L224). Let a comparison against a yardstick from the same run be the judgement, and take test from mod-kit's tests/hang-ceiling.ts (#1577), whose limit only a hang reaches."
     failed=1
   done <<< "$ut"
 done
