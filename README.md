@@ -2598,6 +2598,15 @@ file, line and test name, again from the files alone (#1016). `claude plugin tes
 test, which compares a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
 judgement, and the test's own limit is set where only a hang reaches it.
+Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
+mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
+mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has
+every test limited for the rule above. The runner's `test` has no file wide or global setting, and
+its 5,000 ms judged load, not code: on 2026-10-23 twenty copies of mod-kit's tests at once under
+load failed 20 of 20 with nothing broken, and passed 20 of 20 on the shared ceiling under the same
+load. It is a ceiling for hangs, not a judgement of speed. `tools/check-mod-shared-parts.sh` fails a
+test file, in any mod, that takes `test` from `claude-code/testing` itself, naming the `cp` and the
+import to use instead.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),

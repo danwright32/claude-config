@@ -229,10 +229,17 @@ run_state() {   # run_state <root> <state dir> [args...]  -> sets OUT and RC
     DERIVED_DATA_DF_VOLUME="$TMP_ROOT" DERIVED_DATA_SWEEP_STATE_DIR="$state" bash "$SWEEP" "$@" 2>&1)"
   RC=$?
 }
-# Waits on the CONDITION, a finished record with no sweep still marked in progress, never a fixed
-# time (L290). The deadline only turns a sweep that never finishes into a failure rather than a hang.
-wait_finished() {   # wait_finished <state dir> -> 0 once finished, 1 at the deadline
-  local deadline=$(( $(date +%s) + 30 ))
+# Every wait below is on a CONDITION, never a fixed time (L290), with a ceiling that only a HANG
+# reaches (claude-config#1577): it turns a sweep that never finishes into a failure rather than a
+# hang, and judges nothing about speed. It was 30 s, which load reached with nothing broken: on
+# 2026-10-23 at 17:18 ET, sixteen copies of this suite at once beside 96 busy loops and 60 process
+# launching loops (load average 121 to 438 on 12 cores) failed 16 of 16, every one because the
+# automatic sweep took longer than 30 s to record, and the seven checks of its record after it. The
+# suite's own wall clock deadline (lib/suite-deadline.sh) stays the outer bound.
+HANG_S=300
+# Waits on a finished record with no sweep still marked in progress.
+wait_finished() {   # wait_finished <state dir> -> 0 once finished, 1 at the ceiling
+  local deadline=$(( $(date +%s) + HANG_S ))
   while [ ! -f "$1/last-result" ] || [ -e "$1/in-progress" ]; do
     [ "$(date +%s)" -ge "$deadline" ] && return 1
     sleep 0.1
@@ -248,11 +255,28 @@ check "and exits 0" "$(eq "$RC" 0)"
 
 ROOT6="$TMP_ROOT/dd-auto"; S6="$TMP_ROOT/state-auto"
 mkdir -p "$ROOT6"; build_fixture "$ROOT6"; write_fake_ps "$ROOT6"
+# Returning at once is judged by the STATE --start leaves, never by seconds (#1577, L290): the
+# sweep's process list is held until the suite releases it, so the sweep cannot have finished, and
+# its record cannot exist, unless --start waited for it. This was "returned within 3 s", and the
+# sixteen loaded copies above took 8 to 16 s with nothing broken. Released, the held list answers as
+# the fixture's own, so the sweep judges the same folders as before.
+RELEASE6="$TMP_ROOT/release-6"; HELD_PS="$TMP_ROOT/held-ps"
+cat > "$HELD_PS" <<PS
+#!/bin/sh
+n=0
+while [ ! -e "$RELEASE6" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
+exec "$FAKE_PS"
+PS
+chmod +x "$HELD_PS"
+SAVED_PS="$FAKE_PS"; FAKE_PS="$HELD_PS"
 auto_start="$(date +%s)"
 run_state "$ROOT6" "$S6" --start
 auto_took=$(( $(date +%s) - auto_start ))
+FAKE_PS="$SAVED_PS"
 check "--start exits 0 when it started a sweep" "$(eq "$RC" 0)"
-check "and returns at once rather than waiting for the sweep" "$([ "$auto_took" -lt 3 ] && echo ok || echo "took ${auto_took}s")"
+check "and returns at once rather than waiting for the sweep" \
+  "$([ -e "$S6/in-progress" ] && [ ! -e "$S6/last-result" ] && echo ok || echo "when it returned, after ${auto_took}s, the sweep it started was no longer running (in-progress $([ -e "$S6/in-progress" ] && echo present || echo absent), record $([ -e "$S6/last-result" ] && echo present || echo absent)) though its process list was held, so it waited for the sweep")"
+: > "$RELEASE6"
 check "the started sweep finishes and records what it did" "$(wait_finished "$S6" && echo ok || echo "no finished record in $S6")"
 check "the automatic sweep removes the first orphan" "$(gone "$ROOT6/App-orphan")"
 check "the automatic sweep removes the second orphan" "$(gone "$ROOT6/App-orphan-two")"
@@ -281,7 +305,7 @@ BLOCKING_PS="$TMP_ROOT/blocking-ps"
 cat > "$BLOCKING_PS" <<PS
 #!/bin/sh
 n=0
-while [ ! -e "$RELEASE7" ] && [ "\$n" -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done
+while [ ! -e "$RELEASE7" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
 echo "  77 /usr/bin/login -f someone"
 PS
 chmod +x "$BLOCKING_PS"
@@ -335,13 +359,13 @@ chmod +x "$SHIM12/mv"
 SAVED_PATH="$PATH"; PATH="$SHIM12:$PATH"
 run_state "$ROOT12" "$S12" --start
 start12_rc="$RC"
-lock_free_deadline=$(( $(date +%s) + 30 ))
+lock_free_deadline=$(( $(date +%s) + HANG_S ))
 until perl -e 'use Fcntl qw(:flock); open(my $fh, "<", $ARGV[0]) or exit 1; flock($fh, LOCK_EX | LOCK_NB) ? exit 0 : exit 1;' "$S12/lock" \
   || [ "$(date +%s)" -ge "$lock_free_deadline" ]; do sleep 0.1; done
 PATH="$SAVED_PATH"
 run_state "$ROOT12" "$S12" --last
 check "a sweep whose record cannot be written was started" "$(eq "$start12_rc" 0)"
-check "and it finished, releasing its lock" "$([ "$(date +%s)" -lt "$lock_free_deadline" ] && echo ok || echo "the lock was still held after 30s")"
+check "and it finished, releasing its lock" "$([ "$(date +%s)" -lt "$lock_free_deadline" ] && echo ok || echo "the lock was still held after ${HANG_S}s")"
 check "and it deleted the orphan" "$(gone "$ROOT12/Unwritable-orphan")"
 check "and its record was refused, so this case really ran" \
   "$([ -s "$TMP_ROOT/mv-refused-12" ] && echo ok || echo "the mv on its PATH never refused the record")"
