@@ -1186,7 +1186,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Ten of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Eleven of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
