@@ -258,7 +258,7 @@ mkdir -p "$ROOT6"; build_fixture "$ROOT6"; write_fake_ps "$ROOT6"
 # Returning at once is judged by the STATE --start leaves, never by seconds (#1577, L290): the
 # sweep's process list is held until the suite releases it, so the sweep cannot have finished, and
 # its record cannot exist, unless --start waited for it. This was "returned within 3 s", and the
-# sixteen loaded copies above took 8 to 16 s with nothing broken. Released, the held list answers as
+# sixteen loaded copies above took 8 to 16 s with nothing broken (2026-10-23). Released, the held list answers as
 # the fixture's own, so the sweep judges the same folders as before.
 RELEASE6="$TMP_ROOT/release-6"; HELD_PS="$TMP_ROOT/held-ps"
 cat > "$HELD_PS" <<PS
