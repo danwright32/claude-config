@@ -2263,6 +2263,38 @@ this even when a gate (a hold, being behind) stops it publishing, and it never r
 only an apply clears the empty folder a removal on the other Mac leaves behind, and only for a folder this Mac last held as a mod (`.mods-seen`), so a mod folder just made here and still empty is never taken for one (#629). Only entries under `~/.claude/mods/`
 are the sync's; any other folder named there by hand is kept. With none left, the key is removed.
 The change reaches **new** sessions only: a running session keeps the plugins it loaded.
+`hooks/rule-files-changed.sh`, the same per prompt check that names a rule file changed under a
+running session, says this too, once: which mods arrived on disk after the session started (not
+loaded in it until a new session) and which were removed (#1535). It compares the set of mod folders
+holding a manifest, from one glob, so it starts no process however many mods there are. It says
+nothing about an EDIT to a mod the session already loaded: Claude Code reloads that mod itself and
+prints its own line ("hooks.json changed, reloaded"), or says the earlier version is still running
+when a reload fails, so a second notice would only repeat it, on every pull that touches a mod.
+
+### status says when this Mac's mods are older than the shared repo's (#1535)
+
+On 2026-10-21 the work MacBook ran a mod-kit from before #1306, merged four days earlier, and
+nothing on that Mac said so. Every session loads its mods from `~/.claude/mods` when it starts, so a
+Mac whose installed mods lag the shared repo runs old mod code in every new session. `status`
+compares what is installed in `~/.claude/mods` with the shared repo's own tip (`origin/main`), never
+with the clone's working tree, which lags in step with it. A file counts as behind only when what is
+installed is a version the shared repo held earlier; a copy it never held is this Mac's own unsent
+work, which the drift report already lists. Past the window below, status prints how many files in
+which mods are behind and when the oldest change this Mac lacks landed, then the likely causes it
+can read, each only when it is true now: the clone stopped mid rebase, the CI gate holding receives
+(a red or unreadable verdict), a watcher hold, a launch agent not installed, the watcher installed
+but not running, and the clone itself being behind (with when it last received) or level with the
+repo but not applied here (what a pull that stops before its apply leaves). The causes are read from
+the clone status runs in, which it names, so run it from the scheduled clone for that clone's
+records.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `SYNC_MODS_LAG_AFTER` | `90000` | Seconds the oldest missing mod change may have been on the shared repo before status mentions it. A chosen number, not a measurement: a day, which is the receive timer's default interval (a Mac making no edits of its own is a day behind on a healthy day), plus an hour for a CI run or two before the gated receive takes a commit in. Being wrong costs an hour of old mods unremarked in one direction and a line about a lag the next timer run was about to clear in the other. A value that is not a whole number of seconds is said in status and nothing is compared. |
+
+Measured on Daniels-MacBook-Pro-2 on 2026-10-22, with 370 installed mod files of which 30 were
+behind, one reading each and so only an order of size: status took 12.5 seconds with the comparison
+and 10.8 without it. A first version that hashed one file per process took 28.5.
 
 A change to a mod that is already named does reach running sessions: each one reloads the mod's
 code, at once when idle and at the end of its turn when busy. When one delivery changes mod-kit and

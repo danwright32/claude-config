@@ -27,6 +27,17 @@
 # the global rule files under the config directory: a project's own CLAUDE.md is
 # not what a config sync changes underneath a session.
 #
+# MODS TOO, BUT ONLY THE SET OF THEM (claude-config#1535). A session names its mods once, at its
+# start, from CLAUDE_CODE_PLUGIN_DIRS, so a mod that arrives on disk later is not loaded in it until
+# a new session, and a mod removed from disk is still whatever the session made of it. That is the
+# same shape as a rule file, so it is the same check over a second snapshot: the names of the mod
+# folders that hold a manifest (a folder without one is not named by the sync either). A CHANGE to
+# a mod the session already loaded is deliberately not reported: Claude Code reloads it in the
+# running session and says so itself ("hooks.json changed, reloaded"), and says when a reload
+# failed and the earlier version is still running. Reporting it here would repeat that line on every
+# pull touching a mod and claim a staleness the reload has already cured (L11, L36). The names come
+# from one glob, so this half starts no process at all however many mods there are.
+#
 # Env:
 #   CLAUDE_RULES_DIR        the config directory to read (default ~/.claude)
 #   CLAUDE_RULES_STATE_DIR  where the per session hashes are kept (default TMPDIR).
@@ -41,7 +52,7 @@ input="$(cat 2>/dev/null || true)"
 
 RULES_DIR="${CLAUDE_RULES_DIR:-$HOME/.claude}"
 [ -d "$RULES_DIR" ] || exit 0
-[ -f "$RULES_DIR/CLAUDE.md" ] || exit 0
+[ -f "$RULES_DIR/CLAUDE.md" ] || [ -d "$RULES_DIR/mods" ] || exit 0
 
 # Keyed on the session, so two sessions open at once each get their own baseline.
 # With neither field there is no way to tell a first prompt from a later one, and
@@ -66,6 +77,35 @@ key="$(printf '%s' "$session" | shasum | cut -c1-12)"
 STATE_DIR="${CLAUDE_RULES_STATE_DIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE="$STATE_DIR/claude-rule-files-${key}.state"
+MODS_STATE="$STATE_DIR/claude-mods-${key}.state"
+
+# ONE baseline rule for both snapshots, so the rule files and the mods cannot come to disagree about
+# what a first prompt, an unreadable record or a repeated notice means (L370).
+#
+# since_baseline <state file> <current snapshot>: prints each line on one side only, as
+# "gone<TAB><line>" or "new<TAB><line>", and nothing when the two agree.
+#
+# No baseline yet (the first prompt of this session), or one that cannot be read, re-seeds and
+# stays quiet: reporting everything as changed because the record of what it used to be is missing
+# would be a false alarm about the one subject this hook has to stay credible on (L36).
+#
+# The new state is recorded BEFORE anything is said, so a notice cannot repeat itself if anything
+# after fails: the safe direction here is saying it once too few, not once per prompt for the rest
+# of the session. ONE notice per divergence.
+since_baseline() {
+  local state="$1" current="$2" previous
+  [ -n "$current" ] || return 0
+  if [ ! -s "$state" ]; then
+    printf '%s\n' "$current" > "$state" 2>/dev/null || true
+    return 0
+  fi
+  previous="$(cat "$state" 2>/dev/null || true)"
+  [ -n "$previous" ] || { printf '%s\n' "$current" > "$state" 2>/dev/null || true; return 0; }
+  [ "$current" = "$previous" ] && return 0
+  printf '%s\n' "$current" > "$state" 2>/dev/null || true
+  comm -3 <(printf '%s\n' "$previous" | sort) <(printf '%s\n' "$current" | sort) 2>/dev/null \
+    | awk -F '\t' '{ if ($1 != "") print "gone\t" $1; else print "new\t" $2 }'
+}
 
 # The imports, as bare names only. An absolute path, a tilde path or anything with
 # a slash points outside the set a config sync carries, so it is not this hook's
@@ -111,35 +151,39 @@ snapshot() {
             printf "%s  %s\n", v, n }'
 }
 
-current="$(snapshot)"
-[ -n "$current" ] || exit 0
+# The mod folders that hold a manifest, by name, under a header line that never changes, so a Mac
+# with no mods at all still takes a baseline and a first mod arriving later is reported.
+mod_snapshot() {
+  local m n
+  [ -d "$RULES_DIR/mods" ] || return 0
+  printf '#mods\n'
+  for m in "$RULES_DIR"/mods/*/.claude-plugin/plugin.json; do
+    [ -f "$m" ] || continue
+    n="${m%/.claude-plugin/plugin.json}"
+    printf '%s\n' "${n##*/}"
+  done
+}
 
-# No baseline yet (the first prompt of this session), or one that cannot be read.
-# Both re-seed and stay quiet: reporting every file as changed because the record
-# of what they used to be is missing would be a false alarm about the one subject
-# this hook has to stay credible on (L36).
-if [ ! -s "$STATE" ]; then
-  printf '%s\n' "$current" > "$STATE" 2>/dev/null || true
-  exit 0
+# Joined with spaces without stripping them out afterwards: `case` rather than a substitution,
+# superlinear in the number of matches under the bash macOS ships (claude-config#117).
+words() { tr '\n' ' ' | sed 's/ $//'; }
+
+if [ -f "$RULES_DIR/CLAUDE.md" ]; then
+  # Lines on either side that the other does not have, which covers an edited file, one that
+  # appeared, and one that went away. The name is the last field of a "<hash>  <name>" line.
+  changed="$(since_baseline "$STATE" "$(snapshot)" | awk '{print $NF}' | sort -u | words)"
+  case "$changed" in *[![:space:]]*)
+    echo "claude-sync: these rule files changed on disk after this session loaded them, so what is in this session's context is the older copy: ${changed}. Start a new session to pick them up, or read the changed file directly before relying on anything it says." ;;
+  esac
 fi
 
-previous="$(cat "$STATE" 2>/dev/null || true)"
-[ -n "$previous" ] || { printf '%s\n' "$current" > "$STATE" 2>/dev/null || true; exit 0; }
-[ "$current" = "$previous" ] && exit 0
-
-# Lines on either side that the other does not have, which covers an edited file,
-# one that appeared, and one that went away.
-changed="$(comm -3 <(printf '%s\n' "$previous") <(printf '%s\n' "$current") 2>/dev/null \
-           | awk '{print $NF}' | sort -u | tr '\n' ' ')"
-changed="${changed% }"
-
-# Recorded BEFORE speaking, so a notice cannot repeat itself if anything below
-# fails: the safe direction here is saying it once too few, not once per prompt
-# for the rest of the session.
-printf '%s\n' "$current" > "$STATE" 2>/dev/null || true
-
-# `case` rather than stripping the spaces out: superlinear in the number of matches under the bash
-# macOS ships, and this list grows with the number of rule files (claude-config#117).
-case "$changed" in *[![:space:]]*) ;; *) exit 0 ;; esac
-echo "claude-sync: these rule files changed on disk after this session loaded them, so what is in this session's context is the older copy: ${changed}. Start a new session to pick them up, or read the changed file directly before relying on anything it says."
+mods_diff="$(since_baseline "$MODS_STATE" "$(mod_snapshot)")"
+added="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "new" && $2 != "#mods" { print $2 }' | words)"
+removed="$(printf '%s\n' "$mods_diff" | awk -F '\t' '$1 == "gone" && $2 != "#mods" { print $2 }' | words)"
+case "$added" in *[![:space:]]*)
+  echo "claude-sync: these mods arrived on disk after this session started, and this session has not loaded them: ${added}. A session names its mods when it starts, so a new session loads them; until then their tools, commands and hooks are not here." ;;
+esac
+case "$removed" in *[![:space:]]*)
+  echo "claude-sync: these mods were removed from disk after this session started: ${removed}. A new session runs without them; this one may still be running what it loaded." ;;
+esac
 exit 0
