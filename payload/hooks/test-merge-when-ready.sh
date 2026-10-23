@@ -279,9 +279,20 @@ cat >> "$ST/design-gate-payloads"; printf '\n' >> "$ST/design-gate-payloads"
 [ -s "$ST/design-gate-deny" ] && jq -nc --arg r "$(cat "$ST/design-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 exit 0
 EOS
+cat > "$STUBS/verify-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/verify-gate-payloads"; printf '\n' >> "$ST/verify-gate-payloads"
+if [ -s "$ST/verify-gate-deny" ]; then
+  jq -nc --arg r "$(cat "$ST/verify-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+elif [ -s "$ST/verify-gate-context" ]; then
+  jq -nc --arg c "$(cat "$ST/verify-gate-context")" '{hookSpecificOutput:{hookEventName:"PreToolUse",additionalContext:$c}}'
+fi
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
+export MWR_VERIFY_GATE="$STUBS/verify-gate.sh"
 
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
@@ -687,6 +698,22 @@ fresh "$OLD" 0 "$GREEN"
 out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1364 with the design score gate allowing it, the merge goes through" "0" "$rc"
 check "#1364 the design score gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/design-gate-payloads" 2>/dev/null)"
+
+# The verification run gate (#1529) is asked at the merge, about the exact pinned command: its
+# records are about a head, so a verdict read before the wait would be about a head that may move.
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1529 a merge the verification run gate refuses stops the helper" "1" "$rc"
+check "#1529 in the gate's words" "has a passing verification run there" "$out"
+check "#1529 and the stop names the gate" "require-verification-run.sh refused" "$out"
+check_eq "#1529 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+printf 'Verification merge check, warn mode, so this merge is allowed. PR #7 would be refused in block mode.' > "$ST/verify-gate-context"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1529 a warn mode allow lets the merge through" "0" "$rc"
+check "#1529 the verification gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/verify-gate-payloads" 2>/dev/null)"
+check "#1529 and the warn verdict it hands back is shown in the log, not dropped" "would be refused in block mode" "$out"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that

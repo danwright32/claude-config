@@ -654,91 +654,14 @@ esac
 # by the remedy it names (L11, L109).
 [ -z "$head_sha" ] && deny "PR #$number reads green, but gh did not report its head commit, so this merge cannot be pinned to the commit those checks were actually run for. A rollup is about the pull request, not about a commit, and it is read a moment before the merge: without the pin, a push landing in between is merged unjudged and looks identical afterwards. Check which commit is at the head and that its checks are the green ones, then merge with ALLOW_UNPINNED_MERGE=1 <the same command>."
 
-# Where the gh invocation's OWN words are in the command, as "start end" character offsets (#382).
-#
-# The pin has to be read from, and suggested into, exactly that stretch. The whole line used to
-# serve for both, and they failed together: a piped merge was told to run
-# `gh pr merge 305 --squash 2>&1 | cat --match-head-commit <sha>`, which hands the flag to cat, and
-# the reading below then found the flag in that line and let the unpinned merge through with
-# nothing saying so. Fixing only the suggestion would leave the next hand written copy of the same
-# mistake accepted.
-#
-# The invocation ends at the first unquoted pipe, `&`, `;`, redirection, parenthesis or newline, and
-# a file descriptor number written against its redirection (the 2 of `2>&1`) belongs to the
-# redirection. Quotes are tracked, so a `--body` holding a pipe or a semicolon does not end it.
-#
-# Its one blind spot, stated rather than hidden: a heredoc body is scanned as if it were commands, so
-# a body line that itself begins `gh pr merge` would be taken for the invocation. The matcher that
-# decided this is a merge strips bodies first, and in that shape the pin is read from the body line,
-# finds nothing, and refuses, so the blind spot can only refuse a merge, never let one through.
-merge_invocation_bounds() {  # $1 = command ; prints "start end", or fails when there is none
-  local cmd="$1" n=${#1} i=0 c="" quote="" start=0 end seg
-  local fd='[[:space:]]([0-9]+)$'
-  while [ "$i" -le "$n" ]; do
-    c="${cmd:$i:1}"   # empty at i == n, so the end of the command closes the last invocation
-    if [ -n "$quote" ]; then
-      if [ "$c" = "\\" ] && [ "$quote" = '"' ]; then i=$((i + 2)); continue; fi
-      [ "$c" = "$quote" ] && quote=""
-      i=$((i + 1)); continue
-    fi
-    case "$c" in
-      "\\") i=$((i + 2)); continue ;;
-      "'"|'"') quote="$c" ;;
-      ""|"|"|"&"|";"|">"|"<"|"("|")"|$'\n')
-        seg="${cmd:$start:$((i - start))}"
-        # Which stretch runs the merge is the one reading of gh's (ps_runs_gh, claude-config#1188):
-        # past assignments, rtk, env and sudo, and gh's flags written in front of the subcommand, so
-        # `gh -R o/x pr merge 7` is told where its flag goes like any other merge.
-        if case "$seg" in *merge*) true ;; *) false ;; esac && ps_runs_gh "$seg" pr merge; then
-          end=$i
-          if [ "$c" = ">" ] || [ "$c" = "<" ]; then
-            [[ "$seg" =~ $fd ]] && end=$((end - ${#BASH_REMATCH[1]}))
-          fi
-          while [ "$end" -gt "$start" ]; do
-            case "${cmd:$((end - 1)):1}" in
-              " "|$'\t') end=$((end - 1)) ;;
-              *) break ;;
-            esac
-          done
-          printf '%s %s' "$start" "$end"
-          return 0
-        fi
-        start=$((i + 1))
-        ;;
-    esac
-    i=$((i + 1))
-  done
-  return 1
-}
-
-bounds=""
-invocation=""
-case "$MT_API_ROUTE" in
-  rest|graphql)
-    # Read from the API call's own words by lib/merge-selector.py: `-f sha=<commit>` on the REST
-    # endpoint, `expectedHeadOid` in the mutation's input (written there or passed as a variable).
-    pinned_sha="$MT_API_PIN"
-    case "$pinned_sha" in *[!0-9a-fA-F]*) pinned_sha="" ;; esac
-    ;;
-  *)
-    bounds=$(merge_invocation_bounds "$command") || bounds=""
-    if [ -n "$bounds" ]; then
-      inv_start=${bounds% *}
-      inv_end=${bounds#* }
-      invocation="${command:$inv_start:$((inv_end - inv_start))}"
-    fi
-    pinned_sha=$(printf '%s' "$invocation" \
-      | grep -oE '\-\-match-head-commit[[:space:]=]+[0-9a-fA-F]+' \
-      | grep -oE '[0-9a-fA-F]+$' | awk 'NR <= 1')
-    # A merge behind env or sudo is not one this scan finds at the head of a command, so where it
-    # found no invocation the pin is the one lib/merge-selector.py read from the merge's own words,
-    # which stop at the first pipe or separator just as this scan does (claude-config#1181).
-    if [ -z "$bounds" ] && [ -z "$pinned_sha" ]; then
-      pinned_sha="$MT_API_PIN"
-      case "$pinned_sha" in *[!0-9a-fA-F]*) pinned_sha="" ;; esac
-    fi
-    ;;
-esac
+# The commit this merge pins, read by lib/merge-target.sh's mt_merge_pin, which holds the reasoning
+# (#382, claude-config#1181): only the gh pr merge invocation's own words count, or the API call's.
+# The verification merge check reads the same answer (claude-config#1529), so a flag after a pipe
+# pins nothing for either gate (L613).
+mt_merge_pin "$command"
+bounds="$MT_PIN_BOUNDS"
+inv_end="$MT_PIN_INV_END"
+pinned_sha="$MT_PIN_SHA"
 
 if [ -z "$pinned_sha" ]; then
   # The flag goes on the gh invocation itself, before any pipe, redirection or later command, so the
