@@ -2379,7 +2379,7 @@ const asleepRecord = (extra: Record<string, unknown> = {}) =>
 const interactive = (sessionId: string): Session => ({ sessionId, extra: { 'scope-modes': { isInteractive: true } } })
 
 // The shared merge and deploy lists (#843), as installed with the payload.
-const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.json'
+const LISTS_PATH = '/Users/x/.claude/mods/sleep-repos.local.json'
 const listsFile = (mergeOnly: { repo: string; mergeDeploys?: boolean }[], mayDeploy: string[] = []) => JSON.stringify({ v: 1, mergeOnly, mayDeploy }, null, 2) + '\n'
 
 test('/sleep writes the record whole, enrols the interactive sessions, and the band shows ASLEEP', withSteps, async ($, on) => {
@@ -4124,18 +4124,18 @@ test('a lists file that is missing closes every repository, and asks nothing', w
   const { w, clock } = world(on, { githubRepos: { default: ['o/r'] } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(r.text).toMatch(asRegExp('Merging and deploying are off for every repository tonight: mods/sleep-repos.json is missing.'))
+  expect(r.text).toMatch(asRegExp('Merging and deploying are off for every repository tonight: mods/sleep-repos.local.json is missing.'))
   expect(w.asked).toEqual([])
-  expect(closedNotes(w).map(n => n.questions)).toEqual([['Merging and deploying were off for every repository tonight: mods/sleep-repos.json is missing. Fix mods/sleep-repos.json.']])
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and mods/sleep-repos.json is missing, so tonight'))
+  expect(closedNotes(w).map(n => n.questions)).toEqual([['Merging and deploying were off for every repository tonight: mods/sleep-repos.local.json is missing. Fix mods/sleep-repos.local.json.']])
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and mods/sleep-repos.local.json is missing, so tonight'))
 })
 
 test('a lists file that does not parse closes every repository, the listed ones too', withDeps, async ($, on) => {
   const { w, clock } = world(on, { files: { [LISTS_PATH]: '{"v":1,"mergeOnly":[{"repo":"o/r"' }, githubRepos: { default: ['o/r'] } })
   await start($ as never, clock)
-  expect((await command($ as never, 'sleep')).text).toMatch(asRegExp('every repository tonight: mods/sleep-repos.json is not JSON.'))
+  expect((await command($ as never, 'sleep')).text).toMatch(asRegExp('every repository tonight: mods/sleep-repos.local.json is not JSON.'))
   expect(w.asked).toEqual([])
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('and mods/sleep-repos.json is not JSON, so tonight it neither merges nor deploys'))
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('and mods/sleep-repos.local.json is not JSON, so tonight it neither merges nor deploys'))
 })
 
 test('an entry that could not be checked with GitHub is closed, and said as not checked, never as unknown (L11)', withDeps, async ($, on) => {
@@ -4185,7 +4185,7 @@ test('an entry GitHub does not know under any account is closed for the night', 
 test('a repository first met after sleep began is closed and noted once', withDeps, async ($, on) => {
   const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
   await start($ as never, clock)
-  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and o/r is on neither list in mods/sleep-repos.json, so tonight it neither merges nor deploys.'))
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(asRegExp('Blocked overnight: this would merge a PR, and o/r is on neither list in mods/sleep-repos.local.json, so tonight it neither merges nor deploys.'))
   expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
   // Its own --repo is judged by that repository's place on the lists, which lets it merge; it is
@@ -5125,7 +5125,7 @@ test('a bedtime answer given after the wait that cannot be saved is noted for th
   answer('Allowed to deploy')
   await clock.settle()
   const lost = w.appended.map(a => JSON.parse(a.line) as Record<string, unknown>).filter(n => n.kind === 'question' && /was not saved/.test(String((n.questions as string[])[0])))
-  expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.json is missing. Choose again at the next /sleep.'])
+  expect(lost.map(n => (n.questions as string[])[0])).toEqual(['Your answer about o/r ("Allowed to deploy") was not saved: mods/sleep-repos.local.json is missing. Choose again at the next /sleep.'])
 })
 
 test('a /sleep that takes the marker just after another finished reads the record again, and asks nothing', withDeps, async ($, on) => {

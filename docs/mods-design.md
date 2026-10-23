@@ -1481,7 +1481,7 @@ overnight; paraphrased, because his words name it, #1568). Merge and deploy as i
 `PlayedItApp/playedit` and `nursedexapp/nursedex`. Any other repository (eavesly-web-app, for one)
 is still asked once at bedtime and closed if unanswered.
 
-- One shared file, `payload/mods/sleep-repos.json`, two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
+- One file, `payload/mods/sleep-repos.json` until #1568 and each Mac's own `~/.claude/mods/sleep-repos.local.json` since (it names work repositories), two lists: `mergeOnly` (`{ repo, mergeDeploys }`)
   and `mayDeploy` (owner/name), and an optional third, `waitOwners` (owner names), every repository
   under which waits overnight whether or not a list names it. It matches the owner in any case and
   outranks both lists, so an entry under such an owner on either list is a conflict that waits, and
@@ -1491,14 +1491,17 @@ is still asked once at bedtime and closed if unanswered.
   file under `mods/` is mirrored both ways, so an answer one Mac writes into the installed copy
   reaches the repository and the other Mac, and each repository is asked once. (The issue had the
   answer committed to the development checkout instead; a file the sync carries both ways needs no
-  second writer.) Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
+  second writer.) #1568 gave that up: the file names work repositories and this repository is
+  public, so claude-sync moved each Mac's installed copy to the local name (MOVED_TO_LOCAL), and an
+  answer is now kept on the Mac that asked it, the other Mac asking its own. Only `mergeDeploys: false` lets a merge run overnight; left unsaid it reads as
   unknown, and the merge waits for the morning like a true one, its refusal saying the file does not
   record whether a merge there deploys (L72). Bidspoke and Slate are `mergeOnly` with
   `mergeDeploys: true` (Bidspoke's deploy workflow runs on a push to main, Slate's CI deploys from
   main), the thirteen above are `mayDeploy`, and `waitOwners` names the agency's organisation.
-  `tests/test-sleep-repos.sh` holds the shipped file to the reader's shape and to exactly that
-  decision, including that a repository of the agency's organisation no list names, or named in another case,
-  waits; the mod's own tests prove the reader applies the owner rule that way.
+  `tests/test-sleep-repos.sh` holds an invented file shaped like that decision to the reader's shape
+  and precedence (a repository of an owner that waits, named by no list or in another case, waits),
+  and this Mac's own file to the reader's shape when it has one; the mod's own tests prove the
+  reader applies the owner rule that way.
 - At `/sleep`, before the record is written and under the `preparing` marker: the file is read; each
   worker's repository (this session's, and each enrolled session's `repoRoot` from the registry) on
   neither list is asked about, one picker at a time, all of them sharing one 10 minute wait (a
