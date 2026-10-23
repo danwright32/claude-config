@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import { errorText } from './mod-kit/skew.ts'
 import type { Jobs, JobsEntry } from '../types/index.d.ts'
-import { assess, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
+import { assess, harnessFinished, holdRefusal, inFlight, isErrorLine, isPollLoop, leftoverLine, listedStatuses, notifiedTasks, parseVerdict, repeated, runFor, shortCommand, startedJob, startedTask, type InFlight, type Outcome, type Verdict } from './jobs.ts'
 
 // Background job watcher (claude-config#611). Every background job is recorded with its process
 // group, traced through the output file it writes (never by matching its command text, L1011), into
@@ -41,6 +41,14 @@ type Watch = {
   toldUnreadable: boolean
   toldUntraced: boolean
   toldLookFailed: boolean
+  /**
+   * #1517: what Claude Code last said of the job in the in flight list sent with a subagent's stop:
+   * its status there, or 'unlisted' when the stopping agent's own list left out a job that agent
+   * started. Undefined until a readable list says anything of it.
+   */
+  harness?: string
+  /** What the last measure of its processes found while it had not ended: its group runs, or unknown. */
+  measured?: 'runs' | 'unknown'
 }
 
 const MOD = 'job-watcher'
@@ -479,9 +487,18 @@ const lookAll = async ($: EngineInterface, live: Live) => {
 // meanwhile writes and says nothing (#706). quiet: a check before a job is named (#1387) leaves that
 // telling to the look, so a job just started is never said to be untraceable before a look has tried.
 const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet = false): Promise<boolean> => {
-  if (job.pgid !== null) return hasEnded($, job.pgid)
+  const found = await measure($, job, w, live, quiet)
+  // #1517: what was found of a job still on the record, for the reminder to say which it is.
+  if (found !== 'ended' && live()) w.measured = found
+  return found === 'ended'
+}
+const measure = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet: boolean): Promise<'ended' | 'runs' | 'unknown'> => {
+  if (job.pgid !== null) {
+    const runs = await runsNow($, job.pgid)
+    return runs === false ? 'ended' : runs ? 'runs' : 'unknown'
+  }
   const groups = await groupsHolding($, job.outputPath)
-  if (groups === 'nobody') return true
+  if (groups === 'nobody') return 'ended'
   // One group alone holding the file is the job's; two or more (a reader beside it) cannot be told
   // apart, so the job stays untraced rather than take a guess.
   if (Array.isArray(groups) && groups.length === 1 && groups[0] !== undefined) {
@@ -492,17 +509,60 @@ const ended = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet =
       jobs.set(job.id, { ...current, pgid: groups[0] })
       await publishSafely($)
     }
-    return false
+    return 'runs'
   }
   // An untraced job whose output file is no longer there has nothing left to watch: Claude Code
   // removes a task's output with the task, so the entry is stale, and was shown stuck for an hour on
   // 2026-10-05 (#784). Only a stat that says the file does not exist counts, never a failed one.
-  if (await isGone($, job.outputPath)) return true
+  if (await isGone($, job.outputPath)) return 'ended'
   if (live() && !quiet && !w.toldUntraced) {
     w.toldUntraced = true
-    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. Stop it with TaskStop if it is no longer needed.`)
+    const what = finishedByHarness(w) ? 'Claude Code has finished it, so TaskStop has no task to stop.' : 'Stop it with TaskStop if it is no longer needed.'
+    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) could not be traced to its process, so whether it has ended is unknown. ${what}`)
   }
-  return false
+  return 'unknown'
+}
+
+// #1517: Claude Code has finished the job by its own word (a list sent with a subagent's stop),
+// which alone never ends it: only the measure of its processes does. What it changes is the remedy.
+// TaskStop of a task Claude Code has finished answers "is not running" or "No task found" (both
+// measured on 2.1.309), so a job whose shell ended while what it started runs on in its group is
+// ended by its traced group (L1011), never by TaskStop.
+const finishedByHarness = (w: Watch | undefined): boolean => w?.harness !== undefined && harnessFinished(w.harness)
+const remedyFor = (job: Job, w: Watch | undefined): string =>
+  !finishedByHarness(w)
+    ? 'Stop it with TaskStop'
+    : w?.measured === 'runs' && job.pgid !== null
+      ? `TaskStop has no task to stop: end it with kill -TERM -${job.pgid}`
+      : 'TaskStop has no task to stop'
+// The one sentence the reminder says of a job Claude Code has finished but that has not ended.
+const finishedSentence = (job: Job, name: string, w: Watch | undefined): string =>
+  w?.measured === 'runs' && job.pgid !== null
+    ? `Claude Code has finished background job ${name}, but what it started still runs in its process group ${job.pgid}. ${remedyFor(job, w)}, or keep it with ${KEEP_CALL} and a reason, before you finish.`
+    : `Claude Code has finished background job ${name}, but whether anything it started still runs could not be read: ${
+        job.pgid === null ? 'it could not be traced to a process group' : `ps could not read its process group ${job.pgid}`
+      }. ${remedyFor(job, w)}: keep it with ${KEEP_CALL} and a reason if it is still needed; it is dropped once ${job.pgid === null ? 'nothing holds its output file' : 'its process group has ended'}.`
+
+// A job measured as ended leaves the record (#1517). One an agent left running after it ended is said
+// once to this conversation, with what Claude Code last said of it, since that agent will never read
+// Claude Code's own report of the end; one this conversation or a running agent owns is reported by
+// Claude Code itself, so the watcher says nothing of it.
+const endedNotice = (job: Job, w: Watch | undefined): string | undefined => {
+  if (!job.owner || liveAgents.has(job.owner.id)) return undefined
+  const said = w?.harness
+  const how =
+    said === 'unlisted'
+      ? 'Claude Code had stopped listing it when the agent stopped, so how it ended is not known'
+      : said !== undefined && harnessFinished(said)
+        ? `Claude Code last listed it as ${said}`
+        : 'how it ended is not known'
+  return `Background job ${job.id} (${shortCommand(job.command)}), left by agent ${job.owner.name}, has ended; ${how}.`
+}
+const drop = async ($: EngineInterface, job: Job) => {
+  // Said before the registry write, so a write that fails cannot lose it (lessons review of #634).
+  const notice = endedNotice(jobs.get(job.id) ?? job, watch.get(job.id))
+  if (notice) say(undefined, notice)
+  await forget($, job.id)
 }
 
 // Words from elsewhere (a guard's refusal, Claude's reason) set inside a sentence of the watcher's,
@@ -553,7 +613,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   }
   // A job that finished is Claude Code's to report; the watcher just stops watching it.
   if (await ended($, job, w, live)) {
-    if (live()) await forget($, job.id)
+    if (live()) await drop($, job)
     return
   }
   if (!live()) return
@@ -632,7 +692,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
       : a.state === 'repeating'
         ? `keeps repeating "${repeated(a)}"`
         : `has had no new output for ${Math.round(a.forMs / 60_000)} minutes`
-    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) ${what}. Stop it with TaskStop, or keep it if that is expected.`)
+    say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}) ${what}. ${remedyFor(jobs.get(job.id) ?? job, w)}, or keep it if that is expected.`)
   }
 }
 
@@ -641,11 +701,19 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
 // stop or keep it. Nothing is shown to Dan, and it stops once every running job is kept or ended.
 // Scoped to the loop reading it (#784): an agent is reminded of its own jobs, this session of its own
 // and of any an agent left running when it ended, each of those naming that agent.
+// #1517: a job Claude Code has finished is never called running: it gets a sentence of its own,
+// saying what still runs of it, or that this could not be read, and a remedy that can work.
 const unkeptReminder = (loop: string | undefined): string | undefined => {
   const unkept = [...jobs.values()].filter(j => !j.kept && loopOf(j.owner) === loop)
-  if (!unkept.length) return undefined
-  const named = unkept.map(j => `${j.id} (${shortCommand(j.command)}${j.owner && loop === undefined ? `, left by agent ${j.owner.name}` : ''})`).join(', ')
-  return `Still running and not kept: background ${unkept.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${unkept.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`
+  const labelOf = (j: Job) => `${j.id} (${shortCommand(j.command)}${j.owner && loop === undefined ? `, left by agent ${j.owner.name}` : ''})`
+  const running = unkept.filter(j => !finishedByHarness(watch.get(j.id)))
+  const parts: string[] = []
+  if (running.length) {
+    const named = running.map(labelOf).join(', ')
+    parts.push(`Still running and not kept: background ${running.length === 1 ? 'job' : 'jobs'} ${named}. Stop ${running.length === 1 ? 'it' : 'each'} with TaskStop, or keep it with ${KEEP_CALL} and a reason, before you finish.`)
+  }
+  for (const j of unkept) if (finishedByHarness(watch.get(j.id))) parts.push(finishedSentence(j, labelOf(j), watch.get(j.id)))
+  return parts.length ? parts.join(' ') : undefined
 }
 // #1387: a job is measured before it is named or held, never taken as running on the record alone.
 // The record learns of an end only from the minute's look or from Claude Code's end notice reaching
@@ -665,7 +733,7 @@ const stillRunning = async ($: EngineInterface, job: Job): Promise<boolean> => {
     $.ui.log(`job-watcher: could not check whether background job ${job.id} has ended: ${message(err)}`, { to: 'debug' })
     return true
   }
-  if (jobs.has(job.id)) await forget($, job.id)
+  if (jobs.has(job.id)) await drop($, job)
   return false
 }
 // Every unkept job the reminder to this loop would name, measured first.
@@ -1034,8 +1102,8 @@ export const register: Register = on => {
     if (!current) return { deny: `Background job ${id} ended while it was being kept, so there is nothing to keep.` }
     jobs.set(id, { ...current, kept })
     await publishSafely($)
-    const said = take(e.agentId)
     await dropEnded($, e.agentId)
+    const said = take(e.agentId)
     const reminder = unkeptReminder(e.agentId)
     if (reminder) {
       said.push(reminder)
@@ -1103,8 +1171,9 @@ export const register: Register = on => {
     // about unkept jobs rides on every one, a failed result included. A refusal can carry no
     // context, so its reminder goes into its row as it is appended (below).
     if (result.deny !== undefined) return result
-    const said = result.isError ? [] : take(agentId)
+    // Measured first, so a job found ended here is said on this same result (#1517).
     await dropEnded($, agentId)
+    const said = result.isError ? [] : take(agentId)
     const reminder = unkeptReminder(agentId)
     if (reminder) {
       said.push(reminder)
@@ -1123,7 +1192,21 @@ export const register: Register = on => {
   on('classic.SubagentStop', async ($, e, next) => {
     const agent = e.agent_id
     if (typeof agent !== 'string' || !agent) return next(e)
-    const listed = inFlight((e as { background_tasks?: unknown }).background_tasks)
+    const raw = (e as { background_tasks?: unknown }).background_tasks
+    const listed = inFlight(raw)
+    // #1517: what Claude Code says of each job on the record, read whether or not the stop goes
+    // ahead. A job the list names takes the status it is listed with. A job it leaves out is read as
+    // no longer known only when the stopping agent started it, since that agent's own list must name
+    // its own work however a later build scopes the list; another's job left out says nothing. An
+    // unreadable list says nothing of any job, and is said below.
+    const statuses = listedStatuses(raw)
+    if (statuses) {
+      for (const job of jobs.values()) {
+        const said = statuses.get(job.id)
+        if (said !== undefined) watchOf(job).harness = said
+        else if (job.owner?.id === agent) watchOf(job).harness = 'unlisted'
+      }
+    }
     let held: InFlight[]
     if (listed) {
       // The agent's own entry (a background agent is listed under its own id) is never its work.
@@ -1197,7 +1280,7 @@ export const register: Register = on => {
       const job = jobs.get(id)
       if (!job) continue
       try {
-        if (await ended($, job, watchOf(job), () => true)) await forget($, id)
+        if (await ended($, job, watchOf(job), () => true)) await drop($, job)
       } catch (err) {
         $.ui.log(`job-watcher: could not check background job ${id} after Claude Code reported it: ${message(err)}`, { to: 'debug' })
       }
