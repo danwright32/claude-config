@@ -59,6 +59,8 @@ set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
+# shellcheck source=lib/failure-handling.sh
+. "$HOOK_DIR/lib/failure-handling.sh" 2>/dev/null || exit 0
 
 LESSONS_FILE="${LESSONS_FILE:-$HOME/.claude/LESSONS.md}"
 COOLDOWN=90
@@ -183,11 +185,11 @@ TRIG_WHAT=(
   "a workflow job added with no timeout, so a hang runs to the platform's six hour default"
 )
 TRIG_RE1=(
-  '(^|[^[:alnum:]_])(catch[[:space:]]*[({]|except[[:space:]:])'
+  ''
   '(cron|setInterval|\.schedule\(|scheduleJob|CronCreate|BackgroundTasks|celery|sidekiq|queue\.(add|push|send))'
   '((app|router|server)\.(get|post|put|patch|delete)\(|export[[:space:]]+(async[[:space:]]+)?function[[:space:]]+(GET|POST|PUT|PATCH|DELETE)|@(app|router)\.route|addEventListener\([[:punct:]]fetch)'
   '(DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|TRUNCATE[[:space:]]|DELETE[[:space:]]+FROM|rm[[:space:]]+-rf|fs\.rm\(|unlinkSync|\.drop\()'
-  '(retry|retries|backoff|maxAttempts|exponential)'
+  ''
   '(parseInt|parseFloat|JSON\.parse|Number\()'
   '(waitForTimeout\(|setTimeout\(|Task\.sleep|Thread\.sleep|time\.sleep\(|usleep\(|(^|[^[:alnum:]_.])sleep[[:space:]]*(\(|[0-9]))'
   ''
@@ -222,15 +224,32 @@ TRIG_PATH=(
 # lines and answers by its exit status. Empty means the ordinary regex pair decides, exactly as
 # before, so nothing that existed changes shape.
 TRIG_FN=(
-  ''
+  'trig_error_path_returns_empty'
   ''
   ''
   'trig_destructive_data_op'
-  ''
+  'trig_retry_or_failure_handling'
   ''
   ''
   'trig_workflow_job_without_timeout'
 )
+
+# The two failure triggers ask lib/failure-handling.sh, the predicate the push gate and the lessons
+# review read too (claude-config#1477, L261, L370). They were word lists over every added line, so a
+# mocked response's field `retries_assumed: 2` in a Bidspoke test raised "new retry or
+# failure-handling logic", and a comment or a message saying "catch" or "except" counted as a catch.
+# The lib reads constructs, with string literal contents and comments removed; the empty return
+# beside a catch is matched on those same code only lines, so a "return []" in a comment is not one.
+trig_error_path_returns_empty(){   # $1 = a file holding the added lines  $2 = the path
+  fh_catch "$2" "$1" || return 1
+  # A here-string, never a pipe: `grep -q` leaving on its first match kills the writer with SIGPIPE,
+  # and under pipefail a large file then reads as no match (L183).
+  grep -Eqi -- "${TRIG_RE2[0]}" <<< "$(fh_code_only "$2" < "$1")"
+}
+
+trig_retry_or_failure_handling(){   # $1 = a file holding the added lines  $2 = the path
+  fh_retry "$2" "$1"
+}
 
 # A destructive data operation, less a file removing the temp directory IT created
 # (claude-config#578). On 2026-09-24 the plain regex fired on about eight pushes, every one a
@@ -331,7 +350,7 @@ for i in "${!TRIG_IDS[@]}"; do
     if [ -n "${TRIG_FN[$i]:-}" ]; then
       # The predicate reads the same file the regexes would, so it is subject to the same path
       # scope above and sees exactly the same lines.
-      "${TRIG_FN[$i]}" "$LINES_FILE" || continue
+      "${TRIG_FN[$i]}" "$LINES_FILE" "$f" || continue
     else
       grep -Eqi -- "${TRIG_RE1[$i]}" "$LINES_FILE" || continue
       if [ -n "${TRIG_RE2[$i]}" ]; then

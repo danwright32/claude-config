@@ -538,6 +538,32 @@ if grep -q 'wind_marker_case' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); el
 if grep -q 'export const wind' "$JUDGE_IN" 2>/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: the new source file in the commit never reached the judge"; fi
 if grep -q 'stray_untracked' "$JUDGE_IN" 2>/dev/null; then fail=$((fail+1)); echo "FAIL: an untracked file the commit does not take was shown to the judge"; else pass=$((pass+1)); fi
 
+# --- the failure path SPECIAL CASE reads the shared predicate (claude-config#1477) -----------------
+# The judge is told which files' added CODE handles failure, from lib/failure-handling.sh, so a word
+# like "Fail the run" in a test's label is not read as error handling, and a real catch still is.
+W="$(mk_repo)"
+( cd "$W" && mkdir -p lib tests \
+    && printf 'export async function load() {\n  try { return await fetchIt() } catch (e) { report(e); throw e }\n}\n' > lib/load.js \
+    && printf 'const options = ["Fail the run", "Skip"];\nexport const pick = (i) => options[i];\n' > lib/options.js \
+    && printf 'test("labels", () => { expect(pick(0)).toBe("Fail the run"); stats({ retries_assumed: 2 }); });\n' > tests/options.test.js \
+    && git add lib tests && git commit -qm "load and options" ) >/dev/null 2>&1
+JUDGE_IN="$TMPROOT/judge-failure-files"; rm -f "$JUDGE_IN"; rm -f "$TMPROOT/judge-failure-args"
+STUB_CLAUDE_STDIN="$JUDGE_IN" STUB_CLAUDE_ARGS="$TMPROOT/judge-failure-args" STUB_CLAUDE_OUT="$PASS_JSON" \
+  run_hook "$W" "git push"
+want_code 0 "a push with a catch and a failure worded label is judged"
+fh_line="$(grep -A3 '^FAILURE HANDLING FILES' "$JUDGE_IN" 2>/dev/null)"
+case "$fh_line" in
+  *lib/load.js*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); echo "FAIL: the judge was not told lib/load.js handles failure (got: [$fh_line])" ;;
+esac
+case "$fh_line" in
+  *options*) fail=$((fail+1)); echo "FAIL: a label reading 'Fail the run' was listed as failure handling: [$fh_line]" ;;
+  *) pass=$((pass+1)) ;;
+esac
+if grep -q 'FAILURE HANDLING FILES' "$TMPROOT/judge-failure-args" "$JUDGE_IN" 2>/dev/null \
+   && grep -q 'never makes a change error handling' "$TMPROOT/judge-failure-args" 2>/dev/null; then pass=$((pass+1))
+else fail=$((fail+1)); echo "FAIL: the rubric's failure path SPECIAL CASE does not point the judge at the FAILURE HANDLING FILES list"; fi
+
 # --- a push run from a SUBDIRECTORY is judged on the whole push (claude-config#1076) ----------------
 W="$(mk_repo)"; seed_source_and_test "$W"; mkdir -p "$W/docs"
 JUDGE_IN="$TMPROOT/judge-subdir"; rm -f "$JUDGE_IN"
