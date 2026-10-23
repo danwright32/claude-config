@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { checksOf, compactDue, LAVENDER, lookParts, span, unpushedOf } from '../hooks/facts.ts'
+import { checksOf, COMPACT_SAVES_TOKENS, compactLines, LAVENDER, lookParts, span, unpushedOf } from '../hooks/facts.ts'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -197,23 +197,61 @@ describe('lookParts', () => {
   })
 })
 
-describe('compactDue', () => {
-  test('context above 70% shows the Compact row', () => {
-    expect(compactDue({ contextPercent: 71, cacheExpiresAt: null, now, isWorking: false })).toBe(true)
-    expect(compactDue({ contextPercent: 70, cacheExpiresAt: null, now, isWorking: false })).toBe(false)
+// #1596: the row says why it shows. For the cache the remedy is any message, which reads the cache
+// and starts its hour again; Compact is offered for the cache only once the context is large enough
+// for compacting to cost less than the cold re-read it avoids (COMPACT_SAVES_TOKENS).
+describe('compactLines', () => {
+  const COMPACT = { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }
+  const small = { contextPercent: 18, contextTokens: 36_000 }
+  const large = { contextPercent: 45, contextTokens: COMPACT_SAVES_TOKENS }
+  const textOf = (lines: unknown[][]) => lines.map(l => l.map(p => ((p as { button?: string; label?: string; text?: string }).button ? `[ ${(p as { label: string }).label} ]` : (p as { text: string }).text)).join(''))
+  test('context above 70% says so and offers Compact', () => {
+    expect(compactLines({ contextPercent: 82, contextTokens: 164_000, cacheExpiresAt: null, now, isWorking: false })).toEqual([[{ text: 'context 82% ', color: 'warning' }, COMPACT]])
+    expect(compactLines({ contextPercent: 70, contextTokens: 140_000, cacheExpiresAt: null, now, isWorking: false })).toEqual([])
   })
-  test('the cache within 5 minutes of going cold shows it, and once cold it is gone', () => {
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 5 * MIN, now, isWorking: false })).toBe(true)
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 6 * MIN, now, isWorking: false })).toBe(false)
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now, now, isWorking: false })).toBe(false)
+  test('the cache near cold with a small context says to send any message, and offers no Compact', () => {
+    const lines = compactLines({ ...small, cacheExpiresAt: now + 4 * MIN, now, isWorking: false })
+    expect(textOf(lines)).toEqual(['cache goes cold in 4m: send any message to keep it warm'])
+    expect(lines.flat().some(p => 'button' in p)).toBe(false)
+    expect(lines[0]?.[0]).toMatchObject({ color: 'warning' })
+  })
+  test('the cache near cold with a context large enough for compacting to save offers Compact beside the message', () => {
+    expect(textOf(compactLines({ ...large, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))).toEqual(['cache goes cold in 4m: send any message to keep it warm, or [ Compact ]'])
+    expect(textOf(compactLines({ ...large, contextTokens: COMPACT_SAVES_TOKENS - 1, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))).toEqual(['cache goes cold in 4m: send any message to keep it warm'])
+  })
+  test('the size is read in tokens, never as a share: 18% of a million is past the line, 70% of 200,000 is not', () => {
+    expect(textOf(compactLines({ contextPercent: 18, contextTokens: 180_000, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))[0]).toMatch(/, or \[ Compact \]$/)
+    expect(textOf(compactLines({ contextPercent: 70, contextTokens: 140_000, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))[0]).not.toMatch(/Compact/)
+  })
+  test('a context of unknown size offers no Compact for the cache, since nothing says it would save', () => {
+    expect(textOf(compactLines({ contextPercent: undefined, contextTokens: undefined, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))).toEqual(['cache goes cold in 4m: send any message to keep it warm'])
+  })
+  test('both at once: the context line with its Compact, then the cache line, each reason said once', () => {
+    expect(textOf(compactLines({ contextPercent: 82, contextTokens: 164_000, cacheExpiresAt: now + 4 * MIN, now, isWorking: false }))).toEqual([
+      'context 82% [ Compact ]',
+      'cache goes cold in 4m: send any message to keep it warm',
+    ])
+  })
+  test('the cache row shows within 5 minutes of cold, and once cold it is gone', () => {
+    expect(compactLines({ ...small, cacheExpiresAt: now + 5 * MIN, now, isWorking: false })).toHaveLength(1)
+    expect(compactLines({ ...small, cacheExpiresAt: now + 6 * MIN, now, isWorking: false })).toEqual([])
+    expect(compactLines({ ...small, cacheExpiresAt: now, now, isWorking: false })).toEqual([])
+    expect(textOf(compactLines({ ...small, cacheExpiresAt: now + 30_000, now, isWorking: false }))).toEqual(['cache goes cold in <1m: send any message to keep it warm'])
   })
   // #697: while a main turn runs, every request it makes keeps the cache warm and Dan has nothing to
-  // do about it, so the cache alone brings no Compact row then. Context above 70% still does.
+  // do about it, so the cache alone brings no row then. Context above 70% still does.
   test('while a turn runs, the cache alone brings no row; context still does', () => {
-    expect(compactDue({ contextPercent: 10, cacheExpiresAt: now + 5 * MIN, now, isWorking: true })).toBe(false)
-    expect(compactDue({ contextPercent: 75, cacheExpiresAt: now + 5 * MIN, now, isWorking: true })).toBe(true)
+    expect(compactLines({ ...large, cacheExpiresAt: now + 5 * MIN, now, isWorking: true })).toEqual([])
+    expect(textOf(compactLines({ contextPercent: 75, contextTokens: 150_000, cacheExpiresAt: now + 5 * MIN, now, isWorking: true }))).toEqual(['context 75% [ Compact ]'])
   })
   test('no context reading yet and no cache is no row', () => {
-    expect(compactDue({ contextPercent: undefined, cacheExpiresAt: null, now, isWorking: false })).toBe(false)
+    expect(compactLines({ contextPercent: undefined, contextTokens: undefined, cacheExpiresAt: null, now, isWorking: false })).toEqual([])
+  })
+  test('the longest row fits an 80 column band', () => {
+    const widest = [
+      ...compactLines({ contextPercent: 100, contextTokens: 1_000_000, cacheExpiresAt: now + 5 * MIN, now, isWorking: false }),
+      ...compactLines({ contextPercent: 69, contextTokens: 690_000, cacheExpiresAt: now + 5 * MIN, now, isWorking: false }),
+    ]
+    for (const line of textOf(widest)) expect(line.length).toBeLessThanOrEqual(80)
   })
 })
