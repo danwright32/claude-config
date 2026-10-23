@@ -70,10 +70,23 @@
 # costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
 # hours by default, and the poll count bound the run, and is-it-live's window for a background merge
 # (WAIT_MS) is held at twice that deadline by test-merge-when-ready.sh (L227). Waiting changes only
-# WHEN an update is made; what merges is still exactly the head every gate judged, as above. A queue
-# across sessions, so only one helper per repository updates at a time, was the other remedy the
-# issue named and is not built: it would serialise only this Mac's helpers, not the other MacBook's
-# or a typed merge, and would need a holder that dies to be noticed (L409).
+# WHEN an update is made; what merges is still exactly the head every gate judged, as above.
+#
+# ONE HELPER PER REPOSITORY AT A TIME, IN TURN (claude-config#1515). Settling answers a base that
+# moves; it did not stop the helpers themselves moving it. On 2026-10-22 PET #1885 sat here about 112
+# minutes: its checks take about 23, and four other pull requests from parallel agents merged under
+# it, each putting it behind main and restarting them, until the main session told the other agents
+# to hold. So a run now takes the repository's turn (lib/merge-turn.sh, a queue under this Mac's own
+# state) at its first look, once the checks that need no wait have passed, and holds it through the
+# update, the checks, the review and the merge, giving it up once the merge lands or at any stop.
+# Another run waits for it, and says so as its own state, naming the holder and how long it has held
+# it, never as a wait on checks. A holder whose run has gone is passed over at once; one that has held
+# the turn for MWR_TURN_HOLD_SECONDS is passed over by a run waiting for it, and joins the line again,
+# so a stuck pull request cannot starve the rest either. The turn is asked again just before the
+# gates, so a run that lost it never merges under the one that has it. It orders only this Mac's
+# helpers: the other MacBook's, a typed merge and GitHub's merge queue never see it, and settling
+# still answers those. It decides the order of merges, never whether one is right, so a run that
+# cannot take a turn says so and goes on as before, and every gate judges every merge.
 #
 # WHAT IT REFUSES TO CARRY. Only the merge method is passed to gh, and --delete-branch is carried
 # out here once the merge has landed: the open pull requests based on the branch are moved onto the
@@ -91,8 +104,8 @@
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
 #      is gone), an update GitHub has still not shown four minutes after it, or a read GitHub
 #      refused or still did not answer after being asked again
-#   3  still waiting (on checks, the review, or a base still moving) when the deadline or the poll
-#      count ran out; running it again resumes
+#   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
+#      deadline or the poll count ran out; running it again resumes, at the back of the line
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
 #      based on it could not be moved, GitHub could not be read, or the branch holds commits the
 #      merge did not; running it again finishes the branch
@@ -136,7 +149,10 @@
 # may lag its branch's tip before the base is set again to resync it, and how long after that before
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
-# with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
+# with_retries), MWR_TURN_DIR (~/.claude/state/merge-turns: where the repositories' turns are kept)
+# and MWR_TURN_HOLD_SECONDS (3600: how long one pull request may hold the turn while another waits
+# for it, room for a check run of 15 to 30 minutes, a review and one update; a setting, not a
+# measurement), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
 # MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
 #
 # AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
@@ -166,6 +182,7 @@ NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
 HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"; [ "$HEARTBEAT" -ge 1 ] || HEARTBEAT=1
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
+TURN_HOLD="$(num_or "${MWR_TURN_HOLD_SECONDS:-}" 3600)"
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
 usage(){
@@ -208,6 +225,13 @@ cd "$top" || usage "could not enter $top."
 . "$MWR_LIB/gh-poll.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/gh-poll.sh, the polling policy every look follows, is missing. Nothing was merged." >&2; exit 1; }
 POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MAX" -ge "$POLL" ] || POLL_MAX="$POLL"
 interval="$POLL"
+# shellcheck source=merge-turn.sh
+. "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
+# A place in the line is given up however this run ends: a stop, a signal, or the end of the
+# script. Only a kill that cannot be caught leaves it, and the next run passes it over (see
+# merge-turn.sh). The signals exit, so the EXIT trap runs for them too.
+trap 'turn_leave' EXIT
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 for t in gh jq git; do
   command -v "$t" >/dev/null 2>&1 || { echo "merge-when-ready: $t is not on PATH. Nothing was merged." >&2; exit 1; }
 done
@@ -527,6 +551,8 @@ tidy_worktree(){
 finish_branch(){   # $1 = the sentence saying it merged; always stops
   local said="$1" left n why moved="" failed="" del rrc
   merged_now=1
+  # Merged: the turn is passed on now, not after the branch and worktree are tidied (#1515).
+  turn_leave
   [ -n "$want_delete" ] || stop 0 "$said."
   if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
     stop 0 "$said. Its branch $branch is in a fork, not in $slug, so no branch was deleted."
@@ -602,15 +628,19 @@ not_caught_up(){   # $1 = what GitHub shows
 # waits end at times of their own and keep POLL. A wait longer than the heartbeat is said again inside
 # it (nap), so the log is never quiet for longer than the heartbeat whatever the wait.
 wait_key=""; wait_since=0
-wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow
+#
+# $4, when given, is said with the line but is not part of it: a figure that grows at every look
+# (how long the turn's holder has held it, claude-config#1515) would otherwise make every look a
+# change, and the line would be said every look instead of on the heartbeat.
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow, $4 = what grows with the line
   local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
   if [ "$2" != "$last_status" ]; then
-    say "$2"; last_status="$2"; last_said="$t"; interval="$POLL"
+    say "$2${4:-}"; last_status="$2"; last_said="$t"; interval="$POLL"
   else
     [ -n "${3:-}" ] && interval="$(ghp_next_interval "$interval" "$POLL" "$POLL_MAX" 0)"
     if [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
-      say "$2 Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
+      say "$2${4:-} Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
     fi
   fi
   [ -n "${3:-}" ] && pause="$interval"
@@ -718,6 +748,63 @@ head_is_tip(){
 }
 tip_ok_for=""
 
+# THE REPOSITORY'S TURN (claude-config#1515, the queue itself is lib/merge-turn.sh). Returns 0 when
+# this run may go on: it holds the turn, or no turn could be taken. Returns 1 to wait, with the
+# wait's line in turn_line and the holder's growing time in turn_extra. The turn is taken at the
+# first look that finds the pull request open and past the checks that need no wait (the merge
+# method, the changelog record), and held through the update, the checks, the review and the merge,
+# because each of those is what a merge under it would throw away. It is given up once the merge
+# has landed, or at any stop. A run that cannot take one says so and goes on as the helper did
+# before: the turn only orders the helpers on this Mac, and every gate still judges every merge.
+turn_state=""; turn_waited_from=""; turn_line=""; turn_extra=""
+turn_say_passed(){
+  local l
+  [ -n "$TURN_SAID" ] || return 0
+  while IFS= read -r l; do [ -z "$l" ] || say "$l"; done <<<"$TURN_SAID"
+}
+turn_check(){
+  local t
+  [ "$turn_state" = off ] && return 0
+  t="$(now)"
+  if [ -z "$TURN_TICKET" ]; then
+    turn_open "$slug"
+    if ! turn_join "$pr" "$t"; then
+      turn_state=off
+      say "Could not take a turn to merge in $slug ($TURN_ERR), so this goes on without one, as it did before claude-config#1515: another helper on this Mac may merge under it."
+      return 0
+    fi
+  fi
+  turn_look "$t" "$TURN_HOLD"
+  turn_say_passed
+  if [ -n "$TURN_GONE" ]; then
+    say "#$pr's place in the line to merge in $slug is gone: a run waiting for the turn takes it over once one pull request has held it for $(mins "$TURN_HOLD"). Joining the line again."
+    TURN_TICKET=""; turn_state=""
+    if ! turn_join "$pr" "$t"; then
+      turn_state=off
+      say "Could not join the line to merge in $slug again ($TURN_ERR), so this goes on without a turn: another helper on this Mac may merge under it."
+      return 0
+    fi
+    turn_look "$t" "$TURN_HOLD"
+    turn_say_passed
+  fi
+  if [ "$TURN_MINE" = 1 ]; then
+    if [ "$turn_state" != held ]; then
+      if [ -n "$turn_waited_from" ]; then
+        say "It is #$pr's turn to merge in $slug now, after waiting $(dur $(( t - turn_waited_from ))) for it. Other helpers on this Mac wait until it has merged or stopped, for up to $(mins "$TURN_HOLD")."
+      else
+        say "Took the turn to merge in $slug: other helpers on this Mac wait until #$pr has merged or stopped, for up to $(mins "$TURN_HOLD")."
+      fi
+      turn_state=held; turn_waited_from=""
+    fi
+    return 0
+  fi
+  [ -n "$turn_waited_from" ] || turn_waited_from="$t"
+  turn_state=waiting
+  turn_line="Head ${head:0:7}: waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds ($TURN_AHEAD ahead of it in line)."
+  turn_extra=" #${TURN_HEAD_PR:-?} has held it for $(dur $(( t - ${TURN_HEAD_SINCE:-$t} ))), of the $(mins "$TURN_HOLD") any one pull request may hold it."
+  return 1
+}
+
 while :; do
   polls=$((polls + 1))
   [ "$polls" -le "$MAX_POLLS" ] || stop 3 "Out of time: $((polls - 1)) look(s) at #$pr without reaching a merge (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
@@ -757,6 +844,17 @@ while :; do
     if ! why="$(ask_gate "$CHANGELOG_GATE" "$(merge_text "$head")")"; then
       stop 1 "Stopped: require-changelog-tag.sh refused the merge of #$pr before any wait: $why Nothing was merged; run this again once that is dealt with."
     fi
+  fi
+
+  # The repository's turn, before any update, wait or lessons review is spent on a head another
+  # helper's merge would put behind (claude-config#1515). Each look while waiting still reads the
+  # pull request, so one merged or closed meanwhile stops here as it would have anyway.
+  if ! turn_check; then
+    out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
+    # Not a growing wait: the turn can pass at any look, and a waiter that looked only every few
+    # minutes would leave the repository idle for that long after the holder has merged.
+    wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" "" "$turn_extra"
+    continue
   fi
 
   # The first time a head is seen, confirm it is the branch's tip before an update, a wait or a
@@ -880,6 +978,9 @@ while :; do
   # Ready by every reading here, so confirm again that the head is the branch's tip, since a push can
   # land while the checks run and GitHub can fail to show it (claude-config#1458). The gates decide.
   head_is_tip || continue
+  # Still this run's turn, asked again at the last moment, since the look that took it may have been
+  # a minute and a review ago: a run that has lost it never merges under the one that has it.
+  turn_check || continue
   cmd="$(merge_text "$head")"
   if ! why="$(ask_gate "$RED_GATE" "$cmd")"; then
     stop 1 "Stopped: block-red-merge.sh refused the merge of #$pr at ${head:0:7}: $why"
