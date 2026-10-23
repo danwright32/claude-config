@@ -178,6 +178,25 @@ If the runner ends without stopping, `run_session.py stop <receipt id>` from the
 stops serve, runs the project's stop command and removes the worktree; the run's deadline does the
 same unattended.
 
+## The merge check
+
+`hooks/require-verification-run.sh` (claude-config#1529) judges every merge in a repository whose
+pull request's BASE commit holds `.claude/verification/areas.json`, through
+[scripts/merge_check.py](scripts/merge_check.py), which reads everything through
+`verification.py`. It reads areas.json and the guides from the base commit, so a pull request
+cannot change what judges it: a new file needs an owner merged first, and a guide the pull request
+edits counts only once it has merged. A merge passes when every changed file lands in exactly one
+bucket and each touched area's newest record at the head (or at an earlier commit whose later
+changes, in the pull request's own files, leave the area alone) passes every check and done when
+item, with its receipt on the merging machine showing serve stopped, a clean egress verdict, a
+build stamp equal to the record's commit, and a successful drive call for the area. The merge must
+pin that head with `--match-head-commit`.
+
+In `mode: warn` every merge is allowed, the full verdict reaches the session, and it is added to a
+tally per pull request under `~/.claude-verification/merge-tally/`. After five pull requests, and
+every five after, `hooks/verification-tally-notice.sh` asks Dan in the main session whether to switch
+the repository to `block`. The override is `ALLOW_UNVERIFIED_MERGE=1 <the same command>`.
+
 ## Not built yet
 
 These are what the merge check expects that nothing here can supply yet, said rather than faked:

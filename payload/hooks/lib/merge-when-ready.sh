@@ -19,8 +19,8 @@
 #
 # NOTHING HERE DECIDES A MERGE. The gates a typed merge meets cannot see a merge made inside a
 # script, so before it merges this hands the EXACT merge command it is about to run to the same
-# gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh and design-score-gate.sh,
-# as a hook payload, and merges only when every one allows it. Green, up to date, pinned, reviewed,
+# gates, block-red-merge.sh, pr-review-gate.sh, require-changelog-tag.sh, design-score-gate.sh and
+# require-verification-run.sh (#1529), as a hook payload, and merges only when every one allows it. Green, up to date, pinned, reviewed,
 # carrying its changelog record and, when it closes a Match the settled design issue, at 100% of its
 # design match score (#1364) are therefore judged by the one implementation of each rule, never by a
 # second copy here (L263, L370).
@@ -171,6 +171,7 @@ RED_GATE="${MWR_RED_GATE:-$MWR_HOOKS/block-red-merge.sh}"
 REVIEW_GATE="${MWR_REVIEW_GATE:-$MWR_HOOKS/pr-review-gate.sh}"
 CHANGELOG_GATE="${MWR_CHANGELOG_GATE:-$MWR_HOOKS/require-changelog-tag.sh}"
 DESIGN_GATE="${MWR_DESIGN_GATE:-$MWR_HOOKS/design-score-gate.sh}"
+VERIFY_GATE="${MWR_VERIFY_GATE:-$MWR_HOOKS/require-verification-run.sh}"
 REVIEW_LIB="${MWR_REVIEW_LIB:-$MWR_LIB/pr-review.sh}"
 SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
@@ -278,7 +279,7 @@ merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "
 # MWR_DELETE_BRANCH tells block-red-merge.sh this run was asked for --delete-branch, which the merge
 # command no longer carries, so the rerun command it suggests keeps it (claude-config#1351).
 ask_gate(){   # $1 = gate script, $2 = command text
-  local payload out rc reason
+  local payload out rc reason context
   payload="$(jq -nc --arg c "$2" --arg d "$top" '{session_id:"merge-when-ready",cwd:$d,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
   out="$(printf '%s' "$payload" | MWR_DELETE_BRANCH="$want_delete" bash "$1" 2>&1)"; rc=$?
   reason="$(printf '%s' "$out" | jq -r 'select(.hookSpecificOutput.permissionDecision == "deny") | .hookSpecificOutput.permissionDecisionReason' 2>/dev/null)"
@@ -286,6 +287,11 @@ ask_gate(){   # $1 = gate script, $2 = command text
     printf '%s' "${reason:-$out}"
     return 1
   fi
+  # An allow can carry what the gate wanted the session to read, as the verification run gate's warn
+  # mode verdict does (claude-config#1529). A typed merge hands that to the session; here it goes to
+  # this run's log, on stderr because the caller keeps stdout for a refusal's reason.
+  context="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  [ -n "$context" ] && say "${1##*/} allows the merge and says: $context" >&2
   return 0
 }
 
@@ -996,6 +1002,12 @@ while :; do
   # both halves of the design match score at this head (claude-config#1364).
   if ! why="$(ask_gate "$DESIGN_GATE" "$cmd")"; then
     stop 1 "Stopped: design-score-gate.sh refused the merge of #$pr at ${head:0:7}: $why"
+  fi
+  # Each area the pull request touches needs a passing verification run at this head, where the
+  # repository's base branch asks for them (claude-config#1529). Asked here only, never before the
+  # wait: a record is about a head, and the head can move while this waits.
+  if ! why="$(ask_gate "$VERIFY_GATE" "$cmd")"; then
+    stop 1 "Stopped: require-verification-run.sh refused the merge of #$pr at ${head:0:7}: $why"
   fi
   say "Head ${head:0:7} is green, up to date with $base and reviewed, and every merge gate allows it. Merging, pinned to that head."
   merge_out="$(gh_as "${merge_argv[@]}" --match-head-commit "$head" 2>&1)"; merge_rc=$?

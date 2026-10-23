@@ -14,6 +14,11 @@ the major version it knows and ignores keys it does not, so an additive change n
   guide (no version)      .claude/verification/guides/<area>.md, the fixed template
   verification-run/1      one fenced ```verification-run block per area in a PR comment
   verification-receipt/1  <home>/receipts/<id>/receipt.json, written only by run_session.py
+                          (and drives.jsonl beside it, one line per drive call)
+  verification-tally/1    <home>/merge-tally/<owner>/<name>.jsonl, the merge check's warn tally (#1529)
+
+The merge check (#1529) is merge_check.py beside this file: it judges a pull request through these
+readers and parses no format itself.
 
 CLI (every refusal prints `verification: <kind>: <message>` on stderr, one line per problem):
 
@@ -24,6 +29,7 @@ CLI (every refusal prints `verification: <kind>: <message>` on stderr, one line 
   verification.py record parse [--sha <40 hex>]             a comment body on stdin
   verification.py record render --pr-body <file>            a draft on stdin (see SKILL.md)
   verification.py receipt show <receipt id>
+  verification.py tally due [--mark]                        repositories due the switch to block question
   verification.py nonce
   verification.py whoami <nonce>
 
@@ -520,6 +526,38 @@ def record_blocks(body):
     return blocks
 
 
+def read_block(text, index=0):
+    """One ```verification-run block's text, read: (record or None, problems, area or None).
+
+    The area of a block that fails validation is kept when it can be read, so a reader choosing the
+    newest record for an area can tell that its newest block is broken rather than absent (L10).
+    """
+    try:
+        obj = json.loads(text)
+    except ValueError as e:
+        return None, [("record-not-json", "block %d is not JSON: %s" % (index, e))], None
+    area = obj.get("area") if isinstance(obj, dict) and isinstance(obj.get("area"), str) else None
+    try:
+        return validate_record(obj), [], area
+    except VerificationError as e:
+        return None, e.problems, area
+
+
+def comment_records(bodies):
+    """Every block across a pull request's comments, oldest first, valid or not (claude-config#1529).
+
+    Each entry is {comment, block, record, errors, area}: `record` is the validated record (with
+    `passed`) or None, `errors` its problems, `area` the area it names when that can be read.
+    """
+    out = []
+    for ci, body in enumerate(bodies):
+        for bi, text in enumerate(record_blocks(body)):
+            rec, errors, area = read_block(text, bi)
+            out.append({"comment": ci, "block": bi, "record": rec, "errors": errors,
+                        "area": rec["area"] if rec else area})
+    return out
+
+
 def parse_comment(body, sha=None):
     """Every record in one comment: the valid ones, and each invalid block with its problems.
 
@@ -531,15 +569,9 @@ def parse_comment(body, sha=None):
         fail("record-none", "the comment holds no ```verification-run block")
     records, invalid = [], []
     for i, text in enumerate(blocks):
-        try:
-            obj = json.loads(text)
-        except ValueError as e:
-            invalid.append({"index": i, "errors": [("record-not-json", "block %d is not JSON: %s" % (i, e))]})
-            continue
-        try:
-            rec = validate_record(obj)
-        except VerificationError as e:
-            invalid.append({"index": i, "errors": e.problems})
+        rec, errors, _area = read_block(text, i)
+        if rec is None:
+            invalid.append({"index": i, "errors": errors})
             continue
         if sha is not None:
             rec["sha_matches"] = rec["head_sha"] == sha
@@ -597,6 +629,158 @@ def load_receipt(receipt_id, home=None):
     if not isinstance(rec, dict) or rec.get("schema") != RECEIPT_SCHEMA:
         fail("receipt-schema-unsupported", "%s is not a %s receipt" % (path, RECEIPT_SCHEMA))
     return rec
+
+
+def load_drives(receipt_id, home=None):
+    """Every drive call a run logged, from drives.jsonl beside its receipt (claude-config#1529).
+
+    run_session.py appends one line per call: {at, area, args, exit}. A run with no log made no
+    call, which is an answer (no calls), not a fault. A line that is not that shape is named.
+    """
+    path = os.path.join(receipt_dir(receipt_id, home), "drives.jsonl")
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        fail("drives-unreadable", "%s could not be read: %s" % (path, e))
+    calls = []
+    for n, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError as e:
+            fail("drives-not-json", "%s line %d is not JSON: %s" % (path, n, e))
+        ok = isinstance(obj, dict) and isinstance(obj.get("area"), str) and \
+            isinstance(obj.get("exit"), int) and not isinstance(obj.get("exit"), bool)
+        if not ok:
+            fail("drives-bad-line", "%s line %d is not {area, exit}: %r" % (path, n, line[:200]))
+        calls.append(obj)
+    return calls
+
+
+# ---------------------------------------------------------------------------------------------
+# the warn tally (claude-config#1529)
+#
+# In `mode: warn` the merge check allows every merge and appends its verdict here, one line per
+# judgment, keyed by pull request; the latest line for a pull request is its verdict. A main session
+# hook asks Dan whether to switch a repository to block once TALLY_ASK_EVERY distinct pull requests
+# have been judged since he was last asked. Kept under VERIFICATION_HOME, never ~/.claude, because
+# the sync mirrors ~/.claude to a public repository and these lines name work repositories.
+
+TALLY_SCHEMA = "verification-tally/1"
+TALLY_ASK_EVERY = 5   # chosen, not measured: enough merges to see whether block would refuse them all
+SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def tally_dir(home=None):
+    return os.path.join(home or verification_home(), "merge-tally")
+
+
+def tally_file(slug, home=None):
+    if not isinstance(slug, str) or not SLUG_RE.match(slug) or ".." in slug.split("/"):
+        fail("tally-bad-repo", "%r is not an owner/name repository" % (slug,))
+    owner, name = slug.split("/")
+    return os.path.join(tally_dir(home), owner, name + ".jsonl")
+
+
+def tally_append(slug, pr, head_sha, passed, kinds, home=None):
+    path = tally_file(slug, home)
+    line = json.dumps({"schema": TALLY_SCHEMA, "repo": slug, "pr": int(pr), "head_sha": head_sha,
+                       "at": utc_now(), "passed": bool(passed), "kinds": sorted(set(kinds))}) + "\n"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # One write to a file opened for append, so two merges judged at once never interleave a line.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.write(fd, line.encode())
+    finally:
+        os.close(fd)
+
+
+def tally_summary(slug, home=None):
+    """{prs: {pr: latest entry}, unreadable_lines: n} for one repository's tally."""
+    path = tally_file(slug, home)
+    prs, bad = {}, 0
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+            pr = int(obj["pr"])
+        except (ValueError, KeyError, TypeError):
+            bad += 1
+            continue
+        if obj.get("schema") != TALLY_SCHEMA:
+            bad += 1
+            continue
+        prs[pr] = obj
+    return {"prs": prs, "unreadable_lines": bad}
+
+
+def tally_read(slug, home=None):
+    return tally_summary(slug, home)["prs"]
+
+
+def _asked_path(slug, home=None):
+    return tally_file(slug, home)[:-len(".jsonl")] + ".asked"
+
+
+def _asked_at(slug, home=None):
+    """How many pull requests the tally held when Dan was last asked; 0 when he never was."""
+    try:
+        with open(_asked_path(slug, home)) as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def tally_progress(slug, home=None, every=TALLY_ASK_EVERY):
+    """(pull requests judged so far, the count at which Dan is next asked) for one repository."""
+    return len(tally_read(slug, home)), _asked_at(slug, home) + every
+
+
+def tally_due(home=None, every=TALLY_ASK_EVERY, mark=False):
+    """Every repository whose tally has grown by `every` pull requests since Dan was last asked.
+
+    With `mark`, records each one as asked at its current count, so the next question waits for
+    `every` more pull requests rather than repeating on every tool call.
+    """
+    root = tally_dir(home)
+    due = []
+    for owner in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        odir = os.path.join(root, owner)
+        for name in sorted(os.listdir(odir)) if os.path.isdir(odir) else []:
+            if not name.endswith(".jsonl"):
+                continue
+            slug = "%s/%s" % (owner, name[:-len(".jsonl")])
+            try:
+                s = tally_summary(slug, home)
+            except VerificationError:
+                continue
+            asked = _asked_at(slug, home)
+            n = len(s["prs"])
+            if n < asked + every:
+                continue
+            counts = {}
+            for e in s["prs"].values():
+                for k in e.get("kinds") or []:
+                    counts[k] = counts.get(k, 0) + 1
+            passed = sum(1 for e in s["prs"].values() if e.get("passed") is True)
+            due.append({"repo": slug, "prs": n, "passed": passed, "refused": n - passed, "kinds": counts,
+                        "asked_at": asked, "unreadable_lines": s["unreadable_lines"]})
+            if mark:
+                tmp = _asked_path(slug, home) + ".tmp"
+                with open(tmp, "w") as f:
+                    f.write(str(n))
+                os.replace(tmp, _asked_path(slug, home))
+    return due
 
 
 def render_comment(draft, home=None, transcripts=None, pr_body=""):
@@ -830,6 +1014,9 @@ def _cmd(argv):
         return 0
     if argv[:2] == ["receipt", "show"] and len(argv) == 3:
         print(json.dumps(load_receipt(argv[2]), indent=2))
+        return 0
+    if argv[:2] == ["tally", "due"] and argv[2:] in ([], ["--mark"]):
+        print(json.dumps(tally_due(mark=argv[2:] == ["--mark"]), indent=2))
         return 0
     if argv == ["nonce"]:
         print(new_nonce())

@@ -1121,7 +1121,38 @@ for mode in present absent timeout forbidden silent chatty; do
     chatty) eq "$rc|$MT_REMOTE_STATE|$MT_REMOTE_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a long error is reported by its first non blank line" ;;
   esac
 done
+
+echo "merge-target: mt_api_read keeps what GitHub answered, read by mt_remote_path's rule (claude-config#1529)"
+# The merge check reads files, comments and a compare from GitHub, and needs their CONTENT, which
+# mt_remote_path throws away. One reader under both, so which answers count as absent and which are
+# asked again cannot drift between them (L370).
+export MT_GH_LOG="$ghstub/log"
+api_out="$ghstub/answer"
+for mode in present absent timeout forbidden; do
+  : > "$MT_GH_LOG"; printf 'stale' > "$api_out"
+  MT_PATH_MODE="$mode" PATH="$ghstub:$PATH" mt_api_read "$api_out" "" -H "Accept: application/vnd.github.raw" "repos/acme/widget/contents/x?ref=abc"; rc=$?
+  case "$mode" in
+    present) eq "$rc|$MT_READ_STATE|$MT_READ_ERR|$(cat "$api_out")" "0|ok||{}" "an answer lands in the file named" ;;
+    absent) eq "$rc|$MT_READ_STATE" "0|absent" "gh's own 404 is an answer: absent" ;;
+    timeout) eq "$rc|$MT_READ_STATE" "2|unknown" "a timeout is worth asking again" ;;
+    forbidden) eq "$rc|$MT_READ_STATE|$MT_READ_ERR" "1|unknown|gh: Resource not accessible by integration (HTTP 403)" "a refusal is believed, in GitHub's words" ;;
+  esac
+done
+eq "$(cat "$MT_GH_LOG")" "api -H Accept: application/vnd.github.raw repos/acme/widget/contents/x?ref=abc" "every argument reaches gh api as given"
 rm -rf "$ghstub"
+
+echo "merge-target: mt_merge_pin, the one reading of the commit a merge pins (claude-config#1529)"
+# block-red-merge.sh read the pin inline; the verification merge check needs the same answer, and a
+# second reading is how a flag after a pipe came to count in one gate and not the other (#382, L613).
+pin_of(){ ( mt_api_merge_untold "$1" >/dev/null 2>&1; mt_merge_pin "$1"; printf '%s|%s' "$MT_PIN_SHA" "${MT_PIN_BOUNDS:+found}" ); }
+eq "$(pin_of "$MERGE 7 --squash --match-head-commit abc123")" "abc123|found" "a pin on the merge itself"
+eq "$(pin_of "$MERGE 7 --squash --match-head-commit=abc123")" "abc123|found" "a pin written with ="
+eq "$(pin_of "$MERGE 7 --squash")" "|found" "no pin"
+eq "$(pin_of "$MERGE 7 --squash 2>&1 | cat --match-head-commit abc123")" "|found" "a flag after a pipe pins nothing"
+eq "$(pin_of "gh api -X PUT repos/acme/widget/pulls/7/merge -f sha=abc123")" "abc123|" "the REST merge's sha="
+pin_cmd="$MERGE 7 --squash"
+mt_api_merge_untold "$pin_cmd" >/dev/null 2>&1; mt_merge_pin "$pin_cmd 2>&1 | tail -1"
+eq "$MT_PIN_INV_END" "${#pin_cmd}" "where the invocation ends, for a suggestion that puts the flag on it"
 
 echo "merge-target: mt_retry_read asks again only on a transient failure, inside its deadline (claude-config#1081)"
 tries_left=0; calls=0
