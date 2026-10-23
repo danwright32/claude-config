@@ -1867,8 +1867,9 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   another clause ("the deploy did not finish, so it's waiting on you") does not hide it. When one is there and no unfinished step is on a card Dan can see
   (a card carried from an earlier session is held, not shown, so it does not count), the turn end
   is blocked with: check it against the current state, pin it with the steps tool, say in one line
-  that it is on the card, or say that nothing is left for Dan. Never twice in one chain of turn
-  ends (`stop_hook_active`), so it cannot loop; never in a -p run or the SDK, which have no steps
+  that it is on the card, or say that nothing is left for Dan. Never twice in one turn, so it cannot
+  loop (since #1608 read from the turn's transcript, `stop_hook_active` only where the transcript
+  cannot be read, below); never in a -p run or the SDK, which have no steps
   tool; a block from a Stop hook beneath (winding down) is kept beside it. A card that cannot be
   read is logged and the turn end passes, rather than sending Claude to pin a card that may be
   there.

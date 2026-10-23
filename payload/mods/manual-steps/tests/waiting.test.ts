@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'claude-code/testing'
 import { waitingPhrase } from '../hooks/waiting.ts'
 
-// #863: what in Claude's own final message says a step is waiting on Dan. Narrow on purpose: it was
-// measured on real turn final messages before it shipped (docs/mods-design.md "Manual steps"), so a
-// change here is measured again rather than widened by guesswork (L172, L36).
+// #863: what in a message of Claude's says a step is waiting on Dan, judged on every message of the
+// turn since #1608. Narrow on purpose: each phrase was measured on real turns before it shipped
+// (docs/mods-design.md "Manual steps"), so a change here is measured again rather than widened by
+// guesswork (L172, L36).
 
 describe('waitingPhrase', () => {
   test('the 2026-10-06 wording that left Dan with a command he never saw', () => {
