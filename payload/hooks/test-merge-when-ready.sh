@@ -84,6 +84,8 @@ case "$*" in
     printf '%s\n' "$(rd clock)" >> "$ST/resyncs"
     if [ -e "$ST/resync-takes" ]; then
       rd branch-tip > "$ST/head"; printf '%s' "$(rd rollup-after-resync)" > "$ST/rollup"
+      # behind-after-resync: the head GitHub now shows is an update's, which holds the base.
+      [ -s "$ST/behind-after-resync" ] && cp "$ST/behind-after-resync" "$ST/behind"
     fi
     printf '{"number":7,"base":{"ref":"main"}}\n'
     ;;
@@ -102,6 +104,12 @@ case "$*" in
   "api repos/acme/widget/git/ref/heads/main"*)
     [ -e "$ST/base-hidden" ] && { echo '{"message":"Not Found","status":"404"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     printf '{"ref":"refs/heads/main","object":{"sha":"%s","type":"commit"}}\n' "$(rd main-tip)"
+    ;;
+  # The merged pull requests, as check-stale-worktrees.sh asks for them (claude-config#1521), already
+  # in the shape its --jq makes: merged-list holds "<branch><TAB><head><TAB><number>" lines.
+  "pr list --state merged"*)
+    [ -e "$ST/merged-list-fails" ] && { echo "gh: simulated failure" >&2; exit 1; }
+    cat "$ST/merged-list" 2>/dev/null
     ;;
   "pr list"*)
     fail_read list
@@ -136,13 +144,36 @@ case "$*" in
     fail_read runs
     if [ -s "$ST/runs" ]; then cat "$ST/runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
     ;;
+  # The repository's settings, for the merge methods it allows (claude-config#1476): methods holds the
+  # JSON GitHub answers with, all three allowed when unset, as PET and claude-config answered on
+  # 2026-10-22.
+  "api repos/acme/widget")
+    fail_read repo
+    if [ -s "$ST/methods" ]; then cat "$ST/methods"; echo
+    else printf '%s\n' '{"full_name":"acme/widget","allow_squash_merge":true,"allow_merge_commit":true,"allow_rebase_merge":true}'; fi
+    ;;
   "pr update-branch"*)
     [ -e "$ST/update-fails" ] && { echo "GraphQL: merge conflict between base and head (updatePullRequestBranch)" >&2; exit 1; }
     printf '%s\n' "$(rd clock)" >> "$ST/update-times"
+    # update-unseen: GitHub accepts the update, but its record of the pull request never shows it
+    # (claude-config#1500, PET #1885 on 2026-10-22): the head and the distance behind stay as they
+    # were. With branch-moves the branch itself moves to the next head, as PET's did, and without it
+    # the branch does not move either.
+    if [ -e "$ST/update-unseen" ]; then
+      if [ -e "$ST/branch-moves" ]; then
+        nh="$(head -1 "$ST/next-heads")"; tail -n +2 "$ST/next-heads" > "$ST/next-heads.tmp"; mv "$ST/next-heads.tmp" "$ST/next-heads"
+        printf '%s' "$nh" > "$ST/branch-tip"
+      fi
+      exit 0
+    fi
     nh="$(head -1 "$ST/next-heads")"; tail -n +2 "$ST/next-heads" > "$ST/next-heads.tmp"; mv "$ST/next-heads.tmp" "$ST/next-heads"
     printf '%s' "$nh" > "$ST/head"; printf '0' > "$ST/behind"; cat "$ST/rollup-after-update" > "$ST/rollup"
     ;;
   "pr merge"*)
+    # gh refuses a merge naming no method when nothing can ask which (claude-config#1476).
+    case " $* " in *" --squash "*|*" -s "*|*" --merge "*|*" -m "*|*" --rebase "*|*" -r "*) ;;
+      *) echo "--merge, --rebase, or --squash required when not running interactively" >&2; exit 1 ;;
+    esac
     pinned="$(printf '%s\n' "$*" | sed -nE 's/.*--match-head-commit ([0-9a-f]+).*/\1/p')"
     # GitHub refuses to merge a pull request whose head is not its branch's tip, whatever the pin
     # (Bidspoke #2577, claude-config#1458).
@@ -1111,6 +1142,293 @@ out="$(MWR_DEADLINE_SECONDS=60 run 7 --squash)"; rc=$?
 check_eq "#1458 a lag wait that reaches the deadline ends resumable" "3" "$rc"
 check "#1458 saying what it waited for" "Out of time" "$out"
 check_eq "#1458 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# =================================================================================================
+# 17. An update GitHub's record of the pull request does not show (claude-config#1500). During
+#     GitHub's 2026-10-22 incident PET #1885's branch moved to 9e50f0c when it was updated, but the
+#     pull request kept showing 60a80b8 for over 45 minutes, mergeable UNKNOWN and no CI run started,
+#     and the helper read the unmoved head as still behind and updated it seven more times, then
+#     stopped on a 404 reading the compare. The fake's update-unseen is that: the update is accepted
+#     and the pull request's head and distance behind stay as they were.
+# =================================================================================================
+el(){ printf '%s' "$(( $(cat "$ST/clock") - 1000000 ))"; }
+
+# The branch moved and the pull request never shows it: one update, a wait, the one re-set of the
+# base #1458 makes for a lag, a wait for that, then a plain stop. Never a second update.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; : > "$ST/update-unseen"; : > "$ST/branch-moves"
+out="$(MWR_HEARTBEAT_SECONDS=60 run 7 --squash)"; rc=$?
+check_eq "#1500 a pull request that never shows its update stops, needing a person" "1" "$rc"
+check_eq "#1500 updated once, never again while its head has not moved" "1" "$(count gh-calls 'pr update-branch 7')"
+check_not "#1500 the unmoved head is never counted as a second update" "update 2" "$out"
+check "#1500 it says the pull request has not caught up with its branch" "#7 has not caught up with its branch" "$out"
+check "#1500 and names both commits while it waits" "GitHub still shows head ${OLD:0:7}, but branch feat/x is at ${NEW:0:7}" "$out"
+check "#1500 the wait says it will not update again" "without updating again" "$out"
+check_eq "#1500 the base is set again once, two minutes into the lag" "1000150" "$(cat "$ST/resyncs" 2>/dev/null)"
+check "#1500 the stop is plain" "Stopped: #7 has not caught up with its branch" "$out"
+check_eq "#1500 two minutes after the re-set" "270" "$(el)"
+check_eq "#1500 nothing merged" "0" "$(count gh-calls 'pr merge')"
+check "#1476 the wait for the update to show is heard from while it lasts" "Still waiting" "$(grep 'has not caught up' <<<"$out")"
+
+# The same lag, and the re-set takes: the branch's tip, which holds main, is waited on and merged.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; : > "$ST/update-unseen"; : > "$ST/branch-moves"
+: > "$ST/resync-takes"; printf '%s' "$GREEN" > "$ST/rollup-after-resync"; printf 0 > "$ST/behind-after-resync"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 a lag after an update that the re-set clears ends in the merge" "0" "$rc"
+check_eq "#1500 with the one update" "1" "$(count gh-calls 'pr update-branch 7')"
+check "#1500 of the branch's tip" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+
+# Neither the pull request nor its branch shows the update: waited on, never updated again, and a
+# plain stop four minutes after the update (the two lag windows #1458 allows a lag in all).
+fresh "$OLD" 1 "$GREEN"
+: > "$ST/update-unseen"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 an update nothing shows stops, needing a person" "1" "$rc"
+check_eq "#1500 updated once" "1" "$(count gh-calls 'pr update-branch 7')"
+check "#1500 saying it has not caught up" "#7 has not caught up with its branch" "$out"
+check "#1500 in a plain stop" "Stopped: #7 has not caught up" "$out"
+check_eq "#1500 four minutes after the update" "240" "$(el)"
+check_eq "#1500 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Control: GitHub shows the update during that wait, and the new head is merged with no second update.
+fresh "$OLD" 1 "$GREEN"
+: > "$ST/update-unseen"
+printf '%s\n%s\n' ":" "printf '%s' '$NEW' > \"\$ST/head\"; printf 0 > \"\$ST/behind\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 control: an update GitHub shows late is merged" "0" "$rc"
+check_eq "#1500 control: after one update" "1" "$(count gh-calls 'pr update-branch 7')"
+check "#1500 control: pinned to the head it shows" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+
+# A 404 reading the compare just after an update is GitHub catching up, so it is waited through.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; printf '%s' "$GREEN" > "$ST/rollup-after-update"
+printf '%s\n' "printf 'gh: Not Found (HTTP 404)\ngh: Not Found (HTTP 404)\n' > \"\$ST/compare-fails\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 a 404 comparing just after an update is waited through" "0" "$rc"
+check "#1500 saying the pull request has not caught up" "has not caught up" "$out"
+check "#1500 and the updated head merges" "--match-head-commit $NEW" "$(grep 'pr merge' "$ST/gh-calls")"
+check_eq "#1500 after one update" "1" "$(count gh-calls 'pr update-branch 7')"
+
+# A 404 that lasts: a plain stop, four minutes after the update.
+fresh "$OLD" 1 "$GREEN"
+printf '%s\n' "$NEW" > "$ST/next-heads"; printf '%s' "$GREEN" > "$ST/rollup-after-update"
+printf '%s\n' "printf 'gh: Not Found (HTTP 404)' > \"\$ST/compare-down\"" > "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 a 404 that lasts after an update stops" "1" "$rc"
+check "#1500 saying the pull request has not caught up" "Stopped: #7 has not caught up" "$out"
+check "#1500 and that GitHub cannot compare it" "404" "$(grep 'Stopped' <<<"$out")"
+check_eq "#1500 four minutes after the update" "240" "$(el)"
+check_eq "#1500 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Control: a 404 with no update in this run is not a lag, and stops at once as before.
+fresh "$OLD" 0 "$GREEN"
+printf 'gh: Not Found (HTTP 404)' > "$ST/compare-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1500 control: a 404 comparing with no update made stops" "1" "$rc"
+check "#1500 control: in the words it always used" "could not read whether #7 contains the tip of main" "$out"
+check_eq "#1500 control: at once" "0" "$(count sleeps .)"
+
+# =================================================================================================
+# 18. No merge method passed (claude-config#1476). On 2026-10-21 about a dozen PET merges reached a
+#     green, reviewed, up to date head and stopped on gh's "--merge, --rebase, or --squash required
+#     when not running interactively". Now the repository's own settings decide when they allow one
+#     method, and when they allow more it refuses before anything is waited on.
+# =================================================================================================
+only(){ printf '{"full_name":"acme/widget","allow_squash_merge":%s,"allow_merge_commit":%s,"allow_rebase_merge":%s}' "$1" "$2" "$3" > "$ST/methods"; }
+
+fresh "$OLD" 0 "$GREEN"; only true false false
+out="$(run 7)"; rc=$?
+check_eq "#1476 a repository allowing only squash merges with no method passed" "0" "$rc"
+check "#1476 by squash" "pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
+check "#1476 and the gates judge that command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/red-gate-payloads")"
+check "#1476 saying why" "squash, the only merge method acme/widget allows" "$out"
+
+fresh "$OLD" 0 "$GREEN"; only false false true
+out="$(run 7)"; rc=$?
+check_eq "#1476 rebase only: merged" "0" "$rc"
+check "#1476 by rebase" "pr merge 7 --repo acme/widget --rebase --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
+
+fresh "$OLD" 0 "$GREEN"; only false true false
+out="$(run 7)"; rc=$?
+check_eq "#1476 merge commits only: merged" "0" "$rc"
+check "#1476 by merge commit" "pr merge 7 --repo acme/widget --merge --match-head-commit $OLD" "$(cat "$ST/gh-calls")"
+check "#1476 named as a merge commit" "Merging by merge commit, the only merge method acme/widget allows" "$out"
+
+# All three allowed, as PET and claude-config do: nothing decides, so it refuses before any wait.
+fresh "$OLD" 2 "$PENDING"
+out="$(run 7)"; rc=$?
+check_eq "#1476 several methods allowed and none passed is refused" "64" "$rc"
+check "#1476 naming the methods the repository allows" "acme/widget allows squash, merge commit and rebase merges" "$out"
+check "#1476 and the command to run instead" "merge-when-ready.sh 7 --repo acme/widget --squash" "$out"
+check_eq "#1476 before any update, wait, review or merge" "0 0 0 0" "$(count gh-calls 'pr update-branch') $(count sleeps .) $(count review-calls .) $(count gh-calls 'pr merge')"
+
+fresh "$OLD" 0 "$GREEN"; only true false true
+out="$(run 7)"; rc=$?
+check_eq "#1476 two allowed is refused too" "64" "$rc"
+check "#1476 naming both" "acme/widget allows squash and rebase merges" "$out"
+
+# GitHub does not say (it leaves the settings out for an account that may not change them).
+fresh "$OLD" 0 "$GREEN"; printf '{"full_name":"acme/widget"}' > "$ST/methods"
+out="$(run 7)"; rc=$?
+check_eq "#1476 settings GitHub leaves out are refused, not guessed" "64" "$rc"
+check "#1476 saying GitHub did not say" "GitHub did not say which merge methods acme/widget allows" "$out"
+check_eq "#1476 nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# A read GitHub refuses stops; one that fails in transit is asked again.
+fresh "$OLD" 0 "$GREEN"; only true false false; printf 'gh: Forbidden (HTTP 403)' > "$ST/repo-down"
+out="$(run 7)"; rc=$?
+check_eq "#1476 a refused read of the settings stops" "1" "$rc"
+check "#1476 saying so" "could not read which merge methods acme/widget allows" "$out"
+check_eq "#1476 nothing merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"; only true false false; printf 'read tcp: connection reset by peer\n' > "$ST/repo-fails"
+out="$(run 7)"; rc=$?
+check_eq "#1476 a settings read that fails once in transit still merges" "0" "$rc"
+check "#1476 by the one method" "--squash --match-head-commit $OLD" "$(grep 'pr merge' "$ST/gh-calls")"
+
+# Control: a method passed is used as given, and the settings are never read.
+fresh "$OLD" 0 "$GREEN"; only true false false
+out="$(run 7 --merge)"; rc=$?
+check_eq "#1476 control: a method passed merges" "0" "$rc"
+check "#1476 control: by that method" "--merge --match-head-commit $OLD" "$(grep 'pr merge' "$ST/gh-calls")"
+check_eq "#1476 control: with no read of the settings" "0" "$(count gh-calls '^api repos/acme/widget$')"
+
+# =================================================================================================
+# 19. A heartbeat while it waits (claude-config#1476). On PET #1857 it updated the branch and then
+#     said nothing long enough that the agent stopped it. Every wait now says, at a fixed interval,
+#     what it is still waiting on and for how long, on the injected clock (L524).
+# =================================================================================================
+fresh "$OLD" 0 "$PENDING"
+for _ in 1 2 3 4 5 6 7; do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "cp '$WORKDIR/green' \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(MWR_HEARTBEAT_SECONDS=90 run 7 --squash)"; rc=$?
+check_eq "#1476 a long wait on checks still merges" "0" "$rc"
+check_eq "#1476 with a heartbeat every 90s of it, and only then" "2" "$(grep -c 'Still waiting' <<<"$out")"
+check "#1476 the first at 90s, naming what and how long" "[1m 30s] Head ${OLD:0:7}: waiting, checks still running (1 of 1). Still waiting, for 1m 30s so far." "$out"
+check "#1476 the second at 180s" "[3m 00s] Head ${OLD:0:7}: waiting, checks still running (1 of 1). Still waiting, for 3m 00s so far." "$out"
+
+# Its default interval: two minutes, two looks at the default pace.
+fresh "$OLD" 0 "$PENDING"
+for _ in 1 2 3 4 5; do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "cp '$WORKDIR/green' \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1476 default: merged" "0" "$rc"
+check_eq "#1476 default: one heartbeat in three minutes of waiting" "1" "$(grep -c 'Still waiting' <<<"$out")"
+check "#1476 default: at two minutes" "[2m 00s] Head ${OLD:0:7}: waiting" "$(grep 'Still waiting' <<<"$out")"
+
+# =================================================================================================
+# 20. The merged branch's agent worktree is removed at the merge (claude-config#1521). On 2026-10-22
+#     this repository held 66 agent worktrees, 63 for merged pull requests, because the sweep ran
+#     only at a session's first prompt. Now the merge removes its own branch's worktree, through
+#     check-stale-worktrees.sh --just-merged, so every rule is the check's (L370): only the six hour
+#     recency is off. The caller's own folder is never removed, and nothing here can turn a merge
+#     that landed into a failure.
+# =================================================================================================
+G(){ git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+WREPO="$(cd "$WORKDIR" && pwd -P)/wtrepo"
+G init -q -b main "$WREPO"
+G -C "$WREPO" remote add origin https://github.com/acme/widget.git
+printf 'x\n' > "$WREPO/f.txt"; G -C "$WREPO" add f.txt; G -C "$WREPO" commit -qm base
+AGENT="$WREPO/.claude/worktrees/agent-x"
+wt_fresh(){ # a fresh state, and a fresh agent worktree on feat/x whose head the merged list names
+  fresh "$OLD" 0 "$GREEN"
+  G -C "$WREPO" worktree remove --force "$AGENT" >/dev/null 2>&1
+  G -C "$WREPO" branch -q -D feat/x >/dev/null 2>&1
+  mkdir -p "$WREPO/.claude/worktrees"
+  G -C "$WREPO" worktree add -q -b feat/x "$AGENT" >/dev/null 2>&1
+  printf 'feat/x\t%s\t7\n' "$(G -C "$AGENT" rev-parse HEAD)" > "$ST/merged-list"
+}
+wrun(){ (cd "$WREPO" && bash "$HELPER" "$@" 2>&1); }
+there(){ [ -d "$AGENT" ] && echo yes || echo no; }
+CAN_SEE_USE=0
+{ command -v lsof >/dev/null 2>&1 || [ -d /proc/self/cwd ]; } && CAN_SEE_USE=1
+
+# Merged, clean, and every file in it minutes old: removed, its branch kept.
+wt_fresh
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a merge whose branch has a clean agent worktree succeeds" "0" "$rc"
+check "#1521 and says it merged" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1521 the worktree is removed at the merge, although everything in it is new" "no" "$(there)"
+check "#1521 and it says so, in the check's words" "removed agent-x [feat/x]: PR #7 merged" "$out"
+check_eq "#1521 its local branch is kept" "0" "$(G -C "$WREPO" rev-parse -q --verify feat/x >/dev/null; echo $?)"
+
+# Control: a repository with no agent worktree for the branch says nothing about worktrees.
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1521 control: a merge with no agent worktree merges" "0" "$rc"
+check_not "#1521 control: and says nothing about a worktree" "worktree" "$out"
+check_eq "#1521 control: nor asks GitHub for the merged list" "0" "$(count gh-calls 'pr list --state merged')"
+
+# Uncommitted work keeps it, and the reason is said.
+wt_fresh; printf 'half done\n' > "$AGENT/wip.txt"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a dirty worktree does not stop the merge" "0" "$rc"
+check_eq "#1521 a worktree holding uncommitted work is kept" "yes" "$(there)"
+check "#1521 saying why" "keeping agent-x [feat/x]: it holds 1 uncommitted change(s)" "$out"
+check_eq "#1521 with the work still in it" "half done" "$(cat "$AGENT/wip.txt")"
+
+# Commits the pull request never held keep it.
+wt_fresh; G -C "$AGENT" commit -q --allow-empty -m "after the merge"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 an unmerged commit does not stop the merge" "0" "$rc"
+check_eq "#1521 a worktree with commits the pull request never held is kept" "yes" "$(there)"
+check "#1521 saying why" "keeping agent-x [feat/x]: it has commits PR #7 never held" "$out"
+
+# A process standing in it keeps it.
+wt_fresh
+(cd "$AGENT" && exec sleep 120) &
+WBUSY=$!
+out="$(wrun 7 --squash)"; rc=$?
+kill "$WBUSY" 2>/dev/null; wait "$WBUSY" 2>/dev/null
+check_eq "#1521 a busy worktree does not stop the merge" "0" "$rc"
+if [ "$CAN_SEE_USE" -eq 1 ]; then
+  check_eq "#1521 a worktree a running process stands in is kept" "yes" "$(there)"
+  check "#1521 saying why" "keeping agent-x [feat/x]: a running process is working in it" "$out"
+else
+  echo "SUITE-PART-UNMEASURED neither lsof nor /proc here, so a busy worktree at the merge cannot be tested"
+fi
+
+# The caller's own folder: an agent merging from inside its worktree keeps it, and says the sweep
+# will take it, rather than deleting the floor under itself.
+wt_fresh
+out="$(cd "$AGENT" && bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a merge run from inside the worktree succeeds" "0" "$rc"
+check_eq "#1521 the caller's own worktree is never removed" "yes" "$(there)"
+check "#1521 saying it is the folder the merge was run from, left to the sweep" "is the folder this merge was run from" "$out"
+check "#1521 and naming the sweep that takes it later" "stale worktree sweep" "$out"
+mkdir -p "$AGENT/sub"
+out="$(cd "$AGENT/sub" && bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 so is one run from a folder inside it" "yes" "$(there)"
+rmdir "$AGENT/sub"
+
+# A removal that cannot be judged or breaks never turns the merge into a failure.
+wt_fresh; : > "$ST/merged-list-fails"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a merged list GitHub will not give still leaves a merge that landed at exit 0" "0" "$rc"
+check "#1521 and the merge is still said" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+check "#1521 saying it could not be judged" "could not read the merged pull requests" "$out"
+wt_fresh
+printf '#!/usr/bin/env bash\necho "line 3: syntax error" >&2\nexit 3\n' > "$WORKDIR/broken-check.sh"
+out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/broken-check.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a check that breaks still leaves the merge at exit 0" "0" "$rc"
+check "#1521 and says the check broke, with what it said" "syntax error" "$out"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+wt_fresh
+out="$(cd "$WREPO" && MWR_WORKTREE_CHECK="$WORKDIR/not-there.sh" bash "$HELPER" 7 --squash 2>&1)"; rc=$?
+check_eq "#1521 a check that is missing still leaves the merge at exit 0" "0" "$rc"
+check_eq "#1521 and the worktree is kept" "yes" "$(there)"
+
+# Merged with the branch left in place (stop 4) still removes the worktree, and so does a run that
+# finds the pull request already merged.
+wt_fresh; printf '%s' "$NEW" > "$ST/tip-after-merge"
+out="$(wrun 7 --squash --delete-branch)"; rc=$?
+check_eq "#1521 merged with the branch left in place exits 4 as before" "4" "$rc"
+check_eq "#1521 and the worktree is still removed" "no" "$(there)"
+wt_fresh; : > "$ST/merged"
+out="$(wrun 7 --squash)"; rc=$?
+check_eq "#1521 a pull request found already merged exits 0" "0" "$rc"
+check_eq "#1521 and its worktree is removed too" "no" "$(there)"
 
 echo
 echo "passed: $pass, failed: $fail"

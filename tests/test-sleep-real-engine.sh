@@ -146,7 +146,7 @@ for m in mod-kit status-bar session-registry is-it-live scope-modes; do
   PLUGIN_ARGS+=(--plugin-dir "$HOME/.claude/mods/$m")
 done
 cp "$ROOT/payload/mods/sleep-repos.json" "$HOME/.claude/mods/sleep-repos.json"
-for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
+for f in sleep.sh sleep-report.py sleep-queue.sh sleep-queue.py branch-issues.mjs; do cp "$ROOT/payload/hooks/lib/$f" "$HOME/.claude/hooks/lib/$f"; done
 
 # Stand-ins for what lies outside the engine.
 cat > "$WORK/bin/gh" <<EOF

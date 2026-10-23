@@ -724,6 +724,34 @@ check_eq "sleep-queue.py refuses a queue with no goal issues" 3 "$rc"
 check_has "saying sleep mode works only a goal's issues" "no goal issues were named" "$out"
 check_not "and never offers an open issue" "$(printf 'next\t9')" "$out"
 
+# ---- which issues a branch names, read by mod-kit's one reader (#1475) ----
+# The queue read every run of digits once, its own way: a plan step (connections-pr10-form-2338)
+# and an agent worktree's random id (worktree-agent-ad4e7831d26de84f8) each kept an issue out of
+# the night that no branch was on, while two issues leading a name (fix/1119-1124-...) read as a
+# date and kept neither out, though a branch was on both.
+printf '[%s,%s,%s,%s,%s]' "$(issue 1119 p1 danwright32)" "$(issue 1124 p1 danwright32)" "$(issue 10 p1 danwright32)" "$(issue 7831 p1 danwright32)" "$(issue 2338 p1 danwright32)" > "$WORK/named.json"
+printf 'main\nfix/1119-1124-sleep-claims-and-git-judging\nconnections-pr10-form-2338\nworktree-agent-ad4e7831d26de84f8\n' > "$WORK/named-branches"
+named_queue(){   # $1 = the sleep-queue.py to run
+  python3 "$1" queue repo=danwright32/demo limit=500 "issues=$WORK/named.json" "prs=$WORK/no-prs.json" "branches=$WORK/named-branches" "accounts=$FX/accounts" "unanswered=$WORK/none" "claims=$WORK/none" "registry=$HOME/.claude/state/sessions" "now=$NOW" self=s1 goal=1119,1124,10,7831,2338
+}
+printf '[]' > "$WORK/no-prs.json"
+out="$(named_queue "$DIR/lib/sleep-queue.py")"; rc=$?
+check_eq "the queue reads the branches' issues and answers" 0 "$rc"
+check_has "both issues a branch's name leads with are left out" "$(printf 'skip\t1119\tbranch fix/1119-1124-sleep-claims-and-git-judging names it')" "$out"
+check_has "the second of them too" "$(printf 'skip\t1124\tbranch fix/1119-1124-sleep-claims-and-git-judging names it')" "$out"
+check_has "the issue a plan's step names it after is left out" "$(printf 'skip\t2338\tbranch connections-pr10-form-2338 names it')" "$out"
+check_has "a plan's step pr10 names no issue, so 10 is queued" "$(printf 'next\t10\t')" "$out"
+check_has "an agent worktree's random id names no issue, so 7831 is queued" "$(printf 'next\t7831\t')" "$out"
+# A queue that cannot read the branches refuses rather than reading them as naming nothing, which
+# would queue an issue a branch is on: here sleep-queue.py stands where no mod-kit sits beside it.
+mkdir -p "$WORK/lonely/hooks/lib"
+cp "$DIR/lib/sleep-queue.py" "$WORK/lonely/hooks/lib/sleep-queue.py"
+cp "$DIR/lib/branch-issues.mjs" "$WORK/lonely/hooks/lib/branch-issues.mjs" 2>/dev/null
+out="$(named_queue "$WORK/lonely/hooks/lib/sleep-queue.py")"; rc=$?
+check_eq "a queue whose branch reader cannot run refuses" 3 "$rc"
+check_has "saying the branches could not be read" "which issues the branches name could not be read" "$out"
+check_not "and offers nothing" "$(printf 'next\t')" "$out"
+
 # ---- the seams fired, and nothing reached GitHub ----
 check_eq "the stub source was the one asked" yes "$([ -s "$WORK/source.log" ] && echo yes || echo no)"
 check_eq "gh itself was never called" "" "$(cat "$WORK/gh-called" 2>/dev/null)"

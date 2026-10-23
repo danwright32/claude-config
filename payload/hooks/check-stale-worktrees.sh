@@ -17,7 +17,7 @@
 #   2. Nothing is uncommitted, untracked files included (L5).
 #   3. Nothing in it changed in the last STALE_WT_RECENT_MINUTES (six hours). A session's shell
 #      does not stay in the folder between commands, so a running process is not enough to see a
-#      session at work; a recent change is.
+#      session at work; a recent change is. Off under --just-merged (below).
 #   4. No running process has it as its working directory.
 #   5. It is not locked, or its lock was left by a Claude agent that is no longer running
 #      (lib/agent-lock.sh, #1282). Claude Code locks a running agent's worktree and lifts the lock
@@ -45,6 +45,14 @@
 # removal git itself fails part way can leave a folder git no longer lists; that one is named on
 # every run with the command that deletes it, and never deleted here.
 #
+# --just-merged <worktree> JUDGES THAT ONE WORKTREE, with rule 3 off (claude-config#1521). It is how
+# lib/merge-when-ready.sh removes the merged branch's agent worktree the moment the merge lands, so
+# the rules stay here and are never copied there (L370). Recency is the one rule a worktree merged a
+# moment ago can never pass, and what it stands for is covered at that moment by the others: a
+# running Claude agent holds its worktree's lock (rule 5), a process in it is seen (rule 4), and the
+# caller never names the folder it was run from. Every other worktree and every other marker is left
+# to the sweep, and a path that is not an agent worktree git lists is refused with exit 2.
+#
 # It is not run inside a prompt. The nudge starts it in the background, under no timeout and in a
 # session of its own (lib/stale-worktree-run.py, #1247), because with 46 worktrees inspecting them
 # took most of the nudge's five seconds and the whole run was killed, every session.
@@ -57,7 +65,7 @@
 # ONE network call, not one per worktree: the merged PRs come back in a single list. A repo with
 # no worktree directory costs nothing at all, which is every project but this one.
 #
-# Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [repo-dir]
+# Run:  bash ~/.claude/hooks/check-stale-worktrees.sh [--remove] [--just-merged <worktree>] [repo-dir]
 #
 # Exit 0 = no worktree here holds work that has landed, including when there are none at all, and
 #          no removal was left part way.
@@ -65,7 +73,8 @@
 #          with what was done about it (removed, finished, or the command and the reason it was
 #          kept), so the caller has something to say.
 # Exit 2 = it could not tell, so nothing is claimed and nothing removed: not a git repo, no gh, or
-#          the merged PR list could not be read. Refusing rather than reporting a clean tree,
+#          the merged PR list could not be read, or --just-merged named no agent worktree git lists.
+#          Refusing rather than reporting a clean tree,
 #          because reading nothing and finding nothing wrong are otherwise one answer (L98).
 #
 # Environment:
@@ -79,8 +88,16 @@
 
 set -uo pipefail
 
-REMOVE=0
-if [ "${1:-}" = "--remove" ]; then REMOVE=1; shift; fi
+REMOVE=0; ONLY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --remove) REMOVE=1; shift ;;
+    --just-merged)
+      [ -n "${2:-}" ] || { echo "check-stale-worktrees: --just-merged names the one worktree to judge, and none was named." >&2; exit 2; }
+      ONLY="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
 REPO="${1:-$PWD}"
 GH="${STALE_WT_GH:-gh}"
 LIMIT="${STALE_WT_LIMIT:-400}"
@@ -103,9 +120,18 @@ if [ -z "$top" ]; then
 fi
 
 WTDIR="$top/.claude/worktrees"
+# --just-merged names one worktree, as git lists it or as any path that resolves to it. Anything
+# else is not judged at all rather than reported clean (L98).
+ONLY_REAL=""
+[ -z "$ONLY" ] || ONLY_REAL="$(cd "$ONLY" 2>/dev/null && pwd -P)"
+named(){ [ -z "$ONLY" ] || [ "$1" = "$ONLY" ] || { [ -n "$ONLY_REAL" ] && [ "$1" = "$ONLY_REAL" ]; }; }
+not_listed(){
+  echo "check-stale-worktrees: $ONLY is not an agent worktree git lists under $WTDIR, so there is nothing to judge." >&2
+  exit 2
+}
 # No directory is the ordinary case in every other project, and it is a real answer rather than a
 # reason to refuse: there are no agent worktrees, so none of them is stale.
-[ -d "$WTDIR" ] || exit 0
+[ -d "$WTDIR" ] || { [ -z "$ONLY" ] || not_listed; exit 0; }
 
 # The worktrees GIT knows about, narrowed to the ones under that directory. Read from git rather
 # than from the filesystem, because a directory sitting there that git has forgotten is not a
@@ -115,7 +141,9 @@ WTDIR="$top/.claude/worktrees"
 paths=(); branches=(); heads=(); locks=()
 cur=""; curbranch=""; curhead=""; curlock=""
 flush(){
-  case "$cur" in "$WTDIR"/*) paths+=("$cur"); branches+=("$curbranch"); heads+=("$curhead"); locks+=("$curlock") ;; esac
+  case "$cur" in "$WTDIR"/*)
+    named "$cur" && { paths+=("$cur"); branches+=("$curbranch"); heads+=("$curhead"); locks+=("$curlock"); } ;;
+  esac
   cur=""; curbranch=""; curhead=""; curlock=""
 }
 while IFS= read -r line; do
@@ -135,9 +163,13 @@ done < <(git -C "$top" worktree list --porcelain 2>/dev/null || true)
 common="$(cd "$top" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"
 MARKS="${common:-$top/.git}/claude-worktree-removing"
 marked=0
-for m in "$MARKS"/*; do [ -f "$m" ] && marked=1; done
+# With --just-merged only the named worktree's own marker counts: the rest are the sweep's.
+for m in "$MARKS"/*; do [ -f "$m" ] && named "$(head -n 1 "$m" 2>/dev/null)" && marked=1; done
 
-[ "${#paths[@]}" -gt 0 ] || [ "$marked" -eq 1 ] || exit 0
+if [ "${#paths[@]}" -eq 0 ] && [ "$marked" -eq 0 ]; then
+  [ -z "$ONLY" ] || not_listed
+  exit 0
+fi
 
 # GitHub is asked only when there is a worktree to judge; a marker alone needs nothing from it.
 merged=""
@@ -195,6 +227,7 @@ settled=" "   # the worktrees a cut off removal already accounts for, so the loo
 for m in "$MARKS"/*; do
   [ -f "$m" ] || continue
   p="$(head -n 1 "$m" 2>/dev/null)"; name="$(basename "$p")"; b=""; listed=0
+  named "$p" || continue
   for i in "${!paths[@]}"; do [ "${paths[$i]}" = "$p" ] && { listed=1; b="${branches[$i]}"; }; done
   # Git no longer lists it and the folder is gone, so that removal finished after all and only the
   # marker was left.
@@ -272,7 +305,9 @@ for i in "${!paths[@]}"; do
     continue
   fi
   real="$(cd "$p" 2>/dev/null && pwd -P)" || real="$p"
-  if [ -n "$(find "$p" -mmin "-$RECENT" -not -name .git -print -quit 2>/dev/null)" ]; then
+  # Off for --just-merged: its caller has just merged this worktree's branch, so everything in it
+  # is minutes old by construction, and the rules around this one carry the protection instead.
+  if [ -z "$ONLY" ] && [ -n "$(find "$p" -mmin "-$RECENT" -not -name .git -print -quit 2>/dev/null)" ]; then
     echo "  keeping $name [$b]: something in it changed in the last $RECENT minutes, so a session may still be using it"
     continue
   fi

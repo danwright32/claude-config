@@ -985,7 +985,17 @@ head for a pull request can lag a push (Bidspoke #2577 showed the old commit for
 branch's tip when it first sees a head and again before the gates, waits two minutes for GitHub to
 catch up, then sets the pull request's base again to the one it has, which makes GitHub read the
 branch, waits two more for the real head, and stops in its own words if that has not taken
-(claude-config#1458). It accepts only the merge
+(claude-config#1458). The same lag can follow its own update: on 2026-10-22 PET #1885's branch moved
+when it was updated while the pull request kept showing the old head for over 45 minutes, and the
+helper updated it seven more times. Now the look after an update reads the branch again, says the
+pull request has not caught up with its branch, waits through that lag (a 404 from the compare
+included) as above, and never updates the same head twice; four minutes after the update with
+nothing shown it stops plainly (claude-config#1500). With no merge method passed it reads the
+repository's settings, merges by the one method they allow, and when they allow more (PET and
+claude-config allow all three) stops at once naming them rather than at the merge after the wait.
+It does not guess squash from history, which GitHub does not record a method for. While it waits it
+says so again every two minutes with how long that wait has lasted, so a quiet helper and a hung
+one can be told apart (claude-config#1476). It accepts only the merge
 method, which it hands to `gh pr merge`, and `--delete-branch`, which it carries out itself after
 the merge (below), and stops, in its own words, on a gate's refusal, on findings to read
 (come back with `PR_REVIEW_READ=<key>` in front of it), on a conflict, or when its three hours run
@@ -2030,10 +2040,17 @@ rather than the synced config. Which branch counts as main is one rule both read
 `tools/lib/default-branch.sh`, and how GitHub's record of a branch's pull requests is read is one
 reading both use, in `tools/lib/pull-requests.sh`.
 
-Agent worktrees are also removed automatically. On the first prompt of a session
-`hooks/stale-worktree-nudge.sh` starts `hooks/check-stale-worktrees.sh --remove` in the
-background. It removes a worktree only when its PR merged holding every commit, nothing in it is
-uncommitted, nothing changed in the last six hours, and no running process is working in it. A locked worktree is kept, with one exception:
+Agent worktrees are also removed automatically, at two moments (#1521). When
+`hooks/lib/merge-when-ready.sh` merges a pull request, it removes that branch's agent worktree
+through `hooks/check-stale-worktrees.sh --remove --just-merged <worktree>`, which applies every rule
+below except the six hour one, and never removes the folder the merge was run from: an agent merging
+from inside its own worktree keeps it, and the sweep takes it later. What it removed, or why it kept
+it, is printed after the merge line, and nothing about it turns a merge that landed into a failure.
+And on the first prompt of a session, then again on the first prompt at least three hours after the
+session's last run (`STALE_WT_RERUN_MINUTES`), `hooks/stale-worktree-nudge.sh` starts
+`hooks/check-stale-worktrees.sh --remove` in the background. It removes a worktree only when its PR
+merged holding every commit, nothing in it is uncommitted, nothing changed in the last six hours,
+and no running process is working in it. A locked worktree is kept, with one exception:
 a lock left by a Claude agent that is no longer running (#1282). Claude Code locks an agent's
 worktree with the reason `claude agent <name> (pid <pid> start <time>)` and lifts the lock when the
 agent finishes, so an agent that never finished, because the Mac went down for example, leaves a

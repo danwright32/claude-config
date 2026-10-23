@@ -31,6 +31,11 @@ The spec, with paths resolved against the spec's own folder:
                                          decision's number is shown alone and the PRD holds its sentence,
                                          and it says so when it writes
       "chrome":   {...the round's "chrome", see chrome_frame.py...},
+                | "chromes": [{"name": "edit", ...what "chrome" takes...}, {"name": "view", ...}],
+                                         in place of "chrome", for a design whose frames were captured
+                                         from different pages (a panel in edit mode, a card in view
+                                         mode): each frame names its own in "chrome", so the whole
+                                         design is one file and one decision map (claude-config#1474)
       "screen":   "email" | "document" | "new-product",   in place of "chrome", for a design with no
                                          product page around it: each frame is drawn alone at its own
                                          width (claude-config#1393)
@@ -44,7 +49,8 @@ The spec, with paths resolved against the spec's own folder:
       "fixture":  "../fixtures/team-capacity.json",   the committed data both sides draw
       "frames": [
         {"id": "f1", "title": "Tomorrow, light", "width": 1280, "height": 900 (optional),
-         "variant": {...what buildScreen is handed for this frame...}}
+         "variant": {...what buildScreen is handed for this frame...},
+         "chrome": "edit"                  with "chromes" only: the captured page it is drawn in}
       ],
       "decisions": [
         {"id": "D1", "decision": "The page is called Team capacity", "why": "Sam's word for it",
@@ -60,8 +66,10 @@ The spec, with paths resolved against the spec's own folder:
     }
 
 It writes NOTHING when it refuses, and refuses: a chrome that is not a captured one (no stand ins), a
-"screen" that is not one of the three kinds or the terminal, or one named beside a captured chrome, a
-builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
+"screen" that is not one of the three kinds or the terminal, or one named beside a captured chrome,
+"chromes" beside "chrome" or a "screen", a "chromes" that is empty, a chrome in it with no name, two
+sharing a name, or one no frame is drawn in, a frame naming a chrome the design does not hold, naming
+none in a design of several, or naming one in a design of one, a builder calling the terminal in a design that does not ask for it or declaring its name, a frame with
 no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a
 terminal frame whose window draws at a width other than the frame's own, that draws no window, or whose
 builder throws, a decision with no owner (check-decision-map.py's rule), a decision a
@@ -133,6 +141,16 @@ def main(argv):
                      "well; keep one" % kind)
             fail('the spec names the kind "%s", which has no product page around it, and a captured page as '
                  "well; keep one" % kind)
+    # A design whose frames were captured from different pages lists them in "chromes" and each frame
+    # names its own (claude-config#1474). Beside "chrome" or a kind, one would win over the other, so
+    # both are refused as above.
+    several = "chromes" in spec
+    if several and kind is not None:
+        fail('the spec names the kind "%s", which is drawn with no captured page, and captured pages in "chromes" '
+             "as well; keep one" % kind)
+    if several and spec.get("chrome") is not None:
+        fail('the spec names one captured page in "chrome" and several in "chromes"; keep one: "chromes" when '
+             "the frames were captured from different pages, each frame naming its own")
     builder_name = str(spec.get("builder", "")).strip()
     if not builder_name:
         fail('the spec names no "builder"')
@@ -140,6 +158,7 @@ def main(argv):
     if "buildScreen" not in builder:
         fail("the builder %s does not define buildScreen" % builder_name)
     chrome_bin = None
+    chromes = None   # {name: chrome}, for a design drawn in several captured pages
     try:
         if kind in design_file.SCREEN_KINDS:
             chrome = chrome_frame.shared_screen(kind, builder, builder_name)
@@ -150,7 +169,11 @@ def main(argv):
             # The same reader as the switcher's, so a builder calling the terminal in a design that does
             # not ask for it is refused here as it is in the rounds, never drawn as a builder that threw.
             chrome_frame.load_screen(kind, builder, builder_name)
-            chrome = chrome_frame.no_page(kind) if kind is not None else chrome_frame.load_chrome(spec.get("chrome"), base)
+            if several:
+                chromes = chrome_frame.load_chromes(spec["chromes"], base)
+                chrome = None
+            else:
+                chrome = chrome_frame.no_page(kind) if kind is not None else chrome_frame.load_chrome(spec.get("chrome"), base)
     except chrome_frame.ChromeError as err:
         fail(str(err))
     styles = read(os.path.join(base, spec["styles"]), "styles") if spec.get("styles") else ""
@@ -180,8 +203,31 @@ def main(argv):
             fail("frame %s has no \"variant\", the object its builder is handed" % f["id"])
         if not str(f.get("title", "")).strip():
             fail("frame %s has no title, which is what a reader of the design sees it by" % f["id"])
-        if chrome["kind"] == "png" and w != chrome["width"]:
-            fail("frame %s is %d wide, and its chrome picture is %d: a picture's width is its own" % (f["id"], w, chrome["width"]))
+        named = f.get("chrome")
+        if chromes is None:
+            if named is not None:
+                fail('frame %s names the chrome %s, and %s, so there is none to choose: list the captured pages in '
+                     '"chromes" for each frame to name its own' % (f["id"], json.dumps(named), (
+                         'the spec names one captured page, in "chrome", for every frame' if kind is None
+                         else 'the design is drawn with no captured page ("screen": "%s")' % kind)))
+            if chrome["kind"] == "png" and w != chrome["width"]:
+                fail("frame %s is %d wide, and its chrome picture is %d: a picture's width is its own" % (f["id"], w, chrome["width"]))
+            continue
+        if named is None:
+            fail('frame %s names no chrome, and this design is drawn in %d captured pages (%s); give it "chrome": '
+                 "the one it was captured in" % (f["id"], len(chromes), ", ".join(chromes)))
+        if not isinstance(named, str) or named not in chromes:
+            fail("frame %s names the chrome %s, and the design's chromes are %s"
+                 % (f["id"], json.dumps(named), ", ".join(chromes)))
+        if chromes[named]["kind"] == "png" and w != chromes[named]["width"]:
+            fail("frame %s is %d wide, and its chrome %s is a picture %d wide: a picture's width is its own"
+                 % (f["id"], w, named, chromes[named]["width"]))
+    if chromes is not None:
+        drawn_in = set(f["chrome"] for f in frames)
+        for name in chromes:
+            if name not in drawn_in:
+                fail('the chrome %s is drawn by no frame: name it on the frames captured in it, or take it out of '
+                     '"chromes"' % name)
 
     decisions = spec.get("decisions")
     if not isinstance(decisions, list) or not decisions:
@@ -226,16 +272,23 @@ def main(argv):
     if problems:
         fail("; ".join(problems))
 
-    template = chrome_frame.frame_document(chrome, builder, styles, TOKEN, fixture)
+    if chromes is None:
+        template = chrome_frame.frame_document(chrome, builder, styles, TOKEN, fixture)
+    else:
+        # One document per captured page, never per frame, so a page several frames share is carried once.
+        template = {name: chrome_frame.frame_document(c, builder, styles, TOKEN, fixture) for name, c in chromes.items()}
     variants = {f["id"]: chrome_frame.script_text(json.dumps(f["variant"])) for f in frames}
+    # Each frame of a design in several pages carries the page it is drawn in, which the score keeps on the
+    # frame's row and says beside it (claude-config#1474); a design in one page carries none, as before.
     frames_block = {"frames": [dict({"id": f["id"], "title": f["title"], "width": f["width"]},
-                                    **({"height": f["height"]} if f.get("height") else {})) for f in frames]}
-    if chrome["kind"] in ("none", "screen"):
+                                    **({"height": f["height"]} if f.get("height") else {}),
+                                    **({"chrome": f["chrome"]} if chromes is not None else {})) for f in frames]}
+    if chrome is not None and chrome["kind"] in ("none", "screen"):
         # Read by the score, which records and says it, so a 100% on an email is never read as a build
         # drawn inside the product (claude-config#1393), and a terminal design's pictures are measured only
         # from the terminal adapter's capture of the mod's band (claude-config#1413, #1414).
         frames_block["kind"] = chrome["page"]
-    page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants)
+    page = render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants, chromes)
 
     # The decision map is held to check-decision-map.py's own rule, on the file as written, before it
     # is put where anyone can use it.
@@ -250,7 +303,7 @@ def main(argv):
     # A terminal frame is scored at its declared width, and its window is drawn at the width its builder
     # gives Terminal.screen, so each is drawn in Chrome from the page as written and the two held equal,
     # as a captured picture's width is held to its own (claude-config#1422).
-    if chrome["kind"] == "screen":
+    if chrome is not None and chrome["kind"] == "screen":
         try:
             problems = chrome_frame.window_width_problems(
                 frames, chrome_frame.measure_screen_windows(page, frames, chrome_bin))
@@ -337,7 +390,10 @@ def requirement_anchors(numbers, taken):
     return anchors
 
 
-def render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants):
+def render_page(spec, chrome, decisions, exceptions, frames, frames_block, template, variants, chromes=None):
+    """The settled page. With chromes, a design in several captured pages (claude-config#1474): template
+    is {name: document}, each frame names its own, and the page lists each page once, with where it
+    was captured, under Frames."""
     e = lambda v: html.escape(str(v), quote=True)  # noqa: E731
     requirements = spec.get("requirements")
     # Dan, 2026-10-20, on claude-config#1429: a decision shows its requirement's number as a link to the
@@ -372,10 +428,30 @@ def render_page(spec, chrome, decisions, exceptions, frames, frames_block, templ
     idioms = spec.get("idioms") or []
     idiom_html = ("<h2>Idioms of the medium, to translate rather than copy</h2><ul>%s</ul>"
                   % "".join("<li>%s</li>" % e(i) for i in idioms)) if idioms else ""
-    frame_html = "".join('<h3>%s <span class="dr-meta">%s, %d wide</span></h3><iframe class="dr-frame" data-frame="%s" title="%s" style="width:%dpx;height:%dpx"></iframe>'
-                         % (e(f["title"]), e(f["id"]), f["width"], e(f["id"]), e(f["title"]), f["width"], f.get("height") or 400)
+    frame_html = "".join('<h3>%s <span class="dr-meta">%s, %d wide%s</span></h3><iframe class="dr-frame" data-frame="%s" title="%s" style="width:%dpx;height:%dpx"></iframe>'
+                         % (e(f["title"]), e(f["id"]), f["width"], (", in %s" % e(f["chrome"])) if chromes else "",
+                            e(f["id"]), e(f["title"]), f["width"], f.get("height") or 400)
                          for f in frames)
-    script = """
+    if chromes:
+        frame_html = '<ul class="dr-chromes">%s</ul>\n%s' % ("".join(
+            "<li><strong>%s</strong>, captured from %s</li>" % (e(name), e(c["source"])) for name, c in chromes.items()),
+            frame_html)
+        script = """
+var DR_TEMPLATES = %s;
+var DR_CHROME_OF = %s;
+var DR_VARIANTS = %s;
+/* A frame's whole document: the captured page the frame names, with the round drawn in it from the
+   fixture. The web adapter of the design match score draws it as a page of its own at the frame's
+   width. Each page's template holds the variant as the quoted token make-settled.py wrote, replaced
+   here by the frame's own. */
+function designFrameDocument(id) {
+  if (!Object.prototype.hasOwnProperty.call(DR_VARIANTS, id)) throw new Error("this design has no frame " + id);
+  return DR_TEMPLATES[DR_CHROME_OF[id]].split(%s).join(DR_VARIANTS[id]);
+}
+""" % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps({f["id"]: f["chrome"] for f in frames})),
+       chrome_frame.script_text(json.dumps(variants)), json.dumps(json.dumps(TOKEN)))
+    else:
+        script = """
 var DR_TEMPLATE = %s;
 var DR_VARIANTS = %s;
 /* A frame's whole document: the captured chrome with the round drawn in it from the fixture. The web
@@ -385,7 +461,9 @@ function designFrameDocument(id) {
   if (!Object.prototype.hasOwnProperty.call(DR_VARIANTS, id)) throw new Error("this design has no frame " + id);
   return DR_TEMPLATE.split(%s).join(DR_VARIANTS[id]);
 }
-Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
+""" % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps(variants)),
+       json.dumps(json.dumps(TOKEN)))
+    script += """Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), function (frame) {
   frame.addEventListener("load", function () {
     var fixed = %s;
     var d = frame.contentDocument;
@@ -393,9 +471,7 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
   });
   frame.srcdoc = designFrameDocument(frame.dataset.frame);
 });
-""" % (chrome_frame.script_text(json.dumps(template)), chrome_frame.script_text(json.dumps(variants)),
-       json.dumps(json.dumps(TOKEN)),
-       json.dumps({f["id"]: bool(f.get("height")) for f in frames}))
+""" % json.dumps({f["id"]: bool(f.get("height")) for f in frames})
     dmap = {"requirements": requirements, "decisions": decisions} if requirements else {"decisions": decisions}
     intro_html = "<p>%s</p>\n" % e(spec["intro"].strip()) if spec.get("intro") else ""
     req_html = ("<h2>Requirements</h2>\n<ul class=\"dr-requirements\">%s</ul>\n" % "".join(
@@ -403,7 +479,9 @@ Array.prototype.forEach.call(document.querySelectorAll("iframe[data-frame]"), fu
         '<li id="%s" tabindex="-1"><strong>%s</strong> %s</li>' % (
             anchors[r["number"].strip()], e(r["number"].strip()), e(r["text"].strip())) for r in requirements)
         if requirements else "")
-    if chrome["kind"] in ("none", "screen"):
+    if chromes:
+        drawn = "Every frame is drawn inside the product's real chrome, in whichever of its %d captured pages the frame names" % len(chromes)
+    elif chrome["kind"] in ("none", "screen"):
         drawn = "%s Every frame is drawn at its own width" % e(chrome["line"])
     else:
         drawn = "Every frame is drawn inside the product's real chrome, captured from %s" % e(chrome["source"])

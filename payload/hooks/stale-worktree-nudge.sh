@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# stale-worktree-nudge.sh: remove, once a session, the agent worktrees whose work has already
+# stale-worktree-nudge.sh: remove, every few hours of a session, the agent worktrees whose work has already
 # landed, and say what it removed and what it kept (claude-config#423, #1199, #1247).
 #
 # check-stale-worktrees.sh answers the question correctly and nothing would ever ask it. The
@@ -12,7 +12,8 @@
 # THE CHECK DOES NOT RUN INSIDE THE PROMPT (#1247). This hook has five seconds, and with 46
 # worktrees the check took 3.9 to 4.8 of them before removing anything (measured 2026-10-16), so
 # Claude Code killed it at five and threw its answer away in every session, and nothing was removed
-# for two days. So the first prompt of a session STARTS lib/stale-worktree-run.py, detached and not
+# for two days. So a prompt on which a run is due (a session's first, then one every three hours,
+# below) STARTS lib/stale-worktree-run.py, detached and not
 # waited for, and returns at once. That runner holds the lock that keeps two sessions from removing
 # at once, runs the check with no timeout over it (a removal killed part way is L617's leftover),
 # and writes down anything worth saying. A later prompt says it: the same session's next prompt, or
@@ -20,16 +21,28 @@
 # whichever prompt claims it first, never to every session open in the repository.
 #
 # WHAT IT COSTS, which is the thing that decides whether a per prompt hook is allowed to exist.
-# On every prompt, one glob of the state directory for answers waiting to be said; only when one is
-# there does it ask git which repository this is. On the first prompt of a session, one git call
-# and the start of a process it does not wait for. The run itself makes the one network call, and
-# it starts AT MOST ONCE PER SESSION: the record is written and read BEFORE the run is started, not
-# after it. Written the other way round, deduplicating the message after computing it, the message
-# appeared once and the call was paid on every prompt for the rest of the session.
+# On every prompt, one glob of the state directory for answers waiting to be said (only when one is
+# there does it ask git which repository this is), and a read of this session's record against the
+# clock. When a run is due, one git call and the start of a process it does not wait for. The run
+# itself makes the one network call, and it starts AT MOST ONCE EVERY STALE_WT_RERUN_MINUTES PER
+# SESSION: the record is written and read BEFORE the run is started, not after it. Written the
+# other way round, deduplicating the message after computing it, the message appeared once and the
+# call was paid on every prompt for the rest of the session. The network call must never run per
+# prompt: the merged pull request list is GitHub's shared hourly allowance, and a prompt is not a
+# reason to spend it.
 #
-# What that trades away is stated rather than hidden: a worktree that goes stale part way through a
-# session is removed by the NEXT session rather than this one. For tidying up, a day late is
-# nothing and a network call per prompt is not (L112).
+# AGAIN EVERY THREE HOURS, not only at the first prompt (claude-config#1521). This ran once per
+# session, on the premise that a worktree going stale part way through a session is removed by the
+# next one and "a day late is nothing". That premise expired (L316): on 2026-10-22 one coordinator
+# session had run for three days and dispatched over 60 builders, no other session started in the
+# repository, and 66 worktrees (63 merged, about 2.5 GB) sat there while the disk fell to 12 GB.
+# Two things now cover it. lib/merge-when-ready.sh removes the merged branch's worktree at the
+# merge, which is most of them; this sweep takes the rest, the ones kept at the merge (the merging
+# agent's own folder, a live agent's lock, a process standing in it) once they are free. Why three
+# hours: the sweep keeps anything changed in the last six, so a worktree can go at most about nine
+# hours after its last change, a few hundred MB at that building rate rather than gigabytes, for
+# one network call per session every three hours. Sweeping every hour would gain at most two hours
+# on a six hour floor. A setting, not a measurement.
 #
 # It NEVER blocks the prompt. A UserPromptSubmit hook exiting non-zero stops the turn, and a
 # worktree nobody has tidied is something to mention, not a reason to refuse to work (L54). Every
@@ -42,6 +55,8 @@
 #   STALE_WT_CHECK      run this instead of the check beside it, for a fixture
 #   STALE_WT_STATE_DIR  where the per session records, the lock and the answers are kept (default
 #                       TMPDIR). A DIRECTORY, so two sessions at once each get their own record.
+#   STALE_WT_RERUN_MINUTES  how long after a session's last run it starts another (default 180)
+#   STALE_WT_NOW        the clock in epoch seconds, for a fixture (L524)
 set -uo pipefail
 
 input="$(cat 2>/dev/null || true)"
@@ -116,7 +131,7 @@ start_run(){
 # twice is a smaller failure than never said, and the lock keeps the runs from overlapping (L11,
 # L98). Why it could not deduplicate goes to stderr, which a UserPromptSubmit hook does not show.
 if [ -z "$session" ]; then
-  echo "stale-worktree-nudge: the hook payload carried neither a session id nor a transcript path, so this check could not be held to once per session and may run on every prompt." >&2
+  echo "stale-worktree-nudge: the hook payload carried neither a session id nor a transcript path, so this check could not be held to once per session every three hours and may run on every prompt." >&2
   STATE=""
   start_run
   exit 0
@@ -127,12 +142,23 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 STATE="$STATE_DIR/claude-stale-worktrees-${key}.state"
 
 # THE RECORD IS READ BEFORE THE RUN STARTS, which is the whole of the cost bound: once this session
-# has started one, no later prompt in it starts another, whatever the answer was.
-[ -f "$STATE" ] && exit 0
+# has started one, no later prompt in it starts another until STALE_WT_RERUN_MINUTES have passed
+# since, whatever the answer was. That is a read of a few lines and the clock, never git or the
+# network. A record with no start in it (one the earlier nudge wrote, which started a run once a
+# session) cannot say how old it is, so it is treated as due.
+RERUN="${STALE_WT_RERUN_MINUTES:-180}"
+case "$RERUN" in ''|*[!0-9]*) RERUN=180 ;; esac
+now="${STALE_WT_NOW:-}"
+case "$now" in ''|*[!0-9]*) now="${EPOCHSECONDS:-$(date +%s)}" ;; esac
+if [ -f "$STATE" ]; then
+  last=""
+  while IFS=' ' read -r k v _; do [ "$k" = started ] && last="$v"; done <"$STATE"
+  case "$last" in ''|*[!0-9]*) ;; *) [ $((now - last)) -lt $((RERUN * 60)) ] && exit 0 ;; esac
+fi
 
 # And written before the run starts, not after, so a start that fails cannot leave the session
 # paying for it on every prompt (L514). It also records the runner's process, which is how a run
 # from this session can be found later.
-: > "$STATE" 2>/dev/null || true
+printf 'started %s\n' "$now" >>"$STATE" 2>/dev/null || true
 start_run
 exit 0

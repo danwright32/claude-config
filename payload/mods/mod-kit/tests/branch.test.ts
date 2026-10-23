@@ -68,6 +68,49 @@ test('the issues a branch names: each part of it that is 2 to 6 digits, with at 
   expect(issuesOfBranch('fix/12ab-x')).toEqual([])
 })
 
+// #1475: a Bidspoke builder on connections-pr10-form-2338, step 10 of #2338's plan, was refused
+// every screen edit because the design round guard read pr10 as #10. A step of a plan, a date or a
+// version is never an issue, however it is joined to the rest of the name.
+test('a plan step, a date or a version in a branch name is never read as an issue', () => {
+  expect(issuesOfBranch('connections-pr10-form-2338')).toEqual([2338])
+  expect(issuesOfBranch('connections-pr-10-form-2338')).toEqual([2338])
+  for (const step of ['phase', 'step', 'stage', 'part', 'slice', 'wave', 'batch', 'round', 'pass', 'milestone', 'p', 'v', 'version']) {
+    expect(issuesOfBranch(`${step}10-form-2338`)).toEqual([2338])
+    expect(issuesOfBranch(`${step}-10-form-2338`)).toEqual([2338])
+  }
+  // Real names (claude-config, overture and postroll branches, 2026-10-22).
+  expect(issuesOfBranch('faster-pr-testing-milestone-60')).toEqual([])
+  expect(issuesOfBranch('record-milestone-61-decisions')).toEqual([])
+  expect(issuesOfBranch('guard-costs/2026-09-03')).toEqual([])
+  expect(issuesOfBranch('suite-count/2026-10-03')).toEqual([])
+  expect(issuesOfBranch('dependabot/npm_and_yarn/tsx-4.23.12')).toEqual([])
+  expect(issuesOfBranch('dependabot/npm_and_yarn/types/node-26.2.0')).toEqual([])
+  expect(issuesOfBranch('dependabot/npm_and_yarn/vitest-4.1.11')).toEqual([])
+  expect(issuesOfBranch('fix/1185-bypassed-routes-2-1-299')).toEqual([1185])
+})
+
+test('an issue a step word stands beside, glued to an i, or among several is still read', () => {
+  // A step word before a number of three digits or more: each of these is the issue it names.
+  expect(issuesOfBranch('faster-pr-989-daily-guard-sweep')).toEqual([989])
+  expect(issuesOfBranch('reprep-listing-phase-1880')).toEqual([1880])
+  expect(issuesOfBranch('downbeat-export-minimum-version-3193')).toEqual([3193])
+  expect(issuesOfBranch('lint-each-body-once-per-pass-3498')).toEqual([3498])
+  expect(issuesOfBranch('fix-docs-batch-2502-2532-2312-1820')).toEqual([2502, 2532, 2312, 1820])
+  // overture names an issue i2968; a plan's slice i2 is one digit and stays none.
+  expect(issuesOfBranch('i2968-dismissed-followup-render')).toEqual([2968])
+  expect(issuesOfBranch('issue1475-x')).toEqual([1475])
+  expect(issuesOfBranch('m80-4357-slice-i2-resolver')).toEqual([4357])
+  expect(issuesOfBranch('i1-qb-parse')).toEqual([])
+  expect(issuesOfBranch('fix/1015-1057-1085-mod-guards')).toEqual([1015, 1057, 1085])
+  expect(issuesOfBranch('2232-2193-suite-stats')).toEqual([2232, 2193])
+  expect(issuesOfBranch('m80-4356-phase2-parts45')).toEqual([4356])
+  expect(issuesOfBranch('probe-4106-phase0c-rows')).toEqual([4106])
+  expect(issuesOfBranch('collapse-4030-phase-2')).toEqual([4030])
+  expect(issuesOfBranch('fix-99-phase5-backlog')).toEqual([99])
+  expect(issuesOfBranch('ci-p0-594-595-597-689')).toEqual([594, 595, 597, 689])
+  expect(issuesOfBranch('fix_1282.stale')).toEqual([1282])
+})
+
 test('the main working tree is the first git lists', () => {
   expect(mainOf('worktree /a/b\nHEAD x\n\nworktree /a/b/.claude/worktrees/c\n')).toBe('/a/b')
   expect(mainOf('worktree /Users/x/Documents/Documents - Dan’s MacBook Pro/Bidspoke\nHEAD x\n')).toBe('/Users/x/Documents/Documents - Dan’s MacBook Pro/Bidspoke')

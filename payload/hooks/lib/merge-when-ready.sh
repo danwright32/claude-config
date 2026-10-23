@@ -5,6 +5,9 @@
 #
 #   bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/name] [--squash|--merge|--rebase] [--delete-branch]
 #
+# With no merge method, the repository's settings choose one when they allow only one, and it stops
+# at once, naming them, when they allow more (claude-config#1476, see choose_method).
+#
 # Run it from a checkout of the repository (the lessons review reads the branch from there), in the
 # background: a round of checks and review takes minutes, longer than one Bash call may run.
 #
@@ -52,7 +55,10 @@
 # at once that day, and waits as long again for the real head, whose checks and review are then
 # waited on as any new head's are. Still lagging after that, it stops in its own words; the base is
 # set again once per lag, never in a loop. A branch GitHub says is not there, or will not show, stops
-# it too: with no tip to confirm, nothing is merged.
+# it too: with no tip to confirm, nothing is merged. The same lag can follow an update this makes,
+# and then GitHub shows the head it updated as if nothing happened (claude-config#1500), so after an
+# update the next look confirms the head against the branch again, and an update GitHub has not shown
+# is said and waited on, never answered with another update.
 #
 # WHEN THE BASE KEEPS MOVING it waits for it to be still, and keeps going (claude-config#1271). This
 # used to update at most three times and then stop with nothing merged. On 2026-10-16, with several
@@ -83,13 +89,15 @@
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
-#      is gone), or a read GitHub refused or still did not answer after being asked again
+#      is gone), an update GitHub has still not shown four minutes after it, or a read GitHub
+#      refused or still did not answer after being asked again
 #   3  still waiting (on checks, the review, or a base still moving) when the deadline or the poll
 #      count ran out; running it again resumes
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
 #      based on it could not be moved, GitHub could not be read, or the branch holds commits the
 #      merge did not; running it again finishes the branch
-#   64 refused its arguments, or was run outside a checkout
+#   64 refused its arguments, was run outside a checkout, or was passed no merge method for a
+#      repository that allows more than one (or does not say which)
 #
 # Findings to read: the review's own refusal carries a read key. Read them, fix what is real, then
 #   PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ...
@@ -107,12 +115,18 @@
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
 # epoch seconds, the clock's seam), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
 # reported yet is waited on before the checks gate is asked whether the repository runs any),
-# MWR_HEARTBEAT_SECONDS (300), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
+# MWR_HEARTBEAT_SECONDS (120: how often a wait that has not changed is said again, with how long it
+# has lasted, see wait_a_look), MWR_HEAD_LAG_SECONDS (120: how long GitHub's head for the pull request
 # may lag its branch's tip before the base is set again to resync it, and how long after that before
 # it stops; a setting, see head_is_tip), MWR_READ_TRIES (4: how many times a GitHub read that did not answer
 # is asked in all) and MWR_READ_RETRY_SECONDS (20: the wait between, so about a minute, see
 # with_retries), MWR_SLEEP (sleep), MWR_RED_GATE, MWR_REVIEW_GATE, MWR_CHANGELOG_GATE, MWR_DESIGN_GATE,
-# MWR_REVIEW_LIB.
+# MWR_REVIEW_LIB, MWR_WORKTREE_CHECK (the check that judges the merged branch's agent worktree).
+#
+# AFTER A MERGE THAT LANDED it removes the merged branch's agent worktree when
+# check-stale-worktrees.sh --just-merged allows it, and never the folder it was run from
+# (claude-config#1521, see tidy_worktree). What it removed, or why it kept it, is said after the
+# merge's own line, and nothing about it changes the exit.
 
 set -uo pipefail
 
@@ -134,7 +148,7 @@ MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $((DEADLINE / POLL + 10)))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
-HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 300)"
+HEARTBEAT="$(num_or "${MWR_HEARTBEAT_SECONDS:-}" 120)"
 LAG_WAIT="$(num_or "${MWR_HEAD_LAG_SECONDS:-}" 120)"
 SELF="bash ~/.claude/hooks/lib/merge-when-ready.sh"
 
@@ -167,6 +181,9 @@ read_key="${PR_REVIEW_READ:-}"
 case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key is lowercase hex, copied from the review's refusal)." ;; esac
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || usage "run it from a checkout of the repository: the lessons review reads the branch from one."
+# Where the caller stands, read before this moves, so the merged branch's worktree is never removed
+# from under the session that ran it (claude-config#1521, see tidy_worktree).
+caller_dir="$(pwd -P)"
 cd "$top" || usage "could not enter $top."
 
 # shellcheck source=merge-target.sh
@@ -185,12 +202,14 @@ now(){
   case "$t" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$t" ;; esac
 }
 t0="$(now)"
-elapsed(){
-  local s=$(( $(now) - t0 ))
-  if [ "$s" -ge 60 ]; then printf '%dm %02ds' "$((s / 60))" "$((s % 60))"; else printf '%ds' "$s"; fi
-}
+dur(){ if [ "$1" -ge 60 ]; then printf '%dm %02ds' "$(($1 / 60))" "$(($1 % 60))"; else printf '%ds' "$1"; fi; }
+elapsed(){ dur $(( $(now) - t0 )); }
 say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
-stop(){ say "$2"; exit "$1"; }
+# Every stop after a merge that landed (finish_branch, and a pull request found already merged)
+# tidies the merged branch's agent worktree once its own line is said. The tidy is never able to
+# change the exit: a merge that landed is reported as landed whatever the tidy found.
+merged_now=""
+stop(){ say "$2"; [ -z "$merged_now" ] || { merged_now=""; tidy_worktree || true; }; exit "$1"; }
 
 account=""
 gh_as(){
@@ -204,10 +223,10 @@ gh_as(){
 # The exact command the gates judge and gh runs, as one line of text and as an argument list.
 # --delete-branch is taken out of it and done here, after the merge (claude-config#1337, see
 # finish_branch), so the gates judge the command that actually runs.
-want_delete=""
+want_delete=""; method=""
 merge_argv=(pr merge "$pr" --repo "$slug")
 for f in ${flags[@]+"${flags[@]}"}; do
-  case "$f" in --delete-branch|-d) want_delete=1 ;; *) merge_argv+=("$f") ;; esac
+  case "$f" in --delete-branch|-d) want_delete=1 ;; *) merge_argv+=("$f"); method="$f" ;; esac
 done
 merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "$1"; }
 
@@ -271,7 +290,64 @@ read_compare(){   # sets compare, crc, behind, base_tip
   case "$behind" in ''|*[!0-9]*) ;; *) return 0 ;; esac
   read_err="${compare:0:300}, exit $crc"
   [ "$crc" -ne 0 ] && mt_gh_transient "$compare" && return 2
+  # 3: GitHub cannot find what it was asked to compare. Just after an update that is GitHub not
+  # having caught up with the branch (claude-config#1500), which the caller waits through; at any
+  # other time it stops as any refused read does.
+  [ "$crc" -ne 0 ] && case "$compare" in *"HTTP 404"*) return 3 ;; esac
   return 1
+}
+# The merge methods the repository allows, when none was passed (claude-config#1476): sets allowed
+# (the names, in gh's flag spelling, space separated) and methods_said (false when GitHub left the
+# settings out, as it does for an account that cannot change them, so absent never reads as not
+# allowed).
+read_methods(){
+  local out rc
+  allowed=""; methods_said=""
+  out="$(gh_as api "repos/$slug" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && methods_said="$(printf '%s' "$out" | jq -r '[has("allow_squash_merge"), has("allow_merge_commit"), has("allow_rebase_merge")] | all' 2>/dev/null)"; then
+    allowed="$(printf '%s' "$out" | jq -r '[if .allow_squash_merge == true then "squash" else empty end, if .allow_merge_commit == true then "merge" else empty end, if .allow_rebase_merge == true then "rebase" else empty end] | join(" ")')"
+    return 0
+  fi
+  methods_said=""
+  read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && mt_gh_transient "$out" && return 2
+  return 1
+}
+# "squash", "squash and rebase", "squash, merge and rebase"
+and_list(){
+  local n=$# out="" i=0 w
+  for w in "$@"; do
+    i=$((i + 1))
+    if [ "$i" -eq 1 ]; then out="$w"; elif [ "$i" -eq "$n" ]; then out="$out and $w"; else out="$out, $w"; fi
+  done
+  printf '%s' "$out"
+}
+# WHICH MERGE METHOD, when none was passed (claude-config#1476). gh pr merge refuses to choose one
+# outside a terminal, so on 2026-10-21 about a dozen PET merges waited out their checks and review
+# and then stopped at the merge itself. Now the repository's own settings decide, when they allow
+# exactly one method. When they allow more, nothing here decides: this stops, before any update or
+# wait, naming them. The issue also suggested squash when "the repository's history is squash only",
+# and that is deliberately not built. GitHub records no merge method for a merged pull request, and a
+# squash merge and a rebase of one commit leave the same single parent commit, so "squash only"
+# could only be guessed from history, never read; and a guess picks how commits land on the base,
+# which cannot be undone, for a repository whose settings say a person may choose otherwise (L93).
+# Both repositories measured on 2026-10-22, PET and claude-config, allow all three, so for them the
+# change is that the refusal comes at once, before the wait, instead of after it.
+method_name(){ case "$1" in merge) printf 'merge commit' ;; *) printf '%s' "$1" ;; esac; }
+choose_method(){
+  local rrc am names=() others="" m
+  with_retries "which merge methods $slug allows" read_methods; rrc=$?
+  [ "$rrc" -eq 0 ] || stop 1 "Stopped: no merge method was passed, and could not read which merge methods $slug allows ($read_err$(tried "$rrc")). Nothing was merged; pass --squash, --merge or --rebase."
+  [ "$methods_said" = "true" ] || stop 64 "Stopped: no merge method was passed, and GitHub did not say which merge methods $slug allows (it leaves them out for an account that cannot change the repository's settings). Nothing was merged; run it again naming one: $SELF $pr --repo $slug --squash${want_delete:+ --delete-branch} (or --merge, or --rebase)."
+  read -r -a am <<<"$allowed"
+  for m in ${am[@]+"${am[@]}"}; do names+=("$(method_name "$m")"); done
+  case "${#am[@]}" in
+    1) method="--${am[0]}"; merge_argv+=("$method")
+       say "Merging by $(method_name "${am[0]}"), the only merge method $slug allows, since none was passed." ;;
+    0) stop 64 "Stopped: no merge method was passed, and GitHub says $slug allows none. Nothing was merged." ;;
+    *) for m in "${am[@]:1}"; do others="$others, or --$m"; done
+       stop 64 "Stopped: no merge method was passed, and $slug allows $(and_list "${names[@]}") merges, so which one is a person's choice. Nothing was merged; run it again naming one: $SELF $pr --repo $slug --${am[0]}${want_delete:+ --delete-branch} (${others#, })." ;;
+  esac
 }
 read_back(){   # sets after
   local env
@@ -345,8 +421,65 @@ retarget(){   # $1 = pull request number
   printf '%s, exit %s' "${out:0:300}" "$rc"
   return 1
 }
+# THE MERGED BRANCH'S AGENT WORKTREE GOES AT THE MERGE (claude-config#1521). On 2026-10-22 this
+# repository held 66 agent worktrees, about 2.5 GB, 63 of them for merged pull requests: the sweep
+# (check-stale-worktrees.sh, started by stale-worktree-nudge.sh) ran only at a session's first
+# prompt, and one coordinator session dispatched over 60 builders in three days without another
+# session starting. So once the merge has landed, the worktree under <repo>/.claude/worktrees/ whose
+# branch is the one just merged is handed to check-stale-worktrees.sh --just-merged, which applies
+# every one of its own rules to that one worktree (merged holding every commit, nothing uncommitted
+# or untracked, no running process in it, no live agent's lock, the progress marker) except the six
+# hour recency, which a worktree merged a moment ago can never pass. The rules are the check's,
+# never a copy here (L370), and its branch is never deleted. What this adds is the one fact only the
+# caller has: the folder it was run from. An agent merging from inside its own worktree keeps it,
+# because removing it would take the floor from under the session still standing in it; the sweep
+# takes it later. Nothing here can change the exit: the merge has landed, and a worktree that could
+# not be judged or removed is said and left for the sweep.
+WT_CHECK="${MWR_WORKTREE_CHECK:-$MWR_HOOKS/check-stale-worktrees.sh}"
+tidy_worktree(){
+  local all line cur="" main="" wt="" real out rc tok="" said_any=""
+  [ -n "${branch:-}" ] || return 0
+  all="$(git -C "$top" worktree list --porcelain 2>/dev/null)" || return 0
+  # The first worktree git lists is the main checkout, whose .claude/worktrees holds the agents'.
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) cur="${line#worktree }"; [ -n "$main" ] || main="$cur" ;;
+      "branch refs/heads/$branch") case "$cur" in "$main/.claude/worktrees/"*) wt="$cur" ;; esac ;;
+    esac
+  done <<<"$all"
+  [ -n "$wt" ] || return 0
+  real="$(cd "$wt" 2>/dev/null && pwd -P)" || real="$wt"
+  case "$caller_dir/" in
+    "$real/"*|"$wt/"*)
+      say "Kept the agent worktree $wt: it is the folder this merge was run from, so removing it would take the floor from under the session that ran it. The stale worktree sweep removes it once nothing is working in it."
+      return 0 ;;
+  esac
+  if [ ! -f "$WT_CHECK" ]; then
+    say "Kept the agent worktree $wt: $WT_CHECK, which judges whether it can go, is missing."
+    return 0
+  fi
+  # The same account the merge used, so the merged list is read as the merge was.
+  [ -z "$account" ] || tok="$(gh auth token -u "$account" 2>/dev/null)" || tok=""
+  if [ -n "$tok" ]; then
+    out="$(cd "$main" && GH_TOKEN="$tok" bash "$WT_CHECK" --remove --just-merged "$wt" "$main" 2>&1)"; rc=$?
+  else
+    out="$(cd "$main" && bash "$WT_CHECK" --remove --just-merged "$wt" "$main" 2>&1)"; rc=$?
+  fi
+  case "$rc" in
+    0|1)
+      while IFS= read -r line; do
+        case "$line" in "  "*) say "Agent worktree: ${line#  }"; said_any=1 ;; esac
+      done <<<"$out"
+      [ -n "$said_any" ] || say "Kept the agent worktree $wt: check-stale-worktrees.sh said nothing about it (exit $rc)." ;;
+    2) say "Kept the agent worktree $wt: whether it can go could not be judged ($(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)). The stale worktree sweep looks at it again." ;;
+    *) say "Kept the agent worktree $wt: check-stale-worktrees.sh broke (exit $rc, which it never returns on purpose: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-300))." ;;
+  esac
+  return 0
+}
+
 finish_branch(){   # $1 = the sentence saying it merged; always stops
   local said="$1" left n why moved="" failed="" del rrc
+  merged_now=1
   [ -n "$want_delete" ] || stop 0 "$said."
   if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
     stop 0 "$said. Its branch $branch is in a fork, not in $slug, so no branch was deleted."
@@ -382,15 +515,47 @@ finish_branch(){   # $1 = the sentence saying it merged; always stops
 
 record_asked=""; polls=0; updates=0; head_seen=""; head_since=0; started_for=""; last_status=""; last_said=0
 tip_seen=""; tip_moved_at=""
+# The last update this run made (claude-config#1500): the head it was made to, when, and whether a
+# compare has answered since. See head_is_tip and not_caught_up.
+updated_from=""; updated_at=0; catching_up=""
 # Out of time while waiting on something: the same stop wherever the wait is.
 out_of_time(){   # $1 = what it was still waiting for
   if [ "$polls" -ge "$MAX_POLLS" ] || [ $(( $(now) - t0 )) -ge "$DEADLINE" ]; then
     stop 3 "Out of time: #$pr at ${head:0:7} $1 after $polls look(s). Nothing was merged; run the same command again to resume."
   fi
 }
-wait_a_look(){   # $1 = the status line; said when it changes, and every HEARTBEAT seconds while it does not
-  if [ "$1" != "$last_status" ] || [ $(( $(now) - last_said )) -ge "$HEARTBEAT" ]; then
-    say "$1"; last_status="$1"; last_said="$(now)"
+# An update GitHub has not shown, other than as a branch ahead of its pull request, which
+# head_is_tip handles: the pull request and its branch both still at the head the update was made to
+# and still behind, or a compare GitHub answers 404 for just after it (claude-config#1500; PET #1885
+# stopped on such a 404). Waited on and never answered with another update, for the same four minutes
+# head_is_tip allows a lag in all (two before the base is set again and two after), timed from the
+# update; then a plain stop.
+not_caught_up(){   # $1 = what GitHub shows
+  local bound=$(( 2 * LAG_WAIT ))
+  if [ $(( $(now) - updated_at )) -ge "$bound" ]; then
+    stop 1 "Stopped: #$pr has not caught up with its branch $(mins "$bound") after it was updated with $base: $1. Nothing was merged; GitHub has not shown the update yet, so wait a while, then run the same command again."
+  fi
+  out_of_time "has not caught up with its branch since it was updated ($1)"
+  wait_a_look "caught-up:$updated_from" "Head ${head:0:7}: #$pr has not caught up with its branch since it was updated: $1; waiting up to $(mins "$bound") from the update for GitHub to catch up, without updating again."
+}
+# THE HEARTBEAT (claude-config#1476). On PET #1857 this updated the branch and then said nothing for
+# long enough that the agent watching it stopped it: the line repeated only every five minutes, and
+# said nothing a stuck run would not also say. So a wait's line is said when it changes, and while it
+# does not, every HEARTBEAT seconds again with how long this wait has lasted, so a log with nothing new
+# for well past that (a look, with a read asked again, takes about a minute at most) means the
+# helper is not running. A wait is what $1 names (a head's checks and
+# review, a lag, main settling, an update GitHub has not shown), so a count of checks changing within
+# it does not restart its clock. Two minutes is two looks at the default pace: a setting, not a
+# measurement, on the injected clock (L524), and checked at each look, so it falls on the first look
+# at or after it.
+wait_key=""; wait_since=0
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line
+  local t; t="$(now)"
+  if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
+  if [ "$2" != "$last_status" ]; then
+    say "$2"; last_status="$2"; last_said="$t"
+  elif [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
+    say "$2 Still waiting, for $(dur $(( t - wait_since ))) so far."; last_said="$t"
   fi
   "$SLEEP" "$POLL"
 }
@@ -405,9 +570,16 @@ mins(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $
 # the re-set bounds the wait for it to take, since that day it took at once. Both are settings, not
 # measurements of how long GitHub can lag. The lag is timed from the look that first saw it, and a
 # head that becomes the tip ends it, so a later lag is its own, with its own single re-set.
+#
+# THE SAME LAG AFTER AN UPDATE (claude-config#1500). During GitHub's 2026-10-22 incident PET #1885's
+# branch moved to 9e50f0c when it was updated, but the pull request showed 60a80b8 for over 45
+# minutes, and this read the unmoved head as still behind and updated it seven more times. So an
+# update makes the next look confirm the head against the branch again, even when GitHub shows the
+# same head, and a lag found then is this same lag, said as the pull request not having caught up
+# with its branch since the update, and never answered with another update.
 lag_since=""; resynced_at=""
 head_is_tip(){
-  local rrc why where lagged
+  local rrc why where lagged waitkey waitline
   ref_repo="$slug"; where="branch $branch"
   if [ "$(printf '%s' "$view" | jq -r '.isCrossRepository // false')" = "true" ]; then
     ref_repo="$(printf '%s' "$view" | jq -r '(.headRepositoryOwner.login // "") + "/" + (.headRepository.name // "")')"
@@ -419,23 +591,30 @@ head_is_tip(){
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read the tip of $where ($read_err$(tried "$rrc")), so nothing here can confirm head ${head:0:7} is what the branch holds. Nothing was merged."
   [ -z "$ref_gone" ] || stop 1 "Stopped: $where of #$pr is not on GitHub, so there is no tip to merge. Nothing was merged; push the branch again, then run the same command again."
   if [ "$ref_tip" = "$head" ]; then lag_since=""; resynced_at=""; return 0; fi
-  lagged="GitHub still shows head ${head:0:7} for #$pr, but $where is at ${ref_tip:0:7}"
+  waitkey="lag:$head"
+  if [ "$head" = "$updated_from" ]; then
+    lagged="#$pr has not caught up with its branch since it was updated: GitHub still shows head ${head:0:7}, but $where is at ${ref_tip:0:7}"
+    waitline="Head ${head:0:7}: $lagged; waiting up to $(mins "$LAG_WAIT") for GitHub to catch up, without updating again."
+  else
+    lagged="GitHub still shows head ${head:0:7} for #$pr, but $where is at ${ref_tip:0:7}"
+    waitline="Head ${head:0:7}: GitHub still shows it for #$pr, but $where is at ${ref_tip:0:7}; waiting up to $(mins "$LAG_WAIT") for GitHub to catch up."
+  fi
   [ -n "$lag_since" ] || lag_since="$(now)"
   if [ -z "$resynced_at" ]; then
     if [ $(( $(now) - lag_since )) -lt "$LAG_WAIT" ]; then
       out_of_time "is not its branch's tip ($where is at ${ref_tip:0:7})"
-      wait_a_look "Head ${head:0:7}: GitHub still shows it for #$pr, but $where is at ${ref_tip:0:7}; waiting up to $(mins "$LAG_WAIT") for GitHub to catch up."
+      wait_a_look "$waitkey" "$waitline"
       return 1
     fi
     why="$(retarget "$pr")" || stop 1 "Stopped: after $(mins "$LAG_WAIT") $lagged, and GitHub refused to set its base again, the write that makes it read the branch again: $why. Nothing was merged."
     resynced_at="$(now)"
-    say "After $(mins "$LAG_WAIT") $lagged, so its base was set again to $base, which makes GitHub read the branch again. Looking again for the real head."
+    say "After $(mins "$LAG_WAIT"), $lagged, so its base was set again to $base, which makes GitHub read the branch again. Looking again for the real head."
     "$SLEEP" "$POLL"
     return 1
   fi
   if [ $(( $(now) - resynced_at )) -lt "$LAG_WAIT" ]; then
     out_of_time "is not its branch's tip ($where is at ${ref_tip:0:7}) after its base was set again"
-    wait_a_look "Head ${head:0:7}: GitHub still shows it for #$pr after its base was set again, but $where is at ${ref_tip:0:7}; waiting up to $(mins "$LAG_WAIT") for that to take."
+    wait_a_look "$waitkey" "Head ${head:0:7}: $lagged, after its base was set again; waiting up to $(mins "$LAG_WAIT") for that to take."
     return 1
   fi
   stop 1 "Stopped: $lagged, $(mins "$LAG_WAIT") after its base was set again to make GitHub read the branch again (and $(mins "$LAG_WAIT") of waiting before that). Nothing was merged: GitHub refuses to merge a head that is not its branch's tip. Push to the branch again, or wait a while, then run the same command again."
@@ -458,12 +637,17 @@ while :; do
   case "$state" in
     # A run that stopped with the branch left in place (stop 4) is finished here when run again.
     MERGED) [ -n "$want_delete" ] && finish_branch "Pull request #$pr in $slug is already merged (head ${head:0:7})"
+            merged_now=1
             stop 0 "Pull request #$pr in $slug is already merged (head ${head:0:7}); nothing to do." ;;
     OPEN) ;;
     *) stop 1 "Stopped: pull request #$pr in $slug is ${state:-in an unknown state}, not open. Nothing was merged." ;;
   esac
   [ -n "$head" ] && [ -n "$base" ] || stop 1 "Stopped: GitHub did not report the head commit or base branch of #$pr. Nothing was merged."
   if [ "$head" != "$head_seen" ]; then head_seen="$head"; head_since="$(now)"; fi
+
+  # No method passed: the repository's settings choose one, or it stops here, before the changelog
+  # gate judges a merge command and before any update or wait (claude-config#1476, L667).
+  [ -n "$method" ] || choose_method
 
   # The changelog record, once, at the first look that finds the pull request open: before any
   # update, wait or lessons review, since none of them can change it (#1178, L667).
@@ -483,7 +667,14 @@ while :; do
 
   # Behind its base: update, and go round for the new head.
   with_retries "whether #$pr contains the tip of $base" read_compare; rrc=$?
+  if [ "$rrc" -eq 3 ] && [ -n "$catching_up" ]; then
+    not_caught_up "GitHub answers 404 comparing head ${head:0:7} with $base"
+    continue
+  fi
   [ "$rrc" -eq 0 ] || stop 1 "Stopped: could not read whether #$pr contains the tip of $base ($read_err$(tried "$rrc")). Nothing was merged."
+  # A compare answering for a head other than the one updated, or showing it no longer behind, is
+  # GitHub having caught up, so a 404 after this is a refusal again.
+  { [ "$head" != "$updated_from" ] || [ "$behind" -eq 0 ]; } && catching_up=""
   # When the base's tip was last SEEN to change (claude-config#1271). The first look has nothing to
   # compare with, so a pull request already behind is updated at once; the time is the look that
   # saw the change, never GitHub's commit date, so a clock between them cannot shorten the wait. A
@@ -494,16 +685,25 @@ while :; do
     tip_seen="$base_tip"
   fi
   if [ "$behind" -gt 0 ] || [ "$(printf '%s' "$view" | jq -r '.mergeStateStatus // ""')" = "BEHIND" ]; then
+    # STILL THE HEAD THIS RUN UPDATED (claude-config#1500): GitHub has not shown the update, which is
+    # not a reason to make another. head_is_tip has already found the branch not ahead of it.
+    if [ "$head" = "$updated_from" ]; then
+      not_caught_up "GitHub and branch $branch both still show head ${head:0:7}, $behind behind $base"
+      continue
+    fi
     # MAIN STILL MOVING: wait for it to be still before updating. Each update starts a fresh check
     # run of 15 to 30 minutes (as they ran on 2026-10-16), and a base still taking merges would leave the new head behind again
     # before it finished, so a burst of merges is answered with one update after it, not one each.
     if [ -n "$tip_moved_at" ] && [ $(( $(now) - tip_moved_at )) -lt "$SETTLE" ]; then
       out_of_time "is behind $base, with $base still moving"
-      wait_a_look "Head ${head:0:7}: behind $base, with $base still moving; updating once it has been still for $(mins "$SETTLE")."
+      wait_a_look "settle:$base" "Head ${head:0:7}: behind $base, with $base still moving; updating once it has been still for $(mins "$SETTLE")."
       continue
     fi
     upd="$(gh_as pr update-branch "$pr" --repo "$slug" 2>&1)" || stop 1 "Stopped: GitHub refused to update #$pr with $base: ${upd:0:500}. Nothing was merged; resolve it by hand."
     updates=$((updates + 1))
+    # The next look confirms the head against the branch again even if GitHub shows the same one,
+    # since that is how an update GitHub has not shown looks (claude-config#1500).
+    updated_from="$head"; updated_at="$(now)"; catching_up=1; tip_ok_for=""
     noun="commits"; [ "$behind" -eq 1 ] && noun="commit"
     say "Head ${head:0:7} was $behind $noun behind $base, so it was updated (update $updates). Waiting for the new head's checks and lessons review."
     "$SLEEP" "$POLL"; continue
@@ -565,7 +765,7 @@ while :; do
 
   if [ -n "$waiting" ]; then
     out_of_time "still has $waiting"
-    wait_a_look "Head ${head:0:7}: waiting, $waiting."
+    wait_a_look "head:$head" "Head ${head:0:7}: waiting, $waiting."
     continue
   fi
 

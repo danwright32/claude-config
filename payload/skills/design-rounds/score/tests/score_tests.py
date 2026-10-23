@@ -10,6 +10,7 @@ pixels Pillow decodes from them (fixtures/expected.json).
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -574,6 +575,39 @@ check("a design naming a kind that is not allowed is no score, naming the allowe
 rc, out = run("frames", os.path.join(T, "postcard", "settled.html"))
 check("and its frames are not handed to an adapter either", rc == 2 and "postcard" in out, out)
 check("the refusal names the terminal among the kinds", "terminal" in out, out)
+
+
+# 11b. A design whose frames were captured from different pages (claude-config#1474): each frame names
+# the captured page it is drawn in, the score keeps that name on the frame's row and says it beside the
+# frame, so a picture below 100% on f2 is read against the page f2 is drawn in.
+def name_chromes(*names):
+    def m(s):
+        for f, name in zip(s["frames"]["frames"], names):
+            if name is not None:
+                f["chrome"] = name
+    return m
+
+
+rc, out, data = score(make("chromes", name_chromes("edit", "view")))
+check("a design whose frames name their captured pages scores like any other, both halves", rc == 0 and "MATCHED" in out, out)
+check("and the score file keeps each frame's page on its row",
+      data and [(f["id"], f.get("chrome")) for f in data["pictures"]["frames"]] == [("f1", "edit"), ("f2", "view")],
+      data and data["pictures"]["frames"])
+check("and says it beside each frame", re.search(r"f1 +40 wide in edit +picture", out) is not None
+      and re.search(r"f2 +40 wide in view +picture", out) is not None, out)
+rc, out, data = score(make("one-chrome", None))
+check("a design in one captured page names none beside its frames", data and "chrome" not in data["pictures"]["frames"][0]
+      and " in " not in [l for l in out.splitlines() if l.strip().startswith("f1")][0], out)
+for n, (name, mutate, needle) in enumerate([
+    ("a frame's page that is not a name", name_chromes(7, "view"), "frame f1 in the design-frames block names its chrome as 7"),
+    ("one frame naming its page and another not", name_chromes("edit", None),
+     "frame f2 in the design-frames block names no chrome, and f1 does"),
+    ("a page named beside a kind with no product page", lambda s: (name_chromes("edit", "view")(s),
+                                                                 s["frames"].__setitem__("kind", "email")),
+     "names the kind \"email\", which has no captured page, and its frames name captured pages"),
+]):
+    rc, out, data = score(make("chromes-bad-%d" % n, mutate))
+    check("%s is no score, saying so" % name, rc == 2 and needle in out, out)
 
 
 # 12. A design drawn in the shared terminal, a Claude Code mod's screen (claude-config#1413). Its decision
