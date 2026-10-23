@@ -1269,7 +1269,12 @@ the minute's tick. Changed from the plan by the engine spike (#839) and Dan's de
   finding once (L706).
 - Power: `/sleep` refuses on battery, and when `pmset` cannot say, and holds `caffeinate -i -t`
   until the record's end, its process number kept in `caffeinate.pid` and let go at wake or at the
-  record's own end, only while that process is still `caffeinate`.
+  record's own end, only while that process is still `caffeinate`. `hooks/power.ts` reads pmset's
+  answer (mains, battery, or unknown with why) and words the refusal. Each refusal is also a
+  notification (#1545), since a `/sleep` typed while a turn ran is answered only when the turn ends,
+  in a session Dan may not be looking at: on battery it says to plug in and run `/sleep` again, and
+  a reading pmset does not give is said as unreadable in both, never as battery. A notifier that
+  fails is said in the reply and the debug log, and the refusal stands.
 - Unmeasured until the first real night (Dan, 2026-10-07: build now, measure on night one): a full
   hour of work in an interactive session, a real model following the rules for that long, and what
   a real usage limit looks like. The engine's side of the driver (a Stop blocked with the rules

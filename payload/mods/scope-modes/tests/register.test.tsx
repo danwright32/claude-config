@@ -286,8 +286,8 @@ type Opts = {
   claims?: string
   /** What `sleep-queue.sh work` prints for each issue, its branch tip and its worktree's checkout (#844, #1119). */
   work?: Record<number, string>
-  /** What pmset says this Mac is drawing power from (#844). */
-  power?: 'ac' | 'battery'
+  /** What pmset says this Mac is drawing power from (#844), or how it fails (#1545). */
+  power?: 'ac' | 'battery' | { fails: string }
   caffeinateFails?: boolean
   /** The session is in no repository (#844). */
   noRepo?: boolean
@@ -638,7 +638,11 @@ const world = (on: On, o: Opts = {}) => {
       if (typeof g === 'object') return fail(2, g.fails)
       return ok(`${JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', met: false, sentinel: true, condition: g } })}\n`)
     }
-    if (cmd === 'pmset') return ok(o.power === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
+    if (cmd === 'pmset') {
+      const p = w.o.power
+      if (typeof p === 'object') return fail(1, p.fails)
+      return ok(p === 'battery' ? "Now drawing from 'Battery Power'\n" : "Now drawing from 'AC Power'\n")
+    }
     if (cmd === 'sh' && String(a[1]).startsWith('caffeinate')) {
       if (o.caffeinateFails) return fail(127, 'sh: caffeinate: not found')
       w.caffeinated.push(a[a.length - 1] as string)
@@ -4851,14 +4855,35 @@ test('/sleep refuses on battery, and on mains holds caffeinate for the night, le
   await start($ as never, clock)
   expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again.')
   expect(w.files[CURRENT]).toBeUndefined()
+  // A /sleep typed while a turn ran answers into a session Dan is not looking at, so the refusal is a notification too (#1545).
+  expect(w.notified).toEqual(['Sleep mode did not start: this Mac is on battery power. Plug it in and run /sleep again.'])
   w.o.power = 'ac'
   const r = await command($ as never, 'sleep')
   expect(r.text).toMatch(/^Sleep mode is on until/)
+  expect(w.notified.length).toBe(1)
   expect(w.caffeinated).toEqual([String(Math.ceil((UNTIL - T0) / 1000))])
   expect(w.files[`${SLEEP}/caffeinate.pid`]).toBe(`4242 ${Math.ceil((UNTIL - T0) / 1000)}`)
   await command($ as never, 'wake')
   expect(w.killed).toEqual(['4242'])
   expect(w.files[`${SLEEP}/caffeinate.pid`]).toBeUndefined()
+})
+
+test('/sleep with power it cannot read says so in the reply and the notification, never battery (#844, #1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { power: { fails: 'pmset: IOPS unavailable' } })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe('Sleep mode did not start: whether this Mac is on battery could not be read (pmset: IOPS unavailable).')
+  expect(w.notified).toEqual(['Sleep mode did not start: whether this Mac is on battery could not be read (pmset: IOPS unavailable). Check it is plugged in, then run /sleep again.'])
+  expect(w.files[CURRENT]).toBeUndefined()
+})
+
+test('a refusal whose notification cannot be sent says so in the reply and the log, and still refuses (#1545)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { power: 'battery', notifyFails: true })
+  await start($ as never, clock)
+  expect((await command($ as never, 'sleep')).text).toBe(
+    'Sleep mode did not start: this Mac is on battery power, and a night of work would drain it. Plug it in and run /sleep again. The notification saying so could not be sent: terminal-notifier: no permission to notify.',
+  )
+  expect(w.logs).toContain('scope-modes: /sleep was refused, and the notification saying so could not be sent: terminal-notifier: no permission to notify')
+  expect(w.files[CURRENT]).toBeUndefined()
 })
 
 test('wake never stops another caffeinate that took the hold\'s process number (#844)', withDeps, async ($, on) => {
