@@ -253,11 +253,11 @@ STRAGGLER="$WORK/straggler-hook.sh"
 cat > "$STRAGGLER" <<'EOS'
 #!/bin/bash
 cat >/dev/null
-if [ ! -f "$HOME/seeded" ]; then
-  : > "$HOME/seeded"
+if [ ! -f "$CLAUDE_HOME/seeded" ]; then
+  : > "$CLAUDE_HOME/seeded"
   nohup /bin/bash -c '
-    n=0; while [ ! -f "$HOME/release" ] && [ "$n" -lt 1200 ]; do /bin/sleep 0.05; n=$((n + 1)); done
-    cat /dev/null; cat /dev/null; : > "$HOME/straggled"' </dev/null >/dev/null 2>&1 &
+    n=0; while [ ! -f "$CLAUDE_HOME/release" ] && [ "$n" -lt 1200 ]; do /bin/sleep 0.05; n=$((n + 1)); done
+    cat /dev/null; cat /dev/null; : > "$CLAUDE_HOME/straggled"' </dev/null >/dev/null 2>&1 &
   exit 0
 fi
 cat /dev/null
@@ -265,12 +265,12 @@ EOS
 fresh straggler
 run_hook UserPromptSubmit "$STRAGGLER"; _settle_log="$SHIM_LOG"
 run_hook UserPromptSubmit "$STRAGGLER"; _measured_log="$SHIM_LOG"
-: > "$F/home/release"
-_n=0; while [ ! -f "$F/home/straggled" ] && [ "$_n" -lt 1200 ]; do sleep 0.05; _n=$((_n + 1)); done
+: > "$F/home/.claude/release"
+_n=0; while [ ! -f "$F/home/.claude/straggled" ] && [ "$_n" -lt 1200 ]; do sleep 0.05; _n=$((_n + 1)); done
 _late="$(grep -c '^cat$' "$_settle_log" 2>/dev/null)"
 _counted="$(grep -c . "$_measured_log" 2>/dev/null)"
-if [ ! -f "$F/home/straggled" ] || [ "${_late:-0}" -lt 3 ]; then
-  check "the control: a job the settling run left running is never counted with the measured run" "the straggler never ran its two commands (finished: $([ -f "$F/home/straggled" ] && echo yes || echo no), cat lines in the settling run's log: ${_late:-0} of 3), so this control measured nothing"
+if [ ! -f "$F/home/.claude/straggled" ] || [ "${_late:-0}" -lt 3 ]; then
+  check "the control: a job the settling run left running is never counted with the measured run" "the straggler never ran its two commands (finished: $([ -f "$F/home/.claude/straggled" ] && echo yes || echo no), cat lines in the settling run's log: ${_late:-0} of 3), so this control measured nothing"
 elif [ "${_counted:-0}" -eq 2 ]; then
   check "the control: a job the settling run left running is never counted with the measured run (2: its own cat and cat)" ok
 else
