@@ -344,7 +344,7 @@ want_rc 0 "the control still allows the same push with python3 present"
 
 # --- a repository that COMMITS its own bundle budget record judges itself (claude-config#586) ----
 # Slate keeps its record at .githooks/bundle-budget.txt and judges growth against the copy at the
-# merge base (Try-Pennie/slate PR #2834). A second, global record beside it would be a second answer
+# merge base (slate PR #2834). A second, global record beside it would be a second answer
 # to one question, and the drifting one, so this guard stands down there and says why. Proved
 # against the same fixture that blocks without the file: growth past both margins.
 W="$(mk_repo "$WORKDIR/own-record")"

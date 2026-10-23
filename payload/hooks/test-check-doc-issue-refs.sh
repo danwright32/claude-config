@@ -123,7 +123,7 @@ Closes #12, which will land later.
 want_none "a six digit hex colour is not an issue" "Graphite is #343434 and will stay so."
 
 want_row "a full issue URL carries its own repository" \
-"https://github.com/Try-Pennie/slate/issues/1041 is the issue for the booker side." "1:Try-Pennie/slate#1041"
+"https://github.com/Acme-Corp/storefront/issues/1041 is the issue for the booker side." "1:Acme-Corp/storefront#1041"
 
 want_row "a table cell is its own sentence" \
 "| GET /x | Drains jobs (#973). | #55 tracks the rest. |" "1:55"

@@ -1207,7 +1207,7 @@ rm -rf "$dir"
 
 echo "block-red-merge: the branch holds the base branch's current tip (#766)"
 
-# On 2026-10-04 Try-Pennie/slate main went red after two pull requests that were each green: #3231
+# On 2026-10-04 slate main went red after two pull requests that were each green: #3231
 # merged, then #3237, branched before #3231 landed, merged without ever being tested against it
 # (L85). A green rollup is earned against whatever base the branch was built on, so it says nothing
 # about the combination main will hold unless the branch already contains main's current tip.

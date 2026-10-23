@@ -568,7 +568,7 @@ SESSION_ENV=""
 allows "#536 outside a session (CI, a plain shell) the rule does not apply" "gh issue create --title t --body b $ALL"
 
 # ---------------------------------------------------------------------------
-# A body file the gate cannot read (claude-config#1416). Try-Pennie/slate#3924 and #3925 were filed
+# A body file the gate cannot read (claude-config#1416). slate#3924 and #3925 were filed
 # with a body holding only the session line, from --body-file "$D/i7.md" in a Bash call where $D was
 # never set (variables do not carry between calls), and the gate passed it because it fails open on
 # a file it cannot open. A path naming a variable this command does not set, a file that does not

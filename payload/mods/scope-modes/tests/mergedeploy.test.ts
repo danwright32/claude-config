@@ -16,7 +16,7 @@ const kinds = (command: string, where?: Where) => acts(command, where).map(a => 
 
 const LISTS = JSON.stringify({
   v: 1,
-  mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }, { repo: 'o/merges-quietly', mergeDeploys: false }, { repo: 'o/unsaid' }],
+  mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }, { repo: 'o/merges-quietly', mergeDeploys: false }, { repo: 'o/unsaid' }],
   mayDeploy: ['o/deploys'],
 })
 
@@ -24,7 +24,7 @@ describe('the shared lists, read', () => {
   test('a good file reads as both lists; a mergeOnly entry that does not say whether a merge deploys reads as unknown, never as safe (L72)', () => {
     const r = readRepoLists(LISTS)
     expect('lists' in r && r.lists.mergeOnly).toEqual([
-      { repo: 'Try-Pennie/slate', mergeDeploys: true },
+      { repo: 'Acme-Corp/storefront', mergeDeploys: true },
       { repo: 'o/merges-quietly', mergeDeploys: false },
       { repo: 'o/unsaid', mergeDeploys: 'unknown' },
     ])
@@ -75,7 +75,7 @@ describe('what each repository may do tonight', () => {
   test('mayDeploy deploys; mergeOnly merges unless its merge deploys; case does not matter', () => {
     expect(policyOf(night, 'O/Deploys')).toEqual({ kind: 'deploy', repo: 'O/Deploys' })
     expect(policyOf(night, 'o/merges-quietly')).toEqual({ kind: 'merge-only', repo: 'o/merges-quietly', mergeDeploys: false })
-    expect(policyOf(night, 'try-pennie/slate')).toEqual({ kind: 'merge-only', repo: 'try-pennie/slate', mergeDeploys: true })
+    expect(policyOf(night, 'acme-corp/storefront')).toEqual({ kind: 'merge-only', repo: 'acme-corp/storefront', mergeDeploys: true })
     expect(policyOf(night, 'o/unsaid')).toEqual({ kind: 'merge-only', repo: 'o/unsaid', mergeDeploys: 'unknown' })
     // Not known not to deploy: the merge waits for the morning, and the refusal says why.
     expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, policyOf(night, 'o/unsaid'))).toBe('whether a merge in o/unsaid deploys is not recorded in mods/sleep-repos.json, so it is never merged overnight')
@@ -88,7 +88,7 @@ describe('what each repository may do tonight', () => {
   })
   test('a list that could not be read fails closed for every repository, the listed ones too', () => {
     const broken = nightRepos(readRepoLists('{"v":1,'), [])
-    for (const repo of ['o/deploys', 'Try-Pennie/slate', 'o/new']) expect(policyOf(broken, repo)).toEqual({ kind: 'closed', repo, why: 'mods/sleep-repos.json is not JSON' })
+    for (const repo of ['o/deploys', 'Acme-Corp/storefront', 'o/new']) expect(policyOf(broken, repo)).toEqual({ kind: 'closed', repo, why: 'mods/sleep-repos.json is not JSON' })
     const missing = nightRepos(readRepoLists(null), [])
     expect(policyOf(missing, 'o/deploys')).toEqual({ kind: 'closed', repo: 'o/deploys', why: 'mods/sleep-repos.json is missing' })
   })
@@ -104,69 +104,70 @@ describe('what each repository may do tonight', () => {
   test('what each policy refuses', () => {
     const deploy = policyOf(night, 'o/deploys')
     const quiet = policyOf(night, 'o/merges-quietly')
-    const loud = policyOf(night, 'Try-Pennie/slate')
+    const loud = policyOf(night, 'Acme-Corp/storefront')
     const merge = { kind: 'merge' as const, what: 'merge a PR' }
     const dep = { kind: 'deploy' as const, what: 'deploy with wrangler' }
     const push = { kind: 'push-default' as const, what: 'push main straight to GitHub' }
     expect([refusalOf(merge, deploy), refusalOf(dep, deploy)]).toEqual([undefined, undefined])
     expect(refusalOf(merge, quiet)).toBe(undefined)
     expect(refusalOf(dep, quiet)).toBe('o/merges-quietly may merge overnight but never deploy')
-    expect(refusalOf(merge, loud)).toBe('a merge in Try-Pennie/slate deploys, so it is never merged overnight')
+    expect(refusalOf(merge, loud)).toBe('a merge in Acme-Corp/storefront deploys, so it is never merged overnight')
     // A direct push to a default branch is refused in every repository, deploying ones included.
     for (const p of [deploy, quiet, loud]) expect(refusalOf(push, p)).toMatch(/never made overnight/)
   })
 })
 
 describe('an owner whose every repository waits overnight (waitOwners)', () => {
-  // Dan, 2026-10-07: "Move ANYTHING in halo-lab-trypennie to the wait list automatically. Nothing
-  // in that account should merge overnight". Waiting is no merge and no deploy.
+  // Dan, 2026-10-07, asked for anything in the agency's organisation to go to the wait list
+  // automatically, so nothing in that account merges overnight (paraphrased: his words name the
+  // organisation, claude-config#1568). Waiting is no merge and no deploy.
   const OWNED = JSON.stringify({
     v: 1,
-    waitOwners: ['Halo-lab-Trypennie'],
-    mergeOnly: [{ repo: 'Try-Pennie/slate', mergeDeploys: true }, { repo: 'Halo-lab-Trypennie/quiet', mergeDeploys: false }],
-    mayDeploy: ['o/deploys', 'Halo-lab-Trypennie/listed'],
+    waitOwners: ['Studio-Partner'],
+    mergeOnly: [{ repo: 'Acme-Corp/storefront', mergeDeploys: true }, { repo: 'Studio-Partner/quiet', mergeDeploys: false }],
+    mayDeploy: ['o/deploys', 'Studio-Partner/listed'],
   })
   const night = nightRepos(readRepoLists(OWNED), [])
   const waits = (repo: string) => {
     const p = policyOf(night, repo)
-    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, p)).toMatch(/every repository owned by Halo-lab-Trypennie waits overnight/)
+    expect(refusalOf({ kind: 'merge', what: 'merge a PR' }, p)).toMatch(/every repository owned by Studio-Partner waits overnight/)
     expect(refusalOf({ kind: 'deploy', what: 'deploy' }, p)).toMatch(/neither merges nor deploys/)
   }
   test('a repository under that owner that no list names, one added later, waits', () => {
-    waits('Halo-lab-Trypennie/added-next-year')
+    waits('Studio-Partner/added-next-year')
   })
   test('the owner matches in any case', () => {
-    waits('halo-lab-trypennie/trypennie')
-    waits('HALO-LAB-TRYPENNIE/Trypennie')
-    const shouty = nightRepos(readRepoLists(OWNED.replace('"Halo-lab-Trypennie"]', '"HALO-LAB-trypennie"]')), [])
-    expect(policyOf(shouty, 'Halo-lab-Trypennie/trypennie')).toMatchObject({ kind: 'closed' })
+    waits('studio-partner/website')
+    waits('STUDIO-PARTNER/Website')
+    const shouty = nightRepos(readRepoLists(OWNED.replace('"Studio-Partner"]', '"STUDIO-partner"]')), [])
+    expect(policyOf(shouty, 'Studio-Partner/website')).toMatchObject({ kind: 'closed' })
   })
   test('a mayDeploy or merge only entry under that owner is a conflict, and it still waits', () => {
-    waits('Halo-lab-Trypennie/listed')
-    waits('Halo-lab-Trypennie/quiet')
+    waits('Studio-Partner/listed')
+    waits('Studio-Partner/quiet')
   })
   test('only that owner: another owner, and a name that merely starts with it, keep their lists', () => {
     expect(policyOf(night, 'o/deploys')).toEqual({ kind: 'deploy', repo: 'o/deploys' })
-    expect(policyOf(night, 'Halo-lab-Trypennie-other/x')).toMatchObject({ kind: 'closed', why: 'Halo-lab-Trypennie-other/x is on neither list in mods/sleep-repos.json' })
+    expect(policyOf(night, 'Studio-Partner-other/x')).toMatchObject({ kind: 'closed', why: 'Studio-Partner-other/x is on neither list in mods/sleep-repos.json' })
   })
   test('a repository under that owner is decided, so it is never asked about at bedtime, and an answer for it is refused', () => {
     const r = readRepoLists(OWNED)
-    expect('lists' in r && isListed(r.lists, 'halo-lab-trypennie/new')).toBe(true)
-    expect(addAnswer(OWNED, 'Halo-lab-Trypennie/new', MAY_DEPLOY)).toEqual({ why: 'Halo-lab-Trypennie/new is already listed' })
+    expect('lists' in r && isListed(r.lists, 'studio-partner/new')).toBe(true)
+    expect(addAnswer(OWNED, 'Studio-Partner/new', MAY_DEPLOY)).toEqual({ why: 'Studio-Partner/new is already listed' })
   })
   test('a waitOwners that is not a list of owner names closes every repository, never a partial rule', () => {
     const why = (t: string) => {
       const r = readRepoLists(t)
       return 'why' in r ? r.why : 'read'
     }
-    expect(why('{"v":1,"waitOwners":"Halo-lab-Trypennie","mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has a waitOwners that is not a list')
-    expect(why('{"v":1,"waitOwners":["Halo-lab-Trypennie/trypennie"],"mergeOnly":[],"mayDeploy":[]}')).toMatch(/waitOwners entry that is not an owner name/)
+    expect(why('{"v":1,"waitOwners":"Studio-Partner","mergeOnly":[],"mayDeploy":[]}')).toBe('mods/sleep-repos.json has a waitOwners that is not a list')
+    expect(why('{"v":1,"waitOwners":["Studio-Partner/website"],"mergeOnly":[],"mayDeploy":[]}')).toMatch(/waitOwners entry that is not an owner name/)
     expect(why('{"v":1,"mergeOnly":[],"mayDeploy":[]}')).toBe('read')
   })
   test('the record carries the owners, and a record from before them still reads', () => {
-    expect(night.waitOwners).toEqual(['Halo-lab-Trypennie'])
+    expect(night.waitOwners).toEqual(['Studio-Partner'])
     expect(nightRepos(readRepoLists(LISTS), []).waitOwners).toBeUndefined()
-    expect(policyOf({ mayDeploy: [], mergeOnly: [], closed: [], waitOwners: 'Halo-lab-Trypennie' }, 'o/x')).toMatchObject({ kind: 'closed', why: 'the sleep record carries no merge and deploy lists' })
+    expect(policyOf({ mayDeploy: [], mergeOnly: [], closed: [], waitOwners: 'Studio-Partner' }, 'o/x')).toMatchObject({ kind: 'closed', why: 'the sleep record carries no merge and deploy lists' })
   })
 })
 
@@ -181,10 +182,10 @@ describe('what a command does, by effect', () => {
   test('every merge route: gh pr merge (and --auto), the merge helper, the REST merge endpoints and the GraphQL mutations', () => {
     expect(kinds('gh pr merge 12 --squash')).toEqual(['merge'])
     expect(acts('gh pr merge 12 --auto --squash')[0]?.what).toBe('merge a PR (auto merge)')
-    expect(acts('gh pr merge 12 --repo Try-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
+    expect(acts('gh pr merge 12 --repo Acme-Corp/storefront')[0]?.repo).toBe('acme-corp/storefront')
     // Every spelling gh reads, through mod-kit's one reading of gh's arguments ($.modkit.gh, #961): a joined
     // -R, --repo=, a PR link naming its repository, and a joined --method.
-    expect(acts('gh pr merge 12 -RTry-Pennie/slate')[0]?.repo).toBe('try-pennie/slate')
+    expect(acts('gh pr merge 12 -RAcme-Corp/storefront')[0]?.repo).toBe('acme-corp/storefront')
     expect(acts('gh pr merge 12 --repo=o/x')[0]?.repo).toBe('o/x')
     expect(acts('gh pr merge https://github.com/o/y/pull/3 --squash')[0]?.repo).toBe('o/y')
     expect(kinds('gh api --method=PUT repos/o/r/pulls/12/merge')).toEqual(['merge'])

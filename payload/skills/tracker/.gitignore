@@ -3,3 +3,7 @@
 # config.local.json.bak-2026-10-12, a half written .writing copy, or an editor backup ending in ~.
 *.local.json.*
 *.local.json~
+# The same shapes for a list kept as lines (claude-config#1568), which the sync keeps local alike.
+*.local.txt
+*.local.txt.*
+*.local.txt~

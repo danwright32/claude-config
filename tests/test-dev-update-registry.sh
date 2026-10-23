@@ -209,7 +209,6 @@ git -C "$RA" rev-parse HEAD > "$RA/.last-applied"
 git -C "$RB" rev-parse HEAD > "$RB/.last-applied"
 check "(setup) Mac B holds the registry under its old name before the change" cmp -s "$CB/$REL_OLD" "$CA/$REL_OLD"
 check "(setup) and its clone is at the commit tracking it" git -C "$RB" cat-file -e "HEAD:payload/$REL_OLD"
-check "(setup) Mac B holds the registry under its old name before the change" cmp -s "$CB/$REL_OLD" "$CA/$REL_OLD"
 cp "$CB/$REL_OLD" "$WORK/macB-registry-before.json"
 
 # The change lands from elsewhere (a pull request merged on GitHub): the tracked file is deleted.

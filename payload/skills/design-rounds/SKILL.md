@@ -536,7 +536,7 @@ on the local machine, never in a deployment), or for a mod, the mod's own band f
   attributes, computed colours), never a styling class. `--perturb '<css>'` changes the built side on
   purpose, the negative control. `--ready '<selector>'` waits for the built page to show its content
   before the picture (at most 30 seconds, then the frame is no score): a streamed page can fire load
-  while its loading placeholder is still on screen, which CI once pictured (Try-Pennie/slate#3947).
+  while its loading placeholder is still on screen, which CI once pictured (slate#3947).
 - **SwiftUI**: `node capture-web.mjs --design <settled.html> --out <folder> --design-only` draws the
   design's side; then a snapshot test in the app's UI test target, using
   `score/swiftui/DesignScoreTests/DesignScoreCapture.swift` (copied into that target), renders the

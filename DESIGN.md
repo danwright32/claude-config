@@ -1301,6 +1301,42 @@ anything reads it), and two releases, one adding the local name and one removing
 as a merge from elsewhere would, and holds that the registry survives, the gate passes, and neither
 the local file nor an old name copy reaches the shared repository.
 
+#1568 moved a second list the same way: `hooks/main-to-dev-repos.txt`, the repositories merged main
+into dev after each merge, which named a work organisation. It is a list of lines, not JSON, and the
+move copies bytes, so `LOCAL_FILE_GLOBS` gained `*.local.txt` and its copies rather than the file
+being reshaped in the same step: a reshape needs a converter in the move, which is a second
+mechanism, and a reader of two formats. Its reader, `sync-main-to-dev.sh`, says a missing list on
+every merge instead of standing down as it did while the file travelled (L11), and an empty list is
+the deliberate way to sync nothing. `tests/test-moved-to-local.sh` reads `MOVED_TO_LOCAL` out of the
+script and proves the move for every pair it lists, so a pair added later is proved on the day it
+lands. Sleep mode's lists (`mods/sleep-repos.json`) are the last tracked list naming an
+organisation; their reader's file name is a constant in a mod hook, and moving them waits on
+Dan's answer to the design round guard.
+
+## The work's organisation names are found by hash (#1568)
+
+The work's private repositories live under two GitHub organisations, and this repository is public.
+`hooks/lib/work-names.py` finds a name wherever it stands as a whole hyphenated run inside a token:
+an owner, a URL, a fixture file name before an underscore, or the tail of a longer login. It holds
+the two names only as sha256 hashes, so it does not publish what it guards and a search for them
+finds nothing in it. On a Mac with the dev update registry it also reads, through that registry's
+one reader, the owner of every repository listed, so an organisation added there is guarded on that
+Mac from the next scan; CI has no registry and checks the hashes only, and says so. It never prints
+the name it found, because CI logs of a public repository are public and a refusal is read in
+transcripts.
+
+Deliberately not a name: a product or repository name on its own (`slate#123`, a checkout folder,
+a product in prose). Without the organisation it locates nothing, it is the vocabulary hundreds of
+lessons are written in, and `name#N` is what `lesson-fanout.sh` parses to skip the repository a
+lesson came from, so provenance drops the owner and keeps the name. The same login without its
+hyphen is a different GitHub account and the company's public web domain. Flagging repository names
+would also flag English words (a colour named in a vendored skill), which only an exemption list
+could quiet, and the scan has none.
+
+Not yet wired, and why: once sleep mode's lists and the lesson provenance are clean, the suite runs
+the scanner over the whole tree and the send runs it over what it publishes. Before then both would
+fail on the names still tracked.
+
 ## One watcher, and a leftover loop stops itself (#604)
 
 `do_watch` refused a second watcher from #251, and status still found five watcher processes on
@@ -1312,6 +1348,59 @@ it, and stops with a logged line when either answer is no. The pid file is claim
 so two watchers starting together cannot both run. Status judges watchers by roots only: every send
 is several nested command substitutions carrying the watcher's own command line, so one healthy
 watcher mid send reads three or four deep, which was the "nested up to 4 deep" of that report.
+
+## A watcher older than the claude-sync on disk restarts itself (#420, #1569)
+
+#420 made the watcher record a content hash of the `claude-sync` it loaded and refuse to send on any
+tick where the file on disk differs, because a guard shipped into the script is inert in a process
+that parsed the file before it existed (L715). It deliberately stopped there: refusing was the part
+that could not be wrong, and a process replacing itself was called a separate decision, with
+recovery left to the daily timer or a pull by hand. That left a Mac able to sit silent for a day.
+From 2026-10-22 16:44 to 2026-10-23 08:22 ET the personal MacBook logged the refusal 84 times, sent
+and received nothing, and told nobody (L13, L357). Dan decided on 2026-10-23: "Restart itself".
+
+So a stale tick now has four outcomes, decided in `watch_stale_tick`:
+
+- **Restart.** The newer copy is self tested under the sync lock, with the same `script_self_test`
+  a pull uses before re-executing onto what it pulled (parse, then a full `status` run in throwaway
+  directories), so no pull can change the file between the test and the decision. The lock is
+  released, a `.watch-restarted` note is left for the next watcher, the loop ends fswatch by the pid
+  it traced (fswatch is started through `sh -c` that prints its own pid and then execs it), and the
+  process exits 0. Ending fswatch matters: it writes only on a change, so a watcher left to let it
+  die of its next write would be logged as restarting and still running until somebody saved
+  something.
+- **Wait for the lock.** Another run holding the lock is what a pull applying a newer copy looks
+  like, and the pull restarts the watcher itself when it finishes. The watcher waits the usual lock
+  deadline, then gives up for this change and tries again on the next.
+- **Wait for a hold.** A hold is taken while somebody commits by hand, often in the very clone the
+  watcher runs, so the file may be mid change. A held watcher sends nothing anyway, so its staleness
+  costs nothing until the hold lifts.
+- **Refuse, and say so.** A newer copy that fails its self test would crash at every launch, and
+  with an unconditional `KeepAlive` launchd would respawn it every ten seconds for ever. So the
+  watcher keeps the #420 behaviour, and because no restart and no wait can clear this case it is the
+  one that needs a person: `.watch-stale` records the stretch, `claude-sync stuck` reports it as
+  `watcher-stale` (so status and the per prompt notice say it, the notice at once rather than after
+  its hour), and one desktop notification is posted per stretch.
+
+Why launchd brings it back: the watch agent's plist has `KeepAlive` as the boolean `true`, which
+keeps the job alive unconditionally, exit 0 included (a dictionary with `SuccessfulExit` false would
+not), and sets no `ThrottleInterval`, so launchd's default of ten seconds applies. That throttle
+delays a respawn only for a job that ran under ten seconds since it last started; a watcher old
+enough to be stale has run far longer, so it comes back at once. The plist is unchanged by this, so
+no Mac needs `install-autosync` re-run for it (L423). The suite pins all of that against the plist
+`install-autosync` writes.
+
+The watcher launchd starts next reads `.watch-restarted`, logs `restarted onto claude-sync <new>
+from <old>`, so the log shows the restart landed and not only that one was attempted, and sends once
+on the way up: the change that revealed the stale watcher was refused rather than sent, and fswatch
+reports only changes made after it starts, so without that send the change would wait for the next
+one. A watcher started any other way (a login, a pull's kickstart) does not send until a change.
+
+What this does not cover: a newer copy that passes the self test and then fails only as a watcher
+would be restarted into, and crash loop at launchd's throttle. That is the same exposure a pull's
+own restart of the watcher already had, and the self test is the guard both share. The first
+version of the watcher to carry this code has to be started by something else (a pull's restart, as
+always); only from then on does a stale watcher restart itself.
 
 ## The hooks block is merged in BOTH directions, against the same base
 

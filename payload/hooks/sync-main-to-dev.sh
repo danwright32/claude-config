@@ -2,8 +2,8 @@
 #
 # sync-main-to-dev.sh
 # Claude Code PostToolUse(Bash) hook: after a pull request merges into main in a repo listed in
-# main-to-dev-repos.txt, merge main INTO dev through GitHub's merges API, so staging keeps up with
-# production. The rule came from a partner (Denys, trypennie, 2026-10-01) and merges there are rare,
+# this Mac's ~/.claude/hooks/main-to-dev-repos.local.txt, merge main INTO dev through GitHub's
+# merges API, so staging keeps up with production. The rule came from a partner (Denys, trypennie, 2026-10-01) and merges there are rare,
 # which is exactly when a rule kept only in memory gets missed (L27, L57), so the hook does the merge
 # rather than reminding anyone to.
 #
@@ -26,8 +26,13 @@ set -uo pipefail
 
 payload="$(cat)"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPOS_FILE="$HOOK_DIR/main-to-dev-repos.txt"
-[ -f "$REPOS_FILE" ] || exit 0
+# The list names work repositories, so it is each Mac's own file, never tracked in the public
+# repository (claude-config#1568). claude-sync moved each Mac's installed copy of the old tracked
+# hooks/main-to-dev-repos.txt here byte for byte (MOVED_TO_LOCAL), and never sends or deletes it.
+# Missing is said on every merge, never read as an empty list: a Mac that never got it would
+# otherwise skip the rule silently, which is how a rule kept in memory gets missed (L27, L11).
+# An empty file is the deliberate way to sync nothing here.
+REPOS_FILE="${CLAUDE_HOME:-$HOME/.claude}/hooks/main-to-dev-repos.local.txt"
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || exit 0
 
 parsed="$(ps_parse_payload "$payload" raw)" || exit 0
@@ -57,6 +62,11 @@ Main to dev sync: ${said[$i]}"; done
   fi
   exit 0
 }
+
+if [ ! -f "$REPOS_FILE" ]; then
+  say "this Mac has no list of repositories to merge main into dev after a merge, at $REPOS_FILE, so no repository was synced. It names work repositories, so it is this Mac's own file and never sent between Macs. Create it with one owner/name a line (a # starts a comment), or leave it empty to sync nothing here on purpose."
+  speak
+fi
 
 # One merge: the directory it runs in, the repository it names with -R or a link, and its number.
 sync_one() {  # $1 = directory, $2 = repo flag or empty, $3 = pr number or empty

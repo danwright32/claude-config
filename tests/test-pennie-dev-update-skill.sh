@@ -139,7 +139,7 @@ for step in 'gather.js gather' 'gather.js commit-state' 'lint-post.js'; do
 done
 
 # ---- claude-config#1182: a bare gh command runs as whichever account gh has active, which on the
-# personal MacBook is danwright32, and GitHub answers it 404 for Try-Pennie's private repos. So
+# personal MacBook is danwright32, and GitHub answers it 404 for the work organisation's private repos. So
 # every gh command the skill shows runs through `gather.js gh`, which runs it as the account
 # the registry names for the repo. The bare form is a code block line that STARTS with gh, or an
 # inline command in backticks that starts with gh and names its repo with --repo (every command

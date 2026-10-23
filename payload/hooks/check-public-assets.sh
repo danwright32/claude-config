@@ -5,7 +5,7 @@
 #
 # Goal: block a `git push` that leaves a served asset nothing references, or that adds or changes a
 # raster image over the size cap (claude-config#429). L29 (dead code is worse than deleted code) had
-# no check for assets: the dev team review of Slate (Denys Botsiun, 2026-09-18, Try-Pennie/slate#2561)
+# no check for assets: the dev team review of Slate (Denys Botsiun, 2026-09-18, slate#2561)
 # found three logo SVGs nobody referenced and a 594 KB JPEG for one hero image, and nothing in any
 # project measured either.
 #
