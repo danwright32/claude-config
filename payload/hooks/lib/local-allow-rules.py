@@ -526,19 +526,22 @@ def remove(project, rules_arg):
             or new[got_spans["array"][1]:] != text[spans["array"][1]:]:
         return refuse("the edit would have changed more than the picked rules, so the file was not changed. Backup: %s" % backup)
 
-    # Write beside the original and rename over it, so a write that fails leaves it untouched.
+    # Write beside the original and rename over it, so a write that fails leaves it untouched. A
+    # settings file that is a symlink is written where it points, so the link stays a link and the
+    # file it shares gets the removal.
     if raw != read_bytes(settings_file):
         return refuse("%s changed while this ran, so it was not changed. Backup of what was read: %s" % (shown, backup))
+    target = os.path.realpath(settings_file)
     tmp = None
     try:
-        mode = os.stat(settings_file).st_mode & 0o7777
-        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings_file), prefix=".settings.local.json.")
+        mode = os.stat(target).st_mode & 0o7777
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".settings.local.json.")
         with os.fdopen(fd, "wb") as f:
             f.write(new.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, settings_file)
+        os.replace(tmp, target)
         tmp = None
     except OSError as e:
         return refuse("%s could not be written (%s), so it was not changed. Backup: %s" % (shown, e.strerror or e, backup))

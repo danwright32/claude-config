@@ -31,6 +31,9 @@ s/(--[A-Za-z0-9_-]*([Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][-_]?[Kk][Ee][Yy]|[Ss][Ee][
 # beside a + or a / is a piece of base64 (a package lock's integrity hash) and is not marked: measured
 # 2026-10-23 over this repository's 1044 tracked text files, that was the only line the rule changed.
 s/(^|[^A-Za-z0-9_+/-])([A-Za-z0-9_-]{40})([^A-Za-z0-9_+/-]|$)/\1@@cf40@@\2@@\3/g
+# Twice: a match takes the separator after its run, so a second run one character later has nothing
+# before it to match and waits for this pass, which skips the runs already marked (they follow an @).
+s/(^|[^A-Za-z0-9_+/@-])([A-Za-z0-9_-]{40})([^A-Za-z0-9_+/-]|$)/\1@@cf40@@\2@@\3/g
 s/@@cf40@@([^0-9@]{40})@@/\1/g
 s/@@cf40@@([^A-Z@]{40})@@/\1/g
 s/@@cf40@@([^a-z@]{40})@@/\1/g

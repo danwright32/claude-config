@@ -224,6 +224,12 @@ check "a long plain name: not flagged" "$(lacks 'rule 4 ' 'rule 4')"
 check "the flag token is not printed" "$(lacks "$FAKE_FLAG" 'the flag token')"
 check "the Cloudflare shaped token is not printed" "$(lacks "$FAKE_CF" 'the Cloudflare token')"
 check "flag tokens: the record holds no secret" "$(no_secret_under "$W/home")"
+# Two bare tokens one character apart are both redacted: the first one's match takes the separator,
+# so a single pass would leave the second without the character it needs before it.
+FAKE_CF2="SUHMuveiIpLdxVyy7bPBz6QJY7JWXZEBI4HMVTqY"
+OUT="$(printf '%s %s,%s\n' "$FAKE_CF" "$FAKE_CF2" "$FAKE_CF" | bash -c '. "$1" && ar_redact' _ "$DIR/lib/ai-review-common.sh")"
+check "three adjacent bare tokens: none is left" "$(lacks "$FAKE_CF2" 'the second token')"
+check "three adjacent bare tokens: all three redacted" "$([ "$OUT" = '[REDACTED] [REDACTED],[REDACTED]' ] && echo ok || echo "got: $OUT")"
 # The detector is the one redactor (lib/review-redact.sed, through ar_redact). Without it nothing can
 # say whether a rule holds a key, and that is said rather than passed as clean.
 world noredactor
@@ -300,6 +306,17 @@ b = s.index("]", a)
 open(sys.argv[2], "w").write(s[:a] + s[b:])
 PY
 check "remove all: an empty list and nothing else changed" "$(same_file "$F" "$W/expected-empty")"
+
+# A settings file that is a symlink stays one: the removal lands in the file it points at.
+world symlink
+mkdir -p "$W/shared"
+fixture 'Bash(npm run test:*)' 'Bash(grep -n "x" a/b.ts)'
+mv "$F" "$W/shared/settings.local.json"
+ln -s "$W/shared/settings.local.json" "$F"
+remove "2:$(fp 'Bash(grep -n "x" a/b.ts)')"
+check "symlink: exit 0" "$([ "$RC" -eq 0 ] && echo ok || echo "rc $RC: $OUT")"
+check "symlink: is still a symlink" "$([ -L "$F" ] && echo ok || echo "it was replaced by a regular file")"
+check "symlink: the target lost the rule" "$(grep -q 'grep -n' "$W/shared/settings.local.json" && echo "the rule is still in the target" || echo ok)"
 
 # The default backup folder is outside ~/.claude (the sync only keeps out names ending in .local.json).
 world defaultbackup
