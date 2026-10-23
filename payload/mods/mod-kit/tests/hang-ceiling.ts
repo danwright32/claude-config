@@ -10,9 +10,10 @@
 // was the only real time limit any of them had, a fixed number, and it measured the machine (L290).
 // On 2026-10-23 at 16:24 ET, twenty copies of mod-kit's tests at once beside 96 busy loops and 60
 // process launching loops (load average 220 to 346 on 12 cores) failed 20 of 20, with 490 tests
-// "timed out after 5000 ms" and nothing broken; the slowest of those tests takes about 450 ms on a
-// quiet Mac. Account-room's tests failed the same way in #1541, which set two minutes for that one
-// file, and Dan kept it (2026-10-23). This is that two minutes, for every mod, held here once.
+// "timed out after 5000 ms" and nothing broken; the slowest of them takes 450 to 500 ms on a quiet
+// Mac. Taking `test` from here, twenty copies under the same load at 16:43 ET passed 20 of 20, the
+// slowest test at 11,910 ms. Account-room's tests failed the same way in #1541, which set two minutes
+// for that one file, and Dan kept it (2026-10-23). This is that two minutes, for every mod, held once.
 //
 // A test that never finishes still fails, two minutes in, naming itself. A test that is merely slow
 // is not this file's business: a cost worth guarding is guarded by counting what it does (L224), and

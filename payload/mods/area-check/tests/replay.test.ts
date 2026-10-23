@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { RULE_VERSION, replay, type ReplayInput } from '../hooks/rules.ts'
 import { MEASURED, PATHS } from './replay-fixture.ts'
 

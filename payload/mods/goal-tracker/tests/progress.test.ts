@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { empty, fromTodos, stateOf, taskCreated, taskUpdated } from '../hooks/progress.ts'
 
 const MIN = 60_000

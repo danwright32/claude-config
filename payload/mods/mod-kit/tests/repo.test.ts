@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { ghRepo, githubRepo, linkRepo, repoName } from '../hooks/repo.ts'
 import { GH_REPO_FIXTURES, LINK_FIXTURES } from './gh-fixtures.ts'
 import { REPO_FIXTURES } from './repo-fixtures.ts'

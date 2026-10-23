@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { inScratch, lessonsEdit, noBuildRefusal } from '../hooks/nobuild.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { readCommands } from './read.ts'

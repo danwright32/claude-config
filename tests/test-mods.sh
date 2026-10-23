@@ -237,6 +237,17 @@ test('room by name', slow, async ($, on) => {
   expect(sample()[0]).toBeLessThan(1)
 })
 TS
+# #1577: a file taking `test` from mod-kit's tests/hang-ceiling.ts has the hang ceiling on every test
+# without writing it, so a timing test there passes with no timeoutMs of its own.
+mkmod "$M3T" timed-shared; mkdir -p "$M3T/timed-shared/tests"
+cat > "$M3T/timed-shared/tests/shared.test.ts" <<'TS'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
+test('a list timed under the shared hang ceiling', async ($, on) => {
+  const t = performance.now()
+  expect(performance.now() - t).toBeLessThan(1000)
+})
+TS
 out="$(CLAUDE_BIN="$TMPROOT/no-such-claude" PATH=/usr/bin:/bin TSC_BIN="$TSC_PASS" bash "$CHECK" "$M3T" 2>&1)"; code=$?
 [ "$code" -eq 1 ] && check "a mod test timing its subject under the fixed default limit fails the run, with no claude command" ok \
   || check "a mod test timing its subject under the fixed default limit fails the run, with no claude command" "exit=$code out=$out"
@@ -254,6 +265,8 @@ printf '%s\n' "$out" | grep -q "timed-direct/tests/clock.test.ts:3: test 'a comm
   || check "a comment naming a clock, and Date.now with no arithmetic, are not timing" "$out"
 ! printf '%s\n' "$out" | grep -q "timed-room" && check "a timing test with its own limit, in place or in a named options object, passes" ok \
   || check "a timing test with its own limit, in place or in a named options object, passes" "$out"
+! printf '%s\n' "$out" | grep -q "timed-shared" && check "#1577: a timing test whose test comes from mod-kit's hang ceiling passes" ok \
+  || check "#1577: a timing test whose test comes from mod-kit's hang ceiling passes" "$out"
 [ "$(printf '%s\n' "$out" | grep -c 'times its subject')" -eq 3 ] && check "and exactly the three bare timing tests are named" ok \
   || check "and exactly the three bare timing tests are named" "$out"
 

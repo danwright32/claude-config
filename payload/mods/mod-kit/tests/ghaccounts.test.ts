@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { askAnyAccount, type GhRun } from '../hooks/ghaccounts.ts'
 
 // One gh call as each account gh is logged in to, until one answers (#1279 lessons review): Dan's

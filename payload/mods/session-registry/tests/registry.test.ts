@@ -1,4 +1,5 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 
@@ -748,11 +749,11 @@ const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.len
 // 6,500 to 8,200 ms with 96 processes burning the CPU beside it, with nothing broken. Under that
 // load, given room, it passed five times out of five in 7,200 to 14,200 ms, every list after the
 // archive still over fifty times faster than the yardstick. Two minutes is over eight times the
-// slowest of those, and a list that never answers still fails.
-const HANG_MS = 120_000
+// slowest of those, and a list that never answers still fails. Since #1577 that two minutes is every
+// mod test's, held once in mod-kit's tests/hang-ceiling.ts, which `test` above comes from.
 const job = { id: 'b1', command: 'npm run dev', outputPath: '/tmp/b1.output', pgid: 4242, startedAt: NOW - 3 * HOUR }
 
-test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', { ...withConsumer, timeoutMs: HANG_MS }, async ($, on) => {
+test('2,000 closed records and 2 open ones are listed in a tenth of what reading every record costs in the same run (#911)', withConsumer, async ($, on) => {
   const ended = NOW - 2 * HOUR
   const open = { [`${DIR}/o1.json`]: recOf('o1', { lastSeen: NOW - MIN }), [`${DIR}/o2.json`]: recOf('o2', { lastSeen: NOW - MIN }) }
   const w = world(on, { files: { ...open } })

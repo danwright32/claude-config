@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { SessionMessage } from 'claude-code'
 import { cleanName, type Dans, describesImage, hasExchange as hasExchangeFor, namePrompt as namePromptFor, NO_DANS, renameOutcome, repoLabel, withDans, withRepo } from '../hooks/name.ts'
 import { repoName } from './mod-kit/hooks/repo.ts'

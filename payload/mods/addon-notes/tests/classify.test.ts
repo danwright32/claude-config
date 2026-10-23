@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { isAddOnNote, isAmendment, resumeLine } from '../hooks/classify.ts'
 
 // The phrases Dan used when he interrupted a step only to add scope, mined from his chats

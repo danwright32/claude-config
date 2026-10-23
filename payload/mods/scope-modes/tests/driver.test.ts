@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   LIMITS, activeMs, blockTold, decideFailure, decideStop, freshDriver, heldClaim, overnightRules, progressOf, readDriver, releaseTold, resumeDue,
   type ClaimReading, type DriverReading, type DriverRecord, type StopInput,

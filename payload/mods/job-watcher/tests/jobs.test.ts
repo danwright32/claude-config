@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { assess, harnessFinished, holdRefusal, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
 
 const MIN = 60_000

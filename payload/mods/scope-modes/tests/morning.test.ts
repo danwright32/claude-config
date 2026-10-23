@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ENDED_SAID, KEPT_NIGHTS, morningStep, pickerAnswered, reviewsIn, stalePending, withDone, withPending } from '../hooks/morning.ts'
 
 // The morning reminder (#1107), and since #1283 ending sleep mode is the night's review: Dan,
