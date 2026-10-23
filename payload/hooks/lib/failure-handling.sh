@@ -264,9 +264,10 @@ fh_files() {
   awk '
     /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); if (f == "/dev/null") f = ""; next }
     /^diff --git / { f = ""; next }
-    # The lessons review appends whole files after its diff (lib/ai-review-common.sh); their lines
-    # are not added lines, even one that begins with +.
-    /^===== FULL FILE / { f = ""; next }
+    # The lessons review appends whole files AFTER its diff (lib/ai-review-common.sh), so the first
+    # such header ends the diff. Their text is not added lines, even a line beginning with + or a
+    # diff header quoted inside a test file, so nothing past it is read.
+    /^===== FULL FILE / { exit }
     /^\+/ { if (f != "") print f "\t" substr($0, 2) }
   ' > "$rows"
   while IFS= read -r f; do

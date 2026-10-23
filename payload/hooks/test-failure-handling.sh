@@ -200,6 +200,14 @@ diff --git a/src/clean.ts b/src/clean.ts
 ===== FULL FILE at abc1234: src/clean.ts =====
 export const a = 1
 +  } catch (e) { return [] }
+
+
+===== FULL FILE at abc1234: payload/hooks/test-thing.sh =====
+cat > "$WORK/diff" <<'DIFF'
+diff --git a/src/send.ts b/src/send.ts
++++ b/src/send.ts
++} catch (e) { report(e) }
+DIFF
 FULL
 got="$(bash "$LIB" files < "$WORK/fulldiff" | tr '\n' ' ')"
 if [ -z "$got" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a FULL FILE section after the diff was read as added lines: listed [$got]"; fi
