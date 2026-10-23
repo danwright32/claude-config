@@ -1472,9 +1472,9 @@ first, each with "Go to sleep now"; answers are posted on the issue as dated dec
 Both sides are listed, and a repository on neither is asked about, never let through (Dan,
 2026-10-06). The lists are the ones Dan confirmed word for word on 2026-10-07 (#843). Wait overnight (no merge, no
 deploy, a green PR stays open until morning): `bidspoke`, `slate`, and every
-repository owned by the agency's organisation, now and any made later (his words: "Move ANYTHING in
-[the agency's organisation] to the wait list automatically. Nothing in that account should merge
-overnight"). Merge and deploy as in the daytime: `danwright32/claude-config`,
+repository owned by the agency's organisation, now and any made later (he asked for anything in
+that organisation to go to the wait list automatically, so nothing in that account merges
+overnight; paraphrased, because his words name it, #1568). Merge and deploy as in the daytime: `danwright32/claude-config`,
 `project-enrollment-tracker`, `paperboi`, `sonar`,
 `dwright-pennie/new-agent-onboarding`, `dwright-pennie/repo-digest`, `danwright32/overture`,
 `danwright32/ovation`, `danwright32/downbeat`, `danwright32/PostRoll`, `danwright32/backstage`,

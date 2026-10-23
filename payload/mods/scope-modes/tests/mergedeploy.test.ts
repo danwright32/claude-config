@@ -118,8 +118,9 @@ describe('what each repository may do tonight', () => {
 })
 
 describe('an owner whose every repository waits overnight (waitOwners)', () => {
-  // Dan, 2026-10-07: "Move ANYTHING in [the agency's organisation] to the wait list automatically. Nothing
-  // in that account should merge overnight". Waiting is no merge and no deploy.
+  // Dan, 2026-10-07, asked for anything in the agency's organisation to go to the wait list
+  // automatically, so nothing in that account merges overnight (paraphrased: his words name the
+  // organisation, claude-config#1568). Waiting is no merge and no deploy.
   const OWNED = JSON.stringify({
     v: 1,
     waitOwners: ['Studio-Partner'],
