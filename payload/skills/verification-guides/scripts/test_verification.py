@@ -349,6 +349,20 @@ class RecordParseTests(unittest.TestCase):
             self.assertEqual(out["records"], [], kind)
             self.assertIn(kind, [k for k, _ in out["invalid"][0]["errors"]], (kind, out["invalid"]))
 
+    def test_a_list_or_object_where_a_string_belongs_is_named_not_a_crash(self):
+        c0 = good_record()["checks"][0]
+        cases = [
+            (good_record(checks=[dict(c0, id=["C1"])]), "record-bad-field"),
+            (good_record(guide_edits=[{"check_id": ["C1"], "old": "a", "new": "b", "why": "c"}]), "record-bad-guide-edit"),
+            (good_record(screenshots=[["x.png"]]), "record-bad-screenshot"),
+            (good_record(area=["invoices"]), "record-bad-field"),
+            (good_record(checks=[dict(c0, result=["pass"])]), "record-bad-result"),
+            (good_record(checks=[dict(good_record()["checks"][1], blame=["code"])]), "record-missing-blame"),
+        ]
+        for obj, kind in cases:
+            out = v.parse_comment(comment_with(obj))
+            self.assertIn(kind, [k for k, _ in out["invalid"][0]["errors"]], (kind, out["invalid"]))
+
     def test_unknown_keys_are_allowed(self):
         out = v.parse_comment(comment_with(good_record(extra="later field")))
         self.assertEqual(out["invalid"], [])
@@ -566,6 +580,12 @@ class RenderTests(unittest.TestCase):
         d = self.draft()
         d["areas"][0]["checks"][0] = {"result": "pass", "note": "x"}
         self.refused(d, "render-checks-mismatch")
+
+    def test_a_guide_edit_naming_no_check_is_refused_not_a_crash(self):
+        stopped_receipt(self.home)
+        for bad in (["C3"], {"id": "C3"}, 3, None):
+            d = self.draft(guide_edits=[{"check_id": bad, "new": "x", "why": "y"}])
+            self.refused(d, "record-bad-guide-edit")
 
     def test_screenshot_must_exist_beside_the_receipt(self):
         stopped_receipt(self.home)

@@ -478,11 +478,13 @@ def validate_record(rec):
     if not isinstance(edits, list):
         p.append(("record-bad-field", "guide_edits must be a list"))
         edits = []
-    check_ids = {c.get("id") for c in checks}
+    # Only string ids go in the set: a list or object as an id is already named as record-bad-field,
+    # and must not crash the membership tests below.
+    check_ids = {c.get("id") for c in checks if isinstance(c.get("id"), str)}
     edited = set()
     for i, e in enumerate(edits):
         where = "guide_edits[%d]" % i
-        if not isinstance(e, dict) or e.get("check_id") not in check_ids:
+        if not isinstance(e, dict) or not isinstance(e.get("check_id"), str) or e["check_id"] not in check_ids:
             p.append(("record-bad-guide-edit", "%s must name a check in this record" % where))
             continue
         if not all(one_line(e.get(k)) for k in ("old", "new", "why")) or e["old"] == e["new"]:
@@ -651,8 +653,10 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
         edits = []
         for e in a.get("guide_edits", []) or []:
             e = dict(e) if isinstance(e, dict) else {}
-            e["old"] = gtext.get(e.get("check_id"), "")
-            edits.append({"check_id": e.get("check_id"), "old": e["old"], "new": e.get("new"), "why": e.get("why")})
+            # A check_id that is not a string (a list, a number) names no check: validate_record
+            # below refuses it as record-bad-guide-edit rather than this lookup crashing.
+            cid = e.get("check_id") if isinstance(e.get("check_id"), str) else None
+            edits.append({"check_id": cid, "old": gtext.get(cid, ""), "new": e.get("new"), "why": e.get("why")})
         rec = {
             "schema": RUN_SCHEMA,
             "area": name,
