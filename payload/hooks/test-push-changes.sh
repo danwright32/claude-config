@@ -152,16 +152,18 @@ printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf "%%s\\n" "${CLAUDE_CODE_PROM
 chmod +x "$CACHE_STUB/claude"
 PASS_TO="$TMPROOT/passto"; mkdir -p "$PASS_TO"
 printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' > "$PASS_TO/timeout"; chmod +x "$PASS_TO/timeout"
-for judge_path in "$PASS_TO:$CACHE_STUB:$PATH_BASE" "$CACHE_STUB:$PATH_BASE"; do
+# A PATH with no timeout command whatever the machine has (Linux has /usr/bin/timeout, a Mac with
+# coreutils has gtimeout): only the tools pc_judge and the stand in use, linked from PATH_BASE.
+NOTO="$TMPROOT/notimeout"; mkdir -p "$NOTO"
+for t in bash cat mktemp date rm python3; do
+  p="$(PATH="$PATH_BASE" command -v "$t" 2>/dev/null)" && ln -s "$p" "$NOTO/$t"
+done
+for judge_path in "$PASS_TO:$CACHE_STUB:$NOTO" "$CACHE_STUB:$NOTO"; do
   rm -f "$TMPROOT/ttl"
   PATH="$judge_path" pc_judge sonnet 7 "rubric" "input" >/dev/null 2>&1
   case "$judge_path" in "$PASS_TO"*) how="through a timeout command" ;; *) how="with no timeout command" ;; esac
   if [ "$(cat "$TMPROOT/ttl" 2>/dev/null)" = 5m ]; then ok; else no "the judge launched $how ran with CLAUDE_CODE_PROMPT_CACHE_TTL=[$(cat "$TMPROOT/ttl" 2>/dev/null || echo 'not reached')], want 5m (#1600)"; fi
 done
-# The no timeout arm means something only when PATH_BASE really has none.
-if PATH="$PATH_BASE" command -v timeout >/dev/null 2>&1 || PATH="$PATH_BASE" command -v gtimeout >/dev/null 2>&1; then
-  no "PATH_BASE holds a timeout command, so the launch without one was not exercised"
-else ok; fi
 judge_case "no CLI" "$PATH_BASE" 1 'no claude CLI'
 if [ -z "$PC_JUDGE_MODEL" ]; then ok; else no "a judge that never launched still names a model ($PC_JUDGE_MODEL), so it would be counted as a call"; fi
 # The CLI on PATH below has to be absent for that case to mean anything.
