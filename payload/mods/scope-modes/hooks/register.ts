@@ -3959,8 +3959,6 @@ const placeSentence = (place: ScopeModesPlace, t: Told) => {
   return s
 }
 
-// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
-// or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
 /** Ask before saving's noun (#1483), as its contract has it; it may not be loaded at all. */
 type AskBeforeSavingNoun = { isApproved: (call: { tool: string; input: Record<string, unknown> }) => Promise<{ isApproved: boolean }> }
 
@@ -3984,6 +3982,8 @@ const lessonApproval = async ($: EngineInterface, tool: string, input: Record<st
   }
 }
 
+// What the modes on make of one tool call: the refusal to answer it with, or undefined to let it run,
+// or the cleanup answers (#1051) it runs on, which are used up once it has run (useCleanups).
 type Judged = { tool: string; input: Record<string, unknown>; toolUseId: string; scope: ScopeModesScope | null; away: boolean; asleep: boolean }
 type Verdict = { deny: string } | { cleanups: ScopeModesCleanup[] } | undefined
 const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
