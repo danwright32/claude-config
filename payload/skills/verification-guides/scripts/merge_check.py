@@ -138,7 +138,7 @@ class _Verdict:
 
     # -- what GitHub said ----------------------------------------------------------------------
 
-    def github_list(self, name, what, final):
+    def github_list(self, name, what):
         """The pages GitHub answered for `name`, or None after saying why there are none."""
         err = _read(self.path(name + ".err"))
         if err is not None:
@@ -169,9 +169,9 @@ class _Verdict:
             return self.finish(mode, [])
 
         self.judge_pin()
-        touched, pr_files = self.judge_files(areas, final)
+        touched, pr_files = self.judge_files(areas)
         entries = None
-        pages = self.github_list("comments", "this pull request's comments", final)
+        pages = self.github_list("comments", "this pull request's comments")
         if pages is not None:
             entries = v.comment_records([c.get("body") or "" for c in pages if isinstance(c, dict)])
 
@@ -211,8 +211,8 @@ class _Verdict:
             self.add("merge-pinned-elsewhere", None, "this merge pins %s, but the head these runs were judged at is %s."
                      " Pin %s, or let the check read the new head" % (pinned, self.head, self.head))
 
-    def judge_files(self, areas, final):
-        entries = self.github_list("files", "this pull request's changed files", final)
+    def judge_files(self, areas):
+        entries = self.github_list("files", "this pull request's changed files")
         if entries is None:
             return [], set()
         paths = _paths(entries)
