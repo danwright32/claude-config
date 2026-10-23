@@ -54,6 +54,9 @@ THE DESIGN FILE carries three JSON blocks (<script type="application/json" id=".
                      held by check-decision-map.py and not read by the score
   design-frames      {"frames": [{"id": "f1", "title": "Tomorrow, light", "width": 1280, "height"?: 900}]}
                      no height: the full page, as tall as it draws
+                     "chrome"?: "edit", on every frame or none, for a design whose frames were captured
+                     from different pages (claude-config#1474): the page that frame is drawn in, kept on
+                     its row and said beside it; designFrameDocument(<id>) draws each in its own already
                      "kind"?: "email" | "document" | "new-product", for a design drawn with no product
                      page around it (claude-config#1393); recorded in the score and said in its report
                      | "terminal", for a Claude Code mod's screen drawn in the shared terminal
@@ -208,6 +211,22 @@ def read_design(path, frames_only=False):
         raise Unreadable("the design-frames block in %s names the kind %s, and a design with no product page "
                          "around it, or drawn in a shared screen, is one of: %s"
                          % (path, json.dumps(kind), frame_kinds()))
+    # A design whose frames were captured from different pages names, on each frame, the page it is drawn
+    # in (claude-config#1474). Its designFrameDocument(<id>) already draws each frame in its own page; the
+    # name is kept on the frame's row and said beside it. Every frame names one or none does, so a frame
+    # left out is never read as drawn in a page somebody else's frame named.
+    named = [f for f in frames if "chrome" in f]
+    for f in named:
+        if not isinstance(f["chrome"], str) or not f["chrome"].strip():
+            raise Unreadable("frame %s in the design-frames block names its chrome as %s, and a chrome is named "
+                             "by text" % (f["id"], json.dumps(f["chrome"])))
+    if named and len(named) != len(frames):
+        missing = [f["id"] for f in frames if "chrome" not in f]
+        raise Unreadable("frame %s in the design-frames block names no chrome, and %s does, so it cannot be told "
+                         "which captured page it is drawn in" % (", ".join(missing), named[0]["id"]))
+    if named and kind is not None:
+        raise Unreadable("the design-frames block in %s names the kind %s, which has no captured page, and its "
+                         "frames name captured pages; a design is one or the other" % (path, json.dumps(kind)))
 
     # An adapter asks for the frames alone (`frames`), and a design whose map is still being written
     # can already be drawn.
@@ -530,6 +549,8 @@ def score_capture(folder):
         fid = f["id"]
         pf = {"id": fid, "title": f.get("title", ""), "width": f["width"], "height": f.get("height"),
               "status": "unmeasured", "compared": 0, "matched": 0, "score": 0}
+        if "chrome" in f:
+            pf["chrome"] = f["chrome"]
         pframes.append(pf)
         if fid in excepted_frames:
             pf["status"] = "excepted"
@@ -666,12 +687,14 @@ def render(s):
         lines.append("  pictures   %s of pixels match over %d frame%s" % (
             pct(s["pictures"]["score"], whole), len(measured), "" if len(measured) == 1 else "s"))
     for f in frames:
+        # The captured page a frame is drawn in, for a design in several (claude-config#1474).
+        page = " in %s" % f["chrome"] if f.get("chrome") else ""
         if f["status"] == "measured":
-            lines.append("    %-4s %5d wide  picture %6s  (%d of %d pixels)%s" % (
-                f["id"], f["width"], pct(f["score"], f["matched"] == f["compared"]), f["matched"], f["compared"],
+            lines.append("    %-4s %5d wide%s  picture %6s  (%d of %d pixels)%s" % (
+                f["id"], f["width"], page, pct(f["score"], f["matched"] == f["compared"]), f["matched"], f["compared"],
                 "  see %s" % f["diff"] if f.get("diff") and f["matched"] != f["compared"] else ""))
         elif f["status"] == "excepted":
-            lines.append("    %-4s skipped by %s" % (f["id"], f.get("detail", "")))
+            lines.append("    %-4s%s skipped by %s" % (f["id"], page, f.get("detail", "")))
     exc = s.get("exceptions") or []
     if exc:
         lines.append("  exceptions %d approved by Dan, skipped by this score:" % len(exc))

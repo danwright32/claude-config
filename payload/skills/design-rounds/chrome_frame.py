@@ -29,6 +29,10 @@ make-settled.py draws each frame of the settled design this way, in an iframe fo
 settled file gives each frame's whole document from designFrameDocument(<id>), which the score's web
 adapter draws as a page of its own at the frame's width.
 
+A settled design whose frames were captured from different pages (a panel in edit mode, a card in view
+mode) names each page in "chromes", with a "name", and each frame names the one it is drawn in
+(claude-config#1474); load_chromes reads them, each as load_chrome does.
+
 A screen that has no product page around it (claude-config#1393) is drawn by no_page(<kind>) instead:
 an email, a document or a new product, the three kinds Dan allowed by name on 2026-10-20, each frame
 then the round's drawing alone at its own size, with no margin around it. Any other kind is refused.
@@ -389,6 +393,30 @@ def load_chrome(chrome, base):
     if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
         raise ChromeError('a captured chrome page needs "width": the width in pixels it was captured at')
     return {"kind": "html", "slot": m.group(1), "width": width, "height": None, "page": page, "source": source}
+
+
+def load_chromes(listing, base):
+    """The spec's "chromes" (claude-config#1474): the captured pages a settled design's frames are drawn
+    in, each frame naming its own, so a design whose frames were captured from different pages (a panel
+    in edit mode, a card in view mode) is one file. {name: chrome as load_chrome reads it}, in the
+    spec's order. Each entry is what "chrome" takes, plus its "name"; a nameless one, two sharing a name,
+    and one whose capture load_chrome refuses (said with its name) are refused."""
+    if not isinstance(listing, list) or not listing:
+        raise ChromeError('"chromes" lists the captured pages the frames are drawn in, each what "chrome" takes '
+                          'with a "name" its frames name it by, and this spec gives %s' % json.dumps(listing))
+    chromes = {}
+    for n, entry in enumerate(listing, 1):
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            raise ChromeError('chrome %d has no name, which the frames drawn in it name it by ("name")' % n)
+        if name in chromes:
+            raise ChromeError("two chromes share the name %s, so a frame naming it could be drawn in either; "
+                              "give each its own" % name)
+        try:
+            chromes[name] = load_chrome(entry, base)
+        except ChromeError as err:
+            raise ChromeError("chrome %s: %s" % (name, err))
+    return chromes
 
 
 BOOT = """(function () {
