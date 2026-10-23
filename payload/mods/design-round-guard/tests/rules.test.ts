@@ -1088,7 +1088,8 @@ test('which kept answers count, by the branch reading they were written with (#1
 test('a settled design is under docs/design at the top of its checkout, in any case, and nowhere else', () => {
   for (const rel of ['docs/design/slack-channel-picker.html', 'Docs/Design/x.html', 'docs/design/rules/rail-foot.html'])
     expect({ rel, record: isDesignRecord(rel) }).toEqual({ rel, record: true })
-  for (const rel of ['docs/design/', 'docs/designs/x.html', 'src/docs/design/x.html', 'app/settled.html', 'docs/design/../../app/x.html', '/w/slate/docs/design/x.html'])
+  // Only an HTML page, the one kind make-settled.py writes (lessons review): a sealed stylesheet or component there is no record.
+  for (const rel of ['docs/design/x.css', 'docs/design/Picker.tsx', 'docs/design/x.vue', 'docs/design/x.html.tsx', 'docs/design/', 'docs/designs/x.html', 'src/docs/design/x.html', 'app/settled.html', 'docs/design/../../app/x.html', '/w/slate/docs/design/x.html'])
     expect({ rel, record: isDesignRecord(rel) }).toEqual({ rel, record: false })
   expect(sealCheck('/Users/dan')).toEqual(['python3', '-I', '/Users/dan/.claude/skills/design-rounds/design_file.py', '--sealed'])
 })

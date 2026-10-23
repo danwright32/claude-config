@@ -1907,13 +1907,14 @@ export const unreadPutBack = (file: string, why: string): string =>
   `The design round guard could not read what git puts back in ${file} (${why}), so it judged the whole file as a look change rather than the lines it changes.`
 
 /**
- * Whether a path inside its checkout is where a settled design is committed (#1524): under docs/design
- * at the checkout's top, read in any case, as the Mac's disk reads it. Such a file passes unasked while
+ * Whether a path inside its checkout is where a settled design is committed (#1524): an HTML page, the
+ * only kind make-settled.py writes, under docs/design at the checkout's top, read in any case, as the
+ * Mac's disk reads it; a stylesheet or component there is judged as any is (lessons review). Such a file passes unasked while
  * the design rounds skill's own check (sealCheck) says the text the call leaves is exactly what
  * make-settled.py wrote and sealed. The check is never copied here, so what the seal covers is decided in
  * one place, the skill's design_file.py, which make-settled.py seals with (L370).
  */
-export const isDesignRecord = (rel: string): boolean => /^docs\/design\/[^/]/i.test(rel) && !rel.split('/').includes('..')
+export const isDesignRecord = (rel: string): boolean => /^docs\/design\/[^/].*\.html?$/i.test(rel) && !rel.split('/').includes('..')
 
 /** The design rounds skill's check of a settled design's seal (#1524), the text on its standard input; `-I` so nothing in the folder it runs in is imported. */
 export const sealCheck = (home: string): string[] => ['python3', '-I', `${home}/.claude/skills/${SKILL}/design_file.py`, '--sealed']

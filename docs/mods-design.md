@@ -2907,8 +2907,9 @@ content is unchanged from what it wrote, passes; any hand edit to such a file is
   its input (rules.ts `sealCheck`), and passes the file only on exit 0 saying `sealed`. That also
   needs exactly one of each block, each JSON. An older design_file.py, which ignores the flag and
   exits 0 saying nothing, is held, as is a check that cannot run or exits otherwise, each said.
-- **Where, and what is read.** `docs/design/` at the top of the checkout, in any case as the Mac's
-  disk reads it (rules.ts `isDesignRecord`), whatever the issue's answers, the default branch
+- **Where, and what is read.** An HTML page, the only kind make-settled.py writes, under
+  `docs/design/` at the top of the checkout, in any case as the Mac's disk reads it (rules.ts
+  `isDesignRecord`; a sealed stylesheet or component there is judged as any is, lessons review), whatever the issue's answers, the default branch
   included, since the design was settled on the issue it came from. The text is the one the call
   leaves, read before it runs: a Write's content, an Edit's or MultiEdit's change applied to the file,
   what a git checkout or restore alone puts back (`putBack`), or the source of one plain `cp` alone

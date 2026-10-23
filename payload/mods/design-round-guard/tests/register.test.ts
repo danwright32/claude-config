@@ -2236,7 +2236,8 @@ test('#1524: the same path with an edited frame is held, by any tool, and the re
 test('#1524: a file carrying the blocks and the seal but not under docs/design is held, the check never asked', withKit, async ($, on) => {
   const w = world($, on)
   w.ctl.sealed = [SETTLED_PAGE]
-  for (const file_path of ['/w/slate/app/settled.html', '/w/slate/src/docs/design/slack-channel-picker.html', '/w/slate/docs/designs/slack-channel-picker.html'])
+  // A stylesheet or component under docs/design is no record either, however it is sealed (lessons review).
+  for (const file_path of ['/w/slate/app/settled.html', '/w/slate/src/docs/design/slack-channel-picker.html', '/w/slate/docs/designs/slack-channel-picker.html', '/w/slate/docs/design/picker.css', '/w/slate/docs/design/Picker.tsx'])
     expect({ file_path, held: refusalOf(await call($, { tool: 'Write', file_path, content: SETTLED_PAGE })).includes(SKIP_QUESTION) }).toEqual({ file_path, held: true })
   expect(w.sealChecks).toEqual([])
   expect(w.ran).toEqual([])
