@@ -1154,6 +1154,17 @@ test('an approval lets no other edit through under no build, and the noun is ask
   expect(w.logs.filter(l => l.startsWith('ABS asked '))).toEqual([])
 })
 
+// The event the tool.call hook reads carries agentId beside the arguments (lessons review at 4251447):
+// a subagent's lessons Edit is refused under no build, and the noun is never asked about it.
+test("a subagent's lessons Edit is refused under no build however approved, and the noun is not asked (#1483)", withAbs, async ($, on) => {
+  const { w, clock } = world(on, { files: { '/abs/approved': '' } })
+  await start($ as never, clock)
+  await command($ as never, 'nobuild')
+  const fromAgent = { ...(lessonEditCall() as unknown as Record<string, unknown>), agentId: 'a1' } as never
+  expect(await call($ as never, fromAgent)).toMatch(/^Blocked: no build is on, so this did not edit LESSONS\.md\./)
+  expect(w.logs.filter(l => l.startsWith('ABS asked '))).toEqual([])
+})
+
 test('ask before saving not loaded, or its noun failing, leaves the lessons Edit refused (#1483)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { '/abs/approved': '' } })
   await start($ as never, clock)
