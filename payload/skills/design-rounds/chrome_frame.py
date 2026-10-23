@@ -31,7 +31,8 @@ adapter draws as a page of its own at the frame's width.
 
 A settled design whose frames were captured from different pages (a panel in edit mode, a card in view
 mode) names each page in "chromes", with a "name", and each frame names the one it is drawn in
-(claude-config#1474); load_chromes reads them, each as load_chrome does.
+(claude-config#1474); load_chromes reads them, each as load_chrome does. A round's options name theirs
+the same way (claude-config#1536), and several_chromes and chrome_names refuse both alike.
 
 A screen that has no product page around it (claude-config#1393) is drawn by no_page(<kind>) instead:
 an email, a document or a new product, the three kinds Dan allowed by name on 2026-10-20, each frame
@@ -419,6 +420,51 @@ def load_chromes(listing, base):
         except ChromeError as err:
             raise ChromeError("chrome %s: %s" % (name, err))
     return chromes
+
+
+def several_chromes(spec, items):
+    """True when the spec lists its captured pages in "chromes" (claude-config#1474, #1536), refusing one
+    beside "chrome" or a "screen", where one would win over the other. items names what draws in them
+    ("frames", "options"). The one place make-settled.py and make-switcher.py ask it, so both refuse alike."""
+    if "chromes" not in spec:
+        return False
+    kind = spec.get("screen")
+    if kind is not None:
+        raise ChromeError('the spec names the kind "%s", which is drawn with no captured page, and captured pages in '
+                          '"chromes" as well; keep one' % kind)
+    if spec.get("chrome") is not None:
+        raise ChromeError('the spec names one captured page in "chrome" and several in "chromes"; keep one: "chromes" '
+                          "when the %s were captured from different pages, each naming its own" % items)
+    return True
+
+
+def chrome_names(items, chromes, noun, whole, one_page):
+    """{id: the captured page it is drawn in} for each (id, named) of items, the frames of a settled design
+    or the options of a round, each naming its page in "chrome" (claude-config#1474, #1536); {} where the
+    spec gives one page or none. chromes is load_chromes' {name: chrome}, or None, and one_page then says
+    why there is no page to name. noun and whole name an item and the spec ("frame", "design"). Refused
+    alike for both: an item naming a page in a spec of one, naming none or one the spec does not hold in
+    a spec of several, and a page no item is drawn in."""
+    if chromes is None:
+        for iid, named in items:
+            if named is not None:
+                raise ChromeError('%s %s names the chrome %s, and %s, so there is none to choose: list the captured pages '
+                                  'in "chromes" for each %s to name its own' % (noun, iid, json.dumps(named), one_page, noun))
+        return {}
+    of = {}
+    for iid, named in items:
+        if named is None:
+            raise ChromeError('%s %s names no chrome, and this %s is drawn in %d captured pages (%s); give it "chrome": '
+                              "the one it was captured in" % (noun, iid, whole, len(chromes), ", ".join(chromes)))
+        if not isinstance(named, str) or named not in chromes:
+            raise ChromeError("%s %s names the chrome %s, and the %s's chromes are %s"
+                              % (noun, iid, json.dumps(named), whole, ", ".join(chromes)))
+        of[iid] = named
+    for name in chromes:
+        if name not in of.values():
+            raise ChromeError('the chrome %s is drawn by no %s: name it on the %ss captured in it, or take it out of '
+                              '"chromes"' % (name, noun, noun))
+    return of
 
 
 BOOT = """(function () {
