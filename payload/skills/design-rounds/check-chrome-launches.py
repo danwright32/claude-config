@@ -24,7 +24,8 @@ call, or Chrome's path held in a variable and run under another name. The launch
 make those unneeded; this is the check that a new launch was not written by hand beside them (L613).
 
 Comment lines are not read. Exit 0 when nothing is found, 1 when something is (each printed as
-file:line, the shape, and the line), 2 when a folder cannot be read.
+file:line, the shape, and the line; a code file too large to read is one), 2 when a folder or a
+file in it cannot be read.
 """
 import os
 import re
@@ -104,13 +105,11 @@ def call_args(src, at):
 def scan_file(path, rel):
     found = []
     ext = os.path.splitext(path)[1]
-    try:
-        if os.path.getsize(path) > LIMIT:
-            return found
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            src = fh.read()
-    except OSError:
-        return found
+    # A file that cannot be read is no pass: it raises, and the scan exits 2 naming it.
+    if os.path.getsize(path) > LIMIT:
+        return [(rel, 1, "is over %d bytes and was not read, so a launch in it is not ruled out" % LIMIT, "")]
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        src = fh.read()
     if HEADLESS not in src and "launch" not in src and "executablePath" not in src:
         return found
     lines = src.split("\n")

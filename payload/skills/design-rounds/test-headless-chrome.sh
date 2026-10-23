@@ -87,6 +87,17 @@ check "and says how to start it instead" "through headless-dom.sh" "$out"
 check_eq "and nothing else: not a launch through headless-dom.sh, a comment, an expected argument list, Playwright's own Chromium, or options naming no launch" \
   "6" "$(grep -c '^[a-z]*/[a-z]*\.[a-z]*:[0-9]*: ' "$TMP/guard.out")"
 check_eq "a folder it cannot read is no pass" "2" "$(python3 -I "$GUARD" "$TMP/no-such-folder" >/dev/null 2>&1; echo $?)"
+mkdir -p "$TMP/locked"
+printf '#!/bin/bash\necho hidden\n' > "$TMP/locked/hidden.sh"
+chmod 000 "$TMP/locked/hidden.sh"
+if [ -r "$TMP/locked/hidden.sh" ]; then
+  echo "SUITE-PART-UNMEASURED a file with no read permission is still readable here (run as root?), so a file the guard cannot read was not tested"
+else
+  python3 -I "$GUARD" "$TMP/locked" > "$TMP/locked.out" 2>&1; rc=$?
+  check_eq "nor is a file in it that it cannot read" "2" "$rc"
+  check "and it names that file" "hidden.sh" "$(cat "$TMP/locked.out")"
+fi
+chmod 600 "$TMP/locked/hidden.sh"
 
 # --- 2. the guard, on this whole repository ---
 # Three folders up is the checkout only when this runs from one: from the installed copy in
@@ -162,7 +173,6 @@ else
     await_file "$prof/DevToolsActivePort" || true
     up="$([ -s "$prof/DevToolsActivePort" ] && echo up || echo "never up: $(tail -n 2 "$TMP/exec.err" | tr '\n' ' ')")"
     end_tree "$cp"; { wait "$cp"; } 2>/dev/null
-    sleep 0.5
     got="$(left)"
     [ -z "$got" ] && break
   done
@@ -196,7 +206,6 @@ JS
       kids="$(pgrep -P "$np" | tr '\n' ' ')"
       kill -KILL "$np" 2>/dev/null; wait "$np" 2>/dev/null
       for k in $kids; do end_tree "$k"; done
-      sleep 0.5
       got="$(left)"
       [ -z "$got" ] && break
     done
