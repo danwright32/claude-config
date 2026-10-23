@@ -560,6 +560,13 @@ class RenderTests(unittest.TestCase):
         stopped_receipt(self.home)
         self.refused(self.draft(done_when=[]), "render-done-when-mismatch")
 
+    def test_an_entry_with_no_id_is_a_mismatch_not_a_crash(self):
+        stopped_receipt(self.home)
+        self.refused(self.draft(done_when=[{"result": "pass", "note": "x"}]), "render-done-when-mismatch")
+        d = self.draft()
+        d["areas"][0]["checks"][0] = {"result": "pass", "note": "x"}
+        self.refused(d, "render-checks-mismatch")
+
     def test_screenshot_must_exist_beside_the_receipt(self):
         stopped_receipt(self.home)
         self.refused(self.draft(screenshots=["C2-missing.png"]), "render-screenshot-missing")

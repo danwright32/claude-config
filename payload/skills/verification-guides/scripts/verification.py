@@ -549,7 +549,8 @@ def parse_comment(body, sha=None):
 
 
 def _json_for_fence(obj):
-    # A backtick inside a string could close the fence early; ` is the same JSON string.
+    # A backtick inside a string could close the fence early, so each one is written as JSON's own
+    # unicode escape for it (backslash, u, 0060), which any JSON reader decodes to the same string.
     return json.dumps(obj, indent=2, ensure_ascii=False).replace("`", "\\u0060")
 
 
@@ -632,13 +633,14 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
         guide = load_guide(os.path.join(rdir, "guides", name + ".md"))
         gtext = {c["id"]: c["text"] for c in guide["checks"]}
         checks = [c for c in a.get("checks", []) if isinstance(c, dict)]
-        got = [c.get("id") for c in checks]
+        # Every id as a string, so an entry with no id is a mismatch, never a crash in sorted().
+        got = [str(c.get("id")) for c in checks]
         if sorted(got) != sorted(gtext) or len(got) != len(set(got)):
             p.append(("render-checks-mismatch", "area %s: the guide's checks are %s, the draft has %s"
                       % (name, ", ".join(gtext), ", ".join(map(str, got)) or "none")))
             continue
         dw = [d for d in a.get("done_when", []) if isinstance(d, dict)]
-        if sorted(d.get("id") for d in dw) != sorted(done_text):
+        if sorted(str(d.get("id")) for d in dw) != sorted(done_text):
             p.append(("render-done-when-mismatch", "area %s: the PR's done when items are %s, the draft has %s"
                       % (name, ", ".join(done_text) or "none", ", ".join(str(d.get("id")) for d in dw) or "none")))
             continue
