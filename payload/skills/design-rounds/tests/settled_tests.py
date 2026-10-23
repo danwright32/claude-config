@@ -216,6 +216,72 @@ rc, out, _ = make("with-exception", spec(exceptions=[
      "date": "2026-10-19", "source": "https://github.com/Try-Pennie/slate/issues/3941#issuecomment-1"}]))
 check("an exception in Dan's words is kept and shown", rc == 0 and "the clock can differ, it&#x27;s live" in open(
     os.path.join(T, "with-exception.html"), encoding="utf-8").read(), out)
+sm = re.search(r'id="design-frames">(.*?)</script>', src, re.S)
+check("a design in one captured page names no chrome on its frames and keeps one template",
+      sm is not None and '"chrome"' not in sm.group(1) and "DR_TEMPLATES" not in src and "DR_TEMPLATE = " in src,
+      sm.group(1) if sm else src[-1500:])
+
+# --- a design whose frames were captured from different pages (claude-config#1474) -------------------
+# Bidspoke's lead validation design (try-pennie/bidspoke#2590) had its panel captured in edit mode and its
+# card in view mode, so it was split into two settled files. Each frame now names the captured page it
+# is drawn in, from the spec's "chromes", so one file holds the whole design and one decision map.
+write("view.html", """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Slate, view</title>
+<style>header { height: 48px; background: #2d6a4f; color: #fff; }</style>
+</head><body><header>Slate view mode</header><section id="card"><p>the view card</p></section></body></html>
+""")
+EDIT = dict(CHROME, name="edit")
+VIEW = {"name": "view", "captured": "view.html", "from": "http://localhost:3000/leads/7, view mode, 2026-10-22",
+        "slot": "#card", "width": 1280}
+MULTI_FRAMES = [dict(spec()["frames"][0], chrome="edit"), dict(spec()["frames"][1], chrome="view")]
+
+
+def multi(**changes):
+    return spec(**dict(dict(chrome=None, chromes=[EDIT, VIEW], frames=MULTI_FRAMES), **changes))
+
+
+rc, out, msettled = make("multi", multi())
+check("a design whose frames name their own captured pages is written as one file", rc == 0 and os.path.isfile(msettled), out)
+multi_src = open(msettled, encoding="utf-8").read() if os.path.isfile(msettled) else ""
+mm = re.search(r'<script type="application/json" id="design-frames">(.*?)</script>', multi_src, re.S)
+mframes = json.loads(mm.group(1)) if mm else {}
+check("its frames block names the chrome each frame is drawn in, for the score, and no kind",
+      [(f["id"], f.get("chrome")) for f in mframes.get("frames", [])] == [("f1", "edit"), ("f2", "view")]
+      and "kind" not in mframes, mm.group(1) if mm else multi_src[-800:])
+fr = subprocess.run([sys.executable, SCORE, "frames", msettled], capture_output=True, text=True)
+check("the score reads each frame with the chrome it names",
+      fr.returncode == 0 and [(f["id"], f["width"], f.get("chrome")) for f in json.loads(fr.stdout)["frames"]]
+      == [("f1", 1280, "edit"), ("f2", 390, "view")], fr.stdout + fr.stderr)
+rc2 = subprocess.run([sys.executable, CHECK, msettled], capture_output=True, text=True)
+check("and its one decision map holds", rc2.returncode == 0, rc2.stdout + rc2.stderr)
+check("both captured pages are carried, each once", multi_src.count("the old page") == 1 and multi_src.count("the view card") == 1,
+      "old page %d, view card %d" % (multi_src.count("the old page"), multi_src.count("the view card")))
+mbody = text_of(multi_src.split("<script", 1)[0])
+check("the page names each captured page once, with where it was captured",
+      mbody.count("an admin, 2026-10-19") == 1 and mbody.count("view mode, 2026-10-22") == 1, mbody[:1500])
+check("and each frame's heading names the page it is drawn in",
+      "f1, 1280 wide, in edit" in mbody and "f2, 390 wide, in view" in mbody, mbody[-900:])
+for n, (label, s, needle) in enumerate([
+    ("a frame naming a chrome that does not exist", multi(frames=[MULTI_FRAMES[0], dict(MULTI_FRAMES[1], chrome="viw")]),
+     'frame f2 names the chrome "viw", and the design\'s chromes are edit, view'),
+    ("two chromes with the same name", multi(chromes=[EDIT, dict(VIEW, name="edit")]), "two chromes share the name edit"),
+    ("a chrome with no name", multi(chromes=[EDIT, {k: v for k, v in VIEW.items() if k != "name"}]), "chrome 2 has no name"),
+    ("a frame naming no chrome in a design of several", multi(frames=[MULTI_FRAMES[0], spec()["frames"][1]]),
+     "frame f2 names no chrome"),
+    ("a captured chrome nobody draws", multi(frames=[MULTI_FRAMES[0], dict(MULTI_FRAMES[1], chrome="edit")]),
+     "the chrome view is drawn by no frame"),
+    ("one chrome and several at once", multi(chrome=CHROME), "keep one"),
+    ("several chromes beside a kind with no product page", multi(screen="email"), "keep one"),
+    ("an empty list of chromes", multi(chromes=[]), '"chromes"'),
+    ("a named chrome whose own capture is wrong", multi(chromes=[EDIT, dict(VIEW, slot="#gone")]), "chrome view: "),
+    ("a frame naming a chrome in a design of one", spec(frames=[dict(spec()["frames"][0], chrome="edit"), spec()["frames"][1]]),
+     'frame f1 names the chrome "edit", and the spec names one captured page'),
+    ("a frame wider than its own chrome picture", multi(chromes=[EDIT, {"name": "view", "captured": "window.png", "from": "Ovation",
+                                                                       "slot": [4, 6, 30, 20]}]),
+     "frame f2 is 390 wide, and its chrome view is a picture 40 wide"),
+]):
+    rc, out, path = make("bad-multi-%d" % n, s)
+    check("%s is refused, writing nothing" % label, rc == 2 and needle in out and not os.path.exists(path), out)
 
 # --- a design with no product page around it (claude-config#1393) ------------------------------------
 # Dan, 2026-10-20, on #1393: "allow named kinds". An email, a document or a new product names its kind
@@ -677,6 +743,35 @@ document.body.append(f);
     m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
     check("in Chrome, an email frame is drawn from the fixture with nothing around it and no margin",
           proc.returncode == 0 and m and m.group(1) == "bare|drawn|0", (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
+
+    # A design of several captured pages, each frame drawn for real as the web adapter draws it: in the
+    # page it names, never another's, with the round drawn into that page's own slot (#1474).
+    mprobe = multi_src.replace("</body></html>", """<script>
+var out = [], left = 2;
+[["f1", 1280, "main"], ["f2", 390, "card"]].forEach(function (t) {
+  var f = document.createElement("iframe");
+  f.style.cssText = "width:" + t[1] + "px;height:300px;border:0";
+  f.onload = function () {
+    var d = f.contentDocument, slot = d.getElementById(t[2]);
+    out.push(t[0] + ":" + [d.querySelector("header") ? d.querySelector("header").textContent : "noheader",
+             slot ? (slot.querySelector("h1") ? slot.querySelector(".day").textContent.slice(0, 15) : "notdrawn") : "noslot"].join("|"));
+    if (--left === 0) {
+      var pre = document.createElement("pre"); pre.id = "PROBE"; pre.textContent = out.sort().join(";"); document.body.append(pre);
+    }
+  };
+  f.srcdoc = designFrameDocument(t[0]);
+  document.body.append(f);
+});
+</script></body></html>""")
+    with open(os.path.join(T, "mprobe.html"), "w", encoding="utf-8") as fh:
+        fh.write(mprobe)
+    proc = subprocess.run(["bash", HEADLESS_DOM, "--headless", "--disable-gpu", "--no-sandbox", "--virtual-time-budget=5000",
+                           "--dump-dom", "file://" + os.path.join(T, "mprobe.html")], capture_output=True, text=True,
+                          env=dict(os.environ, HEADLESS_DOM_CHROME=TEST_CHROME, HEADLESS_DOM_DEADLINE="60"))
+    m = re.search(r'<pre id="PROBE">(.*?)</pre>', proc.stdout, re.S)
+    check("in Chrome, each frame of a design of several pages is drawn in the page it names, from the fixture",
+          proc.returncode == 0 and m and m.group(1) == "f1:Slate|Tue: 42 calls o;f2:Slate view mode|Wed: 17 calls o",
+          (m.group(1) if m else proc.stdout[-500:] + proc.stderr[-500:]))
 
     # Each terminal frame drawn for real, as the web adapter draws it: the dark terminal window alone,
     # from the fixture, at exactly the frame's width, at the top left with nothing around it (#1413).
