@@ -666,6 +666,15 @@ function sonarGather(checkRuns, extra) {
   const r = gather(ws);
   check(r.code === 1 && /path/.test(r.err) && /PET/.test(r.err), 'a registry entry carrying a machine path refuses the run', r.all);
 }
+// {"repos": []} is the registry's deliberate "gate nothing" for the merge gate, so gather.js refuses it
+// in words that say what it is, never as a file with no list at all, which would contradict the
+// message that told the person to write it.
+{
+  const ws = workspace({ pulls: {} }, { repos: [] }, {});
+  const r = gather(ws);
+  check(r.code === 1 && /lists no repos/.test(r.err) && !/holds no/.test(r.err),
+    'a registry listing no repos is refused as listing none, not as having no list', r.all);
+}
 
 // ---------------------------------------------------------------- accounts (claude-config#1182)
 //

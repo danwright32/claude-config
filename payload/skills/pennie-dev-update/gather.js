@@ -134,7 +134,10 @@ function loadConfig(file) {
   const read = loadRegistryReader().readRegistry(file);
   if (read.state !== 'ok') refuse(read.why + (read.state === 'unreadable' ? ' Nothing was changed.' : ''));
   const cfg = read.registry;
-  if (cfg.repos.length === 0) refuse(file + ' holds no "repos" list.');
+  if (cfg.repos.length === 0) {
+    refuse(file + ' lists no repos, so there is nothing to gather. An empty list only tells the merge gate to gate nothing on '
+      + 'this Mac; add an entry for each repository the update covers (SKILL.md, "The registry").');
+  }
   cfg.repos.forEach(function (r, i) {
     if (!r || typeof r.name !== 'string' || !r.name.trim()) refuse('Entry ' + (i + 1) + ' in ' + file + ' has no name.');
     // No step reads a local checkout, and the paths entries used to carry were typed by hand and
