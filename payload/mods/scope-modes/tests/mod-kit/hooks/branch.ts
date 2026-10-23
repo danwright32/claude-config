@@ -6,6 +6,9 @@
 // (L613).
 import type { ModKitBranch } from '../types/index.d.ts'
 
+/** The words that make a two digit number just after them a step of a plan, never an issue (#1475). */
+const STEP_WORDS = new Set(['pr', 'phase', 'step', 'stage', 'part', 'slice', 'wave', 'batch', 'round', 'pass', 'milestone', 'p', 'v', 'version'])
+
 /** A git command run in the checkout: its exit code and output, or a rejection when it could not run. */
 export type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
 
@@ -16,13 +19,42 @@ export type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string
  * not one (#1306): an agent worktree's branch, `worktree-agent-ad4e7831d26de84f8`, named #7831, #26
  * and #84 from its random hex id, so Dan's answers were kept under issues it never named, for every
  * later agent whose id held the same digits. A branch naming none is keyed by its own name.
+ *
+ * Nor is a step of a plan, a date or a version (#1475): a Bidspoke builder on
+ * `connections-pr10-form-2338`, step 10 of #2338's plan, was refused every screen edit as #10, and
+ * `pr-10` spelled with a hyphen still read so. So a number of two digits just after a step word
+ * (`pr-10`, `phase-12`, `milestone-61`) is a step, a run of numbers joined by dots or led by a
+ * single digit (`tsx-4.23.12`, `routes-2-1-299`) a version, and a year, month and day
+ * (`guard-costs/2026-09-03`) a date. A step word before three digits or more is not a step:
+ * `faster-pr-989-daily-guard-sweep` and `reprep-listing-phase-1880` each name their issue. An `i` or
+ * `issue` glued to three digits or more is one (`i2968-dismissed-followup-render`), while a plan's
+ * slice `i2` stays none. An issue number never starts with 0.
+ *
+ * This is the one reader of the issues a branch names: hooks and libraries outside the mods reach
+ * it through hooks/lib/branch-issues.mjs, and hooks/test-branch-issue-reader.sh fails on any other.
  */
-export const issuesOfBranch = (branch: string): number[] =>
-  branch
-    .split(/[/_.-]+/)
-    .map(part => /^(\d{2,6})[a-z]?$/i.exec(part)?.[1])
-    .filter((n): n is string => n !== undefined)
-    .map(Number)
+export const issuesOfBranch = (branch: string): number[] => {
+  const parts = [...branch.matchAll(/([/_.-]*)([^/_.-]+)/g)].map(m => ({ sep: m[1] ?? '', text: m[2] ?? '' }))
+  const text = (i: number) => parts[i]?.text ?? ''
+  const bare = (i: number) => /^\d+$/.test(text(i))
+  const not = new Set<number>()
+  for (let i = 0; i + 2 < parts.length; i++) {
+    const [y, m, d] = [text(i), text(i + 1), text(i + 2)]
+    if (/^\d{4}$/.test(y) && /^(0[1-9]|1[0-2])$/.test(m) && /^(0[1-9]|[12]\d|3[01])$/.test(d)) [i, i + 1, i + 2].forEach(k => not.add(k))
+  }
+  for (let i = 0; i < parts.length; ) {
+    let j = i
+    while (bare(j) && bare(j + 1)) j++
+    if (j > i && (parts.slice(i + 1, j + 1).some(p => p.sep.includes('.')) || text(i).length === 1)) for (let k = i; k <= j; k++) not.add(k)
+    i = j + 1
+  }
+  return parts.flatMap((_, i) => {
+    const n = /^(?:issue(?=\d)|i(?=\d{3}))?(\d{2,6})[a-z]?$/i.exec(text(i))?.[1]
+    if (n === undefined || n.startsWith('0') || not.has(i)) return []
+    if (n.length === 2 && i > 0 && STEP_WORDS.has(text(i - 1).toLowerCase())) return []
+    return [Number(n)]
+  })
+}
 
 /** The main working tree `git worktree list --porcelain` names first; null when it names none. */
 export const mainOf = (porcelain: string): string | null => /^worktree (.+)$/m.exec(porcelain)?.[1]?.trim() || null

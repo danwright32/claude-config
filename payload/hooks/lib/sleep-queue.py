@@ -213,15 +213,35 @@ def ended_by(issue_dir, self_id):
 
 # ---- the queue ----
 
-def digits(text):
-    """The issue numbers a branch name can mean: every run of digits, once dates (2026-10-07,
-    20261007) and versions (v10, 1.2.3) are taken out, since those name no issue. What is left
-    still errs toward leaving an issue out, the harmless side, and the skip line names the branch."""
-    t = text or ""
-    t = re.sub(r"(?<![0-9])\d{4}[-_.]?\d{2}[-_.]?\d{2}(?![0-9])", " ", t)
-    t = re.sub(r"(?i)(?<![a-z0-9])v\d+(?:\.\d+)*", " ", t)
-    t = re.sub(r"\d+(?:\.\d+)+", " ", t)
-    return set(re.findall(r"\d+", t))
+# The door to mod-kit's issuesOfBranch, the one reader of the issues a branch names (#1475).
+BRANCH_ISSUES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "branch-issues.mjs")
+
+
+def branch_issues(names):
+    """Each branch name's issues, as strings, read by mod-kit's one reader through
+    branch-issues.mjs, all in one run of node (#1475). This file kept a reading of its own, every
+    run of digits: a plan's step (connections-pr10-form-2338) and an agent's random id
+    (worktree-agent-ad4e7831d26de84f8) each kept an issue out of the night no branch was on, and
+    fix/1119-1124-... read as a date, so neither issue was kept out though a branch was on both.
+    A reader that cannot run refuses the queue, never reads as branches naming nothing, which would
+    queue an issue a branch is on."""
+    names = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
+    if not names:
+        return {}
+    why = None
+    try:
+        p = subprocess.run(["node", "--experimental-strip-types", "--no-warnings", BRANCH_ISSUES],
+                           input="\n".join(names) + "\n", capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            why = (p.stderr.strip().split("\n") or [""])[-1] or "node exited %d" % p.returncode
+        else:
+            read = json.loads(p.stdout)
+            if isinstance(read, dict) and all(isinstance(read.get(n), list) for n in names):
+                return {n: {str(i) for i in read[n]} for n in names}
+            why = "its answer did not name every branch"
+    except Exception as e:
+        why = str(e) or e.__class__.__name__
+    refuse("which issues the branches name could not be read (%s), so an issue a branch is on could be queued" % why)
 
 
 def mentions(text, n):
@@ -247,19 +267,23 @@ def git(cwd, *args):
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
-def named_by_session(r, slug):
-    """The issue numbers an open session's record names in this repository: its branch, and the request it is on."""
+def session_on(r, slug):
+    """What an open session's record says it is on in this repository, as (its checkout's branch,
+    the request it is on), each None when there is none; None for a session elsewhere. The
+    branch's issues are read with every other branch's, in branch_issues."""
     cwd = r.get("cwd")
     if not isinstance(cwd, str) or not os.path.isdir(cwd):
-        return set()
+        return None
     if slug_of(git(cwd, "config", "remote.origin.url")) != slug:
-        return set()
-    out = digits(git(cwd, "branch", "--show-current"))
+        return None
     progress = (r.get("extra") or {}).get("progress") if isinstance(r.get("extra"), dict) else None
     request = progress.get("request") if isinstance(progress, dict) else None
-    if isinstance(request, str):
-        out |= set(re.findall(r"#(\d+)(?![0-9])", request))
-    return out
+    return git(cwd, "branch", "--show-current") or None, request if isinstance(request, str) else None
+
+
+def named_in_request(request):
+    """The issue numbers a session's request names, each #N in it."""
+    return set(re.findall(r"#(\d+)(?![0-9])", request or ""))
 
 
 def load_json(path, what):
@@ -310,9 +334,15 @@ def queue(a):
     others, damaged = reg.open_records(a["self"])
     if damaged:
         refuse("the session registry has records changed in the last five minutes that cannot be read (%s), so a live session's issue could be missed" % ", ".join(damaged))
+    on = [s for s in (session_on(r, slug) for r in others) if s is not None]
+    heads = [p.get("headRefName") for p in prs if isinstance(p, dict)]
+    named = branch_issues([b for b, _ in on] + heads + branches)
     by_session = set()
-    for r in others:
-        by_session |= named_by_session(r, slug)
+    for b, request in on:
+        by_session |= named.get(b, set()) | named_in_request(request)
+
+    def of(name):
+        return named.get(name.strip(), set()) if isinstance(name, str) else set()
 
     rows, skips = [], []
     for i in issues:
@@ -353,11 +383,11 @@ def queue(a):
         last = es[-1][1] if es else None
         carry_on = st == "mine" or (last is not None and last.get("kind") in ("claim", "unstarted"))
         if not carry_on:
-            pr = next((p for p in prs if mentions(p.get("title"), n) or mentions(p.get("body"), n) or str(n) in digits(p.get("headRefName"))), None)
+            pr = next((p for p in prs if mentions(p.get("title"), n) or mentions(p.get("body"), n) or str(n) in of(p.get("headRefName"))), None)
             if pr is not None:
                 skip("open pull request #%s names it" % pr.get("number"))
                 continue
-            br = next((b for b in branches if str(n) in digits(b)), None)
+            br = next((b for b in branches if str(n) in of(b)), None)
             if br is not None:
                 skip("branch %s names it" % br)
                 continue
