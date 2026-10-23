@@ -334,6 +334,167 @@ rm -f "$REPO/sharedfile.txt" "$PROJ/sess1/subagents/agent-$AGENT_ID.meta.json"
 git -C "$REPO" worktree remove --force "$WT" >/dev/null 2>&1
 REPO="$REPO_BEFORE_1513"
 
+echo "check add scope: a worktree the main session created itself (claude-config#1523)"
+
+# A main session that made its own worktree with EnterWorktree was judged on its transcript alone, so
+# a file a background process it started wrote there was foreign. Measured on Claude Code 2.1.307,
+# 2026-10-22, with throwaway headless sessions and from its own code: the session's transcript gets a
+# `worktree-state` record (`worktreeSession` with `worktreePath`, `sessionId`, and `enteredExisting:
+# true` when the session entered a worktree that already existed), and EnterWorktree's own result
+# (`toolUseResult`) carries `worktreePath` and a message that begins "Created worktree at" only when
+# this call made it. "Resumed", "Reused" and "Entered" say it already existed. A worktree RESUMED by
+# name gets a worktree-state record identical to a created one (measured: a second session resuming
+# one that held a file the first had left got no `enteredExisting`), so the record alone proves
+# nothing, and only the Created result does. `claude --worktree` makes no tool call at all, so it
+# leaves only that record and gets no credit.
+REPO="$FIX/repo1523"
+git init -q -b main "$REPO"
+git -C "$REPO" config user.email t@e
+git -C "$REPO" config user.name t
+printf 'seed\n' > "$REPO/seed.txt"
+git -C "$REPO" add seed.txt
+git -C "$REPO" -c commit.gpgsign=false commit -q -m seed
+WT1523="$FIX/repo1523/.claude/worktrees/own"
+git -C "$REPO" worktree add -q -b worktree-own "$WT1523" >/dev/null 2>&1
+printf '.claude/\n' >> "$REPO/.git/info/exclude"
+SESS1523="5ess1523-0000-4000-8000-000000000001"
+MAIN_TR="$FIX/projects/proj1523/$SESS1523.jsonl"; mkdir -p "$(dirname "$MAIN_TR")"
+# worktree_state <worktree path or "null"> [enteredExisting|hookBased] [session id in the record]
+worktree_state(){
+  python3 -c '
+import json, sys
+path, flag, sid = sys.argv[1], sys.argv[2], sys.argv[3]
+ws = None
+if path != "null":
+    ws = {"originalCwd": "/x", "preEnterOriginalCwd": "/x", "worktreePath": path,
+          "worktreeName": "own", "worktreeBranch": "worktree-own", "originalBranch": "main",
+          "originalHeadCommit": "0" * 40, "sessionId": sid}
+    if flag:
+        ws[flag] = True
+print(json.dumps({"type": "worktree-state", "worktreeSession": ws, "sessionId": sid}))
+' "$1" "${2:-}" "${3:-$SESS1523}" >> "$MAIN_TR"
+}
+# enter_call <id> <name|path> <Created|Resumed|Reused|Entered> <worktree path> [record session id]
+enter_call(){
+  python3 -c '
+import json, sys
+tid, how, verb, path, sid = sys.argv[1:6]
+inp = {"path": path} if how == "path" else {"name": "own"}
+print(json.dumps({"type": "assistant", "sessionId": sid, "timestamp": "2026-10-22T20:00:00.000Z",
+    "message": {"content": [{"type": "tool_use", "id": tid, "name": "EnterWorktree", "input": inp}]}}))
+print(json.dumps({"type": "user", "sessionId": sid, "timestamp": "2026-10-22T20:00:01.000Z",
+    "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": "x"}]},
+    "toolUseResult": {"worktreePath": path, "worktreeBranch": "worktree-own",
+                      "message": "%s worktree at “%s” on branch worktree-own." % (verb, path)}}))
+' "$1" "$2" "$3" "$4" "${5:-$SESS1523}" >> "$MAIN_TR"
+}
+run_main(){ # run_main <command> <repo to run in> [session id in the payload] [agent id]
+  OUT="$(python3 -c '
+import json, sys
+d = {"tool_name": "Bash", "cwd": sys.argv[2], "tool_input": {"command": sys.argv[1]},
+     "transcript_path": sys.argv[3], "session_id": sys.argv[4]}
+if sys.argv[5]:
+    d["agent_id"] = sys.argv[5]
+    d["agent_type"] = "general-purpose"
+print(json.dumps(d))
+' "$1" "$2" "$MAIN_TR" "${3-$SESS1523}" "${4:-}" | env CLAUDE_ADD_SCOPE_STATE_DIR="$STATE" bash "$HOOK" 2>&1)"; RC=$?
+}
+now="$(date +%s)"
+# A file nothing in the transcript names and no Bash window covers: only the worktree rule credits it.
+printf 'background output\n' > "$WT1523/bg.txt"
+set_mtime "$WT1523/bg.txt" "$((now - 50000))"
+
+: > "$MAIN_TR"; enter_call t1523a name Created "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+allowed "#1523 an unmentioned file in the worktree this session created with EnterWorktree is its own"
+# Read incrementally like everything else: the creation arrives in a later chunk than the first read.
+: > "$MAIN_TR"; mention_bash_main(){ TR_SAVED="$TR"; TR="$MAIN_TR"; mention_bash "$1"; TR="$TR_SAVED"; }
+mention_bash_main "ls"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 before the session made the worktree, nothing in it is credited"
+enter_call t1523b name Created "$WT1523"; worktree_state "$WT1523"
+run_main "git add -A" "$WT1523"
+allowed "#1523 a creation recorded after the last read of the transcript is credited"
+
+# The controls, each one a way the worktree may not be this session's.
+: > "$MAIN_TR"; enter_call t1523c name Resumed "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree resumed by name, which may hold an earlier session's work, is not credited"
+says "and the file is named" "bg.txt"
+: > "$MAIN_TR"; enter_call t1523d name Reused "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree reused by name is not credited"
+: > "$MAIN_TR"; enter_call t1523e path Entered "$WT1523"; worktree_state "$WT1523" enteredExisting
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree entered by path, made by somebody else, is not credited"
+# claude --worktree: the record only, with no EnterWorktree result, cannot tell made from resumed.
+: > "$MAIN_TR"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree-state record alone (claude --worktree) is not credited"
+# Another session's worktree: the creation and the record belong to a different session id.
+OTHER1523="0ther523-0000-4000-8000-000000000002"
+: > "$MAIN_TR"; enter_call t1523f name Created "$WT1523" "$OTHER1523"; worktree_state "$WT1523" "" "$OTHER1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree another session created is not this session's"
+: > "$MAIN_TR"; enter_call t1523g name Created "$WT1523" "$OTHER1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a creation recorded under another session id is not credited, whatever the record says"
+: > "$MAIN_TR"; enter_call t1523o name Created "$WT1523"; worktree_state "$WT1523" "" "$OTHER1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree-state record under another session id is not credited, whatever the result says"
+# The creation and the record must name the SAME worktree: made one, now in another it never made.
+: > "$MAIN_TR"; enter_call t1523p name Created "$FIX/repo1523/.claude/worktrees/elsewhere"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree made elsewhere does not credit the one the session is in now"
+# Made it, then left it: the session no longer works there, and whoever does next is not credited to it.
+: > "$MAIN_TR"; enter_call t1523h name Created "$WT1523"; worktree_state "$WT1523"; worktree_state null
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a worktree the session made and then left is not credited"
+# Made it, then resumed it by name later (a fork carrying the creation in its history does this).
+: > "$MAIN_TR"; enter_call t1523i name Created "$WT1523"; worktree_state "$WT1523"
+enter_call t1523j name Resumed "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a later Resumed result outranks an earlier Created one"
+# A hook based worktree is not a git worktree Claude Code made, and is never credited.
+: > "$MAIN_TR"; enter_call t1523k name Created "$WT1523"; worktree_state "$WT1523" hookBased
+fresh_cache
+run_main "git add -A" "$WT1523"
+refused "#1523 control: a hook based worktree is not credited"
+# A SUBAGENT working in the session's worktree is judged by the #1513 rules, never this blanket one:
+# sibling agents can share the tree, which is the hazard this gate is for.
+: > "$MAIN_TR"; enter_call t1523l name Created "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523" "$SESS1523" "a1523aaaaaaaaaaaa"
+refused "#1523 control: a subagent in the session's own worktree gets no whole worktree credit"
+# The SHARED main checkout is never a blanket credit, whatever the records name.
+printf 'shared\n' > "$REPO/shared1523.txt"
+set_mtime "$REPO/shared1523.txt" "$((now - 50000))"
+: > "$MAIN_TR"; enter_call t1523m name Created "$REPO"; worktree_state "$REPO"
+fresh_cache
+run_main "git add -A" "$REPO"
+refused "#1523 control: records naming the main checkout credit nothing in it"
+says "and the foreign file is named" "shared1523.txt"
+rm -f "$REPO/shared1523.txt"
+# A payload with no session id cannot be matched to any record, so it is not credited.
+: > "$MAIN_TR"; enter_call t1523n name Created "$WT1523"; worktree_state "$WT1523"
+fresh_cache
+run_main "git add -A" "$WT1523" ""
+refused "#1523 control: with no session id in the payload nothing is credited"
+git -C "$REPO" worktree remove --force "$WT1523" >/dev/null 2>&1
+REPO="$REPO_BEFORE_1513"
+
 echo "check add scope: a checkout somebody else is working in"
 
 # The incident: another session's file, which this one has never mentioned anywhere.
@@ -546,6 +707,253 @@ run "git add -A"
 allowed "the control still allows the same unscoped add with python3 present"
 
 rm -rf "$NOPY_ROOT"
+
+echo "check add scope: the real agent records still have the shape the gate reads (claude-config#1523)"
+
+# The subagent layout and its .meta.json are Claude Code internals, measured on 2.1.307. If either
+# moves, the gate does not break loudly: it falls back to refusing an agent's own files, which is
+# felt as false refusals and taught as overriding (L36). So the newest real record on this machine
+# is read (read only) and every file and field the gate relies on is asserted. Where no record
+# exists (CI, a fresh machine) that is said as UNMEASURED, never as a pass (L411). Nothing from a
+# transcript is ever printed: only the name of each check, and the Claude Code version that wrote it.
+record_drift(){ # record_drift <projects root>: prints PART <name> OK|UNMEASURED <why>|DRIFT <what>
+  python3 -I - "$1" <<'PY'
+import datetime, glob, json, os, sys
+root = sys.argv[1]
+SCAN = 50
+def out(part, verdict, why=""):
+    print(("PART %s %s %s" % (part, verdict, why)).rstrip())
+def records(path):
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(r, dict):
+                    yield r
+    except OSError:
+        return
+if not os.path.isdir(root) or not glob.glob(os.path.join(glob.escape(root), "*", "*.jsonl")):
+    for p in ("layout", "transcript", "isolation"):
+        out(p, "UNMEASURED", "no Claude Code session transcripts on this machine")
+    sys.exit(0)
+esc = glob.escape(root)
+expected = glob.glob(os.path.join(esc, "*", "*", "subagents", "agent-*.jsonl")) + \
+           glob.glob(os.path.join(esc, "*", "*", "subagents", "*", "agent-*.jsonl"))
+anywhere = glob.glob(os.path.join(esc, "**", "agent-*.jsonl"), recursive=True) + \
+           glob.glob(os.path.join(esc, "**", "agent-*.meta.json"), recursive=True)
+if not expected:
+    if anywhere:
+        out("layout", "DRIFT", "agent records exist but none at <session>/subagents/[<group>/]agent-<id>.jsonl")
+    else:
+        out("layout", "UNMEASURED", "no subagent has run on this machine")
+    out("transcript", "UNMEASURED", "no agent transcript to read")
+    out("isolation", "UNMEASURED", "no agent transcript to read")
+    sys.exit(0)
+expected.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+def parent_of(p):
+    d = os.path.dirname(p)
+    if os.path.basename(d) != "subagents":
+        d = os.path.dirname(d)
+    return os.path.dirname(d) + ".jsonl"
+def aid_of(p):
+    return os.path.basename(p)[len("agent-"):-len(".jsonl")]
+# Layout, on the newest record: the parent transcript the gate derives the folder from, and the meta.
+newest = expected[0]
+problems = []
+if not os.path.isfile(parent_of(newest)):
+    problems.append("no parent transcript <session>.jsonl beside the subagents folder")
+meta_path = newest[:-len(".jsonl")] + ".meta.json"
+try:
+    with open(meta_path) as fh:
+        meta = json.load(fh)
+    if not isinstance(meta, dict):
+        problems.append("the .meta.json is not an object")
+except Exception:
+    problems.append("no readable agent-<id>.meta.json beside the agent transcript")
+version = ""
+for r in records(newest):
+    if isinstance(r.get("version"), str):
+        version = r["version"]
+        break
+out("layout", "DRIFT" if problems else "OK", "; ".join(problems) if problems else
+    "newest agent record, written by Claude Code %s" % (version or "of unknown version"))
+# Transcript: the newest agent that ran Bash, read for the fields the mentions and windows use.
+seen = None
+for p in expected[:SCAN]:
+    uses, results, stamps, bad_stamps, mentions = {}, set(), 0, 0, 0
+    for r in records(p):
+        msg = r.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        ts = r.get("timestamp")
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use":
+                uses[c.get("id")] = (c.get("name"), c.get("input"))
+                inp = c.get("input")
+                if isinstance(inp, dict) and any(isinstance(inp.get(k), str) for k in ("command", "file_path")):
+                    mentions += 1
+            elif c.get("type") == "tool_result":
+                results.add(c.get("tool_use_id"))
+            else:
+                continue
+            # Only the conversation records are timed. Claude Code also writes api-request-blob
+            # records repeating the same blocks with no timestamp (measured 2026-10-22), which the
+            # gate already passes over for its windows.
+            if r.get("type") not in ("assistant", "user"):
+                continue
+            try:
+                datetime.datetime.strptime((ts or "")[:19], "%Y-%m-%dT%H:%M:%S")
+                stamps += 1
+            except Exception:
+                bad_stamps += 1
+    bash = [i for i, (n, _) in uses.items() if n == "Bash"]
+    if bash:
+        seen = (bash, uses, results, stamps, bad_stamps, mentions)
+        break
+if seen is None:
+    out("transcript", "UNMEASURED", "none of the newest %d agent transcripts ran Bash" % SCAN)
+else:
+    bash, uses, results, stamps, bad_stamps, mentions = seen
+    problems = []
+    if any(not isinstance(i, str) or not i for i in bash):
+        problems.append("a Bash tool_use has no id")
+    if not any(i in results for i in bash):
+        problems.append("no tool_result carries the tool_use_id of a Bash call")
+    if bad_stamps or not stamps:
+        problems.append("tool call records lack an ISO timestamp")
+    if not mentions:
+        problems.append("no tool input carries command or file_path")
+    out("transcript", "DRIFT" if problems else "OK", "; ".join(problems))
+# Isolation: the newest agent whose recorded cwd is its own .claude/worktrees/agent-<id> worktree.
+found = None
+for p in expected[:SCAN]:
+    seg = "/.claude/worktrees/agent-%s" % aid_of(p)
+    for r in records(p):
+        cwd = r.get("cwd")
+        if isinstance(cwd, str) and (cwd.endswith(seg) or (seg + "/") in cwd):
+            found = (p, cwd[:cwd.index(seg) + len(seg)])
+            break
+    if found:
+        break
+if found is None:
+    out("isolation", "UNMEASURED", "none of the newest %d agents ran in a worktree it was spawned with" % SCAN)
+else:
+    p, wt = found
+    problems = []
+    try:
+        with open(p[:-len(".jsonl")] + ".meta.json") as fh:
+            m = json.load(fh)
+    except Exception:
+        m = None
+    if not isinstance(m, dict):
+        problems.append("no readable .meta.json beside an isolated agent")
+    else:
+        if m.get("spawnedWithWorktree") is not True:
+            problems.append("the meta has no spawnedWithWorktree true")
+        w = m.get("worktreePath")
+        if not isinstance(w, str):
+            problems.append("the meta has no worktreePath")
+        elif os.path.realpath(w) != os.path.realpath(wt):
+            problems.append("the meta worktreePath is not the worktree the agent ran in")
+    out("isolation", "DRIFT" if problems else "OK", "; ".join(problems))
+PY
+}
+# judge_drift <checker output> <label>: a DRIFT fails, an UNMEASURED is said on the runner's line.
+judge_drift(){
+  local line part verdict why
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    part="$(printf '%s' "$line" | cut -d' ' -f2)"
+    verdict="$(printf '%s' "$line" | cut -d' ' -f3)"
+    why="$(printf '%s' "$line" | cut -d' ' -f4-)"
+    case "$verdict" in
+      OK) check "#1523 $2: the $part of the newest agent record is what the gate reads" ok ;;
+      UNMEASURED) echo "SUITE-PART-UNMEASURED #1523 the $part of a real agent record: $why" ;;
+      *) check "#1523 $2: the $part of the newest agent record is what the gate reads" "$why" ;;
+    esac
+  done <<LINES
+$1
+LINES
+}
+
+# The checker's own controls, on fixtures in the real layout, each seen to fail before it is trusted
+# with the real records (L1).
+DR="$FIX/drift"
+drift_fixture(){ # drift_fixture <root>: one session with one isolated agent that ran Bash
+  local root="$1" sdir="$1/-proj/sess" wt="$1/wt/.claude/worktrees/agent-adrift000000000001"
+  mkdir -p "$sdir/subagents" "$wt"
+  : > "$sdir.jsonl"
+  python3 -c '
+import json, sys
+wt = sys.argv[1]
+print(json.dumps({"type": "assistant", "cwd": wt, "version": "9.9.9", "timestamp": "2026-10-22T20:00:00.000Z",
+    "message": {"content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]}}))
+print(json.dumps({"type": "user", "cwd": wt, "timestamp": "2026-10-22T20:00:01.000Z",
+    "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "x"}]}}))
+' "$wt" > "$sdir/subagents/agent-adrift000000000001.jsonl"
+  python3 -c '
+import json, sys
+print(json.dumps({"agentType": "general-purpose", "spawnedWithWorktree": True, "worktreePath": sys.argv[1]}))
+' "$wt" > "$sdir/subagents/agent-adrift000000000001.meta.json"
+}
+drift_says(){ # drift_says <label> <part> <verdict> <output>
+  case "$4" in *"PART $2 $3"*) check "$1" ok ;; *) check "$1" "expected PART $2 $3" ;; esac
+}
+rm -rf "$DR"; drift_fixture "$DR/good"
+o="$(record_drift "$DR/good")"
+drift_says "#1523 drift control: a record in the measured shape passes the layout" layout OK "$o"
+drift_says "#1523 drift control: and its transcript" transcript OK "$o"
+drift_says "#1523 drift control: and its isolation meta" isolation OK "$o"
+drift_fixture "$DR/renamed"
+sed -i.bak 's/spawnedWithWorktree/spawnedInWorktree/' "$DR/renamed/-proj/sess/subagents/agent-adrift000000000001.meta.json"
+o="$(record_drift "$DR/renamed")"
+drift_says "#1523 drift control: a renamed spawnedWithWorktree is drift" isolation DRIFT "$o"
+drift_fixture "$DR/nometa"
+rm -f "$DR/nometa/-proj/sess/subagents/agent-adrift000000000001.meta.json"
+o="$(record_drift "$DR/nometa")"
+drift_says "#1523 drift control: a missing meta file is drift" layout DRIFT "$o"
+drift_fixture "$DR/wtpath"
+python3 -c '
+import json, sys
+p = sys.argv[1]; m = json.load(open(p)); m["worktree"] = m.pop("worktreePath"); json.dump(m, open(p, "w"))
+' "$DR/wtpath/-proj/sess/subagents/agent-adrift000000000001.meta.json"
+o="$(record_drift "$DR/wtpath")"
+drift_says "#1523 drift control: a renamed worktreePath is drift" isolation DRIFT "$o"
+drift_fixture "$DR/noparent"
+rm -f "$DR/noparent/-proj/sess.jsonl"
+: > "$DR/noparent/-proj/other.jsonl"
+o="$(record_drift "$DR/noparent")"
+drift_says "#1523 drift control: no parent transcript beside the subagents folder is drift" layout DRIFT "$o"
+drift_fixture "$DR/noid"
+sed -i.bak 's/"tool_use_id": "toolu_1"/"toolUseId": "toolu_1"/' "$DR/noid/-proj/sess/subagents/agent-adrift000000000001.jsonl"
+o="$(record_drift "$DR/noid")"
+drift_says "#1523 drift control: a renamed tool_use_id is drift" transcript DRIFT "$o"
+drift_fixture "$DR/nostamp"
+sed -i.bak 's/"timestamp": /"time": /' "$DR/nostamp/-proj/sess/subagents/agent-adrift000000000001.jsonl"
+o="$(record_drift "$DR/nostamp")"
+drift_says "#1523 drift control: a renamed timestamp on the conversation records is drift" transcript DRIFT "$o"
+drift_fixture "$DR/moved"
+mkdir -p "$DR/moved/-proj/agents"
+mv "$DR/moved/-proj/sess/subagents/"agent-* "$DR/moved/-proj/agents/"
+o="$(record_drift "$DR/moved")"
+drift_says "#1523 drift control: agent records moved out of subagents/ are drift, not unmeasured" layout DRIFT "$o"
+mkdir -p "$DR/empty"
+o="$(record_drift "$DR/empty")"
+drift_says "#1523 drift control: no transcripts at all is unmeasured" layout UNMEASURED "$o"
+mkdir -p "$DR/noagents/-proj"; : > "$DR/noagents/-proj/sess.jsonl"
+o="$(record_drift "$DR/noagents")"
+drift_says "#1523 drift control: transcripts but no agent ever run is unmeasured" layout UNMEASURED "$o"
+case "$o" in *"sess.jsonl"*|*'"type"'*) check "#1523 drift control: no transcript text is printed" "it printed a path or record" ;;
+  *) check "#1523 drift control: no transcript text is printed" ok ;; esac
+
+# Now the real records on this machine, read only.
+judge_drift "$(record_drift "${CLAUDE_ADD_SCOPE_LIVE_PROJECTS:-$HOME/.claude/projects}")" "on this machine"
 
 echo
 echo "passed: $pass, failed: $fail"
