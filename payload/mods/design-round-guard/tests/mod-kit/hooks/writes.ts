@@ -22,7 +22,7 @@ import { kindOf } from './program.ts'
 // the command line it is (#965, #974, #975, commandWrites). A script run from a file (python3
 // build.py, bash x.sh, ./tool, make-settled.py) writes what no word names, which is not guessed at
 // (#654); since #1586 each argument it is handed is given apart, in `runs`, for a guard judging what
-// a script's arguments name (scriptRun).
+// a script's arguments name (the design round guard, whose refusal says so in its rules.ts scriptUnread).
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
