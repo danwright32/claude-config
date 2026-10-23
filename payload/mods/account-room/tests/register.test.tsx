@@ -97,10 +97,19 @@ const modKit: { name: string; register: Register } = {
 // and a test runs with no network or process of its own, so nothing here can reach the real one (L2).
 const REPO = 'test-owner/readings'
 const REPO_OPTION = { readingsRepo: REPO }
-const withKit = { plugins: [modKit], options: REPO_OPTION }
+// Every test in this file runs the room on the test clock, so none of them judges real time, and the
+// only real time limit any of them had was the runner's default of 5,000 ms. That is a fixed number,
+// so it measured the machine (claude-config#1541, L290): on 2026-10-23 at 04:18 ET, ten copies of
+// this mod's tests at once beside 72 busy loops and 30 process launching loops (load average 160 on
+// 12 cores), the slow GitHub test below took 4,069 to 5,098 ms, 494 ms on a quiet Mac, and failed
+// once with nothing broken; others in the file reached 3,171 ms. So the limit is set where only a
+// hang reaches it, as session-registry's #911 test does: two minutes is over twenty times the
+// slowest of those, and a test that never finishes still fails.
+const HANG_MS = 120_000
+const withKit = { plugins: [modKit], options: REPO_OPTION, timeoutMs: HANG_MS }
 // The manifest's defaults carry the proven Chrome route (#659), so a test of Switch with no route
 // set up empties both commands itself, as somebody blanking the settings would.
-const NO_ROUTE = { plugins: [modKit], options: { ...REPO_OPTION, logoutCommand: '', signedOutCheck: '' } }
+const NO_ROUTE = { plugins: [modKit], options: { ...REPO_OPTION, logoutCommand: '', signedOutCheck: '' }, timeoutMs: HANG_MS }
 
 // An older mod-kit, whose slot list has no 'room' (a Mac the sync has not yet brought up to date):
 // it refuses the card, so the refusal path is exercised.
@@ -534,7 +543,7 @@ const raiser: { name: string; register: Register } = {
     })
   },
 }
-const withRaiser = { plugins: [modKit, raiser], options: REPO_OPTION }
+const withRaiser = { plugins: [modKit, raiser], options: REPO_OPTION, timeoutMs: HANG_MS }
 const raiseLogin = async ($: unknown, clock: { settle: () => Promise<void> }, account: Record<string, string> | null) => {
   await ($ as { tool: { call: (e: never) => Promise<unknown> } }).tool.call({ tool: 'Bash', command: JSON.stringify(account) } as never)
   await clock.settle()
@@ -702,7 +711,7 @@ test('gh that cannot be run at all is said on the card, never as no readings (#7
   await ui.unmount()
 })
 
-test('a readings repository setting that is not owner/name is said on the card, and gh is never run with it (#750)', { plugins: [modKit], options: { readingsRepo: '../user' } }, async ($, on) => {
+test('a readings repository setting that is not owner/name is said on the card, and gh is never run with it (#750)', { plugins: [modKit], options: { readingsRepo: '../user' }, timeoutMs: HANG_MS }, async ($, on) => {
   const { clock, gh } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
   const ui = await mountBand($ as never)
@@ -1360,7 +1369,7 @@ test('a lock whose token cannot be written is let go at once, not held until it 
   expect(toasts.some(t => /^The nickname could not be saved: \S/.test(t))).toBe(true)
 })
 
-test('a card the band refuses is said once, in the transcript, not only in the debug log (L551)', { plugins: [modKitToday], options: REPO_OPTION }, async ($, on) => {
+test('a card the band refuses is said once, in the transcript, not only in the debug log (L551)', { plugins: [modKitToday], options: REPO_OPTION, timeoutMs: HANG_MS }, async ($, on) => {
   const { clock, transcript } = world(on, { files: { [LOGIN]: login('acct-home', 'home@example.com'), [NICKNAMES]: await named({ 'acct-home': 'Home' }) } })
   await start($, clock)
   await measure($, clock, limits(96, 50))
