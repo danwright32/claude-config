@@ -26,6 +26,10 @@ As a command:
       Prints, one per line, each tool.call hook in that folder that answers the call with a result
       and never asks $.modkit.screen itself, as <file>:<line>; a hook whose body is a named function
       that cannot be found is printed as ?<file>:<line>.
+  ts_source.py kit-test-takers <mod dir>
+      Prints, one per line as <file>:<line>, each import under the mod that takes `test` from
+      'claude-code/testing' itself rather than from mod-kit's tests/hang-ceiling.ts (#1577). Exit 1
+      when a file cannot be read, naming it.
 """
 import os
 import re
@@ -507,11 +511,58 @@ def strip_hooks(mods, dest):
     return failed
 
 
+# An import from the runner's own test kit, in any spelling: one line or across lines, renamed names,
+# or the whole module. `import type` brings in no test, and nor does a `type` name inside the braces.
+KIT_IMPORT = re.compile(r"""\bimport\s+(?!type\b)([^;'"]*?)\s*from\s*['"]claude-code/testing['"]""", re.S)
+# The one file that may take the runner's test: mod-kit's own tests/hang-ceiling.ts (#1577).
+HANG_CEILING = os.path.join("tests", "hang-ceiling.ts")
+
+
+def kit_test_takers(mod):
+    """Each place under a mod's folder that takes `test` from 'claude-code/testing' itself, as
+    <path>:<line> (claude-config#1577), and a file that cannot be read as <path> (cannot be read: why).
+    Copies of mod-kit's files (any folder named mod-kit) are mod-kit's own, held byte for byte by the
+    shared parts scan, and mod-kit's tests/hang-ceiling.ts is the one place that wraps the runner's."""
+    found, failed = [], 0
+    is_kit = os.path.basename(os.path.normpath(mod)) == "mod-kit"
+    for top, dirs, files in os.walk(mod):
+        dirs[:] = sorted(x for x in dirs if x not in ("node_modules", ".claude-plugin", "mod-kit"))
+        for f in sorted(files):
+            if not f.endswith((".ts", ".tsx")):
+                continue
+            path = os.path.join(top, f)
+            rel = os.path.relpath(path, mod)
+            if is_kit and rel == HANG_CEILING:
+                continue
+            try:
+                with open(path) as fh:
+                    text = fh.read()
+            except (OSError, UnicodeDecodeError) as e:
+                found.append(f"{rel} (cannot be read: {e})")
+                failed = 1
+                continue
+            code = strip_comments(text, is_jsx(path))
+            for m in KIT_IMPORT.finditer(code):
+                what = m.group(1).strip()
+                takes = what.startswith("*")
+                braces = re.search(r"\{([^}]*)\}", what)
+                if braces:
+                    takes = takes or any(p.split()[:1] == ["test"] for p in braces.group(1).split(","))
+                if takes:
+                    found.append(f"{rel}:{code.count(chr(10), 0, m.start()) + 1}")
+    return found, failed
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "strip-hooks":
         sys.exit(strip_hooks(sys.argv[2], sys.argv[3]))
     if len(sys.argv) == 3 and sys.argv[1] == "unscreened":
         print("\n".join(unscreened(sys.argv[2])))
         sys.exit(0)
-    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir>", file=sys.stderr)
+    if len(sys.argv) == 3 and sys.argv[1] == "kit-test-takers":
+        lines, bad = kit_test_takers(sys.argv[2])
+        if lines:
+            print("\n".join(lines))
+        sys.exit(bad)
+    print("usage: ts_source.py strip-hooks <mods dir> <out dir> | unscreened <hooks dir> | kit-test-takers <mod dir>", file=sys.stderr)
     sys.exit(2)
