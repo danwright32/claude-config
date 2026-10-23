@@ -193,8 +193,8 @@ build stamp equal to the record's commit, and a successful drive call for the ar
 pin that head with `--match-head-commit`.
 
 In `mode: warn` every merge is allowed, the full verdict reaches the session, and it is added to a
-tally per pull request under `~/.claude-verification/merge-tally/`. After five pull requests, and
-every five after, `hooks/verification-tally-notice.sh` asks Dan in the main session whether to switch
+tally per pull request under `~/.claude-verification/merge-tally/`. Each time the tally has grown by
+`TALLY_ASK_EVERY` pull requests (set in `verification.py`), `hooks/verification-tally-notice.sh` asks Dan in the main session whether to switch
 the repository to `block`. The override is `ALLOW_UNVERIFIED_MERGE=1 <the same command>`.
 
 ## Not built yet
