@@ -70,6 +70,13 @@ printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
 cat > "$FAKE_LOG/stdin"
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
+# FAKE_CLAUDE_HOLD names a file: the review does not finish until the suite creates it, however
+# long that takes, so "still running" is a state the suite SETS rather than a race against a
+# sleep (claude-config#1541, L290). The ceiling only stops a broken run hanging for ever.
+if [ -n "${FAKE_CLAUDE_HOLD:-}" ]; then
+  n=0
+  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+fi
 if [ -n "${FAKE_CLAUDE_OUT:-}" ]; then printf '%s\n' "$FAKE_CLAUDE_OUT"; exit 0; fi
 printf 'src/calendar.ts:12: deleteEvent still throws the raw error while createEvent got the typed one. Should be: the same typed error in both. [severity: major]\n'
 EOS
@@ -166,16 +173,23 @@ done
 # ===========================================================================
 # 1. A successful push starts exactly one detached review and returns at once.
 # ===========================================================================
-# The review sleeps REVIEW_SLEEP seconds and the hook must return well inside that, which is what
-# proves it does not wait for the review. 5 rather than 2 since claude-config#1007 gave the hook
-# the push gate's own scope check to run first: at a load average near 400 (measured 2026-10-09,
-# many agents at once) that check alone took 0.6 to 1 s, and the 2 s margin was missed by 39 ms.
-REVIEW_SLEEP=5
-FAKE_CLAUDE_SLEEP=$REVIEW_SLEEP fire_push "git push origin main" 0
+# What proves the hook does not wait for the review is that it RETURNS while the review cannot have
+# finished: the fake claude is held until this suite releases it, so the review is unfinished for as
+# long as the suite says, and a hook that waited would only come back once the review had ended,
+# with its finished file already written. No clock is read for the verdict (claude-config#1541).
+#
+# It used to race the hook against a review that slept a fixed 5 seconds (2 before
+# claude-config#1007), which is a judgement about the machine: on 2026-10-22 the hook took 5736 ms
+# on a saturated Mac and failed, and on 2026-10-23 at 00:50 ET, under 96 busy loops and 36 process
+# launching loops (load average 251 on 12 cores), 12 copies at once failed 12 of 12, the hook taking
+# 8.4 to 14.2 s with nothing wrong (L290). The elapsed time is still printed, as a figure.
+FIX_HOLD="$WORKDIR/release-fix"
+FAKE_CLAUDE_HOLD="$FIX_HOLD" fire_push "git push origin main" 0
 check_eq "the push hook exits 0" 0 "$RC"
 check "and says the review started" "started in the background" "$OUT"
 check "naming the model it used" "with sonnet" "$OUT"
-[ "$ELAPSED" -lt $((REVIEW_SLEEP * 1000)) ] && ok || bad "the hook returned in ${ELAPSED} ms, which is not within $REVIEW_SLEEP seconds of a push that takes a $REVIEW_SLEEP second review"
+fix_done_early=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt )
+[ ! -e "${fix_done_early[0]:-}" ] && ok || bad "the hook returned before the review it started had finished (it took ${ELAPSED} ms, and the review's finished file was already written, so the hook waited for it)"
 
 pending_now=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt.pending )
 [ -f "${pending_now[0]:-}" ] && ok || bad "a .pending file exists while the review runs"
@@ -183,6 +197,8 @@ pending_body="$(cat "${pending_now[0]:-/dev/null}" 2>/dev/null)"
 check "and it carries the start time" "started=" "$pending_body"
 check "and the branch" "branch=main" "$pending_body"
 
+# Released only now, so everything above was judged while the review was certainly running.
+: > "$FIX_HOLD"
 wait_for_final "$SHA_FIX" 20 && ok || bad "the finished file appears within 20 seconds"
 final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt )
 FINAL_FIX="${final[0]:-}"
