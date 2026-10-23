@@ -2938,7 +2938,43 @@ content is unchanged from what it wrote, passes; any hand edit to such a file is
   with a script that wrote nothing): no write is read from a script file's arguments, so the same is
   true of any screen file a script is handed. That is older than this change, which never runs its
   seal check for such a call (a test says so) and so neither relies on it nor widens it; it is
-  recorded as its own finding.
+  recorded as its own finding. #1586 closed it, below.
+
+### What #1586 changed, 2026-10-23
+
+Measured live on 2026-10-23 by the #1524 builder: a script file run with a screen file named only
+as its argument (`python3 some/script.py <checkout>/app/page.tsx`, make-settled.py handed a page under
+`docs/design`) was not held on a branch with no answer for its issue, because mod-kit's write reader
+read no write from a script file's arguments.
+
+- **Read in mod-kit, kept apart.** The write reader gives `runs` (mod-kit's `writes.ts`): each script
+  file a command runs, an interpreter's script operand (`python3 gen.py`, `bash x.sh`, `node
+  build.mjs`; never inline code, a script on standard input, `python -m` or awk's and sed's program
+  file) or a script run by its own name (ending in a script language's extension, or named by `./`
+  or `../`), with every word after it that may name a file, as a path where its words name one, a cd
+  and a variable the command set followed. An option is none, `--name=value` gives its value, and
+  an address or another machine's path is none. It sits apart from `files`, `changes` and `unnamed`,
+  as `byGit` does, so the guards that judge those are unchanged: no build allows script runs by
+  design, and ask before saving, overnight and the collision guard were left as they are, the same
+  gap in each recorded as its own finding.
+- **Judged as an Edit of the file.** What a script writes cannot be read before it runs, so each file
+  it is handed is judged as a write of it: a screen file is held on an issue Dan has not answered for,
+  a test, a file in no checkout (the scratchpad) and any file of no look kind run, a mod's `.ts` hook
+  file that draws nothing runs and is read again after (#1296), and the guard's own record is
+  refused. The refusal says the guard cannot read what the script does with the file (rules.ts
+  `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
+- **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
+  seal checked, since there is no text to check before it runs, so make-settled.py run straight into
+  `docs/design` is held on an issue with no answer. The skill now writes it into the session's
+  scratchpad and copies it in with a cp alone, which #1524 reads before it runs and passes while
+  sealed, and the refusal says so (rules.ts `SCRIPT_RECORD`). Judging such a run after it ran and
+  undoing an unsealed result, as #1296 does for a mod's `.ts` file, was the other way, and was not
+  taken: the cp needs no undo, and the skill's one command becomes two.
+- **What stays unread.** A file a script writes that no argument names (a path in its own text), a
+  folder it is handed (`python3 codemod.py app/`), a module run with `python -m`, and a tool run
+  through `npx` or a runner the reader does not take off. A script that only reads a screen file,
+  such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
+  no answer; run it on the scratchpad copy before the cp.
 
 ## Picker manners (#615), built 2026-10-04
 

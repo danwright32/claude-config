@@ -86,7 +86,7 @@ export type ModKit = {
    * that cannot be read, a command xargs gives its files to, a download the server names (`curl -J`,
    * `wget --content-disposition`), a recursive wget, or one of the addresses in a file (`wget -i`,
    * the file in `inputs`). The one reader of what a command changes (L613); a script file named as
-   * an operand is not guessed at.
+   * an operand is not guessed at, and each argument it is handed is given apart, in `runs` (#1586).
    */
   writes: (input: { command: string; cwd: string; home: string }) => Promise<ModKitWrites>
   /** One command's words read as git: its subcommand after git's global options, and -C's folder. Undefined when not git. */
@@ -447,6 +447,19 @@ export type ModKitWrites = {
    * file put back from two places is given once for each.
    */
   byGit?: { word: string; path?: string; does: 'write' | 'remove'; tree?: true; from?: string }[]
+  /**
+   * A script file the command runs (#1586), present when one is handed any argument: an interpreter's
+   * script operand (`python3 gen.py`, `bash x.sh`, `node build.mjs`, never inline code, a script on
+   * standard input, a module or awk's or sed's program file) or a script run by its own name (one
+   * ending in a script language's extension, or named by `./` or `../`). What it writes cannot be read
+   * before it runs, so each word after it that may name a file is given in `args`: as written, with
+   * its absolute path where its words name one, a cd and a variable the command set followed, or the
+   * `folder` a pattern lands in; an option's value written `--name=value` is that value, and an
+   * option, `-`, an address and another machine's path are none. `script` is the script's own word
+   * and `path` its file. Kept apart from `files`, `changes` and `unnamed`, as `byGit` is, so the guards
+   * that judge those are unchanged by it; the design round guard reads it.
+   */
+  runs?: { what: string; script: string; path?: string; args: { word: string; path?: string; folder?: string }[] }[]
 }
 
 /**
