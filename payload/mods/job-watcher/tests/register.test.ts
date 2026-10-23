@@ -123,8 +123,11 @@ type Job = {
   mtime?: number
   unreadable?: boolean
   gone?: boolean
-  /** notRunning: Claude Code's error result for a task that has already ended (#1387). */
-  stop?: 'ok' | 'refused' | 'throws' | 'hangs' | 'held' | 'notRunning'
+  /**
+   * notRunning: Claude Code's error result for a task that has already ended (#1387). unknown: its
+   * error result for an id it no longer knows at all (#1517).
+   */
+  stop?: 'ok' | 'refused' | 'throws' | 'hangs' | 'held' | 'notRunning' | 'unknown'
   holder?: 'held' | 'none' | 'error'
   /**
    * The parent of its group's leader: the Claude Code process that started it while that runs, or
@@ -419,6 +422,11 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
     // Claude Code's own words for a task that has already ended, seen live on 2026-10-20 (#1387).
     if (e.tool === 'TaskStop' && j?.stop === 'notRunning') {
       const text = `Task ${String(input.task_id)} is not running (status: completed)`
+      return { result: text, text, isError: true } as never
+    }
+    // Claude Code's own words for an id it no longer knows, measured live on 2.1.309 (2026-10-23, #1517).
+    if (e.tool === 'TaskStop' && j?.stop === 'unknown') {
+      const text = `No task found with ID: ${String(input.task_id)}. Running background agents: none`
       return { result: text, text, isError: true } as never
     }
     // A stop Claude Code never answers.
@@ -2748,4 +2756,160 @@ test('an untraced job whose output nobody holds any more is dropped before it is
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(next)).not.toContain(REMINDER)
   expect(w.extra[w.extra.length - 1]).toEqual([])
+})
+
+// #1517: in a PET session on 2026-10-22 a job a subagent left (b2kmw3u3u) was named for hours as
+// running and not progressing after that agent finished, and TaskStop answered "No task found", so
+// the remedy the reminder named could never work. Measured live on 2.1.309 (2026-10-23): Claude Code
+// reports a background job completed as soon as its shell exits, while a process the shell started
+// runs on in the job's process group, holding its output file; a TaskStop then answers that the task
+// is not running, and for an id it no longer knows, "No task found with ID". So the watcher reads
+// what Claude Code says of the job (the in flight list sent with the agent's stop) beside its own
+// measure of the job's process group. Claude Code's word alone never ends a job: one whose group
+// still runs is still named, with a remedy that works, and one that cannot be measured says so.
+const FINISHED = 'Claude Code has finished background job'
+const BUILD = 'cd /repo && bash build.sh'
+const reminderOf = (r: unknown) => ((r as { context?: string[] }).context ?? []).find(c => c.startsWith(FINISHED) || c.startsWith(REMINDER)) ?? ''
+const finishAgent = async (clock: { advance: (ms: number) => Promise<unknown> }, agents: Agent[], ms = MIN + 1) => {
+  ;(agents[0] as Agent).status = 'completed'
+  await clock.advance(ms)
+}
+
+test("a finished agent's job Claude Code no longer knows, whose process group still runs, is named as finished with a remedy that works (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  world(on, { tail: 'building\n', size: 9, stop: 'unknown' }, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: BUILD, run_in_background: true }))
+  // The agent's stop: Claude Code lists only the agent itself, not the job, so the stop goes ahead.
+  expect((await subagentStop($, 'a1', [subagentEntry('a1')])).block).toBeUndefined()
+  await finishAgent(clock, agents, 11 * MIN)
+  // The remedy the reminder named before #1517 cannot work: Claude Code no longer knows the id.
+  const stopped = await $.tool.call({ tool: 'TaskStop', task_id: 'job1' } as never)
+  expect(String((stopped as { text?: string }).text)).toContain('No task found with ID: job1')
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).not.toContain(REMINDER)
+  // Its silence is said too, with the same remedy, never TaskStop.
+  expect(noticesOf(mine)).toContain('job1 (cd /repo && bash build.sh) has had no new output for 11 minutes.')
+  expect(contextOf(mine)).not.toContain('Stop it with TaskStop')
+  expect(reminderOf(mine)).toBe(`${FINISHED} job1 (${BUILD}, left by agent fix CI), but what it started still runs in its process group 501. TaskStop has no task to stop: end it with kill -TERM -501, or keep it with mcp__job-watcher__keep_job and a reason, before you finish.`)
+  // Still on the status bar: something of it still runs.
+  expect((await jobsOf($)).length).toBe(1)
+})
+
+test("a finished agent's job that has ended is said once as ended, with what Claude Code last said of it, then never named again (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  const job: Job = { tail: 'building\n', size: 9, stop: 'unknown' }
+  world(on, job, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: BUILD, run_in_background: true }))
+  await subagentStop($, 'a1', [subagentEntry('a1')])
+  await finishAgent(clock, agents)
+  job.gone = true
+  await clock.advance(MIN + 1)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toBe(`Background job job1 (${BUILD}), left by agent fix CI, has ended; Claude Code had stopped listing it when the agent stopped, so how it ended is not known.`)
+  const again = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(again)).toBe('')
+  expect(await jobsOf($)).toEqual([])
+})
+
+test("a finished agent's job that ended as Claude Code last listed it is said with that outcome (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  const job: Job = { tail: 'building\n', size: 9 }
+  world(on, job, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: BUILD, run_in_background: true }))
+  await subagentStop($, 'a1', [subagentEntry('a1'), { ...shell('job1', BUILD), status: 'failed' }])
+  await finishAgent(clock, agents)
+  // Ended between looks: measured on the next tool result, before it is named (#1387).
+  job.gone = true
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toBe(`Background job job1 (${BUILD}), left by agent fix CI, has ended; Claude Code last listed it as failed.`)
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toBe('')
+})
+
+// The failure paths (L11): a process group that cannot be measured is never read as gone, whatever
+// Claude Code says. The job stays named, saying its state could not be read and why.
+test("a finished agent's job Claude Code no longer knows, whose processes cannot be read, stays named as unreadable, never dropped (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  world(on, { tail: 'building\n', size: 9, holder: 'error' }, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: BUILD, run_in_background: true }))
+  await subagentStop($, 'a1', [subagentEntry('a1')])
+  await finishAgent(clock, agents)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(reminderOf(mine)).toBe(`${FINISHED} job1 (${BUILD}, left by agent fix CI), but whether anything it started still runs could not be read: it could not be traced to a process group. TaskStop has no task to stop: keep it with mcp__job-watcher__keep_job and a reason if it is still needed; it is dropped once nothing holds its output file.`)
+  expect((await jobsOf($)).length).toBe(1)
+})
+
+test("a finished agent's traced job whose process group ps cannot read stays named, saying so (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  const job: Job = { tail: 'building\n', size: 9 }
+  world(on, job, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: BUILD, run_in_background: true }))
+  await subagentStop($, 'a1', [subagentEntry('a1')])
+  job.psFails = true
+  await finishAgent(clock, agents)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(reminderOf(mine)).toContain(`${FINISHED} job1 (${BUILD}, left by agent fix CI), but whether anything it started still runs could not be read: ps could not read its process group 501.`)
+  expect((await jobsOf($)).length).toBe(1)
+})
+
+test("a finished agent's job Claude Code still listed as running, whose process still runs, is still named as running (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  world(on, { tail: 'pending\n', size: 8 }, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 9 --watch', run_in_background: true }))
+  const listed = [subagentEntry('a1'), shell('job1', 'gh pr checks 9 --watch')]
+  expect((await subagentStop($, 'a1', listed)).block).toContain(HOLD)
+  expect((await subagentStop($, 'a1', listed)).block).toContain(HOLD)
+  expect((await subagentStop($, 'a1', listed)).block).toBeUndefined()
+  await finishAgent(clock, agents)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toContain(`${REMINDER} background job job1 (gh pr checks 9 --watch, left by agent fix CI)`)
+  expect(contextOf(mine)).not.toContain(FINISHED)
+})
+
+test("an in flight list that cannot be read says nothing of a finished agent's job: it is named as running, and the list said unreadable (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }]
+  world(on, { tail: 'pending\n', size: 8 }, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 9 --watch', run_in_background: true }))
+  await subagentStop($, 'a1', { job1: 'completed' })
+  await subagentStop($, 'a1', { job1: 'completed' })
+  await subagentStop($, 'a1', { job1: 'completed' })
+  await finishAgent(clock, agents)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toContain(`${REMINDER} background job job1 (gh pr checks 9 --watch, left by agent fix CI)`)
+  expect(contextOf(mine)).not.toContain(FINISHED)
+  expect(contextOf(mine)).toContain('could not read the list of background work')
+})
+
+test("another agent's stop leaving a job out of its list says nothing of that job (#1517)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const agents = [{ ...AGENT }, { ...AGENT, id: 'a2', description: 'other' }]
+  world(on, { tail: 'pending\n', size: 8 }, { agents })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 9 --watch', run_in_background: true }))
+  await subagentStop($, 'a2', [subagentEntry('a2')])
+  await finishAgent(clock, agents)
+  const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(mine)).toContain(`${REMINDER} background job job1 (gh pr checks 9 --watch, left by agent fix CI)`)
+  expect(contextOf(mine)).not.toContain(FINISHED)
 })
