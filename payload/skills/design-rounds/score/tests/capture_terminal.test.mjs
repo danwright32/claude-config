@@ -158,6 +158,10 @@ function fakeBrowser({ report = () => ({ built: true, screens: 1 }), checks = nu
           return checks ? checks(arg.frame, side) : [];
         }
         if (arg && typeof arg === "object" && arg.report) return report(me.content);
+        // The design side's own report and the settled file's reader of it (claude-config#1539): this
+        // stand in's design documents report nothing, and its settled file has no reader.
+        if (arg && typeof arg === "object" && "designReport" in arg) return null;
+        if (arg && typeof arg === "object" && "troubleOf" in arg) return undefined;
         if (typeof arg === "string") return `<!doctype html><html><head></head><body>frame ${arg}</body></html>`;
         return true;
       },

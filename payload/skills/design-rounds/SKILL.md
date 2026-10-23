@@ -361,7 +361,12 @@ decision is written so its check can be authored from it: what it is, why, its o
 or `noCode`), how it is verified (`"verify": "check"`, the default, with `"check"`, the one sentence
 the check asserts, and `"frames"`, every frame it shows on; or `"picture"`; or `"elsewhere"` with
 `"provenBy"`). The file gives `designFrameDocument(<id>)`, each frame's whole document, which the
-score's web adapter draws as a page of its own. A design with no product page around it names its
+score's web adapter draws as a page of its own. Each frame calls its builder's `screenShown` once, as it
+loads, and a frame whose builder or `screenShown` throws is not the design: the page says so right above
+that frame, in the builder's own words, and the score reads the same words from the file's
+`designFrameTrouble` and calls that frame no score (claude-config#1539). Only Chrome can see a throw, so
+such a design is still written, except a terminal one, whose frames are drawn before writing and which is
+refused. A design with no product page around it names its
 kind in `"screen"` in place of `"chrome"`, as its rounds did: each frame is drawn alone at its own
 width, the file says the kind where a design in chrome names its capture, and its `design-frames`
 block carries `"kind"`, which the score records in its score file and says in its report, so a 100%
@@ -377,7 +382,7 @@ terminal design is refused, naming that variable, where there is none. The file 
 `design-frames` block carries `"kind": "terminal"`. The score scores its decisions like any others,
 and measures its pictures only from the terminal adapter's capture (below, claude-config#1414); from
 any other capture it says the picture half is unmeasured, so it is no score. It refuses, writing nothing, a chrome
-that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder throws, a checked decision with no check sentence or no frame, a
+that was not captured, a kind that is not one of the three or the terminal, or one named beside a chrome, a frame with no width or variant, a terminal design with no Chrome to measure it in or whose measurement fails, a terminal frame whose window draws at another width, that draws no `Terminal.screen` window, or whose builder or its `screenShown` throws, a checked decision with no check sentence or no frame, a
 decision on a frame the design does not hold, a decision with no owner, an intro that is not text, a
 requirements list that is empty or out of shape, a decision naming a requirement the list does not
 hold, and an exception without Dan's words, a date and where he said them.
@@ -487,7 +492,7 @@ It prints both halves, every unmet or unchecked decision, every frame's percenta
 exceptions it skipped, and writes `score.json` (the one score format, the same for every adapter)
 and a `<frame>-diff.png` per frame, differences in red. Exit 0 is matched, 1 not matched yet, and 2
 no score: a capture or design it cannot read, a frame with no picture, a design picture not drawn at
-its frame's width, a check that threw, a check the design itself fails (so the check is wrong, not
+its frame's width, a design frame its builder did not draw whole, a check that threw, a check the design itself fails (so the check is wrong, not
 the build), or nothing left to measure. Unmeasured is never 100%. The capture's shape is at the top
 of `design_score.py`. It reads PNGs with the standard library alone, so it runs the same on both Macs
 and on CI: two 1280 by 2000 frames scored in about 7 seconds on 2026-10-19.

@@ -209,6 +209,31 @@ export async function openDesign(o, browser) {
   return { design, out, checksSrc, fixture, notes, source };
 }
 
+/**
+ * What kept the design's own frame from being drawn whole, or null when nothing did (claude-config#1539):
+ * the report its document leaves as window.DR_FRAME, read in the settled file's own words, from its
+ * designFrameTrouble, the reading its page says beside the frame, so the score and the page never word a
+ * frame differently. A settled file with no reader whose frames do report was written before it, and is
+ * said once in the notes, never read as whole; a design made by hand reports nothing and is drawn as
+ * before. The report is copied to plain values, since it may carry the frame's own functions.
+ */
+export async function designTrouble(d, dpage) {
+  const report = await dpage.evaluate(() => {
+    const r = window.DR_FRAME;
+    return r ? { built: !!r.built, why: String(r.why || ""), noSlot: !!r.noSlot, shownWhy: r.shownWhy ? String(r.shownWhy) : "" } : null;
+  }, { designReport: true });
+  const trouble = await d.source.evaluate(({ troubleOf }) => (typeof window.designFrameTrouble === "function"
+    ? window.designFrameTrouble(troubleOf) : undefined), { troubleOf: report });
+  if (trouble === undefined) {
+    if (report && !d.saidNoReader) {
+      d.saidNoReader = true;
+      d.notes.push(`the settled design ${d.design} gives no designFrameTrouble, so whether its builder drew each frame whole was not read; write it again with make-settled.py`);
+    }
+    return null;
+  }
+  return trouble ? String(trouble) : null;
+}
+
 /** Draws one frame's design side at its own width and runs the checks on it: its row, its document,
  * and the viewport and screenshot options the build side is drawn with too. */
 export async function drawDesignFrame(d, browser, f) {
@@ -220,6 +245,9 @@ export async function drawDesignFrame(d, browser, f) {
   try {
     await dpage.setContent(doc, { waitUntil: "load" });
     await settle(dpage, f.width);
+    // Still pictured and checked, for whoever looks; the score reads it as no score (claude-config#1539).
+    const trouble = await designTrouble(d, dpage);
+    if (trouble) row.designError = trouble;
     writeFileSync(join(d.out, row.designImage), await dpage.screenshot(shot));
     row.designChecks = await runChecks(dpage, d.checksSrc, f.id, d.fixture);
   } finally {

@@ -452,6 +452,13 @@ rc, out, _ = score(make("height", lambda s: s["frames"]["frames"][0].__setitem__
 check("a design picture not drawn at its frame's declared height is no score", rc == 2 and str(FH + 5) in out, out)
 rc, out, _ = score(make("load-error", lambda s: s["capture"]["frames"][1].__setitem__("builtError", "net::ERR_CONNECTION_REFUSED")))
 check("a built page that could not be loaded is no score", rc == 2 and "ERR_CONNECTION_REFUSED" in out, out)
+# The design's own frame not drawn whole (its builder or its screenShown threw, claude-config#1539) is
+# nothing whole to hold the build to, so no score, naming the frame and the builder's own words, even
+# where both pictures match.
+rc, out, _ = score(make("design-error", lambda s: s["capture"]["frames"][1].__setitem__(
+    "designError", "the builder's screenShown threw: no partner list for Wed")))
+check("a design frame its builder did not draw whole is no score, naming the frame and the builder's words",
+      rc == 2 and "frame f2" in out and "no partner list for Wed" in out and "design" in out, out)
 rc, out, _ = score(make("no-capture", lambda s: s.__setitem__("capture", None)))
 check("a folder with no capture is no score", rc == 2 and "capture.json" in out, out)
 rc, out, _ = score(make("bad-capture", lambda s: s.__setitem__("capture", "{ not json")))
