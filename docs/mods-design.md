@@ -761,6 +761,17 @@ taken from the spec's words or the existing patterns, and each is open to Dan ch
   "Away". "Switch to build?" is asked by the mod in Claude Code's question dialog when Claude calls
   its `switch_to_build` tool, so only Dan's press lifts no build: the dialog reads "Claude wants to
   <change>. Switch to build?" with Yes and No.
+- One edit goes through no build on an approval (#1483, Dan's sign off of 2026-10-22, picker answer
+  "Let the approved lesson edit through": "with no build on, the single Edit of ~/.claude/LESSONS.md
+  matched to an approval from the lesson check or ask-before-saving is let through; every other edit
+  stays refused"). Recording a lesson is review work no build already permits, and on 2026-10-22 the
+  only way through was switching to build for the whole session. The pass is `lessonsEdit` in
+  `hooks/nobuild.ts`: the main session's Edit tool (never replace_all, never Write, MultiEdit or a
+  shell route) on `<home>/.claude/LESSONS.md` spelled exactly so, and then only when ask before
+  saving's noun, `$.askBeforeSaving.isApproved`, says a live, unspent approval matches it, matched by
+  that mod's own predicates as a call sent again is, never a second approval record here. The noun
+  only looks: ask before saving spends the approval at its `tool.check` as the call passes, so a
+  resend is refused. That mod not loaded, out of step or failing reads as not approved.
 - No build is a guard against the usual routes Claude takes, not a sealed box (Dan, 2026-10-04,
   recorded on #730): it reads what Claude reaches for when an edit is refused, and a determined route
   around it (a script that writes what no word names) is not what it is for. #730 was the last pass
