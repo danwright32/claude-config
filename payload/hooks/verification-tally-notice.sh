@@ -62,8 +62,9 @@ for d in due:
     if d["refused"] == 0:
         rec = "Recommended: Switch to block, since every one of them would have passed."
     elif d["kinds"].get("egress-unmeasured"):
-        rec = ("Recommended: Keep warn, since %d of them carried egress-unmeasured, which nothing can clear until an"
-               " egress monitor exists, so block mode would refuse every merge." % d["kinds"]["egress-unmeasured"])
+        rec = ("Recommended: Keep warn, since %d of them carried egress-unmeasured: the egress monitor could not"
+               " see those runs (egress.why in each receipt says why), and block mode would refuse every merge like"
+               " them until it can." % d["kinds"]["egress-unmeasured"])
     else:
         rec = "Recommended: Keep warn, since %d of them would have been refused." % d["refused"]
     parts.append(

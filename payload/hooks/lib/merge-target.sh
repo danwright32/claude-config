@@ -38,8 +38,16 @@
 #   mt_gh_transient  whether a failed gh read is worth asking again: the
 #                      transport or GitHub's own server failed, rather than
 #                      GitHub answering no
-#   mt_retry_read    asks a read again while it fails transiently, through an
-#                      injected sleep, and never on a refusal (#1081)
+#   mt_gh_read_class the one reading of a failed gh read every reader returns
+#                      through: transient, GitHub refusing the sign in (a 401
+#                      with no token, MT_SIGNIN_RC, #1615), or an answer to believe
+#   mt_retry_read    asks a read again while it fails transiently or its sign in
+#                      is refused, through an injected sleep, and never on a
+#                      refusal (#1081, #1615); mt_signin_said says a sign in
+#                      that stayed refused
+#   mt_gate_read_budget
+#                    a merge gate's read budget, longer when merge-when-ready.sh
+#                      asks the gate under no harness timeout (#1615)
 #   mt_view_class    whether an mt_pr_view answer was found, refused, or a
 #                      transient failure worth asking again
 #   mt_unfinished_runs
@@ -1215,7 +1223,7 @@ mt_usable_answer() {  # $1 = json, $2 = remote slug
 # so the question is about the repository the merge is about.
 mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote slug, $4 = --repo value or empty
   local pr="$1" fields="$2" slug="$3" repo="${4:-}" answer account token wrong="" errf err
-  local notfound=0 other=""
+  local notfound=0 other="" other_account=""
   local -a args=(pr view)
   [ -n "$pr" ] && args+=("$pr")
   [ -n "$repo" ] && args+=(--repo "$repo")
@@ -1269,15 +1277,17 @@ mt_pr_view() {  # $1 = pr number or empty, $2 = --json field list, $3 = remote s
         notfound=1; break ;;
       *"Could not resolve to a Repository"*|*"HTTP 404"*)
         notfound=1 ;;
-      *) [ -z "$other" ] && other="${err:-gh printed nothing}" ;;
+      *) [ -z "$other" ] && { other="${err:-gh printed nothing}"; other_account="$account"; } ;;
     esac
   done
   [ -n "$errf" ] && rm -f "$errf"
 
+  # errorAccount is the account `error` came from, empty for the active one, so a reader told the sign
+  # in was refused can read that account's token again (claude-config#1615).
   local nf=false
   [ "$notfound" = 1 ] && [ -z "$other" ] && [ -z "$wrong" ] && nf=true
-  jq -nc --arg wrong "$wrong" --argjson nf "$nf" --arg error "$other" \
-    '{found: false, wrongRepo: $wrong, notFound: $nf, error: $error}'
+  jq -nc --arg wrong "$wrong" --argjson nf "$nf" --arg error "$other" --arg ea "$other_account" \
+    '{found: false, wrongRepo: $wrong, notFound: $nf, error: $error, errorAccount: $ea}'
   return 1
 }
 
@@ -1310,17 +1320,112 @@ mt_gh_transient() {  # $1 = the error text gh printed
   return 1
 }
 
-# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient), up to
+# A SIGN IN GITHUB REFUSED IS ITS OWN OUTCOME (claude-config#1615). On 2026-10-23, at load averages up
+# to 342, merge-when-ready.sh 1606 stopped three times on "HTTP 401: Requires authentication
+# (https://api.github.com/graphql)" while waiting its turn, and the same read a few seconds later
+# answered, with GH_TOKEN unset and gh auth status healthy. "Requires authentication" is what GitHub
+# answers a request that carried NO token (one it will not take is "Bad credentials", measured the
+# same day). gh reads its token from the macOS keyring on every run, through /usr/bin/security,
+# giving up after three seconds ("timeout while trying to get secret from keyring" is in gh 2.89's
+# own text) and then sending the request with no token, which was the first suspect. It is NOT
+# reproduced: 300 parallel token reads at a load average of 84, and 30 more at an ambient 325 the
+# same evening, all came back with a token inside half a second, so load alone does not cause it.
+# Still open: the keyring failing for another reason, or GitHub briefly answering 401 to good
+# requests. The token read made after each refusal (mt_signin_token_state) is what will tell the
+# two apart the next time it happens (L177).
+#
+# So that 401 is neither believed the first time, as mt_gh_transient's allow list believes every answer
+# GitHub gave, nor counted as a transport fault: it is asked again by mt_retry_read as MT_SIGNIN_RC,
+# each try a new gh run with a fresh keyring read, and a refusal that outlasts the tries is said as
+# GitHub refusing the sign in N times (mt_signin_said), distinctly from a pull request GitHub could not
+# show (L11). 6, because every code below it already means something to a reader or a caller:
+# 3 (merge-when-ready's compare: 404), 4 and 5 (pr-review.sh: a library or a tool missing), 5
+# (merge-when-ready: a rate limit).
+#
+# Only the no token answer counts. "Bad credentials" is a token GitHub looked at and refused, which
+# asking again in seconds does not change, and pr-review.sh's pull request read has believed it the
+# first time since claude-config#1161 (its test "a refusal is read once"), so it stays believed (L542).
+MT_SIGNIN_RC=6
+mt_gh_signin_refused() {  # $1 = the error text gh printed
+  local t
+  t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  case "$t" in
+    *"bad credentials"*) return 1 ;;
+    *"requires authentication"*) return 0 ;;
+  esac
+  return 1
+}
+
+# How a failed gh read is asked again, the one reading every merge time reader returns through (L35):
+# 2 transient (mt_gh_transient), MT_SIGNIN_RC when GitHub refused the sign in, 1 for everything else,
+# which is believed. $2 is the account that was asked (empty for the active one), kept in
+# MT_SIGNIN_ACCOUNT for the token read mt_retry_read makes after a refused sign in.
+mt_gh_read_class() {  # $1 = the error text gh printed, $2 = account or empty
+  mt_gh_transient "$1" && return 2
+  if mt_gh_signin_refused "$1"; then
+    MT_SIGNIN_ACCOUNT="${2:-}"; MT_SIGNIN_KIND=refused
+    MT_SIGNIN_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
+    return "$MT_SIGNIN_RC"
+  fi
+  return 1
+}
+
+# Whether gh reads a token for the account $1 (empty for the active one) right now, as present or
+# empty in MT_SIGNIN_TOKEN. The token itself is never printed or kept (L691): only whether it was there.
+mt_signin_token_state() {  # $1 = account or empty
+  local tok
+  if [ -n "${1:-}" ]; then tok=$(gh auth token -u "$1" 2>/dev/null); else tok=$(gh auth token 2>/dev/null); fi
+  if [ -n "$tok" ]; then MT_SIGNIN_TOKEN=present; else MT_SIGNIN_TOKEN=empty; fi
+  tok=""
+}
+
+# The sentence for a read whose sign in was refused on every try, from what mt_retry_read counted. $1,
+# when given, is what was being read; $2 the last error, else MT_SIGNIN_ERR, the one the reader saw.
+# A refusal GitHub gave (MT_SIGNIN_REFUSALS) and a token gh could not read, so GitHub was never asked
+# (MT_SIGNIN_NOTOKENS), are counted and said apart (L11).
+mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or empty
+  local n="${MT_SIGNIN_REFUSALS:-0}" m="${MT_SIGNIN_NOTOKENS:-0}" what="${1:-}" err="${2:-${MT_SIGNIN_ERR:-}}" lead=""
+  mt__times() { if [ "$1" = 1 ]; then printf '1 time'; else printf '%s times' "$1"; fi; }
+  [ "$n" -gt 0 ] && lead="GitHub refused the sign in $(mt__times "$n")"
+  [ "$m" -gt 0 ] && lead="${lead:+$lead, and }gh read no token to sign in with $(mt__times "$m")"
+  [ -n "$lead" ] || lead="GitHub refused the sign in"
+  printf '%s%s%s; a token read straight after each came back %s. That is gh sending no token, or one GitHub would not take, not GitHub being unable to show it: check gh auth status, then run the same command again' \
+    "$lead" "${what:+ reading $what}" "${err:+ ($err)}" "${MT_SIGNIN_SEEN:-unread}"
+}
+
+# The read budget for a merge gate (claude-config#1615). A gate run by the harness is killed at its
+# timeout and says nothing, which for a PreToolUse gate can read as an allow, so it keeps a budget well
+# inside that timeout (#1081). merge-when-ready.sh asks the same gates itself, under no harness timeout,
+# and on 2026-10-23, at a load average of 342, a 15 second budget was spent before
+# require-verification-run.sh could read areas.json, twice, so it names a longer one in MT_GATE_READ_BUDGET_SECONDS. A budget only bounds
+# how long a read is asked again; a read that never answers refuses either way. $1 is the gate's own
+# setting (a test seam), which wins; $2 the gate's default.
+mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its default
+  case "${1:-}" in ''|*[!0-9]*) ;; *) printf '%s' "$1"; return 0 ;; esac
+  case "${MT_GATE_READ_BUDGET_SECONDS:-}" in ''|*[!0-9]*) ;; *) printf '%s' "$MT_GATE_READ_BUDGET_SECONDS"; return 0 ;; esac
+  printf '%s' "$2"
+}
+
+# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient) or
+# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class), up to
 # $1 tries in all with $2 seconds between them (both the caller's settings, not measured), slept
 # through the command $3 so a test never waits on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
-# recognised: believed the first time, since asking again cannot turn a refusal into a yes) or 2. It
+# recognised: believed the first time, since asking again cannot turn a refusal into a yes), 2 or
+# MT_SIGNIN_RC. It
 # is called in this shell, never a subshell, so the globals it sets reach the caller.
 #
 # $4, when not empty, is a deadline in the shell's own SECONDS: a retry whose wait would end past it
 # is not made, and 2 comes back as if the tries had run out. A hook the harness kills for overrunning
 # its timeout says nothing at all, which for a PreToolUse gate can read as an allow, so a gate gives
 # its retries a budget well inside its timeout (#1081). $5, when not empty, is a function told the
-# try number before each wait, for a caller that says what it is doing.
+# try number and what the reader answered before each wait, for a caller that says what it is doing.
+#
+# A reader answering MT_SIGNIN_RC (GitHub refused the sign in, claude-config#1615) is asked again by
+# the same rule, through the same injected sleep (L524), and each refusal is followed by one token read
+# for the account asked (mt_signin_token_state), so what the keyring gave is recorded where the
+# refusal is: MT_SIGNIN_REFUSALS counts them and MT_SIGNIN_SEEN lists what each token read came to.
+# Tries spent, it returns the last outcome, so a refused sign in is never reported as an answer and
+# every caller's `-eq 0 ||` refusal holds exactly as before.
 #
 # One implementation, shared by merge-when-ready.sh and block-red-merge.sh, which both learned it
 # (claude-config#1061, #1081): two copies of a retry rule drift in exactly the part that matters, which
@@ -1330,12 +1435,21 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
   case "$tries" in ''|*[!0-9]*) tries=1 ;; esac
   [ "$tries" -ge 1 ] || tries=1
   case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
+  MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""
   while :; do
+    MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""
     "$reader"; rc=$?
-    [ "$rc" -eq 2 ] || return "$rc"
-    [ "$try" -lt "$tries" ] || return 2
-    if [ -n "$deadline" ] && [ $((SECONDS + wait)) -gt "$deadline" ]; then return 2; fi
-    [ -n "$announce" ] && "$announce" "$try"
+    if [ "$rc" -eq "$MT_SIGNIN_RC" ]; then
+      if [ "$MT_SIGNIN_KIND" = notoken ]; then MT_SIGNIN_NOTOKENS=$((MT_SIGNIN_NOTOKENS + 1))
+      else MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1)); fi
+      mt_signin_token_state "${MT_SIGNIN_ACCOUNT:-}"
+      MT_SIGNIN_SEEN="${MT_SIGNIN_SEEN:+$MT_SIGNIN_SEEN, }$MT_SIGNIN_TOKEN"
+    elif [ "$rc" -ne 2 ]; then
+      return "$rc"
+    fi
+    [ "$try" -lt "$tries" ] || return "$rc"
+    if [ -n "$deadline" ] && [ $((SECONDS + wait)) -gt "$deadline" ]; then return "$rc"; fi
+    [ -n "$announce" ] && "$announce" "$try" "$rc"
     "$sleeper" "$wait"
     try=$((try + 1))
   done
@@ -1343,17 +1457,17 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
 
 # How a reader classifies an mt_pr_view envelope ($1): 0 found, 2 a transient failure worth asking
 # again (gh's error names the transport or GitHub's server, and no account answered not found or
-# about another repository), 1 anything else. Sets MT_VIEW_ERR to gh's error, for the sentence a
-# caller stops with.
+# about another repository), MT_SIGNIN_RC when GitHub refused the sign in on the same terms
+# (claude-config#1615), 1 anything else. Sets MT_VIEW_ERR to gh's error, for the sentence a caller
+# stops with.
 mt_view_class() {  # $1 = the envelope mt_pr_view printed
+  local rc
   MT_VIEW_ERR=""
   [ "$(printf '%s' "$1" | jq -r '.found // false' 2>/dev/null)" = "true" ] && return 0
   MT_VIEW_ERR="$(printf '%s' "$1" | jq -r '.error // ""' 2>/dev/null)"
-  if [ "$(printf '%s' "$1" | jq -r '(.notFound // false) or ((.wrongRepo // "") != "")' 2>/dev/null)" != "true" ] \
-     && mt_gh_transient "$MT_VIEW_ERR"; then
-    return 2
-  fi
-  return 1
+  [ "$(printf '%s' "$1" | jq -r '(.notFound // false) or ((.wrongRepo // "") != "")' 2>/dev/null)" != "true" ] || return 1
+  mt_gh_read_class "$MT_VIEW_ERR" "$(printf '%s' "$1" | jq -r '.errorAccount // ""' 2>/dev/null)"; rc=$?
+  return "$rc"
 }
 
 # The workflow runs GitHub has created for a commit and not yet finished (claude-config#1087).
@@ -1369,7 +1483,8 @@ mt_view_class() {  # $1 = the envelope mt_pr_view printed
 # Sets MT_RUNS_PENDING to the unfinished runs' names, joined with ", " (empty when every run has
 # finished, or when there are none at all, which is what a repository without Actions answers), and
 # MT_RUNS_ERR to what went wrong. Returns 0 when GitHub answered with a list it could read, 2 when
-# the read failed transiently, and 1 for anything else, including an answer that is not that list:
+# the read failed transiently, MT_SIGNIN_RC when GitHub refused the sign in (mt_gh_read_class), and 1
+# for anything else, including an answer that is not that list:
 # not knowing whether CI is still to come is not the same as knowing it is not (L42). Asked as
 # $3, the account that could see the pull request, when one is named.
 mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empty
@@ -1389,8 +1504,7 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
   [ "$errf" != /dev/null ] && rm -f "$errf"
   if [ "$rc" -ne 0 ]; then
     MT_RUNS_ERR="${MT_RUNS_ERR:-gh exited $rc}"
-    mt_gh_transient "$MT_RUNS_ERR" && return 2
-    return 1
+    mt_gh_read_class "$MT_RUNS_ERR" "$account"; return
   fi
   # --paginate prints one object per page, so the pages are slurped and every one must carry the list.
   if [ "$(printf '%s' "$out" | jq -s 'length > 0 and all(.[]; (.workflow_runs | type) == "array")' 2>/dev/null)" != "true" ]; then
@@ -1404,7 +1518,10 @@ mt_unfinished_runs() {  # $1 = owner/name, $2 = commit sha, $3 = account or empt
 # Does a repository on GitHub hold this path? A reader in mt_retry_read's terms (claude-config#1096):
 # sets MT_REMOTE_STATE to present, absent or unknown and MT_REMOTE_ERR to the first line gh printed,
 # and returns 0 when GitHub answered (present or absent), 2 when the read failed transiently
-# (mt_gh_transient), and 1 for any other failure. Call it in this shell, never a subshell, so the
+# (mt_gh_transient), MT_SIGNIN_RC when the sign in was refused or gh read no token (mt_api_read,
+# claude-config#1615), and 1 for any other failure. Every failure leaves MT_REMOTE_STATE unknown, which
+# is what a caller judges by (mt_pinned_tool_remote, block-red-merge.sh's workflows read), so a sign in
+# refused is never read as absent. Call it in this shell, never a subshell, so the
 # globals reach the caller.
 #
 # For a merge that names, with --repo, a repository other than the checkout it
@@ -1432,7 +1549,8 @@ mt_remote_path() {  # $1 = owner/name, $2 = a repo relative path, $3 = account o
 # has used since #1096, which now reads through it so the two cannot drift (L370): sets MT_READ_STATE
 # to ok, absent (gh's own 404) or unknown, and MT_READ_ERR to the first non blank line gh printed,
 # and returns 0 when GitHub answered (ok or absent), 2 when the read failed transiently
-# (mt_gh_transient), and 1 for any other failure, which a caller must refuse on rather than read as
+# (mt_gh_transient), MT_SIGNIN_RC when GitHub refused the sign in or gh read no token for the account
+# (claude-config#1615), and 1 for any other failure, which a caller must refuse on rather than read as
 # absent (L42). $3 onward are gh api's own arguments, passed as given. Call it in this shell, never a
 # subshell, so the globals reach the caller.
 mt_api_read() {  # $1 = file for the answer (/dev/null to keep none), $2 = account or empty for the active one, $3.. = gh api arguments
@@ -1443,7 +1561,14 @@ mt_api_read() {  # $1 = file for the answer (/dev/null to keep none), $2 = accou
     || { MT_READ_ERR="could not make a temporary file for gh's answer"; return 1; }
   if [ -n "$account" ]; then
     token=$(gh auth token -u "$account" 2>/dev/null) || token=""
-    if [ -z "$token" ]; then rm -f "$errf"; MT_READ_ERR="gh has no token for the account $account"; return 1; fi
+    # The account could see the pull request moments ago, so an empty token read here is the keyring
+    # read failing, asked again like a refused sign in, and said as gh having no token: GitHub was
+    # never asked (L11).
+    if [ -z "$token" ]; then
+      rm -f "$errf"; MT_READ_ERR="gh read no token for the account $account from the keyring"
+      MT_SIGNIN_ACCOUNT="$account"; MT_SIGNIN_ERR="$MT_READ_ERR"; MT_SIGNIN_KIND=notoken
+      return "$MT_SIGNIN_RC"
+    fi
     GH_TOKEN="$token" gh api "$@" >"$out" 2>"$errf"; rc=$?
   else
     gh api "$@" >"$out" 2>"$errf"; rc=$?
@@ -1456,8 +1581,7 @@ mt_api_read() {  # $1 = file for the answer (/dev/null to keep none), $2 = accou
   case "$err" in
     *"HTTP 404"*) MT_READ_STATE="absent"; return 0 ;;
   esac
-  mt_gh_transient "$err" && return 2
-  return 1
+  mt_gh_read_class "$err" "$account"
 }
 
 # Where the gh invocation's OWN words are in the command, as "start end" character offsets (#382).

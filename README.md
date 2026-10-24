@@ -1126,6 +1126,13 @@ A GitHub read that fails in transit or on GitHub's server (a timeout, a reset co
 answer GitHub actually gave, such as a 404, is believed the first time, and nothing merges on a
 read it could not confirm (claude-config#1061). The gate's own reads are asked again the same way,
 three times within a budget well inside its 30 second hook timeout (a setting, not a measurement, claude-config#1081).
+A sign in GitHub refused for want of a token (HTTP 401 "Requires authentication", which a few runs
+met under heavy load on 2026-10-23, with a direct read seconds later answering) is asked again by the
+same rule, with a token read after each refusal recording whether the
+keyring gave one, never the token itself; one that outlasts the tries stops as "GitHub refused the
+sign in N times", not as an unreadable pull request (claude-config#1615). The gates the helper asks
+run under no hook timeout, so it hands them a longer read budget, `MWR_GATE_READ_BUDGET_SECONDS`
+(90, a setting): a read that never answers still refuses.
 
 Checks that have reported being green is not the head's CI being green (claude-config#1087). A
 workflow run can exist for minutes before any of its jobs registers a check (Slate's CI waits on a

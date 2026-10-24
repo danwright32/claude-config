@@ -26,15 +26,18 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${LIB_SELF_LOCATE_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+# The checkout this copy is the payload of, found by the one shared test (lib/checkout-root.sh,
+# claude-config#1567): a repository above that is not this one (a home folder kept in git) is no
+# checkout, so its files are never scanned as this repository's.
+ROOT="${LIB_SELF_LOCATE_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"
 
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-  echo "test-lib-self-locate: no repo above $DIR, so there were no files to read." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read its files, and there is none above $DIR"
+  echo "test-lib-self-locate: $DIR/.. is not the payload of a claude-config checkout, so there were no files of this repository to read." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read its files, and $DIR/.. is not the payload of a claude-config checkout"
   exit 2
 fi
 
