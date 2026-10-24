@@ -181,6 +181,7 @@ let toldUntimed = false
 // not on every read, since every guarded edit reads the list (lessons review of #636).
 const missed = new Map<string, number>()
 const SEARCH_AGAIN_MS = 60_000
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 // Far more sessions than are ever open at once; the cap only stops growth over a long process.
 const CACHE_MAX = 200
 // What a session id looks like; anything else read from disk never goes into a path or a search.
@@ -422,29 +423,45 @@ export const register: Register = on => {
     // Where a session's transcript is, only if that file is really there: in the folder for the
     // directory it started in, else wherever a file named by its id is. Never a guessed path, so a
     // reader can say the transcript was not found rather than fail to read one that never existed.
-    const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<string | null> => {
-      if (!SESSION_ID.test(r.sessionId)) return null
+    // A check or a search that fails is no answer (#1636): under a load average past 100 one did,
+    // and was read as no file, so /sleep told Dan a session with a /goal had none. Such a lookup
+    // gives `unread`, naming each failure, and is never remembered as a miss, so the next read looks again.
+    const transcriptOf = async (h: string, r: SessionsRecord, now: number): Promise<{ path: string | null; unread?: string }> => {
+      if (!SESSION_ID.test(r.sessionId)) return { path: null }
+      const failures: string[] = []
       for (const p of [found.get(r.sessionId), r.transcriptPath, `${projectsOf(h)}/${folderOf(r.cwd)}/${r.sessionId}.jsonl`]) {
-        if (p && (await built.fs.exists(p).catch(() => false))) {
+        if (!p) continue
+        let there = false
+        try {
+          there = await built.fs.exists(p)
+        } catch (err) {
+          failures.push(`whether ${p} is there could not be checked (${errText(err)})`)
+        }
+        if (there) {
           remember(found, r.sessionId, p, CACHE_MAX)
-          return p
+          return { path: p }
         }
       }
       const last = missed.get(r.sessionId)
-      if (last !== undefined && now - last < SEARCH_AGAIN_MS) return null
+      if (!failures.length && last !== undefined && now - last < SEARCH_AGAIN_MS) return { path: null }
+      const name = `${r.sessionId}.jsonl`
       try {
-        const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', `${r.sessionId}.jsonl`], { timeoutMs: 5_000 })
-        const p = f.exitCode === 0 ? f.stdout.split('\n').map(l => l.trim()).find(Boolean) : undefined
+        const f = await built.process.run(['find', projectsOf(h), '-maxdepth', '2', '-name', name], { timeoutMs: 5_000 })
+        // find exits 1 when a folder it passes cannot be read, and still prints what it found.
+        const p = f.stdout.split('\n').map(l => l.trim()).find(Boolean)
         if (p) {
           remember(found, r.sessionId, p, CACHE_MAX)
           missed.delete(r.sessionId)
-          return p
+          return { path: p }
         }
-      } catch {
-        // Not found is the answer: the reader says so by name.
+        if (f.exitCode !== 0) failures.push(`the search for ${name} failed (${f.stderr.trim() || `find exited ${f.exitCode}`})`)
+      } catch (err) {
+        // Refused, which is how a search cut off at its timeout reaches a mod.
+        failures.push(`the search for ${name} failed (${errText(err)})`)
       }
+      if (failures.length) return { path: null, unread: failures.join('; ') }
       remember(missed, r.sessionId, now, CACHE_MAX)
-      return null
+      return { path: null }
     }
     const sessions: Sessions = {
       list: async (): Promise<SessionsList> => {
@@ -521,7 +538,14 @@ export const register: Register = on => {
             else if (isOpenAt(r, now)) open.push(r)
             else out.closed.push(r)
           }
-          await Promise.all(open.map(async r => (r.transcriptPath = await transcriptOf(h, r, now))))
+          await Promise.all(
+            open.map(async r => {
+              const t = await transcriptOf(h, r, now)
+              r.transcriptPath = t.path
+              if (t.unread !== undefined) r.transcriptUnread = t.unread
+              else delete r.transcriptUnread
+            }),
+          )
           out.open.push(...open)
         })()
         work.catch(() => undefined)
