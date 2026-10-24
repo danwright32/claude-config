@@ -2575,7 +2575,16 @@ when a reload fails, so a second notice would only repeat it, on every pull that
 Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
 so a change between starting a session and its first prompt is reported too (#1544); the first
 prompt takes them only for a session with no start record. A start that finds a record already
-there, which is what a resume or a compaction of the same session is, keeps it and says nothing.
+there, which is what a resume or a compaction of the same session is, says nothing and keeps the
+mods record. It re-takes the rule file record at a compaction or a resume, because Claude Code
+re-reads the rule files from disk at both: measured on the real engine with Claude Code 2.1.309 on
+2026-10-24 by `tests/test-rule-files-reload.sh` (a headless session with a scripted stand-in model,
+no paid call), which found the model sent the copy on disk at the compaction, and on a resume the
+copy on disk then with Claude Code's own note that it replaces the earlier one, while nothing
+re-reads them between prompts. Keeping the old record there would have had the next prompt say "the
+older copy is in this session's context" about a copy the session no longer held (#1580). A
+`/clear` starts a new session id, which has no record to keep. The interactive `/resume` picker is
+not offered in a headless session, so it is the one path not measured.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
 
