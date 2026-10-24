@@ -12,7 +12,13 @@
 // caller's to say.
 
 export type PollRun = (argv: string[], env?: Record<string, string>) => Promise<{ exitCode: number; stdout: string; stderr: string }>
-/** How to reach the library: the runner, its path, and the session whose budget a look spends. */
+/**
+ * How to reach the library: the runner, its path, and the session whose budget a look spends, which
+ * is `$.session.id()`: the same id as the CLAUDE_CODE_SESSION_ID every Bash call of the session
+ * carries, measured against the real engine by tests/test-session-id-agreement.sh (#1575). It is
+ * always passed, never left to the environment: a mod's own, and what its children inherit, carries
+ * no session id, or another session's when Claude Code was started from inside one.
+ */
 export type Poll = { run: PollRun; lib: string; session: string }
 export type Take = { take: true } | { take: false; why: 'pause' | 'cap'; waitMs: number; said: string }
 

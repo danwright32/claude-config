@@ -3441,6 +3441,38 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
   which is what the week's log is for.
 
+## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
+
+The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute
+on `CLAUDE_CODE_SESSION_ID`. A Bash call's loop is keyed by the id Claude Code puts in that call's
+environment; status-bar and scope-modes are keyed by `$.session.id()`, which mod-kit's
+`hooks/ghpoll.ts` hands the library. That the two are one id had been assumed, and every test of
+the mod path faked the runner, so it was measured against the real engine (Claude Code 2.1.309).
+
+- **What was measured.** Headless sessions with a probe mod (`tests/session-id-probe`), which on
+  each tagged Bash call recorded `$.session.id()` and took a look through the real `ghpoll.ts` and
+  `gh-poll.sh`, while the call itself recorded the id it carried and took a look too. The two ids
+  were equal in all seven places: the session's own call, a subagent's (the probe saw its agentId,
+  and the id was the parent's), after `/compact` (same id), after `/clear` (a new id, both sides
+  together), `claude -p --resume` (same id), `--resume --fork-session` (a new id, both sides
+  together), and a session started with another session's id already in its environment, as a
+  `claude -p` run from inside a session's Bash call is (Claude Code gave the call its own id, and
+  `$.session.id()` was that id). The gh-poll state held one folder per id, each with both sides'
+  looks of every step with that id, and none for `no-session` or the other session. Before that,
+  one live interactive session: its subagent's Bash call carried `52478673-...`, and session
+  registry's record, written by the mod from `$.session.id()`, was named the same.
+- **A mod must pass the id.** A mod's own environment (`$.env.get`) carries no
+  `CLAUDE_CODE_SESSION_ID`, and its `$.process.run` children inherit none; in the session started
+  with another's id, both carried that other id. So `ghpoll.ts` always passes `$.session.id()` as
+  the child's `CLAUDE_CODE_SESSION_ID`, as it did; a mod relying on what it inherits would have
+  counted its looks under `no-session`, or under the session that started Claude Code. Mutating
+  the probe to key on its own environment turned the folder checks red, as did recording the
+  environment's id in place of `$.session.id()`.
+- **What holds it.** `tests/test-session-id-agreement.sh` runs the measurement in every local run
+  (about five seconds, the scripted stand-in model, so nothing is billed) and says UNMEASURED where
+  there is no Claude Code or no macOS. Not measured, and said: an interactive `/resume` picker, a
+  teammate, and a fork subagent.
+
 ## Not design decisions
 
 The rounds were HTML pages standing in for a terminal. The browser window, the font and the exact

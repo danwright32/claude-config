@@ -27,7 +27,13 @@
 #
 # The session is CLAUDE_CODE_SESSION_ID, which every Bash call a session or its agents make carries
 # (agents carry their parent's, so a session's whole fleet shares the budget); a loop run by hand,
-# outside any session, shares the key no-session with every other such loop.
+# outside any session, shares the key no-session with every other such loop. A mod hands the library
+# its $.session.id() as CLAUDE_CODE_SESSION_ID, and the two are one id: measured against the real
+# engine (2.1.309, 2026-10-24, claude-config#1575) for a session's own call, a subagent's, after
+# /compact, /clear, a resume and a forked resume, and in a session started with another's id already
+# in its environment, and held there by tests/test-session-id-agreement.sh. The mod must pass it: a
+# mod's own environment, and what its $.process.run children inherit, carries no session id, or that
+# other session's.
 #
 # What it does not do: it decides nothing about what a loop is waiting for, and never sleeps. It
 # answers how long to wait and why, and the loop waits through its own injected sleep and says so

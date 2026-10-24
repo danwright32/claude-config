@@ -1131,7 +1131,10 @@ view` loops at once. While a head's checks and review run, each look that sees n
 the wait, up to three minutes (`MWR_POLL_MAX_SECONDS`), and any change, a check finishing included,
 starts it at a minute again, so the look that finds the checks done merges at once. Each look takes a
 place in the session's looks a minute (`GH_POLL_PER_MINUTE`, 4), shared by every loop in the session
-through a small state file under `~/.claude/state/gh-poll/`, keyed on the session. A rate limit
+through a small state file under `~/.claude/state/gh-poll/`, keyed on the session: the
+`CLAUDE_CODE_SESSION_ID` a Bash call carries, which is the id a mod reads with `$.session.id()` and
+hands the library, so the mods' looks and the merge helpers' share one budget (measured against the
+real engine by `tests/test-session-id-agreement.sh`, claude-config#1575). A rate limit
 answer to any read or update pauses every look in the session for GitHub's Retry-After, the reset
 time of an allowance it reports spent, or, for a burst limit naming no time, a minute doubling while
 it holds; the wait is said as a rate limit, with a heartbeat inside any wait longer than two
