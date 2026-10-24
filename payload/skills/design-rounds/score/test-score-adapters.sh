@@ -446,6 +446,35 @@ JSON
   if [ "$rc" -eq 1 ] && said "not matched yet" "$TB/off.log" && said "see t1-diff.png" "$TB/off.log" && ! grep -q "pictures   100%" "$TB/off.log"; then ok; else bad "the same band with one character changed (3 unpushed commits) scores below 100% on the picture, naming the frame (rc=$rc)" "$(cat "$TB/off.log")"; fi
   run_terminal "$TB/green" "$TB/green.json"; rc=$?
   if [ "$rc" -eq 2 ] && said "could not be drawn in the shared terminal" "$TB/green.log" && said '"success"' "$TB/green.log"; then ok; else bad "a band in a colour the shared terminal cannot draw is no score, naming the colour (rc=$rc)" "$(cat "$TB/green.log")"; fi
+  # The built side's frame report is read through the settled file's designFrameTrouble, as the design
+  # side and the settled page read it (claude-config#1581): before, its own reader worded a builder throw
+  # differently and never read a screenShown throw, which was scored as a whole frame. This design draws
+  # whole with its own band and throws only once the mod's band is in it: its builder on 3 unpushed
+  # commits, its screenShown on 4.
+  mkdir -p "$TB/thrown"
+  sed '$d' "$TB/builder.js" | sed 's/  return T.screen(/  var n = T.screen(/' > "$TB/thrown/builder.js"
+  cat >> "$TB/thrown/builder.js" <<'JS'
+  if (n.textContent.indexOf("3 unpushed commits") >= 0) throw new Error("no room for 3 unpushed commits");
+  return n;
+}
+function screenShown(variant, el) {
+  if (el && el.textContent.indexOf("4 unpushed commits") >= 0) throw new Error("no room for 4 unpushed commits");
+}
+JS
+  cp "$TB/fixture.json" "$TB/settled.json" "$TB/thrown/"
+  cp "$TB/settled.checks.js" "$TB/thrown/settled.checks.js"
+  mod_screen "$TB/four.json" 4 warning
+  if python3 "$SKILL/make-settled.py" "$TB/thrown/settled.json" "$TB/thrown/settled.html" > "$TB/thrown/make.log" 2>&1; then
+    for case in off:"its builder threw (no room for 3 unpushed commits), so nothing of the round is drawn in it" \
+                four:"its builder's screenShown threw (no room for 4 unpushed commits), so whatever that draws once the frame is shown is missing from it"; do
+      name="${case%%:*}" words="${case#*:}"
+      DESIGN_SCORE_PLAYWRIGHT="$PW" node "$TERMINAL_ADAPTER" --design "$TB/thrown/settled.html" --mod "$TB/$name.json" \
+        --out "$TB/thrown/$name" --fixture "$TB/fixture.json" --channel chrome --repo "$APP" > "$TB/thrown/$name.log" 2>&1; rc=$?
+      if [ "$rc" -eq 2 ] && python3 -c 'import json,sys; f=json.load(open(sys.argv[1] + "/capture.json"))["frames"][0]; sys.exit(0 if f.get("builtError") == "the design'"'"'s frame with the mod'"'"'s band put in it is not drawn whole: " + sys.argv[2] and not f.get("designError") else 1)' "$TB/thrown/$name" "$words"; then ok; else bad "a built side ($name.json) whose band makes the design's code throw is no score, in the settled page's own words (rc=$rc)" "$(cat "$TB/thrown/$name.log"; cat "$TB/thrown/$name/capture.json" 2>/dev/null)"; fi
+    done
+  else
+    bad "make-settled.py writes a terminal design that throws only on the mod's band" "$(cat "$TB/thrown/make.log")"
+  fi
   # A check about the transcript, which is the design's and not the mod's, passes on the design and is
   # never met on the build: the build's checks read the band alone.
   printf '%s\n' "window.DESIGN_CHECKS = [{id: 'D1', frames: ['t1'], check: function (doc) { var b = doc.querySelector('.term-body'); var ok = !!b && b.textContent.indexOf('Merging #653') >= 0; return {ok: ok, detail: ok ? 'the transcript is there' : 'no transcript'}; }}];" > "$TB/transcript.checks.js"
