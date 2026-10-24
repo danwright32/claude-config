@@ -27,7 +27,9 @@
 # phrasing itself, e.g. this hook's own tests). Explain why to the user first, never skip
 # silently, same rule as the test gate and the style gate.
 #
-# Fails OPEN: any parse error allows the command.
+# Fails OPEN on a parse error: a command whose text cannot be read is allowed. Fails CLOSED when
+# the detector itself cannot run: python3 or lib/closing-keyword.py missing refuses a command
+# that could link an issue, because a detector that is not there finds nothing (L98).
 
 payload="$(cat)"
 
@@ -40,7 +42,8 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #
-# The negation detector below is python3 and nothing here asked whether python3 was installed.
+# The detector, lib/closing-keyword.py (inline here until claude-config#1550), is python3, and
+# nothing here asked whether python3 was installed.
 # Without it the findings came back empty, the emptiness test passed, and this gate exited 0 on
 # exactly the phrasing it exists to stop, with nothing said. A detector that cannot run finds
 # nothing, and finding nothing is exactly what a clean run looks like (L42, L98).
