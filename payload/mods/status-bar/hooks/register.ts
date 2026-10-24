@@ -411,8 +411,8 @@ const cacheMoved = async ($: EngineInterface) => {
 }
 
 // A compaction replaces the conversation, so the hour being counted belonged to one that is gone:
-// the clock starts again from nothing, as after a /clear, and a Compact row shown for the cache
-// goes with it (#697).
+// the clock starts again from nothing, as after a /clear, and the Compact row's cache line (the
+// time left and "send any message", #1596) goes with it (#697).
 const cacheReplaced = async ($: EngineInterface) => {
   await $.state.set(cacheRef, null)
   toastedFor = null
