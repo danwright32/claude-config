@@ -751,6 +751,21 @@ with no review gets one started by the gate. A repo whose own script merges insi
 checker, `lib/pr-review.sh check`, before merging: Overture's `merge_pr` does. `check` exits 0 to
 allow, 1 to refuse on a verdict, and 3 to refuse because the review has not finished yet.
 
+The merge helper, `lib/merge-when-ready.sh`, merges inside itself and takes the key from its
+environment, so the key has to reach it TYPED (claude-config#1673). Before it, a Bash call that ran
+the helper, grepped the key out of its refusal and ran it again with `PR_REVIEW_READ="$key"` merged
+with nobody having read the findings: no gate counts the helper as a merge, and #1587 had closed
+only the Monitor form of that loop. Now `pr-review-gate.sh`, which sees every Bash command before it
+runs, records the sha256 of a key written as a literal in front of the helper
+(`PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ...`) under the review state
+folder's `helper-keys/`, and the helper refuses, exit 64 and before anything else, a key that was not
+recorded there: one in a variable, an export or a substitution, which nobody could see when the
+command was read. A key that cannot be recorded refuses the command at the gate, saying why. The
+same key typed in front of `gh pr merge` is judged by the gate itself, as before. Run outside Claude
+Code, where no gate sees the command, the helper therefore takes no key at all; merge there with the
+key in front of `gh pr merge`. Anything that can write to `~/.claude/state` can still forge a record,
+as it can forge a review's acknowledgement: this closes the loop, not deliberate tampering.
+
 Minor findings are advisory (claude-config#1356). In a judged sample of 60 round 1 findings, those
 marked major were real 7 times in 10 and those marked minor 26 times in 50, and 11 of the 12 wrong
 ones were minor, yet each cost a fix, a review and a push. So, as Dan decided on 2026-10-19, a review
@@ -1371,7 +1386,8 @@ Three gates close the three parts of that, all reading commands through one libr
   request, pushes, commits, or runs `lib/merge-when-ready.sh`. Every merge and push gate is registered
   for Bash, and Claude Code runs a hook only for the tools its matcher names, so a merge inside a
   Monitor met no merge gate at all, and the helper takes the review's read key from its environment,
-  so a loop could feed it a key read from its own output. A Monitor that watches (a tail of the
+  so a loop could feed it a key read from its own output (the same loop in a Bash call is closed by
+  the helper taking only a key typed in front of it, claude-config#1673). A Monitor that watches (a tail of the
   helper's log, a pgrep on a push) is untouched: over the 1,010 distinct Monitor commands on the
   personal MacBook on 2026-10-24 it refused none.
 - `handback-claims-gate.sh` (PreToolUse, SubagentHandback) compares a hand-back's claims ("no
