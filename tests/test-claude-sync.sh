@@ -13,6 +13,14 @@ set -uo pipefail
 SCRIPT="${SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/claude-sync}"
 SCRIPT_SELF="${SCRIPT_SELF:-$(cd "$(dirname "$0")" && pwd)/$(basename "$0")}"
 
+# A change watcher started a fourth time on one copy of claude-sync inside five minutes stops there
+# and waits, for as long as it takes, for a different copy on disk (claude-config#1594). Sections in
+# this file start watchers on one copy in one clone far more often than that, each expecting it to
+# run and end, so with the bound in force they would hang rather than fail. It is lifted for the whole
+# file here, where every section and shard inherits it, and the one section about the bound sets it
+# back to the tool's own default for each start it makes.
+export SYNC_WATCH_LOOP_MAX=1000000
+
 # Where this suite keeps its OWN scratch, which is the same directory the tool keeps its own in
 # (claude-config#116). The temp root belongs to the whole machine (113,912 entries measured on
 # this Mac, 25 of them ours), and the sweep that reclaims abandoned scratch has to read whichever
@@ -18470,6 +18478,152 @@ fi
 check "#1569 with no SuccessfulExit condition and no ThrottleInterval of its own" \
   "! grep -q -e SuccessfulExit -e ThrottleInterval '$WR_PL'"
 check "#1569 and it starts at load, so a login brings it up too" "grep -q '<key>RunAtLoad</key><true/>' '$WR_PL'"
+
+
+section "== a watcher that keeps ending as soon as it starts stops being restarted, and says so (#1594) =="
+# #1569 made a stale watcher exit so that launchd starts it again on the newer claude-sync, guarded
+# by the self test a pull uses: the newer copy must parse and finish `status`. A copy that passes
+# that and fails only as the watcher exits again at once, and the watch agent's unconditional
+# KeepAlive has launchd start it again every ten seconds, for ever, with one dying line in the log
+# each time as the only trace; a pull's own restart of the watcher had the same exposure. So every
+# start is recorded in the clone against the copy it runs, and a start that finds that same copy
+# started more than three times in five minutes stops there: it stays up, so launchd has nothing to
+# restart, sends nothing, records the stretch in .watch-stale for stuck, status and the session
+# notice, notifies once, and hands over to the next claude-sync that runs once one is on disk.
+#
+# Nothing here waits on the real clock. The start times are injected (SYNC_WATCH_NOW), so the window
+# is crossed by setting the clock (L290, L524); the parked watcher's poll is a tenth of a second; and
+# every wait is on a condition, bounded, and stops at once if the process it waits on has gone.
+WL="$WORK/watch-loop"; mkdir -p "$WL/home/hooks" "$WL/clone"
+WL_SELF="$WL/clone/claude-sync"; WL_HITS="$WL/hits"; WL_FS="$WL/fake-fswatch"
+WL_NOTES="$WL/notes"; WL_NOTIFIER="$WL/notifier"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$WL_NOTES" > "$WL_NOTIFIER"; chmod +x "$WL_NOTIFIER"
+printf '#!/usr/bin/env bash\necho one\n' > "$WL_FS"; chmod +x "$WL_FS"
+wl_sha(){ { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | awk 'NR==1{print substr($1,1,12)}'; }
+# grep -c prints 0 AND fails on an empty file, so a `|| echo 0` would print a second zero.
+wl_lines(){ local n; n="$(grep -c . "$1" 2>/dev/null)"; printf '%s' "${n:-0}"; }
+# A copy that fails ONLY as the watcher: it exits 7 where a watcher starts watching, after everything
+# a start does first, and nowhere else. $1 is appended, so two such copies can differ. Written by
+# REPLACING the file, which is how a pull moves it.
+wl_looping(){
+  awk -v tag="$1" '/^  local paths=\(\) d$/ && !done { print "  exit 7"; done = 1 } { print } END { print "# " tag }' \
+    "$SCRIPT" > "$WL/next"
+  chmod +x "$WL/next"; mv "$WL/next" "$WL_SELF"
+}
+wl_fresh(){
+  rm -rf "$WL/clone/.sync-lock" "$WL/clone/.watch-restarted" "$WL/clone/.watch-stale" \
+    "$WL/clone/.watch-starts" "$WL/watch.pid" "$WL/log"
+  : > "$WL_HITS"; : > "$WL_NOTES"
+}
+wl_watch(){   # $1 = the clock, as an epoch
+  # The bound at the tool's own default: the lift the top of this file applies to every other
+  # section is removed, so what is tested is what ships.
+  env -u SYNC_WATCH_LOOP_MAX -u SYNC_WATCH_LOOP_WINDOW SYNC_WATCH_NOW="$1" SYNC_WATCH_PARK_POLL=0.1 \
+    SYNC_FSWATCH="$WL_FS" SYNC_WATCH_SEND="printf 'x\n' >> '$WL_HITS'" CLAUDE_HOME="$WL/home" \
+    SYNC_REPO="$WL/clone" SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WL_NOTIFIER" SYNC_HOSTNAME=wl-mac \
+    SYNC_WATCH_PID_FILE="$WL/watch.pid" SYNC_HOLD_FILE="$WL/hold" bash "$WL_SELF" watch
+}
+# Waits until $2 holds, for at most twenty seconds, and no longer than process $1 lives: a watcher
+# that exits rather than park fails the checks below at once instead of after the bound.
+wl_wait(){   # $1 = a pid   $2 = a condition
+  local n=0
+  while ! eval "$2" && kill -0 "$1" 2>/dev/null && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n+1)); done
+  return 0
+}
+wl_field(){ awk -v f="$1" 'NR==1{print $f}' "$WL/clone/.watch-stale" 2>/dev/null; }
+
+# THE FIXTURE IS THE FAULT THE ISSUE DESCRIBES, or every check below is about some other fault (L48):
+# it passes the very self test a restart is guarded by, and it fails as the watcher.
+wl_fresh; wl_looping one; WL_LOOP="$(wl_sha "$WL_SELF")"
+mkdir -p "$WL/selftest/home" "$WL/selftest/repo/payload"
+printf '{"hooks":{}}\n' > "$WL/selftest/home/settings.json"
+CLAUDE_HOME="$WL/selftest/home" SYNC_REPO="$WL/selftest/repo" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_LOCK="$WL/selftest/lock" bash "$WL_SELF" status >/dev/null 2>&1; rc_wl_st=$?
+check "#1594 the fixture passes the self test a restart onto it is guarded by" "[ '$rc_wl_st' = 0 ]"
+out_wl_1="$(wl_watch 1000 2>&1)"; rc_wl_1=$?
+out_wl_2="$(wl_watch 1010 2>&1)"; rc_wl_2=$?
+out_wl_3="$(wl_watch 1020 2>&1)"; rc_wl_3=$?
+dbg "#1594 starts 1 to 3: $rc_wl_1 $rc_wl_2 $rc_wl_3: $out_wl_3"
+check "#1594 and it fails as the watcher, every time it is started" "[ '$rc_wl_1 $rc_wl_2 $rc_wl_3' = '7 7 7' ]"
+check "#1594 three starts of one copy in twenty seconds are not yet called a loop" "[ ! -e '$WL/clone/.watch-stale' ]"
+check "#1594 and nobody is notified about them" "[ \"\$(wl_lines '$WL_NOTES')\" = 0 ]"
+
+# THE FOURTH START OF THE SAME COPY INSIDE FIVE MINUTES STOPS THERE.
+wl_watch 1030 > "$WL/log" 2>&1 &
+wl_job=$!
+wl_wait "$wl_job" "[ -s '$WL/clone/.watch-stale' ] && grep -q 'NOT watching' '$WL/log'"
+WL_PID="$(head -1 "$WL/watch.pid" 2>/dev/null || true)"
+out_wl_4="$(cat "$WL/log" 2>/dev/null)"
+dbg "#1594 fourth start: $out_wl_4"
+check "#1594 the fourth start stays up rather than end, so launchd has nothing to restart" "kill -0 '$wl_job' 2>/dev/null"
+check "#1594 it is the watcher of record: the pid file names it, so no second one starts beside it" \
+  "[ -n '$WL_PID' ] && kill -0 '$WL_PID' 2>/dev/null"
+check "#1594 it sends nothing" "[ \"\$(wl_lines '$WL_HITS')\" = 0 ]"
+check "#1594 the log says it is not watching, which copy, and why" \
+  "line_has \"\$out_wl_4\" 'claude-sync watch: NOT watching' '$WL_LOOP' 'started 4 times'"
+check "#1594 it records the stretch, for stuck, status and the session notice" "[ -s '$WL/clone/.watch-stale' ]"
+check "#1594 the record names the copy, on disk and running" \
+  "[ \"\$(wl_field 3) \$(wl_field 4)\" = '$WL_LOOP $WL_LOOP' ]"
+check "#1594 and says why: four starts inside the five minute window" "[ \"\$(wl_field 5)\" = loop:4:300 ]"
+check "#1594 one desktop notification is posted" "[ \"\$(wl_lines '$WL_NOTES')\" = 1 ]"
+stuck_wl="$(CLAUDE_HOME="$WL/home" SYNC_REPO="$WL/clone" SYNC_NO_NOTIFY=1 bash "$SCRIPT" stuck 2>&1)"
+dbg "#1594 stuck: $stuck_wl"
+check "#1594 claude-sync stuck reports it as its own kind, in words" \
+  "line_has \"\$stuck_wl\" '^watcher-looping' '$WL_LOOP' 'started 4 times'"
+check "#1594 and not as a watcher stuck on an older copy, which is a different fault" \
+  "! grep -q '^watcher-stale' <<< \"\$stuck_wl\""
+wl_sentence="$(printf '%s\n' "$stuck_wl" | awk -F'\t' '$1=="watcher-looping"{print $4}')"
+st_wl="$(CLAUDE_HOME="$WL/home" SYNC_REPO="$WL/clone" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 \
+  SYNC_CLONE_REGISTRY="$WL/noreg" bash "$SCRIPT" status 2>&1)"
+check "#1594 and status prints exactly that sentence" \
+  "[ -n \"\$wl_sentence\" ] && grep -qF -- \"\$wl_sentence\" <<< \"\$st_wl\""
+
+# ENDED AND STARTED AGAIN INSIDE THE WINDOW (somebody ends it, the Mac restarts): it stops at once
+# again, as the same stretch, and the desktop is not told twice.
+[ -n "$WL_PID" ] && kill "$WL_PID" 2>/dev/null
+wl_wait "$wl_job" "false"
+wl_watch 1040 > "$WL/log" 2>&1 &
+wl_job=$!
+wl_wait "$wl_job" "[ \"\$(wl_field 2)\" = 2 ]"
+WL_PID="$(head -1 "$WL/watch.pid" 2>/dev/null || true)"
+dbg "#1594 fifth start: $(cat "$WL/log" 2>/dev/null)"
+check "#1594 a fifth start in the window stays up too" "kill -0 '$wl_job' 2>/dev/null"
+check "#1594 as the same stretch, counted again" "[ \"\$(wl_field 2)\" = 2 ]"
+check "#1594 and with no second desktop notification" "[ \"\$(wl_lines '$WL_NOTES')\" = 1 ]"
+
+# A CLAUDE-SYNC THAT RUNS LANDS ON DISK: the stopped watcher hands over to it, by the same restart a
+# stale watcher makes, so launchd starts it on the new copy and the stretch ends.
+cp "$SCRIPT" "$WL/next"; printf '\n# fixed\n' >> "$WL/next"; mv "$WL/next" "$WL_SELF"
+WL_FIXED="$(wl_sha "$WL_SELF")"
+wl_wait "$wl_job" "false"
+wait "$wl_job"; rc_wl_5=$?
+out_wl_5="$(cat "$WL/log" 2>/dev/null)"
+dbg "#1594 handover: rc=$rc_wl_5: $out_wl_5"
+check "#1594 once a copy that runs is on disk, the stopped watcher exits cleanly for launchd to restart" \
+  "[ '$rc_wl_5' = 0 ]"
+check "#1594 and says it is restarting, from which copy to which" \
+  "line_has \"\$out_wl_5\" 'claude-sync watch: restarting' 'from claude-sync $WL_LOOP to $WL_FIXED'"
+check "#1594 the record of the stretch is gone" "[ ! -e '$WL/clone/.watch-stale' ]"
+check "#1594 the next watcher is told what it restarted from" "[ -s '$WL/clone/.watch-restarted' ]"
+check "#1594 and it removed its pid file, so the next watcher is not refused" "[ ! -e '$WL/watch.pid' ]"
+check "#1594 it sent nothing on the way out" "[ \"\$(wl_lines '$WL_HITS')\" = 0 ]"
+
+# NOT A LOOP: the same copy started four times, each more than five minutes after the last.
+wl_fresh; wl_looping one
+wl_watch 1000 >/dev/null 2>&1; wl_watch 1400 >/dev/null 2>&1; wl_watch 1800 >/dev/null 2>&1
+out_wl_6="$(wl_watch 2200 2>&1)"; rc_wl_6=$?
+check "#1594 starts spread wider than the window are each restarted as usual" "[ '$rc_wl_6' = 7 ]"
+check "#1594 and nothing is recorded as stuck" "[ ! -e '$WL/clone/.watch-stale' ]"
+
+# NOT A LOOP: four starts in a minute of DIFFERENT copies, which is a run of updates landing, each
+# started once, rather than one copy started again and again.
+wl_fresh; wl_looping one
+wl_watch 1000 >/dev/null 2>&1; wl_watch 1010 >/dev/null 2>&1; wl_watch 1020 >/dev/null 2>&1
+wl_looping two
+out_wl_7="$(wl_watch 1030 2>&1)"; rc_wl_7=$?
+check "#1594 a start of a different copy is not counted with the starts of the last one" "[ '$rc_wl_7' = 7 ]"
+check "#1594 and nothing is recorded as stuck for it" "[ ! -e '$WL/clone/.watch-stale' ]"
+wl_fresh
 
 
 section "== the index generator, against the wrap shapes it actually meets (#192, #194, #195) =="

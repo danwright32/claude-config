@@ -103,11 +103,93 @@ describe('waitingPhrase', () => {
       expect(waitingPhrase(said)).toBeNull()
   })
 
+  // #1613: "waiting on you" read over whole turns fired as often on things that are not a step as on
+  // steps. Each of these is paraphrased from a measured false alarm of the 30 days to 2026-10-24.
+  test('"waiting on you" said of a decision, a question, a reply or an OK passes (#1613)', () => {
+    for (const said of [
+      '**Waiting on you:**\n1. **PR #12 (#40):** built and held. Your decision on #40 clashes with #41, and the PR comment sets out the choice.',
+      '**Two PRs are ready but waiting on you:**\n- **PR #12:** held on purpose, because your decision on #40 clashes with #41.',
+      '#1171 is still waiting on you to answer one design guard question:',
+      'Still waiting on you, from my last message: reply "skip ok for 712" to let it past the gate, or tell me to add a test.',
+      '**Waiting on you:**\n- **#583 and #601:** ready to merge, but they loosen what the review accepts, so they need your OK.',
+      'Whether the charger reminder should also go out in the evening is the one thing waiting on you. Until you answer, the issue stays as filed.',
+      '**Waiting on you at noon:**\n- **#1483:** needs your answer to the design round guard.',
+      'Still waiting on you. Nothing more can move without your sign-off.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test('"waiting on you" naming no step at all passes (#1613)', () => {
+    for (const said of [
+      'Still waiting on you for #1107 and #1077.',
+      '#1483 has one commit that is only local and not pushed, waiting on you.',
+      'Waiting on you.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test('"waiting on you" describing a kind of thing, rather than handing one over, passes (#1613)', () => {
+    for (const said of [
+      '3. Send you a final status covering what merged, what is waiting on you, and anything left open.',
+      "3. Send you a final status covering what merged, what's waiting on you, and anything left open.",
+      'Your count also includes the replies waiting on you. Check how many are nudges.',
+      'So the milestone gets to two open issues, both waiting on you, and I can run nothing further.',
+      'Every open issue is now either being worked on or waiting on you (#771, #808). I will walk you through them once the agents finish.',
+      'After it merges, everything left in Ungrouped will be waiting on you.',
+      'Two agents are running: #863 (steps waiting on you go on the card) and #867.',
+      '- **Things waiting on you go amber.** Use and Dismiss stay grey.',
+      'Now the two issues waiting on you, one at a time:',
+      'The status bar shows that something is waiting on you until you click Done.',
+      'Next is the notification when a session starts waiting on you. Here is the wording to check:',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test('"waiting on you" about the steps card, which already shows the step, passes (#1613)', () => {
+    for (const said of [
+      'The card is the only thing still waiting on you. I will check each step when you press Done.',
+      'If the last message says a step is waiting on you but none is on the steps card, the session is held. Run it again to see.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test('"waiting on you" inside a quotation that started earlier on the line passes (#1613)', () => {
+    for (const said of [
+      'A sentence like "The deploy did not finish, so it\'s waiting on you" never fires, and the test should change.',
+      'A message like “the build failed, still waiting on you” could slip past the check.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  // Paraphrased from every real hand off the phrase made in the same 30 days, and the two of the
+  // days before that the transcripts still hold: narrowing must keep each one.
+  test('"waiting on you" handing Dan a step still fires (#1613)', () => {
+    for (const said of [
+      'The only thing still waiting on you is the merge command in my last message, and only if you want that PR merged.',
+      '**Waiting on you:**\n\n1. **A day of use (#3660).** Use the app normally, including one scout.\n2. **The redesign.** Its decisions are on the discussion.',
+      '**Still waiting on you:** the first real send (#42), and real receipts for the reader tests (#73).',
+      '4. **Still waiting on you from earlier:**\n   - the first real invoice send (#42);\n   - 20 receipts for the reader verdict (#74).',
+      'The one thing waiting on you is running the sync command on the work MacBook.',
+      '**Waiting on you:**\n* **#771:** check that the card shows once at the next merge.',
+      '**Waiting on you. Each needs the pull first:**\n1. **#808:** the Safari sign out live test.',
+      '**Waiting on you (these can start now):**\n- **#808:** test the Safari sign out.',
+      'Still waiting on you, for another time:\n- **#876:** the settings files.\n- **#875:** short live checks.',
+      '- **Waiting on you or an event:**\n  - #848: an hour of use on the work MacBook, then one command.',
+      '**Waiting on you:** the two bug bash setup steps, whenever you are ready.',
+      "- **#42, sending:** it's waiting on you. The steps are to reinstall the app and fill in `sending.json`.",
+      'Waiting on you: run `/goal clear` to end the session.',
+      'Still waiting on you from last night: try the new checkbox on the test show. Type the name and tick the box.',
+      'One thing still waiting on you, from the reflection: the installed app is old. Run `mac/build-install.sh`, then relaunch.',
+      '3. **Still waiting on you:** the remote main still points at the bad commit, so these three commands have to come from you.',
+    ])
+      expect(waitingPhrase(said)).toBe(said.match(/waiting on you/i)?.[0] ?? '')
+  })
+
   // Lessons review of PR 866: a negation elsewhere in the sentence says nothing about the phrase.
   test('a negation in another clause, or far from the phrase, does not hide a real hand-off', () => {
     for (const said of [
       "The deploy did not finish, so it's waiting on you: run the migration from the dashboard.",
-      "So this show isn't hidden, and it's still waiting on you in Reached out.",
+      "So this show isn't hidden, and it's still waiting on you in Reached out: send the follow up.",
       "I can't apply it from here because the console is not reachable from this Mac, which leaves it waiting on you.",
     ])
       expect(waitingPhrase(said)).toBe('waiting on you')

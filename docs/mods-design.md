@@ -1871,7 +1871,7 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod
   reads Claude's own final message (`last_assistant_message`, never Dan's; since #1608 every
   message of the turn, below) for a step handed over
-  in prose: "waiting on you", "once you run" (or apply, paste, click, approve), "you'll need to run",
+  in prose: "waiting on you" (since #1613 only where it hands over a step, below), "once you run" (or apply, paste, click, approve), "you'll need to run",
   "needs you to paste" and the like, "your step". One negated right before it, in its own clause
   and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
   as the name of a thing ("is waiting on you", the notification) does not count; a negation in
@@ -1945,6 +1945,39 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   separately rather than tuned here. The 2026-10-23 wording, the step second to last and the
   reflection last, is the case that must fire (`tests/register.test.tsx`), and the sentences in
   `tests/waiting.test.ts` are paraphrased from the measured hits, never copied.
+- **"Waiting on you" only where it hands over a step** (#1613). Read over whole turns, "waiting
+  on you" fired in 43 turns of the 30 days to 2026-10-24 on this Mac (9,957 turns outside the temp
+  folders, every message of the turn, measured exactly as #1608 did), and read one by one only 16
+  handed Dan a step. The other 27 said it of a decision, a question, a reply or an OK ("waiting on
+  you: your decision on #40 clashes with #41"), named nothing to do ("still waiting on you for
+  #1107"), described a kind of thing ("replies waiting on you", "what's waiting on you", "things
+  waiting on you go amber"), spoke of the steps card itself, or quoted the phrase in talk about this
+  check. So it now counts only when all of these hold (`handsOverAStep` in `hooks/waiting.ts`):
+  - it hands something over: it leads its line or sentence ("**Still waiting on you:**"), is said
+    of a thing ("the deploy is waiting on you", "which leaves it waiting on you", never "something
+    is" or "what is"), or names the thing ("the one thing still waiting on you is ...", never
+    "things waiting on you go ...");
+  - it is not inside a quotation opened earlier on its line;
+  - its own sentence, a heading's colon ending it, does not name the card, which already shows the
+    step;
+  - a step word (run, paste, click, type, try, use, install, send, check, test, command, steps and
+    the like) comes after the start of its sentence, up to the end of its paragraph, or of the list
+    a heading ending in a colon introduces, and within 500 characters of it, before any decision
+    word (decision, answer, question, reply, your OK, sign-off, whether and the like).
+
+  Measured the same way, it now fires in 16 of the 43 turns, all 16 real: every real one kept, none
+  of the 27 false. #863's five together go from 55 turns (27 real, 28 false) to 31 (27 real, 4
+  false; the 4 are "once you approve" and "you need to click" said of a plan, a lesson picker, a Done
+  button and a later sign in, left for their own measurement); every phrase together from 102 turns
+  to 78. On final messages alone "waiting on you" goes from 17 to 4. The rule was fitted on those
+  43 turns, so it was also tried on the only three turns of the 30 days before that the transcripts
+  still hold: it missed both real ones there ("One thing still waiting on you, from the reflection:",
+  and "these three commands have to come from you"), which is why a thing named before a comma or
+  colon and "commands" count; with them it fires on both and not on the false one. The labels are
+  one reader's: a hit is real when the text it fired on hands Dan something to do, and a turn whose
+  hit was false is false even where another sentence in it, which no phrase matched, did hand him a
+  step. The false shapes are failing cases in `tests/waiting.test.ts` and every real one a firing
+  case, all paraphrased.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
