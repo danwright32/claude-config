@@ -211,7 +211,8 @@ ps__crude_cut() {   # $1 = command
 # assignments, one per line, outer quotes removed; PS__R_TOOL, the gh or git subcommand it runs as gh
 # and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git), or else
 # the subcommand of rtk's own it runs, `rtk init` (rtk_field, read by ps_runs_at rtk, claude-config#1468);
-# PS__R_WRAP, empty for a command that hands no string to a shell or eval, else the wrapper's name
+# PS__R_WRAP, empty for a command that hands no string to a shell or eval and runs no script file by
+# its path or by source (those are `direct` and `source`, below), else the wrapper's name
 # (`bash -c`, `eval`, `env -S`), with 0x1d and the reason after it when its string cannot be read
 # (ps_unreadable). The commands a wrapper runs are records of their own right after it (shell-words.py
 # wrapped, claude-config#1478), so the wrapper's record is a container, never an action of its own
