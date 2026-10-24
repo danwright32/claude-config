@@ -151,6 +151,15 @@ printf '%s' '{"number":7,"url":"https://github.com/acme/widget/pull/7","body":"C
 run_hook "$MERGE 7 --squash"
 expect_deny "an answer with no closing issue list cannot be judged" "Cannot tell"
 
+# A detector that fails is no verdict, and a warning it prints on stderr is no finding.
+printf 'raise SystemExit(5)\n' > "$WORK/broken.py"
+printf 'import sys\nsys.stderr.write("DeprecationWarning: something\\n")\n' > "$WORK/warns.py"
+pr_json "Closes #12." "12" > "$WORK/pr.json"
+run_hook "$MERGE 7 --squash" CLOSING_KEYWORD_LIB="$WORK/broken.py"
+expect_deny "a detector that fails refuses rather than passes" "gave no verdict (exit 5)"
+run_hook "$MERGE 7 --squash" CLOSING_KEYWORD_LIB="$WORK/warns.py"
+expect_allow "a warning the detector prints on stderr is not a finding"
+
 # 5. One pull request per command: the body read is the first merge's (claude-config#1062).
 pr_json "Closes #12." "12" > "$WORK/pr.json"
 run_hook "$MERGE 7 --squash && $MERGE 8 --squash"

@@ -62,7 +62,7 @@ if ps_reader_missing python3; then
     *SKIP_CLOSING_CHECK=1*) exit 0 ;;
     *"pr create"*|*"pr edit"*|*"git commit"*)
       echo "BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
-        "check-closing-keyword.sh reads this text with it, looking for a negated closing keyword beside an issue reference, so with python3 absent nothing here reads the text at all." \
+        "check-closing-keyword.sh reads this text with it (lib/closing-keyword.py), looking for a closing keyword beside an issue the text says it is not closing, so with python3 absent nothing here reads the text at all." \
         "python3")" >&2
       echo "A sentence like \"does not close #897\" closes the issue on merge regardless of the negation, which is why this is a gate rather than a note." >&2
       echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2

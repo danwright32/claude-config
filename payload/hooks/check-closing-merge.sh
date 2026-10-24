@@ -36,7 +36,8 @@
 #
 # Seams, for the tests: CLOSING_READ_TRIES (3 in all), CLOSING_READ_RETRY_SECONDS (2),
 # CLOSING_READ_BUDGET_SECONDS (15, against a hook timeout of 30; MT_GATE_READ_BUDGET_SECONDS, which
-# merge-when-ready.sh sets, when it is unset), CLOSING_SLEEP (sleep), all chosen, not measured.
+# merge-when-ready.sh sets, when it is unset), CLOSING_SLEEP (sleep), all chosen, not measured;
+# CLOSING_KEYWORD_LIB (the detector file).
 
 set -uo pipefail
 
@@ -50,7 +51,7 @@ case "$payload" in *merge*|*Merge*|*enqueuePullRequest*) ;; *) exit 0 ;; esac
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null || exit 0
 
-DETECTOR="$HOOK_DIR/lib/closing-keyword.py"
+DETECTOR="${CLOSING_KEYWORD_LIB:-$HOOK_DIR/lib/closing-keyword.py}"
 OVERRIDE="Deliberate override, for a body that has to quote the phrasing: SKIP_CLOSING_CHECK=1 <the same command>."
 
 # On stderr with exit 2 rather than through deny(), which builds its JSON with jq, one of the tools
@@ -170,8 +171,12 @@ esac
 command -v python3 >/dev/null 2>&1 || deny "Cannot tell whether this merge closes an issue its body says stays open: $(ps_detector_absent_why "python3 is not on PATH" "check-closing-merge.sh reads the body through lib/closing-keyword.py, so with it absent nothing here can tell a sentence that closes an issue from one that says it stays open." "python3") $OVERRIDE"
 [ -f "$DETECTOR" ] || deny "Cannot tell whether this merge closes an issue its body says stays open: $DETECTOR is missing, and it is the rule this gate applies. Restore it with claude-sync pull. $OVERRIDE"
 
-findings=$(printf '%s' "$view" | python3 "$DETECTOR" pr "$api_slug" 2>&1); det_rc=$?
-[ "$det_rc" -eq 0 ] || deny "Cannot tell whether this merge closes an issue its body says stays open: lib/closing-keyword.py gave no verdict ($(printf '%s' "$findings" | awk 'NF { last = $0 } END { print last }' | cut -c1-300)). That is the detector failing, not the body passing. $OVERRIDE"
+# Its stderr is kept apart, so a warning Python prints on the way is never read as a finding.
+DET_ERR=$(mktemp "${TMPDIR:-/tmp}/closing-merge-det.XXXXXX") || DET_ERR=/dev/null
+findings=$(printf '%s' "$view" | python3 "$DETECTOR" pr "$api_slug" 2>"$DET_ERR"); det_rc=$?
+det_why=$(awk 'NF { last = $0 } END { print last }' "$DET_ERR" 2>/dev/null | cut -c1-300)
+[ "$DET_ERR" = /dev/null ] || rm -f "$DET_ERR"
+[ "$det_rc" -eq 0 ] || deny "Cannot tell whether this merge closes an issue its body says stays open: lib/closing-keyword.py gave no verdict (exit $det_rc${det_why:+: $det_why}). That is the detector failing, not the body passing. $OVERRIDE"
 [ -n "$findings" ] || exit 0
 
 deny "Refusing to merge PR #${number:-$pr}: GitHub will close every issue its body puts a closing word in front of, whatever the sentence around it says (L1018), and this body says otherwise about:
