@@ -78,6 +78,13 @@ run "#1188 control: a flag in front of pr view" $ALLOW 'gh -R o/x pr view 12 --j
 run "#1550 a conditional close"               $BLOCK 'gh pr create --title x --body "The parser change would also have closed #2584."'
 run "#1550 a close of an issue called part of" $BLOCK 'gh pr edit 12 --body "Part of #953. The next PR closes #953."'
 
+# --- A detector that crashes prints no finding, which must not read as a clean text (L98) ---
+BROKEN_LIB="$(mktemp "${TMPDIR:-/tmp}/closing-keyword-broken.XXXXXXXX")"
+printf 'raise SystemExit(5)\n' > "$BROKEN_LIB"
+CLOSING_KEYWORD_LIB="$BROKEN_LIB" run "#1550 a crashing detector refuses rather than passes" $BLOCK \
+  'gh pr create --title x --body "Part of #897, which stays open."'
+rm -f "$BROKEN_LIB"
+
 # --- A genuine close must sail through, or the hook is useless ---
 run "a real close"                    $ALLOW 'gh pr create --title x --body "Closes #897."'
 run "the safe phrasing"               $ALLOW 'gh pr create --title x --body "Part of #897, which stays open."'

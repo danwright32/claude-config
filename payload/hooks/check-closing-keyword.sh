@@ -28,8 +28,9 @@
 # silently, same rule as the test gate and the style gate.
 #
 # Fails OPEN on a parse error: a command whose text cannot be read is allowed. Fails CLOSED when
-# the detector itself cannot run: python3 or lib/closing-keyword.py missing refuses a command
-# that could link an issue, because a detector that is not there finds nothing (L98).
+# the detector itself cannot run: python3 or lib/closing-keyword.py missing, or the detector
+# exiting with an error, refuses a command that could link an issue, because a detector that
+# did not run finds nothing (L98).
 
 payload="$(cat)"
 
@@ -118,13 +119,20 @@ fi
 # also calls "Part of" or says stays open.
 #
 # A detector file that is not there finds nothing, and nothing is what a clean message looks like, so
-# its absence is refused as python3's is above (L98).
-if [ ! -f "$HOOK_DIR/lib/closing-keyword.py" ]; then
-  echo "BLOCKED: $HOOK_DIR/lib/closing-keyword.py is missing, and it is the rule this hook applies, so nothing here can read this text for a closing keyword that says the opposite of what it does. Restore it with claude-sync pull." >&2
+# its absence is refused as python3's is above (L98), and so is a detector that ran and failed: a
+# crash prints no finding either. CLOSING_KEYWORD_LIB points it at another file, for the tests.
+DETECTOR="${CLOSING_KEYWORD_LIB:-$HOOK_DIR/lib/closing-keyword.py}"
+if [ ! -f "$DETECTOR" ]; then
+  echo "BLOCKED: $DETECTOR is missing, and it is the rule this hook applies, so nothing here can read this text for a closing keyword that says the opposite of what it does. Restore it with claude-sync pull." >&2
   echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
   exit 2
 fi
-findings="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/closing-keyword.py" text 2>/dev/null)"
+findings="$(printf '%s' "$cmd" | python3 "$DETECTOR" text 2>/dev/null)"; det_rc=$?
+if [ "$det_rc" -ne 0 ]; then
+  echo "BLOCKED: $DETECTOR failed (exit $det_rc) reading this text, so whether it puts a closing keyword in front of an issue it says it is not closing is unknown. That is the detector failing, not the text passing." >&2
+  echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
+  exit 2
+fi
 
 [ -n "$findings" ] || exit 0
 
