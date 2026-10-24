@@ -5,11 +5,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { bandSpec, builtDocument, capture, loadKit, parseArgs, readModScreen } from "../capture-terminal.mjs";
 
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 const kit = await loadKit();
+
+// The settled file's own reader of a frame's report, as chrome_frame.py writes it into every settled
+// page (claude-config#1539), so a test of the build's words holds them to the page's, never to a copy.
+const CHROME_FRAME = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "chrome_frame.py");
+const TROUBLE_SRC = /FRAME_TROUBLE = """([\s\S]*?)"""/.exec(readFileSync(CHROME_FRAME, "utf8"))[1];
+const designFrameTrouble = new Function(`${TROUBLE_SRC}\nreturn designFrameTrouble;`)();
+const WHOLE = { built: true, why: "", noSlot: false, shownWhy: "" };
 
 // The status bar's band as its own test harness publishes it to mod-kit (payload/mods/status-bar,
 // "a failing PR and unpushed commits" with context at 74%), recorded from a real run on 2026-10-21.
@@ -141,8 +149,11 @@ test("the built document is the design's own frame with the band put in place, f
   assert.ok(builtDocument(design, named, { bandOnly: true }).includes('"text":"__BAND_ONLY__ and __SPEC__"'));
 });
 
-/** A stand in browser: each page reports what the injected band script would, per document. */
-function fakeBrowser({ report = () => ({ built: true, screens: 1 }), checks = null } = {}) {
+/** A stand in browser: each page reports what its document would, per document and side.
+ * reports(doc, side): the DR_FRAME report the frame leaves, copied to plain values, null for none;
+ * side is "design" or "built". reader: the settled file's designFrameTrouble, none when left out, as a
+ * file made before claude-config#1539 has. screens(doc): the terminal windows the band script counted. */
+function fakeBrowser({ reports = () => null, reader = null, screens = () => 1, checks = null } = {}) {
   const log = [];
   const page = (viewport) => {
     const me = { viewport, content: null, shots: [] };
@@ -157,11 +168,10 @@ function fakeBrowser({ report = () => ({ built: true, screens: 1 }), checks = nu
           const side = me.content.includes("DR-MOD-BAND") ? (me.content.includes("bandOnly = true") ? "built" : "picture") : "design";
           return checks ? checks(arg.frame, side) : [];
         }
-        if (arg && typeof arg === "object" && arg.report) return report(me.content);
-        // The design side's own report and the settled file's reader of it (claude-config#1539): this
-        // stand in's design documents report nothing, and its settled file has no reader.
-        if (arg && typeof arg === "object" && "designReport" in arg) return null;
-        if (arg && typeof arg === "object" && "troubleOf" in arg) return undefined;
+        if (arg && typeof arg === "object" && "modScreens" in arg) return screens(me.content);
+        // A frame's own report, on either side, and the settled file's reader of it (claude-config#1539).
+        if (arg && typeof arg === "object" && "designReport" in arg) return reports(me.content, (me.content || "").includes("DR-MOD-BAND") ? "built" : "design");
+        if (arg && typeof arg === "object" && "troubleOf" in arg) return reader ? reader(arg.troubleOf) : undefined;
         if (typeof arg === "string") return `<!doctype html><html><head></head><body>frame ${arg}</body></html>`;
         return true;
       },
@@ -226,11 +236,51 @@ test("a band the terminal cannot draw is recorded by frame with the reason, for 
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("a design frame that draws no terminal window, or whose builder throws, leaves the band nowhere to go", async () => {
+test("a design frame that draws no terminal window, or two, leaves the band nowhere to go", async () => {
   const { dir, o } = setupCapture();
-  const b = fakeBrowser({ report: (doc) => (doc.includes("frame f1") ? { built: true, screens: 0 } : { built: false, why: "Terminal: unknown style" }) });
+  const b = fakeBrowser({ reports: () => WHOLE, reader: designFrameTrouble, screens: (doc) => (doc.includes("frame f1") ? 0 : 2) });
   const cap = await capture(o, b, FRAMES, { gitState: git, kit });
   assert.match(cap.frames[0].builtError, /draws no terminal window/);
-  assert.match(cap.frames[1].builtError, /Terminal: unknown style/);
+  assert.match(cap.frames[1].builtError, /draws 2 terminal windows/);
+  assert.ok(cap.frames.every((f) => f.designError === undefined), "a whole design side records nothing");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// The built side's report was read by a reader of its own, which took only built and why: a builder's
+// throw was worded unlike the settled page and the score, and a screenShown throw was not read at all
+// (claude-config#1581). It is read through the settled file's designFrameTrouble, as the design side is.
+test("the built side's builder throw and screenShown throw are worded as the settled page words them", async () => {
+  const { dir, o } = setupCapture();
+  const built = { f1: { built: false, why: "Terminal: unknown style", noSlot: false, shownWhy: "" },
+    f2: { built: true, why: "", noSlot: false, shownWhy: "no partner list" } };
+  const asked = [];
+  const reader = (r) => { asked.push(r); return designFrameTrouble(r); };
+  const b = fakeBrowser({ reports: (doc, side) => (side === "built" ? built[/frame (f\d)/.exec(doc)[1]] : WHOLE), reader });
+  const cap = await capture(o, b, FRAMES, { gitState: git, kit });
+  const said = "the design's frame with the mod's band put in it is not drawn whole: ";
+  assert.equal(cap.frames[0].builtError, said + "its builder threw (Terminal: unknown style), so nothing of the round is drawn in it");
+  assert.equal(cap.frames[1].builtError, said + "its builder's screenShown threw (no partner list), so whatever that draws once the frame is shown is missing from it");
+  assert.deepEqual(asked, [WHOLE, built.f1, WHOLE, built.f2], "each side's own report is what the reader is handed");
+  assert.ok(cap.frames.every((f) => f.designError === undefined && f.checks.length === 0));
+  assert.deepEqual(b.log.filter((p) => p.shots.length).length, 2, "only the two design sides are pictured");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a built frame that reports nothing is said as its builder never running, in the settled file's words", async () => {
+  const { dir, o } = setupCapture();
+  const b = fakeBrowser({ reports: (doc, side) => (side === "built" ? null : WHOLE), reader: designFrameTrouble });
+  const cap = await capture(o, b, FRAMES, { gitState: git, kit });
+  assert.equal(cap.frames[0].builtError, "the design's frame with the mod's band put in it is not drawn whole: its builder never ran, so nothing of the round is drawn in it");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a settled file older than its reader is said once for both sides, never read by a second reader", async () => {
+  const { dir, o } = setupCapture();
+  const b = fakeBrowser({ reports: (doc, side) => (side === "built" ? { built: false, why: "x", noSlot: false, shownWhy: "" } : WHOLE) });
+  const cap = await capture(o, b, FRAMES, { gitState: git, kit });
+  const notes = cap.notes.filter((n) => /designFrameTrouble/.test(n));
+  assert.equal(notes.length, 1, cap.notes.join("\n"));
+  assert.match(notes[0], /make-settled\.py/);
+  assert.ok(cap.frames.every((f) => f.builtError === undefined && f.designError === undefined));
   rmSync(dir, { recursive: true, force: true });
 });

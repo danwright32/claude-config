@@ -51,24 +51,13 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
 alive(){ kill -0 "$1" 2>/dev/null; }
-# Waits on the CONDITION, in tenths, with a ceiling generous enough for a loaded Mac. The ceiling is
+# Waits on the CONDITION, with the one ceiling only a hang reaches (lib/hang-wait.sh). The ceiling is
 # what makes a broken helper fail rather than hang this suite; it is never what a pass waits for.
-wait_gone(){   # wait_gone <pid> [tenths]
-  local n=0
-  while [ "$n" -lt "${2:-300}" ]; do
-    alive "$1" || return 0
-    sleep 0.1; n=$((n + 1))
-  done
-  return 1
-}
-wait_file(){   # wait_file <path> [tenths]
-  local n=0
-  while [ "$n" -lt "${2:-300}" ]; do
-    [ -s "$1" ] && return 0
-    sleep 0.1; n=$((n + 1))
-  done
-  return 1
-}
+# These were 30, 10 and 5 seconds counted in tenths, the shape a loaded Mac reaches with nothing
+# broken (claude-config#1620; settings, not measurements).
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+wait_gone(){ hang_wait "! alive $1"; }   # wait_gone <pid>
+wait_file(){ hang_wait "[ -s '$1' ]"; }  # wait_file <path>
 
 # A child that blocks for as long as THIS suite is alive and no longer, so nothing here can outlive
 # a run of it however the run ends. That bound is the fix this issue is about, applied to its own
@@ -123,7 +112,7 @@ if wait_gone "$ov"; then
   check "#444 a suite past its own deadline is stopped" ok
 else
   ov_rc="still running"
-  check "#444 a suite past its own deadline is stopped" "it was still running after 30s"
+  check "#444 a suite past its own deadline is stopped" "it was still running after ${HANG_S}s"
 fi
 [ "$ov_rc" = 124 ] \
   && check "#444 and it exits 124, the status a deadline means" ok \
@@ -137,7 +126,7 @@ case "$(cat "$TMPROOT/overrun.out")" in
   *finished*) check "#444 and nothing after the blocked step ran" "out=$(cat "$TMPROOT/overrun.out")" ;;
   *) check "#444 and nothing after the blocked step ran" ok ;;
 esac
-if [ -n "$ov_child" ] && wait_gone "$ov_child" 50; then
+if [ -n "$ov_child" ] && wait_gone "$ov_child"; then
   check "#444 and the child it was blocked on went with it" ok
 else
   check "#444 and the child it was blocked on went with it" "child pid '${ov_child:-never started}' is still running"
@@ -149,7 +138,7 @@ ov_wd="$(cat "$TMPROOT/overrun.wd" 2>/dev/null || true)"
 case "$ov_wd" in
   ''|*[!0-9]*) check "#444 the watchdog recorded itself" "pidfile held '$ov_wd'" ;;
   *) ALL_PIDS="$ALL_PIDS $ov_wd"
-     wait_gone "$ov_wd" 50 \
+     wait_gone "$ov_wd" \
        && check "#444 and the watchdog is gone once it has fired" ok \
        || check "#444 and the watchdog is gone once it has fired" "pid $ov_wd is still running" ;;
 esac
@@ -325,8 +314,11 @@ fi
 # ---------------------------------------------------------------------------
 # Without this, a helper that stopped every suite at once would pass every check above (L159).
 mk_armed "$TMPROOT/quick.sh" ": nothing to wait for"
+# Given the hang ceiling as its deadline for this run, so the one check below judging a duration
+# compares it with something only a hang reaches (claude-config#1620): it was 30 s against a 60 s
+# deadline, and a loaded Mac can take 30 s to start a suite with nothing broken (the 30 s was a setting, not a measurement).
 q_start="$(date +%s)"
-q_out="$(SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/quick.wd" bash "$TMPROOT/quick.sh" 2>&1)"; q_rc=$?
+q_out="$(SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/quick.wd" bash "$TMPROOT/quick.sh" 2>&1)"; q_rc=$?
 q_took=$(( $(date +%s) - q_start ))
 [ "$q_rc" -eq 0 ] && [ "$q_out" = finished ] \
   && check "#444 a suite inside its deadline runs to the end untouched" ok \
@@ -335,7 +327,7 @@ q_took=$(( $(date +%s) - q_start ))
 # poll, and a watchdog still holding the suite's output would keep every caller that captures it
 # waiting (L235). Judged against the deadline it was given, not a guessed number: a capture held
 # open by the watchdog would last until the deadline itself.
-[ "$q_took" -lt 30 ] \
+[ "$q_took" -lt "$HANG_S" ] \
   && check "#444 and a caller capturing its output is not held open by the watchdog" ok \
   || check "#444 and a caller capturing its output is not held open by the watchdog" "the capture took ${q_took}s"
 # Waited for rather than read at once: the watchdog is started in the background, and a suite with
@@ -345,7 +337,7 @@ q_wd="$(cat "$TMPROOT/quick.wd" 2>/dev/null || true)"
 case "$q_wd" in
   ''|*[!0-9]*) check "#444 the quick suite armed a watchdog at all" "pidfile held '$q_wd'" ;;
   *) ALL_PIDS="$ALL_PIDS $q_wd"
-     wait_gone "$q_wd" 100 \
+     wait_gone "$q_wd" \
        && check "#444 and its watchdog leaves once the suite has gone" ok \
        || check "#444 and its watchdog leaves once the suite has gone" "pid $q_wd is still running" ;;
 esac
@@ -361,7 +353,9 @@ esac
 stop_and_check(){
   local name="$1" sig="$2" body="$3" want="$4" pid child rc n=0
   mk_armed "$TMPROOT/$name.sh" "$body"
-  SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/$name.wd" \
+  # The hang ceiling as its limit, so its own deadline can never be what stops it first on a loaded
+  # Mac: what this judges is the signal sent from outside (#1620).
+  SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/$name.wd" \
     bash "$TMPROOT/$name.sh" > "$TMPROOT/$name.out" 2>&1 &
   pid=$!
   ALL_PIDS="$ALL_PIDS $pid"
@@ -369,16 +363,13 @@ stop_and_check(){
   ALL_PIDS="$ALL_PIDS $child"
   # Stopped only once the watchdog has SEEN the child, which it records beside its pidfile. Stopping
   # sooner would test the gap the helper states it has, a child started within the last poll.
-  while [ "$n" -lt 300 ]; do
-    awk -F'\t' -v p="$child" '$1 == p { f = 1 } END { exit !f }' "$TMPROOT/$name.wd.seen" 2>/dev/null && break
-    sleep 0.1; n=$((n + 1))
-  done
+  hang_wait "awk -F'\t' -v p='$child' '\$1 == p { f = 1 } END { exit !f }' '$TMPROOT/$name.wd.seen' 2>/dev/null"
   kill -"$sig" "$pid" 2>/dev/null
   if wait_gone "$pid"; then wait "$pid"; rc=$?; else rc="still running"; fi
   [ "$rc" = "$want" ] \
     && check "#444 a suite sent $sig ($name) stops with the status $sig means" ok \
     || check "#444 a suite sent $sig ($name) stops with the status $sig means" "exit=$rc out=$(cat "$TMPROOT/$name.out")"
-  if [ -n "$child" ] && wait_gone "$child" 100; then
+  if [ -n "$child" ] && wait_gone "$child"; then
     check "#444 and the child it had started ($name) is gone too" ok
   else
     check "#444 and the child it had started ($name) is gone too" "child pid '${child:-never started}' is still running"
@@ -415,7 +406,12 @@ off_out="$(SUITE_WALL_TIMEOUT=0 SUITE_WALL_PIDFILE="$TMPROOT/off.wd" bash "$TMPR
 # The seams describe ONE run. A suite started by an armed suite must not read the injected start or
 # pidfile as its own (L169), or every nested suite would inherit a deadline that has already passed.
 mk_armed "$TMPROOT/parent.sh" "env | grep -E '^SUITE_WALL_(STARTED|PIDFILE)=' || echo clean"
-pe_out="$(SUITE_WALL_STARTED=$(( now - 5 )) SUITE_WALL_PIDFILE="$TMPROOT/parent.wd" bash "$TMPROOT/parent.sh" 2>&1)"
+# Its start is read from the clock NOW, and its limit is the hang ceiling: this checks what the suite
+# passes on, never how fast it runs. With the start taken from the top of this suite and its 60 s
+# limit (a setting, not a measurement), a load window at 08:55 ET on 2026-10-24 (load average 152)
+# reached this case after its deadline had passed, and the suite was stopped before it could say
+# anything (#1620).
+pe_out="$(SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_STARTED=$(( $(date +%s) - 5 )) SUITE_WALL_PIDFILE="$TMPROOT/parent.wd" bash "$TMPROOT/parent.sh" 2>&1)"
 case "$pe_out" in
   clean*) check "#444 the injected start and pidfile are not passed on to what the suite runs" ok ;;
   *) check "#444 the injected start and pidfile are not passed on to what the suite runs" "out=$pe_out" ;;

@@ -622,6 +622,29 @@ git -C "$R" add -A && git -C "$R" commit -qm words
 out=$(run_hook "git push" "$R")
 assert_absent "cron, setInterval and queues named only in strings and comments do not fire" 'background work' "$out"
 
+# --- claude-config#1578: cron as a word, no array push, and a shell job started outside a test ----
+# Two of the three times the trigger fired in the #1540 measurement were not background work:
+# Overture #4541's `endsAcronym` held the letters of cron, and #1277's breadth first search pushed
+# onto an array named queue. A job a hook or script starts with `&` was no trigger at all, though a
+# detached runner nobody watches is the case L13 and L71 are about. Each line below is the real one.
+background_fires bg-cronjob src/jobs.ts 'const job = new CronJob(spec, nightly)' "cron at the start of a word"
+background_fires bg-detach payload/hooks/design-score-reopen.sh 'nohup python3 "$RUNNER" --scheduled --state-dir "$STATE" </dev/null >/dev/null 2>&1 &' "a detached runner a hook starts"
+background_fires bg-parallel claude-sync '( bash "$suite" > "$out" 2>&1; printf '"'%s'"' "$?" > "$out.rc" ) & pids="$pids $!"' "a job started with & in a script with no extension"
+
+R=$(make_repo bg-not-jobs '            let endsAcronym = i > 0 && name[i - 1].isUppercase && i + 1 < name.count' mac/Overture/Integration/LandingRevert.swift)
+mkdir -p "$R/payload/mods/design-round-guard/hooks" "$R/hooks" "$R/src"
+printf '%s\n' '        queue.push([file, x])' > "$R/payload/mods/design-round-guard/hooks/rules.ts"
+printf '%s\n' 'fake_server > "$W/log" 2>&1 & pid=$!' 'wait "$pid"' > "$R/hooks/test-fake-server.sh"
+printf '%s\n' 'build && ship || exit 1' 'echo "refused" >&2' 'run 2>&1 | tee "$log"' 'probe &>/dev/null' \
+  'out="$(gh_as api "repos/$slug/actions/runs?status=success&event=pull_request&per_page=50" 2>&1)"' \
+  "perl -e 'exit(\$st & 127 ? 128 + (\$st & 127) : \$st >> 8)'" \
+  'echo "start it with & and wait"  # then: cmd & wait' \
+  'masked=$(( flags & MASK ))' '(( mode & owner_bit )) && echo set' > "$R/hooks/plain.sh"
+printf '%s\n' 'const masked = flags & MASK' > "$R/src/bits.ts"
+git -C "$R" add -A && git -C "$R" commit -qm not-jobs
+out=$(run_hook "git push" "$R")
+assert_absent "an identifier holding cron, an array push, a test's own job, and an & that starts no job do not fire" 'background work' "$out"
+
 # --- claude-config#1525: files the repository marks generated are not scanned -----------------
 # A Slate push adding only a design record (docs/design/*.html, linguist-generated in .gitattributes)
 # was told it had an error path returning empty and a destructive data operation: both were inside
