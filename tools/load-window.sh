@@ -112,25 +112,36 @@ cmd=("$@")
 busy_now(){
   local table seen="" f pid st pr slug
   if table="$(suite_pile_table)"; then
+    # A run counts only as a ROOT: one with a suite, the runner or the merge helper above it is a
+    # fixture (test-run-all-tests.sh runs the runner, test-merge-when-ready.sh the helper), already
+    # covered by whatever runs above it. On 2026-10-24 one builder's full run was listed as five full
+    # suite runs by its fixtures, and a suite's stand in merge as a merge (#1620).
     seen="$(printf '%s\n' "$table" | awk -v self="$$" '
       function base(w) { sub(/.*\//, "", w); return w }
+      function script_of(c,   m, w, j) {
+        m = split(c, w, " ")
+        if (base(w[1]) ~ /\.sh$/) return base(w[1])
+        if (base(w[1]) ~ /^(ba|z|da)?sh$/) for (j = 2; j <= m; j++) if (w[j] !~ /^-/) return base(w[j])
+        return ""
+      }
+      function runs_tests(s) { return s ~ /^test-.*\.sh$/ || s == "run-all-tests.sh" || s == "merge-when-ready.sh" }
       {
         p = $1; parent[p] = $2; c = ""
         for (i = 4; i <= NF; i++) c = c (i > 4 ? " " : "") $i
-        cmd[p] = c; order[++n] = p
+        cmd[p] = c; sc[p] = script_of(c); order[++n] = p
       }
       END {
         for (k = 1; k <= n; k++) {
-          p = order[k]; q = p; mine = 0
-          for (d = 0; d < 100 && q != "" && q != "0"; d++) { if (q == self) { mine = 1; break }; q = parent[q] }
-          if (mine) continue
-          m = split(cmd[p], w, " "); script = ""
-          if (base(w[1]) ~ /^(merge-when-ready|run-all-tests)\.sh$/) script = base(w[1])
-          else if (base(w[1]) ~ /^(ba|z|da)?sh$/) {
-            for (j = 2; j <= m; j++) if (w[j] !~ /^-/) { if (base(w[j]) ~ /^(merge-when-ready|run-all-tests)\.sh$/) script = base(w[j]); break }
+          p = order[k]
+          if (p == self || (sc[p] != "merge-when-ready.sh" && sc[p] != "run-all-tests.sh")) continue
+          q = parent[p]; skip = 0
+          for (d = 0; d < 100 && q != "" && q != "0"; d++) {
+            if (q == self || runs_tests(sc[q])) { skip = 1; break }
+            q = parent[q]
           }
-          if (script == "merge-when-ready.sh") printf "%s a merge-when-ready.sh run (%s)\n", p, substr(cmd[p], 1, 120)
-          else if (script == "run-all-tests.sh") printf "%s a full suite run (%s)\n", p, substr(cmd[p], 1, 120)
+          if (skip) continue
+          if (sc[p] == "merge-when-ready.sh") printf "%s a merge-when-ready.sh run (%s)\n", p, substr(cmd[p], 1, 120)
+          else printf "%s a full suite run (%s)\n", p, substr(cmd[p], 1, 120)
         }
       }')"
   else
@@ -146,6 +157,19 @@ busy_now(){
     seen="${seen:+$seen$'\n'}$pid a merge-when-ready.sh run holding a place to merge $slug#$pr"
   done
   [ -z "$seen" ] || printf '%s\n' "$seen"
+}
+
+# What busy_now found, in words: the one run itself when there is one, else how many of each kind,
+# "among them" the first. The part before "among them" is what the waiting line compares.
+describe_busy(){
+  awk '{ sub(/^[^ ]* /, ""); n++; if (index($0, "a full suite run") == 1) f++; else m++; if (n == 1) first = $0 }
+    END {
+      if (n == 1) { printf "%s", first; exit }
+      out = ""
+      if (m) out = m " merge-when-ready.sh run" (m > 1 ? "s" : "")
+      if (f) out = out (out != "" ? " and " : "") f " full suite run" (f > 1 ? "s" : "")
+      printf "%s, among them %s", out, first
+    }'
 }
 
 if [ -n "$status" ]; then
@@ -255,15 +279,18 @@ while :; do
   else
     busy="$(busy_now)"
     [ -n "$busy" ] || break
-    waiting="$(printf '%s\n' "$busy" | sed 's/^[^ ]* //' | paste -sd ';' - | sed 's/;/; /g')"
+    waiting="$(printf '%s\n' "$busy" | describe_busy)"
   fi
   if [ $(( t - t0 )) -ge "$WAIT_MAX" ] || [ "$looks" -ge "$max_looks" ]; then
     how="refused before it started"
     say "Refused: after $(( t - t0 ))s this is still waiting for $waiting, and a deliberate load window must not overlap other sessions' merges or full suites (claude-config#1618). Nothing was started; run it again later."
     exit 75
   fi
-  [ "$waiting" = "$last_said" ] || say "Waiting for $waiting, for up to ${WAIT_MAX}s in all."
-  last_said="$waiting"
+  # Said when WHAT it waits for changes (the kinds and counts), never on every look: suites come and
+  # go by the second, and a line per look buried the one that mattered (2026-10-24, #1620).
+  kinds="${waiting%%, among them *}"
+  [ "$kinds" = "$last_said" ] || say "Waiting for $waiting, for up to ${WAIT_MAX}s in all."
+  last_said="$kinds"
   looks=$((looks + 1))
   "$SLEEP" "$WAIT_POLL"
 done
@@ -310,7 +337,7 @@ while :; do
   fi
   busy="$(busy_now)"
   if [ -n "$busy" ]; then
-    how="yielded after $(( t - start ))s to $(printf '%s\n' "$busy" | sed 's/^[^ ]* //' | paste -sd ';' - | sed 's/;/; /g')"
+    how="yielded after $(( t - start ))s to $(printf '%s\n' "$busy" | describe_busy)"
     say "Stopping early: ${how#yielded after * to } started, and a deliberate load window must not overlap it."
     exit 75
   fi
