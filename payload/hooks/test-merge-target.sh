@@ -26,6 +26,11 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The record of refused sign ins (claude-config#1626) is this suite's own, so the refusals it fakes
+# are never counted as this Mac's.
+SIGNIN_WORK="$(mktemp -d "${TMPDIR:-/tmp}/mt-signin.XXXXXX")"
+export MT_SIGNIN_LEDGER_DIR="$SIGNIN_WORK/ledger"
+trap 'rm -rf "$SIGNIN_WORK"' EXIT
 # shellcheck source=lib/merge-target.sh
 . "$HOOK_DIR/lib/merge-target.sh"
 
@@ -1250,6 +1255,94 @@ case "$said" in
   "gh read no token to sign in with 2 times"*) pass ;;
   *) fail "an empty token read was said as GitHub refusing the sign in, which it never asked: $said" ;;
 esac
+
+echo "merge-target: a refused sign in is counted across runs, and a rate past its threshold is said (claude-config#1626)"
+# #1615 made a refused sign in an outcome asked again within one run, and nothing counted them across
+# runs (L77): a Mac whose keyring read now fails often looked like one where it failed once under
+# load, until a merge finally stopped. So mt_retry_read records each one, the one place they are all
+# counted, in a ledger of this Mac's, and says the count once it reaches a threshold.
+LEDGER="$MT_SIGNIN_LEDGER_DIR/refusals.tsv"
+SIGNIN_CLOCK="$SIGNIN_WORK/clock"
+printf '#!/usr/bin/env bash\ncat "%s"\n' "$SIGNIN_CLOCK" > "$SIGNIN_WORK/now"; chmod +x "$SIGNIN_WORK/now"
+export MT_SIGNIN_CLOCK="$SIGNIN_WORK/now"
+printf '2000000' > "$SIGNIN_CLOCK"
+rm -rf "$MT_SIGNIN_LEDGER_DIR"
+lines(){ if [ -f "$LEDGER" ]; then wc -l < "$LEDGER" | tr -d ' '; else echo 0; fi; }
+fields(){ awk -F'\t' -v n="$1" 'NR == n { print $1 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7 "|" NF }' "$LEDGER"; }
+
+echo 0 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" mt_retry_read 3 5 fake_sleep "" "" signin_api
+eq "$?|$(lines)" "0|0" "#1626 a read GitHub answered at once records nothing"
+
+# Refused twice, then answered: one line per refusal, with what the token read straight after came to.
+echo 2 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" CLAUDE_CODE_SESSION_ID="sess/one" MT_SIGNIN_RUN=run-a mt_retry_read 3 5 fake_sleep "" "" signin_api; rc=$?
+eq "$rc|$(lines)" "0|2" "#1626 each refusal is one line, and the read still answered"
+eq "$(fields 1)" "2000000|sess_one|run-a|test-merge-target.sh|refused|present|7" "#1626 a refusal's line: when, the session, the run, what ran it, the outcome and the token read after"
+# An empty token read for an account is recorded as its own outcome (L11).
+PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty CLAUDE_CODE_SESSION_ID="" MT_SIGNIN_RUN=run-b mt_retry_read 1 5 fake_sleep "" "" signin_notoken
+eq "$(fields 3)" "2000000|no-session|run-b|test-merge-target.sh|notoken|empty|7" "#1626 an empty token read is recorded apart, outside any session"
+# Nothing private: never the account, the repository, gh's error or the token (L222).
+case "$(cat "$LEDGER")" in
+  *someone*|*acme*|*widget*|*stand-in-token*|*authentication*) fail "#1626 the ledger names something private: $(cat "$LEDGER")" ;;
+  *) pass ;;
+esac
+eq "${MT_SIGNIN_TREND:-}" "" "#1626 three in a day is under the threshold and says nothing"
+
+# The count is over the last day of the injected clock (L524), across every run and session.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+{
+  printf '1900000\thost\tsess_old\trun-old\tmerge-when-ready.sh\trefused\tempty\n'
+  printf '1990000\thost\tsess_x\trun-x\tmerge-when-ready.sh\trefused\tempty\n'
+  printf 'not-a-time\thost\tsess_x\trun-x\tmerge-when-ready.sh\trefused\tempty\n'
+  printf '1995000\thost\tsess_x\trun-x\tblock-red-merge.sh\tnotoken\tempty\n'
+  printf '1999000\thost\tsess_y\trun-y\tmerge-when-ready.sh\trefused\tpresent\n'
+} > "$LEDGER"
+echo 1 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" CLAUDE_CODE_SESSION_ID=sess_z MT_SIGNIN_RUN=run-z mt_retry_read 3 5 fake_sleep "" "" signin_api
+eq "${MT_SIGNIN_TREND:-}" "" "#1626 four in the last day, the older and the unreadable lines not counted, says nothing"
+echo 1 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" MT_TOKEN_MODE=empty CLAUDE_CODE_SESSION_ID=sess_z MT_SIGNIN_RUN=run-z mt_retry_read 3 5 fake_sleep "" "" signin_api
+trend="${MT_SIGNIN_TREND:-}"
+case "$trend" in
+  "Across runs, this Mac has recorded 5 failed GitHub sign ins in the last 24 hours (4 refused by GitHub, 1 with no token gh could read), in 3 runs, at or past the 5 that means gh's sign in is failing often rather than once under load"*) pass ;;
+  *) fail "#1626 the fifth in a day is not said as a rate across runs: $trend" ;;
+esac
+case "$trend" in *"came back empty 3 times and present 2 times"*) pass ;; *) fail "#1626 the token reads after each, the evidence #1615 lacked, are not said: $trend" ;; esac
+case "$trend" in *"$LEDGER"*) pass ;; *) fail "#1626 the record is not named: $trend" ;; esac
+said="$(mt_signin_said "the thing")"
+case "$said" in *"run the same command again. Across runs, this Mac has recorded 5 failed"*) pass ;; *) fail "#1626 a stop on a refused sign in does not carry the count across runs: $said" ;; esac
+said="$(MT_SIGNIN_TREND_SAID=1 mt_signin_said "the thing")"
+case "$said" in *"Across runs"*) fail "#1626 a count already said in this run is said again: $said" ;; *) pass ;; esac
+eq "$(MT_SIGNIN_ALERT_AT=7 mt_signin_trend)" "" "#1626 the threshold is a setting"
+eq "$(MT_SIGNIN_ALERT_AT=many mt_signin_trend | cut -c1-48)" "Across runs, this Mac has recorded 5 failed GitH" "#1626 a threshold that is not a number is not believed"
+
+# Recording never changes the read's outcome, and a record that cannot be made is said (L95).
+printf 'x' > "$SIGNIN_WORK/a-file"
+echo 1 > "$MT_401_LEFT"
+PATH="$ghstub:$PATH" MT_SIGNIN_LEDGER_DIR="$SIGNIN_WORK/a-file/ledger" mt_retry_read 3 5 fake_sleep "" "" signin_api; rc=$?
+eq "$rc" "0" "#1626 a ledger that cannot be written changes nothing about the read"
+case "${MT_SIGNIN_RECORD_NOTE:-}" in
+  *"could not be recorded in $SIGNIN_WORK/a-file/ledger/refusals.tsv"*"claude-config#1626"*) pass ;;
+  *) fail "#1626 a refusal that could not be recorded is not said: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+esac
+case "$(mt_signin_said)" in *"could not be recorded"*) pass ;; *) fail "#1626 a stop does not say its refusal went unrecorded" ;; esac
+
+# A clock that prints anything but a time is not believed: the real one is read instead (L50).
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; printf 'soon' > "$SIGNIN_CLOCK"
+mt_signin_record refused present
+case "$(cut -f1 "$LEDGER")" in ''|*[!0-9]*) fail "#1626 a clock that is not a time was written: $(cut -f1 "$LEDGER")" ;; *) pass ;; esac
+printf '2000000' > "$SIGNIN_CLOCK"
+
+# Assume it runs twice: twenty runs recording at once each leave one whole line.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  ( MT_SIGNIN_RUN="p$i" mt_signin_record refused present ) &
+done
+wait
+eq "$(lines)" "20" "#1626 twenty runs at once leave twenty lines"
+eq "$(awk -F'\t' 'NF == 7 && $6 == "refused" && $7 == "present"' "$LEDGER" | cut -f4 | sort -u | wc -l | tr -d ' ')" "20" "#1626 each of them whole and its own"
+unset MT_SIGNIN_CLOCK
 rm -rf "$ghstub"
 
 echo "merge-target: a gate run by merge-when-ready.sh takes its read budget from it (claude-config#1615)"

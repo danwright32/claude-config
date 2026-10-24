@@ -272,6 +272,9 @@ now(){
   case "$t" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$t" ;; esac
 }
 t0="$(now)"
+# This run, as lib/merge-target.sh's record of refused sign ins names it (claude-config#1626), handed
+# to every gate it asks, so the run and its gates count as one run there, not several.
+export MT_SIGNIN_RUN="mwr-$$-$t0"
 dur(){ if [ "$1" -ge 60 ]; then printf '%dm %02ds' "$(($1 / 60))" "$(($1 % 60))"; else printf '%ds' "$1"; fi; }
 elapsed(){ dur $(( $(now) - t0 )); }
 say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
@@ -356,7 +359,17 @@ announce_retry(){
   else
     say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
   fi
+  signin_across_runs
   load_note
+}
+# What lib/merge-target.sh's ledger of refused sign ins says across runs (claude-config#1626), each said
+# once a run: the count once the day holds enough to mean gh's sign in is failing often, and a refusal
+# that could not be recorded. A stop's mt_signin_said leaves out a count this has already said.
+MT_SIGNIN_TREND_SAID=""; MT_SIGNIN_RECORD_NOTE_SAID=""
+signin_across_runs(){
+  if [ -n "${MT_SIGNIN_TREND:-}" ] && [ -z "$MT_SIGNIN_TREND_SAID" ]; then say "$MT_SIGNIN_TREND."; MT_SIGNIN_TREND_SAID=1; fi
+  if [ -n "${MT_SIGNIN_RECORD_NOTE:-}" ] && [ -z "$MT_SIGNIN_RECORD_NOTE_SAID" ]; then say "$MT_SIGNIN_RECORD_NOTE."; MT_SIGNIN_RECORD_NOTE_SAID=1; fi
+  return 0
 }
 # The loop itself is mt_retry_read, shared with block-red-merge.sh's own reads (claude-config#1081).
 # A reader answering 5 was refused for GitHub's rate limit (claude-config#1482, lib/gh-poll.sh's
