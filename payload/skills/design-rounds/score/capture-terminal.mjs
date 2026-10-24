@@ -38,7 +38,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { LAUNCH_ARGS, designFrames, drawDesignFrame, findPlaywright, gitState, launchChrome, loadPlaywright, openDesign, runChecks, settle } from "./capture-web.mjs";
+import { LAUNCH_ARGS, designFrames, designTrouble, drawDesignFrame, findPlaywright, gitState, launchChrome, loadPlaywright, openDesign, runChecks, settle } from "./capture-web.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCORE = join(HERE, "design_score.py");
@@ -206,19 +206,21 @@ export function builtDocument(designDoc, spec, { bandOnly }) {
   return designDoc.slice(0, at) + script + designDoc.slice(at);
 }
 
-// What the frame reported once drawn: whether its builder ran, and how many terminal windows it drew.
-const readReport = () => ({
-  built: !!(window.DR_FRAME && window.DR_FRAME.built),
-  why: (window.DR_FRAME && window.DR_FRAME.why) || "its builder never ran",
-  screens: window.DR_MOD ? window.DR_MOD.screens : 0,
-});
+// How many terminal windows the frame drew, as the band script counted them.
+const screensDrawn = () => (window.DR_MOD ? window.DR_MOD.screens : 0);
 
-function notDrawn(report) {
-  if (!report.built) return `the design's frame could not be drawn with the mod's band in it: ${report.why}`;
-  if (report.screens !== 1) {
-    return report.screens === 0
+/**
+ * Why the built side is not drawn, or null when it is. Whether its builder drew it whole is the settled
+ * file's own reading of its report (designTrouble, through designFrameTrouble), the words the settled page
+ * and the design side say too, so a builder throw and a screenShown throw are worded one way everywhere
+ * and the report has one reader (claude-config#1581).
+ */
+function notDrawn(trouble, screens) {
+  if (trouble) return `the design's frame with the mod's band put in it is not drawn whole: ${trouble}`;
+  if (screens !== 1) {
+    return screens === 0
       ? "the design's frame draws no terminal window, so there is no band to put the mod's in"
-      : `the design's frame draws ${report.screens} terminal windows, so which band is the mod's is not one answer`;
+      : `the design's frame draws ${screens} terminal windows, so which band is the mod's is not one answer`;
   }
   return null;
 }
@@ -254,7 +256,8 @@ export async function capture(o, browser, frames, deps = {}) {
       const bpage = await browser.newPage({ viewport });
       try {
         await bpage.setContent(builtDocument(doc, spec, { bandOnly: false }), { waitUntil: "load" });
-        row.builtError = notDrawn(await bpage.evaluate(readReport, { report: true })) || undefined;
+        const trouble = await designTrouble(d, bpage);
+        row.builtError = notDrawn(trouble, await bpage.evaluate(screensDrawn, { modScreens: true })) || undefined;
         if (!row.builtError) {
           await settle(bpage, f.width);
           writeFileSync(join(d.out, row.builtImage), await bpage.screenshot(shot));

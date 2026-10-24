@@ -215,7 +215,9 @@ export async function openDesign(o, browser) {
  * designFrameTrouble, the reading its page says beside the frame, so the score and the page never word a
  * frame differently. A settled file with no reader whose frames do report was written before it, and is
  * said once in the notes, never read as whole; a design made by hand reports nothing and is drawn as
- * before. The report is copied to plain values, since it may carry the frame's own functions.
+ * before. The report is copied to plain values, since it may carry the frame's own functions. The
+ * terminal adapter reads its built side, the design's frame with the mod's band in it, through this too,
+ * so the frame's report has this one reader (claude-config#1581).
  */
 export async function designTrouble(d, dpage) {
   const report = await dpage.evaluate(() => {
