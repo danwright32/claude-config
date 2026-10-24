@@ -476,6 +476,20 @@ plainest reading of the decisions above:
   drops it, as before; it never shows an ended row. The sighting behind the issue (b2kmw3u3u, PET,
   2026-10-22) was on the work MacBook, whose session record was not read, so which of a lingering
   process and an unreadable measure it was is not known.
+- **This conversation's own jobs (#1579).** The in flight list arrives only with a subagent's stop,
+  so a conversation that runs no agents never gets a reading of its own jobs from it. Claude Code's
+  word on those comes from the task notification instead: the `<status>` in each
+  `<task-notification>` block is recorded beside the block's ids as the job's reading, exactly as
+  the in flight list's is, and the job is then measured as before. Measured over this Mac's
+  transcripts on 2026-10-24 (1,380 distinct blocks, 2.1.278 to 2.1.309): ids shaped like a Bash
+  job's (which a Monitor's share) carried completed 668 times, failed 8, stopped 6 and killed 5,
+  and agents completed 589, failed 35, stopped 16 and killed 1; every block was closed and none held
+  two statuses; several ids shared one block, and
+  its one status, only in the notice of tasks a previous session left; and 49 Monitor events carried
+  no status at all, so a block without one says nothing of its job rather than finishing it. The
+  #706 decision that a reported job whose group still runs stays named is kept; only its wording
+  changed, from running with TaskStop to finished with `kill -TERM -<group>` (the open question on
+  the issue, taken as it proposed).
 - **Every result reminds.** A refused tool result carries no context, and one refused by a mod
   outside the watcher never reaches it, so the reminder about unkept jobs goes into such a result's
   row as the conversation keeps it: Claude reads it there, and Dan's screen draws the row as it was.
@@ -1871,7 +1885,7 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   prose in an earlier reply, and Dan never saw it. So at the turn's end (`classic.Stop`) the mod
   reads Claude's own final message (`last_assistant_message`, never Dan's; since #1608 every
   message of the turn, below) for a step handed over
-  in prose: "waiting on you", "once you run" (or apply, paste, click, approve), "you'll need to run",
+  in prose: "waiting on you" (since #1613 only where it hands over a step, below), "once you run" (or apply, paste, click, approve), "you'll need to run",
   "needs you to paste" and the like, "your step". One negated right before it, in its own clause
   and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
   as the name of a thing ("is waiting on you", the notification) does not count; a negation in
@@ -1945,6 +1959,39 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   separately rather than tuned here. The 2026-10-23 wording, the step second to last and the
   reflection last, is the case that must fire (`tests/register.test.tsx`), and the sentences in
   `tests/waiting.test.ts` are paraphrased from the measured hits, never copied.
+- **"Waiting on you" only where it hands over a step** (#1613). Read over whole turns, "waiting
+  on you" fired in 43 turns of the 30 days to 2026-10-24 on this Mac (9,957 turns outside the temp
+  folders, every message of the turn, measured exactly as #1608 did), and read one by one only 16
+  handed Dan a step. The other 27 said it of a decision, a question, a reply or an OK ("waiting on
+  you: your decision on #40 clashes with #41"), named nothing to do ("still waiting on you for
+  #1107"), described a kind of thing ("replies waiting on you", "what's waiting on you", "things
+  waiting on you go amber"), spoke of the steps card itself, or quoted the phrase in talk about this
+  check. So it now counts only when all of these hold (`handsOverAStep` in `hooks/waiting.ts`):
+  - it hands something over: it leads its line or sentence ("**Still waiting on you:**"), is said
+    of a thing ("the deploy is waiting on you", "which leaves it waiting on you", never "something
+    is" or "what is"), or names the thing ("the one thing still waiting on you is ...", never
+    "things waiting on you go ...");
+  - it is not inside a quotation opened earlier on its line;
+  - its own sentence, a heading's colon ending it, does not name the card, which already shows the
+    step;
+  - a step word (run, paste, click, type, try, use, install, send, check, test, command, steps and
+    the like) comes after the start of its sentence, up to the end of its paragraph, or of the list
+    a heading ending in a colon introduces, and within 500 characters of it, before any decision
+    word (decision, answer, question, reply, your OK, sign-off, whether and the like).
+
+  Measured the same way, it now fires in 16 of the 43 turns, all 16 real: every real one kept, none
+  of the 27 false. #863's five together go from 55 turns (27 real, 28 false) to 31 (27 real, 4
+  false; the 4 are "once you approve" and "you need to click" said of a plan, a lesson picker, a Done
+  button and a later sign in, left for their own measurement); every phrase together from 102 turns
+  to 78. On final messages alone "waiting on you" goes from 17 to 4. The rule was fitted on those
+  43 turns, so it was also tried on the only three turns of the 30 days before that the transcripts
+  still hold: it missed both real ones there ("One thing still waiting on you, from the reflection:",
+  and "these three commands have to come from you"), which is why a thing named before a comma or
+  colon and "commands" count; with them it fires on both and not on the false one. The labels are
+  one reader's: a hit is real when the text it fired on hands Dan something to do, and a turn whose
+  hit was false is false even where another sentence in it, which no phrase matched, did hand him a
+  step. The false shapes are failing cases in `tests/waiting.test.ts` and every real one a firing
+  case, all paraphrased.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
@@ -3407,6 +3454,38 @@ observing half, so it has no surface of its own: no card, no question, nothing d
   way, and the mod's replay test holds the rules to it. On 2026-10-22 a busy work repository's month
   replayed to 77% of judged sessions holding at least once and 179 of 602 holding four or more times,
   which is what the week's log is for.
+
+## A mod's session id is the one Bash calls carry (#1575), measured 2026-10-24
+
+The one GitHub polling policy (`hooks/lib/gh-poll.sh`, #1482) keys each session's looks a minute
+on `CLAUDE_CODE_SESSION_ID`. A Bash call's loop is keyed by the id Claude Code puts in that call's
+environment; status-bar and scope-modes are keyed by `$.session.id()`, which mod-kit's
+`hooks/ghpoll.ts` hands the library. That the two are one id had been assumed, and every test of
+the mod path faked the runner, so it was measured against the real engine (Claude Code 2.1.309).
+
+- **What was measured.** Headless sessions with a probe mod (`tests/session-id-probe`), which on
+  each tagged Bash call recorded `$.session.id()` and took a look through the real `ghpoll.ts` and
+  `gh-poll.sh`, while the call itself recorded the id it carried and took a look too. The two ids
+  were equal in all seven places: the session's own call, a subagent's (the probe saw its agentId,
+  and the id was the parent's), after `/compact` (same id), after `/clear` (a new id, both sides
+  together), `claude -p --resume` (same id), `--resume --fork-session` (a new id, both sides
+  together), and a session started with another session's id already in its environment, as a
+  `claude -p` run from inside a session's Bash call is (Claude Code gave the call its own id, and
+  `$.session.id()` was that id). The gh-poll state held one folder per id, each with both sides'
+  looks of every step with that id, and none for `no-session` or the other session. Before that,
+  one live interactive session: its subagent's Bash call carried `52478673-...`, and session
+  registry's record, written by the mod from `$.session.id()`, was named the same.
+- **A mod must pass the id.** A mod's own environment (`$.env.get`) carries no
+  `CLAUDE_CODE_SESSION_ID`, and its `$.process.run` children inherit none; in the session started
+  with another's id, both carried that other id. So `ghpoll.ts` always passes `$.session.id()` as
+  the child's `CLAUDE_CODE_SESSION_ID`, as it did; a mod relying on what it inherits would have
+  counted its looks under `no-session`, or under the session that started Claude Code. Mutating
+  the probe to key on its own environment turned the folder checks red, as did recording the
+  environment's id in place of `$.session.id()`.
+- **What holds it.** `tests/test-session-id-agreement.sh` runs the measurement in every local run
+  (about five seconds, the scripted stand-in model, so nothing is billed) and says UNMEASURED where
+  there is no Claude Code or no macOS. Not measured, and said: an interactive `/resume` picker, a
+  teammate, and a fork subagent.
 
 ## Not design decisions
 

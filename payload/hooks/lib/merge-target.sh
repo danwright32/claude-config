@@ -29,6 +29,10 @@
 #   mt_checkout_candidates
 #                    the child checkouts under a directory, so a caller that
 #                      cannot resolve one can say which it was torn between
+#   mt_review_checkout
+#                    the checkout the lessons review reads a merge's branch
+#                      from, when the merge names a repository its directory
+#                      is not a checkout of (#1607)
 #   mt_pr_number     the pull request the command names, if it names one
 #   mt_remote_slug   owner/name from the git remote, read from the CURRENT
 #                      directory, so callers cd first
@@ -45,6 +49,9 @@
 #                      is refused, through an injected sleep, and never on a
 #                      refusal (#1081, #1615); mt_signin_said says a sign in
 #                      that stayed refused
+#   mt_signin_record each refused sign in written to this Mac's ledger, counted
+#                      across runs, and mt_signin_trend the sentence once the
+#                      last day holds enough of them (#1626)
 #   mt_gate_read_budget
 #                    a merge gate's read budget, longer when merge-when-ready.sh
 #                      asks the gate under no harness timeout (#1615)
@@ -1156,6 +1163,70 @@ mt_checkout_candidates() {  # $1 = a directory
   return 0
 }
 
+# The checkout the lessons review reads a merge's branch from (claude-config#1607). The merge's own
+# directory, unless the merge names its repository (-R, --repo or a pull request link) and that
+# directory is plainly not a checkout of it: no checkout at all, or one whose origin is a DIFFERENT
+# GitHub repository. Then a checkout of the named repository this Mac knows answers instead: one the
+# lessons review has recorded working in (pr-opened.tsv, the pull request's own opening first, then
+# pr-reviews.tsv, newest first), else one directly inside the merge's directory. Each is believed
+# only once its own origin names the repository (L237), since a recorded folder can be gone or hold
+# something else by now. The review is keyed by the origin, so that checkout reads the same review
+# the pull request's own checkout started, and the merge is held to it exactly as before: this
+# changes where the branch is read, never whether the merge waits.
+#
+# Before, the review was run in the merge's directory whatever it was: from the home directory it
+# refused as "could not run: not inside a git repository", which read as a review failure and left
+# SKIP_PR_REVIEW=1 the only way through, and from a checkout of another repository it reviewed a
+# commit that checkout does not hold.
+#
+# An origin that is not a GitHub owner/name (a local path, another host, a form mt_remote_slug does
+# not read) cannot be compared, so that directory is judged as before, rather than refused on a
+# guess. GitHub reads owner/name in any case, so the comparison ignores it.
+#
+# Sets MT_REVIEW_DIR to the directory and returns 0. With none, sets MT_REVIEW_WHY to the sentence a
+# gate refuses with and returns 1. MT_REVIEW_ELSEWHERE is 1 when MT_REVIEW_DIR is not the merge's own
+# directory, so the gate can say where the review was read from. Call it in this shell, never a
+# subshell, so the globals reach the caller.
+mt_review_checkout() {  # $1 = the directory the merge runs in, $2 = the repository it names or empty, $3 = the pull request's URL or empty
+  local d="$1" named="$2" url="${3:-}" top own="" want c seen=$'\n'
+  MT_REVIEW_DIR="$d"; MT_REVIEW_WHY=""; MT_REVIEW_ELSEWHERE=0
+  [ -n "$named" ] || return 0
+  want="$(printf '%s' "$named" | tr '[:upper:]' '[:lower:]')"
+  if top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)"; then
+    own="$(cd "$top" && mt_remote_slug)"
+    if ! [[ "$own" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+      || [ "$(printf '%s' "$own" | tr '[:upper:]' '[:lower:]')" = "$want" ]; then
+      return 0
+    fi
+  fi
+  [ -n "${AR_PR_OPENED:-}" ] || . "$_MT_LIB/ai-review-common.sh" 2>/dev/null
+  while IFS= read -r c; do
+    [ -n "$c" ] && [ -d "$c" ] || continue
+    case "$seen" in *$'\n'"$c"$'\n'*) continue ;; esac
+    seen="$seen$c"$'\n'
+    top="$(git -C "$c" rev-parse --show-toplevel 2>/dev/null)" || continue
+    [ "$(cd "$top" && mt_remote_slug | tr '[:upper:]' '[:lower:]')" = "$want" ] || continue
+    MT_REVIEW_DIR="$top"; MT_REVIEW_ELSEWHERE=1
+    return 0
+  done < <(
+    # The recorded folders, newest first: the pull request's own opening, then every opening, then
+    # every review. Column 4 is the folder in both ledgers, column 6 the opening's pull request URL.
+    for f in "${AR_PR_OPENED:-}" "${AR_PR_LEDGER:-}"; do
+      [ -n "$f" ] && [ -f "$f" ] || continue
+      awk -F '\t' -v u="$url" -v first="$([ "$f" = "${AR_PR_OPENED:-}" ] && echo 1)" '
+        { d[NR] = $4; own[NR] = (first && u != "" && $6 == u) }
+        END { if (first) for (i = NR; i > 0; i--) if (own[i]) print d[i]
+              for (i = NR; i > 0; i--) print d[i] }' "$f" 2>/dev/null
+    done
+    mt_checkout_candidates "$d"
+  )
+  local where="it runs in $d, which is not a checkout of $named"
+  [ -n "$own" ] && where="it runs in $d, which is a checkout of $own, not of $named"
+  MT_REVIEW_WHY="this merge names $named, but $where. The lessons review reads the pull request's branch from a checkout of its repository, and no checkout of $named is known on this Mac: none of the folders the lessons review has recorded working in, and none directly inside $d, is one. Run the same command from a checkout of $named (cd into it first, or clone it). Override, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>."
+  MT_REVIEW_DIR=""
+  return 1
+}
+
 # owner/name from the git remote of the CURRENT directory.
 #
 # The identity comes from the remote, not from gh, because a check whose two
@@ -1391,6 +1462,92 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
   [ -n "$lead" ] || lead="GitHub refused the sign in"
   printf '%s%s%s; a token read straight after each came back %s. That is gh sending no token, or one GitHub would not take, not GitHub being unable to show it: check gh auth status, then run the same command again' \
     "$lead" "${what:+ reading $what}" "${err:+ ($err)}" "${MT_SIGNIN_SEEN:-unread}"
+  # What this Mac has recorded across runs (claude-config#1626), unless the run already said it.
+  [ -n "${MT_SIGNIN_TREND:-}" ] && [ -z "${MT_SIGNIN_TREND_SAID:-}" ] && printf '. %s' "$MT_SIGNIN_TREND"
+  [ -n "${MT_SIGNIN_RECORD_NOTE:-}" ] && [ -z "${MT_SIGNIN_RECORD_NOTE_SAID:-}" ] && printf '. %s' "$MT_SIGNIN_RECORD_NOTE"
+  return 0
+}
+
+# REFUSED SIGN INS ARE COUNTED ACROSS RUNS (claude-config#1626). mt_retry_read asks a refused sign in
+# again within one run (#1615), and on its own that is an expected outcome nothing counts (L77): a Mac
+# whose keyring read now fails often looks the same as one where it failed once under load, until a
+# merge finally stops. So every refusal mt_retry_read sees, the one place they are all counted, is
+# written down in a ledger of this Mac's, one tab separated line each: the time (epoch), the Mac, the
+# session (CLAUDE_CODE_SESSION_ID kept to a file name's characters, as lib/gh-poll.sh keys it, or
+# no-session), the run (MT_SIGNIN_RUN, which merge-when-ready.sh sets for itself and the gates it
+# asks, else this process), what ran it (the script's file name), the outcome (refused: GitHub's 401;
+# notoken: gh read no token for the account, so GitHub was never asked) and what the token read
+# straight after came to (present or empty). That last column is the evidence #1615 could not
+# reproduce: empty after a refusal is the keyring, present is GitHub refusing a good request.
+#
+# Never the account, the repository, the pull request, gh's error or the token (L222), so it names
+# nothing private and lives with the other per Mac records, in
+# ${MT_SIGNIN_LEDGER_DIR:-~/.claude/state/gh-signin}/refusals.tsv, which claude-sync never carries.
+# Only appended, one short line per write (O_APPEND keeps a line that size whole when two runs write at
+# once), and never rewritten, trimmed or deleted: there is no rewrite for two runs to race, and how
+# long the evidence is kept is Dan's decision, not a default (L9). It grows only on a refusal, about
+# 80 bytes each.
+#
+# Read back on every refusal: when the last MT_SIGNIN_WINDOW_SECONDS (86400, a day) hold
+# MT_SIGNIN_ALERT_AT (5) or more, MT_SIGNIN_TREND is the sentence saying so, which mt_signin_said
+# carries into every stop on a refused sign in and merge-when-ready.sh says as the retry is announced.
+# 5 is a setting, not a measurement, since nothing was counted before this: between a one off under
+# load (1 or 2) and 2026-10-23's evening (three runs stopping after 4 refusals each). It speaks only
+# when a new refusal arrives, so it stands down by itself once they stop (L695). The clock is
+# MT_SIGNIN_CLOCK, a command printing epoch seconds, a seam like the sleep (L524).
+mt__signin_ledger(){ printf '%s/refusals.tsv' "${MT_SIGNIN_LEDGER_DIR:-${CLAUDE_HOME:-$HOME/.claude}/state/gh-signin}"; }
+mt__signin_now(){
+  local t=""
+  [ -n "${MT_SIGNIN_CLOCK:-}" ] && t="$("$MT_SIGNIN_CLOCK" 2>/dev/null)"
+  case "$t" in ''|*[!0-9]*) date +%s 2>/dev/null ;; *) printf '%s' "$t" ;; esac
+}
+
+# Append one refusal ($1 refused or notoken, $2 present or empty) and set MT_SIGNIN_TREND. Sets
+# MT_SIGNIN_RECORD_NOTE, the sentence saying so, when the line could not be written; never changes
+# what the read returns (L95).
+mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
+  local ledger now host session run caller err
+  ledger="$(mt__signin_ledger)"
+  now="$(mt__signin_now)"
+  case "$now" in
+    ''|*[!0-9]*) MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (the time could not be read), so the count of refused sign ins across runs (claude-config#1626) is missing it"; return 0 ;;
+  esac
+  host="${HOSTNAME:-$(hostname 2>/dev/null)}"; host="${host%%.*}"; host="${host//[!A-Za-z0-9-]/_}"
+  # The session as the polling policy keys it, one reading of it (L370).
+  declare -F ghp_session_key >/dev/null || . "$_MT_LIB/gh-poll.sh" 2>/dev/null
+  session="$(ghp_session_key 2>/dev/null)"; session="${session:-unknown}"
+  run="${MT_SIGNIN_RUN:-$$}"; run="${run//[!A-Za-z0-9_.-]/_}"
+  caller="${0##*/}"; caller="${caller//[!A-Za-z0-9_.-]/_}"
+  err="$( { mkdir -p "${ledger%/*}" && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$session" "$run" "${caller:-unknown}" "$1" "$2" >> "$ledger"; } 2>&1 )" || {
+    err="${err%%$'\n'*}"
+    MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (${err:-the write failed}), so the count of refused sign ins across runs (claude-config#1626) is missing it"
+    return 0
+  }
+  MT_SIGNIN_TREND="$(mt_signin_trend "$now")"
+  return 0
+}
+
+# The sentence for the refusals recorded in the last day, or nothing when they are under the
+# threshold. $1 is now, else the clock. A line whose time is not a number is not counted (L50).
+mt_signin_trend(){  # [$1 = now]
+  local now="${1:-}" at="${MT_SIGNIN_ALERT_AT:-}" win="${MT_SIGNIN_WINDOW_SECONDS:-}" ledger
+  case "$now" in ''|*[!0-9]*) now="$(mt__signin_now)" ;; esac
+  case "$at" in ''|*[!0-9]*|0) at=5 ;; esac
+  case "$win" in ''|*[!0-9]*|0) win=86400 ;; esac
+  ledger="$(mt__signin_ledger)"
+  [ -f "$ledger" ] || return 0
+  awk -F'\t' -v since="$((now - win))" -v hours="$(( (win + 1799) / 3600 ))" -v at="$at" -v path="$ledger" '
+    NF == 7 && $1 ~ /^[0-9]+$/ && $1 + 0 > since {
+      n++; if ($6 == "notoken") t++; else r++
+      if ($7 == "empty") e++; else if ($7 == "present") p++
+      key = $3 SUBSEP $4; if (!(key in runs)) { runs[key] = 1; m++ }
+    }
+    END {
+      if (n < at) exit
+      printf "Across runs, this Mac has recorded %d failed GitHub sign ins in the last %d hours (%d refused by GitHub, %d with no token gh could read), in %d %s, at or past the %d that means gh'"'"'s sign in is failing often rather than once under load; the token read straight after came back empty %d %s and present %d %s. The record is %s (claude-config#1626)", \
+        n, hours, r + 0, t + 0, m, (m == 1 ? "run" : "runs"), at, e + 0, (e == 1 ? "time" : "times"), p + 0, (p == 1 ? "time" : "times"), path
+    }' "$ledger" 2>/dev/null
+  return 0
 }
 
 # The read budget for a merge gate (claude-config#1615). A gate run by the harness is killed at its
@@ -1435,7 +1592,7 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
   case "$tries" in ''|*[!0-9]*) tries=1 ;; esac
   [ "$tries" -ge 1 ] || tries=1
   case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
-  MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""
+  MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""; MT_SIGNIN_TREND=""; MT_SIGNIN_RECORD_NOTE=""
   while :; do
     MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""
     "$reader"; rc=$?
@@ -1444,6 +1601,8 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
       else MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1)); fi
       mt_signin_token_state "${MT_SIGNIN_ACCOUNT:-}"
       MT_SIGNIN_SEEN="${MT_SIGNIN_SEEN:+$MT_SIGNIN_SEEN, }$MT_SIGNIN_TOKEN"
+      # Counted across runs too (claude-config#1626, mt_signin_record).
+      if [ "$MT_SIGNIN_KIND" = notoken ]; then mt_signin_record notoken "$MT_SIGNIN_TOKEN"; else mt_signin_record refused "$MT_SIGNIN_TOKEN"; fi
     elif [ "$rc" -ne 2 ]; then
       return "$rc"
     fi

@@ -24,6 +24,8 @@ HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/block-red-merge.sh"
 # cases about retrying read how many waits there were from BRM_SLEEP_LOG.
 SLEEP_DIR="$(mktemp -d)"
 trap 'rm -rf "$SLEEP_DIR"' EXIT
+# The refused sign ins this suite fakes are recorded here, never as this Mac's (claude-config#1626).
+export MT_SIGNIN_LEDGER_DIR="$SLEEP_DIR/gh-signin"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "${BRM_SLEEP_LOG:-/dev/null}"\n' > "$SLEEP_DIR/fake-sleep"
 chmod +x "$SLEEP_DIR/fake-sleep"
 export BRM_SLEEP="$SLEEP_DIR/fake-sleep"

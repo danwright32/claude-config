@@ -110,6 +110,12 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/check-closing-merge.sh",
+            "timeout": 30,
+            "statusMessage": "Checking the PR body closes no issue it says stays open"
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/require-verification-run.sh",
             "timeout": 30,
             "statusMessage": "Checking each touched area has a passing verification run"

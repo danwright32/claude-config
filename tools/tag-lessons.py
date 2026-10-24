@@ -68,7 +68,11 @@ def ask(model, batch, timeout):
     cannot start answers NOTHING, which the caller already turns into an UNTAGGED refusal, rather than
     ending the tool in a traceback (found by the PR lessons review of #575)."""
     body = "\n".join(f"L{n}. {text}" for n, text in batch)
-    cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p",
+    # The five minute prompt cache (claude-config#1601): the batches run one after another, so each
+    # reads back the prefix the last one wrote, and the one hour default would write it at twice the
+    # input price where five minutes costs 1.25 times it.
+    cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
+           "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p",
            PROMPT + body, "--model", model, "--settings", '{"disableAllHooks":true}']
     try:
         done = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)

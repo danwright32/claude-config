@@ -1231,7 +1231,9 @@ NAMES
 
 # The internal _groups verb: the detached process do_start leaves running for a review in groups.
 # Runs every group's reviewer at once, each with the deadline the pending review records, waits for
-# all of them, then writes the branch's review.
+# all of them, then writes the branch's review. Launched together, they do not SEND together: the
+# runner lets the first begin answering before the rest start, so they read the cached lessons back
+# rather than each writing them (STARTS IN TURN in lib/ai-review-run.py, claude-config#1619).
 do_groups() {
   [ -e "$pending" ] || return 0
   local n k gbase model dl st run
@@ -1260,7 +1262,7 @@ do_groups() {
 # writing it (the waiting process and a check can both arrive).
 assemble_groups() {
   [ -e "$pending" ] && [ ! -e "$final" ] || return 1
-  local n k f gs gf t fin=0 status=ok failed="" total=0 cnt names run
+  local n k f gs gf t fin=0 status=ok failed="" total=0 cnt names run so sw starts=""
   # Only the run the pending marker names now: a process left over from before a restart holds an
   # older run's folder, and its answers are not this review's.
   run="$(meta_of "$pending" run)"
@@ -1272,6 +1274,10 @@ assemble_groups() {
   for k in $(seq 1 "$n"); do
     f="$parts/$name-g$k.txt"
     gs="$(meta_of "$f" status)"
+    # The order each group started in and how long it waited for the one ahead to begin answering
+    # (claude-config#1619), kept here because the groups' own files are removed below.
+    so="$(meta_of "$f" start_order)"; sw="$(meta_of "$f" start_wait)"
+    starts="$starts${starts:+, }$k ${so:-unrecorded}${sw:+ after ${sw}s}"
     t="$(meta_of "$f" finished)"
     case "$t" in ''|*[!0-9]*) ;; *) [ "$t" -gt "$fin" ] && fin="$t" ;; esac
     if [ "$gs" = ok ]; then
@@ -1285,10 +1291,10 @@ assemble_groups() {
   done
   [ "$fin" -gt 0 ] || fin="$(date +%s)"
   {
-    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nfindings=%s\ngroups=%s\n\n' \
+    printf 'repo=%s\nbranch=%s\nsha=%s\nstarted=%s\nfinished=%s\nstatus=%s\nmodel=%s\ndeadline=%s\nkind=pr\nbase=%s\nfindings=%s\ngroups=%s\ngroup_starts=%s\n\n' \
       "$repo_label" "$branch" "$full_sha" "$(meta_of "$pending" started)" "$fin" "$status" \
       "$(meta_of "$pending" model)" "$(meta_of "$pending" deadline)" "$(meta_of "$pending" base)" \
-      "$([ "$status" = ok ] && printf '%s' "$total")" "$n"
+      "$([ "$status" = ok ] && printf '%s' "$total")" "$n" "$starts"
     if [ "$status" = ok ]; then
       printf 'Read in %s groups of files at once, each by the same reviewer with the same deadline, because the branch is over the size one review can use. Every group returned a review.\n' "$n"
     else
@@ -1795,7 +1801,9 @@ do_check() {
     timeout) echo "Refusing to $act: the lessons review of $repo_label at $short did not finish inside its deadline ($took), so the branch was never read." ;;
     error) echo "Refusing to $act: the lessons review of $repo_label at $short failed:" ; ar_capped_body "$final" 8 "$PRR_LINE_CHARS" ;;
     unparsed) echo "Refusing to $act: the lessons review of $repo_label at $short answered, but not in the review's format, so it is not a review. The start of what it said:"; ar_capped_body "$final" 6 "$PRR_LINE_CHARS" ;;
-    empty) echo "Refusing to $act: the lessons review of $repo_label at $short came back empty (the reviewer printed nothing), which is not the same as finding nothing." ;;
+    # Empty has several causes since the reviewer streams (#1619): nothing printed, a stream that
+    # ended without a result, a result with no text. The runner's first line says which.
+    empty) echo "Refusing to $act: the lessons review of $repo_label at $short came back empty, which is not the same as finding nothing:"; ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
     abandoned) echo "Refusing to $act: the lessons review of $repo_label at $short was started and never finished; the background runner died." ;;
     could-not-run) echo "Refusing to $act: the lessons review of $repo_label at $short could not run:"; ar_capped_body "$final" 4 "$PRR_LINE_CHARS" ;;
     too-large) echo "Refusing to $act: the lessons review of $repo_label at $short could not run, the branch is too large to review:"; ar_capped_body "$final" 2 "$PRR_LINE_CHARS" ;;
@@ -1804,7 +1812,7 @@ do_check() {
   # A review in groups says on its first line which group did not return (#601), and an abandoned
   # one which groups never answered.
   case "$status" in
-    timeout|empty|abandoned) [ -n "$(meta_of "$final" groups)" ] && ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
+    timeout|abandoned) [ -n "$(meta_of "$final" groups)" ] && ar_capped_body "$final" 1 "$PRR_LINE_CHARS" ;;
   esac
   remedy
   return 1

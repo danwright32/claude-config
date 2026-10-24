@@ -21,6 +21,10 @@
 # HEAD, which can be a different commit (L179). Refuses when the pull request cannot be found:
 # merging something no review has read is what this gate exists to stop (L42).
 #
+# The branch is read from a checkout of the pull request's repository: a merge naming its repository
+# from a folder that is not a checkout of it is read from one this Mac knows, or refused saying a
+# checkout is needed (mt_review_checkout, claude-config#1607).
+#
 # Only minor findings do not hold a merge (claude-config#1356): they are handed to the session and to
 # Dan as advisory, through mt_review_allowed in lib/merge-target.sh.
 #
@@ -97,7 +101,17 @@ if [ -z "$head" ]; then
   refuse "Refusing to merge: could not read the head of $(mt_pr_label "$pr") in ${slug:-this repository} from GitHub${err:+ ($err)}, so there is no way to know which lessons review answers for it. Override, explained to Dan first: SKIP_PR_REVIEW=1 <the same command>."
 fi
 
-args=(check --dir "$repo_dir" --sha "$head")
+# The checkout the review reads the branch from (claude-config#1607): the merge's own directory, unless
+# the merge names a repository that directory is not a checkout of, when a checkout of it this Mac
+# knows answers, or the merge is refused saying a checkout is needed. The pull request's URL, as GitHub
+# gave it, finds the checkout it was opened from first.
+pr_url="$(printf '%s' "$envelope" | jq -r 'if .found then .view.url // "" else "" end' 2>/dev/null)"
+mt_review_checkout "$repo_dir" "$repo_flag" "$pr_url" || refuse "Refusing to merge: $MT_REVIEW_WHY"
+review_dir="$MT_REVIEW_DIR"
+from_note=""
+[ "$MT_REVIEW_ELSEWHERE" = 1 ] && from_note="pr-review-gate: this merge names $repo_flag and runs in $repo_dir, which is not a checkout of it, so its lessons review is read from $review_dir, a checkout of it on this Mac."$'\n'
+
+args=(check --dir "$review_dir" --sha "$head")
 [ -n "$base" ] && args+=(--base-ref "origin/$base")
 [ -n "$head_branch" ] && args+=(--branch "$head_branch")
 # The pull request a review started here reads the description and comments of, where answers to
@@ -118,4 +132,4 @@ read_key="$(mt_presented_read_key "$command" mt_runs_merge)"
 out="$(PR_REVIEW_READ="$read_key" bash "$HOOK_DIR/lib/pr-review.sh" "${args[@]}" 2>&1)"; rc=$?
 # An allow with minor findings hands them over as advisory, to the session and to Dan (#1356).
 [ "$rc" -eq 0 ] && mt_review_allowed pr-review-gate "$out"
-refuse "$out"
+refuse "$from_note$out"

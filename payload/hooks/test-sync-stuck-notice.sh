@@ -179,6 +179,22 @@ clear_state
 out="$(prompt w1)"
 says "and its end is said to the session that heard it" "$out" "no longer stuck on an older claude-sync"
 
+echo "sync stuck notice: a watcher that stopped restarting a copy that kept ending is said at once, and so is its end (#1594)"
+
+# Fields as a stopped watcher writes them: the copy it runs is the copy on disk, and the reason is
+# how many starts of it fell inside how many seconds. A minute old, far under the threshold.
+printf '%s 1 cccccccccccc cccccccccccc loop:4:300\n' "$(( NOW - 60 ))" > "$CLONE/.watch-stale"
+out="$(prompt w2)"
+says "a watcher that kept ending as soon as it started is reported without waiting" "$out" "keeps stopping as soon as it starts"
+says "naming the copy and how often it started" "$out" "cccccccccccc started 4 times in 5 minutes"
+says "and what it means for the person" "$out" "not reaching the other Mac"
+never_says "and it is not described as stuck on an older copy, which it is not" "$out" "stuck on an older claude-sync"
+out="$(prompt w2)"
+silent "the next prompt is quiet" "$out"
+clear_state
+out="$(prompt w2)"
+says "and its end is said to the session that heard it" "$out" "no longer stopped for ending as soon as it started"
+
 echo "sync stuck notice: a record nobody can read is not a healthy sync"
 
 printf 'garbage\n' > "$CLONE/.behind-skips"
