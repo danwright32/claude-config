@@ -156,6 +156,10 @@ WATCH_STALE_FILE="$SYNC_REPO/.watch-stale"
 # Left by a change watcher exiting to restart onto a newer claude-sync, and consumed by the watcher
 # launchd starts next: "<when> <from> <to>" (#1569).
 WATCH_RESTARTED_FILE="$SYNC_REPO/.watch-restarted"
+# Every recent start of a change watcher in this clone, one "<when> <the copy it runs>" per line, so a
+# copy launchd keeps starting and that keeps ending can be told from one that started once
+# (claude-config#1594).
+WATCH_STARTS_FILE="$SYNC_REPO/.watch-starts"
 MY_PUSH_FILE="$SYNC_REPO/.my-push"   # the head this Mac last sent, and what became of it (#340)
 RESURRECTED_REPORTED_FILE="$SYNC_REPO/.resurrected-reported"   # leftovers already reported once (#331)
 UNLOADABLE_NOTIFIED_FILE="$SYNC_REPO/.unloadable-notified"   # skills entries the cannot load notice already named (#968)
@@ -11386,6 +11390,8 @@ report_ci_unreadable(){
 #   receiving    the shared repo's newest commit keeps failing its tests (claude-config#336)
 #   watcher-stale  the change watcher runs an older claude-sync and cannot restart onto the one on
 #                disk, because that one fails its self test (claude-config#1569)
+#   watcher-looping  the change watcher kept ending as soon as it started, so it stopped restarting
+#                and sends nothing until a different claude-sync is on disk (claude-config#1594)
 #   sending-unreadable, receiving-unreadable, watcher-stale-unreadable
 #                the record is THERE and its count will not parse, so whether anything is stuck
 #                cannot be answered from it. Said rather than read as zero: a record nobody can
@@ -11446,8 +11452,21 @@ sync_stuck_records(){
         printf 'watcher-stale-unreadable\t-\t-\t%s\n' "the record of a change watcher that could not restart onto the claude-sync on disk, at $WATCH_STALE_FILE, could not be read, so whether it is still stuck on an older copy cannot be told from it. The watcher rewrites it on its next refused change and removes it once it runs the copy on disk." ;;
       *)
         case "$first" in ''|*[!0-9]*) first="" ;; esac
-        printf 'watcher-stale\t%s\t%s\t%s\n' "$n" "${first:--}" \
-          "the change watcher is stuck on an older claude-sync, so config edited on this Mac is not reaching the other Mac: it runs ${runs:-an unrecorded copy}, and the newer one on disk, ${disk:-an unrecorded copy}, $(script_fault_words "$fault"), so it cannot restart onto it. It has refused $n change(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))"), and restarts by itself once a claude-sync that runs is in $SYNC_REPO; a fixed version arrives with: git -C $SYNC_REPO pull" ;;
+        case "$fault" in
+          # A copy that kept ending as soon as it started, so the watcher stopped restarting it
+          # (claude-config#1594). Its own kind and its own words: nothing about it is older than the
+          # file on disk, and the remedy is a different copy rather than a working newer one (L11).
+          loop:*)
+            local lp_starts lp_window
+            lp_starts="${fault#loop:}"; lp_window="${lp_starts#*:}"; lp_starts="${lp_starts%%:*}"
+            case "$lp_starts" in ''|*[!0-9]*) lp_starts="several" ;; esac
+            case "$lp_window" in ''|*[!0-9]*) lp_window="a few minutes" ;; *) lp_window="$(duration_in_words "$lp_window")" ;; esac
+            printf 'watcher-looping\t%s\t%s\t%s\n' "$n" "${first:--}" \
+              "the change watcher keeps stopping as soon as it starts, so config edited on this Mac is not reaching the other Mac: claude-sync ${runs:-an unrecorded copy} started $lp_starts times in $lp_window as the watcher and ended each time, so the watcher stopped restarting it $(age_in_words "$(( now - ${first:-$now} ))") and sends nothing. Why each start ended is in the watch agent's log, ~/.claude-sync.log. It hands over by itself once a different claude-sync is in $SYNC_REPO; a fixed version arrives with: git -C $SYNC_REPO pull" ;;
+          *)
+            printf 'watcher-stale\t%s\t%s\t%s\n' "$n" "${first:--}" \
+              "the change watcher is stuck on an older claude-sync, so config edited on this Mac is not reaching the other Mac: it runs ${runs:-an unrecorded copy}, and the newer one on disk, ${disk:-an unrecorded copy}, $(script_fault_words "$fault"), so it cannot restart onto it. It has refused $n change(s) in a row, the first $(age_in_words "$(( now - ${first:-$now} ))"), and restarts by itself once a claude-sync that runs is in $SYNC_REPO; a fixed version arrives with: git -C $SYNC_REPO pull" ;;
+        esac ;;
     esac
   fi
   return 0
@@ -13006,6 +13025,14 @@ do_watch(){
   # Removed on the way out however this ends, so the next watcher is not refused by a record of
   # one that has gone. Only OUR own record: a file another live watcher wrote must survive us.
   trap 'if [ "$(head -1 "$SYNC_WATCH_PID_FILE" 2>/dev/null || true)" = "$$" ]; then rm -f "$SYNC_WATCH_PID_FILE"; fi' EXIT
+  # A COPY THAT KEEPS ENDING AS SOON AS IT STARTS (claude-config#1594). Decided here, before anything
+  # else a watcher does, so as little of the copy as possible stands between a start and this
+  # check: whatever fails later in a start cannot stop it being counted. Past the bound this start
+  # stops here and stays up, so launchd has nothing to restart (L71).
+  if watch_start_is_loop; then
+    watch_park
+    return $?
+  fi
   # A watcher that has just started is running whatever is on disk, so a record saying the watcher
   # here could not restart onto it describes a process that has gone (claude-config#1569).
   rm -f "$WATCH_STALE_FILE" 2>/dev/null || true
@@ -13117,8 +13144,7 @@ do_watch(){
           # None of the patterns above occurs in these markers ("SEND-OUTCOME held" is not inside
           # "SEND-OUTCOME stale-daemon-held"), so where they sit among them decides nothing.
           *"SEND-OUTCOME stale-daemon-restart "*)
-            restart_pair="$(awk 'sub(/^SEND-OUTCOME stale-daemon-restart /, "") && !done { print; done = 1 }' <<< "$out")"
-            echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: restarting from claude-sync ${restart_pair% *} to ${restart_pair#* }, the newer copy on disk, which parsed and finished a read only run. This daemon exits now and launchd starts it again on the newer one."
+            watch_restart_line "$(awk 'sub(/^SEND-OUTCOME stale-daemon-restart /, "") && !done { print; done = 1 }' <<< "$out")"
             watch_end_fswatch "$watch_fs_pid"
             exit "$WATCH_RESTART_RC" ;;
           # The three ways a stale daemon does NOT restart, each in its own words because each has
@@ -13307,6 +13333,103 @@ watch_stale_record(){   # $1 = the copy this watcher runs  $2 = the copy on disk
     mv -f "$WATCH_STALE_FILE.$$" "$WATCH_STALE_FILE" 2>/dev/null || rm -f "$WATCH_STALE_FILE.$$" 2>/dev/null || true
   fi
   [ "$new" -eq 1 ]
+}
+
+# A CHANGE WATCHER THAT KEEPS ENDING AS SOON AS IT STARTS (claude-config#1594).
+#
+# A restart onto a newer claude-sync, whether the watcher's own (#1569) or a pull's kickstart, is
+# guarded by script_self_test, which proves the copy parses and finishes `status`. A copy that passes
+# that and fails only as the watcher (a fault in do_watch, or in anything only the loop reaches) ends
+# at once, and the watch agent's KeepAlive is unconditional, so launchd starts it again every ten
+# seconds for ever, with one dying line in the log each time as the only trace. By then the copy that
+# loops is the only code running, because launchd always starts the file on disk, so the bound has to
+# live in that copy and run as early in a start as it can.
+#
+# Counted PER COPY: four updates landing in a minute are four copies each started once, which is
+# progress, not a loop. More than WATCH_LOOP_MAX starts of one copy inside WATCH_LOOP_WINDOW seconds
+# is a loop. Three is above what an ordinary day gives one copy (a login, a pull's restart, the one
+# restart onto it), and launchd's throttle passes it in about thirty seconds, so a loop is stopped
+# inside a minute.
+WATCH_LOOP_MAX="${SYNC_WATCH_LOOP_MAX:-3}"
+case "$WATCH_LOOP_MAX" in ''|*[!0-9]*) WATCH_LOOP_MAX=3 ;; esac
+WATCH_LOOP_WINDOW="${SYNC_WATCH_LOOP_WINDOW:-300}"
+case "$WATCH_LOOP_WINDOW" in ''|*[!0-9]*) WATCH_LOOP_WINDOW=300 ;; esac
+# How often a stopped watcher looks for a different claude-sync on disk. A poll rather than fswatch,
+# because fswatch is part of what a start that keeps ending may be failing on.
+WATCH_PARK_POLL="${SYNC_WATCH_PARK_POLL:-60}"
+WATCH_LOOP_STARTS=0
+# The clock a start is recorded against, injectable so a test crosses the window by setting it
+# rather than waiting for it (L524, L290).
+watch_now(){
+  case "${SYNC_WATCH_NOW:-}" in ''|*[!0-9]*) date +%s ;; *) printf '%s' "$SYNC_WATCH_NOW" ;; esac
+}
+# Records this start against the copy this watcher runs, drops every start of another copy or from
+# outside the window, and returns 0 when this start is one too many. Sets WATCH_LOOP_STARTS.
+watch_start_is_loop(){
+  local me now t d kept=""
+  me="${WATCH_LOADED_DIGEST:0:12}"
+  # A watcher that could not read which copy it runs has said so already, and has nothing to count
+  # its starts against.
+  [ -n "$me" ] || return 1
+  now="$(watch_now)"
+  if [ -f "$WATCH_STARTS_FILE" ]; then
+    while read -r t d _; do
+      case "$t" in ''|*[!0-9]*) continue ;; esac
+      [ "$d" = "$me" ] || continue
+      # A start "in the future" is a clock that went back, and is not evidence of anything.
+      [ "$t" -le "$now" ] && [ $(( now - t )) -lt "$WATCH_LOOP_WINDOW" ] || continue
+      kept="$kept$t $d"$'\n'
+    done < "$WATCH_STARTS_FILE"
+  fi
+  kept="$kept$now $me"$'\n'
+  if ! { printf '%s' "$kept" > "$WATCH_STARTS_FILE.$$" && mv -f "$WATCH_STARTS_FILE.$$" "$WATCH_STARTS_FILE"; } 2>/dev/null; then
+    rm -f "$WATCH_STARTS_FILE.$$" 2>/dev/null || true
+    # Said, because a bound that cannot count is no bound, and a silent one reads as a watcher that
+    # was checked and found healthy (L98).
+    echo "claude-sync: could not record this watcher's start in $WATCH_STARTS_FILE, so a claude-sync that keeps ending as soon as it starts would be started again by launchd for ever without being stopped. Watching anyway." >&2
+    return 1
+  fi
+  WATCH_LOOP_STARTS="$(printf '%s' "$kept" | grep -c .)" || true
+  [ "$WATCH_LOOP_STARTS" -gt "$WATCH_LOOP_MAX" ]
+}
+
+# The line a watcher writes as it exits to restart onto a newer copy, from the restart marker's
+# "<from> <to>". One sentence, written by the watch loop and by a stopped watcher handing over.
+watch_restart_line(){   # $1 = "<from> <to>"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: restarting from claude-sync ${1% *} to ${1#* }, the newer copy on disk, which parsed and finished a read only run. This daemon exits now and launchd starts it again on the newer one."
+}
+
+# A STOPPED WATCHER. It stays up, so launchd has nothing to restart, and sends nothing. It records the
+# stretch in .watch-stale with the reason, which `stuck`, status and the session notice read as
+# `watcher-looping`, and notifies once per stretch. It hands over once a different claude-sync is on
+# disk, through watch_stale_tick, so a hold, a held lock and a broken newer copy are each handled
+# exactly as they are for any stale watcher, and a newer copy that runs is restarted onto.
+watch_park(){
+  local me="${WATCH_LOADED_DIGEST:0:12}" now_digest out tried="" said
+  if watch_stale_record "$me" "$me" "loop:$WATCH_LOOP_STARTS:$WATCH_LOOP_WINDOW"; then
+    notify "the change watcher keeps stopping as soon as it starts, so it has stopped restarting and nothing is sent from this Mac"
+  fi
+  echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT watching: claude-sync $me has started $WATCH_LOOP_STARTS times in $(duration_in_words "$WATCH_LOOP_WINDOW") and ended each time, so this start stops here rather than end too and be started again by launchd every ten seconds. It sends nothing, and hands over by itself once a different claude-sync is in $SYNC_REPO. Why each start ended is in the lines above."
+  while :; do
+    sleep "$WATCH_PARK_POLL" 2>/dev/null || sleep 60
+    watch_should_stop && return 0
+    now_digest="$(script_digest || true)"
+    [ -n "$now_digest" ] && [ "$now_digest" != "$WATCH_LOADED_DIGEST" ] || continue
+    # A newer copy already found broken is not tested again every poll: it is said once, and the
+    # stretch's record says it from then on. A hold or a held lock is tried again, since each clears
+    # by itself.
+    [ "$now_digest" != "$tried" ] || continue
+    if out="$( watch_stale_tick 2>&1 )"; then :; fi
+    case "$out" in
+      *"SEND-OUTCOME stale-daemon-restart "*)
+        watch_restart_line "$(awk 'sub(/^SEND-OUTCOME stale-daemon-restart /, "") && !done { print; done = 1 }' <<< "$out")"
+        return 0 ;;
+      *"SEND-OUTCOME stale-daemon-broken"*)
+        tried="$now_digest"
+        said="$(printf '%s\n' "$out" | awk '!/^SEND-OUTCOME /' | tr '\n' ' ')"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') claude-sync watch: NOT restarted: $said" ;;
+    esac
+  done
 }
 
 # THE LAUNCH AGENTS THIS SCRIPT WOULD WRITE, defined once (claude-config#328).
