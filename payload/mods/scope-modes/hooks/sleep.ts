@@ -221,3 +221,6 @@ export const sleepDir = (home: string) => `${home.replace(/\/+$/, '')}/.claude/s
 
 /** A night's notes file, named by its generation as hooks/lib/sleep-report.py names it (notes_path). */
 export const notesOf = (home: string, generation: string) => `${sleepDir(home)}/notes/${generation.replace(/[^\w.-]/g, '_')}.jsonl`
+
+/** What the night's report says needs Dan, beside its notes, as hooks/lib/sleep-report.py names it (needs_path, #1665). */
+export const needsFileOf = (home: string, generation: string) => notesOf(home, generation).replace(/\.jsonl$/, '.needs.json')
