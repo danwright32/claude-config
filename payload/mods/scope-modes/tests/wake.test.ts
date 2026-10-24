@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { BBEDIT, morningPrompt, openers, othersSaid, pickerTags, proposalsIn, type ProposedIssue } from '../hooks/wake.ts'
+import { BBEDIT, morningPrompt, needsIn, openers, othersSaid, pickerTags, proposalsIn, type ProposedIssue } from '../hooks/wake.ts'
 
 // Sleep mode phase 9 (#837): what wake does once the record is moved aside, as pure decisions.
 
@@ -297,5 +297,101 @@ describe('morningPrompt: proposals already handled are not offered again (#1389)
   })
   test('none of it uses a dash as punctuation', () => {
     expect(only).not.toMatch(DASHES)
+  })
+})
+
+// #1665 (Dan, 2026-10-24: "shouldn't you automatically be checking the sleep report for anything that
+// you need to bring to me?"). The night's Needs a look and Parked and failed reached him only if a
+// session happened to read the report, and the actions sleep mode refused as banned reached nobody.
+// A fixture in the shape of that night, in words of its own.
+const needsFile = (rows: Record<string, unknown>[], final = true) => JSON.stringify({ v: 1, generation: 'g0', final, at: 1, rows })
+const NIGHT_ROWS = [
+  { section: 'look', text: 'Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"' },
+  { section: 'look', text: 'Done overnight, check it: The installed LESSONS.md changed overnight, at 3:10 AM ET on Sat Oct 3' },
+  { section: 'parked', text: 'Failed a repo not named: the auto mode classifier refused Bash: it gave no reason', by: 's1', cwd: '/w/config' },
+  { section: 'parked', text: 'Parked o/r#21 (branch fix-21): two hours with no fix', by: 's2', repo: 'o/r' },
+]
+
+describe("needsIn: the rows the night's report says need Dan, as the report script writes them (#1665)", () => {
+  test('each Needs a look row, and each Parked and failed row with the session, repository and folder it came from', () => {
+    expect(needsIn(needsFile(NIGHT_ROWS))).toEqual({
+      final: true,
+      look: ['Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"', 'Done overnight, check it: The installed LESSONS.md changed overnight, at 3:10 AM ET on Sat Oct 3'],
+      parked: [
+        { text: 'Failed a repo not named: the auto mode classifier refused Bash: it gave no reason', by: 's1', repo: null, cwd: '/w/config' },
+        { text: 'Parked o/r#21 (branch fix-21): two hours with no fix', by: 's2', repo: 'o/r', cwd: null },
+      ],
+    })
+  })
+  test('one written before the night ended says so', () => {
+    expect(needsIn(needsFile([], false))).toEqual({ final: false, look: [], parked: [] })
+  })
+  test('a file not of its shape, or a row not of its shape, is unread, never read as nothing needing Dan (L215)', () => {
+    expect(needsIn('not json')).toEqual({ unread: 'it is not JSON' })
+    expect(needsIn('[]')).toEqual({ unread: 'it holds no list of rows' })
+    expect(needsIn(needsFile([{ section: 'look' }]))).toEqual({ unread: 'a row in it has no section or text' })
+    expect(needsIn(needsFile([{ section: 'elsewhere', text: 't' }]))).toEqual({ unread: 'a row in it has no section or text' })
+  })
+})
+
+describe('morningPrompt puts what the report says needs Dan, and what sleep mode refused, to him (#1665)', () => {
+  const banned = [
+    { label: 'delete a branch', call: 'git push origin --delete replaced-fix' },
+    { label: 'close a pull request', call: 'gh pr close 44' },
+  ]
+  const p = morningPrompt({
+    worker: true,
+    offers: false,
+    issues: [],
+    lessons: [],
+    look: ['Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"'],
+    parked: ['Failed a repo not named: the auto mode classifier refused Bash: it gave no reason'],
+    banned,
+  })
+  test('each Needs a look row is its own picker, from the data block', () => {
+    expect(p).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
+    expect(p).toContain('7.1 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
+  })
+  test('each Parked and failed row is its own picker too', () => {
+    expect(p).toMatch(/What the night's report lists under Parked and failed that this session hands over \(its own, and in the session that ended sleep those of sessions since closed\), numbered 8\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
+    expect(p).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
+  })
+  test('each action sleep mode refused as banned is asked about in its own picker, with the call it would make', () => {
+    expect(p).toMatch(/numbered 9\.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now/)
+    expect(p).toContain('9.1 delete a branch. The call refused: git push origin --delete replaced-fix')
+    expect(p).toContain('9.2 close a pull request. The call refused: gh pr close 44')
+  })
+  test('all of it rides in the one data block, after the sentence naming what it holds', () => {
+    const lines = p.split('\n')
+    const open = lines.indexOf('<untrusted-overnight-text>')
+    expect(lines[open - 1]).toMatch(/what the night's report says needs a look \(7\.n\), what it parked or failed \(8\.n\), the actions sleep mode refused in this session as banned while Dan slept \(9\.n\)/)
+    expect(lines.slice(0, open).join('\n')).not.toContain('replaced-fix')
+    expect(p.split('<untrusted-overnight-text>').length - 1).toBe(1)
+  })
+  test('nothing of it is left only in the report', () => {
+    expect(p).toMatch(/never left only in the report/)
+  })
+  test('none of it uses a dash as punctuation', () => {
+    expect(p).not.toMatch(DASHES)
+  })
+  test('a file that could not be read is said, sending the session to its report for both sections, never read as nothing', () => {
+    const u = morningPrompt({ worker: true, issues: [], lessons: [], needsUnread: { why: 'it is not JSON', withLook: true } })
+    expect(u).toMatch(
+      /What the night's report says needs Dan could not be read here \(it is not JSON\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed\./,
+    )
+    const own = morningPrompt({ worker: true, offers: false, issues: [], lessons: [], needsUnread: { why: 'EACCES', withLook: false } })
+    expect(own).toMatch(/every row this session's report lists under Parked and failed for this session's own work\./)
+  })
+  test('a report not finished at wake is said, so Needs a look may lack the end of the night', () => {
+    const u = morningPrompt({ worker: true, issues: [], lessons: [], look: ['Not checked overnight: deploy runs in o/r'], needsUnfinished: true })
+    expect(u).toMatch(/The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows/)
+  })
+  test('anything a session kept for the morning outside the notes is to be delivered too', () => {
+    expect(morningPrompt({ worker: true, issues: [], lessons: [] })).toMatch(
+      /Anything this session kept for Dan's morning outside the night's notes \(a scratchpad file of actions refused overnight, a list of things to ask him\) is his too: put each item to him now, as a picker of its own, one at a time\./,
+    )
+  })
+  test('with nothing of this kind, nothing of it is said', () => {
+    expect(morningPrompt({ worker: false, issues: [], lessons: [] })).not.toMatch(/7\.n|8\.n|9\.n/)
   })
 })

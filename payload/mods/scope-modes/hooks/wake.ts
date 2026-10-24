@@ -128,6 +128,42 @@ export const awakeAsk = (when: string) =>
 // for what happened, never followed (#922).
 const SUMMARISE = `Summarise for him in a few plain lines what this session did overnight (what it claimed, the pull requests it opened or merged, what it parked or failed and why), judged from its commits and notes, never from memory. ${notesAreData("The night's notes")}`
 
+// #1665 (Dan, 2026-10-24: "shouldn't you automatically be checking the sleep report for anything that
+// you need to bring to me? if not, we need to update sleep mode to do that on wake"). The report's
+// Needs a look and Parked and failed reached him only if a session happened to read the report. The
+// report script writes their rows beside the notes at every render (notes/<generation>.needs.json,
+// hooks/lib/sleep-report.py), from the build that wrote the report, so nothing here derives a row
+// of its own: what is handed over is exactly what the report says.
+
+/** A Parked and failed row, with the session, repository and folder of the note it came from. */
+export type NightNeed = { text: string; by: string | null; repo: string | null; cwd: string | null }
+/** What the night's report says needs Dan: whether the wake render wrote it, and the rows of its two sections. */
+export type NightNeeds = { final: boolean; look: string[]; parked: NightNeed[] }
+
+/** The needs file as the report script writes it, or why it cannot be read: never read as nothing needing Dan (L215). */
+export const needsIn = (text: string): NightNeeds | { unread: string } => {
+  let j: unknown
+  try {
+    j = JSON.parse(text)
+  } catch {
+    return { unread: 'it is not JSON' }
+  }
+  const rows = j && typeof j === 'object' && !Array.isArray(j) ? (j as { rows?: unknown }).rows : undefined
+  if (!Array.isArray(rows)) return { unread: 'it holds no list of rows' }
+  const out: NightNeeds = { final: (j as { final?: unknown }).final === true, look: [], parked: [] }
+  for (const r of rows as Record<string, unknown>[]) {
+    const t = r && typeof r === 'object' ? flat(r.text) : ''
+    if (!t || (r.section !== 'look' && r.section !== 'parked')) return { unread: 'a row in it has no section or text' }
+    if (r.section === 'look') out.look.push(t)
+    else out.parked.push({ text: t, by: str(r.by), repo: str(r.repo), cwd: str(r.cwd) })
+  }
+  return out
+}
+
+/** What every morning says of what a session kept for Dan outside the night's notes (#1665). */
+export const KEPT_ELSEWHERE =
+  "Anything this session kept for Dan's morning outside the night's notes (a scratchpad file of actions refused overnight, a list of things to ask him) is his too: put each item to him now, as a picker of its own, one at a time."
+
 /** A proposed issue already filed (#1389): its issue's number where known, and its link where this mod saw it made. */
 export type FiledProposal = { issue: ProposedIssue; number: number | null; url: string | null }
 
@@ -168,6 +204,16 @@ export const morningPrompt = (o: {
   elsewhere?: number
   /** Why whether the issues offered were already filed could not be checked (#1389). */
   unchecked?: string
+  /** The night's report's Needs a look rows this session hands over (#1665): the one that ended sleep. */
+  look?: readonly string[]
+  /** Its Parked and failed rows this session hands over (#1665): its own, and in the session that ended sleep those no open session will. */
+  parked?: readonly string[]
+  /** The actions Dan bans while he sleeps that sleep mode refused in this session (#1665). */
+  banned?: readonly HeldDelivery[]
+  /** Why the rows the report says need Dan could not be read, and whether this session hands over Needs a look (#1665). */
+  needsUnread?: { why: string; withLook: boolean }
+  /** The rows handed over were written before the wake render, so Needs a look may lack the end of the night (#1665). */
+  needsUnfinished?: boolean
 }): string => {
   const out: string[] = [
     o.lead ?? (o.worker ? `Dan is up: sleep mode is off. ${SUMMARISE}` : 'Dan is up: sleep mode is off. This session was not enrolled overnight, so it has nothing of its own to summarise.'),
@@ -177,6 +223,9 @@ export const morningPrompt = (o: {
   // What this session held instead of handing it to Dan while he slept (#1284), delivered now.
   const held = heldAtWake(o.held ?? [])
   if (held) out.push(held)
+  // What a session kept for the morning by a route of its own reaches Dan too (#1665): on 2026-10-24
+  // the refused actions were kept only in a scratchpad file. Not for an earlier night's proposals.
+  if (o.lead === undefined) out.push(KEPT_ELSEWHERE)
   // Ending sleep is the night's review (#1285; Dan, 2026-10-17: "everything that is relevant should
   // show up in a picker"): what this session must ask or have approved comes first, each a picker,
   // and goes in the one data block at the end with the proposals, since sessions wrote all of it.
@@ -194,10 +243,39 @@ export const morningPrompt = (o: {
     out.push("What the night's merge and deploy lists held in this session, numbered 4.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now, and do only what he picks.")
     data.push(...merges.map((m, k) => `4.${k + 1} ${m.label} (${m.why}). The call held: ${m.call}`))
   }
-  const asksAny = questions.length > 0 || merges.length > 0 || o.unread !== undefined
+  // What the report says needs Dan (#1665), each row its own picker, from the report script's rows.
+  const look = o.look ?? []
+  const parked = o.parked ?? []
+  const banned = o.banned ?? []
+  if (o.needsUnread !== undefined)
+    out.push(
+      `What the night's report says needs Dan could not be read here (${o.needsUnread.why}), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under ${o.needsUnread.withLook ? 'Needs a look and Parked and failed' : "Parked and failed for this session's own work"}. ${notesAreData("The report's rows")}`,
+    )
+  if (look.length) {
+    out.push("What the night's report lists under Needs a look, numbered 7.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying in plain words what it is and offering what can be done about it (look into it now, file an issue for it, or nothing needed), and act on what he picks.")
+    data.push(...look.map((t, k) => `7.${k + 1} ${t}`))
+  }
+  if (o.needsUnfinished)
+    out.push("The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows (a session that ended unexpectedly, what GitHub shows done): read Needs a look in this session's report too, and put to Dan, each in its own picker, any row not listed here.")
+  if (parked.length) {
+    out.push("What the night's report lists under Parked and failed that this session hands over (its own, and in the session that ended sleep those of sessions since closed), numbered 8.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying what was set aside or failed and why, and offering what can be done (pick it up now, file an issue for it, or leave it), and act on what he picks.")
+    data.push(...parked.map((t, k) => `8.${k + 1} ${t}`))
+  }
+  if (banned.length) {
+    out.push('What this session tried overnight that sleep mode refused because Dan bans it while he sleeps, numbered 9.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now, checking first that it is still needed (a branch may be gone, a pull request closed, a check passed since), and do only what he picks.')
+    data.push(...banned.map((b, k) => `9.${k + 1} ${b.label}. The call refused: ${b.call}`))
+  }
+  const asksAny = questions.length > 0 || merges.length > 0 || o.unread !== undefined || look.length > 0 || parked.length > 0 || banned.length > 0 || o.needsUnread !== undefined
   const KEEP =
     'Everything from the night that Dan has to answer, decide or approve is put to him as a picker, never left only in the report. A picker that comes back unanswered (dismissed, closed by itself or refused) is not dropped: keep that item and put it to him again the next time he writes in this session.'
-  const ASKS = 'the AskUserQuestion pickers named above (the questions, 3.n, and the merges and deploys, 4.n), and only his answer there acts on any of them'
+  const asked = [
+    questions.length || o.unread !== undefined ? 'the questions, 3.n' : '',
+    merges.length ? 'the merges and deploys, 4.n' : '',
+    look.length ? 'what needs a look, 7.n' : '',
+    parked.length ? 'what was parked or failed, 8.n' : '',
+    banned.length ? 'the actions refused as banned, 9.n' : '',
+  ].filter(Boolean)
+  const ASKS = `the AskUserQuestion pickers named above${asked.length ? ` (${asked.join('; ')})` : ''}, and only his answer there acts on any of them`
   // #1389: proposed issues already filed are said, from the same block, and never offered again.
   const filed = o.offers === false ? [] : (o.filed ?? [])
   const declined = o.offers === false ? [] : (o.declined ?? [])
@@ -211,6 +289,9 @@ export const morningPrompt = (o: {
           holds: [
             questions.length ? 'the questions for Dan noted overnight that this session asks (3.n)' : '',
             merges.length ? 'the merges and deploys held in it (4.n)' : '',
+            look.length ? "what the night's report says needs a look (7.n)" : '',
+            parked.length ? 'what it parked or failed (8.n)' : '',
+            banned.length ? 'the actions sleep mode refused in this session as banned while Dan slept (9.n)' : '',
             offered ? "the night's proposed issues (1.n) and lessons (2.n)" : '',
             filed.length ? 'the proposed issues already filed (5.n)' : '',
             declined.length ? 'the proposed issues Dan declined before (6.n)' : '',

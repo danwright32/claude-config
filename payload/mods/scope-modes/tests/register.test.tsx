@@ -554,6 +554,26 @@ const world = (on: On, o: Opts = {}) => {
       if (o.reportFails?.[op]) return fail(1, o.reportFails[op])
       if (op === 'note') w.appended.push({ file: arg('--record'), line: arg('--line') })
       if (op === 'note' && o.homeGoneAfterNote) w.homeGone = true
+      // Every render writes what the report says needs Dan beside the notes (#1665), as the real
+      // script does: a fixture given there stands for the rows the notes give, marked final by the
+      // wake render; with none, the night had none.
+      if (op === 'render' || op === 'start' || op === 'note') {
+        try {
+          const rec = JSON.parse(w.files[arg('--record')] ?? '') as { generation?: unknown }
+          if (typeof rec.generation === 'string') {
+            const at = `/Users/x/.claude/state/sleep/notes/${rec.generation.replace(/[^\w.-]/g, '_')}.needs.json`
+            let had: Record<string, unknown> | null = null
+            try {
+              had = at in w.files ? (JSON.parse(w.files[at] as string) as Record<string, unknown>) : null
+            } catch {
+              had = null
+            }
+            if (!(at in w.files) || had) w.files[at] = JSON.stringify({ v: 1, generation: rec.generation, final: rest.includes('--final'), rows: had?.rows ?? [] })
+          }
+        } catch {
+          // A record that is not JSON names no night.
+        }
+      }
       // The final render leaves the report the record names on the disk (#837: wake opens it).
       if (op === 'render' && rest.includes('--final')) {
         try {
@@ -2415,7 +2435,10 @@ test('/sleep writes the record whole, enrols the interactive sessions, and the b
   expect(recordWrites(w)[0]).toMatch(new RegExp(`^${SLEEP}/\\.current-${T0}-s1-[a-z0-9]+\\.tmp$`))
   // The record, the night's list of issues whose before bed question went unanswered (#836): none
   // tonight, and the night waiting on its morning review (#1107), whose reminder the card says, not this text.
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`].sort())
+  // The report's first render writes what it says needs Dan beside the notes too (#1665).
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual(
+    [LISTS_PATH, CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/notes/${T0}-s1.needs.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`].sort(),
+  )
   expect(w.files[`${SLEEP}/unanswered/${T0}-s1`]).toBe('')
   expect(lastModes(w)).toEqual(['ASLEEP'])
   expect(r.text).toBe(`Sleep mode is on until noon ET tomorrow (Thu Jan 1). Enrolled to work overnight: this session and 1 other. Not enrolled: 2 sessions that are not interactive or have not said. Tonight's goals: this session, "Close #7"; another session, "Close #7". Told to start now: another session. The night's report is at /Users/x/Downloads/1969-12-31 repo s1 sleep report.md.`)
@@ -2752,7 +2775,7 @@ test('two /sleep at once: one record, and the second says it is already on', wit
   expect(texts.filter(t => /^Sleep mode is already (on|being prepared)/.test(t ?? '')).length).toBe(1)
   // The record, the one night's unanswered list beside it (#836), the one night waiting on its morning
   // review (#1107), and the one session's report name (#1287).
-  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`])
+  expect(Object.keys(w.files).filter(f => !f.endsWith('/caffeinate.pid')).sort()).toEqual([CURRENT, `${SLEEP}/morning-review.json`, `${SLEEP}/notes/${T0}-s1.needs.json`, `${SLEEP}/reports/${T0}-s1/s1.path`, `${SLEEP}/unanswered/${T0}-s1`])
   expect(JSON.parse(w.files[`${SLEEP}/morning-review.json`] as string)).toEqual([{ generation: `${T0}-s1`, night: '1969-12-31' }])
   // Each attempt writes its own marker, so one attempt's cleanup never removes the other's.
   expect(new Set(w.fsWrites.filter(f => f.includes('/preparing.'))).size).toBe(2)
@@ -2795,7 +2818,7 @@ test('/wake moves the record aside, puts every session back where it was, and a 
   expect(w.reports.map(x => x.op)).toEqual(['note', 'render'])
   expect(w.reports[1]).toEqual({ op: 'render', record: moved, final: true })
   expect(w.files[CURRENT]).toBeUndefined()
-  expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP))).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`])
+  expect(Object.keys(w.files).filter(f => f.startsWith(SLEEP)).sort()).toEqual([`${SLEEP}/ended/${T0}-woke-s1.json`, `${SLEEP}/notes/g0.needs.json`])
   expect(lastModes(w)).toEqual(['AWAY'])
   expect(w.sent).toEqual([{ to: 's2', text: AWAY_TEXT }])
   expect((await command($ as never, 'wake')).text).toBe('Sleep mode was not on.')
@@ -3179,6 +3202,107 @@ test('a merge the night held in a session is put to Dan as a picker in its morni
   const m = morningOf(w)[0] as string
   expect(m).toMatch(/What the night's merge and deploy lists held in this session, numbered 4\.n in the block below/)
   expect(m).toMatch(/4\.1 merge a PR \(.*o\/r.*\)\. The call held: gh pr merge 12 --squash/)
+})
+
+// #1665 (Dan, 2026-10-24: "shouldn't you automatically be checking the sleep report for anything that
+// you need to bring to me?"). A night in the shape of 2026-10-23's, in words of its own: what the
+// report said needs a look and what failed never reached the session, and the branch deletes, the
+// pull request close and the check rerun sleep mode refused were kept only in a scratchpad file.
+const NEEDS_AT = '/Users/x/.claude/state/sleep/notes/g0.needs.json'
+const needsFixture = (rows: Record<string, unknown>[], final = false) => JSON.stringify({ v: 1, generation: 'g0', final, rows })
+const NIGHT_NEEDS = [
+  { section: 'look', text: 'Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"' },
+  { section: 'look', text: 'Done overnight, check it: The installed LESSONS.md changed overnight, at 3:10 AM ET' },
+  { section: 'parked', text: 'Failed a repo not named: the auto mode classifier refused Bash: it gave no reason', by: 's1', cwd: '/repo' },
+  { section: 'parked', text: 'Parked o/r#30 (branch fix-30): two hours with no fix', by: 's4', repo: 'o/r' },
+  { section: 'parked', text: 'Failed o/r#31: the tests would not build', by: 's2', repo: 'o/r' },
+]
+
+test('what the report says needs a look and what failed are put to Dan as pickers by the session that woke it (#1665)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { open: [interactive('s2')], files: { [CURRENT]: asleepRecord({ workers: ['s1', 's2', 's4'] }), [NEEDS_AT]: needsFixture(NIGHT_NEEDS) } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('7.1 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
+  expect(m).toContain('7.2 Done overnight, check it: The installed LESSONS.md changed overnight, at 3:10 AM ET')
+  expect(m).toMatch(/What the night's report lists under Needs a look, numbered 7\.n in the block below: put each to Dan in its own AskUserQuestion picker/)
+  // Its own failure, and one of a session that has closed in its repository; never one of a session still open.
+  expect(m).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
+  expect(m).toContain('8.2 Parked o/r#30 (branch fix-30): two hours with no fix')
+  expect(m).not.toContain('the tests would not build')
+  // Read after the wake render, so nothing is said of a report not finished.
+  expect(m).not.toMatch(/was not finished at wake/)
+})
+
+test('a session that did not end sleep hands over only its own Parked and failed rows, never Needs a look (#1665)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's9'] }), [NEEDS_AT]: needsFixture(NIGHT_NEEDS) } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
+  expect(m).not.toContain('Milestone touched overnight')
+  expect(m).not.toMatch(/was not finished at wake/)
+  // A closed session's row is the session that ended sleep's to hand over, never this one's (lessons review at 53fe8bd).
+  expect(m).not.toContain('Parked o/r#30')
+})
+
+test("a closed session's Parked and failed row is handed over by the session that ended sleep, whatever its repository, and when the notes cannot be read (lessons review at 53fe8bd)", withDeps, async ($, on) => {
+  const rows = [
+    { section: 'parked', text: 'Parked acme/slate#8 (branch fix-8): the build would not start', by: 's4', repo: 'acme/slate' },
+    { section: 'parked', text: 'Failed a repo not named: a note with no session', cwd: '/elsewhere' },
+  ]
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's4'] }), [NEEDS_AT]: needsFixture(rows), [PROPOSED_AT]: PROPOSED }, unreadableFiles: [PROPOSED_AT] })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/The night's notes could not be read/)
+  expect(m).toContain('8.1 Parked acme/slate#8 (branch fix-8): the build would not start')
+  expect(m).toContain('8.2 Failed a repo not named: a note with no session')
+})
+
+test("what the report says needs Dan that cannot be read is said in the morning, never read as nothing (#1665)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [NEEDS_AT]: needsFixture(NIGHT_NEEDS) }, unreadableFiles: [NEEDS_AT] })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  expect(morningOf(w)[0]).toMatch(/What the night's report says needs Dan could not be read here \(.+\), so none of it is listed: put to Dan, each in its own AskUserQuestion picker, every row this session's report lists under Needs a look and Parked and failed\./)
+})
+
+test('a report whose wake render did not finish has its earlier rows handed over, and says Needs a look may lack the end of the night (#1665)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1'] }), [NEEDS_AT]: needsFixture(NIGHT_NEEDS) }, reportFails: { render: 'gh: not logged in' } })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toContain('7.1 Done overnight, check it: Milestone touched overnight')
+  expect(m).toMatch(/The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows/)
+})
+
+test('an action Dan bans while he sleeps, refused overnight, is put to Dan as a picker in that session\'s morning, once each (#1665)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await start($ as never, clock)
+  expect(await call($ as never, bash('git push origin --delete replaced-fix', 'b1'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not delete a branch\. This session keeps it and asks Dan about it when sleep mode ends/)
+  expect(await call($ as never, bash('git push origin --delete replaced-fix', 'b2'))).toMatch(/^Refused: sleep mode is on/)
+  expect(await call($ as never, bash('gh pr close 44', 'b3'))).toMatch(/^Refused: sleep mode is on/)
+  await clock.advance(MIN)
+  delete w.files[CURRENT]
+  await clock.advance(MIN)
+  await clock.settle()
+  expect(morningOf(w).length).toBe(1)
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/refused because Dan bans it while he sleeps, numbered 9\.n in the block below: ask Dan in its own AskUserQuestion picker, one at a time, whether to do each now/)
+  expect(m).toContain('9.1 delete a branch. The call refused: git push origin --delete replaced-fix')
+  expect(m).toContain('9.2 run gh pr close. The call refused: gh pr close 44')
+  expect(m).not.toContain('9.3 ')
+  // Never as a merge the night's lists held.
+  expect(m).not.toContain('4.1 ')
+  await clock.advance(3 * MIN)
+  expect(morningOf(w).length).toBe(1)
 })
 
 test("notes that cannot be read at a session's morning are said, never read as no question (#1285)", withDeps, async ($, on) => {
