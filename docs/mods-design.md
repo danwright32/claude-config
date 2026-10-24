@@ -3007,6 +3007,16 @@ content is unchanged from what it wrote, passes; any hand edit to such a file is
   seal check for such a call (a test says so) and so neither relies on it nor widens it; it is
   recorded as its own finding. #1586 closed it, below.
 
+- **Seen failing, #1588.** The two hold tests above (an edited page, a sealed page outside
+  `docs/design`) were never seen failing: the second passed before the code existed, and the safety
+  classifier refused, correctly, a mutation run against the real guard. `tests/test-design-guard-mutants.sh`
+  now runs each against a broken copy that `tools/prove-it-fails.sh` makes, never the tree being
+  worked in: a guard whose `isDesignRecord` takes every path fails the outside test, and one whose
+  `settledRecord` passes without the seal check fails the edited page test. As its control, a copy
+  whose only change is a comment's words fails neither, so the harness can say NOT PROVED. Each
+  named test is first seen passing on the tree as it is, so one renamed or no longer run reads as a
+  failure. Without a claude command (CI's Linux runner) the suite says UNMEASURED.
+
 ### What #1586 changed, 2026-10-23
 
 Measured live on 2026-10-23 by the #1524 builder: a script file run with a screen file named only
@@ -3027,7 +3037,8 @@ read no write from a script file's arguments.
 - **Judged as an Edit of the file.** What a script writes cannot be read before it runs, so each file
   it is handed is judged as a write of it: a screen file is held on an issue Dan has not answered for,
   a test, a file in no checkout (the scratchpad) and any file of no look kind run, a mod's `.ts` hook
-  file that draws nothing runs and is read again after (#1296), and the guard's own record is
+  file that draws nothing runs and is read again after (#1296; since #1576 any mod hook file, `.ts`,
+  `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
   `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
 - **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
