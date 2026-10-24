@@ -62,6 +62,8 @@ expect_allow() {  # $1 = what, $2 = output
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-vrun.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+# The refused sign ins this suite fakes are recorded here, never as this Mac's (claude-config#1626).
+export MT_SIGNIN_LEDGER_DIR="$WORK/gh-signin"
 HEAD="1111111111111111111111111111111111111111"
 OLD="2222222222222222222222222222222222222222"
 BASE="3333333333333333333333333333333333333333"

@@ -385,6 +385,22 @@ case "$wr_seen" in
        || check "every suite is handed a wrapped refusal record of its own" "the record it was handed exists: $wr_seen" ;;
 esac
 
+# And none records a refused GitHub sign in in the Mac's REAL record (claude-config#1626), whose count
+# across runs is what says this Mac's keyring read is failing often: a suite faking a 401 through any
+# merge gate without pointing it elsewhere would raise that count with fixtures.
+GS="$TMPROOT/dir-signin-ledger"
+mkdir -p "$GS"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${MT_SIGNIN_LEDGER_DIR:-}" > "$(dirname "$0")/ledger.seen"\nprintf "SUITE-RESULT passed=1 failed=0\\n"\n' > "$GS/test-signin-ledger.sh"
+env -u MT_SIGNIN_LEDGER_DIR HOOK_TESTS_TIMINGS= HOOK_TESTS_FLAKE_RECHECK=0 bash "$RUNNER" "$GS" >/dev/null 2>&1
+gs_seen="$(cat "$GS/ledger.seen" 2>/dev/null)"
+case "$gs_seen" in
+  '') check "every suite is handed a refused sign in record of its own" "it was handed none, so a merge gate would record into the real one" ;;
+  "$HOME/.claude/"*) check "every suite is handed a refused sign in record of its own" "it was handed the real one: $gs_seen" ;;
+  *) [ ! -e "$gs_seen" ] \
+       && check "every suite is handed a refused sign in record of its own" ok \
+       || check "every suite is handed a refused sign in record of its own" "the record it was handed exists: $gs_seen" ;;
+esac
+
 # One at a time is the escape hatch, and it has to keep working: it is what somebody reaches for
 # when a suite only fails alongside others.
 out_seq="$(HOOK_TESTS_JOBS=1 bash "$RUNNER" "$P" 2>&1)"; code_seq=$?
