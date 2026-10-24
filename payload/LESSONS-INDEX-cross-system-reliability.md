@@ -5,6 +5,7 @@ clause saying what the failure looks like. Read the whole entry before a rule de
 anything: `~/claude-config-sync/claude-sync lesson L174`, or the entry in ~/.claude/LESSONS.md,
 which is NOT loaded into the session.
 
+- L804. A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.
 - L793. A job that rechecks the rule its scheduler applied must receive the scheduler's readings, or it refuses on thinner evidence and waits.
 - L792. A count toward a page or all clear counts only runs that checked the subject; a slower sweep's gaps read as recovery or break the streak.
 - L789. A job gated with always() to tolerate a skipped predecessor also tolerates a failed one, so refuse a failed or cancelled predecessor by name.

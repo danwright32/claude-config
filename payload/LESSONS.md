@@ -8789,6 +8789,9 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A plan shipped with its own audit unresolved is read as THE plan, so file the correction as a gating issue alongside the phase issues.
 
 ## Cross-system reliability
+- **L804. A worker that waits in line for an exclusive turn must count its time limit from when it gets the turn, and must not take the turn with less time left than the work takes, because a worker that gives up mid turn holds everyone else's place and finishes nothing.**
+  (claude-config#1604, 2026-10-23)
+  SHORT: A worker queued for an exclusive turn counts its deadline from the turn and never takes a turn it cannot finish, or it holds the line for nothing.
 - **L793. When a scheduler decides to start a job from readings it took itself, and the job checks the same rule again before acting, hand the job those readings, because a job that re-decides from only its own fresher but thinner evidence refuses what the scheduler approved and the work silently waits for the next fallback.**
   (project-enrollment-tracker#1758, 2026-10-20)
   SHORT: A job that rechecks the rule its scheduler applied must receive the scheduler's readings, or it refuses on thinner evidence and waits.

@@ -106,6 +106,7 @@ Dan does not write code or live in the terminal. When a step genuinely requires 
 - For a manual file edit: put the find text in one code block and the replacement text in a second block, so he can cmd+F (his spec, 2026-06-25).
 - **Dan cannot see files delivered into the chat.** A file card rendered in the conversation is invisible to him (his words, 2026-09-07: "i need you to open them. I cant see it in this chat"), so anything he has to LOOK at (a screenshot, a rendering, a report) must be OPENED on his screen, not just sent or named by path. Open it with the app NAMED: `open -a "Google Chrome" <file>` for an HTML page, `open -a Preview <file>` for a screenshot or a PDF. Never a bare `open`, which goes to the Island browser. Tell him focus is about to move, in the same message.
 - NEVER put a secret value inside a command, code block, or anything that echoes to the terminal (a GitHub token was leaked this way once). For secrets: open the target env file in BBEdit with a named placeholder for him to fill in, then verify the secret landed afterward.
+- **Every key, token or credential Dan creates gets a description** saying what uses it and why it was made (his words, 2026-10-23: "i always want a description"). Hand him the text to paste on the steps card, beside the name, even where the form marks the field optional.
 
 ## Code Standards
 
@@ -210,7 +211,7 @@ On Dans-MacBook-Pro:
 - `~/Documents/Documents - Dan’s MacBook Pro/Bidspoke`: Next.js 14 + Cloudflare Workers + Supabase. Moved here from `~/Documents/Bidspoke` on 2026-10-02 when the Documents folder was reorganised (the new parent is the folder iCloud Desktop & Documents creates), so quote the path: it has spaces and a curly apostrophe.
 - `~/eavesly-web-app`: Vite + React + TypeScript + shadcn/ui + Supabase
 - `~/trypennie`: Next.js 15 + Prismic CMS + Google Maps
-- `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)`: data analysis workspace (Python + Google Sheets), listed before as `~/Documents/Manager Goal Tracking`, which is a symlink to this folder and has dangled since the 2026-10-02 move
+- `~/Apps/PET`: the Project Enrollment Tracker (Node + Supabase + Cloudflare Pages). Moved here on 2026-10-23 from the iCloud synced `~/Documents/Documents - Dan’s MacBook Pro/Project Enrollment Tracker (PET)` so its `.env` credentials stop syncing to iCloud (PET #1924, #1627).
 
 The four above are where they were recorded before this section was split by machine, and their
 absence from Daniels-MacBook-Pro-2 is the only evidence for putting them here. Nothing has
