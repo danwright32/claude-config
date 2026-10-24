@@ -1,0 +1,6 @@
+{
+  "name": "session-id-probe",
+  "version": "0.1.0",
+  "description": "A test fixture for tests/test-session-id-agreement.sh: records the session id a mod reads beside each tagged shell call, and takes a look through the GitHub polling policy as the mods do.",
+  "author": { "name": "Dan Wright" }
+}

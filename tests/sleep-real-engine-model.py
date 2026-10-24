@@ -25,6 +25,11 @@ one word text answer. Otherwise the first user message names the script:
                end. A worker with no goal is never given rules, so it only answers "ready".
   anything else (the morning turn after /wake) gets a short text answer.
 
+Before those, the newest prompt is read for tests/test-session-id-agreement.sh's PROBE steps
+(#1575), which the same stand-in serves rather than a second copy of this server: `PROBE-AGENT:
+<prompt>` hands the prompt to a general purpose subagent, `PROBE-RUN: <command>` runs the command,
+each once. The newest prompt, not the first, since a probe step comes after /compact and /clear.
+
 A side call judging a /goal condition (Claude Code's goal evaluator, which must answer JSON) is
 answered that the condition does not hold, so the goal's Stop hook blocks whenever it is reached.
 """
@@ -78,7 +83,43 @@ def text(t):
 
 
 def bash(cmd):
-    return {'kind': 'tool', 'command': cmd}
+    return {'kind': 'tool', 'name': 'Bash', 'input': {'command': cmd, 'description': 'Overnight step'}}
+
+
+def last_prompt(messages):
+    """The newest user message that is a prompt (no tool result in it): its text and its index."""
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.get('role') != 'user':
+            continue
+        c = m.get('content')
+        if isinstance(c, str):
+            return c, i
+        blocks = [x for x in c or [] if isinstance(x, dict)]
+        if any(x.get('type') == 'tool_result' for x in blocks):
+            continue
+        return '\n'.join(x.get('text', '') for x in blocks if x.get('type') == 'text'), i
+    return '', -1
+
+
+def probe_step(messages, tools):
+    """The PROBE steps of tests/test-session-id-agreement.sh (#1575), read from the newest prompt, so
+    they hold after /compact, /clear and a resume alike: `PROBE-AGENT: <prompt>` hands the prompt to a
+    subagent, `PROBE-RUN: <command>` runs the command in Bash, each once, then the turn ends. A prompt
+    naming neither is not a probe's (None)."""
+    said, at = last_prompt(messages)
+    agent = re.search(r'PROBE-AGENT: (.+)', said)
+    run = re.search(r'PROBE-RUN: (.+)', said)
+    if not (agent or run):
+        return None
+    for m in messages[at + 1:]:
+        if isinstance(m.get('content'), list) and any(isinstance(x, dict) and x.get('type') == 'tool_use' for x in m['content']):
+            return text('done')
+    if agent:
+        name = 'Agent' if 'Agent' in tools else 'Task'
+        return {'kind': 'tool', 'name': name,
+                'input': {'description': 'Probe step', 'prompt': agent.group(1).strip(), 'subagent_type': 'general-purpose'}}
+    return bash(run.group(1).strip())
 
 
 def note_cmd(line):
@@ -162,6 +203,9 @@ def answer(body):
         return text('{"ok": false, "reason": "not yet"}')
     if 'Bash' not in tools:
         return text('ok')
+    probe = probe_step(messages, tools)
+    if probe is not None:
+        return probe
     first = first_user(messages)
     ran = tool_uses(messages)
     if 'BAN-STEP' in first:
@@ -219,8 +263,7 @@ class Handler(BaseHTTPRequestHandler):
             block = {'type': 'text', 'text': a['text']}
             stop = 'end_turn'
         else:
-            block = {'type': 'tool_use', 'id': 'toolu_' + uuid.uuid4().hex[:20], 'name': 'Bash',
-                     'input': {'command': a['command'], 'description': 'Overnight step'}}
+            block = {'type': 'tool_use', 'id': 'toolu_' + uuid.uuid4().hex[:20], 'name': a['name'], 'input': a['input']}
             stop = 'tool_use'
         usage = {'input_tokens': 10, 'output_tokens': 5, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0}
         model = body.get('model') or 'claude-haiku-4-5'
@@ -239,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
             sse(self, 'content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': block['text']}})
         else:
             sse(self, 'content_block_start', {'type': 'content_block_start', 'index': 0,
-                                              'content_block': {'type': 'tool_use', 'id': block['id'], 'name': 'Bash', 'input': {}}})
+                                              'content_block': {'type': 'tool_use', 'id': block['id'], 'name': block['name'], 'input': {}}})
             sse(self, 'content_block_delta', {'type': 'content_block_delta', 'index': 0,
                                               'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(block['input'])}})
         sse(self, 'content_block_stop', {'type': 'content_block_stop', 'index': 0})
