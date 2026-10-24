@@ -845,6 +845,106 @@ out="$(fire_gate "gh pr merge 7 --squash")"; rc=$?
 check_eq "a pull request gh cannot find is refused, never allowed blind" "2" "$rc"
 
 # ===========================================================================================
+# 4b. A merge naming its repository from a directory that is not a checkout of it (claude-config#1607).
+#     Measured 2026-10-23: `gh pr merge <n> -R <owner>/<repo>` from the home directory was refused
+#     with "The lessons review could not run: ... is not inside a git repository", which reads as a
+#     review failure and left SKIP_PR_REVIEW=1 the only way through. The review now reads the branch
+#     from a checkout of the named repository this Mac knows (one the lessons review has worked in,
+#     or one directly inside the merge's directory), and when there is none says plainly that a
+#     checkout is needed and where the merge ran.
+# ===========================================================================================
+# A checkout of acme/widget as GitHub names it, whose fetches go to the fixture's bare origin, so
+# nothing reaches the network (L2). get-url applies insteadOf, so it keys as REPO does.
+XCLONE="$WORKDIR/x/widget"
+mkdir -p "$WORKDIR/x"
+git clone -q "$ORIGIN" "$XCLONE" 2>/dev/null
+git -C "$XCLONE" remote set-url origin https://github.com/acme/widget.git
+git -C "$XCLONE" config url."$ORIGIN".insteadOf https://github.com/acme/widget.git
+# Where git says that checkout stands, which on macOS is the temporary folder's /private spelling.
+XCLONE_TOP="$(git -C "$XCLONE" rev-parse --show-toplevel)"
+# A checkout of a different GitHub repository, and a folder that is no checkout at all.
+XOTHER="$WORKDIR/x/other"
+git clone -q "$ORIGIN" "$XOTHER" 2>/dev/null
+git -C "$XOTHER" remote set-url origin git@github.com:acme/other.git
+git -C "$XOTHER" config url."$ORIGIN".insteadOf git@github.com:acme/other.git
+XHOME="$WORKDIR/x/home"; mkdir -p "$XHOME"
+fire_gate_in(){ # fire_gate_in <cwd> <command>
+  python3 -c 'import json,sys; print(json.dumps({"session_id":"s1","cwd":sys.argv[1],"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[2]}}))' "$1" "$2" \
+    | bash "$GATE" 2>&1
+}
+x_pr(){ printf '{"number":7,"headRefOid":"%s","baseRefName":"main","headRefName":"feat/sync","url":"https://github.com/acme/widget/pull/7"}\n' "$HEAD_SHA" > "$FAKE_LOG/pr-view.json"; }
+x_opened(){ printf '%s\thost\twidget\t%s\t%s\thttps://github.com/acme/widget/pull/7\n' "$(date +%s)" "$1" "$HEAD_SHA" >> "$AI_REVIEW_STATE_DIR/pr-opened.tsv"; }
+X_MERGE="gh pr merge 7 -R acme/widget --squash"
+
+# Nothing known: refused in plain words, never as a review that could not run.
+reset_state; x_pr; mkdir -p "$AI_REVIEW_STATE_DIR"
+out="$(fire_gate_in "$XHOME" "$X_MERGE")"; rc=$?
+check_eq "#1607 a merge naming a repository from outside any checkout of it, none known, is refused" "2" "$rc"
+check "#1607 saying a checkout of the named repository is needed" "not a checkout of acme/widget" "$out"
+check "#1607 naming where the merge ran" "$XHOME" "$out"
+check "#1607 and how to run it" "Run the same command from a checkout of acme/widget" "$out"
+check_not "#1607 never as a review that could not run" "could not run" "$out"
+check_eq "#1607 and no reviewer was started for it" "0" "$(calls)"
+# A record naming a folder that is gone, or a checkout of another repository, is not a checkout of it.
+x_opened "$WORKDIR/x/gone"; x_opened "$XOTHER"; x_opened "$REPO"
+out="$(fire_gate_in "$XHOME" "$X_MERGE")"; rc=$?
+check_eq "#1607 a recorded folder that is gone or holds another repository is not used" "2|0" "$rc|$(calls)"
+check "#1607 and the refusal is the plain one" "not a checkout of acme/widget" "$out"
+# A checkout of a different GitHub repository is not a checkout of the one the merge names: before,
+# the review ran there against a commit it does not hold and recorded a review that could not run.
+out="$(fire_gate_in "$XOTHER" "$X_MERGE")"; rc=$?
+check_eq "#1607 a merge naming a repository from a checkout of another is refused when none is known" "2" "$rc"
+check "#1607 saying which repository that checkout is" "a checkout of acme/other" "$out"
+check_not "#1607 never as a review that could not run there" "could not run" "$out"
+
+# A checkout of it the lessons review has recorded: the review runs there, the same review, and the
+# merge is held to it exactly as from the checkout itself.
+reset_state; x_pr; mkdir -p "$AI_REVIEW_STATE_DIR"; x_opened "$XCLONE"
+out="$(fire_gate_in "$XHOME" "$X_MERGE")"; rc=$?
+check_eq "#1607 with a known checkout the merge is held for the review" "2" "$rc"
+check "#1607 saying where the review is read from" "read from $XCLONE_TOP" "$out"
+check_not "#1607 not the plain refusal" "Run the same command from a checkout" "$out"
+wait_final "$HEAD_SHA" || bad "#1607 the review started from the known checkout finished"
+xdir="$(awk -F '\t' -v s="$HEAD_SHA" '$5 == s { d = $4 } END { print d }' "$AI_REVIEW_STATE_DIR/pr-reviews.tsv" 2>/dev/null)"
+check_eq "#1607 and that review read the branch in the known checkout" "$XCLONE_TOP" "$xdir"
+out="$(fire_gate_in "$XHOME" "$X_MERGE")"; rc=$?
+check_eq "#1607 the finished review's findings refuse the merge" "2" "$rc"
+check "#1607 carrying them" "deleteEvent still swallows" "$out"
+xk="$(key_in "$out")"
+out="$(fire_gate_in "$XHOME" "PR_REVIEW_READ=$xk $X_MERGE")"; rc=$?
+check_eq "#1607 and the merge presenting their read key is allowed" "0" "$rc"
+# The same holds from a checkout of another repository, and with the name spelled in other case, as
+# GitHub reads it.
+out="$(fire_gate_in "$XOTHER" "PR_REVIEW_READ=$xk gh pr merge 7 -R ACME/Widget --squash")"; rc=$?
+check_eq "#1607 from a checkout of another repository, named in other case, the known checkout answers" "0" "$rc"
+
+# From a checkout of the named repository itself nothing changes: the review is read where it runs.
+reset_state; x_pr; mkdir -p "$AI_REVIEW_STATE_DIR"
+out="$(fire_gate_in "$XCLONE" "$X_MERGE")"; rc=$?
+check_eq "#1607 control: from a checkout of the named repository the merge is held as before" "2" "$rc"
+check "#1607 control: for a review started there" "started" "$out"
+check_not "#1607 control: saying nothing of another checkout" "read from" "$out"
+x_opened "$XCLONE"
+# The checkout the pull request was opened from answers before a newer record of another checkout of
+# the same repository, whose origin may be spelled differently and so key a different review.
+XCLONE2="$WORKDIR/x2/widget"
+mkdir -p "$WORKDIR/x2"
+git clone -q "$ORIGIN" "$XCLONE2" 2>/dev/null
+git -C "$XCLONE2" remote set-url origin git@github.com:acme/widget.git
+git -C "$XCLONE2" config url."$ORIGIN".insteadOf git@github.com:acme/widget.git
+printf '%s\thost\twidget\t%s\t%s\thttps://github.com/acme/widget/pull/8\n' "$(date +%s)" "$XCLONE2" "$HEAD_SHA" >> "$AI_REVIEW_STATE_DIR/pr-opened.tsv"
+out="$(fire_gate_in "$XHOME" "$X_MERGE")"; rc=$?
+check "#1607 the pull request's own opening answers before a newer record" "read from $XCLONE_TOP," "$out"
+wait_final "$HEAD_SHA" || bad "#1607 the review started from the checkout itself finished"
+
+# A checkout of it directly inside the merge's folder answers with no record at all.
+reset_state; x_pr; mkdir -p "$AI_REVIEW_STATE_DIR"
+out="$(fire_gate_in "$WORKDIR/x" "$X_MERGE")"; rc=$?
+check_eq "#1607 a checkout of it inside the merge's folder is held for its review" "2" "$rc"
+check "#1607 read from that checkout" "read from $XCLONE_TOP" "$out"
+wait_final "$HEAD_SHA" || bad "#1607 the review started from the child checkout finished"
+
+# ===========================================================================================
 # 5. The nudge does not show a whole branch review (claude-config#1090, Dan 2026-10-12). It reached
 #    whichever session prompted next, which was rarely the one merging, and walking these reviews
 #    timed it out on the first prompt of every new session. The merge gate shows the findings on its
