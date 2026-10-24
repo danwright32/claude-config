@@ -4520,6 +4520,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   run, and its own fixture of five files had passed. `first="$(head -c 64 "$f")"` fixed it,
   proved by a 3,000 file case that failed before the change.)
   SHORT: A per item `read < <(cmd)` loop kills macOS bash 3.2 part way through a big list; use a command substitution and test at the real count.
+- **L1030. Never put a heredoc inside a $( ) command substitution in a script macOS bash 3.2
+  runs, because a single quote anywhere in the heredoc's body breaks the parse and the whole
+  script dies before running anything; write the heredoc's output to a file and read the
+  file instead.**
+  (claude-config#1690, 2026-10-24)
+  SHORT: A heredoc inside $( ) with a single quote in it breaks macOS bash 3.2's parse and kills the script; write to a file instead.
 
 - **L488. A shell script that sources a library with `.` and does not run `set -e`
   CARRIES ON when that file is missing, because the dot command only writes to stderr and

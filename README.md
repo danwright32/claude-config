@@ -1297,6 +1297,19 @@ exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000
 into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
 the checkout's objects read only. `--no-github` asks GitHub nothing.
 
+Each finding is placed at the line its `Quote:` names in the file at the reviewed head (#1357), and
+one that cannot be placed keeps its cited number with a `[review harness: not placed, <why>, ...]`
+mark. How often that happens, and why, is `python3 ~/.claude/hooks/lib/ai-review-placement.py
+[--since WHEN]` on each Mac (#1368): reviews, findings, the placed share, the not placed ones by
+reason, and how the placed ones were placed, from the `placement=` value each review records. On
+the personal MacBook, over the 646 reviews started from 2026-10-20 02:56 ET to 2026-10-24 11:04 ET,
+13 of 323 findings were not placed: 9 quoted a phrase of one long line rather than the whole of it,
+and 4 cited a path that was not a file (a `..`, a stray folder in front, a bare file name). So a
+quote matching no whole line, as given or without the diff's leading `+` or `-`, is now looked for
+inside lines when it is 20 characters or longer, and a path that is not a file is tried as the one
+changed file it fits, kept only when the quote then places it. Read the report again a few days
+after this reaches each Mac, to see how often each fallback fires and what is still not placed.
+
 #### Scoring the review itself
 
 `tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:
@@ -1820,8 +1833,9 @@ bash tools/load-window.sh --seconds 180 --workers 24 --spawners 12 --label "#162
 
 It takes this Mac's one load window turn (the merge helper's own queue, `hooks/lib/merge-turn.sh`,
 so a dead holder is passed over at once and a stuck one after `LOAD_WINDOW_HOLD_SECONDS`), waits
-until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, plus the merge
-helper's live turn tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
+until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, counting only a run
+with no suite above it, so a suite's own fixtures are not runs, plus the merge helper's live turn
+tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
 workers and the command for at most `--seconds` (180 at most), and stops early, also exit 75, if a
 merge or a full suite starts meanwhile. Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
@@ -1831,6 +1845,13 @@ tidied included, and on every read it asks again) and the
 suite pile notice name a window running or ended within 15 minutes, in ET. Every number in this
 paragraph is a setting, not a measurement. To see what is recorded and what a window would wait for:
 `bash tools/load-window.sh --status`.
+
+What a load reproduction usually finds is a wait with a short ceiling: a `date +%s` plus a few
+seconds, or a `sleep 0.1` loop of a few hundred ticks, which a loaded Mac reaches with nothing broken
+(#1577, #1620). A wait on a condition in a suite takes its ceiling from `hooks/lib/hang-wait.sh`
+instead (`hang_wait "<condition>"`, giving up at `HANG_S`), one number only a hang reaches, which
+`SUITE_HANG_SECONDS` lowers for one run when a control has to show a wait still fails. That ceiling
+is a setting, not a measurement.
 
 ### Measuring the section time budget's margin
 

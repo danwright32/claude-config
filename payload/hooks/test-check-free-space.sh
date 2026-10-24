@@ -26,6 +26,8 @@ set -uo pipefail
 suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Every wait on a condition gives up at the one ceiling only a hang reaches (claude-config#1620).
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 CHECK="$DIR/check-free-space.sh"
 NUDGE="$DIR/free-space-nudge.sh"
 
@@ -519,14 +521,10 @@ PLIST
   find "$1/$2" -exec touch -t 202601011200 {} +
 }
 # Waits on the condition (a finished record and nothing marked in progress), never a fixed time
-# (L290); the deadline only turns a sweep that never finishes into a failure rather than a hang.
+# (L290), with lib/hang-wait.sh's ceiling, which only a sweep that never finishes reaches. It was 30
+# s, the ceiling that failed 16 of 16 loaded copies of test-derived-data-sweep.sh (#1577, on 2026-10-23; #1620).
 sweep_finished() {   # sweep_finished <state dir>
-  local deadline=$(( $(date +%s) + 30 ))
-  while [ ! -f "$1/last-result" ] || [ -e "$1/in-progress" ]; do
-    [ "$(date +%s)" -ge "$deadline" ] && return 1
-    sleep 0.1
-  done
-  return 0
+  hang_wait "[ -f '$1/last-result' ] && [ ! -e '$1/in-progress' ]"
 }
 run_logs() { find "$1" -name 'run-*.log' 2>/dev/null | wc -l | tr -d ' '; }
 dd_nudge() {   # dd_nudge <session> <derived data root> <sweep state> [VAR=value...] -> prints all output
@@ -534,7 +532,7 @@ dd_nudge() {   # dd_nudge <session> <derived data root> <sweep state> [VAR=value
   mkdir -p "$TMPROOT/fs-$sess"
   payload "$sess" | env FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/fs-$sess" \
     FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$root" DERIVED_DATA_SWEEP_STATE_DIR="$state" \
-    FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" "$@" bash "$NUDGE" 2>&1
+    FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" FREE_SPACE_DERIVED_DATA_SECONDS="$HANG_S" "$@" bash "$NUDGE" 2>&1
 }
 
 DD_ROOT="$TMPROOT/nudge-derived-data"; SW1="$TMPROOT/sweep-1"
@@ -569,17 +567,20 @@ BLOCKING_PS="$TMPROOT/blocking-ps"
 cat > "$BLOCKING_PS" <<PS
 #!/bin/sh
 n=0
-while [ ! -e "$RELEASE2" ] && [ "\$n" -lt 300 ]; do sleep 0.1; n=\$((n + 1)); done
+while [ ! -e "$RELEASE2" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
 echo "  77 /usr/bin/login -f someone"
 PS
 chmod +x "$BLOCKING_PS"
-slow_start="$(date +%s)"
+# Judged by the STATE the warning leaves, never by seconds (L290): the sweep's process list is held
+# until the suite releases it, so when the warning returns the sweep it started must still be marked
+# in progress with no record, which is untrue only if the warning waited for it. This was "within 5
+# s", which a loaded Mac reaches with nothing broken (#1620; 5 s was a setting, not a measurement).
 n_slow1="$(dd_nudge sess-slow1 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
-slow_took=$(( $(date +%s) - slow_start ))
+slow1_state="$([ -e "$SW2/in-progress" ] && echo in-progress || echo "in-progress absent"), $([ -f "$SW2/last-result" ] && echo "record present" || echo "no record")"
 n_slow2="$(dd_nudge sess-slow2 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
 : > "$RELEASE2"
-check "a warning whose sweep is slow still arrives within its time budget" \
-  "$(grep -q 'GB free on' <<< "$n_slow1" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow1")"
+check "a warning whose sweep is slow still arrives, without waiting for the sweep" \
+  "$(grep -q 'GB free on' <<< "$n_slow1" && [ "$slow1_state" = "in-progress, no record" ] && echo ok || echo "when it returned the sweep it started was $slow1_state though its process list was held, said: $n_slow1")"
 check "and says it started the sweep" "$(grep -qF 'Started clearing' <<< "$n_slow1" && echo ok || echo "said: $n_slow1")"
 check "a second warning while that sweep runs says one is already running" \
   "$(grep -qF 'already running' <<< "$n_slow2" && ! grep -qF 'Started clearing' <<< "$n_slow2" && echo ok || echo "said: $n_slow2")"
@@ -620,65 +621,83 @@ check "a switch that is neither 0 nor 1 is said and treated as off" \
 # The whole count is bounded, not only the sizing inside it: reading every folder's info.plist forks
 # a reader per folder, so a DerivedData with hundreds of folders could otherwise carry the hook past
 # its 10 second timeout (a setting, not a measurement) and lose the free space warning with it.
+#
+# Judged by STATE, never by seconds (claude-config#1620, L290). These were "returned within 5 s",
+# which a loaded Mac reaches with nothing broken. The stand in sweep logs each call (its pid and its
+# argument) and then HOLDS until the suite releases it, with a ceiling only a hang reaches, so it can
+# end on its own only if nothing stopped it. When the warning returns, every call the bound stopped
+# must be GONE (killed, its group with it), which is untrue only if the warning waited for it; and
+# which calls were made says whether the bound was one for the whole step or one per call.
 SLOW_SWEEP="$TMPROOT/slow-sweep.sh"
-printf '#!/usr/bin/env bash\nsleep 5\necho "should never be printed"\n' > "$SLOW_SWEEP"
-NS_SLOW="$TMPROOT/ns-slow"; mkdir -p "$NS_SLOW"
-slow_start="$(date +%s)"
-n_slow="$(payload sess-slow | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=1 \
-  FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0 FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
-slow_took=$(( $(date +%s) - slow_start ))
+cat > "$SLOW_SWEEP" <<SH
+#!/usr/bin/env bash
+printf '%s %s\n' "\$\$" "\${1:-}" >> "\$SWEEP_CALLS"
+n=0; while [ ! -e "\$SWEEP_RELEASE" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
+echo "should never be printed"
+SH
+# One that answers --last at once and holds only on --start.
+STALL_START="$TMPROOT/stall-start-sweep.sh"
+cat > "$STALL_START" <<SH
+#!/usr/bin/env bash
+printf '%s %s\n' "\$\$" "\${1:-}" >> "\$SWEEP_CALLS"
+if [ "\${1:-}" = --start ]; then
+  n=0; while [ ! -e "\$SWEEP_RELEASE" ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n + 1)); done
+fi
+echo "should never be printed"
+SH
+calls_of(){ awk '{ print $2 }' "$1" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
+# The calls still RUNNING (a stopped one not yet reaped runs nothing), or nothing.
+calls_running(){
+  local p r=""
+  for p in $(awk '{ print $1 }' "$1" 2>/dev/null); do
+    kill -0 "$p" 2>/dev/null || continue
+    case "$(ps -o stat= -p "$p" 2>/dev/null)" in *Z*|'') ;; *) r="$r $p" ;; esac
+  done
+  printf '%s' "${r# }"
+}
+bound_nudge(){   # bound_nudge <session> <sweep> <seconds> [VAR=value...] -> prints all output
+  local sess="$1" sw="$2" secs="$3"; shift 3
+  mkdir -p "$TMPROOT/ns-$sess"
+  payload "$sess" | env FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$TMPROOT/ns-$sess" \
+    FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$sw" FREE_SPACE_DERIVED_DATA_SECONDS="$secs" \
+    FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" SWEEP_CALLS="$TMPROOT/calls-$sess" SWEEP_RELEASE="$TMPROOT/release-$sess" "$@" bash "$NUDGE" 2>&1
+}
+n_slow="$(bound_nudge sess-slow "$SLOW_SWEEP" 1 FREE_SPACE_DERIVED_DATA_AUTO_DELETE=0)"
+left_running="$(calls_running "$TMPROOT/calls-sess-slow")"; : > "$TMPROOT/release-sess-slow"
 check "a count that runs past its bound is stopped, and the warning still arrives" \
-  "$(grep -q 'GB free on' <<< "$n_slow" && [ "$slow_took" -lt 5 ] && echo ok || echo "took ${slow_took}s, said: $n_slow")"
+  "$(grep -q 'GB free on' <<< "$n_slow" && [ "$(calls_of "$TMPROOT/calls-sess-slow")" = --summary ] && [ -z "$left_running" ] && echo ok || echo "calls: $(calls_of "$TMPROOT/calls-sess-slow"), still running when it returned: '${left_running}', said: $n_slow")"
 check "and the notice says the count did not finish rather than saying nothing" \
   "$(grep -qF 'did not finish within 1s' <<< "$n_slow" && ! grep -qF 'should never be printed' <<< "$n_slow" && echo ok || echo "said: $n_slow")"
 # The same bound holds the steps that report the last sweep and start the next one, which normally
 # answer at once: a sweep script that hangs there must not carry the hook past its timeout either.
-NS_SLOW_AUTO="$TMPROOT/ns-slow-auto"; mkdir -p "$NS_SLOW_AUTO"
-slow_start="$(date +%s)"
-n_slow_auto="$(payload sess-slow-auto | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW_AUTO" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=1 \
-  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
-slow_took=$(( $(date +%s) - slow_start ))
+n_slow_auto="$(bound_nudge sess-slow-auto "$SLOW_SWEEP" 1)"
+left_running="$(calls_running "$TMPROOT/calls-sess-slow-auto")"; : > "$TMPROOT/release-sess-slow-auto"
 check "a sweep script that hangs when asked to start is stopped, and the warning still arrives" \
-  "$(grep -q 'GB free on' <<< "$n_slow_auto" && [ "$slow_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_slow_auto" && echo ok || echo "took ${slow_took}s, said: $n_slow_auto")"
+  "$(grep -q 'GB free on' <<< "$n_slow_auto" && [ -z "$left_running" ] && ! grep -qF 'should never be printed' <<< "$n_slow_auto" && echo ok || echo "still running when it returned: '${left_running}', said: $n_slow_auto")"
 check "and the notice says reading the last sweep did not answer rather than saying nothing" \
   "$(grep -qF 'did not answer within 1s' <<< "$n_slow_auto" && ! grep -qF 'Started clearing' <<< "$n_slow_auto" && echo ok || echo "said: $n_slow_auto")"
 # A sweep script that answers --last at once but hangs on --start reaches the start's own bound.
-STALL_START="$TMPROOT/stall-start-sweep.sh"
-printf '#!/usr/bin/env bash\n[ "${1:-}" = --start ] && sleep 5\necho "should never be printed"\n' > "$STALL_START"
-NS_STALL="$TMPROOT/ns-stall"; mkdir -p "$NS_STALL"
-slow_start="$(date +%s)"
-n_stall="$(payload sess-stall | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_STALL" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$STALL_START" FREE_SPACE_DERIVED_DATA_SECONDS=2 \
-  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
-slow_took=$(( $(date +%s) - slow_start ))
+n_stall="$(bound_nudge sess-stall "$STALL_START" 2)"
+left_running="$(calls_running "$TMPROOT/calls-sess-stall")"; : > "$TMPROOT/release-sess-stall"
 check "a start that hangs is stopped at the bound, and the notice says whether it started is not known" \
-  "$([ "$slow_took" -lt 5 ] && grep -qF 'Starting the automatic sweep of Xcode build caches did not answer within' <<< "$n_stall" && ! grep -qF 'Started clearing' <<< "$n_stall" && echo ok || echo "took ${slow_took}s, said: $n_stall")"
+  "$([ "$(calls_of "$TMPROOT/calls-sess-stall")" = "--last --start" ] && [ -z "$left_running" ] && grep -qF 'Starting the automatic sweep of Xcode build caches did not answer within' <<< "$n_stall" && ! grep -qF 'Started clearing' <<< "$n_stall" && echo ok || echo "calls: $(calls_of "$TMPROOT/calls-sess-stall"), still running when it returned: '${left_running}', said: $n_stall")"
 # The bound is for the whole Xcode step, not for each call in it: reading the last result and
 # starting the next sweep are two calls, and two full bounds back to back (12 seconds at the default
 # of 6) would carry the hook past its 10 second timeout (settings, not measurements). With a 3 second
-# bound and a sweep that hangs, the step must end inside one bound, not two.
-NS_SLOW_SUM="$TMPROOT/ns-slow-sum"; mkdir -p "$NS_SLOW_SUM"
-slow_start="$(date +%s)"
-n_slow_sum="$(payload sess-slow-sum | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_SLOW_SUM" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=3 \
-  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
-slow_took=$(( $(date +%s) - slow_start ))
+# bound and a --last that hangs, the step must end inside one bound: --last spends all of it, so
+# --start is never called. One bound per call would call it.
+n_slow_sum="$(bound_nudge sess-slow-sum "$SLOW_SWEEP" 3)"
+left_running="$(calls_running "$TMPROOT/calls-sess-slow-sum")"; : > "$TMPROOT/release-sess-slow-sum"
 check "the bound covers the whole Xcode step, so two hanging calls cannot add up past it" \
-  "$([ "$slow_took" -lt 5 ] && grep -q 'GB free on' <<< "$n_slow_sum" && echo ok || echo "took ${slow_took}s, said: $n_slow_sum")"
+  "$([ "$(calls_of "$TMPROOT/calls-sess-slow-sum")" = --last ] && [ -z "$left_running" ] && grep -q 'GB free on' <<< "$n_slow_sum" && echo ok || echo "calls: $(calls_of "$TMPROOT/calls-sess-slow-sum"), still running when it returned: '${left_running}', said: $n_slow_sum")"
 check "and a sweep it had no time left to start is said, never claimed" \
   "$(grep -qF 'no time was left to start' <<< "$n_slow_sum" && ! grep -qF 'Started clearing' <<< "$n_slow_sum" && echo ok || echo "said: $n_slow_sum")"
 # Zero turns the count off. Handed to perl's alarm it would mean no bound at all, the opposite of
-# what a zero reads as.
-NS_ZERO="$TMPROOT/ns-zero"; mkdir -p "$NS_ZERO"
-zero_start="$(date +%s)"
-n_zero="$(payload sess-zero | FREE_SPACE_BYTES="$((7 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_ZERO" \
-  FREE_SPACE_PATH=/fixture FREE_SPACE_DERIVED_DATA_SWEEP="$SLOW_SWEEP" FREE_SPACE_DERIVED_DATA_SECONDS=0 \
-  FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"
-zero_took=$(( $(date +%s) - zero_start ))
+# what a zero reads as. Off means the sweep is never called.
+n_zero="$(bound_nudge sess-zero "$SLOW_SWEEP" 0)"
+: > "$TMPROOT/release-sess-zero"
 check "a bound of 0 turns the count off rather than leaving it unbounded" \
-  "$(grep -q 'GB free on' <<< "$n_zero" && [ "$zero_took" -lt 5 ] && ! grep -qF 'should never be printed' <<< "$n_zero" && echo ok || echo "took ${zero_took}s, said: $n_zero")"
+  "$(grep -q 'GB free on' <<< "$n_zero" && [ -z "$(calls_of "$TMPROOT/calls-sess-zero")" ] && ! grep -qF 'should never be printed' <<< "$n_zero" && echo ok || echo "calls: $(calls_of "$TMPROOT/calls-sess-zero"), said: $n_zero")"
 NS_DD="$TMPROOT/ns-dd"; mkdir -p "$NS_DD"
 n_dd_fine="$(payload sess-dd-fine | FREE_SPACE_BYTES="$((200 * GB))" FREE_SPACE_NOW="$T0" FREE_SPACE_STATE_DIR="$NS_DD" \
   FREE_SPACE_PATH=/fixture XCODE_DERIVED_DATA_ROOT="$DD_ROOT" FREE_SPACE_NUDGE_STATE_DIR="$NSTATE" bash "$NUDGE" 2>&1)"

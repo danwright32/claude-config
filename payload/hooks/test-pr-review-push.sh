@@ -26,6 +26,10 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/pr-review.sh"
+# Every wait on a condition gives up at the one ceiling only a hang reaches (claude-config#1620),
+# handed to the stand ins this suite writes as FAKE_HANG_S, since they run as processes of their own.
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+export FAKE_HANG_S="$HANG_S"
 PUSH_GATE="$DIR/pr-review-push-gate.sh"
 COMMIT_HOOK="$DIR/ai-review-on-pr.sh"
 MERGE_GATE="$DIR/pr-review-gate.sh"
@@ -94,7 +98,7 @@ now="$(cat "$FAKE_CLOCK_FILE" 2>/dev/null || echo 1000)"
 echo $((now + ${1%.*})) > "$FAKE_CLOCK_FILE"
 if [ -n "${FAKE_SLEEP_WAITS:-}" ]; then
   t0=$SECONDS
-  while ls "$AI_REVIEW_STATE_DIR"/*.pending >/dev/null 2>&1 && [ $((SECONDS - t0)) -lt 20 ]; do /bin/sleep 0.1; done
+  while ls "$AI_REVIEW_STATE_DIR"/*.pending >/dev/null 2>&1 && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do /bin/sleep 0.1; done
 fi
 exit 0
 EOS
@@ -128,9 +132,9 @@ BASE_SHA="$(G merge-base origin/main HEAD)"
 
 KEY="$(bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repo_key '$REPO'")"
 final_of(){ printf '%s/%s-pr-%s.txt' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
-wait_final(){ # bounded, on the condition (L290)
-  local f; f="$(final_of "$1")"; local t0=$SECONDS
-  while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
+wait_final(){ # on the condition (L290), with the hang ceiling: it was 40 s (#1620)
+  local f; f="$(final_of "$1")"
+  hang_wait "[ -e '$f' ] || [ ! -e '$f.pending' ]"
   [ -e "$f" ]
 }
 # A runner from the case before, still finishing, would write into the next case's fresh state, so
@@ -138,7 +142,7 @@ wait_final(){ # bounded, on the condition (L290)
 # test-pr-review.sh; the story is in the library both suites share).
 . "$DIR/lib/review-runners-done.sh"
 reset_state(){
-  runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
+  runners_done || bad "a reviewer runner from the case before was still running ${HANG_S}s later, the hang ceiling, so this case could read its answer"
   rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"; echo 1000 > "$FAKE_CLOCK_FILE"
 }
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }
@@ -177,11 +181,11 @@ RUNNERS_DONE_BOUND=1 runners_done; rc=$?
 check_eq "#1122 a runner input still held means the runners are not done" "1" "$rc"
 # Removed by another process once this one is waiting: the wait ends on the condition, not a sleep.
 rm -f "$WORKDIR/wait-started"
-( t0=$SECONDS; while [ ! -e "$WORKDIR/wait-started" ] && [ $((SECONDS - t0)) -lt 20 ]; do sleep 0.05; done
+( hang_wait "[ -e '$WORKDIR/wait-started' ]" 0.05
   rm -f "$AI_REVIEW_STATE_DIR/held.diff" ) &
 _releaser=$!
 : > "$WORKDIR/wait-started"
-RUNNERS_DONE_BOUND=20 runners_done; rc=$?
+runners_done; rc=$?
 wait "$_releaser" 2>/dev/null
 check_eq "#1122 and they are done once the last input is removed" "0" "$rc"
 rm -f "$WORKDIR/wait-started"

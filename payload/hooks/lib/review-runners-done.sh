@@ -13,9 +13,11 @@
 # claude-config#1122, which moved this here so the two suites cannot drift apart.
 #
 # runners_done: 0 once no runner input is left in $AI_REVIEW_STATE_DIR, 1 if one is still there
-# after RUNNERS_DONE_BOUND seconds (40 by default).
+# after RUNNERS_DONE_BOUND seconds, by default the hang ceiling every suite's wait shares
+# (lib/hang-wait.sh, claude-config#1620). It was 40, which a loaded Mac can reach with nothing broken.
+. "${BASH_SOURCE[0]%/*}/hang-wait.sh"
 runners_done() {
-  local t0=$SECONDS bound="${RUNNERS_DONE_BOUND:-40}"
+  local t0=$SECONDS bound="${RUNNERS_DONE_BOUND:-$HANG_S}"
   while [ $((SECONDS - t0)) -lt "$bound" ]; do
     compgen -G "$AI_REVIEW_STATE_DIR/*.diff" >/dev/null || compgen -G "$AI_REVIEW_STATE_DIR/parts/*/*.diff" >/dev/null || return 0
     sleep 0.1

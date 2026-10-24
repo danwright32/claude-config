@@ -23,6 +23,10 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/pr-review.sh"
+# Every wait on a condition gives up at the one ceiling only a hang reaches (claude-config#1620),
+# handed to the stand ins this suite writes as FAKE_HANG_S, since they run as processes of their own.
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+export FAKE_HANG_S="$HANG_S"
 CREATE_HOOK="$DIR/ai-review-on-pr.sh"
 GATE="$DIR/pr-review-gate.sh"
 NUDGE="$DIR/ai-review-nudge.sh"
@@ -75,11 +79,13 @@ else
   rm -f "$FAKE_LOG/stdin.$$"
 fi
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
-# FAKE_CLAUDE_HOLD=<file>: answer only once that file exists (bounded), so a case decides when its
-# reviewer finishes instead of guessing with a sleep (claude-config#1097, L290).
+# FAKE_CLAUDE_HOLD=<file>: answer only once that file exists (bounded only by the hang ceiling), so
+# a case decides when its reviewer finishes instead of guessing with a sleep (claude-config#1097,
+# L290). The bound was 60 s, after which the reviewer answered anyway and a loaded case that had not
+# yet released it read a finished review as still running (#1620; the 60 s was a setting, not a measurement).
 if [ -n "${FAKE_CLAUDE_HOLD:-}" ]; then
   t0=$SECONDS
-  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ $((SECONDS - t0)) -lt 60 ]; do sleep 0.1; done
+  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.1; done
 fi
 [ -n "${FAKE_CLAUDE_STDERR_FILE:-}" ] && cat "$FAKE_CLAUDE_STDERR_FILE" >&2
 [ -n "${FAKE_CLAUDE_EXIT:-}" ] && { echo "fake claude: simulated failure" >&2; exit "$FAKE_CLAUDE_EXIT"; }
@@ -205,11 +211,12 @@ prr(){ bash "$LIB" "$@" 2>&1; }
 key(){ bash -c ". '$DIR/lib/ai-review-common.sh'; ar_repo_key '$REPO'"; }
 KEY="$(key)"
 final_of(){ printf '%s/%s-pr-%s.txt' "$AI_REVIEW_STATE_DIR" "$KEY" "$1"; }
-wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed sleep (L290)
+wait_final(){ # wait_final <sha>: waits on the condition, never a fixed sleep (L290), with the hang
+  # ceiling (lib/hang-wait.sh): it was 40 s, which a loaded Mac can reach with nothing broken (#1620; a setting, not a measurement).
   # Only while a review is PENDING: with no marker nothing is running, so there is nothing to wait
   # for and the absence is the answer.
-  local f; f="$(final_of "$1")"; local t0=$SECONDS
-  while [ ! -e "$f" ] && [ -e "$f.pending" ] && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
+  local f; f="$(final_of "$1")"
+  hang_wait "[ -e '$f' ] || [ ! -e '$f.pending' ]"
   [ -e "$f" ] || return 1
   # The review file is not the runner's last act: it then appends the outcome ledger row and only
   # then removes its input (ai-review-run.py; a review in groups removes its run's parts folder after
@@ -218,15 +225,14 @@ wait_final(){ # wait_final <sha>: waits on the condition, bounded, never a fixed
   # on 2026-10-13 with a 2 s pause put in front of ar_pr_ledger, which failed 18 checks of this
   # suite). So the wait ends on the input being gone.
   local n="${f##*/}"; n="${n%.txt}"
-  while { [ -e "$AI_REVIEW_STATE_DIR/$n.diff" ] || compgen -G "$AI_REVIEW_STATE_DIR/parts/$n.*" >/dev/null; } \
-    && [ $((SECONDS - t0)) -lt 40 ]; do sleep 0.1; done
+  hang_wait "! { [ -e '$AI_REVIEW_STATE_DIR/$n.diff' ] || compgen -G '$AI_REVIEW_STATE_DIR/parts/$n.*' >/dev/null; }"
   return 0
 }
 # Waits for every reviewer runner of the case before to finish, so the state folder is never wiped
 # under one (claude-config#1097); shared with test-pr-review-push.sh, the story is in the library.
 . "$DIR/lib/review-runners-done.sh"
 reset_state(){
-  runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
+  runners_done || bad "a reviewer runner from the case before was still running ${HANG_S}s later, the hang ceiling, so this case could read its answer"
   rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"
 }
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }
@@ -698,8 +704,9 @@ check "and says the diff was empty" "empty" "$out"
 #     one argument left fails without shifting (the class found in find-prior-verdicts.sh, L387).
 for flag in --dir --sha --base-ref --pr; do
   bash "$LIB" check "$flag" >"$WORKDIR/trail.out" 2>&1 &
-  pid=$!; t0=$SECONDS
-  while kill -0 "$pid" 2>/dev/null && [ $((SECONDS - t0)) -lt 5 ]; do sleep 0.1; done
+  pid=$!
+  # Waited on with the hang ceiling: it was 5 s, which bash starting under load can pass (#1620; a setting, not a measurement).
+  hang_wait "! kill -0 $pid 2>/dev/null"
   if kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; bad "$flag given last hangs instead of being refused"
   else
