@@ -140,6 +140,9 @@ if not spec.get("no_receipt"):
         "checkout_sha": sha, "areas": ["invoices"], "stopped_at": "2026-10-22T23:10:00Z", "stopped_by": "stop",
         "build_stamp": sha, "build_stamp_source": "stamp-command", "egress": egress}))
     w(os.path.join(home, "receipts", rid, "drives.jsonl"), json.dumps({"area": "invoices", "exit": 0}) + "\n")
+    # The record posted is the one record render wrote (#1572), unless the case edits it afterwards.
+    if not spec.get("unrendered"):
+        v.remember_rendered(rid, [dict(rec, checks=[dict(c, result="fail") for c in rec["checks"]])] if spec.get("edited") else [rec], home)
 PY
 
 N=0
@@ -283,6 +286,12 @@ expect_allow "a record from an older commit whose later patch leaves the area al
 setup '{"unmeasured": true}'
 out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_deny "unmeasured egress is never clean" "$out" "egress as unmeasured"
+setup '{"unrendered": true}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a record record render never wrote" "$out" "record render"
+setup '{"edited": true}'
+out="$(run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a record edited after render" "$out" "changed after it was rendered"
 setup '{}'
 out="$(run_hook "$MERGE 7 --squash")"
 expect_deny "an unpinned merge" "$out" "does not pin" "--match-head-commit $HEAD"

@@ -5,7 +5,7 @@ import type {} from '../types/index.d.ts'
 import { git, pipeline, type Command } from './mod-kit/hooks/commands.ts'
 import { commandWrites } from './mod-kit/hooks/writes.ts'
 import { repoQuestion } from '../hooks/mergedeploy.ts'
-import { goalQuestion, NO_GOAL } from '../hooks/bedtime.ts'
+import { goalQuestion, goalUnreadQuestion, NO_GOAL } from '../hooks/bedtime.ts'
 import { GOAL_MARK, goalAt } from './mod-kit/hooks/goal.ts'
 import { REST_RESUME, SLEEP_START } from '../hooks/driver.ts'
 import { CLAIM_MS, proposalPath } from '../hooks/proposals.ts'
@@ -207,7 +207,7 @@ const SCRATCH = '/private/tmp/claude-501/-Users-x-proj/s1/scratchpad'
 const AWAY_TEXT = 'Dan switched every session on this Mac to away.'
 const PHONE_LINE = "You're on your phone. Reply away to switch every session."
 
-type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown>; transcriptPath?: string | null }
+type Session = { sessionId: string; repoRoot?: string; extra?: Record<string, unknown>; transcriptPath?: string | null; transcriptUnread?: string }
 // The goal every session has set with /goal unless a test says otherwise (#1242).
 const DEFAULT_GOAL = 'Close #7'
 // The one PR GitHub holds, found by `gh pr list --head` only for its own branch (scope-modes-616
@@ -328,6 +328,8 @@ type Opts = {
   touchFails?: string
   /** mod-kit's reader of a transcript's /goal fails (#1252). */
   goalReaderFails?: boolean
+  /** What the session registry's list says of this session (s1) beyond its id (#1636). */
+  selfSession?: Omit<Session, 'sessionId'>
   /** mod-kit's link reader fails only for a link holding this text (#961). */
   linkReaderFailsOn?: string
   /** What `ps -o args=` says the recorded process is now (#844): by default the hold /sleep started. */
@@ -695,7 +697,7 @@ const world = (on: On, o: Opts = {}) => {
       if (o.registryAnswer !== undefined) return ok(o.registryAnswer)
       // Each session's transcript where the registry finds it (#1242), unless a test says where.
       const withTranscript = (s: Session) => ({ transcriptPath: `/Users/x/.claude/projects/-repo/${s.sessionId}.jsonl`, ...s })
-      return ok(JSON.stringify({ open: [{ sessionId: 's1' }, ...(o.open ?? [])].map(withTranscript), closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
+      return ok(JSON.stringify({ open: [{ sessionId: 's1', ...o.selfSession }, ...(o.open ?? [])].map(withTranscript), closed: [], unreadable: o.unreadable ?? [], selfId: 's1' }))
     }
     if (cmd === '__verdict') {
       const v = o.verdict ?? null
@@ -2516,26 +2518,83 @@ test('a goal question left unanswered for the ten minutes leaves its worker with
   expect(r.text).toMatch(asRegExp(' No goal, so no work tonight: the session in o/other ("Fix the parser") (not answered in 10 minutes).'))
 })
 
-test("a transcript whose goal cannot be read, or that cannot be found, is asked about, never read as a goal (#1242)", withDeps, async ($, on) => {
-  const { w, clock } = world(on, withOther({ open: [otherWorker({ transcriptPath: null })], goals: { s1: { fails: 'grep: Permission denied' } }, issueAnswers: { [goalQuestion('this session')]: NO_GOAL, [S2_GOAL_Q]: NO_GOAL } }))
+// Since #1636 each is asked in the unread question's words, never as a worker with no goal.
+test("a transcript whose goal cannot be read, or that cannot be found, is asked about as unread, never read as a goal (#1242, #1636)", withDeps, async ($, on) => {
+  const selfQ = goalUnreadQuestion('this session', 'the read of its transcript failed: grep: Permission denied')
+  const otherQ = goalUnreadQuestion('the session in o/other ("Fix the parser")', 'its transcript was not found')
+  const { w, clock } = world(on, withOther({ open: [otherWorker({ transcriptPath: null })], goals: { s1: { fails: 'grep: Permission denied' } }, issueAnswers: { [selfQ]: NO_GOAL, [otherQ]: NO_GOAL } }))
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(w.asked).toEqual([goalQuestion('this session'), S2_GOAL_Q])
+  expect(w.asked).toEqual([selfQ, otherQ])
   expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
   expect(recordOf(w).goals).toEqual({})
   // Why each was asked is said, so a goal Dan did set and the mod could not read is not a mystery.
-  expect(r.text).toMatch(/this session's \/goal could not be read \(grep: Permission denied\)/)
-  expect(r.text).toMatch(/the session in o\/other \("Fix the parser"\)'s transcript was not found/)
+  expect(r.text).toContain(' The /goal of this session could not be read, because the read of its transcript failed: grep: Permission denied.')
+  expect(r.text).toContain(' The /goal of the session in o/other ("Fix the parser") could not be read, because its transcript was not found.')
+})
+
+// #1636, as it happened on 2026-10-23 at 10:20 PM ET under a load average past 100: the registry's
+// lookup of this session's transcript failed, and /sleep asked "This session has no /goal set" of a
+// session whose /goal was set. A goal that could not be read is asked about in its own words, saying
+// why, so an answer to it is never taken as proof there was none (L10, L11).
+const LOOKUP_FAILED = 'the search for s1.jsonl failed (find did not answer within 5 seconds)'
+const UNREAD_SELF_Q = `The /goal of this session could not be read, because its transcript could not be looked up: ${LOOKUP_FAILED}. It may have one set, but it does no work tonight unless you give it one here. What should it work toward: a milestone, issues, or a task, in your words?`
+test('a goal whose transcript lookup failed is asked about as unread, with why, never as no goal (#1636)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, issueAnswers: { [UNREAD_SELF_Q]: NO_GOAL } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked).toEqual([UNREAD_SELF_Q])
+  expect(w.asked).not.toContain(goalQuestion('this session'))
+  expect(r.text).toContain(` The /goal of this session could not be read, because its transcript could not be looked up: ${LOOKUP_FAILED}.`)
+})
+
+// #1636: /sleep reads its own session's transcript from what Claude Code itself handed this session
+// (each turn end's hook input names it), not only from the registry's lookup.
+const OWN_T = '/Users/x/.claude/projects/-Users-x-started-here/s1.jsonl'
+test("/sleep reads this session's own goal from the transcript Claude Code named to it, when the registry's lookup failed (#1636)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED } })
+  await start($ as never, clock)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's1', transcript_path: OWN_T, stop_hook_active: false } as never)
+  const r = await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual([OWN_T])
+  expect(w.asked).toEqual([])
+  expect(recordOf(w).goals).toEqual({ s1: 'Close #7' })
+  expect(r.text).toContain(`Tonight's goals: this session, "Close #7".`)
+})
+
+test("a transcript named for this session's earlier conversation (before a /clear) is never read as its own (#1636)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: '/Users/x/.claude/projects/-repo/s0.jsonl', stop_hook_active: false } as never)
+  await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+})
+
+test("a subagent's event is never taken as naming this session's transcript (#1636)", withDeps, async ($, on) => {
+  const { w, clock } = world(on)
+  await start($ as never, clock)
+  await ($ as unknown as $T).classic.PermissionRequest({ session_id: 's1', transcript_path: OWN_T, agent_id: 'a1', tool_name: 'Read', tool_input: {} } as never)
+  await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual(['/Users/x/.claude/projects/-repo/s1.jsonl'])
+})
+
+test("the report's name reads this session's title from the transcript Claude Code named to it too (#1636)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [OWN_T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's1', transcript_path: OWN_T, stop_hook_active: false } as never)
+  await command($ as never, 'sleep')
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
 })
 
 // #1252: the goal is read by mod-kit's one reader; a mod-kit that cannot answer is said the same way.
 test('a goal reader mod-kit cannot give is said and asked about, never read as a goal (#1252)', withDeps, async ($, on) => {
-  const { w, clock } = world(on, { goalReaderFails: true, issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  const q = goalUnreadQuestion('this session', 'the read of its transcript failed: mod-kit is not loaded')
+  const { w, clock } = world(on, { goalReaderFails: true, issueAnswers: { [q]: NO_GOAL } })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
-  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(w.asked).toEqual([q])
   expect(recordOf(w).goals).toEqual({})
-  expect(r.text).toMatch(/this session's \/goal could not be read \(mod-kit is not loaded\)/)
+  expect(r.text).toContain('The /goal of this session could not be read, because the read of its transcript failed: mod-kit is not loaded.')
 })
 
 // #1252's fallback, with no test of its own until now: a mod-kit loaded before it had the goal reader
@@ -2544,13 +2603,14 @@ test('a goal reader mod-kit cannot give is said and asked about, never read as a
 // inside the promise; the goal is then said as unreadable, naming the skew, and Dan is asked for one.
 const withNoGoalReader = { plugins: [deps, isItLive, { name: 'kit-lacks-goal', register: (() => undefined) as Register }] }
 test('a mod-kit with no goal reader at all is said, naming the skew, and the goal is asked for (#1252)', withNoGoalReader, async ($, on) => {
-  const { w, clock } = world(on, { issueAnswers: { [goalQuestion('this session')]: NO_GOAL } })
+  const { w, clock } = world(on, { ask: NO_GOAL })
   await start($ as never, clock)
   const r = await command($ as never, 'sleep')
   expect(r.text).toMatch(/^Sleep mode is on until/)
-  expect(w.asked).toEqual([goalQuestion('this session')])
+  expect(w.asked.length).toBe(1)
+  expect(w.asked[0]).toMatch(/^The \/goal of this session could not be read, because the read of its transcript failed: scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no goal/)
   expect(recordOf(w).goals).toEqual({})
-  expect(r.text).toContain("this session's /goal could not be read (scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no goal")
+  expect(r.text).toContain('The /goal of this session could not be read, because the read of its transcript failed: scope-modes and mod-kit are out of step in this session: the mod-kit loaded here has no goal')
 })
 
 test('with nobody at this session to ask, a worker with no goal is left with none (#1242)', withDeps, async ($, on) => {

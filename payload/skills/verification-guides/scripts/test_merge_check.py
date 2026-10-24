@@ -109,6 +109,8 @@ class Fixture:
         self.guides = {"invoices": GUIDE, "clients": GUIDE.replace("Invoices", "Clients")}
         self.compares = {}
         self.pin = "required " + HEAD
+        # Every record posted is one record render wrote (#1572), unless a test says otherwise.
+        self.render_all = True
         self.receipt(RID, HEAD)
 
     def receipt(self, rid, sha, drives=({"area": "invoices", "exit": 0},), **over):
@@ -124,7 +126,16 @@ class Fixture:
             write(os.path.join(rdir, "drives.jsonl"), "".join(json.dumps(d) + "\n" for d in drives))
         return rdir
 
+    def rendered(self, *records):
+        """Record each one as record render does, beside the receipt it names."""
+        for rec in records:
+            v.remember_rendered(rec["receipt_id"], [rec], self.home)
+
     def save(self, skip=()):
+        if self.render_all:
+            for e in v.comment_records(self.comments):
+                if e["record"] and os.path.isdir(os.path.join(self.home, "receipts", e["record"]["receipt_id"])):
+                    self.rendered(e["record"])
         write(os.path.join(self.dir, "view.json"), json.dumps(self.view))
         write(os.path.join(self.dir, "slug"), SLUG)
         write(os.path.join(self.dir, "pin"), self.pin)
@@ -223,6 +234,45 @@ class Judging(unittest.TestCase):
     def test_no_drive_call_covering_the_area(self):
         self.f.receipt(RID, HEAD, drives=({"area": "invoices", "exit": 1}, {"area": "clients", "exit": 0}))
         self.assertEqual(kinds(self.f.judge()), ["no-drive"])
+
+    def test_an_untouched_rendered_record_passes(self):
+        self.f.render_all = False
+        self.f.rendered(record())
+        self.assertEqual(self.f.judge()["problems"], [])
+
+    def test_a_failing_result_edited_to_pass_after_render_is_refused(self):
+        self.f.render_all = False
+        self.f.rendered(record(fail=("C2",)))
+        out = self.f.judge()
+        self.assertEqual((kinds(out), out["decision"]), (["record-edited"], "refuse"))
+        self.assertIn(RID, out["text"])
+
+    def test_a_note_rewritten_after_render_is_refused(self):
+        self.f.render_all = False
+        rendered = record()
+        self.f.rendered(rendered)
+        edited = record()
+        edited["checks"][0]["note"] = "rewritten by hand"
+        self.f.comments = [comment(edited)]
+        self.assertEqual(kinds(self.f.judge()), ["record-edited"])
+
+    def test_a_record_render_never_wrote_is_its_own_refusal(self):
+        self.f.render_all = False
+        out = self.f.judge()
+        self.assertEqual(kinds(out), ["record-not-rendered"])
+        self.assertIn("record render", out["text"])
+
+    def test_a_record_rendered_twice_passes_as_either(self):
+        self.f.render_all = False
+        self.f.rendered(record(fail=("C1",)), record())
+        self.assertEqual(self.f.judge()["problems"], [])
+
+    def test_an_unreadable_rendered_log_is_said_not_read_as_unrendered(self):
+        self.f.render_all = False
+        write(os.path.join(self.f.home, "receipts", RID, "rendered.jsonl"), "{not json\n")
+        out = self.f.judge()
+        self.assertEqual(kinds(out), ["receipt-unreadable"])
+        self.assertIn("rendered", out["text"])
 
     def test_no_record(self):
         self.f.comments = ["Looks good to me"]
