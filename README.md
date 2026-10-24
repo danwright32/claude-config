@@ -109,8 +109,13 @@ lesson's provenance is `name#123`, never `owner/name#123`, and a fixture invents
 sha256 hashes, and on a Mac with the dev update registry also checks the owner of every repository
 in it. It never prints a name it found, only where. It runs over the whole tree before every push
 and in CI (`tests/test-work-names-tree.sh`), and over what every send is about to publish: a send
-carrying a name is refused, naming the file and line, until it is gone
-(`SYNC_SKIP_WORK_NAMES_SCAN=1` overrides it for one run, said to Dan first).
+carrying a name is refused, naming the file and line, until it is gone. A send that cannot run the
+scanner is refused as well (#1621): python3 missing, the files it would publish not listable, or
+the scanner itself not beside the copy of `claude-sync` being run, which is how a copy run outside
+its checkout looks. Suites that run a copy give it the scanner rather than being exempt.
+`SYNC_SKIP_WORK_NAMES_SCAN=1` lets one send run by hand through unscanned, said to Dan first; every
+use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
+scans, since it sends on every change for as long as it runs.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`

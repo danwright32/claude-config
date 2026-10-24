@@ -34,6 +34,8 @@
 # Env overrides (mainly for tests): CLAUDE_HOME, SYNC_REPO, SYNC_NO_GIT=1,
 #   SYNC_INTERVAL, SYNC_FSWATCH, SYNC_SKIP_SECRET_SCAN, SYNC_NO_NOTIFY,
 #   SYNC_SKIP_LESSON_CHECK=1 (publish a rule file despite a duplicate number),
+#   SYNC_SKIP_WORK_NAMES_SCAN=1 (one send run by hand goes unscanned for work organisation
+#   names, said on stderr and in the sync log; the change watcher ignores it),
 #   SYNC_LESSON_RESERVE_SECONDS (how long next-lesson reserves a number, default 600),
 #   SYNC_NO_CITATION_PREFILTER=1 (scan every synced file for a lesson citation
 #   instead of grepping for candidates first: the pre-#53 path, kept so the two
@@ -4985,41 +4987,58 @@ $pf"*) continue ;; esac
 # reads everything the push would publish: every file the clone tracks or would add, the staged
 # payload included. It names where each one is, never the name it found, since a refusal is read in
 # transcripts. Python and the registry the scanner reads are required: a scan that could not run
-# is a refusal, never a pass (L98). The scanner itself ships in the same commit as this script, so
-# its absence means a copy of the tool run outside its own checkout, which several suites do on
-# purpose (as for unmanaged-skills.sh above): that send goes ahead and says, every time, that it
-# was not scanned, and the whole tree check in CI stays the second line. Override, for one run and
-# said to the person first: SYNC_SKIP_WORK_NAMES_SCAN=1.
+# is a refusal, never a pass (L98).
+#
+# A MISSING SCANNER IS A REFUSAL TOO (claude-config#1621). It ships in the same commit as this
+# script, so its absence means a copy of the tool run outside its own checkout. #1568 let that send
+# go ahead with a notice, so the guard failed open exactly where nothing else was watching; the
+# suites that run a copy now give it the scanner (seed_work_names_scanner) rather than being exempt.
+#
+# THE OVERRIDE, SYNC_SKIP_WORK_NAMES_SCAN=1, is one send run by hand, said to the person first
+# (claude-config#1621, kept as the issue recommended, since a false positive would otherwise stop
+# every send). Every use says on stderr and in the sync log that the send was not scanned, so a send
+# nothing judged leaves a record (L523). The change watcher ignores it and scans: it sends on every
+# change for as long as it runs, so an override in its environment would cover every send it makes.
 scan_work_names(){
-  [ "${SYNC_SKIP_WORK_NAMES_SCAN:-0}" = "1" ] && return 0
   [ -d "$PAYLOAD" ] || return 0
-  local lib="$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py" list out rc refusal found
+  if [ "${SYNC_SKIP_WORK_NAMES_SCAN:-0}" = "1" ]; then
+    if [ "${SYNC_IN_WATCH:-0}" = "1" ]; then
+      echo "claude-sync: SYNC_SKIP_WORK_NAMES_SCAN=1 is ignored in the change watcher's send, which is scanned as usual: the override covers one send run by hand, and the watcher sends on every change." >&2
+      sync_log_line "SYNC_SKIP_WORK_NAMES_SCAN=1 ignored in the change watcher's send from $SYNC_REPO, which was scanned as usual"
+    else
+      echo "claude-sync: this send was NOT scanned for work organisation names, because SYNC_SKIP_WORK_NAMES_SCAN=1 is set for this run." >&2
+      sync_log_line "send from $SYNC_REPO NOT scanned for work organisation names, because SYNC_SKIP_WORK_NAMES_SCAN=1 was set for that run"
+      return 0
+    fi
+  fi
+  local lib="$SYNC_SELF_PAYLOAD/hooks/lib/work-names.py" list="" listing="" listed=0 out="" rc=0 refusal found
+  if [ -f "$lib" ]; then
+    list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
+    # A listing that failed, or that came back empty, is not a clean tree: it is a scan of nothing,
+    # and refuses like any scan that could not judge (L98).
+    if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
+      if listing="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard 2>&1)"; then listed=1; fi
+      # Only the files that exist: a deletion staged in the index is not content.
+      [ "$listed" -eq 1 ] && printf '%s\n' "$listing" \
+        | while IFS= read -r rel; do [ -n "$rel" ] && [ -f "$SYNC_REPO/$rel" ] && printf '%s\0' "$rel"; done > "$list"
+    else
+      if ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null; then listed=1; else listing="find could not list $SYNC_REPO/payload"; fi
+    fi
+  fi
   if [ ! -f "$lib" ]; then
-    echo "claude-sync: this send was NOT scanned for work organisation names: the scanner is not beside this copy of the tool ($lib). Run claude-sync from its own checkout, where it ships." >&2
-    return 0
-  fi
-  list="$(mktemp "${TMPDIR:-/tmp}/claude-sync-work-names.XXXXXX")" || die "could not make a scratch file for the work names scan, so nothing is sent."
-  # A listing that failed, or that came back empty, is not a clean tree: it is a scan of nothing,
-  # and refuses like any scan that could not judge (L98).
-  local listing="" listed=0
-  if [ "${SYNC_NO_GIT:-0}" != "1" ] && [ -e "$SYNC_REPO/.git" ]; then
-    if listing="$(git -C "$SYNC_REPO" -c core.quotePath=false ls-files --cached --others --exclude-standard 2>&1)"; then listed=1; fi
-    # Only the files that exist: a deletion staged in the index is not content.
-    [ "$listed" -eq 1 ] && printf '%s\n' "$listing" \
-      | while IFS= read -r rel; do [ -n "$rel" ] && [ -f "$SYNC_REPO/$rel" ] && printf '%s\0' "$rel"; done > "$list"
-  else
-    if ( cd "$SYNC_REPO" && find payload -type f -print0 ) > "$list" 2>/dev/null; then listed=1; else listing="find could not list $SYNC_REPO/payload"; fi
-  fi
-  if [ "$listed" -ne 1 ]; then
+    out="the scanner is not beside this copy of claude-sync ($lib), which is how a copy run outside its own checkout looks. Run claude-sync from its checkout, where the scanner ships."; rc=2
+  elif [ "$listed" -ne 1 ]; then
     out="the files this send would publish could not be listed: ${listing:0:300}"; rc=2
   elif [ ! -s "$list" ]; then
     out="listing the files this send would publish found none, so nothing could be scanned"; rc=2
   elif ! command -v python3 >/dev/null 2>&1; then
     out="python3, which runs the work names scanner ($lib), is not on PATH"; rc=2
   else
-    out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)"; rc=$?
+    # Read in an && || list: under set -e a bare assignment from a scan that exits 1 or 2 would end
+    # the run there, before any refusal could say what it found.
+    out="$(python3 "$lib" --root "$SYNC_REPO" --files0-from "$list" 2>&1)" && rc=0 || rc=$?
   fi
-  rm -f "$list"
+  [ -z "$list" ] || rm -f "$list"
   [ "$rc" -eq 0 ] && return 0
   if [ "$rc" -eq 1 ]; then
     found="$(printf '%s\n' "$out" | grep -v '^work-names:' | cut -d: -f1,2 | sort -u | tr '\n' ' ')"

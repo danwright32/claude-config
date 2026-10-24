@@ -1343,10 +1343,21 @@ and the same way: a refusal names file and line, is recorded in `.send-refused` 
 and stops the send. That second place is the one that matters most, because lessons are written on
 a Mac and published by the sync with no pull request in between (L280). It could only be wired once
 the last tracked mention was gone, or every send would have been refused. A scan that cannot judge
-(no python3, an unreadable registry, a file listing that failed or found nothing) refuses the send. A copy of the tool with no scanner beside it
-sends and says it was not scanned: the scanner ships in the same commit as the script, so only a
-copy run outside its checkout lacks it, which several suites do on purpose, as they do for
-`unmanaged-skills.sh`; refusing there would have failed them for a state the real clone never has.
+(no python3, an unreadable registry, a file listing that failed or found nothing) refuses the send.
+
+So does a copy of the tool with no scanner beside it (#1621). #1568 let that send go ahead with a
+notice, on the reasoning that only a copy run outside its checkout lacks the scanner and several
+suites run one on purpose. That made the guard fail open in exactly the state nothing else watches,
+so the suites now give their copies the scanner (`seed_work_names_scanner` in
+`tests/test-claude-sync.sh`), as they give them `unmanaged-skills.sh`, rather than the tool
+exempting them.
+
+The override, `SYNC_SKIP_WORK_NAMES_SCAN=1`, stayed (#1621, the option the issue recommended): a
+false positive would otherwise stop every send until a scanner change shipped. It is shaped like
+the other one run overrides. Every use says on stderr that the send was not scanned and writes the
+same to the sync log, so an unscanned send leaves a record. The change watcher ignores it and scans,
+because the watcher sends on every change for as long as it runs, and an override in its
+environment would be a standing exemption rather than one run.
 
 ## One watcher, and a leftover loop stops itself (#604)
 
