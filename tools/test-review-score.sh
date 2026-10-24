@@ -3,9 +3,9 @@
 #
 # The scorer runs the REAL runner (payload/hooks/lib/ai-review-run.py) over each case, so a fake
 # claude on PATH stands in for the model: no test here ever calls a real model. The fake answers
-# from files this suite writes, chosen by which invented file the review input names, and it
-# answers the way `claude -p --output-format json` does when asked to, since the scorer reads the
-# cost of each review from that.
+# from files this suite writes, chosen by which invented file the review input names, in the
+# stream the runner asks for (lib/fake-claude-stream.py wraps its text), whose result event carries
+# the cost the scorer reads back from each review's metadata.
 #
 # The case set is the invented public sample in tools/review-score-sample (no real code: the real
 # judged set quotes private code and stays on the Mac outside this repository), copied into a
@@ -35,8 +35,14 @@ FAKEBIN="$WORK/bin"; mkdir -p "$FAKEBIN"
 export FAKE_DIR="$WORK/fake"; mkdir -p "$FAKE_DIR/answers"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = stream-json ] && [ -z "${FAKE_STREAM_INNER:-}" ]; then
+    FAKE_STREAM_INNER=1 "$0" "$@" | python3 "$FAKE_STREAM"; exit "${PIPESTATUS[0]}"
+  fi
+done
 printf 'called\n' >> "$FAKE_DIR/calls"
 printf '%s\x1e' "$@" > "$FAKE_DIR/args"
+env > "$FAKE_DIR/env.$$"
 cat > "$FAKE_DIR/stdin.$$"
 answer=""
 for f in "$FAKE_DIR"/answers/*.txt; do
@@ -55,19 +61,13 @@ if [ -n "${FAKE_FAIL_ONCE:-}" ] && rm "$FAKE_FAIL_ONCE" 2>/dev/null; then
 fi
 text="No issues found."
 [ -n "$answer" ] && text="$(tail -n +2 "$answer")"
-json=0
-prev=""
-for a in "$@"; do
-  [ "$prev" = "--output-format" ] && [ "$a" = "json" ] && json=1
-  prev="$a"
-done
-if [ "$json" = 1 ]; then
-  FAKE_TEXT="$text" python3 -c 'import json, os; print(json.dumps({"type": "result", "is_error": False, "result": os.environ["FAKE_TEXT"], "total_cost_usd": 0.05, "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 300, "output_tokens": 50}}))'
-else
-  printf '%s\n' "$text"
-fi
+printf '%s\n' "$text"
 EOS
 chmod +x "$FAKEBIN/claude"
+# The runner asks for the stream and reads each review's cost from its result event (#1619): the
+# one converter wraps the text above in those events, with this cost and these token counts.
+export FAKE_STREAM="$DIR/../payload/hooks/lib/fake-claude-stream.py"
+export FAKE_STREAM_RESULT='{"total_cost_usd": 0.05, "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 300, "output_tokens": 50}}'
 
 # answer <name> <token the review input must contain> <review text>
 answer(){ printf '%s\n%s\n' "$2" "$3" > "$FAKE_DIR/answers/$1.txt"; }
@@ -136,6 +136,13 @@ runs=("$RESULTS"/run-*.json); run1="${runs[0]}"
 [ -f "$run1" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a run writes its results file"; }
 check "the results file keeps the unjudged finding for a person to judge" "docstring is vague" "$(cat "$run1" 2>/dev/null)"
 [ ! -e "$H/.claude/state" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: a scoring run must not write the live review state"; }
+# #1619: the reviews of one run, started together, share one folder of turns (never the live one),
+# so exactly one goes first and the others read the lessons back after it.
+warm_dirs="$(cat "$FAKE_DIR"/env.* 2>/dev/null | grep '^AI_REVIEW_WARM_DIR=' | sort -u)"
+[ "$(grep -c . <<< "$warm_dirs")" = 1 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: every review of a run takes its turn in the same folder ($warm_dirs)"; }
+check_not "and that folder is not the live review state" "$H/.claude" "$warm_dirs"
+firsts="$(grep -o '"start_order": "first"' "$run1" 2>/dev/null | grep -c . || true)"
+[ "$firsts" = 1 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: of the reviews started together, exactly one went first ($firsts)"; }
 
 # --- 4. matching: a line window, and quoted text beyond it --------------------------------------
 cp -R "$SAMPLE" "$WORK/match"; rm -rf "$WORK/match/invented-retry"
@@ -278,7 +285,7 @@ def refuse(*a, **k):
     raise OSError(28, "No space left on device")
 shutil.copyfile = refuse
 rv = rs.review_once(case, {"hooks_lib": rs.DEFAULT_HOOKS_LIB, "lessons_dir": rs.DEFAULT_LESSONS_DIR,
-                           "model": "sonnet", "deadline": 30, "finding_re": None}, shutil.which("claude"))
+                           "model": "sonnet", "deadline": 30, "finding_re": None, "warm_dir": sys.argv[2]})
 print("status=%s note=%s" % (rv["status"], rv.get("note", "")))
 PY
 )"

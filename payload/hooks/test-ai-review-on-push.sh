@@ -63,8 +63,16 @@ export AI_REVIEW_HOSTS="review-host"
 # ---------------------------------------------------------------------------
 FAKEBIN="$WORKDIR/bin"; mkdir -p "$FAKEBIN"
 export FAKE_LOG="$WORKDIR/fakelog"; mkdir -p "$FAKE_LOG"
+export FAKE_STREAM="$DIR/lib/fake-claude-stream.py"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
+# The reviewer is asked for the stream (claude-config#1619): the text below is wrapped in its
+# events by the one converter, lib/fake-claude-stream.py.
+for a in "$@"; do
+  if [ "$a" = stream-json ] && [ -z "${FAKE_STREAM_INNER:-}" ]; then
+    FAKE_STREAM_INNER=1 "$0" "$@" | python3 "$FAKE_STREAM"; exit "${PIPESTATUS[0]}"
+  fi
+done
 printf 'called\n' >> "$FAKE_LOG/calls"
 # Which process this review is, and (below) whether it reached its own end, so a review stopped by
 # its deadline is told from one that finished by the state it leaves, not the time (#1577).

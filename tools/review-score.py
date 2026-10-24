@@ -42,10 +42,12 @@ wrong, and its text is kept in the results file for a person to judge and add to
 
 WHAT A RUN COSTS. Each case is one review by the real runner (payload/hooks/lib/ai-review-run.py,
 the prompt and scope beside it, the lessons index under payload/), so one review per case per
-repeat. The cost is MEASURED, not estimated: a shim put first on PATH runs the real claude with
---output-format json and hands the runner the review text, keeping the cost and token counts it
-reports. With no selection a run reviews an evenly spread sample of 3 cases; --all reviews every
-case. Each review costs about what one lessons review of that diff costs.
+repeat. The cost is MEASURED, not estimated: the runner reads claude's stream and records in each
+review's metadata the cost and token counts claude's result reports, and the scorer reads them from
+there. With no selection a run reviews an evenly spread sample of 3 cases; --all reviews every
+case. Each review costs about what one lessons review of that diff costs. The --jobs reviews
+started together take turns (claude-config#1619, STARTS IN TURN in the runner) in one folder per
+run, so they read the cached lessons back rather than each writing them.
 
 RESULTS go to --results-dir (default <cases>/results): run-<UTC time>.json per run, holding every
 review's raw findings, and baseline.json. A comparison re-matches BOTH runs against the case set as
@@ -65,7 +67,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -322,59 +323,36 @@ def score_run(run, cases, window):
 # ---------------------------------------------------------------------------------------------
 # Reviewing
 
-SHIM = r'''#!/usr/bin/env python3
-# The real claude, asked for JSON, so the scorer can read what each review cost. The runner sees
-# only the review text, as it would from the real claude, and the same exit status.
-import json, os, subprocess, sys
-real = os.environ["REVIEW_SCORE_REAL_CLAUDE"]
-p = subprocess.run([real] + sys.argv[1:] + ["--output-format", "json"], stdin=sys.stdin,
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-sys.stderr.write(p.stderr.decode("utf-8", "replace"))
-raw = p.stdout.decode("utf-8", "replace")
-try:
-    d = json.loads(raw)
-    text = d.get("result") or ""
-    usage = {"cost_usd": d.get("total_cost_usd"), "usage": d.get("usage") or {}}
-except ValueError:
-    text, usage = raw, None
-if usage is not None:
-    with open(os.environ["REVIEW_SCORE_USAGE_FILE"], "w", encoding="utf-8") as f:
-        json.dump(usage, f)
-sys.stdout.write(text)
-sys.exit(p.returncode)
-'''
+# What a review cost, read from the runner's own metadata: it records the cost and token counts
+# claude's result reports, under the API's names (claude-config#1619, which replaced a claude shim
+# here that asked for JSON, since the runner now reads claude's stream itself).
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 
 
-def review_once(case, cfg, real_claude):
+def review_once(case, cfg):
     """One review of one case by the real runner. Never raises: a failure is a status, so one case
     whose setup fails (a full disk, its diff gone) cannot end the run before its results are written."""
     started = time.time()
     try:
-        return _review_once(case, cfg, real_claude, started)
+        return _review_once(case, cfg, started)
     except Exception as e:  # noqa: BLE001  any failure here is this one review's, reported as such
         return {"status": "error", "note": f"the review could not be set up: {type(e).__name__}: {e}"[:200],
                 "findings": [], "seconds": round(time.time() - started)}
 
 
-def _review_once(case, cfg, real_claude, started):
+def _review_once(case, cfg, started):
     tmp = tempfile.mkdtemp(prefix="review-score-")
     try:
         state = os.path.join(tmp, "state"); os.mkdir(state)
         repo = os.path.join(tmp, "repo"); os.mkdir(repo)
-        bindir = os.path.join(tmp, "bin"); os.mkdir(bindir)
-        shim = os.path.join(bindir, "claude")
-        with open(shim, "w", encoding="utf-8") as f:
-            f.write(SHIM)
-        os.chmod(shim, os.stat(shim).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         if isinstance(case.get("package_json"), dict):
             with open(os.path.join(repo, "package.json"), "w", encoding="utf-8") as f:
                 json.dump(case["package_json"], f)
         diff = os.path.join(tmp, "input.diff")
         shutil.copyfile(case["diff_path"], diff)  # the runner deletes the diff it was given
-        usage_file = os.path.join(tmp, "usage.json")
-        env = dict(os.environ, PATH=bindir + os.pathsep + os.environ.get("PATH", ""),
-                   REVIEW_SCORE_REAL_CLAUDE=real_claude, REVIEW_SCORE_USAGE_FILE=usage_file,
-                   AI_REVIEW_STATE_DIR=state)
+        # One folder of turns for the whole run (claude-config#1619), so the --jobs reviews started
+        # together take turns and read the lessons back, while each keeps its own state.
+        env = dict(os.environ, AI_REVIEW_STATE_DIR=state, AI_REVIEW_WARM_DIR=cfg["warm_dir"])
         lib = cfg["hooks_lib"]
         cmd = [sys.executable, os.path.join(lib, "ai-review-run.py"),
                "--state-dir", state, "--key", "score", "--sha", case["id"], "--name", "review",
@@ -405,13 +383,14 @@ def _review_once(case, cfg, real_claude, started):
               "seconds": round(time.time() - started)}
         if status != "ok":
             rv["note"] = (lines[0] if lines else "")[:200]
-        try:
-            with open(usage_file, encoding="utf-8") as f:
-                u = json.load(f)
-            rv["cost_usd"] = u.get("cost_usd")
-            rv["usage"] = u.get("usage") or {}
-        except (OSError, ValueError):
-            pass
+        if meta.get("start_order"):
+            rv["start_order"] = meta["start_order"]
+        if "cost_usd" in meta:
+            try:
+                rv["cost_usd"] = float(meta["cost_usd"])
+            except ValueError:
+                rv["cost_usd"] = None  # reported, but unreadable: counted as a review with no cost
+            rv["usage"] = {k: int(meta[k]) for k in USAGE_FIELDS if meta.get(k, "").isdigit()}
         return rv
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -603,8 +582,7 @@ def cmd_run(args):
     chosen, selection = pick(ids, args)
     if args.repeat < 1:
         raise Unmeasured("--repeat must be at least 1.")
-    real_claude = shutil.which("claude")
-    if not real_claude:
+    if not shutil.which("claude"):
         raise Unmeasured("claude is not on PATH, so no review can run.")
     hooks_lib = os.path.abspath(args.hooks_lib)
     cfg = {"hooks_lib": hooks_lib, "lessons_dir": os.path.abspath(args.lessons_dir),
@@ -631,17 +609,11 @@ def cmd_run(args):
     print(f"Reviewing {len(jobs)} time{'s' if len(jobs) != 1 else ''} ({selection}, {args.repeat} each) "
           f"with {cfg['model']}, {args.jobs} at once; each review takes about as long as a lessons review.",
           flush=True)
-    done = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-        futs = {pool.submit(review_once, cases[cid], cfg, real_claude): cid for cid, _ in jobs}
-        for fut in concurrent.futures.as_completed(futs):
-            cid = futs[fut]
-            rv = fut.result()
-            run["cases"].setdefault(cid, {"reviews": []})["reviews"].append(rv)
-            done += 1
-            print(f"  [{done}/{len(jobs)}] {cid}: {rv['status']}, {len(rv['findings'])} finding"
-                  f"{'s' if len(rv['findings']) != 1 else ''}, {rv['seconds']}s"
-                  + (f" ({rv['note']})" if rv.get("note") else ""), flush=True)
+    cfg["warm_dir"] = tempfile.mkdtemp(prefix="review-score-turns-")
+    try:
+        _run_jobs(run, jobs, cases, cfg, args.jobs)
+    finally:
+        shutil.rmtree(cfg["warm_dir"], ignore_errors=True)
     unmeasured += failed_reviews(run)
     run["finished"] = int(time.time())
     per = score_run(run, cases, args.window)
@@ -653,6 +625,21 @@ def cmd_run(args):
     if args.save_baseline:
         save_baseline_if_safe(run, path, code, results_dir)
     return code
+
+
+def _run_jobs(run, jobs, cases, cfg, width):
+    """Every review, `width` at once, each one's result into the run as it lands."""
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, width)) as pool:
+        futs = {pool.submit(review_once, cases[cid], cfg): cid for cid, _ in jobs}
+        for fut in concurrent.futures.as_completed(futs):
+            cid = futs[fut]
+            rv = fut.result()
+            run["cases"].setdefault(cid, {"reviews": []})["reviews"].append(rv)
+            done += 1
+            print(f"  [{done}/{len(jobs)}] {cid}: {rv['status']}, {len(rv['findings'])} finding"
+                  f"{'s' if len(rv['findings']) != 1 else ''}, {rv['seconds']}s"
+                  + (f" ({rv['note']})" if rv.get("note") else ""), flush=True)
 
 
 def save_baseline_if_safe(run, path, code, results_dir):

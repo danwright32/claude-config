@@ -10,9 +10,14 @@ diff and writes the answer where ai-review-nudge.sh will find it on a later prom
                      --started EPOCH
 
 It runs EXACTLY `env -u CLAUDECODE CLAUDE_CODE_PROMPT_CACHE_TTL=5m CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p
-<message> --append-system-prompt <lessons> --exclude-dynamic-system-prompt-sections --model
-<model> --settings {"disableAllHooks":true} --strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with
-the diff on stdin (each part is explained where the command is built).
+<message> --append-system-prompt <lessons> --exclude-dynamic-system-prompt-sections --output-format
+stream-json --verbose --include-partial-messages --model <model> --settings {"disableAllHooks":true}
+--strict-mcp-config --disable-slash-commands --disallowedTools ReportFindings` with the diff on
+stdin (each part is explained where the command is built), reading the review from the stream's
+result event (THE STREAM, below). Before it starts claude it takes a turn, so reviews started
+together send their requests one after another and share the cached lessons (STARTS IN TURN, below,
+claude-config#1619); the order and wait are in the metadata as start_order and start_wait, and the
+cost and token counts claude reports as cost_usd and the API's own token field names.
 The `env -u` is load bearing: a nested claude refuses to start while CLAUDECODE is set, and every
 hook inherits that variable from the session that fired it. Removing it here rather than in the
 shell keeps the whole command in one place the test can read back from the fake claude's recorded
@@ -64,13 +69,16 @@ cite. The review files themselves are swept after 14 days; the ledger is not, be
 re-rank of the lessons core (#563, #566) needs which lessons reviews actually cite, over months.
 """
 import argparse
+import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -418,6 +426,234 @@ def redact(text, stderr=False):
     return r.stdout.decode("utf-8", errors="replace").strip()
 
 
+# STARTS IN TURN (claude-config#1619). The lessons are cached for five minutes from the moment a
+# reviewer's first request is answered, so a review that sends its request after that reads them
+# back, and reviews sent at the same moment each write them: measured 2026-10-23, the first three
+# reviews launched together each read back only the 19k tool and system prefix, not the 57k with the
+# lessons. Reviews are launched together whenever a branch is read in groups (pr-review.sh, #601)
+# and in the review score's parallel runs, and can be by two sessions at once. So before claude
+# starts, every review with the same model and lessons (one cache, so one key) takes a TURN:
+#
+#   warm       the lessons were warm within WARM_FRESH_SECONDS: start at once.
+#   first      nobody ahead: start at once, holding the turn until the reviewer BEGINS answering
+#              (the first event of claude's stream, by when the cache has been written), which
+#              marks the lessons warm and lets the turn go.
+#   followed   waited for the review ahead, which began answering: start now, reading them back.
+#   took-over  the review ahead ended without answering (it failed, or died): the turn passed to
+#              this one at once, so a failed first review never holds the rest for their bound.
+#   gave-up    the review ahead held the turn past this review's bound and never began answering:
+#              start anyway. Recorded so a wait that bought nothing is never silent (L11).
+#   unavailable the turn could not be kept (no folder, no lock): start at once rather than block.
+#
+# The turn is an flock, which the kernel lets go when its holder dies (L409), so nothing is left
+# standing to wait on; the warm mark is a file whose time says when. Each review's order and wait
+# are in its metadata (start_order, start_wait), and the wait is taken out of its own deadline, so
+# a review never runs past the deadline its caller set.
+WARM_FRESH_SECONDS = 240    # under the cache's five minutes, leaving room for claude's own start
+START_WAIT_SECONDS = 60     # a reviewer begins answering within seconds; this is only the ceiling
+START_POLL_SECONDS = 0.25
+
+
+def warm_dir(env=None):
+    """Where turns are kept: AI_REVIEW_WARM_DIR, else a folder of the review state, so every review
+    on this Mac shares it and a suite's own state keeps its turns apart from the live ones."""
+    env = os.environ if env is None else env
+    if env.get("AI_REVIEW_WARM_DIR"):
+        return env["AI_REVIEW_WARM_DIR"]
+    state = env.get("AI_REVIEW_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "state", "ai-review")
+    return os.path.join(state, "warm")
+
+
+def start_key(model, fixed):
+    """One turn per cache: the model and the appended system prompt (the lessons)."""
+    return hashlib.sha256((model + "\0" + fixed).encode("utf-8")).hexdigest()[:16]
+
+
+def start_wait_bound(deadline, env=None):
+    """How long a review waits for the one ahead: AI_REVIEW_START_WAIT_SECONDS, else
+    START_WAIT_SECONDS, never more than a quarter of its own deadline."""
+    env = os.environ if env is None else env
+    try:
+        bound = int(env.get("AI_REVIEW_START_WAIT_SECONDS", "") or START_WAIT_SECONDS)
+    except ValueError:
+        bound = START_WAIT_SECONDS
+    return max(0, min(bound, deadline // 4))
+
+
+class StartTurn:
+    """A review's turn. answering() is called from the stream reader when the reviewer begins
+    answering, release() when the review ends, in either order and any number of times."""
+
+    def __init__(self, order, waited, warm_path, fd):
+        self.order, self.waited = order, waited
+        self._warm, self._fd = warm_path, fd
+        self._mu = threading.Lock()
+        self._answered = False
+
+    def answering(self):
+        with self._mu:
+            if self._answered:
+                return
+            self._answered = True
+            if self._warm:
+                try:
+                    with open(self._warm, "a", encoding="utf-8"):
+                        pass
+                    os.utime(self._warm, None)
+                except OSError:
+                    pass  # the next review then writes the cache itself, as before #1619
+            self._let_go()
+
+    def release(self):
+        with self._mu:
+            self._let_go()
+
+    def _let_go(self):
+        if self._fd is not None:
+            try:
+                os.close(self._fd)  # closing the only descriptor lets the flock go
+            except OSError:
+                pass
+            self._fd = None
+
+
+def _fresh(path, now, fresh):
+    try:
+        return now() - os.stat(path).st_mtime < fresh
+    except OSError:
+        return False
+
+
+def take_turn(folder, key, bound, clock=time.monotonic, sleep=time.sleep, now=time.time,
+              poll=START_POLL_SECONDS, fresh=WARM_FRESH_SECONDS):
+    """The review's StartTurn (see STARTS IN TURN). clock, sleep and now are injected by the tests,
+    so no test of a wait waits for real (L524)."""
+    warm = os.path.join(folder, key + ".warm")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd = os.open(os.path.join(folder, key + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return StartTurn("unavailable", 0, None, None)
+    t0, waited_any = clock(), False
+    try:
+        while True:
+            if _fresh(warm, now, fresh):
+                os.close(fd)
+                return StartTurn("followed" if waited_any else "warm", clock() - t0, warm, None)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                pass
+            else:
+                if _fresh(warm, now, fresh):  # the one ahead began answering between look and lock
+                    os.close(fd)
+                    return StartTurn("followed" if waited_any else "warm", clock() - t0, warm, None)
+                return StartTurn("took-over" if waited_any else "first", clock() - t0, warm, fd)
+            waited = clock() - t0
+            if waited >= bound:
+                os.close(fd)
+                return StartTurn("gave-up", waited, warm, None)
+            sleep(min(poll, bound - waited))
+            waited_any = True
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return StartTurn("unavailable", clock() - t0, None, None)
+
+
+# THE STREAM (claude-config#1619). claude is asked for --output-format stream-json with
+# --include-partial-messages, so the first event of the reviewer's answer arrives when the answer
+# BEGINS, which is what lets the reviews behind it start. Without the partial events the first
+# event after init is the whole first message, which for a review is often the whole review.
+# Checked in Claude Code 2.1.309's own text: a `stream_event` carries the API's event (the first of
+# a turn is message_start), and the run ends with a `result` event whose `result` is the text the
+# plain output prints. The text kept and parsed is that result, nothing else of the stream.
+STARTED_BY = ("stream_event", "assistant", "result")
+OTHER_KEPT_CHARS = 20000
+
+
+def new_stream():
+    return {"result": None, "events": 0, "other": []}
+
+
+def read_event(raw, got, on_start):
+    """Read one line of claude's output into `got`. Calls on_start at every event that means the
+    reviewer is answering (StartTurn.answering keeps only the first)."""
+    line = raw.decode("utf-8", errors="replace").strip()
+    if not line:
+        return
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        ev = None
+    if not isinstance(ev, dict):
+        if sum(len(x) for x in got["other"]) < OTHER_KEPT_CHARS:
+            got["other"].append(line)
+        return
+    got["events"] += 1
+    kind = ev.get("type")
+    if kind in STARTED_BY:
+        on_start()
+    if kind == "result":
+        got["result"] = ev
+
+
+def run_stream(cmd, stdin, timeout, on_start):
+    """(returncode, stream, stderr bytes, timed out). Read while it runs, so the start is seen when
+    it happens; its own process group, so the deadline can kill everything claude started and not
+    only the one pid subprocess knows about."""
+    proc = subprocess.Popen(cmd, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    got, err = new_stream(), []
+
+    def read_out():
+        for raw in iter(proc.stdout.readline, b""):
+            read_event(raw, got, on_start)
+
+    def read_err():
+        err.append(proc.stderr.read())
+
+    readers = [threading.Thread(target=read_out, daemon=True), threading.Thread(target=read_err, daemon=True)]
+    for t in readers:
+        t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+    for t in readers:
+        t.join(5)
+    return proc.returncode, got, b"".join(e for e in err if e), timed_out
+
+
+USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+
+
+def usage_meta(res):
+    """What the review cost, as claude's result reports it, under the API's own names, for the
+    review score and for measuring what the turns save. A figure that is not a number is left out."""
+    out = {}
+    cost = res.get("total_cost_usd")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        out["cost_usd"] = cost
+    usage = res.get("usage") if isinstance(res.get("usage"), dict) else {}
+    for k in USAGE_FIELDS:
+        v = usage.get(k)
+        if isinstance(v, int) and not isinstance(v, bool):
+            out[k] = v
+    return out
+
+
 def main(argv):
     ap = argparse.ArgumentParser()
     for opt in ("--state-dir", "--key", "--sha", "--repo-label", "--branch", "--repo-dir",
@@ -506,53 +742,74 @@ def main(argv):
         # never read back more than the 20k tool and system prefix. With the identical text now in
         # the system prompt (THE ORDER, above), a review started within five minutes of another's
         # first request reads them back; reviews started together, the groups of a branch too large
-        # for one review, each write them, measured. The variable is
+        # for one review, each wrote them, measured, until they took turns (STARTS IN TURN, #1619).
+        # The variable is
         # read by Claude Code 2.1.309 itself (checked in the binary and by probe runs that wrote
         # to ephemeral_5m only). --exclude-dynamic-system-prompt-sections moves the working folder,
         # git status and the rest of the per machine sections out of the system prompt, which
         # would otherwise differ for every repository and worktree ahead of the lessons.
+        # The stream (THE STREAM, above): --verbose is required with stream-json under -p, and
+        # --include-partial-messages makes the first event arrive when the answer begins.
         cmd = ["env", "-u", "CLAUDECODE", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m",
                "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", prompt,
                *(["--append-system-prompt", fixed] if fixed else []),
                "--exclude-dynamic-system-prompt-sections",
+               "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                "--model", a.model, "--settings", '{"disableAllHooks":true}', "--strict-mcp-config",
                "--disable-slash-commands",
                "--disallowedTools", "ReportFindings"]
-        with open(a.diff_file, "rb") as diff:
-            # Its own process group, so the deadline can kill everything claude started and not
-            # only the one pid subprocess knows about.
-            proc = subprocess.Popen(cmd, stdin=diff, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, start_new_session=True)
-            try:
-                out, err = proc.communicate(timeout=a.deadline)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                try:
-                    proc.communicate(timeout=5)
-                except (subprocess.TimeoutExpired, OSError):
-                    pass
-                status = "timeout"
-                body = (f"The review did not finish inside {a.deadline} seconds and was stopped. "
-                        "Nothing was read back. Re-run it by pushing again, or raise "
-                        "AI_REVIEW_DEADLINE_SECONDS if this repository's pushes are routinely large.")
-                out = err = b""
-        if status != "timeout":
-            text = out.decode("utf-8", errors="replace").strip()
+        # The turn (STARTS IN TURN, above), taken last, right before claude starts, so nothing
+        # between the wait and the request delays the reviews behind this one.
+        turn = take_turn(warm_dir(), start_key(a.model, fixed), start_wait_bound(a.deadline))
+        meta["start_order"] = turn.order
+        meta["start_wait"] = int(round(turn.waited))
+        try:
+            with open(a.diff_file, "rb") as diff:
+                rc, got, err, timed_out = run_stream(cmd, diff, max(1, a.deadline - int(turn.waited)),
+                                                     turn.answering)
+        finally:
+            turn.release()
+        if timed_out:
+            status = "timeout"
+            body = (f"The review did not finish inside {a.deadline} seconds and was stopped. "
+                    "Nothing was read back. Re-run it by pushing again, or raise "
+                    "AI_REVIEW_DEADLINE_SECONDS if this repository's pushes are routinely large.")
+        else:
+            res = got["result"]
+            if res is not None:
+                meta.update(usage_meta(res))
+            raw = res.get("result") if res is not None else None
+            text = raw.strip() if isinstance(raw, str) else ""
             errtext = err.decode("utf-8", errors="replace").strip()
-            if proc.returncode != 0:
+            printed = "\n".join(got["other"]).strip()
+            if rc != 0:
                 status = "error"
                 # Never the raw stderr: settings warnings dropped and credentials redacted first.
                 safe = redact(errtext, stderr=True) if errtext else ""
                 tail = ("\n".join(safe.splitlines()[-5:]) if safe else
                         "(claude printed nothing on stderr)" if not errtext else
                         "(nothing left to show once settings warnings were dropped)")
-                body = f"claude exited {proc.returncode} and no review was read back. Its last lines:\n{tail}"
+                body = f"claude exited {rc} and no review was read back. Its last lines:\n{tail}"
+            elif res is None and printed:
+                # Not the stream it was asked for: kept as the evidence, never read as a review.
+                status = "unparsed"
+                body = ("claude exited 0 and sent no result event, though it was asked for "
+                        "--output-format stream-json, so no review was read back. What it printed:\n"
+                        + redact(printed))
+            elif res is None:
+                status = "empty"
+                body = ("claude exited 0 and its output ended without a result, so there is no review to show."
+                        if got["events"] else
+                        "claude exited 0 and printed nothing, so there is no review to show.")
+            elif res.get("is_error"):
+                status = "error"
+                kind = res.get("subtype") or "no kind given"
+                said = redact(text) if text else ""
+                body = (f"claude reported an error result ({kind}) and no review was read back."
+                        + (f" What it said:\n{said}" if said else ""))
             elif not text:
                 status = "empty"
-                body = "claude exited 0 and printed nothing, so there is no review to show."
+                body = "claude exited 0 and its answer was empty, so there is no review to show."
             elif text != "No issues found." and count_findings(text) == 0:
                 # Neither shape the prompt allows. Counting it as zero findings would read an answer
                 # that is not a review (the hook hijack above, a refusal, a question back) as a clean
