@@ -32,6 +32,13 @@ mods/scope-modes/hooks/sleep.ts; this script is handed a record and writes for i
                                          past the record's until, #1167), sessions and claims that
                                          went quiet flagged.
 
+Every render also writes notes/<generation>.needs.json beside the notes (#1665): the rows of the
+whole night's Needs a look and Parked and failed, from the same build that wrote the report, each
+Parked and failed row with the `by`, `repo` and `cwd` of its note, and `final` true only from the
+wake render. The scope modes mod reads it when sleep ends and puts each row to Dan in a picker
+(hooks/wake.ts, needsIn), since on 2026-10-24 those two sections reached him only if a session
+happened to read the report.
+
 Every other phase writes through sleep_note in lib/sleep.sh, never this file's notes directly.
 
 A note is an object with a `kind` (a plain lowercase word); the writer adds `v`, `generation` and,
@@ -384,9 +391,12 @@ def text_of(n):
     return " ".join(str(t).split()) if t else ""
 
 
-def build(record, notes, bad, final, now, github, session=None, all_notes=None):
+def build(record, notes, bad, final, now, github, session=None, all_notes=None, needs=None):
     """The report. `session`, since #1287, is the one session it covers: `notes` are then its own
-    with the whole Mac's kinds, and `all_notes` every note, read for which sessions went quiet."""
+    with the whole Mac's kinds, and `all_notes` every note, read for which sessions went quiet.
+    `needs`, when given, is a list each row of Needs a look and Parked and failed is added to, as
+    the morning reads them (#1665): a Parked and failed row with the session, repository and folder
+    of the note it came from."""
     every = notes if all_notes is None else all_notes
     since = record["since"]
     end_at, end_note = night_end(record, notes, now)
@@ -479,6 +489,8 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None):
         look.append("%d line%s of the notes could not be read." % (bad, "" if bad == 1 else "s"))
     if final or look:
         section("Needs a look", look, "Nothing needs a look.")
+    if needs is not None:
+        needs.extend({"section": "look", "text": t} for t in look)
 
     qs = []
     for n in [n for n in notes if n["kind"] == "question"]:
@@ -514,9 +526,14 @@ def build(record, notes, bad, final, now, github, session=None, all_notes=None):
         if n["kind"] in ("parked", "failed") and replaced(i, n):
             continue
         if n["kind"] == "parked":
-            pf.append("Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n)))
+            row = "Parked %s%s: %s" % (where(n), " (branch %s)" % n["branch"] if n.get("branch") else "", text_of(n))
         elif n["kind"] == "failed":
-            pf.append("Failed %s: %s" % (where(n), text_of(n)))
+            row = "Failed %s: %s" % (where(n), text_of(n))
+        else:
+            continue
+        pf.append(row)
+        if needs is not None:
+            needs.append(dict({"section": "parked", "text": row}, **{k: n[k] for k in ("by", "repo", "cwd") if isinstance(n.get(k), str) and n[k]}))
     section("Parked and failed", pf)
 
     issues = []
@@ -1005,7 +1022,7 @@ def scoped(github, repos):
     return {**github, "done": done}
 
 
-def _write(dest, text):
+def _write(dest, text, what="the report"):
     try:
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
         # Written whole beside it and moved into place, so a reader never sees half a report.
@@ -1021,13 +1038,28 @@ def _write(dest, text):
                 pass
             raise
     except OSError as e:
-        raise Refused("the report could not be written to %s (%s)" % (dest, e))
+        raise Refused("%s could not be written to %s (%s)" % (what, dest, e))
+
+
+def needs_path(notes_file):
+    """Where the rows the report says need Dan are kept for the morning (#1665), beside the notes."""
+    return notes_file[:-len(".jsonl")] + ".needs.json"
+
+
+def _write_needs(path, record, rows, final, now):
+    """The whole night's Needs a look and Parked and failed rows, as one JSON file the scope modes
+    mod reads when sleep ends, so each is put to Dan rather than left in the report. Written at
+    every render, whole, from the build that wrote the report; `final` says whether it was the wake
+    render, before which Needs a look lacks what only the end of the night can show."""
+    body = {"v": 1, "generation": record.get("generation"), "final": bool(final), "at": now, "rows": rows}
+    _write(needs_path(path), json.dumps(body, ensure_ascii=False) + "\n", "what the report says needs Dan")
 
 
 def _render_once(path, record, final, github):
     notes, bad = read_notes(path)
     now = now_ms()
     dests = session_reports(path, record)
+    needs = []
     if dests is not None:
         dests = fallback_reports(path, record, notes, dests, final, now)
         # One report per session with news (#1287): its own notes, with the whole Mac's sections.
@@ -1036,14 +1068,18 @@ def _render_once(path, record, final, github):
             mine = [n for n in notes if n.get("by") == sid or n["kind"] in MAC_WIDE]
             repos = {n["repo"] for n in notes if n.get("by") == sid and isinstance(n.get("repo"), str)}
             texts[dest] = build(record, mine, bad, final, now, scoped(github, repos), session=sid, all_notes=notes)
+        # What needs Dan is the whole night's, once, never once per report (#1665).
+        build(record, notes, bad, final, now, github, needs=needs)
         _pause()
         for dest, text in texts.items():
             _write(dest, text)
+        _write_needs(path, record, needs, final, now)
         return "\n".join(texts) if texts else "no session has a report for this night yet"
-    text = build(record, notes, bad, final, now, github)
+    text = build(record, notes, bad, final, now, github, needs=needs)
     _pause()
     dest = record["report"]
     _write(dest, text)
+    _write_needs(path, record, needs, final, now)
     return dest
 
 

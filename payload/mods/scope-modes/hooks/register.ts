@@ -73,7 +73,7 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
-import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -81,6 +81,7 @@ import {
   LESSONS_KEY,
   MORNING_UNANSWERED,
   morningPrompt,
+  needsIn,
   openers,
   openLater,
   othersSaid,
@@ -88,6 +89,7 @@ import {
   repoKey,
   UNATTRIBUTED,
   type FiledProposal,
+  type NightNeeds,
   type NightQuestion,
   type ProposedIssue,
 } from './wake.ts'
@@ -1165,8 +1167,9 @@ const overnightWhy = async ($: EngineInterface, tool: string, input: Record<stri
     lookOf($),
   )
 }
-const overnightDeny = (what: string) =>
-  `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}. Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.`
+// `kept`: the call is kept in this session's state and put to Dan when sleep mode ends (#1665).
+const overnightDeny = (what: string, kept = false) =>
+  `Refused: sleep mode is on and Dan bans this while he sleeps, so this did not ${what}.${kept ? ' This session keeps it and asks Dan about it when sleep mode ends, so there is no need to note it or keep it anywhere else.' : ''} Do not look for another way to do it; it waits for the morning. Carry on with work that does not need it, or skip this issue.`
 
 // Puts every session back where Dan was before sleep (#840: wake restores placeBefore).
 const restorePlace = async ($: EngineInterface, record: SleepRecord | null): Promise<string | null> => {
@@ -1604,7 +1607,9 @@ const endedNight = (record: SleepRecord | null, self: string): Night => ({
   offers: true,
   ...(typeof record?.generation === 'string' ? {} : { unread: 'the sleep record names no generation' }),
 })
-type HeldItem = HeldDelivery & { why?: string }
+// `why`: a merge or deploy the night's lists held (#1285); `banned`: an action Dan bans while he
+// sleeps, refused at the call (#1665); neither: a delivery held until wake (#1284).
+type HeldItem = HeldDelivery & { why?: string; banned?: true }
 
 // Phase 9 (#837), every session since #1285: a session's own morning, from the night's notes: its
 // summary if it worked, what it held, the questions it noted and the merges the night held in it,
@@ -1613,8 +1618,9 @@ type HeldItem = HeldDelivery & { why?: string }
 // fails is said in the prompt, never read as a night with nothing proposed (L215). `anything` is
 // whether there is anything to put to Dan at all, so a session with nothing of its own starts no turn.
 const morningOf = async ($: EngineInterface, night: Night, self: string, held: readonly HeldItem[]): Promise<{ prompt: string; anything: boolean }> => {
-  const deliveries = held.filter(h => h.why === undefined)
-  const merges = held.filter((h): h is HeldMerge => h.why !== undefined)
+  const deliveries = held.filter(h => h.why === undefined && !h.banned)
+  const merges = held.filter((h): h is HeldMerge => h.why !== undefined && !h.banned)
+  const banned = held.filter(h => h.banned).map(h => ({ label: h.label, call: h.call }))
   let read: ReturnType<typeof proposalsIn> | { unread: string }
   if (night.unread !== undefined) read = { unread: night.unread }
   else if (night.generation === null) read = { issues: [], lessons: [], questions: [], bad: 0 }
@@ -1636,12 +1642,27 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
     })
     if (own) reportName = (own.split('/').pop() ?? own).replace(/\.md$/, '')
   }
+  // What the night's report says needs Dan (#1665), as the report script wrote it beside the notes:
+  // Needs a look is the night's, handed over by the session that ended it, which reads it after the
+  // wake render; each Parked and failed row is its session's, and one whose session will not hand it
+  // over is its repository's, claimed below with that repository's proposals. A file that cannot be
+  // read, or is not there, is said, never read as nothing needing Dan (L215).
+  const needs = night.generation === null ? null : await needsOfNight($, night.generation)
+  const needsSaid = (): Pick<Parameters<typeof morningPrompt>[0], 'look' | 'needsUnread' | 'needsUnfinished'> => {
+    if (needs === null) return {}
+    if ('unread' in needs) return { needsUnread: { why: needs.unread, withLook: night.offers } }
+    return night.offers ? { look: needs.look, ...(needs.final ? {} : { needsUnfinished: true }) } : {}
+  }
+  const ownParked = needs !== null && !('unread' in needs) ? needs.parked.filter(r => r.by === self).map(r => r.text) : []
   if ('unread' in read) {
     // Notes that cannot be read send the session that ended sleep to the report, for its own
     // repository's proposals and the lessons only (lessons review of #1315).
     const p = { issues: [], lessons: [], unread: read.unread }
     const own = night.offers ? (await repoOf($)).slug : null
-    return { prompt: morningPrompt({ worker: night.worker, offers: night.offers, held: deliveries, merges, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }), anything: true }
+    return {
+      prompt: morningPrompt({ ...needsSaid(), worker: night.worker, offers: night.offers, held: deliveries, merges, banned, parked: ownParked, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }),
+      anything: true,
+    }
   }
   // What this session offers is its own repository's (#1286): the proposed issues and the questions
   // no open session will ask (one naming no session, or one whose session has closed), each keyed by
@@ -1650,22 +1671,30 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   // or whose claim cannot be written, is left (and the latter logged), never offered twice.
   const mine = (await repoOf($)).slug
   const keys = new Set<string>([...(mine ? [mine] : []), ...(night.offers ? [UNATTRIBUTED, LESSONS_KEY] : [])])
+  const parkedRows = needs !== null && !('unread' in needs) ? needs.parked : []
   let open: Set<string> | null = null
-  if (read.questions.some(q => q.by !== null && q.by !== self)) {
+  if (read.questions.some(q => q.by !== null && q.by !== self) || parkedRows.some(r => r.by !== null && r.by !== self)) {
     try {
       open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
     } catch (err) {
-      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions from other sessions are left to them`, { to: 'debug' })
+      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions and parked work from other sessions are left to them`, { to: 'debug' })
     }
   }
+  // One no open session will hand over: it names no session, or its session has closed.
+  const orphaned = (by: string | null) => by !== self && (by === null || (open !== null && !open.has(by)))
   const orphans: { q: NightQuestion; key: string }[] = []
   for (const q of read.questions) {
-    if (q.by === self || !(q.by === null || (open !== null && !open.has(q.by)))) continue
+    if (!orphaned(q.by)) continue
     orphans.push({ q, key: repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) })
+  }
+  const parkedOrphans: { text: string; key: string }[] = []
+  for (const r of parkedRows) {
+    if (!orphaned(r.by)) continue
+    parkedOrphans.push({ text: r.text, key: repoKey(r.repo ?? (r.cwd ? await folderRepo($, r.cwd) : null)) })
   }
   const has = (key: string) => (key === LESSONS_KEY ? read.lessons.length > 0 : read.issues.some(i => repoKey(i.repo) === key) || orphans.some(o => o.key === key))
   const claimed = new Set<string>()
-  if (night.generation !== null) for (const key of keys) if (has(key) && (await claimOffer($, night.generation, key))) claimed.add(key)
+  if (night.generation !== null) for (const key of keys) if ((has(key) || parkedOrphans.some(p => p.key === key)) && (await claimOffer($, night.generation, key))) claimed.add(key)
   // Each claimed issue is sorted before it is offered (#1389): one already filed is said, one another
   // open session claimed is left to it, and the rest are claimed one by one for this session.
   const sorted = await sortProposals(
@@ -1679,8 +1708,13 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
   // offer, and this session says nothing of them (lessons review).
   const offers = issues.length > 0 || lessons.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0 || sorted.elsewhere > 0 || (night.offers && ![...keys].some(has))
+  const parked = [...ownParked, ...parkedOrphans.filter(p => claimed.has(p.key)).map(p => p.text)]
+  const said = needsSaid()
   return {
     prompt: morningPrompt({
+      ...said,
+      parked,
+      banned,
       worker: night.worker,
       offers,
       held: deliveries,
@@ -1696,7 +1730,22 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
       ...(mine ? { forRepo: mine } : {}),
       ...(reportName ? { reportName } : {}),
     }),
-    anything: night.worker || offers || held.length > 0 || questions.length > 0,
+    // A needs file that cannot be read starts a turn only where Needs a look would have been handed
+    // over; elsewhere it is said in a morning the session has anyway (a worker always has one).
+    anything: night.worker || offers || held.length > 0 || questions.length > 0 || parked.length > 0 || (said.look?.length ?? 0) > 0 || (night.offers && said.needsUnread !== undefined),
+  }
+}
+
+// The night's needs file (#1665), or why it cannot be read: one that is not there is said too,
+// since every render of the report writes it, so its absence means the report was never rendered
+// by a script that writes it.
+const needsOfNight = async ($: EngineInterface, generation: string): Promise<NightNeeds | { unread: string }> => {
+  try {
+    const path = needsFileOf((await sleepPaths($)).home, generation)
+    if (!(await $.fs.exists(path))) return { unread: "the night's report has not written it" }
+    return needsIn(await $.fs.read(path))
+  } catch (err) {
+    return { unread: msg(err) }
   }
 }
 
@@ -2122,7 +2171,26 @@ const changeHeld = async ($: EngineInterface, fn: (held: HeldItem[]) => HeldItem
 const without = (held: HeldItem[], gone: readonly HeldItem[]) => held.filter(x => !gone.some(g => g.call === x.call))
 // Kept once each, in the order held: the same call held twice is delivered once.
 const keepForWake = ($: EngineInterface, h: HeldItem) =>
-  changeHeld($, held => (held.some(x => x.call === h.call) ? held : [...held, { label: h.label, call: h.call, ...(h.why !== undefined ? { why: h.why } : {}) }]))
+  changeHeld($, held =>
+    held.some(x => x.call === h.call) ? held : [...held, { label: h.label, call: h.call, ...(h.why !== undefined ? { why: h.why } : {}), ...(h.banned ? { banned: true as const } : {}) }],
+  )
+// An action Dan bans while he sleeps, refused at the call (#1665), kept for this session's morning,
+// where he is asked whether to do it now. A Bash call with no command makes nothing to ask about.
+// A write that fails leaves it in memory for the morning, losing it only to a reload, as a held
+// merge is kept; whether it is kept at all is what the refusal tells Claude, so it never says so falsely.
+const keepBanned = async ($: EngineInterface, tool: string, input: Record<string, unknown>, raw: string, what: string): Promise<boolean> => {
+  if (tool === 'Bash' && !raw.trim()) return false
+  const { tool: _t, tool_use_id: _id, agentId: _a, consent: _c, ...args } = input
+  const call = raw || `${tool} ${JSON.stringify(args)}`
+  try {
+    await keepForWake($, { label: what, call, banned: true })
+    return true
+  } catch (err) {
+    const kept = heldNow?.some(h => h.call === call) ?? false
+    $.ui.log(`scope-modes: an action refused overnight could not be written to this session's state (${msg(err)}); ${kept ? 'it is kept in memory for the morning' : 'it is not kept'}`, { to: 'debug' })
+    return kept
+  }
+}
 
 // The night this session last saw asleep (#1285), in memory and in $.state for a reload: written by
 // this session alone (its minute, its wake, its noon end), so it needs no merging.
@@ -4090,8 +4158,11 @@ const judge = async ($: EngineInterface, j: Judged): Promise<Verdict> => {
   if (asleep) {
     const what = await overnightWhy($, tool, input)
     if (what) {
+      // Kept for this session's morning, where Dan is asked whether to do it now (#1665): on
+      // 2026-10-24 the refused branch deletes, pull request close and check rerun reached nobody.
+      const kept = await keepBanned($, tool, input, raw, what)
       await $.modkit.blocked({ toolUseId, guard: 'Sleep mode', reason: `Dan is asleep, so this would not ${what}.`, safeWay: 'Claude leaves it for the morning and carries on.' })
-      return { deny: overnightDeny(what) }
+      return { deny: overnightDeny(what, kept) }
     }
   }
   return cleanupsLet.length ? { cleanups: cleanupsLet } : undefined

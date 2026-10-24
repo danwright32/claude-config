@@ -1113,7 +1113,9 @@ What the plan settled is in #840; what the build decided, each open to Dan chang
   file's own `sleep_active` says the Mac is asleep. Nothing else formats the report or touches the
   notes file. The kinds the report reads (`claim`, `done`, `parked`, `failed`, `question`, `issue`,
   `lesson`, `finding`, `heartbeat`, `wait`, `usage`, `stopped`) and their fields are listed at the
-  top of the script; a kind it does not know is still shown, under Other notes.
+  top of the script; a kind it does not know is still shown, under Other notes. Every render also
+  writes the night's Needs a look and Parked and failed rows to `notes/<generation>.needs.json` for
+  the morning (#1665, phase 9 below).
 - Notes are `notes/<generation>.jsonl`, one line per note, appended in one write in append mode,
   so concurrent writers need no lock; the writer adds `v`, `generation` and `at`. The report, the
   `report` path in the record (`~/Downloads/Sleep report <night>.md`, the name Dan asked for in
@@ -1645,6 +1647,23 @@ morning offers what the night proposed, filing nothing he has not picked.
   the claim. A session with nothing of
   its own starts no turn; notes that cannot be read are said, sending it to the report. The wake
   reply says how many other sessions are open and which workers closed since (`othersSaid`).
+- Everything the report says needs Dan reaches him (#1665; Dan, 2026-10-24: "shouldn't you
+  automatically be checking the sleep report for anything that you need to bring to me?"). On
+  2026-10-24 the report's Needs a look (two milestones touched, LESSONS.md changed), its Parked and
+  failed (a classifier refusal) and the actions sleep mode refused as banned (three branch deletes,
+  a `gh pr close`, a `gh run rerun`) reached him only through a session that happened to read the
+  report or kept its own scratchpad file. Every render of the report now also writes those two
+  sections' rows beside the notes, `notes/<generation>.needs.json`, from the same build, each Parked
+  and failed row with its note's `by`, `repo` and `cwd`, and `final` true only from the wake render
+  (`needsIn` in `hooks/wake.ts` reads it; nothing in the mod derives a row of its own). The session
+  that ended the night hands over Needs a look (7.n), read after its wake render, and says so when
+  that render did not finish; each session hands over its own Parked and failed rows (8.n), and one
+  whose session has closed is its repository's, claimed with that repository's proposals. Each
+  action the ban list refuses at the call (#834) is kept in the session's held list as `banned` and
+  asked about at its morning (9.n), the refusal telling Claude it is kept; a Bash call with no
+  command keeps nothing. Every row and action is its own picker, in the one data block. A needs file
+  that cannot be read, or is not there, is said, sending the session to the report's two sections.
+  Every morning also says that anything a session kept for Dan outside the notes is delivered too.
 - Its own morning turn (`morningPrompt` in `hooks/wake.ts`) is a turn of its own after `/wake`,
   started with `$.prompt.submit` once the command is done, or the turn "I'm up" starts: its summary,
   then the proposed issues in the end of turn issue review's multi select picker (each option ending

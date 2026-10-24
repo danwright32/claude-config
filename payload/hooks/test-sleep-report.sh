@@ -395,6 +395,34 @@ has "the 5 hour limit passed is said" "5 hour limit: reached 100% (aaaa1111 at 6
 has "a kind no section knows is still shown" "a kind nobody renders yet" "$r"
 has "a line that cannot be read is counted, never dropped" "1 line of the notes could not be read" "$r"
 
+# ---- what the report says needs Dan, beside the notes for the morning (#1665) ----
+# On 2026-10-24 the report's Needs a look and Parked and failed never reached the waking session,
+# which is handed only the notes. So every render writes those two sections' rows beside the notes,
+# from the same build that wrote the report, each Parked and failed row with the session, repository
+# and folder it came from, so the morning hands each one to the session it belongs to.
+needs_rows(){   # $1 = the needs file: one line per row, section|by|repo|text
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); [print("%s|%s|%s|%s" % (r["section"], r.get("by") or "", r.get("repo") or "", r["text"])) for r in d["rows"]]' "$1" 2>&1
+}
+section_rows(){   # $1 = the report, $2 = a section's title: its rows, without the dash
+  printf '%s\n' "$1" | sed -n "/^## $2\$/,/^## /p" | sed -n 's/^- //p'
+}
+NEEDS="$SLEEPDIR/notes/g6.needs.json"
+check_eq "the final render writes what needs Dan beside the notes, marked final" "True" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["final"])' "$NEEDS" 2>&1)"
+check_eq "every Needs a look row of the report is there, in its order" "$(section_rows "$r" 'Needs a look')" \
+  "$(needs_rows "$NEEDS" | sed -n 's/^look|[^|]*|[^|]*|//p')"
+check_eq "every Parked and failed row of the report is there, in its order" "$(section_rows "$r" 'Parked and failed')" \
+  "$(needs_rows "$NEEDS" | sed -n 's/^parked|[^|]*|[^|]*|//p')"
+has "a parked row carries the session and repository that parked it" "parked|bbbb2222|o/r|Parked o/r#21 (branch fix-21): Two hours with no fix" "$(needs_rows "$NEEDS")"
+has "a failed row too" "parked|aaaa1111|o/s|Failed o/s#3: Classifier refused the push" "$(needs_rows "$NEEDS")"
+lacks "a failure the queue replaced with a done is not handed over either (#1119)" "Failed o/r#22" "$(needs_rows "$NEEDS")"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g6.json" >/dev/null 2>&1
+check_eq "a render before the end writes it too, marked not final" "False" \
+  "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["final"])' "$NEEDS" 2>&1)"
+has "with the parked rows the morning of a session that did not end the night reads" "parked|bbbb2222|o/r|Parked o/r#21" "$(needs_rows "$NEEDS")"
+NOW=$WOKE py render --record "$SLEEPDIR/ended/g6.json" --final >/dev/null 2>&1
+r="$(report_of g6)"
+
 # More results than the limit asked for is said, never read as all of them (L24).
 python3 -c 'import json; print(json.dumps([{"number":i,"title":"t","url":"u","mergedAt":"2026-10-08T07:00:00Z"} for i in range(1000,1200)]))' > "$FAKE/gh-pr-o_r"
 NOW=$WOKE py render --record "$SLEEPDIR/ended/g6.json" --final >/dev/null 2>&1
@@ -562,6 +590,7 @@ NOW=$WOKE py render --record "$SLEEPDIR/ended/g7.json" --final >/dev/null 2>&1
 r="$(report_of g7)"
 has "no reading at all is not measurable, said only then" "Paid usage: not measurable, since no session reported a cost reading" "$r"
 has "a night with nothing wrong says so" "Nothing needs a look." "$r"
+check_eq "and hands the morning no row, never the words that say so as one (#1665)" "" "$(needs_rows "$SLEEPDIR/notes/g7.needs.json")"
 has "and a night with nothing done says so" "Nothing was merged or closed in a repo worked tonight." "$r"
 
 # An ended record (by limit) says so in the header.
@@ -654,6 +683,10 @@ check_eq "every session with news gets a file, one with none gets none, and the 
   "$(ls "$DL2" | LC_ALL=C sort | tr '\n' '|' | sed 's/|$//')"
 check_eq "the name given is recorded for that session" "$DL2/2026-10-07 slate ffff6666 sleep report.md" "$(cat "$SLEEPDIR/reports/g20/ffff6666.path" 2>/dev/null)"
 check_eq "and none for the session with no news" "" "$(cat "$SLEEPDIR/reports/g20/eeee5555.path" 2>/dev/null)"
+# What needs Dan is the whole night's, written once beside the notes, never once per report (#1665).
+check_eq "a per session night writes what needs Dan once, from every note" \
+  "look|||Done overnight, check it: an issue was created in acme/slate|look|||Session bbbb2222 ended unexpectedly: last heard 11:48 PM ET, 7h 17m before the end, and it never said it stopped.|look|||Session cccc3333 ended unexpectedly: it never wrote a note." \
+  "$(needs_rows "$SLEEPDIR/notes/g20.needs.json" | tr '\n' '|' | sed 's/|$//')"
 has "the named one holds its own question" "Rename the list?" "$(cat "$DL2/2026-10-07 slate ffff6666 sleep report.md" 2>/dev/null)"
 # A name already on the disk from an earlier sleep the same night is never written over: (2).
 per_record g23 '["gggg7777"]' "$SLEEPDIR/ended/g23.json"
