@@ -83,11 +83,11 @@ check "the closing part moves Status to Done" \
 check "Done waits for every follow on Dan approved" \
   "$(grep -qi 'once every follow on I approved is finished' <<< "$step4" && echo ok || echo "no rule holding Done for approved follow ons")"
 check "the closing part names the row by its record id" \
-  "$(grep -qi 'record id' <<< "$step4" && echo ok || echo "no record id in step 4")"
+  "$(grep -qi 'names the row by its record id and the list id, never by its Task' <<< "$step4" && grep -qF 'set row <record id> on list F0CB5JMEM2P' <<< "$step4" && echo ok || echo "the closing part does not name the row by its record id")"
 check "a long draft keeps the closing part whole" \
   "$(grep -qi 'keeps parts 1, 5, 6 and 7 whole' <<< "$step4" && echo ok || echo "closing part not kept whole on overflow")"
 check "step 7 writes the record id back into the Description" \
-  "$(grep -qi 'record id' <<< "$step7" && grep -qF 'slack_update_list_record' <<< "$step7" && echo ok || echo "no write back of the record id")"
+  "$(grep -qF 'replace `<record id>` in its Description with the record id the add returned and write that Description again with `slack_update_list_record`' <<< "$step7" && echo ok || echo "no write back of the record id")"
 check "the read back confirms the Description names its own record id" \
   "$(grep -qi 'names its own record id' <<< "$step7" && echo ok || echo "no read back of the record id")"
 # The stop rule itself, not just the option names: the Status row of the table names them too, so a
