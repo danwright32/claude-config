@@ -568,7 +568,9 @@ on the local machine, never in a deployment), or for a mod, the mod's own band f
   transcript can never pass on the mod's behalf. A check for a mod's design therefore reads the band
   (`.term-band`); a decision about anything else in the window is not the mod's to draw and is
   `"verify": "elsewhere"`. Measured 2026-10-21 with the status bar's real rows: 738000 of 738000
-  pixels at 820 wide, and 737965 (99.9%) with one character of the band changed.
+  pixels at 820 wide, and 737965 (99.9%) with one character of the band changed. Where the mod's band
+  makes the design's own builder or its `screenShown` throw, the build side is no score, said in the
+  settled file's `designFrameTrouble` words, the ones the page says beside a frame (claude-config#1581).
 
   **How a mod milestone produces its capture.** Commit, beside the mod's tests, its screen fixture:
 
