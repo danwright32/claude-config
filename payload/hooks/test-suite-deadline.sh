@@ -54,7 +54,7 @@ alive(){ kill -0 "$1" 2>/dev/null; }
 # Waits on the CONDITION, with the one ceiling only a hang reaches (lib/hang-wait.sh). The ceiling is
 # what makes a broken helper fail rather than hang this suite; it is never what a pass waits for.
 # These were 30, 10 and 5 seconds counted in tenths, the shape a loaded Mac reaches with nothing
-# broken (claude-config#1620).
+# broken (claude-config#1620; settings, not measurements).
 . "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 wait_gone(){ hang_wait "! alive $1"; }   # wait_gone <pid>
 wait_file(){ hang_wait "[ -s '$1' ]"; }  # wait_file <path>
@@ -316,7 +316,7 @@ fi
 mk_armed "$TMPROOT/quick.sh" ": nothing to wait for"
 # Given the hang ceiling as its deadline for this run, so the one check below judging a duration
 # compares it with something only a hang reaches (claude-config#1620): it was 30 s against a 60 s
-# deadline, and a loaded Mac can take 30 s to start a suite with nothing broken.
+# deadline, and a loaded Mac can take 30 s to start a suite with nothing broken (the 30 s was a setting, not a measurement).
 q_start="$(date +%s)"
 q_out="$(SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/quick.wd" bash "$TMPROOT/quick.sh" 2>&1)"; q_rc=$?
 q_took=$(( $(date +%s) - q_start ))

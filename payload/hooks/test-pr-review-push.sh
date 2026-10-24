@@ -134,7 +134,7 @@ wait_final(){ # on the condition (L290), with the hang ceiling: it was 40 s (#16
 # test-pr-review.sh; the story is in the library both suites share).
 . "$DIR/lib/review-runners-done.sh"
 reset_state(){
-  runners_done || bad "a reviewer runner from the case before was still running 40 s later, so this case could read its answer"
+  runners_done || bad "a reviewer runner from the case before was still running ${HANG_S}s later, the hang ceiling, so this case could read its answer"
   rm -rf "$AI_REVIEW_STATE_DIR" "$FAKE_LOG"; mkdir -p "$FAKE_LOG"; echo 1000 > "$FAKE_CLOCK_FILE"
 }
 meta(){ awk -v k="$2=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit } /^$/ { exit }' "$1"; }

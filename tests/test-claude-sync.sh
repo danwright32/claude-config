@@ -2167,7 +2167,7 @@ SUITE_LOAD_FIGURE=""
 # Every wait on a condition below gives up at the one ceiling only a hang reaches, lib/hang-wait.sh's
 # (claude-config#1620): they were 5, 20, 60 and 120 seconds, written as a few hundred ticks of a
 # tenth or a `date +%s` plus a minute, the shape that failed 16 of 16 loaded copies of
-# test-derived-data-sweep.sh (#1577). A copy without the file cannot wait on anything safely, so it
+# test-derived-data-sweep.sh (#1577, on 2026-10-23). A copy without the file cannot wait on anything safely, so it
 # refuses rather than guessing a ceiling.
 if ! . "$(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh"; then
   echo "FAIL: $(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
@@ -8767,8 +8767,8 @@ _int_outer=$!
 # Polled in tenths, not in whole seconds (claude-config#206, L290). Every wait in this section is
 # on a CONDITION with a deadline behind it, and the condition is normally true within a second: a
 # child reaches `push` in 0.8 seconds, measured 2026-08-30. A one second granularity therefore
-# rounded each of these three waits up to a whole second for nothing. The deadlines are unchanged
-# in seconds, only their resolution moves.
+# rounded each of these three waits up to a whole second for nothing. Their deadlines, once 90 and
+# 30 seconds, are now the shared hang ceiling (lib/hang-wait.sh, #1620), which only a hang reaches.
 _int_pid=""; _int_kids=""; _int_waited=0
 while [ "$_int_waited" -lt $(( HANG_S * 10 )) ]; do
   _int_pid="$(cat "$_int_lock/pid" 2>/dev/null || true)"

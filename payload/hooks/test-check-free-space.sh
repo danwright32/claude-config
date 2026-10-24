@@ -522,7 +522,7 @@ PLIST
 }
 # Waits on the condition (a finished record and nothing marked in progress), never a fixed time
 # (L290), with lib/hang-wait.sh's ceiling, which only a sweep that never finishes reaches. It was 30
-# s, the ceiling that failed 16 of 16 loaded copies of test-derived-data-sweep.sh (#1577, #1620).
+# s, the ceiling that failed 16 of 16 loaded copies of test-derived-data-sweep.sh (#1577, on 2026-10-23; #1620).
 sweep_finished() {   # sweep_finished <state dir>
   hang_wait "[ -f '$1/last-result' ] && [ ! -e '$1/in-progress' ]"
 }
@@ -574,7 +574,7 @@ chmod +x "$BLOCKING_PS"
 # Judged by the STATE the warning leaves, never by seconds (L290): the sweep's process list is held
 # until the suite releases it, so when the warning returns the sweep it started must still be marked
 # in progress with no record, which is untrue only if the warning waited for it. This was "within 5
-# s", which a loaded Mac reaches with nothing broken (#1620).
+# s", which a loaded Mac reaches with nothing broken (#1620; 5 s was a setting, not a measurement).
 n_slow1="$(dd_nudge sess-slow1 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
 slow1_state="$([ -e "$SW2/in-progress" ] && echo in-progress || echo "in-progress absent"), $([ -f "$SW2/last-result" ] && echo "record present" || echo "no record")"
 n_slow2="$(dd_nudge sess-slow2 "$DD2" "$SW2" DERIVED_DATA_PS="$BLOCKING_PS")"
