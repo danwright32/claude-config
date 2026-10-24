@@ -119,12 +119,15 @@
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
 #      based on it could not be moved, GitHub could not be read, or the branch holds commits the
 #      merge did not; running it again finishes the branch
-#   64 refused its arguments, was run outside a checkout, or was passed no merge method for a
-#      repository that allows more than one (or does not say which)
+#   64 refused its arguments, was run outside a checkout, was given a read key nobody typed in front
+#      of it (claude-config#1673), or was passed no merge method for a repository that allows more
+#      than one (or does not say which)
 #
 # Findings to read: the review's own refusal carries a read key. Read them, fix what is real, then
 #   PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ...
-# and the key reaches both the review checker and the merge command the review gate judges.
+# and the key reaches both the review checker and the merge command the review gate judges. It is
+# taken only when typed like that, as a literal pr-review-gate.sh recorded before the command ran
+# (claude-config#1673): a key a script read out of this helper's output is refused, exit 64.
 #
 # HOW OFTEN IT LOOKS. Each look reads the pull request through GitHub's GraphQL allowance, 5,000
 # points an hour that every session on the Mac shares, so it looks once a minute: about 60 points an
@@ -229,6 +232,18 @@ if [ -n "$repo" ] && ! [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 fi
 read_key="${PR_REVIEW_READ:-}"
 case "$read_key" in *[!a-f0-9]*) usage "PR_REVIEW_READ is not a read key (a key is lowercase hex, copied from the review's refusal)." ;; esac
+# The key proves the findings were READ, so it has to come from whoever read them, typed in front of
+# this command, which pr-review-gate.sh records before the command runs (claude-config#1673). A key in
+# a variable, an export or a substitution was not typed: a Bash loop that greps it from this helper's
+# own refusal and runs it again would otherwise merge with nobody having read anything.
+if [ -n "$read_key" ]; then
+  # shellcheck source=ai-review-common.sh
+  if ! . "$MWR_LIB/ai-review-common.sh" 2>/dev/null || [ "$(type -t ar_helper_key_typed)" != function ]; then
+    echo "merge-when-ready: $MWR_LIB/ai-review-common.sh is missing, so whether PR_REVIEW_READ was typed in front of this command cannot be read. Nothing was merged." >&2
+    exit 1
+  fi
+  ar_helper_key_typed "$read_key" || usage "PR_REVIEW_READ was not typed in front of this command, so it does not show the findings were read: a key read out of this helper's output by a script, or carried in a variable or an export, is refused (claude-config#1673). Read the findings, then type the key from the review's refusal: PR_REVIEW_READ=<key> $SELF <pr> ... Nothing was merged."
+fi
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || usage "run it from a checkout of the repository: the lessons review reads the branch from one."
 # Where the caller stands, read before this moves, so the merged branch's worktree is never removed
