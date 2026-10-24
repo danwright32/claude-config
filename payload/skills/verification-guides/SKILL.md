@@ -82,8 +82,9 @@ The receipt is written only by `run_session.py`, at
 `~/.claude-verification/receipts/<receipt id>/receipt.json` (`VERIFICATION_HOME` moves it). It is
 outside `~/.claude` on purpose: the sync mirrors `~/.claude` into a public repository, and a
 receipt folder holds screenshots of private apps. Beside it are the screenshots, `serve.log`,
-`drives.jsonl` (every drive call, its area, arguments and exit), and the copies of areas.json and
-the guides the run used. It records the machine, the head and the commit checked out, when serve
+`drives.jsonl` (every drive call, its area, arguments and exit), `rendered.jsonl` (the fingerprint
+of every record `record render` wrote from this run, which the merge check matches the posted
+record against), and the copies of areas.json and the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
 `recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
 stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
