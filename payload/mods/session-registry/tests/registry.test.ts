@@ -56,6 +56,10 @@ type WorldOpts = {
   noMtimes?: boolean
   // Runs as each mv starts, before anything moves, so an owner's write can land in between.
   beforeMv?: (argv: string[]) => void
+  // A check of whether a file is there that fails, by path, as one did under heavy load (#1636).
+  existsFails?: Record<string, string>
+  // The search for a transcript by its id refused (as a run cut off at its timeout is), or failing.
+  findFails?: { deny: string } | { exitCode: number; stderr: string }
 }
 const world = (on: On, opts: WorldOpts = {}) => {
   const files: Record<string, string> = { ...(opts.files ?? {}) }
@@ -98,7 +102,12 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: files[e.path] as string }
   })
-  on('fs.exists', ($, e) => ({ value: e.path in files }) as never)
+  on('fs.exists', ($, e) => {
+    const failed = opts.existsFails?.[e.path]
+    // Refused, which is how a check the engine could not finish reaches the mod.
+    if (failed !== undefined) return { deny: failed } as never
+    return { value: e.path in files } as never
+  })
   on('fs.stat', ($, e) => {
     if (!(e.path in files)) throw new Error(`no file ${e.path}`)
     return { value: { kind: 'file', size: 1, mtimeMs: stampOf(e.path), isLink: false } } as never
@@ -165,6 +174,9 @@ const world = (on: On, opts: WorldOpts = {}) => {
     if (cmd === 'git') return ok('/repo\n')
     if (cmd === 'find' && a) {
       finds.push(rest[rest.indexOf('-name') + 1] as string)
+      const ff = opts.findFails
+      if (ff && 'deny' in ff) return { deny: ff.deny } as never
+      if (ff) return { value: { exitCode: ff.exitCode, stdout: '', stderr: ff.stderr, isStdoutTruncated: false, isStderrTruncated: false } }
       const name = rest[rest.indexOf('-name') + 1] as string
       return ok(Object.keys(files).filter(p => p.startsWith(a + '/') && p.endsWith('/' + name)).map(p => p + '\n').join(''))
     }
@@ -656,6 +668,55 @@ test('a session id that is not an id is never put into a path or a search', with
   expect(r?.transcriptPath).toBeNull()
   // Only this session's own record (s1) was searched for.
   expect(w.finds).toEqual(['s1.jsonl'])
+})
+
+// #1636: under a load average past 100, /sleep was told this session's transcript was not found
+// while the file was there: a check that failed, or a search cut off at its timeout, was read as no
+// file. A lookup that fails is said, with why, and never remembered as a miss (L10, L11).
+const unreadOf = async ($: Parameters<typeof call>[0], id: string) =>
+  (JSON.parse(await call($, 'list')) as { open: { sessionId: string; transcriptPath: string | null; transcriptUnread?: string }[] }).open.find(r => r.sessionId === id)
+
+test('a transcript lookup whose checks fail is said as unread with why, never as not found (#1636)', withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-app/s2.jsonl'
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' }, existsFails: { [T]: 'fs.exists did not answer within 10 seconds' }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBeNull()
+  expect(r?.transcriptUnread).toMatch(new RegExp(`^whether ${T} is there could not be checked \\(.*fs.exists did not answer within 10 seconds\\); the search for s2.jsonl failed \\(.*find did not answer within 5 seconds\\)$`))
+})
+
+test('a search for a transcript that exits with an error and finds nothing is said as unread, never as not found (#1636)', withConsumer, async ($, on) => {
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') }, findFails: { exitCode: 1, stderr: 'find: /Users/x/.claude/projects/-a: Permission denied' } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBeNull()
+  expect(r?.transcriptUnread).toBe('the search for s2.jsonl failed (find: /Users/x/.claude/projects/-a: Permission denied)')
+})
+
+test('a lookup that failed is not remembered as a miss: the next read searches again (#1636)', withConsumer, async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') }, findFails: { deny: 'find did not answer within 5 seconds' } })
+  await start($)
+  const ofS2 = () => w.finds.filter(f => f === 's2.jsonl').length
+  await unreadOf($, 's2')
+  await unreadOf($, 's2')
+  expect(ofS2()).toBe(2)
+})
+
+test('a check that fails on one place is passed over when the transcript is found at another, with nothing said (#1636)', withConsumer, async ($, on) => {
+  const T = '/Users/x/.claude/projects/-Users-x-elsewhere/s2.jsonl'
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app'), [T]: '' }, existsFails: { '/Users/x/.claude/projects/-Users-x-app/s2.jsonl': 'EIO' } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBe(T)
+  expect(r?.transcriptUnread).toBeUndefined()
+})
+
+test('a transcript that is truly nowhere carries no unread reason (#1636)', withConsumer, async ($, on) => {
+  world(on, { files: { [`${DIR}/s2.json`]: other('s2', '/Users/x/app') } })
+  await start($)
+  const r = await unreadOf($, 's2')
+  expect(r?.transcriptPath).toBeNull()
+  expect(r?.transcriptUnread).toBeUndefined()
 })
 
 // Decided with Dan (2026-10-04, #633): a closed session's record is kept 7 days, then deleted at

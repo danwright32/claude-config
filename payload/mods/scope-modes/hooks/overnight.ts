@@ -13,7 +13,8 @@ import { DEPLOYERS, EDITORS, databaseRefusal, dbToolRefusal, flagOf, hasFlag, op
 //   decision 3 needs on the issue being worked, a review, a close) only on the repository the
 //   checkout is, everything gh does but a short list of known reads counting as a write, and one
 //   whose repository cannot be resolved is refused (L75);
-// - LESSONS.md written by any route in command position;
+// - LESSONS.md written by any route in command position, a script file handed it as its argument
+//   included (#1592);
 // - every write tool under mcp__claude_ai_*, mcp__claude-in-chrome__* and mcp__posthog__*, and
 //   Supabase and psql writes;
 // - git checkout or switch in a primary checkout (H7);
@@ -582,6 +583,9 @@ export const overnightRefusal = async (call: OvernightCall, look: Look): Promise
   const w = call.writes
   if (w.files.some(f => isLessons(f.path ?? f.word)) || w.changes.some(c => isLessons(c.path ?? c.word))) return 'write to LESSONS.md'
   if (w.unnamed.some(u => [...u.words, ...u.inputs, ...(u.targets ?? []), ...(u.into ? [u.into] : [])].some(isLessons))) return 'write to LESSONS.md'
+  // A script file the command runs, handed LESSONS.md as its argument (mod-kit's `runs`, #1586): what
+  // it does with the file cannot be read before it runs, so it is held as an Edit of it is (#1592).
+  if ((w.runs ?? []).some(r => r.args.some(a => isLessons(a.path ?? a.word)))) return 'write to LESSONS.md'
 
   // Each command in order, in the folder it runs in: a cd moves it, a subshell keeps its own.
   // gh run where this reader reads no gh command at all (eval, a string it cannot open): neither

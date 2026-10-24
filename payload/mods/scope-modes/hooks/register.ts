@@ -53,6 +53,7 @@ import {
   goalOptions,
   goalIssues,
   goalQuestion,
+  goalUnreadQuestion,
   groupQuestions,
   sameText as oneSpaced,
   orderQuestions,
@@ -657,17 +658,20 @@ const settleNight = async ($: EngineInterface, home: string, repos: string[], ro
 // transcript by mod-kit's one reader of a /goal ($.modkit.goal, #1252, which the goal tracker reads
 // too), and a worker with none is asked for one first among the before bed questions, sharing their
 // ten minutes: what Dan types is its goal. Left without one, it does no work tonight, and /sleep and
-// the morning report say so. A reader that fails is said, as no goal, and so is a mod-kit loaded
-// before it had the reader: asked inside the promise, the TypeError thrown at the call is caught too.
-type GoalRead = { goal: string } | { none: string }
-const readGoal = async ($: EngineInterface, seat: Seat, who: string): Promise<GoalRead> => {
-  if (!seat.transcript) return { none: `${who}'s transcript was not found` }
+// the morning report say so. A goal that could not be read (#1636: no transcript, a lookup that
+// failed, a reader that failed, or a mod-kit loaded before it had the reader, whose TypeError thrown
+// at the call is caught since it is asked inside the promise) is `unread`, with why as a clause about
+// the worker, and is asked about in its own words, never as a worker with no goal (L10, L11).
+type GoalRead = { goal: string } | { none: true } | { unread: string }
+const readGoal = async ($: EngineInterface, seat: Seat): Promise<GoalRead> => {
+  if (!seat.transcript)
+    return { unread: seat.transcriptUnread ? `its transcript could not be looked up: ${seat.transcriptUnread}` : 'its transcript was not found' }
   const transcript = seat.transcript
   const g = await Promise.resolve()
     .then(() => $.modkit.goal({ transcript }))
     .catch(err => ({ state: 'unreadable' as const, why: msg(err) }))
-  if (g.state === 'unreadable') return { none: `${who}'s /goal could not be read (${g.why})` }
-  return g.state === 'set' ? { goal: g.condition } : { none: `${who} has no /goal set` }
+  if (g.state === 'unreadable') return { unread: `the read of its transcript failed: ${g.why}` }
+  return g.state === 'set' ? { goal: g.condition } : { none: true }
 }
 
 // Who a goal question is about, as Dan knows the session: its repository and what he asked of it.
@@ -684,7 +688,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
   const unread: string[] = []
   for (const seat of seats) {
     const who = seatName(seat, self, repos.get(seat.id) ?? null)
-    const read = await readGoal($, seat, who)
+    const read = await readGoal($, seat)
     if ('goal' in read) {
       goals[seat.id] = read.goal
       names[seat.id] = who
@@ -692,7 +696,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
       continue
     }
     // A goal set but unreadable is said apart, so Dan is not left wondering why he was asked.
-    if (!/ has no \/goal set$/.test(read.none)) unread.push(read.none)
+    if ('unread' in read) unread.push(`The /goal of ${who} could not be read, because ${read.unread}.`)
     const left = round.until - (await $.clock.now())
     let why: string | null = null
     if (!interactive) why = 'nobody was at this session to ask'
@@ -702,7 +706,8 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
       without.push(`${who} (${why})`)
       continue
     }
-    const asked = await askOne($, goalQuestion(who), goalOptions(), BEDTIME_HEADER, left, async a => {
+    const question = 'unread' in read ? goalUnreadQuestion(who, read.unread) : goalQuestion(who)
+    const asked = await askOne($, question, goalOptions(), BEDTIME_HEADER, left, async a => {
       // Answered after the wait: the night has begun without it, so it is said, never kept silently.
       if (goalAnswer(a).goal !== null) $.ui.toast(`Your goal for ${who} came after the 10 minutes, so it does no work tonight. Set it there with /goal before the next /sleep.`)
     })
@@ -731,7 +736,7 @@ const settleGoals = async ($: EngineInterface, seats: Seat[], repos: Map<string,
   let said = ''
   if (set.length) said += ` Tonight's goals: ${set.join('; ')}.`
   if (without.length) said += ` No goal, so no work tonight: ${without.join('; ')}.`
-  if (unread.length) said += ` Read as no goal because ${andList(unread)}.`
+  if (unread.length) said += ` ${unread.join(' ')}`
   return { goals, names, said }
 }
 
@@ -1222,14 +1227,31 @@ const endIfOver = async ($: EngineInterface, reading: SleepReading) => {
 // lists (#843), and what the bedtime questions need of it (#1242): where its transcript is, for its
 // /goal, and its request, so Dan can tell which session a question is about. This session's folder
 // is filled in by /sleep from its own checkout.
-type Seat = { id: string; root: string | null; transcript: string | null; request: string | null }
+// `transcriptUnread` is the registry's why when its lookup failed (#1636), kept apart from not found.
+type Seat = { id: string; root: string | null; transcript: string | null; transcriptUnread?: string; request: string | null }
+
+// This session's own transcript as Claude Code itself named it (#1636): every classic hook's input
+// carries the path, so each one this mod handles notes it, with the session id it was for. /sleep
+// reads its own /goal from it, and its own title, without depending on the registry's lookup, which
+// failed under load on 2026-10-23. Only for the id it was heard for, so the conversation before a
+// /clear is never read as this one; a subagent's event is left out. These hooks run only where the
+// managed settings file keeps the security default out of first place (#876); else, and before this
+// session's first turn ends, nothing is heard and the registry's path is used as before.
+let heard: { id: string; path: string } | null = null
+const hear = (e: { session_id?: unknown; transcript_path?: unknown; agent_id?: unknown }) => {
+  if (e.agent_id !== undefined) return
+  if (typeof e.session_id === 'string' && e.session_id && typeof e.transcript_path === 'string' && e.transcript_path) heard = { id: e.session_id, path: e.transcript_path }
+}
+const heardFor = (self: string) => (heard?.id === self ? heard.path : null)
 const requestOf = (r: { extra?: Record<string, unknown> }) => {
   const q = (r.extra?.progress as { request?: unknown } | undefined)?.request
   return typeof q === 'string' && q.trim() ? q.trim() : null
 }
 const enrol = async ($: EngineInterface, self: string): Promise<{ workers: string[]; seats: Seat[]; others: number; left: number; unknown?: string }> => {
   const workers = interactive ? [self] : []
-  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: null, request: null }] : []
+  // This session's transcript is first the one Claude Code named to it, else the registry's (#1636).
+  const own = heardFor(self)
+  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own, request: null }] : []
   let list
   try {
     list = await $.sessions.list()
@@ -1240,13 +1262,16 @@ const enrol = async ($: EngineInterface, self: string): Promise<{ workers: strin
   for (const o of list.open) {
     if (o.sessionId === self) {
       const mine = seats.find(s => s.id === self)
-      if (mine) mine.transcript = o.transcriptPath ?? null
+      if (mine && !own) {
+        mine.transcript = o.transcriptPath ?? null
+        if (o.transcriptUnread) mine.transcriptUnread = o.transcriptUnread
+      }
       continue
     }
     const said = (o.extra?.[MOD] as { isInteractive?: unknown } | undefined)?.isInteractive
     if (said === true) {
       workers.push(o.sessionId)
-      seats.push({ id: o.sessionId, root: o.repoRoot ?? null, transcript: o.transcriptPath ?? null, request: requestOf(o) })
+      seats.push({ id: o.sessionId, root: o.repoRoot ?? null, transcript: o.transcriptPath ?? null, ...(o.transcriptUnread ? { transcriptUnread: o.transcriptUnread } : {}), request: requestOf(o) })
     } else left++
   }
   const unknown = list.unreadable.length ? `the session registry could not read ${list.unreadable.join(', ')}` : undefined
@@ -2223,7 +2248,8 @@ const titleNow = async ($: EngineInterface): Promise<string | null> => {
   let path: string | null = null
   try {
     const self = await $.session.id()
-    path = (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+    // The transcript Claude Code named to this session first, as for its goal (#1636).
+    path = heardFor(self) ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
   } catch (err) {
     $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
     return null
@@ -4199,6 +4225,8 @@ export const register: Register = on => {
     ] as const)
       await $.command.register({ name, description, immediate: true })
     interactive = e.isInteractive === true
+    // A transcript heard before this start was another session's or another load's (#1636).
+    heard = null
     await $.tool.register({
       name: 'switch_to_build',
       description:
@@ -4792,6 +4820,7 @@ export const register: Register = on => {
   // record is read live, and one that cannot be read is awake: no approval (L42). A session that is
   // not a worker is only kept quiet, so its prompts wait for Dan as always.
   on('classic.PermissionRequest', async ($, e, next) => {
+    hear(e)
     // Any throw in deciding whether this session is an asleep worker reads as awake: no approval.
     let worker = false
     try {
@@ -4833,6 +4862,7 @@ export const register: Register = on => {
   // A refusal by the auto mode classifier while asleep (#834) is final: a `failed` note naming the
   // reason, and never a retry, whatever beneath asked for.
   on('classic.PermissionDenied', async ($, e, next) => {
+    hear(e)
     const reading = await sleepNow($)
     if (reading.state !== 'asleep') return next(e)
     try {
@@ -4859,6 +4889,7 @@ export const register: Register = on => {
     // blocked again (measured on 2.1.301: 9 more blocks a turn, every turn, past the circuit
     // breaker), and the night's limits held only while a goal happened to be met. The settings Stop
     // hooks beneath stand down while asleep, so ending the chain here takes nothing from the night.
+    hear(e)
     const driven = await driveStop($)
     if (driven !== 'not-driven') return driven ?? {}
     // A turn end asks GitHub afresh about everything that can still change (#1037).
@@ -4878,6 +4909,7 @@ export const register: Register = on => {
 
   // A turn that ended on an API error, while an enrolled session works overnight: waited out or stopped (#844).
   on('classic.StopFailure', async ($, e, next) => {
+    hear(e)
     // Only while asleep: awake, a failed turn is Dan's to see, and nothing here acts or notes.
     if (!(await isAsleep($))) return next(e)
     try {

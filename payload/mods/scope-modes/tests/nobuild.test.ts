@@ -553,6 +553,15 @@ describe('on the shared readers (#712)', () => {
     expect(run('bash < tests/run.sh')).toBeUndefined()
     expect(run('python3 tools/report.py')).toBeUndefined()
   })
+  // #1592: the write reader gives a script's arguments apart, in `runs` (#1586), and the gates that
+  // judge a file handed to a script read them; no build allows running scripts by design, so a
+  // script handed any file, lasting memory and LESSONS.md included, still runs here.
+  test('a script file handed files as its arguments still runs, whatever the files are (#1592)', () => {
+    for (const command of ['python3 tools/fix.py src/app.ts', 'python3 x.py payload/LESSONS.md', 'bash tools/fix.sh CLAUDE.md', './tidy.sh ~/.claude/projects/p/memory/MEMORY.md']) {
+      expect(commandWrites(command, CWD, HOME).runs?.length).toBe(1)
+      expect({ command, r: run(command) }).toEqual({ command, r: undefined })
+    }
+  })
   test('a download whose files no word names is allowed only into the notes', () => {
     expect(what(run('wget -r https://x.dev/docs/'))).toBe('change files its words do not name (a wget download of many files)')
     expect(run(`wget -r -P ${SCRATCH} https://x.dev/docs/`)).toBeUndefined()

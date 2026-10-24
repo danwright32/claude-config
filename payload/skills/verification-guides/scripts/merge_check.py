@@ -36,8 +36,9 @@ Every problem has its own kind, so distinct causes never share a message (L11): 
 base-areas-invalid, base-guide-missing, base-guide-invalid, files-incomplete, unowned-file,
 ambiguous-file, no-record, malformed-record, failing-record, record-not-base-guide,
 done-when-changed, stale-record, receipt-other-machine, receipt-missing, receipt-unreadable,
-receipt-mismatch, receipt-not-stopped, egress-unmeasured, egress-not-clean, stamp-missing,
-stamp-failed, stamp-mismatch, no-drive, merge-unpinned, merge-pinned-elsewhere.
+receipt-mismatch, receipt-not-stopped, record-not-rendered, record-edited, egress-unmeasured,
+egress-not-clean, stamp-missing, stamp-failed, stamp-mismatch, no-drive, merge-unpinned,
+merge-pinned-elsewhere.
 """
 
 import json
@@ -359,6 +360,7 @@ class _Verdict:
             self.add("receipt-mismatch", name, "receipt %s does not describe its record: %s" % (rid, "; ".join(wrong)))
         if not r.get("stopped_at"):
             self.add("receipt-not-stopped", name, "receipt %s shows serve still running (no stop time), so the run is not over" % rid)
+        self.judge_rendered(name, rec, rid, at)
         egress = r.get("egress") if isinstance(r.get("egress"), dict) else {}
         verdict = egress.get("verdict")
         why = egress.get("why") or "no reason recorded"
@@ -388,6 +390,26 @@ class _Verdict:
         if not any(d["area"] == name and d["exit"] == 0 for d in drives):
             self.add("no-drive", name, "receipt %s logged no successful drive call for this area, so nothing shows the run"
                      " navigated to it or triggered it" % rid)
+
+    def judge_rendered(self, name, rec, rid, at):
+        """Is the posted record exactly one record render wrote for this receipt (#1572)?
+
+        The receipt proves the run happened; only the fingerprint render left beside it proves the
+        results posted are the ones it rendered, so a comment edited by hand afterwards is refused.
+        """
+        try:
+            rendered = v.load_rendered(rid, self.home)
+        except v.VerificationError as e:
+            self.add("receipt-unreadable", name, "the rendered record log of receipt %s could not be read (%s: %s)" % (rid, *e.problems[0]))
+            return
+        if name not in rendered:
+            self.add("record-not-rendered", name, "receipt %s holds no record render wrote for this area, so %s was not"
+                     " written by verification.py record render on this machine (or was rendered before render kept"
+                     " fingerprints). Render it with record render and post that comment unchanged" % (rid, at))
+        elif v.record_digest(rec) not in rendered[name]:
+            self.add("record-edited", name, "%s is not any record verification.py record render wrote for it: the"
+                     " comment was changed after it was rendered (a result, a note or a check's text). Post the"
+                     " rendered comment unchanged, or run the area again" % at)
 
     # -- the answer ----------------------------------------------------------------------------
 

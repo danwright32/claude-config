@@ -11,6 +11,12 @@ export type SessionsRecord = {
   closedAt: number | null
   /** Where its transcript is, so its latest request is read from there rather than copied. */
   transcriptPath: string | null
+  /**
+   * Set only in a list's answer, and only when `transcriptPath` is null because looking for the
+   * transcript failed (a check or a search that errored or was cut off): why, so a reader says it
+   * could not be looked up rather than that there is none (#1636). Absent when it is truly nowhere.
+   */
+  transcriptUnread?: string
   /** Files this session has edited inside its repository (or its folder outside one), newest last: by the edit tools, or named by a shell command (#654); scratch such as /tmp is left out (#674). */
   edits: string[]
   /** What other mods keep about the session (background jobs, task progress), by key. */
