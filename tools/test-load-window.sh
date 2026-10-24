@@ -106,6 +106,11 @@ eq "#1618 a window with no --seconds is refused" 2 "$RC"
 run --seconds 5 --workers 0 --spawners 0
 eq "#1618 a window with no workers is refused" 2 "$RC"
 eq "#1618 and none of these recorded a window" "" "$(record)"
+# A leading zero is a number, never an octal error that kills the run (lessons review, #1640).
+fresh zeros
+run --seconds 09 --workers 08 --spawners 09 -- bash "$W/report.sh" "$case_dir/r"
+eq "#1618 numbers with a leading zero are read as base ten" 0 "$RC"
+says "#1618 and said as such" "8 busy and 9 process launching workers" "$OUT"
 
 # =================================================================================================
 # 2. A quiet Mac: the window runs the command with its workers, records its start and end in ET,

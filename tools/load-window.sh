@@ -178,11 +178,14 @@ if [ -n "$status" ]; then
 fi
 
 num "$seconds" || usage "--seconds is required, a whole number of seconds."
+# Read as base ten, so a leading zero (08) is a number rather than an octal error that kills the run.
+seconds=$(( 10#$seconds ))
 [ "$seconds" -ge 1 ] && [ "$seconds" -le "$MAX_SECONDS" ] || usage "--seconds $seconds is outside 1 to $MAX_SECONDS: a window is three minutes at most, so other sessions' merges and suites are not starved."
 [ -n "$workers" ] || workers="$(load_average_cores 2>/dev/null)"
 [ -n "$workers" ] || workers="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null)"
 num "$workers" || usage "--workers must be a whole number."
 num "$spawners" || usage "--spawners must be a whole number."
+workers=$(( 10#$workers )); spawners=$(( 10#$spawners ))
 [ $(( workers + spawners )) -ge 1 ] || usage "a window needs at least one worker."
 [ $(( workers + spawners )) -le 256 ] || usage "$workers busy and $spawners process launching workers is more than 256, more than any reproduction here has needed."
 [ -n "$label" ] || label="${cmd[*]:-load only}"
