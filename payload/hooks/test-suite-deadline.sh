@@ -353,7 +353,9 @@ esac
 stop_and_check(){
   local name="$1" sig="$2" body="$3" want="$4" pid child rc n=0
   mk_armed "$TMPROOT/$name.sh" "$body"
-  SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/$name.wd" \
+  # The hang ceiling as its limit, so its own deadline can never be what stops it first on a loaded
+  # Mac: what this judges is the signal sent from outside (#1620).
+  SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_POLL=0.05 SUITE_WALL_PIDFILE="$TMPROOT/$name.wd" \
     bash "$TMPROOT/$name.sh" > "$TMPROOT/$name.out" 2>&1 &
   pid=$!
   ALL_PIDS="$ALL_PIDS $pid"
@@ -404,7 +406,12 @@ off_out="$(SUITE_WALL_TIMEOUT=0 SUITE_WALL_PIDFILE="$TMPROOT/off.wd" bash "$TMPR
 # The seams describe ONE run. A suite started by an armed suite must not read the injected start or
 # pidfile as its own (L169), or every nested suite would inherit a deadline that has already passed.
 mk_armed "$TMPROOT/parent.sh" "env | grep -E '^SUITE_WALL_(STARTED|PIDFILE)=' || echo clean"
-pe_out="$(SUITE_WALL_STARTED=$(( now - 5 )) SUITE_WALL_PIDFILE="$TMPROOT/parent.wd" bash "$TMPROOT/parent.sh" 2>&1)"
+# Its start is read from the clock NOW, and its limit is the hang ceiling: this checks what the suite
+# passes on, never how fast it runs. With the start taken from the top of this suite and its 60 s
+# limit (a setting, not a measurement), a load window at 08:55 ET on 2026-10-24 (load average 152)
+# reached this case after its deadline had passed, and the suite was stopped before it could say
+# anything (#1620).
+pe_out="$(SUITE_WALL_TIMEOUT="$HANG_S" SUITE_WALL_STARTED=$(( $(date +%s) - 5 )) SUITE_WALL_PIDFILE="$TMPROOT/parent.wd" bash "$TMPROOT/parent.sh" 2>&1)"
 case "$pe_out" in
   clean*) check "#444 the injected start and pidfile are not passed on to what the suite runs" ok ;;
   *) check "#444 the injected start and pidfile are not passed on to what the suite runs" "out=$pe_out" ;;
