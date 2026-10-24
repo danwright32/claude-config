@@ -158,6 +158,16 @@ describe('the files a shell command writes, as this guard judges them', () => {
   test('what the words cannot name is not guessed at (#654)', () => {
     expect(judgedWrites({ files: [{ word: '$OUT' } as never], changes: [{ word: '*.txt', does: 'remove' } as never] })).toEqual([])
   })
+  // #1592: a script file handed a file as its argument (mod-kit's `runs`, #1586) may write it, which
+  // cannot be read before it runs, so each argument with a path is judged as an edit of it; one the
+  // reader could not place (a pattern) is not guessed at, as above.
+  test('a file handed to a script as its argument is an edit of it, once however often it is named', () => {
+    const runs = [
+      { args: [{ word: 'notes.txt', path: '/repo/notes.txt' }, { word: '*.md', folder: '/repo' } as never] },
+      { args: [{ word: '/repo/notes.txt', path: '/repo/notes.txt' }, { word: 'b.txt', path: '/repo/b.txt' }] },
+    ]
+    expect(judgedWrites({ files: [], changes: [{ path: '/repo/b.txt', does: 'remove' }], runs })).toEqual([{ path: '/repo/b.txt', removes: true }, { path: '/repo/notes.txt' }])
+  })
 })
 
 describe('what a removed folder holds of the other sessions', () => {

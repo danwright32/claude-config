@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
@@ -359,6 +359,24 @@ test('a file taken from what a command mentions is marked as such, and its menti
   expect(named.guessed).toEqual([])
   // Mentions read from the text given, the command's with its program's prose taken out.
   expect(await lastingFiles({ files: [{ word: '$F' }], unnamed: [] }, HOME, inCheckout, 'printf x >> "$F"; cat ~/.claude/CLAUDE.md', undefined, { text: 'printf x >> "$F"' })).toEqual([])
+})
+
+// #1592: a file handed to a script as its argument (mod-kit's `runs`) counts as a file the words
+// name, marked as handed so the refusal says so; one the words also write is said as written.
+test('a lasting memory file handed to a script counts, marked as handed, and is said as handed to a script', async () => {
+  const { inCheckout } = checkouts()
+  const runs = [{ args: [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }, { word: 'notes.md', path: '/Users/dan/Apps/slate/notes.md' }] }]
+  const read = { handed: [] as string[], guessed: [] as string[] }
+  expect(await lastingFiles({ files: [], unnamed: [], runs }, HOME, inCheckout, 'python3 x.py CLAUDE.md notes.md', undefined, read)).toEqual(['~/Apps/slate/CLAUDE.md'])
+  expect(read).toEqual({ handed: ['~/Apps/slate/CLAUDE.md'], guessed: [] })
+  const both = { handed: [] as string[] }
+  const files = [{ word: 'CLAUDE.md', path: '/Users/dan/Apps/slate/CLAUDE.md' }]
+  expect(await lastingFiles({ files, unnamed: [], runs }, HOME, inCheckout, 'python3 x.py CLAUDE.md > CLAUDE.md', undefined, both)).toEqual(['~/Apps/slate/CLAUDE.md'])
+  expect(both.handed).toEqual([])
+  expect(writesWhat(['~/a/CLAUDE.md'], [], ['~/a/CLAUDE.md'])).toBe('this hands lasting memory (~/a/CLAUDE.md) to a script, which may write it')
+  expect(writesWhat(['~/b/AGENTS.md', '~/a/CLAUDE.md'], [], ['~/a/CLAUDE.md'])).toBe(
+    'this writes lasting memory (~/b/AGENTS.md), and it hands lasting memory (~/a/CLAUDE.md) to a script, which may write it',
+  )
 })
 
 // Lessons review of #731: the hook's refusal read the failure's message with no guard, so a failure
