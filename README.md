@@ -833,6 +833,24 @@ merge is stopped. An empty one (`--repo=`) is no repository to gh, which reads t
 judged that way. The table carries each spelling, behind each wrapper, with the repository both
 recognisers must read.
 
+The lessons review reads a pull request's branch from a checkout of its repository, so a merge that
+names its repository (`-R`, `--repo` or a pull request link) from a folder that is not a checkout of
+it is read from one this Mac knows (claude-config#1607). Before, the review ran in the merge's folder
+whatever it was: from the home folder, as measured on 2026-10-23, it refused as "could not run: not inside a git repository",
+which read as a review failure and left `SKIP_PR_REVIEW=1` the only way through, and from a checkout
+of another repository it reviewed a commit that checkout does not hold. Now, when the folder is no
+checkout, or a checkout whose origin is a different GitHub repository, the gate looks for a checkout
+of the named one among the folders the lessons review has recorded working in (`pr-opened.tsv`, the
+pull request's own opening first, then `pr-reviews.tsv`, newest first) and then those directly inside
+the merge's folder, believing each only once its own origin names that repository, and says in its
+refusal which checkout the review was read from. Reviews are keyed by the origin, so it is the same
+review the pull request's own checkout started, held to the same read key. With none, the merge is
+refused saying a checkout of that repository is needed, where the merge ran and what that folder is,
+and to run the same command from a checkout. A folder whose origin is not a GitHub owner/name cannot
+be compared and is judged where it is, as before. The gate never clones or fetches a checkout of its
+own: the merge gate runs under a 60 second hook timeout, and a second copy whose origin is spelled
+differently would key, and pay for, a second review. `mt_review_checkout` in `lib/merge-target.sh`.
+
 Which gh or git subcommand a command runs is read in one place, `lib/shell-words.py` (claude-config#1188),
 and every hook asks it rather than keeping a reading of its own: the merge gates, the closing keyword
 check, the push scope check and the lessons review's start on a pull request creation, the durable
