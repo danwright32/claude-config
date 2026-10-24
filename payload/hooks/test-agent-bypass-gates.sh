@@ -9,8 +9,8 @@
 # Nothing refused either bypass, and the report the main session relied on was untrue. So:
 #
 #   no-verify-gate.sh        refuses an AGENT's git command that skips the repository's own git hooks
-#                            (--no-verify, commit -n, core.hooksPath, HUSKY=0), unless the main
-#                            session approved that agent with lib/no-verify-approval.sh
+#                            (--no-verify, commit -n, core.hooksPath, HUSKY=0), with no approval
+#                            that lets one through (claude-config#1666)
 #   monitor-action-gate.sh   refuses a Monitor whose command merges, pushes, commits or runs the merge
 #                            helper, because no PreToolUse(Bash) gate is ever run for a Monitor's
 #                            command, so a merge there meets no merge gate at all
@@ -31,7 +31,6 @@ suite_deadline_arm || exit $?
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/agent-overrides.py"
 NV_GATE="$DIR/no-verify-gate.sh"
-APPROVE="$DIR/lib/no-verify-approval.sh"
 MON_GATE="$DIR/monitor-action-gate.sh"
 HB_GATE="$DIR/handback-claims-gate.sh"
 . "$DIR/lib/settings-file.sh"
@@ -42,7 +41,7 @@ fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
 
 missing=""
-for f in "$LIB" "$NV_GATE" "$APPROVE" "$MON_GATE" "$HB_GATE"; do
+for f in "$LIB" "$NV_GATE" "$MON_GATE" "$HB_GATE"; do
   [ -f "$f" ] || missing="$missing $(basename "$f")"
 done
 if [ -n "$missing" ]; then
@@ -53,10 +52,8 @@ fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agent-bypass.XXXXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-export NO_VERIFY_APPROVAL_DIR="$WORK/approvals"
 export HANDBACK_CHECK_STATE_DIR="$WORK/handback-state"
 export CLAUDE_ISSUE_SPOOL_DIR="$WORK/spool"
-export NO_VERIFY_NOW=1000000
 
 # ---------------------------------------------------------------------------------------------
 echo "agent-overrides.py skips: what skips a repository's own git hooks"
@@ -90,7 +87,7 @@ skips_says "a plain commit is not a skip" 'git commit -m "x"' 1
 skips_says "a grep for the flag is not a skip" 'grep -rn -- "--no-verify" payload' 1
 
 # ---------------------------------------------------------------------------------------------
-echo "no-verify-gate.sh: an agent's skip of the git hooks is refused unless the main session approved it"
+echo "no-verify-gate.sh: an agent's skip of the git hooks is refused, with no approval that lets it through"
 
 bash_payload() { # bash_payload <command> [agent_id]
   python3 -c '
@@ -123,45 +120,31 @@ allowed "an agent's plain commit goes through"
 run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
 refused "an agent's commit --no-verify is refused"
 says "the refusal names the agent" "a1b2c3d4"
-says "the refusal names the approval the main session can give" "no-verify-approval.sh approve a1b2c3d4"
+says "the refusal says to hand back to the main session" "hand back to the main session"
+case "$ERR$OUT" in
+  *approval*|*approve*) check "the refusal offers no approval" "it still mentions one: ${ERR:0:400}" ;;
+  *) check "the refusal offers no approval" ok ;;
+esac
 run_hook "$NV_GATE" "$(bash_payload 'HUSKY=0 git push origin x' a1b2c3d4)"
 refused "an agent's HUSKY=0 push is refused"
 run_hook "$NV_GATE" "$(bash_payload 'git -c core.hooksPath=/dev/null commit -m x' a1b2c3d4)"
 refused "an agent's core.hooksPath commit is refused"
 
-# An agent may not approve itself: the approval is the main session's, and the gate is what tells the
-# two apart (only an agent's payload carries agent_id).
-run_hook "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 'slow lint'" a1b2c3d4)"
-refused "an agent running the approval itself is refused"
-says "and told the approval is the main session's" "main session"
-# Nor write one by hand (lessons review at f654145): the folder is the approval, so an agent's command
-# naming it is refused whatever it does there.
-run_hook "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\nreason=x\n' > ~/.claude-no-verify-approvals/a1b2c3d4" a1b2c3d4)"
-refused "an agent writing an approval file by hand is refused"
-run_hook "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\nreason=x\n' > ~/.claude-no-verify-approvals/a1b2c3d4")"
-allowed "the main session's command naming the folder is not this gate's business"
-run_hook "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 'slow lint'")"
-allowed "the main session running the approval goes through the gate"
-
-echo "no-verify-approval.sh: approve, expiry, revoke"
-out="$(bash "$APPROVE" approve a1b2c3d4 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && check "an approval with no reason is refused" ok || check "an approval with no reason is refused" "exit $rc: $out"
-out="$(bash "$APPROVE" approve 'a1/../x' because 2>&1)"; rc=$?
-[ "$rc" -ne 0 ] && check "an agent id that is not a plain id is refused" ok || check "an agent id that is not a plain id is refused" "exit $rc: $out"
-out="$(bash "$APPROVE" approve a1b2c3d4 "the pre-commit lint takes 20 minutes under load" 2>&1)"; rc=$?
-[ "$rc" -eq 0 ] && check "the main session approves one agent" ok || check "the main session approves one agent" "exit $rc: $out"
-run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
-allowed "the approved agent's --no-verify then goes through"
-says "and the allow says it was approved, with the reason" "the pre-commit lint takes 20 minutes"
-run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' ffff0000)"
-refused "another agent is still refused"
-NO_VERIFY_NOW=$((1000000 + 7201)) run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
-refused "the approval expires after two hours"
-out="$(bash "$APPROVE" list 2>&1)"
-case "$out" in *a1b2c3d4*) check "list names the approval" ok ;; *) check "list names the approval" "$out" ;; esac
-bash "$APPROVE" revoke a1b2c3d4 >/dev/null 2>&1
-run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
-refused "a revoked approval no longer lets it through"
+# No approval lets an agent skip the hooks (claude-config#1666; Dan, 2026-10-24: "Remove it"). #1587
+# had the main session approve one agent for two hours, by a file in ~/.claude-no-verify-approvals/;
+# an agent could forge that file with the Write tool, which no Bash gate sees. So an approval file left
+# where that approval lived, in force by its own expiry, must change nothing. HOME is pointed at a
+# throwaway folder so the file is planted there, never in the real one.
+FAKE_HOME="$WORK/home"
+mkdir -p "$FAKE_HOME/.claude-no-verify-approvals"
+printf 'approved=1\nexpires=9999999999\nreason=forged\n' > "$FAKE_HOME/.claude-no-verify-approvals/a1b2c3d4"
+HOME="$FAKE_HOME" run_hook "$NV_GATE" "$(bash_payload 'git commit --no-verify -m wip' a1b2c3d4)"
+refused "an agent's --no-verify is refused even with an approval file in force"
+if [ -e "$DIR/lib/no-verify-approval.sh" ]; then
+  check "the approval script is gone" "lib/no-verify-approval.sh still exists beside this suite"
+else
+  check "the approval script is gone" ok
+fi
 
 # ---------------------------------------------------------------------------------------------
 echo "monitor-action-gate.sh: a Monitor never carries a merge, a push or a commit"
@@ -322,12 +305,8 @@ refused "no-verify-gate.sh refuses an agent's skip it cannot read"
 says "naming python3" "python3"
 run_nopy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
 allowed "and lets a command naming no skip through"
-run_nopy "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\n' > ~/.claude-no-verify-approvals/a1b2c3d4" a1b2c3d4)"
-refused "no-verify-gate.sh with no python3 still refuses an agent writing an approval"
-run_nopy "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 x" a1b2c3d4)"
-refused "and an agent running the approval"
-run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"printf x > ~/.claude-no-verify-approvals/a1b2c3d4 # git"'
-refused "an agent payload that cannot be parsed and names the approvals folder is refused"
+run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m wip"'
+refused "an agent payload that cannot be parsed and names a skip is refused"
 run_nopy "$MON_GATE" "$(bash_payload 'until gh pr merge 7; do sleep 60; done' '' Monitor)"
 refused "monitor-action-gate.sh refuses a merge it cannot read"
 says "naming python3" "python3"
