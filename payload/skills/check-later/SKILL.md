@@ -19,7 +19,7 @@ to set the reminder. Dan types nothing after the command: everything comes from 
 | Column | Key | What goes in it |
 |---|---|---|
 | Task | `name` | Short imperative naming the issues: `Check the first Salesforce canary (#2173)` |
-| Status | `people` | Always `Waiting` |
+| Status | `people` | `Waiting` when written; the cold session moves it to `In progress`, then `Done` (step 4, part 7) |
 | Description | `Col07QBFU85SB` | The one line prompt (step 4) |
 | Start Date | `Col0CAWEL5RFH` | `YYYY-MM-DD` |
 | Project | `Col0CBFHLQX44` | A select: read its options, never assume them |
@@ -27,7 +27,8 @@ to set the reminder. Dan types nothing after the command: everything comes from 
 
 Start with `slack_read_list` on `F0CB5JMEM2P` and `schema_only: true`. If that fails (the connected
 Slack is not Pennie's, or has no access), stop: say the connected Slack cannot open the list, and add
-nothing. If a column above is missing or renamed, stop and say which.
+nothing. If a column above is missing or renamed, or Status has no `Waiting`, `In progress` or
+`Done` option (spelled exactly so), stop and say which.
 
 ## Steps
 
@@ -97,13 +98,23 @@ drafts of about 300 words (some 1,800 characters) overflowed both. Its parts, in
 6. The gate: `ask me with a picker before` closing, deleting, rolling back or changing a setting,
    and `propose a short numbered plan for my approval before building.` Any follow on from step 1
    comes here, as what to plan once Dan approves.
+7. Close the row, so a finished check never sits at `Waiting` reading like one nobody ran: the cold
+   session sets this row's Status to `In progress` with `slack_update_list_record` when it reports
+   the check and starts work, and to `Done` only once every follow on Dan approved in it is finished
+   (Dan, 2026-10-23). It names the row by its record id and the list id, never by its Task, because
+   a text match can find no row or the wrong one: `Then with slack_update_list_record set row
+   <record id> on list F0CB5JMEM2P, column people, to In progress as you report, and to Done once
+   every follow on I approved is finished (no call means it stays In progress).` The record id does
+   not exist until the row is added, so the draft carries `<record id>` and step 7 fills it in; an
+   update to an existing row (step 5) uses that row's id from the start.
 
 When the draft runs past 600 characters, the detail moves into a comment on the issue, never into a
 longer Description: the facts of part 3 (times, ids, tables, numbers, the source to read instead of
 a purged one), the full conditions of part 4 and any follow on plan. The comment opens with
-`Check later, <Start Date>:` and the Description keeps parts 1, 5 and 6 whole, names that comment by
-its heading and date in part 2, and keeps of parts 3 and 4 only what still fits. Count with
-`printf %s "<description>" | wc -m`.
+`Check later, <Start Date>:` and the Description keeps parts 1, 5, 6 and 7 whole, names that comment
+by its heading and date in part 2, and keeps of parts 3 and 4 only what still fits. Count with
+`printf %s "<description>" | wc -m`, with `<record id>` replaced by the longest record id step 5
+read, since the filled in id is what the 600 has to hold.
 
 Project is the select option matching the repo. When none matches, leave it empty; the card gets a
 step for it (step 8).
@@ -119,17 +130,21 @@ Dan set is for the old date.
 
 One AskUserQuestion per row, one question per call. Put any correction from step 2 in the question.
 The recommended option carries a preview holding Task, Start Date, Project, reminder time and the
-Description, and the comment from step 4 when there is one. Options: add it as drafted (Recommended), change the date, change the wording, skip it.
+Description, and the comment from step 4 when there is one. A new row's Description shows
+`<record id>` where its own id will go, and the question says step 7 fills it in. Options: add it as drafted (Recommended), change the date, change the wording, skip it.
 Nothing is written before Dan picks.
 
 ### 7. Write and read back
 
 Post the step 4 comment first, where there is one (`gh issue comment <n> --body-file <file>`), so the
 row never names a comment that is not there. Then `slack_add_list_record` (or
-`slack_update_list_record` for an approved update). Keep the Link each call returns. Then
-read the list back and confirm each Description holds no line break and at most 600 characters; if
-one does not, join it into one line or move more into the comment, write it again and read back
-again.
+`slack_update_list_record` for an approved update). Keep the Link and the record id each call
+returns. For a new row, replace `<record id>` in its Description with the record id the add
+returned and write that Description again with `slack_update_list_record`, so the cold session can
+find the row it has to close. Then read the list back and confirm each Description holds no line
+break and at most 600 characters, and names its own record id (not the placeholder, not another
+row's); if one does not, join it into one line, move more into the comment or put in the right id,
+write it again and read back again.
 
 ### 8. Pin the reminder card
 
@@ -163,3 +178,5 @@ step 2, in plain words.
 | A 300 word Description | At most 600 characters; the facts go in a comment on the issue it names |
 | Moving a Sunday evening end to Monday 9:00 AM | Keep the exact ET time the wait ends |
 | A prompt that leans on this session ("as discussed") | Name every fact, id and time the cold session needs |
+| A Description that ends at the report, so the row stays `Waiting` after the work is done | Part 7: the cold session sets `In progress` as it reports, `Done` once every approved follow on is finished |
+| Naming the row for the cold session by its Task | Its record id, written in after the add and read back |

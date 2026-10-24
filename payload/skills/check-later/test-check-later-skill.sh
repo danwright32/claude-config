@@ -62,6 +62,36 @@ check "what runs long moves into a comment on the issue" \
   "$(grep -qi 'moves into a comment on the issue' "$SKILL" && echo ok || echo "no rule for where the rest goes")"
 check "the read back measures the length too" \
   "$(grep -qi 'and at most 600 characters' "$SKILL" && echo ok || echo "no length check on read back")"
+# #1609, Dan 2026-10-23: the Description a cold session runs must tell it to close the loop on its
+# own row, naming the row by its record id (never a text match, which can find nothing or the wrong
+# row), moving Status to In progress when it reports and to Done only once every approved follow on
+# is finished. Read from inside step 4 and step 7, so a phrase elsewhere in the file cannot pass it,
+# and each joined into one line, so where the markdown happens to wrap cannot fail it.
+step4="$(awk '/^### 4\. /{on=1; next} /^### /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
+step7="$(awk '/^### 7\. /{on=1; next} /^### /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
+list_section="$(awk '/^## The list/{on=1; next} /^## /{on=0} on' "$SKILL" 2>/dev/null)"
+check "step 4 is there to read" "$([ -n "$step4" ] && echo ok || echo "no ### 4. section")"
+check "step 7 is there to read" "$([ -n "$step7" ] && echo ok || echo "no ### 7. section")"
+check "the Description template has a closing part for the row" \
+  "$(grep -qi 'Close the row' <<< "$step4" && echo ok || echo "no closing part in step 4")"
+check "the closing part sets the row with slack_update_list_record" \
+  "$(grep -qF 'slack_update_list_record' <<< "$step4" && echo ok || echo "no slack_update_list_record in step 4")"
+check "the closing part moves Status to In progress on reporting" \
+  "$(grep -qF 'Status to `In progress`' <<< "$step4" && echo ok || echo "no In progress step")"
+check "the closing part moves Status to Done" \
+  "$(grep -qF 'to `Done`' <<< "$step4" && echo ok || echo "no Done step")"
+check "Done waits for every follow on Dan approved" \
+  "$(grep -qi 'once every follow on I approved is finished' <<< "$step4" && echo ok || echo "no rule holding Done for approved follow ons")"
+check "the closing part names the row by its record id" \
+  "$(grep -qi 'record id' <<< "$step4" && echo ok || echo "no record id in step 4")"
+check "a long draft keeps the closing part whole" \
+  "$(grep -qi 'keeps parts 1, 5, 6 and 7 whole' <<< "$step4" && echo ok || echo "closing part not kept whole on overflow")"
+check "step 7 writes the record id back into the Description" \
+  "$(grep -qi 'record id' <<< "$step7" && grep -qF 'slack_update_list_record' <<< "$step7" && echo ok || echo "no write back of the record id")"
+check "the read back confirms the Description names its own record id" \
+  "$(grep -qi 'names its own record id' <<< "$step7" && echo ok || echo "no read back of the record id")"
+check "the schema check confirms the Status options the row moves through" \
+  "$(grep -qF '`In progress`' <<< "$list_section" && grep -qF '`Done`' <<< "$list_section" && echo ok || echo "The list section names no In progress and Done options")"
 check "the skill holds no long dash" \
   "$(perl -CSD -ne '$f = 1 if /[\x{2013}\x{2014}]/; END { exit($f ? 1 : 0) }' "$SKILL" && echo ok || echo "found one")"
 
