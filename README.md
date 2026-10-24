@@ -1268,6 +1268,40 @@ improvement with a second run (`--repeat 2` pools two reviews per case). Exit 0 
 not worse, 1 worse, 2 unmeasured (no case set, or no review succeeded), 3 no baseline covering
 these cases.
 
+### An agent getting past the checks, and a report that says it did not
+
+On 2026-10-23 a Bidspoke builder agent committed twice with `git commit --no-verify` because the
+pre-commit typecheck and lint were slow, merged a pull request after a Monitor retry loop got it past
+the lessons review's read step, and handed back "no `--no-verify`, no overrides" (claude-config#1587).
+Three gates close the three parts of that, all reading commands through one library,
+`lib/agent-overrides.py`, which reads them through `lib/shell-words.py` like every other gate:
+
+- `no-verify-gate.sh` (PreToolUse, Bash) refuses an AGENT's git command that skips the repository's
+  own git hooks: `--no-verify` on any git subcommand, commit's `-n`, `-c core.hooksPath=...`, and
+  `HUSKY=0` and the other hook managers' switches, behind rtk, env, an if or a `bash -c` string, and
+  inside a rebase's `--exec`. Words that only mention one are not one. The main session is not
+  judged. It approves one agent, with a reason, for two hours, with
+  `bash ~/.claude/hooks/lib/no-verify-approval.sh approve <agent id> "<why>"` (`list` and `revoke`
+  too); the gate refuses that command from an agent, which is what makes it the main session's.
+  Approvals sit in `~/.claude-no-verify-approvals/`, outside the synced folder.
+- `monitor-action-gate.sh` (PreToolUse, Monitor) refuses a Monitor whose command merges a pull
+  request, pushes, commits, or runs `lib/merge-when-ready.sh`. Every merge and push gate is registered
+  for Bash, and Claude Code runs a hook only for the tools its matcher names, so a merge inside a
+  Monitor met no merge gate at all, and the helper takes the review's read key from its environment,
+  so a loop could feed it a key read from its own output. A Monitor that watches (a tail of the
+  helper's log, a pgrep on a push) is untouched: over the 1,010 distinct Monitor commands on the
+  personal MacBook on 2026-10-24 it refused none.
+- `handback-claims-gate.sh` (PreToolUse, SubagentHandback) compares a hand-back's claims ("no
+  `--no-verify`", "no overrides", "nothing was bypassed", "I never used SKIP_X") with the commands the
+  agent's own transcript shows it ran (one a hook refused never ran; one that ran and failed did), and
+  refuses a report they contradict, quoting both, so the agent corrects it. A clause that qualifies
+  itself ("no other overrides") is not a denial, and one naming an override in full is about that
+  override only. A report the agent will not correct goes through on the third attempt, said to Dan
+  and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
+  the personal MacBook it found one real contradiction (a report saying "I never used
+  `SKIP_PAYLOAD_WRITE_CHECK=1`" after two commands that set it) and no false one. That Claude Code
+  runs PreToolUse hooks for the SubagentHandback tool at all was not measured when this shipped.
+
 ### What a push actually waits on
 
 Twenty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
