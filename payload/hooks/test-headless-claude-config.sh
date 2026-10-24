@@ -231,6 +231,11 @@ cat > "$FIX/after.py" <<'EOF'
 cmd = ["env", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p",
        "CLAUDE_CODE_PROMPT_CACHE_TTL=5m"]
 EOF
+# The same, on the launch line itself, in both languages.
+cat > "$FIX/sameline.py" <<'EOF'
+cmd = ["env", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "claude", "-p", "CLAUDE_CODE_PROMPT_CACHE_TTL=5m"]
+EOF
+printf 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude -p DISABLE_PROMPT_CACHING=1 < p.txt\n' > "$FIX/sameline.sh"
 run
 check "a choice that chooses nothing fails the scan" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
 says "DISABLE_PROMPT_CACHING=0 leaves caching on" "$OUT" "zero.sh:1"
@@ -238,6 +243,8 @@ says "an empty lifetime names none" "$OUT" "empty.sh:1"
 says "a longer variable name is a different variable" "$OUT" "longer.sh:1"
 says "a marker with no worded reason does not count" "$OUT" "dash.sh:2"
 says "a lifetime given as claude's argument is not its environment" "$OUT" "after.py:1"
+says "nor when it sits on the launch line in python" "$OUT" "sameline.py:1"
+says "nor in shell" "$OUT" "sameline.sh:1"
 
 echo "headless claude prompt cache lifetime: what it must leave alone"
 

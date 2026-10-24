@@ -6,7 +6,7 @@ CONFIG. A headless run inherits the whole global CLAUDE.md and every lessons ind
 something says otherwise, and nothing in the call shows it: measured 2026-09-23, the findings
 harvester took 64,868 input tokens with them and 29,663 without, on every harvest. So each launch
 this finds must either switch the config off on the launch itself (CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
-anywhere in the statement) or carry a `# claude-mds-ok: <reason>` comment in the comment block
+on the launch, as defined below) or carry a `# claude-mds-ok: <reason>` comment in the comment block
 directly above the statement, saying why it keeps the config or how it already excludes it.
 
 PROMPT CACHE LIFETIME. On a subscription a headless run writes its prompt to the ONE HOUR cache by
@@ -17,10 +17,10 @@ CLAUDE_CODE_PROMPT_CACHE_TTL=<lifetime> (5m costs 1.25 times the input price to 
 `# prompt-cache-ok: <reason>` comment directly above the statement saying why the default is right.
 
 The two are separate decisions with separate messages: a marker for one never answers the other.
-"On the launch" means anywhere in the statement up to and including the launch line: in shell, the
-backslash continued lines before it (so an export in the subshell that line opens counts); in
-Python, the statement the argv list belongs to, found by parsing the file, where an item AFTER the
-launch words is an argument to claude and not its environment.
+"On the launch" means anywhere in the statement BEFORE the launch words, on their line or an
+earlier one: in shell, the backslash continued lines before it (so an export in the subshell that
+line opens counts); in Python, the statement the argv list belongs to, found by parsing the file.
+Anything after the launch words, on any line, is an argument to claude and not its environment.
 
 Launches are FOUND by scanning, never listed by hand (L96): in shell, `claude -p` or
 `claude --print` as a command on a line that is not a comment; in Python, the two words as adjacent
@@ -142,8 +142,10 @@ def statement_start(lines, i, kind, spans):
     return i
 
 
-def decides(lines, start, i, switched, marker_re):
-    if switched("\n".join(lines[start:i + 1])):
+def decides(lines, start, i, col, switched, marker_re):
+    """Whether the statement starting at `start` decides, reading only what comes BEFORE the launch
+    words at column `col` of line i: anything after them is an argument to claude."""
+    if switched("\n".join(lines[start:i] + [lines[i][:col]])):
         return True
     j = start - 1
     while j >= 0 and is_comment(lines[j]):
@@ -179,14 +181,16 @@ def main(argv):
         for i, line in enumerate(lines):
             if is_comment(line):
                 continue
-            if not pattern.search(code_part(line) if kind == "shell" else line):
+            # code_part only trims the end of the line, so a column found in it is one in the line.
+            found = pattern.search(code_part(line) if kind == "shell" else line)
+            if not found:
                 continue
             checked += 1
             if kind == "python" and spans is None:
                 spans = python_statements(text) or []
             start = statement_start(lines, i, kind, spans)
             for name, switched, marker_re, _ in DECISIONS:
-                if not decides(lines, start, i, switched, marker_re):
+                if not decides(lines, start, i, found.start(), switched, marker_re):
                     bad[name].append(f"{path}:{i + 1}")
     if checked == 0:
         print("headless-claude-config: found no headless claude launch at all in "
