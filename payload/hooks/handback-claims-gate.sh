@@ -85,21 +85,25 @@ max="${HANDBACK_CHECK_MAX_REFUSALS:-2}"
 case "$max" in ''|*[!0-9]*) max=2 ;; esac
 count=0
 key="$(printf '%s' "$agent" | tr -c 'A-Za-z0-9_-' '_')"
+why="after $max refusals"
 if [[ -n "$key" ]] && mkdir -p "$state" 2>/dev/null; then
   count="$(cat "$state/$key" 2>/dev/null || echo 0)"
   case "$count" in ''|*[!0-9]*) count=0 ;; esac
-fi
-
-if [ "$count" -lt "$max" ]; then
-  printf '%s\n' "$((count + 1))" > "$state/$key" 2>/dev/null
-  printf '%s\n' "REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
+  # A refusal is given only once it is COUNTED: one that could not be recorded would read as the
+  # first every time, and the report could never be handed back (lessons review at 0fe61ad).
+  if [ "$count" -lt "$max" ] && printf '%s\n' "$((count + 1))" > "$state/$key" 2>/dev/null; then
+    printf '%s\n' "REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
 $found
 Correct the report before handing back: name each of these, say why it was done, and remove the claim that it was not. The main session acts on this report, so it has to say what happened (claude-config#1587)." >&2
-  exit 2
+    exit 2
+  fi
+  [ "$count" -lt "$max" ] && why="unrefused, because the gate could not keep count of its refusals in $state"
+else
+  why="unrefused, because the gate could not keep count of its refusals in $state"
 fi
 
 # Let through so the report is never stranded, but never unremarked.
-note="Agent $agent handed back a report that contradicts its own commands, after $max refusals. $(printf '%s' "$found" | tr '\n' ' ')"
+note="Agent $agent handed back a report that contradicts its own commands, $why. $(printf '%s' "$found" | tr '\n' ' ')"
 bash "$HOOK_DIR/lib/issue-spool.sh" note "${cwd:-.}" "$note" "handback-claims-gate.sh" "$parent" >/dev/null 2>&1 \
   || note="$note (and it could not be spooled for the end of turn review)"
 msg="handback-claims-gate.sh: $note"

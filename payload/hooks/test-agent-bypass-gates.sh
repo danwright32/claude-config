@@ -280,6 +280,15 @@ says "and it says the report contradicts the commands" "contradicts"
 if grep -rq "b6" "$CLAUDE_ISSUE_SPOOL_DIR" 2>/dev/null; then check "the contradiction is spooled for the main session" ok
 else check "the contradiction is spooled for the main session" "nothing under $CLAUDE_ISSUE_SPOOL_DIR mentions b6: $(ls -R "$CLAUDE_ISSUE_SPOOL_DIR" 2>&1)"; fi
 
+# A counter that cannot be stored must not refuse for ever (lessons review at 0fe61ad): with no record
+# of the refusals, every attempt would read as the first, and the report could never be handed back.
+T8="$WORK/proj/s-hb/subagents/agent-b8.jsonl"
+transcript "$T8" 'git commit --no-verify -m wip'
+: > "$WORK/not-a-dir"
+HANDBACK_CHECK_STATE_DIR="$WORK/not-a-dir/state" hb b8 'No overrides.'
+allowed "a contradicting report is let through when the refusal count cannot be kept"
+says "saying so" "could not keep count"
+
 hb b404 'No overrides.'
 allowed "an agent whose transcript cannot be found is let through"
 says "saying it could not check" "could not"
