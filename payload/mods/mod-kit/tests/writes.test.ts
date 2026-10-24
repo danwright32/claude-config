@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { commandWrites } from '../hooks/writes.ts'
 
 // The one reader of which files a Bash call writes (#705, L613): ask before saving kept its own and

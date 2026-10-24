@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { scopesAskedOffIn, triggersIn } from '../hooks/triggers.ts'
 
 // Each phrase the specs name (#616, #621), and the ones mined from Dan's chats that they quote.

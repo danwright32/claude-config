@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { errorText, missingOf, skewNews, skewSentence } from '../hooks/skew.ts'
 
 // #1281: a mod calls another mod's noun as that mod is loaded in this session. A mod reloaded

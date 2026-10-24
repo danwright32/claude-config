@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { lastSource, powerChange, powerOf, sleepRefusal } from '../hooks/power.ts'
 
 // pmset -g batt as it answers on a MacBook: the first line names the source in single quotes. AC is

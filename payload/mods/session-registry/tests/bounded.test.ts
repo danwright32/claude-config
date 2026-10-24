@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { remember } from '../hooks/bounded.ts'
 
 // The transcript lookup cache is keyed by session id, and every /clear mints a new one, so it is

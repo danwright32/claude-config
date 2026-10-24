@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
 
 // A stand-in guard that blocks every Bash call through the kit, as the real guards do.

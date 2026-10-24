@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { checksOf, COMPACT_SAVES_TOKENS, compactLines, LAVENDER, lookParts, span, unpushedOf } from '../hooks/facts.ts'
 
 const MIN = 60_000

@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
 import { typedAnswerText, typedMissing, typedToast } from '../hooks/typed.ts'
 

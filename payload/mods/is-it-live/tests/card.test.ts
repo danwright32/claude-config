@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { buttonId, cardOf, cardText, liveList, messageRow, pinnable, reasonToRefuse, stateOf, titleOf } from '../hooks/card.ts'
 
 // Is it live (claude-config#617): the card's state, words and the message row, settled with Dan on

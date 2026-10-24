@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type PollRun } from '../hooks/ghpoll.ts'
 
 // The mods' way onto the one polling policy, hooks/lib/gh-poll.sh (#1482): a mod cannot source a

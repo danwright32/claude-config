@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { PLANS, planOf, planText } from '../hooks/plan.ts'
 
 // The plan a login is on, named from its organizationType (#1156). The values are the ones Claude

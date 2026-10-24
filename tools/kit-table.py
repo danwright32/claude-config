@@ -62,7 +62,8 @@ def render(es):
 // mod-kit's real reader (#760 item 7). An entry failing here means the reader has moved and the
 // collision guard's tests are green against an answer it no longer gives: re-measure that entry
 // in the table, then run the tool again.
-import {{ describe, expect, test }} from 'claude-code/testing'
+import {{ describe, expect }} from 'claude-code/testing'
+import {{ test }} from './hang-ceiling.ts'
 import {{ commands, git }} from '../hooks/commands.ts'
 import {{ commandWrites }} from '../hooks/writes.ts'
 

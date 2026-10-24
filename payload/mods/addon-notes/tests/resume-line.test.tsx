@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 
 // The resume line Claude opens with after an amendment is drawn as one dim grey line (design
