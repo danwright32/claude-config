@@ -55,7 +55,9 @@ PLACED BY QUOTE (claude-config#1357). The reviewer writes a `Quote:` line under 
 line of code it means, and the runner moves the finding to the line of the file at the reviewed
 head that matches it, then drops the Quote line, so the stored review is one line per finding in
 the `<path>:<line>: ` shape every reader parses. A finding it cannot place keeps its number, marked
-as unchecked (place_findings below).
+as unchecked (place_findings below). An ok review records how its findings were placed as
+`placement=` (whole line, without the diff's marker, part of a line, path corrected, not placed),
+which lib/ai-review-placement.py reports with the marks (claude-config#1368).
 
 TWO KINDS, one reviewer (claude-config#560). `--kind push` (the default) is the advisory review of
 one push. `--kind pr` is the lessons review of a WHOLE branch that lib/pr-review.sh starts when a
@@ -74,6 +76,7 @@ import glob
 import hashlib
 import json
 import os
+import posixpath
 import re
 import signal
 import subprocess
@@ -272,12 +275,49 @@ def count_findings(text):
 # history and the answered findings match in pr-review.sh) was misled by it. So the prompt asks for
 # the line itself on a `Quote: <the line>` line under each finding, and this places the finding at
 # the line of the file AT THE REVIEWED HEAD that matches it: compared with surrounding white space
-# trimmed and runs of it collapsed, and one leading diff marker dropped only when the quote as given
-# matches nothing (claude-config#1368), nothing more, and the occurrence nearest the cited number when
-# the line is there more than once. The Quote line is then dropped, so a stored review stays one
-# line per finding for every reader. A finding that cannot be placed keeps the number it cited and
-# says why on its own line, so a guess never reads as a checked line (L11); it is never dropped.
+# trimmed and runs of it collapsed, the occurrence nearest the cited number when the line is there
+# more than once. The Quote line is then dropped, so a stored review stays one line per finding for
+# every reader. A finding that cannot be placed keeps the number it cited and says why on its own
+# line, so a guess never reads as a checked line (L11); it is never dropped.
+#
+# Each step after the first was added because this Mac's own reviews measured it (claude-config#1368,
+# lib/ai-review-placement.py, which reads the marks back): a quote matching no whole line is tried
+# without one leading diff marker, then as part of a line; and a cited path that is not a file at
+# the head is tried as the one changed file it fits. What each finding needed is counted, and the
+# review records the counts as `placement=` (placement_meta), since a placed finding carries no
+# trace of how, and a fallback that never fires reads exactly like one that is not there (L551).
 QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
+# A quote shorter than this, once normalised, is never looked for inside lines: a name or a short
+# statement (`e.amount;`, `return total;`) is inside too many of them to say which one it meant.
+# The quotes that matched no whole line in this Mac's reviews from 2026-10-20 to 2026-10-24 were
+# all 59 characters or longer, so the floor leaves every one of them placeable.
+PART_MIN = 20
+# The mark an unplaced finding carries, written in place_findings and read back here only (L41).
+MARK = re.compile(r"\[review harness: not placed, (.*?), so line [0-9]+ is the reviewer's own number, "
+                  r"unchecked\]")
+# Every reason _place gives, as the kind lib/ai-review-placement.py counts it by, tried in order: a
+# corrected path whose quote then matched nothing says both, and is first a path that is not a file.
+UNPLACED_KINDS = (
+    ("no_quote", "it quoted no line"),
+    ("empty_quote", "its Quote line was empty"),
+    ("head_unreadable", "the reviewed head could not be read"),
+    ("no_file", " is not a file at the reviewed head"),
+    ("no_match", "its quote matches no line of "),
+)
+
+
+def unplaced_kind(why):
+    """The kind of one unplaced finding's reason, as written in its mark, or "other"."""
+    for kind, phrase in UNPLACED_KINDS:
+        if phrase in why:
+            return kind
+    return "other"
+
+
+def placement_meta(counts):
+    """The `placement=` metadata value: how many were placed by the whole line, without the diff's
+    marker, by part of a line, and after their path was corrected, and how many were not placed."""
+    return ",".join(f"{k}:{counts.get(k, 0)}" for k in ("whole", "marker", "part", "path", "unplaced"))
 
 
 def _normal(s):
@@ -315,44 +355,83 @@ def _head_lines(repo_dir, sha, path, cache):
     return cache[path]
 
 
-def _place(path, cited, quote, repo_dir, sha, cache):
-    """(line, None) for a placed finding, or (None, why) for one that cannot be placed."""
+def _fitting_path(path, changed):
+    """The path a cited path that is not a file most plausibly names, or None. `..` and `.` are
+    resolved whatever else is known, since the cited path itself names the result. Beyond that only
+    the push's COMPLETE list of changed files is searched, for the one file the cited path ends with
+    (a stray folder in front, as `suites/payload/...`) or that ends with it (a folder left off, as a
+    bare `SKILL.md`); two that fit is no answer, and nothing is guessed from a partial list."""
+    p = posixpath.normpath(path)
+    if p != path and not p.startswith("../") and p not in (".", ".."):
+        return p
+    if not changed:
+        return None
+    fits = {c for c in changed if c != path and (path.endswith("/" + c) or c.endswith("/" + path))}
+    return fits.pop() if len(fits) == 1 else None
+
+
+def _match(lines, quote):
+    """(hits, how, tried): the lines the quote names and how it named them, or no hits and the
+    words saying what was tried. A whole line first, as given and then without one leading diff
+    marker, and only then part of a line in the same order, so a real line that begins with + or -
+    (a Markdown or YAML list item, a unary minus, a diff kept in the repository) and a line that IS
+    the quote both win over a line that merely contains it."""
+    forms = [quote]
+    # A quote copied from the diff can keep the diff's leading + or - (claude-config#1368). A quote
+    # that is nothing but the marker is not retried, since the empty rest would match every blank
+    # line. A leading space needs no such step: the quote is trimmed before it is compared.
+    if quote[0] in "+-" and quote[1:].strip():
+        forms.append(_normal(quote[1:]))
+    for n, form in enumerate(forms):
+        hits = [i for i, line in enumerate(lines, 1) if _normal(line) == form]
+        if hits:
+            return hits, ("whole" if n == 0 else "marker"), ""
+    tried = f", as given or without its leading {quote[0]}" if len(forms) > 1 else ""
+    if all(len(f) < PART_MIN for f in forms):
+        return [], None, f"{tried}, and is too short to be placed by part of a line"
+    for form in forms:
+        if len(form) >= PART_MIN:
+            hits = [i for i, line in enumerate(lines, 1) if form in _normal(line)]
+            if hits:
+                return hits, "part", ""
+    return [], None, f"{tried}, whole or in part"
+
+
+def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
+    """(path, line, how, None) for a placed finding, how being whole, marker or part and path the
+    one it was placed in, or (path, None, None, why) for one that cannot be placed."""
     if quote is None:
-        return None, "it quoted no line"
+        return path, None, None, "it quoted no line"
     if not quote:
-        return None, "its Quote line was empty"
+        return path, None, None, "its Quote line was empty"
     try:
         lines = _head_lines(repo_dir, sha, path, cache)
+        fixed = None
+        if lines is None:
+            fixed = _fitting_path(path, changed)
+            lines = _head_lines(repo_dir, sha, fixed, cache) if fixed else None
+            if lines is None:
+                return path, None, None, f"{path} is not a file at the reviewed head"
     except (OSError, subprocess.SubprocessError):
-        return None, "the reviewed head could not be read to check it"
-    if lines is None:
-        return None, f"{path} is not a file at the reviewed head"
-    hits = _hits(lines, quote)
-    tried = ""
-    # A quote copied from the diff can keep the diff's leading + or - (claude-config#1368). The
-    # quote as given is tried first and wins whenever it matches, because a real line can begin with
-    # either (a Markdown or YAML list item, a unary minus, a diff kept in the repository); only a
-    # quote matching nothing loses that one marker and is tried again. A quote that is nothing but
-    # the marker is not retried, since the empty rest would match every blank line. A leading space
-    # needs no such step: the quote is trimmed before it is compared.
-    if not hits and quote[0] in "+-" and quote[1:].strip():
-        hits = _hits(lines, _normal(quote[1:]))
-        tried = f", as given or without its leading {quote[0]}"
+        return path, None, None, "the reviewed head could not be read to check it"
+    hits, how, tried = _match(lines, quote)
     if not hits:
         shown = quote if len(quote) <= 60 else quote[:60] + "..."
-        return None, f'its quote matches no line of {path} at the reviewed head{tried}: "{shown}"'
-    return min(hits, key=lambda n: (abs(n - cited), n)), None
+        miss = f'its quote matches no line of {fixed or path} at the reviewed head{tried}: "{shown}"'
+        # A corrected path is kept only when the quote proves it; otherwise the cited one stays,
+        # and the mark says what was tried in its place.
+        return path, None, None, (f"{path} is not a file at the reviewed head, and {miss}" if fixed else miss)
+    return fixed or path, min(hits, key=lambda n: (abs(n - cited), n)), how, None
 
 
-def _hits(lines, quote):
-    return [n for n, line in enumerate(lines, 1) if _normal(line) == quote]
-
-
-def place_findings(text, repo_dir, sha):
+def place_findings(text, repo_dir, sha, changed=None):
     """(text, counts): each finding moved to the line its Quote names, its Quote line dropped, and
-    every approximate `~N` written as a plain number. counts holds how many were placed and not."""
+    every approximate `~N` written as a plain number. counts holds how many were placed and not,
+    and of those placed, how many by the whole line, without the diff's marker, by part of a line,
+    and in a corrected path. changed is the push's complete list of changed files, or None."""
     lines = text.splitlines()
-    out, counts, cache = [], {"placed": 0, "unplaced": 0}, {}
+    out, cache = [], {}
+    counts = {"placed": 0, "unplaced": 0, "whole": 0, "marker": 0, "part": 0, "path": 0}
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -372,10 +451,13 @@ def place_findings(text, repo_dir, sha):
                 quote = _quoted(q.group(1))
                 i = k
         path, cited, rest = m.group(1), int(m.group(3)), line[m.end():]
-        placed, why = _place(path, cited, quote, repo_dir, sha, cache)
+        where, placed, how, why = _place(path, cited, quote, repo_dir, sha, cache, changed)
         if why is None:
             counts["placed"] += 1
-            out.append(f"{path}:{placed}: {rest}")
+            counts[how] += 1
+            if where != path:
+                counts["path"] += 1
+            out.append(f"{where}:{placed}: {rest}")
         else:
             counts["unplaced"] += 1
             out.append(f"{path}:{cited}: {rest} [review harness: not placed, {why}, so line {cited} "
@@ -833,8 +915,10 @@ def main(argv):
             else:
                 status = "ok"
                 # Placed first, so every later reading of a finding sees the line it is about.
-                text, _ = place_findings(text, a.repo_dir, a.sha)
-                text, marked = mark_false_absences(text, changed_files(a.diff_file))
+                changed = changed_files(a.diff_file)
+                text, placement = place_findings(text, a.repo_dir, a.sha, changed)
+                meta["placement"] = placement_meta(placement)
+                text, marked = mark_false_absences(text, changed)
                 if marked:
                     text = (f"Note: {marked} finding below claims a file this push changed was not changed; "
                             "the complete list of changed files says otherwise, and each is marked.\n\n"

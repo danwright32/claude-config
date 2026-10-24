@@ -1171,8 +1171,18 @@ printf 'export const gone = 1;\n' > "$PLACE/src/old.ts"
 # A file whose real lines begin with "-", as a Markdown list does: line 2 is the item, line 3 the
 # same words without the marker, so a quote of the item that is wrongly stripped lands on line 3.
 mkdir -p "$PLACE/docs"
-printf '# Steps\n- run the tests\nrun the tests\n' > "$PLACE/docs/list.md"
-P add src/ledger.ts src/old.ts docs/list.md; P commit -q -m seed
+printf '# Steps\n- run the tests\nrun the tests\n- check the ledger totals before release\ncheck the ledger totals before release\n' > "$PLACE/docs/list.md"
+# Prose, whose lines are long, so a reviewer quotes a phrase of one rather than the whole of it
+# (claude-config#1368: every quote that matched nothing in this Mac's reviews from 2026-10-20 to
+# 2026-10-24 was part of one line). Lines 2 and 5 are the same, so the nearest one can be told.
+cat > "$PLACE/docs/notes.md" <<'EOF'
+# Notes
+The bedtime answer is written into the shared file so it is asked once, and kept there.
+
+A second paragraph says the shared file is written once a night by the scheduled sync.
+The bedtime answer is written into the shared file so it is asked once, and kept there.
+EOF
+P add src/ledger.ts src/old.ts docs/list.md docs/notes.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
 place_out="$(python3 - "$RUNNER" "$PLACE" "$PLACE_SHA" <<'EOF'
@@ -1183,10 +1193,11 @@ spec.loader.exec_module(m)
 repo, sha = sys.argv[2], sys.argv[3]
 
 S = " Should be: fix it. [severity: major]"
-def one(name, answer, want_line, want_mark):
+def one(name, answer, want_line, want_mark, changed=None):
     """want_line: the location the finding must start with; want_mark: a phrase the line must
-    carry, or None for no harness mark at all."""
-    text, counts = m.place_findings(answer, repo, sha)
+    carry, or None for no harness mark at all; changed: the push's complete list of changed files,
+    or None when there is none."""
+    text, counts = m.place_findings(answer, repo, sha, changed)
     lines = [l for l in text.splitlines() if m.FINDING.match(l)]
     problems = []
     if len(lines) != 1:
@@ -1263,6 +1274,63 @@ one("a quote that is only a diff marker is never stripped to nothing and matched
     "src/ledger.ts:3: something is wrong here." + S + "\nQuote: +",
     "src/ledger.ts:3: ", "matches no line of src/ledger.ts")
 
+# Part of a line (claude-config#1368). Measured on this Mac over 646 reviews from 2026-10-20 to
+# 2026-10-24: 9 of the 13 findings left unplaced quoted a phrase of one long line (prose, a table
+# row, a comment), and every one of the 9 was a phrase of exactly one line of its file. So a quote
+# matching no whole line, as given or without its marker, is looked for inside lines, the nearest
+# occurrence to the cited number winning, but only a quote of 20 characters or more, since a
+# shorter one (a variable name, `return total;`) is inside too many lines to say which it meant.
+one("a quote that is a phrase of one long line places on that line",
+    "docs/notes.md:4: the answer is said to be shared." + S +
+    "\nQuote: written into the shared file so it is asked once",
+    "docs/notes.md:5: ", None)
+one("a phrase found in two lines goes to the one nearest the cited number",
+    "docs/notes.md:1: the answer is said to be shared." + S +
+    "\nQuote: written into the shared file so it is asked once",
+    "docs/notes.md:2: ", None)
+one("a quote that is a whole line wins over a nearer line that only contains it",
+    "docs/list.md:4: the step names no tool." + S + "\nQuote: check the ledger totals before release",
+    "docs/list.md:5: ", None)
+one("a phrase copied with the diff's leading + places once the marker is dropped",
+    "docs/notes.md:4: the answer is said to be shared." + S +
+    "\nQuote: +written into the shared file so it is asked once",
+    "docs/notes.md:5: ", None)
+one("a quote shorter than 20 characters is never placed by part of a line, and says so",
+    "src/ledger.ts:3: the amount is unchecked." + S + "\nQuote: e.amount;",
+    "src/ledger.ts:3: ", "too short to be placed by part of a line")
+one("a phrase in no line at all keeps its number and says part of a line was tried",
+    "docs/notes.md:4: the answer is said to be shared." + S +
+    "\nQuote: written into the local file so it is asked twice",
+    "docs/notes.md:4: ", "matches no line of docs/notes.md at the reviewed head, whole or in part")
+
+# A cited path that is not a file at the head (claude-config#1368: the other 4 of the 13). One held
+# `..`, two a stray folder in front of the real path, one a bare file name. Each is tried as the
+# one changed file of the push whose path it fits, and only kept when its quote then places it
+# there, so a corrected path is always one the quote proved.
+CH = ["src/ledger.ts", "docs/list.md", "src/old.ts"]
+one("a path with a stray folder in front is read as the changed file it ends with",
+    "suites/src/ledger.ts:3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "src/ledger.ts:5: ", None, CH)
+one("a bare file name is read as the one changed file of that name",
+    "ledger.ts:3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "src/ledger.ts:5: ", None, CH)
+one("a path holding .. is read as the path it names",
+    "src/sub/../ledger.ts:3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "src/ledger.ts:5: ", None)
+one("a bare file name two changed files share is not guessed between",
+    "ledger.ts:3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "ledger.ts:3: ", "ledger.ts is not a file at the reviewed head", CH + ["lib/ledger.ts"])
+one("with no complete list of changed files a stray folder is not guessed away",
+    "suites/src/ledger.ts:3: total is never checked." + S + "\nQuote: total += e.amount;",
+    "suites/src/ledger.ts:3: ", "suites/src/ledger.ts is not a file at the reviewed head", None)
+one("a corrected path whose file does not hold the quote keeps the cited path and says both",
+    "suites/src/ledger.ts:5: total is multiplied." + S + "\nQuote: total *= e.amount;",
+    "suites/src/ledger.ts:5: ",
+    "suites/src/ledger.ts is not a file at the reviewed head, and its quote matches no line of src/ledger.ts", CH)
+one("a changed file deleted by the push is still not a file at the head",
+    "src/old.ts:1: gone is still imported elsewhere." + S + "\nQuote: export const gone = 1;",
+    "src/old.ts:1: ", "src/old.ts is not a file at the reviewed head", CH)
+
 # Several findings at once: each takes its own quote, and the lines that are not findings stay.
 two, counts = m.place_findings(
     "src/ledger.ts:3: first." + S + "\nQuote: total += e.amount;\n"
@@ -1271,8 +1339,40 @@ two, counts = m.place_findings(
 got = [l.split(" ")[0] for l in two.splitlines() if m.FINDING.match(l)]
 print("PASS\tthree findings each placed by their own quote" if got == ["src/ledger.ts:5:", "src/ledger.ts:1:", "src/ledger.ts:16:"]
       else f"FAIL\tthree findings each placed by their own quote: {got} | {two!r}")
-print("PASS\tthe counts say how many were placed and how many not" if counts == {"placed": 2, "unplaced": 1}
+print("PASS\tthe counts say how many were placed and how many not" if
+      counts == {"placed": 2, "unplaced": 1, "whole": 2, "marker": 0, "part": 0, "path": 0}
       else f"FAIL\tthe counts say how many were placed and how many not: {counts}")
+# HOW each was placed is counted too, since a placed finding carries no trace of it and a fallback
+# that never fires reads exactly like one that is not there (L551).
+_, counts = m.place_findings(
+    "src/ledger.ts:3: a." + S + "\nQuote: total += e.amount;\n"
+    "src/ledger.ts:3: b." + S + "\nQuote: +    total += e.amount;\n"
+    "docs/notes.md:4: c." + S + "\nQuote: written into the shared file so it is asked once\n"
+    "ledger.ts:3: d." + S + "\nQuote: total += e.amount;\n"
+    "src/ledger.ts:3: e." + S, repo, sha, ["src/ledger.ts"])
+print("PASS\tthe counts say how each finding was placed" if
+      counts == {"placed": 4, "unplaced": 1, "whole": 2, "marker": 1, "part": 1, "path": 1}
+      else f"FAIL\tthe counts say how each finding was placed: {counts}")
+meta = m.placement_meta(counts)
+print("PASS\tthe counts are written as one metadata value" if
+      meta == "whole:2,marker:1,part:1,path:1,unplaced:1"
+      else f"FAIL\tthe counts are written as one metadata value: {meta!r}")
+# Every reason a finding can be left unplaced is one the report can name (lib/ai-review-placement.py
+# reads the marks back), so none of them falls into its catch all.
+kinds = []
+for answer, ch, s in (
+        ("src/ledger.ts:5: x." + S, None, sha),
+        ("src/ledger.ts:5: x." + S + "\nQuote: ", None, sha),
+        ("src/ledger.ts:5: x." + S + "\nQuote: total += e.amount;", None, "0" * 40),
+        ("src/old.ts:1: x." + S + "\nQuote: export const gone = 1;", None, sha),
+        ("src/ledger.ts:5: x." + S + "\nQuote: total *= e.amount;", None, sha),
+        ("suites/src/ledger.ts:5: x." + S + "\nQuote: total *= e.amount;", CH, sha)):
+    t, _ = m.place_findings(answer, repo, s, ch)
+    mk = m.MARK.search(t)
+    kinds.append(m.unplaced_kind(mk.group(1)) if mk else None)
+print("PASS\tevery reason a finding is left unplaced reads back as its own kind" if
+      kinds == ["no_quote", "empty_quote", "head_unreadable", "no_file", "no_match", "no_file"]
+      else f"FAIL\tevery reason a finding is left unplaced reads back as its own kind: {kinds}")
 # The approximate marker is a finding to the parse the runner gates on, so an answer whose only
 # finding is approximate is a review, not "unparsed".
 n = m.count_findings("src/ledger.ts:~253: total is never checked." + S)
@@ -1280,7 +1380,7 @@ print("PASS\tan approximate finding is counted" if n == 1 else f"FAIL\tan approx
 # A head the runner cannot read places nothing and says so on every finding, never guessing.
 text, counts = m.place_findings("src/ledger.ts:3: x." + S + "\nQuote: total += e.amount;", repo, "0" * 40)
 print("PASS\ta head that cannot be read leaves the finding at its number, marked" if
-      text.startswith("src/ledger.ts:3: ") and "could not be read" in text and counts == {"placed": 0, "unplaced": 1}
+      text.startswith("src/ledger.ts:3: ") and "could not be read" in text and counts["placed"] == 0 and counts["unplaced"] == 1
       else f"FAIL\ta head that cannot be read leaves the finding at its number, marked: {counts} | {text!r}")
 EOF
 )"
@@ -1292,7 +1392,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 22 ] && ok || bad "the placement fixtures ran $place_ran of 22 cases"
+[ "$place_ran" -eq 38 ] && ok || bad "the placement fixtures ran $place_ran of 38 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
@@ -1317,6 +1417,7 @@ check "the finding citing a blank line is stored at the line it quoted" "src/pla
 check_not "and its Quote line is not stored" "Quote:" "$placed_body"
 check "the approximate finding with no quote is stored at its number" "src/placed.ts:1: total has no type" "$placed_body"
 check "marked as not placed" "quoted no line" "$placed_body"
+check "the review records how its findings were placed" "placement=whole:1,marker:0,part:0,path:0,unplaced:1" "$placed_body"
 check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$placed_body"
 
 echo
