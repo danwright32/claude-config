@@ -128,7 +128,7 @@ type ScopeModes = {
 // modes, which reads the one sleep record, and refused without asking him. Answers the refusal, or
 // null while awake. Scope modes not loaded, or a check that fails, is awake: the save is asked about
 // as usual, and a question while asleep is refused by scope modes itself.
-const whileAsleep = async ($: EngineInterface, { files, guessed }: Targets, rule: string): Promise<string | null> => {
+const whileAsleep = async ($: EngineInterface, { files, guessed, handed }: Targets, rule: string): Promise<string | null> => {
   // The noun is spelled out at each call, as the engine requires.
   try {
     if (!(await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.isAsleep())) return null
@@ -136,7 +136,7 @@ const whileAsleep = async ($: EngineInterface, { files, guessed }: Targets, rule
     return null
   }
   const where = files.join(', ')
-  const head = `Not saved: ${writesWhat(files, guessed)}, and Dan is asleep (sleep mode), so he is not asked tonight.`
+  const head = `Not saved: ${writesWhat(files, guessed, handed)}, and Dan is asleep (sleep mode), so he is not asked tonight.`
   const tail = 'Do not write it any other way; carry on with the rest of the work.'
   try {
     const r = await ($ as unknown as { scopeModes: ScopeModes }).scopeModes.sleepNote({ kind: 'save', files, rule })
@@ -181,8 +181,9 @@ const isSetIn = async ($: EngineInterface, home: string): Promise<IsSet> => {
 }
 
 // The files a call would save lasting memory to, and among them those taken only from what a Bash
-// command mentions, since its words do not name the file it writes (#940), which the refusal says.
-type Targets = { files: string[]; guessed: string[] }
+// command mentions, since its words do not name the file it writes (#940), and those found only as a
+// file handed to a script as its argument (#1592), each of which the refusal says.
+type Targets = { files: string[]; guessed: string[]; handed: string[] }
 
 // A Bash command as its mentions are read (#940): each python program in it that only writes files,
 // found in the command as written, with the lasting memory its comments and sentences name taken out
@@ -232,7 +233,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   const inCheckout: InCheckout = async abs => (await $.modkit.workingTree({ path: abs })) !== null
   if (tool !== 'Bash') {
     const abs = resolvePath(String(input.file_path ?? ''), cwd, home)
-    return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [] }
+    return { files: (await lastingMemory(abs, home, inCheckout)) ? [display(abs, home)] : [], guessed: [], handed: [] }
   }
   const command = String(input.command ?? '')
   const isSet = await isSetIn($, home)
@@ -240,7 +241,8 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
   // Read only where the command mentions lasting memory at all, the one case it can change anything.
   const text = mentionsAny(command) ? await mentionText($, command) : command
   const guessed: string[] = []
-  const out = await lastingFiles(w, home, inCheckout, command, isSet, { text, guessed })
+  const handed: string[] = []
+  const out = await lastingFiles(w, home, inCheckout, command, isSet, { text, guessed, handed })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files, never by every path
     // its text quotes (#830: a heredoc editing a test file quoted a memory path as test data).
@@ -273,7 +275,7 @@ const lastingTargets = async ($: EngineInterface, tool: string, input: Record<st
       for (const m of await mentioned(await $.fs.read(f), home, inCheckout, isSet)) if (!out.includes(m)) out.push(m)
     }
   }
-  return { files: out, guessed }
+  return { files: out, guessed, handed }
 }
 
 // What would be saved, as the rule's text: a new file's whole text, the lines a rewrite adds, an
@@ -411,9 +413,9 @@ const lapsedNote = (x: AskBeforeSavingApproval) =>
     : `Dan's earlier ${pressed(x)} on this save lapsed after ${MINUTES} minutes unused, so he has to be asked again.`
 
 // What a subagent is told when its write would save lasting memory: refused, never asked (#777).
-const agentRefusal = ({ files, guessed }: Targets) =>
-  (guessed.length
-    ? `Not saved: ${writesWhat(files, guessed)}. Only the main session may write it, after asking Dan; a subagent never asks him. `
+const agentRefusal = ({ files, guessed, handed }: Targets) =>
+  (guessed.length || handed.length
+    ? `Not saved: ${writesWhat(files, guessed, handed)}. Only the main session may write it, after asking Dan; a subagent never asks him. `
     : `Not saved: this would write lasting memory (${files.join(', ')}), which only the main session may do, after asking Dan; a subagent never asks him. `) +
   `If this is not a save to memory (a test fixture, or a file whose text only mentions one), make the change with Edit or Write on the file itself. ` +
   `If it is a standing rule, put the rule and the file in your final report, and the main session will ask him.`
@@ -647,7 +649,7 @@ export const register: Register = on => {
     const q: AskBeforeSavingQuestion = { id, tool: tool as AskBeforeSavingQuestion['tool'], input, files, key }
     // One waiting question per save: the same save refused again replaces the one before.
     await update($, pendingRef, p => [...(p ?? []).filter(x => x.key !== key), q])
-    const ask = askInstruction(id, files, targets.guessed)
+    const ask = askInstruction(id, files, targets.guessed, targets.handed)
     const late = lapsed ?? lesson.lapsed
     return { decision: 'deny', reason: late ? `${lapsedNote(late)} ${ask}` : ask }
   }).catch(($, e, next) => ({ decision: 'deny', reason: cannotCheck(next.error) }))

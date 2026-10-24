@@ -357,6 +357,21 @@ describe('LESSONS.md, written by any route in command position (L673)', () => {
     ])
       expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
   })
+  // #1592: a script file handed LESSONS.md as its argument (mod-kit's `runs`, #1586) wrote it past
+  // this check, since what the script does with it cannot be read before it runs. Held as an Edit is.
+  test('a script file handed LESSONS.md as its argument, by any route that runs one (#1592)', async () => {
+    for (const c of [
+      'python3 x.py payload/LESSONS.md',
+      'python3 tools/add.py --file ~/.claude/LESSONS.md',
+      'bash tools/fix.sh --in=payload/LESSONS.md',
+      './tidy.sh payload/LESSONS.md',
+      'cd payload && node add.mjs LESSONS.md',
+    ])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: 'write to LESSONS.md' })
+    // The same scripts handed an ordinary file, or nothing, are not this check's.
+    for (const c of ['python3 x.py payload/notes.md', 'bash tools/fix.sh --in=README.md', './tidy.sh', 'cd payload && node add.mjs index.md'])
+      expect({ c, r: await bash(c) }).toEqual({ c, r: undefined })
+  })
 })
 
 describe('outward tools: every write under claude.ai, Chrome and PostHog, and database writes', () => {

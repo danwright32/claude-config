@@ -146,7 +146,10 @@ export const latestRequest = (tail: string): string | undefined => {
 // Decided for #654 (docs/mods-design.md): what the words do not name is not guessed at. A script, a
 // python -c, a make, or a path built from a variable, a glob or a command substitution writes
 // files this cannot see, and those are neither judged nor noted; nor is a folder made or a mode
-// changed, which touches no other session's work.
+// changed, which touches no other session's work. Since #1592 a file handed to a script file as its
+// argument (mod-kit's `runs`, #1586) is judged and noted as an edit of it, as an Edit of that file is:
+// what the script does with it cannot be read before it runs. What a script writes that no argument
+// names is still not seen.
 export type ShellWrite = { path: string; sources?: string[]; removes?: true; tree?: true }
 
 // What git itself changes is judged the same way (#1136, Dan, 2026-10-13): a checkout of a path and a
@@ -157,6 +160,7 @@ type Written = {
   files: { path?: string; sources?: string[]; mayBeFolder?: true; tree?: true }[]
   changes: { path?: string; does: string; tree?: true }[]
   byGit?: { path?: string; does: 'write' | 'remove'; tree?: true }[]
+  runs?: { args: { path?: string }[] }[]
 }
 export const judgedWrites = (w: Written): ShellWrite[] => {
   const out: ShellWrite[] = []
@@ -178,5 +182,6 @@ export const judgedWrites = (w: Written): ShellWrite[] => {
     const tree = g.tree ? { tree: true as const } : {}
     add(g.path, g.does === 'remove' ? { removes: true, ...tree } : tree)
   }
+  for (const r of w.runs ?? []) for (const a of r.args) if (a.path) add(a.path, {})
   return out
 }

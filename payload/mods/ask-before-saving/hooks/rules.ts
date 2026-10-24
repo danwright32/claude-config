@@ -7,7 +7,12 @@ export const MOD = 'ask-before-saving'
 
 // What a command writes, as mod-kit's contract spells it (types/index.d.ts there): plain data, since
 // only plain data crosses between mods.
-export type Writes = { files: { word: string; path?: string }[]; unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[] }
+// `runs` is each script file a command runs with the files it is handed as arguments (#1586).
+export type Writes = {
+  files: { word: string; path?: string }[]
+  unnamed: { what: string; words: string[]; inputs: string[]; targets?: string[] }[]
+  runs?: { args: { word: string; path?: string }[] }[]
+}
 
 // The lasting memory the spec names: the memory folder, MEMORY.md, ~/.claude/CLAUDE.md, LESSONS.md,
 // and a project's CLAUDE.md or AGENTS.md. By file name for the last four, so a project or the config
@@ -72,6 +77,9 @@ const unread = (f: { word: string; path?: string }) => !f.path || THROUGH.test(f
  * its python programs hold taken out (#940). One that mentions none goes through
  * (docs/mods-design.md). The one exception: a target through a variable the command itself fixed
  * for certain, at the path the reader gave (certainPath, #1241), is judged by that path alone.
+ * A file handed to a script file as its argument (mod-kit's `runs`, #1592) is judged as a file the
+ * words name, as an Edit of it is, since what the script does with it cannot be read before it runs;
+ * one found only that way is put in `read.handed`, so the refusal says it is handed to a script.
  */
 export const lastingFiles = async (
   w: Writes,
@@ -87,10 +95,14 @@ export const lastingFiles = async (
     if (!out.includes(s)) out.push(s)
   }
   let mentions: string[] | undefined
-  for (const f of w.files) {
+  const handed: string[] = []
+  // The files the words name, then those handed to a script as its arguments (#1592), each judged alike.
+  const words = [...w.files.map(f => ({ ...f, run: false })), ...(w.runs ?? []).flatMap(r => r.args.map(a => ({ ...a, run: true })))]
+  for (const f of words) {
     const byName = !f.path && NAMES.has(f.word.split('/').pop() ?? '') && (await throughSettable(f.word, command, isSet))
     const hit = f.path ? (await lastingMemory(f.path, home, inCheckout)) && display(f.path, home) : byName && f.word
     if (hit) {
+      if (f.run && !out.includes(hit)) handed.push(hit)
       add(hit)
       named.push(hit)
     }
@@ -102,6 +114,7 @@ export const lastingFiles = async (
       for (const m of (mentions ??= await mentioned(read.text ?? command, home, inCheckout, isSet))) add(m)
   }
   if (read.guessed) for (const m of out) if (!named.includes(m) && !read.guessed.includes(m)) read.guessed.push(m)
+  if (read.handed) for (const m of handed) if (!read.handed.includes(m)) read.handed.push(m)
   return out
 }
 
@@ -109,9 +122,10 @@ export const lastingFiles = async (
  * How a judgement reads what a command mentions (#940): `text`, the command with the sentences its
  * programs hold taken out (withoutPythonText), when not the command itself; and `guessed`, where the
  * files found only by what the command mentions are put, so the refusal can say that is what they
- * are and a misfire shows.
+ * are and a misfire shows; and `handed`, where the files found only as a script's argument are put
+ * (#1592), so the refusal says what it measured: that the file is handed to a script.
  */
-export type MentionRead = { text?: string; guessed?: string[] }
+export type MentionRead = { text?: string; guessed?: string[]; handed?: string[] }
 
 /**
  * Whether a variable could hold a value when the command runs (#777). Each Bash call is a fresh
@@ -565,7 +579,14 @@ export const addsLesson = (added: string, rule: string): boolean => {
  * command mentions because its words do not name the file it writes, that this is so (#940), so a
  * misfire shows as one. A message may claim only what its check measured (L11).
  */
-export const writesWhat = (files: string[], guessed: string[] = []): string => {
+export const writesWhat = (files: string[], guessed: string[] = [], handed: string[] = []): string => {
+  // A file handed to a script as its argument (#1592) is said as that, never as a file it writes:
+  // what the script does with it cannot be read before it runs.
+  if (handed.length) {
+    const rest = files.filter(f => !handed.includes(f))
+    const toScript = `lasting memory (${handed.join(', ')}) to a script, which may write it`
+    return rest.length ? `${writesWhat(rest, guessed)}, and it hands ${toScript}` : `this hands ${toScript}`
+  }
   const named = files.filter(f => !guessed.includes(f))
   const maybe = guessed.join(', ')
   if (!guessed.length) return `this writes lasting memory (${files.join(', ')})`
@@ -579,10 +600,10 @@ export const writesWhat = (files: string[], guessed: string[] = []): string => {
  * naming the file and stating the rule in plain words (#777, Dan: "I don't really know what it's
  * asking"), and on For good send the same call again.
  */
-export const askInstruction = (id: string, files: string[], guessed: string[] = []): string => {
+export const askInstruction = (id: string, files: string[], guessed: string[] = [], handed: string[] = []): string => {
   const where = files.join(', ')
   return (
-    `Not saved yet: ${writesWhat(files, guessed)}, so Dan decides first. ` +
+    `Not saved yet: ${writesWhat(files, guessed, handed)}, so Dan decides first. ` +
     (guessed.length ? `If it only quotes ${guessed.join(', ')} as text and writes another file, make the change with Edit or Write on that file instead. ` : '') +
     `Ask him now with AskUserQuestion: one question, with metadata {"source": "${sourceOf(id)}"}, that names ${where} and states the rule in one plain sentence, never the command or the raw text, ` +
     `such as "Save to ${files[0]} for good: <the rule>?", with the options ${FOR_GOOD}, ${THIS_SESSION} and ${NOT_AT_ALL}. ` +

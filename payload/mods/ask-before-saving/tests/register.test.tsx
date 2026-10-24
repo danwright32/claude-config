@@ -548,6 +548,46 @@ test('a write by any shell route mod-kit reads is refused: a cd into the memory 
   expect(w.ran).toEqual([])
 })
 
+// #1592: a script file run with a lasting memory file named only as its argument wrote it unasked,
+// since mod-kit's reader gives a script's arguments apart, in `runs` (#1586). Each is asked about as
+// an Edit of that file is, saying it is handed to a script; an ordinary file handed to one is not.
+test('a script handed a lasting memory file as its argument is asked about, as an Edit of it is; handed an ordinary file it runs unasked (#1592)', withKit, async ($, on) => {
+  const w = world($, on)
+  const handed: [string, string][] = [
+    ['python3 tool.py ~/.claude/projects/p/memory/MEMORY.md', '~/.claude/projects/p/memory/MEMORY.md'],
+    ['python3 x.py payload/LESSONS.md', '~/Apps/slate/payload/LESSONS.md'],
+    ['bash tools/fix.sh --in-place CLAUDE.md', '~/Apps/slate/CLAUDE.md'],
+    ['./tidy.sh AGENTS.md', '~/Apps/slate/AGENTS.md'],
+    ['node build.mjs --out=/Users/dan/.claude/CLAUDE.md', '~/.claude/CLAUDE.md'],
+  ]
+  for (const [command, file] of handed) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect(`${command}: ${why}`).toContain(ASKS)
+    expect(why).toContain(`this hands lasting memory (${file}) to a script, which may write it`)
+  }
+  expect(w.ran).toEqual([])
+  // The same scripts handed an ordinary file, or no file at all, run unasked.
+  for (const command of ['python3 tool.py notes.md', 'bash tools/fix.sh --in-place README.md', './tidy.sh', 'node build.mjs --out=dist/index.html'])
+    expect(`${command}: ${refusalOf(await call($, { tool: 'Bash', command }))}`).toBe(`${command}: `)
+  expect(w.ran.length).toBe(4)
+})
+
+test('For good on a script handed lasting memory lets that same call through once, as it does an Edit (#1592)', withKit, async ($, on) => {
+  const w = world($, on, { auto: true })
+  const command = 'python3 tool.py ~/.claude/projects/p/memory/MEMORY.md'
+  const refused = refusalOf(await call($, { tool: 'Bash', command, description: 'Add the rule with the tool' }))
+  expect(refused).toContain(ASKS)
+  const answered = await askDan($, w, refused, 'For good', '~/.claude/projects/p/memory/MEMORY.md', 'skip the screenshots')
+  expect(contextOf(answered)).toContain('Dan answered For good to saving this to ~/.claude/projects/p/memory/MEMORY.md')
+  expect(w.ran).toEqual([])
+  const again = await call($, { tool: 'Bash', command, description: 'Run the approved tool' })
+  expect(again.deny).toBeUndefined()
+  expect(w.ran.map(r => r.input.command)).toEqual([command])
+  // The approval was for that one call: sent once more, it is asked about again.
+  expect(refusalOf(await call($, { tool: 'Bash', command }))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
 // #743: `F=<memory folder>/MEMORY.md; printf ... >> "$F"` appended to MEMORY.md with no question.
 test('a save through a path the command holds in a variable is refused, naming the file it goes to', withKit, async ($, on) => {
   const w = world($, on)
