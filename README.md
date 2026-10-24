@@ -1820,8 +1820,9 @@ bash tools/load-window.sh --seconds 180 --workers 24 --spawners 12 --label "#162
 
 It takes this Mac's one load window turn (the merge helper's own queue, `hooks/lib/merge-turn.sh`,
 so a dead holder is passed over at once and a stuck one after `LOAD_WINDOW_HOLD_SECONDS`), waits
-until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, plus the merge
-helper's live turn tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
+until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, counting only a run
+with no suite above it, so a suite's own fixtures are not runs, plus the merge helper's live turn
+tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
 workers and the command for at most `--seconds` (180 at most), and stops early, also exit 75, if a
 merge or a full suite starts meanwhile. Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
@@ -1831,6 +1832,13 @@ tidied included, and on every read it asks again) and the
 suite pile notice name a window running or ended within 15 minutes, in ET. Every number in this
 paragraph is a setting, not a measurement. To see what is recorded and what a window would wait for:
 `bash tools/load-window.sh --status`.
+
+What a load reproduction usually finds is a wait with a short ceiling: a `date +%s` plus a few
+seconds, or a `sleep 0.1` loop of a few hundred ticks, which a loaded Mac reaches with nothing broken
+(#1577, #1620). A wait on a condition in a suite takes its ceiling from `hooks/lib/hang-wait.sh`
+instead (`hang_wait "<condition>"`, giving up at `HANG_S`), one number only a hang reaches, which
+`SUITE_HANG_SECONDS` lowers for one run when a control has to show a wait still fails. That ceiling
+is a setting, not a measurement.
 
 ### Measuring the section time budget's margin
 
