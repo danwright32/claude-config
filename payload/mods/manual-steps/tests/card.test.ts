@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { cardFrom, cardLines, carriedNote, type DrawnAt, finish, finishedWhen, fold, keepFinished, nextStep, paneColumns, sent } from '../hooks/card.ts'
 import type { StepsCard } from '../types/index.d.ts'
 

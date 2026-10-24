@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { notesAreData, overnightData } from '../hooks/overnightdata.ts'
 
 // claude-config#922: what overnight sessions wrote reaches what Claude is told only as data, inside

@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { branchAt, isDefaultBranch, issuesOfBranch, mainOf, readBranch, type Run } from '../hooks/branch.ts'
 
 // Where a checkout stands (#978), read once by the kit for every mod: its main working tree, branch,

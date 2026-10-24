@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { PROSE_MARK, TURN_BYTES, turnAt, turnIn, type TurnRun } from '../hooks/turn.ts'
 
 // #1608: every message Claude wrote since the turn began, read from the tail of the transcript, so a

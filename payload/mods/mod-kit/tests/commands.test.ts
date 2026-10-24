@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { commands, git, pipeline } from '../hooks/commands.ts'
 
 // The one reader of shell commands every guard uses (L613): the secret guard, the keystroke guard

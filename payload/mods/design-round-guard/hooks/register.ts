@@ -39,6 +39,8 @@ import {
   isOwnRecord,
   isDesignRecord,
   sealCheck,
+  SCRIPT_RECORD,
+  scriptUnread,
   settledNotSealed,
   settledUnchecked,
   settledUnread,
@@ -154,6 +156,11 @@ import { errorText } from './mod-kit/skew.ts'
 //   shown, and an app's screen file is not read so, since Tailwind reads its comments for classes. A
 //   shell write there still cannot be read before it runs, so it is held as before, and the refusal
 //   says the Edit tool lets a change to comments alone through (rules.ts shellUnread).
+// - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
+//   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
+//   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
+//   scriptUnread); a settled design under docs/design handed to one is never sealed checked, so the
+//   design rounds skill writes make-settled.py's page into the scratchpad and copies it in with a cp alone.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -234,7 +241,8 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // not follow where that is; and the text it will hold, where the call carries it.
 // `folder`, for a shell write whose name is a pattern, is where mod-kit's write reader placed it (#1123).
 // `from`, for a git checkout or restore, is where git puts the file back from (#1158).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string }
+// `run`, for a file a script run is handed as its argument, is that script's file (#1586).
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -261,6 +269,12 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // cannot be followed, or judged as a pattern. What a checkout or restore puts back is judged by the
   // lines it changes, as an edit is (#1158).
   for (const g of w.byGit ?? []) targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+  // A script file the command runs (#1586, measured live on 2026-10-23: `python3 gen.py app/page.tsx`
+  // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
+  // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
+  // that file would be. What it writes that no argument names (a path in its own text) is not read.
+  for (const r of w.runs ?? [])
+    for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), run: r.path ?? r.script })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {
@@ -558,6 +572,8 @@ const recordText = async (
     const back = await putBack($, t.path, tree, t.from)
     return 'why' in back ? { why: back.why } : { text: back.text }
   }
+  // Handed to a script (#1586), make-settled.py included: what it writes is read only once it ran.
+  if (t.run !== undefined) return { why: SCRIPT_RECORD }
   const src = await copiedFrom($, String(input.command ?? ''), t.path, at)
   if (typeof src !== 'string') return src
   try {
@@ -748,7 +764,14 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     } else if (change && (await nothingShown($, t.path, tree, change.before, change.after))) continue
-    else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
+    else if (t.run !== undefined && !isDesignRecord(relTo(t.path, tree))) {
+      // A file a script is handed (#1586): the refusal says why it was judged as a write of it. A
+      // settled design's own reason is said above, with the way that goes through.
+      const notes = unreadIn.get(tree) ?? []
+      const said = scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
+      if (!notes.includes(said)) notes.push(said)
+      unreadIn.set(tree, notes)
+    } else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
       // A shell write to a mod's TSX or JSX hook file cannot be read before it runs (#1341), and an
       // Edit making only a comment change there would pass, so the refusal says so.
       const notes = unreadIn.get(tree) ?? []
