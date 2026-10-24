@@ -1407,11 +1407,48 @@ on the way up: the change that revealed the stale watcher was refused rather tha
 reports only changes made after it starts, so without that send the change would wait for the next
 one. A watcher started any other way (a login, a pull's kickstart) does not send until a change.
 
-What this does not cover: a newer copy that passes the self test and then fails only as a watcher
-would be restarted into, and crash loop at launchd's throttle. That is the same exposure a pull's
-own restart of the watcher already had, and the self test is the guard both share. The first
-version of the watcher to carry this code has to be started by something else (a pull's restart, as
-always); only from then on does a stale watcher restart itself.
+The first version of the watcher to carry this code has to be started by something else (a pull's
+restart, as always); only from then on does a stale watcher restart itself.
+
+### A copy that passes the self test and fails only as the watcher (#1594)
+
+The self test proves a copy parses and finishes `status`. A copy that passes it and fails only as
+the watcher (a fault in `do_watch`, or in anything only the loop reaches) is restarted into, ends at
+once, and the unconditional `KeepAlive` has launchd start it again every ten seconds, for ever, with
+one dying line in the log each time as the only trace. A pull's own restart of the watcher had the
+same exposure.
+
+By the time that loop is running, the old watcher has gone: launchd always starts the file on disk,
+so the only code running is the copy that loops. The bound therefore lives in that copy and runs as
+early in a start as it can, straight after the pid file is claimed and the copy's hash is taken,
+before anything else a start does:
+
+- **Every start is recorded** in the clone's `.watch-starts` as its time and the copy it runs. A
+  start keeps only the earlier starts of the same copy inside the window, so the file holds one
+  stretch of one copy at most. The clock is `SYNC_WATCH_NOW` when set, so the suite crosses the
+  window by setting it.
+- **Counted per copy.** Four updates landing in a minute are four copies each started once, which is
+  progress, not a loop.
+- **More than three starts of one copy in five minutes** (`SYNC_WATCH_LOOP_MAX`,
+  `SYNC_WATCH_LOOP_WINDOW`) is a loop. Three is more than an ordinary day gives one copy (a login, a
+  pull's restart, the one restart onto it), and launchd's throttle passes it in about thirty
+  seconds.
+- **Past the bound the start stops there and stays up**, so launchd has nothing to restart. It
+  sends nothing and logs `NOT watching` with the copy and the count. It writes `.watch-stale` with
+  the fault `loop:<starts>:<window>`, which `claude-sync stuck` reports as its own kind,
+  `watcher-looping`, in its own words, because nothing about it is older than the file on disk and
+  the remedy is a different copy, not a newer working one. Status prints that sentence, the session
+  notice says it at once and says its end, and one desktop notification is posted per stretch.
+- **It hands over by itself.** Every `SYNC_WATCH_PARK_POLL` seconds (sixty by default) it compares
+  the file on disk with the copy it runs, polling rather than using fswatch because fswatch is part
+  of what such a start may be failing on. Once they differ it runs `watch_stale_tick`, exactly as a
+  stale watcher does, so a hold, a held lock and a broken newer copy are each handled the same way,
+  and a newer copy that runs is restarted onto.
+
+What it still cannot cover: a fault in the few lines a start runs before the count (the fswatch
+check, the refusal of a second watcher, the pid file claim), and a copy whose stopped state itself
+fails. Those still loop at launchd's throttle, because the code that would stop them is the code
+that fails.
 
 ## The hooks block is merged in BOTH directions, against the same base
 

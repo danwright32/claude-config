@@ -281,6 +281,12 @@ depends on the newer copy and on what else is happening:
   the stretch, and records it in the clone's `.watch-stale`, which `claude-sync status` and the per
   prompt session notice report at once rather than after the usual hour. It restarts by itself once
   a copy that runs is on disk, and the record goes with it.
+- **The newer copy passes that test but fails as the watcher** (#1594): every start is recorded in
+  the clone's `.watch-starts`, and the fourth start of one copy inside five minutes stops there
+  instead of ending too. It stays up, so launchd stops restarting it, sends nothing, logs
+  `NOT watching`, records the stretch in `.watch-stale` (reported by `stuck`, status and the session
+  notice as `watcher-looping`), and posts one desktop notification. It checks the file on disk every
+  minute and hands over, as above, once a different `claude-sync` is there.
 
 Until #1569 it only refused, and recovery waited for the daily timer or a pull by hand: on
 2026-10-22 to 23 the personal MacBook refused 84 times over 16 hours and sent and received nothing.
