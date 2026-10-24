@@ -49,7 +49,10 @@ the sections Roles, Reach, State setup, Checks and Known traps, with three to si
 `- [C1] <one sentence>`. `verification.py guide check <guide>` refuses any other shape.
 
 The run record is one fenced block per area in the run's PR comment, under a table a person reads.
-It is rendered by `verification.py record render`, never typed:
+It is rendered by `verification.py record render`, never typed. Render also keeps a fingerprint of
+each record it wrote in `rendered.jsonl` beside the receipt, and the merge check refuses a posted
+record that matches none of them, so post the rendered comment unchanged: an edit after render, to a
+result, a note or a check's text, is refused as `record-edited` (claude-config#1572).
 
 ````
 ```verification-run
@@ -79,8 +82,9 @@ The receipt is written only by `run_session.py`, at
 `~/.claude-verification/receipts/<receipt id>/receipt.json` (`VERIFICATION_HOME` moves it). It is
 outside `~/.claude` on purpose: the sync mirrors `~/.claude` into a public repository, and a
 receipt folder holds screenshots of private apps. Beside it are the screenshots, `serve.log`,
-`drives.jsonl` (every drive call, its area, arguments and exit), and the copies of areas.json and
-the guides the run used. It records the machine, the head and the commit checked out, when serve
+`drives.jsonl` (every drive call, its area, arguments and exit), `rendered.jsonl` (the fingerprint
+of every record `record render` wrote from this run, which the merge check matches the posted
+record against), and the copies of areas.json and the guides the run used. It records the machine, the head and the commit checked out, when serve
 started, became ready and stopped and why (`stop`, `ready_failed`, `serve_exited`, `deadline`,
 `recovered`, `start_failed`, `start_error`, `start_interrupted`, `supervisor_error`), the build
 stamp, and `egress` (below). The three `start_` reasons mean setup failed before serve started, and
@@ -211,8 +215,9 @@ edits counts only once it has merged. A merge passes when every changed file lan
 bucket and each touched area's newest record at the head (or at an earlier commit whose later
 changes, in the pull request's own files, leave the area alone) passes every check and done when
 item, with its receipt on the merging machine showing serve stopped, a clean egress verdict, a
-build stamp equal to the record's commit, and a successful drive call for the area. The merge must
-pin that head with `--match-head-commit`.
+build stamp equal to the record's commit, and a successful drive call for the area, and the record
+exactly as `record render` wrote it from that receipt (its fingerprint in `rendered.jsonl`). The
+merge must pin that head with `--match-head-commit`.
 
 In `mode: warn` every merge is allowed, the full verdict reaches the session, and it is added to a
 tally per pull request under `~/.claude-verification/merge-tally/`. Each time the tally has grown by
