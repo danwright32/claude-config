@@ -299,9 +299,17 @@ grep -q "first-mod" <<< "$s2" \
   || check "#1544 and a mod there at start is not" ok
 
 # A resumed or compacted session is the SAME session: Claude Code runs SessionStart
-# again with source resume or compact, and that must not move the baseline to what
-# is on disk now, or a change made before it would never be reported. Nor may it
-# speak or consume the change: the next prompt is where the notice is said.
+# again with source resume or compact. Neither speaks there: the next prompt is
+# where any notice is said.
+#
+# The two baselines part company there (claude-config#1580). Claude Code RE-READS the
+# rule files at a compaction and at a resume (measured on the real engine by
+# tests/test-rule-files-reload.sh: after either, the model is sent the copy on disk
+# then, and after a resume a note that it replaces the earlier copy), so the rule file
+# baseline moves to what is on disk then, and a change made before it is not reported:
+# saying "the older copy is in this session's context" would by then be false (L11).
+# Mods are NOT renamed at a compaction (a process names them once), so the mods
+# baseline is kept, and a mod that arrived before it is still reported.
 for src in resume compact; do
   sid="kept-$src"
   event "$sid" SessionStart startup >/dev/null
@@ -312,14 +320,34 @@ for src in resume compact; do
     && check "#1544 a $src start is silent" ok \
     || check "#1544 a $src start is silent" "said: $r1"
   r2="$(event "$sid" UserPromptSubmit)"
-  grep -q "RTK.md" <<< "$r2" && grep -q "mod-before-$src" <<< "$r2" \
-    && check "#1544 a $src keeps the original baseline, so a change before it is still reported" ok \
-    || check "#1544 a $src keeps the original baseline, so a change before it is still reported" "said: $r2"
+  grep -q "RTK.md" <<< "$r2" \
+    && check "#1580 a $src re-reads the rule files, so a rule file changed before it is not reported" "said: $r2" \
+    || check "#1580 a $src re-reads the rule files, so a rule file changed before it is not reported" ok
+  grep -q "mod-before-$src" <<< "$r2" \
+    && check "#1580 a $src keeps the mods baseline, so a mod added before it is still reported" ok \
+    || check "#1580 a $src keeps the mods baseline, so a mod added before it is still reported" "said: $r2"
   r3="$(event "$sid" UserPromptSubmit)"
   [ -z "$r3" ] \
     && check "#1544 and reported once, after a $src as before it" ok \
     || check "#1544 and reported once, after a $src as before it" "said again: $r3"
+  # And a rule file changed AFTER the reload is reported as before: the re-seed moves
+  # the baseline, it does not stop the comparison.
+  printf 'rtk after %s\n' "$src" > "$START/RTK.md"
+  r4="$(event "$sid" UserPromptSubmit)"
+  grep -q "RTK.md" <<< "$r4" \
+    && check "#1580 a rule file changed after a $src is still reported" ok \
+    || check "#1580 a rule file changed after a $src is still reported" "said: $r4"
 done
+
+# A start from scratch that finds a record (a reused session id) keeps it, as #1544 made
+# it: only a compaction and a resume are measured to re-read the files.
+event kept-startup SessionStart startup >/dev/null
+printf 'rtk before a second startup\n' > "$START/RTK.md"
+event kept-startup SessionStart startup >/dev/null
+ks="$(event kept-startup UserPromptSubmit)"
+grep -q "RTK.md" <<< "$ks" \
+  && check "#1580 a startup that finds a record keeps the rule file baseline" ok \
+  || check "#1580 a startup that finds a record keeps the rule file baseline" "said: $ks"
 
 # A resume with no record at all (a session from before this hook, or a temp
 # directory cleared since) takes its baseline there, so its first prompt is quiet.
