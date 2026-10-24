@@ -40,9 +40,10 @@ hook that slow is killed and the command goes unscreened.
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
   shell-words.py data-blanked '<path>[ <subcommand>]'...   stdin: a whole command
-      when the command is exactly `bash <path> [<subcommand>] <words>` for one of the declared
+      when the command is exactly `bash <path> [<subcommand>] <words>`, or `<path> [<subcommand>]
+      <words>` with the script run by its path (claude-config#1623), for one of the declared
       entries (path under ~/), with nothing in front but GH_TOKEN=$(gh auth token -u <login>), it
-      printed from `bash` on with every argument after the path (or the subcommand) that is quoted
+      printed from `bash` (or the path) on with every argument after the path (or the subcommand) that is quoted
       whole replaced by '', exit 0; for any other shape nothing, exit 1 (claude-config#1574, #1610).
       The reader check-wrapped-commands.sh asks before refusing a script file; see data_blanked().
 
@@ -1243,8 +1244,9 @@ def read(s):
     start rather than one per command (claude-config#1040): ps_is_git_push asked python for the words
     of every command in the line, so a heredoc commit, forty short commands and a push started 44
     pythons in every push hook (measured 2026-10-12). The commands a wrapper runs are records of their
-    own after it (claude-config#1478), and a wrapper is never alone, since read on its own it is more
-    than one command.
+    own after it (claude-config#1478), and a wrapper that holds a string is never alone, since read on
+    its own it is more than one command; a script run by its path or sourced (`direct`, `source`,
+    claude-config#1623) holds none, so it can be alone as any plain command can.
     """
     records, crude = _records(s, "", 0)
     out = []

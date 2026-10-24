@@ -44,8 +44,9 @@
 # finding about the three tools (4 of the first 14 refusals recorded, 2026-10-22 to 23). A script
 # could run an argument, so a quoted argument is never data in general. It is data only for a script
 # subcommand declared below, whose argument handling has been read and runs none of them, and only
-# when the command is that call alone, read by lib/shell-words.py data_blanked: `bash`, the declared
-# path (~/ or the home directory written out), the subcommand, then words, and nothing a shell would do
+# when the command is that call alone, read by lib/shell-words.py data_blanked: `bash` (or nothing,
+# the script run by its path, claude-config#1623), the declared path (~/ or the home directory
+# written out), the subcommand, then words, and nothing a shell would do
 # beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the command
 # passes only if what is left names none of the three. Every other shape is refused as before, and so
 # is a note the reader cannot judge. The milestone duplicate check is declared the same way, every
