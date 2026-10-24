@@ -215,7 +215,9 @@ ps__crude_cut() {   # $1 = command
 # (`bash -c`, `eval`, `env -S`), with 0x1d and the reason after it when its string cannot be read
 # (ps_unreadable). The commands a wrapper runs are records of their own right after it (shell-words.py
 # wrapped, claude-config#1478), so the wrapper's record is a container, never an action of its own
-# (ps__action_records). A command that read on its own is exactly
+# (ps__action_records). A script file run by its path or sourced is `direct` or `source` with 0x1d and
+# the reason (claude-config#1623): unreadable, but holding no records, so it is the command itself and
+# stays an action. A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
 # Its own folder by parameter expansion, never dirname, which under a PATH without it gave the

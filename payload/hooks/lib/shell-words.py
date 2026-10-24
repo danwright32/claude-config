@@ -22,7 +22,8 @@ hook that slow is killed and the command goes unscreened.
       gh or git subcommand it runs, tool_field: tool 0x1d sub 0x1d act 0x1d words, else rtk's own
       subcommand, rtk_field, in the same shape, or empty>" 0x1c "<the wrapper, `bash -c`, `eval` or
       `env -S`, when it hands a string to a shell or eval, with 0x1d and why after it when that string
-      cannot be read, else empty>" 0x1e, the commands a wrapper runs being records of their own right
+      cannot be read; `direct` or `source` with 0x1d and why, for a script file run by its path or
+      sourced, which hands no string (claude-config#1623); else empty>" 0x1e, the commands a wrapper runs being records of their own right
       after it (claude-config#1478). Exit 3 as commands; see read(), command_rest(), gh_path(),
       git_path(), rtk_field() and wrapped().
   shell-words.py tool       stdin: one command
