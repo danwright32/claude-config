@@ -324,6 +324,120 @@ check_eq "#1610 and refuses the token in front of a note" "2" "$rc"
 out="$(payload "bash $SPOOL note . \"git push\" \"builder\"" | bash "$PRE1610/check-wrapped-commands.sh" 2>&1)"; rc=$?
 check_eq "#1610 control: that reader still passes a plain note" "0" "$rc"
 
+# 4d. A script run by its path, or sourced, is a script file run by a shell (claude-config#1623).
+# `./build.sh && git push` runs the file's commands exactly as `bash ./build.sh && git push` does, and
+# no gate reads the file either way, so it is refused beside git, gh or rtk the same. A path is any
+# command word holding a slash, outside the directories programs are installed in, and not named git,
+# gh or rtk (which every gate reads by that name); `source` and `.` run a file's commands in the shell
+# itself. The declared scripts keep their declarations however they are run, by bash or by path.
+#
+# The guard answers most commands from the payload's text before the reader loads (RUNS_FILE_*), and
+# a script run that text misses would pass unread, so every case refused here is also refused by a
+# copy of the guard with no reader beside it: there, only reaching the reader can refuse.
+LONE1623="$WORKDIR/lone1623"; mkdir -p "$LONE1623"
+cp "$HOOK" "$LONE1623/"
+refused_file(){ # refused_file <name> <command> <the script file the refusal names>
+  judge "$2"
+  check_eq "#1623 refused: $1" "2" "$rc"
+  check "#1623 and the refusal names the script file: $1" "runs the script file $3," "$out"
+  check "#1623 and offers the one command override: $1" "SKIP_WRAPPED_CHECK=1" "$out"
+  out="$(payload "$2" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+  check_eq "#1623 and the fast path does not pass it over: $1" "2" "$rc"
+}
+refused_file "a script run by ./ beside a push" "./build.sh && git push" "./build.sh"
+refused_file "a script run by ../ beside gh" "../tools/release.sh && gh pr create --fill" "../tools/release.sh"
+refused_file "a relative path with no ./" "scripts/release.sh; git push" "scripts/release.sh"
+refused_file "an absolute path outside the program directories" "/srv/someone-else/bin/deploy && git push" "/srv/someone-else/bin/deploy"
+refused_file "a path under the home directory beside rtk" "~/bin/deploy.sh && rtk init -g" "~/bin/deploy.sh"
+refused_file "a path through a variable" "\$HOME/bin/deploy.sh && git push" "\$HOME/bin/deploy.sh"
+refused_file "a quoted path" "\"./build me.sh\" && git push" "./build me.sh"
+refused_file "the script after the push" "git status && ./build.sh" "./build.sh"
+refused_file "on a line of its own" "$(printf './build.sh\ngit push')" "./build.sh"
+refused_file "behind nohup" "nohup ./build.sh & git push" "./build.sh"
+refused_file "behind sudo with an option's value" "sudo -u bob ./build.sh; git push" "./build.sh"
+refused_file "behind timeout" "timeout 30 ./build.sh && git push" "./build.sh"
+refused_file "behind an assignment holding a space" "X=\"a b\" ./build.sh && git push" "./build.sh"
+refused_file "behind the account rule's token" "GH_TOKEN=\$(gh auth token -u danwright32) ./build.sh" "./build.sh"
+refused_file "as an if condition" "if ./check.sh; then git push; fi" "./check.sh"
+refused_file "in a brace group" "{ ./build.sh; } && git push" "./build.sh"
+refused_file "a braced variable's path" "\${HOME}/bin/deploy.sh && git push" "\${HOME}/bin/deploy.sh"
+refused_file "a quoted variable then a path" "\"\$S\"/run.sh && git push" "\$S/run.sh"
+refused_file "two dots then a name" "..hidden/run.sh && git push" "..hidden/run.sh"
+refused_file "escaped by a backslash" "\\./build.sh && git push" "./build.sh"
+refused_file "inside a substitution" "git commit -m \"\$(./message.sh)\"" "./message.sh"
+refused_file "inside bash -c" "bash -c './build.sh && git push'" "./build.sh"
+refused_file "run by find -exec" "find . -name '*.sh' -exec ./lint.sh {} \\; && git add -u" "./lint.sh"
+refused_file "a temp directory is no program directory" "/tmp/x.sh && git push" "/tmp/x.sh"
+refused_file "a program directory left by .." "/usr/bin/../../tmp/x.sh && git push" "/usr/bin/../../tmp/x.sh"
+refused_file "a virtual environment's program" ".venv/bin/pytest && git commit -m 'tests'" ".venv/bin/pytest"
+refused_file "sourced" "source ./env.sh && git push" "./env.sh"
+refused_file "sourced by ." ". ./env.sh && git push" "./env.sh"
+refused_file "sourced with no slash" "source env.sh && gh pr merge 7" "env.sh"
+# The near miss #1610 dropped: no space before bash makes the token's value end in `bash`, and the
+# declared script itself the command, behind an assignment the declaration does not accept.
+refused_file "the token run together with bash" "GH_TOKEN=\$(gh auth token -u danwright32)bash $MC \"o/r\" --like \"gh\"" "$MC"
+refused_file "a declared script run by path, chained to a push" "$SPOOL note . \"a finding\" \"builder\" && git push" "$SPOOL"
+refused_file "a declared script run by path, its words unquoted" "$SPOOL note . git push \"builder\"" "$SPOOL"
+refused_file "a declared script's other subcommand, run by path" "$SPOOL clear . \"git push\"" "$SPOOL"
+refused_file "a declared script's name elsewhere, run by path" "./issue-spool.sh note . \"git push\" \"builder\"" "./issue-spool.sh"
+refused_file "a declared script through a variable" "\$HOME/.claude/hooks/lib/issue-spool.sh note . \"git push\" \"builder\"" "\$HOME/.claude/hooks/lib/issue-spool.sh"
+judge "$SPOOL clear . \"git push\""
+check "#1623 a declared script run by path in another shape is told the shapes it passes in" "passes only called alone" "$out"
+judge "./build.sh && git push"
+check "#1623 a script refused is told it can run in a command of its own" "Run the script in a command of its own" "$out"
+allowed "a declared note run by its path" "$SPOOL note . \"git push was refused\" \"builder #1623\""
+allowed "a declared note by its absolute path" "$HOME/.claude/hooks/lib/issue-spool.sh note . \"gh pr view\" \"builder #1623\""
+allowed "the duplicate check run by its path, piped to grep" "$MC \"o/r\" --like \"a gh title\" 2>&1 | grep DUPLICATE"
+allowed "the duplicate check by path for another account" "GH_TOKEN=\$(gh auth token -u other-acct) $MC \"o/r\" --like \"git\""
+allowed "git by its path" "/usr/bin/git status"
+allowed "gh by its path" "/opt/homebrew/bin/gh pr list"
+allowed "git by a path outside the program directories" "./vendor/bin/git status"
+allowed "env by its path" "/usr/bin/env python3 x.py && git status"
+allowed "a system program by its path" "/bin/ls /tmp && git status"
+allowed "a Homebrew program by its path" "/opt/homebrew/bin/jq . x.json && git status"
+allowed "a program in /usr/local/bin" "/usr/local/bin/node x.js && git status"
+allowed "the command line tools' git" "/Library/Developer/CommandLineTools/usr/bin/git status"
+allowed "a script by path naming none of the three" "./build.sh --fast"
+allowed "paths as arguments" "git add ./build.sh scripts/x.sh && git -C /srv/x/repo status"
+allowed "a path echoed" "echo ./build.sh && git status"
+allowed "a path in a pipe's argument" "cat ~/x.txt | grep git"
+allowed "a path inside a commit message" "git commit -m 'run ./build.sh first'"
+allowed "a path in a heredoc body" "$(printf "git commit -F - <<'EOF'\n./build.sh\nEOF")"
+allowed "a dot directory as an argument" "git add .claude/settings.json"
+# Found replaying real commands: an array append is an assignment, never a command.
+allowed "an array append holding a slash" "args+=(-only-testing:AppTests/CopyTests) && git status"
+allowed "an array assignment holding a slash" "files=(src/a.ts src/b.ts) && git add \"\${files[@]}\""
+allowed "the override, for one command" "SKIP_WRAPPED_CHECK=1 ./build.sh && git push"
+
+# The cost stays flat: a command naming git with paths only as arguments is answered before the
+# reader is loaded, so with the reader missing it still passes in silence, while one running a
+# script by its path reaches the reader and, with none, is refused as not judged. The commonest
+# passes measured on 30 days of real commands are among them: a jq program's parentheses, an
+# assignment of a path, a URL or a path at the start of a line in a heredoc, `${x}/y` as an argument.
+lone_passes(){ # lone_passes <name> <command>
+  out="$(payload "$2" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+  check_eq "#1623 never loads the reader: $1" "0|" "$rc|$out"
+}
+lone_passes "a jq program" "gh pr list --json number,title --jq '.[] | (.number) | tostring'"
+lone_passes "an assignment of a path" "S=/private/tmp/x/scratchpad && mkdir -p \$S && git status"
+lone_passes "an assignment of a path after ;" "cd /x; S=/private/tmp/x && git status"
+lone_passes "a URL at the start of a heredoc line" "$(printf "git commit -F - <<'EOF'\nhttps://github.com/o/r/pull/1\nEOF")"
+lone_passes "a braced variable as an argument" "git -C \${HOME}/repo status"
+lone_passes "arithmetic" "N=\$(( \$N / 2 )) && git status"
+out="$(payload "git -C /srv/x/repo add ./src/a.ts && git commit -m 'x'" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 paths only as arguments never load the reader" "0|" "$rc|$out"
+out="$(payload "GH_TOKEN=\$(gh auth token -u danwright32) gh issue list --repo o/r" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 nor does a gh call holding a slash behind the token" "0|" "$rc|$out"
+out="$(payload "./build.sh && git push" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 a script by path with the reader missing is refused as not judged" "2" "$rc"
+check "#1623 and says it runs a script by its path" "runs a script by its path" "$out"
+out="$(payload "sudo -u bob ./build.sh; git push" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 the fast path sees a script behind a runner's option value" "2" "$rc"
+out="$(payload "X=\"a b\" ./build.sh && git push" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 the fast path sees a script behind an assignment holding a space" "2" "$rc"
+out="$(payload ". ./env.sh && git push" | bash "$LONE1623/check-wrapped-commands.sh" 2>&1)"; rc=$?
+check_eq "#1623 the fast path sees a sourced file" "2" "$rc"
+
 # 5. Every refusal is recorded (claude-config#1492): one tab separated line of time, Mac, wrapper,
 # reason category and outcome, so how often the refusal fires, and on what, can be read after a week
 # of real use. Never the command, never a path: a script file's name is somebody's content.
@@ -354,20 +468,26 @@ recorded "wrapping too deep" "eval eval eval eval eval eval git push" "eval" dep
 recorded "a script file" "bash ./secret-build-1492.sh && git push" "bash" script-file
 recorded "find -execdir" "find . -name x -execdir git add {} \\;" "find -execdir" execdir
 recorded "a find -exec never ended" "find . -exec git push" "find -exec" unended
+recorded "a script run by its path" "./secret-build-1623.sh && git push" "direct" script-file
+recorded "a sourced file" ". ./secret-env-1623.sh && git push" "source" script-file
 
 # The script file's name and the command are nowhere in what was recorded.
-rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
-judge "bash ./secret-build-1492.sh && git push origin private-branch-1492"
-held="$(cat "$LEDGER" 2>/dev/null)"
-check_eq "#1492 the record holds a line for the refusal" "1" "$(grep -c . "$LEDGER" 2>/dev/null || true)"
-case "$held" in
-  *secret-build*|*private-branch*|*"git push"*|*/*) bad "#1492 the record holds no command text and no path (got: $held)" ;;
-  *) ok ;;
-esac
+for held_cmd in "bash ./secret-build-1492.sh && git push origin private-branch-1492" \
+  "./secret-build-1492.sh && git push origin private-branch-1492"; do
+  rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
+  judge "$held_cmd"
+  held="$(cat "$LEDGER" 2>/dev/null)"
+  check_eq "#1492 the record holds a line for the refusal: $held_cmd" "1" "$(grep -c . "$LEDGER" 2>/dev/null || true)"
+  case "$held" in
+    *secret-build*|*private-branch*|*"git push"*|*/*) bad "#1492 the record holds no command text and no path (got: $held)" ;;
+    *) ok ;;
+  esac
+done
 
 # Each reason the reader can give has a category of its own, so a new one arriving in
 # lib/shell-words.py with no category here fails this, rather than being counted as "other" for ever
-# (L96). The eight cases above are one per reason.
+# (L96). The first eight cases above are one per reason; the last two, a script run by its path and
+# one sourced (claude-config#1623), share the script-file reason under wrappers of their own.
 whys="$(python3 -c 'import re, sys; print(len(re.findall(r"^WHY_[A-Z_]+ = ", open(sys.argv[1]).read(), re.M)))' "$DIR/lib/shell-words.py")"
 check_eq "#1492 every reason the reader gives is one of the eight categories recorded above" "8" "$whys"
 

@@ -211,11 +211,14 @@ ps__crude_cut() {   # $1 = command
 # assignments, one per line, outer quotes removed; PS__R_TOOL, the gh or git subcommand it runs as gh
 # and git themselves find it (shell-words.py tool_field, read by ps_runs_gh and ps_runs_git), or else
 # the subcommand of rtk's own it runs, `rtk init` (rtk_field, read by ps_runs_at rtk, claude-config#1468);
-# PS__R_WRAP, empty for a command that hands no string to a shell or eval, else the wrapper's name
+# PS__R_WRAP, empty for a command that hands no string to a shell or eval and runs no script file by
+# its path or by source (those are `direct` and `source`, below), else the wrapper's name
 # (`bash -c`, `eval`, `env -S`), with 0x1d and the reason after it when its string cannot be read
 # (ps_unreadable). The commands a wrapper runs are records of their own right after it (shell-words.py
 # wrapped, claude-config#1478), so the wrapper's record is a container, never an action of its own
-# (ps__action_records). A command that read on its own is exactly
+# (ps__action_records). A script file run by its path or sourced is `direct` or `source` with 0x1d and
+# the reason (claude-config#1623): unreadable, but holding no records, so it is the command itself and
+# stays an action. A command that read on its own is exactly
 # that one command (no substitution in it) is kept as a reading of its own as well, so a question
 # about one command of the line, the push itself, is answered with no second start.
 # Its own folder by parameter expansion, never dirname, which under a PATH without it gave the
@@ -683,8 +686,11 @@ ps__action_records() {   # $1 = command  $2 = the action's predicate
   while [ "$j" -lt "${#texts[@]}" ]; do
     text="${texts[$j]}"; j=$((j + 1))
     # A wrapper (`bash -c '...'`, eval) holds its commands as records of their own after it, each in
-    # the directory it runs in; the wrapper itself is not a second action (claude-config#1478).
-    [ -z "${wraps[$((j - 1))]}" ] || continue
+    # the directory it runs in; the wrapper itself is not a second action (claude-config#1478). A
+    # script run by its path or sourced (`direct`, `source`, claude-config#1623) holds no records:
+    # it is the command itself, so a repo's merge tool run as `./scripts/merge-when-green.sh 7`
+    # stays the merge every merge gate reads it as.
+    case "${wraps[$((j - 1))]}" in ''|direct$'\x1d'*|source$'\x1d'*) ;; *) continue ;; esac
     "$pred" "$text" </dev/null || continue
     case "$text" in
       *'$('*|*'`'*)
