@@ -215,8 +215,9 @@ edits counts only once it has merged. A merge passes when every changed file lan
 bucket and each touched area's newest record at the head (or at an earlier commit whose later
 changes, in the pull request's own files, leave the area alone) passes every check and done when
 item, with its receipt on the merging machine showing serve stopped, a clean egress verdict, a
-build stamp equal to the record's commit, and a successful drive call for the area. The merge must
-pin that head with `--match-head-commit`.
+build stamp equal to the record's commit, and a successful drive call for the area, and the record
+exactly as `record render` wrote it from that receipt (its fingerprint in `rendered.jsonl`). The
+merge must pin that head with `--match-head-commit`.
 
 In `mode: warn` every merge is allowed, the full verdict reaches the session, and it is added to a
 tally per pull request under `~/.claude-verification/merge-tally/`. Each time the tally has grown by
