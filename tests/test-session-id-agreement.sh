@@ -108,8 +108,8 @@ for _ in $(seq 1 50); do [ -s "$WORK/model.port" ] && break; perl -e 'select(und
 PORT="$(cat "$WORK/model.port")"
 
 # The Bash call a step asks for: the id it carries and a look taken through gh-poll.sh, at one fixed
-# moment (1,000,000 s) so no look ages out of the minute between steps, and under a cap no step can
-# reach, so every look is taken and counted.
+# moment the code sets (epoch second 1000000, not a measurement) so no look ages out of the minute
+# between steps, and under a cap no step can reach, so every look is taken and counted.
 step() { echo "PROBE-RUN: printf '%s\t%s\t%s\n' $1 \"\$CLAUDE_CODE_SESSION_ID\" \"\$(bash ~/.claude/hooks/lib/gh-poll.sh take 1000000)\" >> $BASH_LOG # PROBE-TAG=$1"; }
 
 # One headless session: OUT INHERITED [claude args...] -- MESSAGE...  INHERITED is the
