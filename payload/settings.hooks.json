@@ -142,6 +142,11 @@
           },
           {
             "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/no-verify-gate.sh",
+            "timeout": 15
+          },
+          {
+            "type": "command",
             "command": "__CLAUDE_HOME__/hooks/check-gh-watch-interval.sh",
             "timeout": 10
           },
@@ -173,6 +178,26 @@
             "type": "command",
             "command": "__CLAUDE_HOME__/hooks/scratchpad-subagent-gate.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/monitor-action-gate.sh",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__CLAUDE_HOME__/hooks/handback-claims-gate.sh",
+            "timeout": 30
           }
         ]
       },
