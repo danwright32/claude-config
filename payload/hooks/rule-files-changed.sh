@@ -78,10 +78,10 @@ except Exception:
 def one(v):
     return str(v or "").replace("\x1f", " ").replace("\n", " ")
 print("\x1f".join(one(x) for x in (d.get("session_id") or d.get("transcript_path"),
-                                   d.get("hook_event_name"))))
+                                   d.get("hook_event_name"), d.get("source"))))
 ' 2>/dev/null || true)"
-session="" event=""
-IFS=$'\x1f' read -r session event <<< "$fields" || true
+session="" event="" source=""
+IFS=$'\x1f' read -r session event source <<< "$fields" || true
 if [ -z "$session" ]; then
   echo "rule-files-changed: the hook payload carried neither a session id nor a transcript path, so a first prompt cannot be told from a later one and no comparison was made." >&2
   exit 0
@@ -105,7 +105,10 @@ MODS_STATE="$STATE_DIR/claude-mods-${key}.state"
 # against; taken at the first prompt instead, a change in between was never reported. A start that
 # finds a record keeps it: Claude Code runs SessionStart again on a resume or a compaction of the
 # SAME session, and moving the baseline to what is on disk then would silence a change made before
-# it. It never compares or speaks there either, so the change is said at the next prompt.
+# it that the session did not reload. That holds for the mods at every start; the rule files are
+# re-read at a compaction and a resume, so there they are re-seeded instead (reseed, below,
+# claude-config#1580). It never compares or speaks there either, so a change is said at the next
+# prompt.
 #
 # No baseline yet at a prompt (a session started before this hook was wired, or whose start could
 # not write), or one that cannot be read, re-seeds and stays quiet: reporting everything as changed
@@ -131,6 +134,23 @@ since_baseline() {
   printf '%s\n' "$current" > "$state" 2>/dev/null || true
   comm -3 <(printf '%s\n' "$previous" | sort) <(printf '%s\n' "$current" | sort) 2>/dev/null \
     | awk -F '\t' '{ if ($1 != "") print "gone\t" $1; else print "new\t" $2 }'
+}
+
+# A compaction and a resume RE-READ the rule files (claude-config#1580, measured on the real engine
+# with Claude Code 2.1.309 on 2026-10-24 by tests/test-rule-files-reload.sh): Claude Code runs
+# SessionStart with that source, loads CLAUDE.md and its imports from disk again (an
+# InstructionsLoaded load with reason compact, or session_start on a resume), and the model is sent
+# that copy; after a resume, with Claude Code's own note that it replaces the earlier one. So at
+# those two starts the rule file baseline moves to what is on disk, record or no record: keeping the
+# older one would make the next prompt say "the older copy is in this session's context" about a
+# copy the session no longer holds (L11). Only the rule files: the mods baseline is kept, since a
+# process names its mods once and a compaction does not rename them. A startup that finds a record
+# keeps it, as before; a /clear starts a new session id, so it has no record to keep.
+reseed() {
+  local current
+  current="$("$2")"
+  [ -n "$current" ] || return 0
+  printf '%s\n' "$current" > "$1" 2>/dev/null || true
 }
 
 # The imports, as bare names only. An absolute path, a tilde path or anything with
@@ -197,7 +217,12 @@ words() { tr '\n' ' ' | sed 's/ $//'; }
 # At a start there is nothing to say, only the record to take, and SessionStart's stdout would go
 # into the session's context, so it goes no further than that.
 if [ "$event" = "SessionStart" ]; then
-  [ -f "$RULES_DIR/CLAUDE.md" ] && since_baseline "$STATE" snapshot
+  if [ -f "$RULES_DIR/CLAUDE.md" ]; then
+    case "$source" in
+      compact|resume) reseed "$STATE" snapshot ;;
+      *) since_baseline "$STATE" snapshot ;;
+    esac
+  fi
   since_baseline "$MODS_STATE" mod_snapshot
   exit 0
 fi
