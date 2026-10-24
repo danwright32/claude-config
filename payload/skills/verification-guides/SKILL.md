@@ -49,7 +49,10 @@ the sections Roles, Reach, State setup, Checks and Known traps, with three to si
 `- [C1] <one sentence>`. `verification.py guide check <guide>` refuses any other shape.
 
 The run record is one fenced block per area in the run's PR comment, under a table a person reads.
-It is rendered by `verification.py record render`, never typed:
+It is rendered by `verification.py record render`, never typed. Render also keeps a fingerprint of
+each record it wrote in `rendered.jsonl` beside the receipt, and the merge check refuses a posted
+record that matches none of them, so post the rendered comment unchanged: an edit after render, to a
+result, a note or a check's text, is refused as `record-edited` (claude-config#1572).
 
 ````
 ```verification-run

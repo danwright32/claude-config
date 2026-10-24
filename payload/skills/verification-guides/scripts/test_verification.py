@@ -572,6 +572,26 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Old check", body)
         self.assertIn("Why", body)
 
+    def test_render_remembers_what_it_rendered_beside_the_receipt(self):
+        stopped_receipt(self.home)
+        rec = v.parse_comment(self.render(self.draft()), sha=SHA)["matching"][0]
+        self.assertIn(v.record_digest(rec), v.load_rendered(RECEIPT_ID, self.home)[rec["area"]])
+        edited = dict(rec, checks=[dict(c, result="pass") for c in rec["checks"]])
+        self.assertNotIn(v.record_digest(edited), v.load_rendered(RECEIPT_ID, self.home)[rec["area"]])
+
+    def test_a_refused_render_remembers_nothing(self):
+        stopped_receipt(self.home)
+        d = self.draft()
+        d["areas"][0]["checks"] = d["areas"][0]["checks"][:2]
+        d["areas"][0]["guide_edits"] = []
+        self.refused(d, "render-checks-mismatch")
+        self.assertEqual(v.load_rendered(RECEIPT_ID, self.home), {})
+
+    def test_render_refuses_when_it_cannot_remember(self):
+        rdir = stopped_receipt(self.home)
+        os.makedirs(os.path.join(rdir, "rendered.jsonl"))
+        self.refused(self.draft(), "render-not-remembered")
+
     def test_a_running_receipt_cannot_be_recorded(self):
         stopped_receipt(self.home, stopped_at=None, stopped_by=None)
         self.refused(self.draft(), "render-receipt-not-stopped")

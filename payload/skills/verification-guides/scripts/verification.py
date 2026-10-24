@@ -15,6 +15,8 @@ the major version it knows and ignores keys it does not, so an additive change n
   verification-run/1      one fenced ```verification-run block per area in a PR comment
   verification-receipt/1  <home>/receipts/<id>/receipt.json, written only by run_session.py
                           (and drives.jsonl beside it, one line per drive call)
+  verification-rendered/1 <home>/receipts/<id>/rendered.jsonl, one line per record `record render`
+                          wrote, so the merge check can refuse a record edited after render (#1572)
   verification-tally/1    <home>/merge-tally/<owner>/<name>.jsonl, the merge check's warn tally (#1529)
 
 The merge check (#1529) is merge_check.py beside this file: it judges a pull request through these
@@ -42,6 +44,7 @@ mirrors ~/.claude to a public repository, and receipts hold screenshots of priva
 VERIFICATION_TRANSCRIPTS (default ~/.claude/projects) for whoami.
 """
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -54,6 +57,7 @@ import time
 AREAS_SCHEMA = "verification-areas/1"
 RUN_SCHEMA = "verification-run/1"
 RECEIPT_SCHEMA = "verification-receipt/1"
+RENDERED_SCHEMA = "verification-rendered/1"
 AREAS_PATH = ".claude/verification/areas.json"
 
 GUIDE_SECTIONS = ("Roles", "Reach", "State setup", "Checks", "Known traps")
@@ -666,6 +670,71 @@ def load_receipt(receipt_id, home=None):
     return rec
 
 
+# Keys a reader adds to a record it parsed, never part of what record render wrote.
+_READER_KEYS = ("passed", "sha_matches")
+
+
+def record_digest(rec):
+    """The fingerprint of one record as record render wrote it (claude-config#1572).
+
+    Taken over every key the record carries, results, notes and text included, so a comment edited
+    after render (a failing check changed to pass, a note rewritten) no longer matches. JSON with
+    sorted keys, so the same record parsed back from a comment gives the same fingerprint.
+    """
+    body = {k: val for k, val in rec.items() if k not in _READER_KEYS}
+    text = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def remember_rendered(receipt_id, records, home=None):
+    """Append each rendered record's fingerprint to rendered.jsonl beside its receipt.
+
+    Append only: an area rendered twice (a second run of record render) keeps both, and the merge
+    check passes a record matching either, since both were written by render. A write that fails
+    is a refusal (render-not-remembered), never a silent skip, or the record would be refused later
+    with nobody told why (L10).
+    """
+    path = os.path.join(receipt_dir(receipt_id, home), "rendered.jsonl")
+    lines = "".join(json.dumps({"schema": RENDERED_SCHEMA, "area": r["area"], "digest": record_digest(r),
+                                "at": utc_now()}) + "\n" for r in records)
+    try:
+        with open(path, "a") as f:
+            f.write(lines)
+    except OSError as e:
+        fail("render-not-remembered", "the fingerprint of what was rendered could not be written to %s (%s),"
+             " so the merge check would refuse the record: render it again once that is fixed" % (path, e))
+
+
+def load_rendered(receipt_id, home=None):
+    """Every fingerprint record render wrote for this receipt, by area: {area: set of digests}.
+
+    A receipt with no rendered.jsonl had nothing rendered from it, which is an answer ({}), not a
+    fault. A line that is not that shape is named, never skipped (L10).
+    """
+    path = os.path.join(receipt_dir(receipt_id, home), "rendered.jsonl")
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        fail("rendered-unreadable", "%s could not be read: %s" % (path, e))
+    out = {}
+    for n, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError as e:
+            fail("rendered-not-json", "%s line %d is not JSON: %s" % (path, n, e))
+        ok = isinstance(obj, dict) and obj.get("schema") == RENDERED_SCHEMA and \
+            isinstance(obj.get("area"), str) and isinstance(obj.get("digest"), str)
+        if not ok:
+            fail("rendered-bad-line", "%s line %d is not a %s line: %r" % (path, n, RENDERED_SCHEMA, line[:200]))
+        out.setdefault(obj["area"], set()).add(obj["digest"])
+    return out
+
+
 def load_drives(receipt_id, home=None):
     """Every drive call a run logged, from drives.jsonl beside its receipt (claude-config#1529).
 
@@ -907,6 +976,7 @@ def render_comment(draft, home=None, transcripts=None, pr_body=""):
         p.append(("render-area-missing", "the run served %s but the draft has no record for it" % ", ".join(missing)))
     if p:
         raise VerificationError(p)
+    remember_rendered(rid, records, home)
     head = ["## Verification run at %s" % receipt["head_sha"][:7], "",
             "Receipt `%s` on %s, runner agent `%s`. Serve stopped at %s (%s)."
             % (rid, receipt["machine"], agent, receipt["stopped_at"], receipt.get("stopped_by")), ""]
