@@ -1755,7 +1755,7 @@ printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a pas
 out="$(run 7 --squash)"; rc=$?
 check_eq "#1618 a refusal during a load window still stops" "1" "$rc"
 check "#1618 and names the window running, with its workers and label" "A deliberate load window is running on this Mac (tools/load-window.sh, pid 4242, 24 busy and 6 process launching workers, \"repro of #1620\")" "$out"
-check "#1618 in ET, on the helper's own clock" "until $(TZ=America/New_York date -r 1000080 '+%H:%M:%S') ET at the latest" "$out"
+check "#1618 in ET, on the helper's own clock" "until 08:48:00 ET at the latest" "$out"
 
 fresh "$OLD" 0 "$GREEN"
 printf '%s\n' "$SIGNIN" > "$ST/view-fails"
@@ -1773,7 +1773,7 @@ check_not "#1618 says nothing about it once merged" "load window" "$out"
 fresh "$OLD" 0 "$GREEN"
 printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
 out="$(run 7 --squash)"; rc=$?
-check "#1618 a window that ended minutes before is named as ended" "A deliberate load window ran on this Mac from $(TZ=America/New_York date -r 999900 '+%H:%M:%S') ET to $(TZ=America/New_York date -r 999990 '+%H:%M:%S') ET" "$out"
+check "#1618 a window that ended minutes before is named as ended" "A deliberate load window ran on this Mac from 08:45:00 ET to 08:46:30 ET" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"

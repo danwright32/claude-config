@@ -171,7 +171,7 @@ LW="$WORK/home/.claude/state/load-window"; mkdir -p "$LW"
 printf 'start\tw1\t%s\t%s\t4242\t24\t6\trepro of #1620\n' $(( NOW - 30 )) $(( NOW + 150 )) > "$LW/windows.tsv"
 out="$(prompt w1 "$WORK/old")"
 says "a pile said during a window names it" "$out" "A deliberate load window is running on this Mac (tools/load-window.sh, pid 4242, 24 busy and 6 process launching workers, \"repro of #1620\")"
-says "with its end in ET" "$out" "until $(TZ=America/New_York date -r $(( NOW + 150 )) '+%H:%M:%S') ET at the latest"
+says "with its end in ET" "$out" "until 03:02:30 ET at the latest"
 silent "and no window is said without a pile" "$(prompt w2 "$WORK/healthy")"
 rm -rf "$LW"
 
