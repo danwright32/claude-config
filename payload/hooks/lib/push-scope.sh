@@ -683,8 +683,11 @@ ps__action_records() {   # $1 = command  $2 = the action's predicate
   while [ "$j" -lt "${#texts[@]}" ]; do
     text="${texts[$j]}"; j=$((j + 1))
     # A wrapper (`bash -c '...'`, eval) holds its commands as records of their own after it, each in
-    # the directory it runs in; the wrapper itself is not a second action (claude-config#1478).
-    [ -z "${wraps[$((j - 1))]}" ] || continue
+    # the directory it runs in; the wrapper itself is not a second action (claude-config#1478). A
+    # script run by its path or sourced (`direct`, `source`, claude-config#1623) holds no records:
+    # it is the command itself, so a repo's merge tool run as `./scripts/merge-when-green.sh 7`
+    # stays the merge every merge gate reads it as.
+    case "${wraps[$((j - 1))]}" in ''|direct$'\x1d'*|source$'\x1d'*) ;; *) continue ;; esac
     "$pred" "$text" </dev/null || continue
     case "$text" in
       *'$('*|*'`'*)

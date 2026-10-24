@@ -923,19 +923,64 @@ WHY_FILE = "it runs the script file %s, whose commands are in the file, not the 
 WHY_EXECDIR = "it runs its command in the directory of each file it finds, which cannot be told"
 WHY_UNENDED = "its %s command never ends with ; or {} +"
 
+# A script run by its path, or sourced, is a script file run by a shell (claude-config#1623):
+# `./build.sh && git push` runs the file's commands as `bash ./build.sh && git push` does, and no gate
+# reads the file either way. A command word holding a slash is run as that file, never looked up on
+# PATH, so it is a path; the word alone says so, and no file is opened or even looked for, which keeps
+# the reading the same for a file the command itself writes first, and costs nothing per command.
+# Three kinds of path are no script file of their own. One named git, gh or rtk, which every gate
+# reads by that name wherever it lives (`/opt/homebrew/bin/gh pr merge 7` is a merge to all of them).
+# A shell, eval, env or an argument runner by its path, read as that program above. And a program in
+# one of PROGRAM_DIRS, the directories the system and Homebrew install programs in, which run what the
+# same name run bare runs, and a bare name was never read as a script. The path is normalised first,
+# so `/usr/bin/../../tmp/x.sh` is in /tmp. `source` and `.` run a file's commands in the shell itself.
+# The wrapper is named `direct` for a path and `source` for either spelling of the builtin; the reason
+# is WHY_FILE, the one a shell running a script file gives, so the refusal, its record and the
+# declared scripts (data_blanked) treat the two alike.
+PROGRAM_DIRS = ("/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/", "/System/",
+                "/Library/Developer/CommandLineTools/", "/usr/local/bin/", "/usr/local/sbin/",
+                "/opt/homebrew/bin/", "/opt/homebrew/sbin/")
+READ_BY_NAME = {"git", "gh", "rtk"}
+ARRAY_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+?=")
+
+
+def _script_run(word, rest):
+    """(wrapper, None, why) for a command whose own word runs a script file, by its path or by
+    source or `.`, else None (claude-config#1623)."""
+    if word in ("source", "."):
+        try:
+            operands = shlex.split(rest, posix=True)[1:]
+        except ValueError:
+            return ("source", None, WHY_QUOTE)
+        if operands and operands[0] == "--":
+            operands = operands[1:]
+        return ("source", None, WHY_FILE % operands[0]) if operands else None
+    if "/" not in word or word.split("/")[-1] in READ_BY_NAME:
+        return None
+    # An array assignment or append (`args+=(x/y)`, `a=(x/y)`) is no command, though split() leaves it,
+    # and neither is a word whose name before its first slash holds = or : (a URL, `k=v/x`): the
+    # guard's fast path (check-wrapped-commands.sh RUNS_FILE_WORD) passes those over too, so the two
+    # agree on what a path is.
+    if ARRAY_ASSIGNMENT.match(word) or any(ch in word.split("/")[0] for ch in "=:"):
+        return None
+    if word.startswith("/") and (os.path.normpath(word) + "/").startswith(PROGRAM_DIRS):
+        return None
+    return ("direct", None, WHY_FILE % word)
+
 
 def wrapped(rest):
     """(wrapper, string, why) for one command, from its own name on (command_rest), that runs a string
     as a command line, else None. wrapper names it (`bash -c`, `eval`, `env -S`, or the shell's name
-    when it reads its input); string is the command line it runs, None when there is none to read;
-    why is "" when the string can be read, else the reason it cannot."""
+    when it reads its input, `direct` or `source` for a script file run by its path or sourced);
+    string is the command line it runs, None when there is none to read; why is "" when the string
+    can be read, else the reason it cannot."""
     name, _ = first_word(rest)
     if name is None:
         raw = rest.split(None, 1)
         name = raw[0].strip("'\"") if raw else ""
-    name = name.split("/")[-1]
+    word, name = name, name.split("/")[-1]
     if name not in SHELLS and name not in ("eval", "env") and name not in ARGUMENT_RUNNERS:
-        return None
+        return _script_run(word, rest)
     try:
         words = shlex.split(rest, posix=True)
     except ValueError:
@@ -1204,7 +1249,10 @@ def read(s):
     records, crude = _records(s, "", 0)
     out = []
     for d, t, wrap, rest, assigns, field, _ in records:
-        fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if not wrap and alone(t) else "0",
+        # A script run by its path or sourced holds no records of its own (claude-config#1623), so
+        # it can be alone as any plain command can.
+        container = wrap and wrap.partition("\x1d")[0] not in ("direct", "source")
+        fields = (d, t, "\x1f".join(command_words(t)), git_dir(rest), "1" if not container and alone(t) else "0",
                   rest, assigns, field, wrap)
         out.append("\x1c".join(fields) + "\x1e")
     return "".join(out), 3 if crude else 0
@@ -1313,8 +1361,9 @@ def _data_words(s):
 
 def data_blanked(s, declared, home):
     """s with every argument quoted whole after a declared script (and its subcommand, when the entry
-    names one) replaced by '', when s is exactly `bash <script> [<subcommand>] <arguments>` for one of
-    declared ("<path>" or "<path> <subcommand>", the path under ~/), else None. The script is matched
+    names one) replaced by '', when s is exactly `bash <script> [<subcommand>] <arguments>`, or the same
+    with the script run by its path and no bash (claude-config#1623), for one of declared ("<path>"
+    or "<path> <subcommand>", the path under ~/), else None. The script is matched
     on its whole path, written ~/ or from home, so a script of the same name elsewhere is no match.
     Only DATA_TOKEN_PREFIX may stand in front, and it is left out of what is returned: it names gh
     itself, and what it runs, one plain `gh auth token`, is read as its own command by every gate.
@@ -1334,17 +1383,22 @@ def data_blanked(s, declared, home):
             return None
         filtered.append(" ".join(["|", fw[0][0]] + ["''" if whole else r for r, _, whole in fw[1:]]))
     words = _data_words(s)
-    if not words or len(words) < 2 or words[0][0] != "bash" or not home.startswith("/"):
+    if not words or not home.startswith("/"):
         return None
-    raw_path, path, _ = words[1]
+    # `bash <script>`, or the script run by its path (claude-config#1623): each declared script is a
+    # bash script with its own bash shebang, so the two run it alike.
+    at = 1 if words[0][0] == "bash" else 0
+    if len(words) < at + 1:
+        return None
+    raw_path, path, _ = words[at]
     if raw_path.startswith("~/"):
         path = home.rstrip("/") + raw_path[1:]
     for entry in declared:
         script, _, sub = entry.partition(" ")
         if not script.startswith("~/") or " " in sub or path != home.rstrip("/") + script[1:]:
             continue
-        fixed = 3 if sub else 2
-        if sub and (len(words) < 3 or words[2][1] != sub):
+        fixed = at + (2 if sub else 1)
+        if sub and (len(words) < at + 2 or words[at + 1][1] != sub):
             continue
         kept = [w[0] for w in words[:fixed]] + ["''" if whole else r for r, _, whole in words[fixed:]]
         return " ".join(kept + filtered)
