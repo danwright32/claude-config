@@ -45,6 +45,7 @@ state/
 .ci-red-since
 .watch-stale
 .watch-restarted
+.watch-starts
 .my-push
 .mods-seen
 .trees-seen

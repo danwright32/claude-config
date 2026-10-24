@@ -109,8 +109,13 @@ lesson's provenance is `name#123`, never `owner/name#123`, and a fixture invents
 sha256 hashes, and on a Mac with the dev update registry also checks the owner of every repository
 in it. It never prints a name it found, only where. It runs over the whole tree before every push
 and in CI (`tests/test-work-names-tree.sh`), and over what every send is about to publish: a send
-carrying a name is refused, naming the file and line, until it is gone
-(`SYNC_SKIP_WORK_NAMES_SCAN=1` overrides it for one run, said to Dan first).
+carrying a name is refused, naming the file and line, until it is gone. A send that cannot run the
+scanner is refused as well (#1621): python3 missing, the files it would publish not listable, or
+the scanner itself not beside the copy of `claude-sync` being run, which is how a copy run outside
+its checkout looks. Suites that run a copy give it the scanner rather than being exempt.
+`SYNC_SKIP_WORK_NAMES_SCAN=1` lets one send run by hand through unscanned, said to Dan first; every
+use says so on stderr and writes a line to the sync log, and the change watcher ignores it and
+scans, since it sends on every change for as long as it runs.
 
 Plugin-managed skills are excluded so plugin updates don't cause churn, and so is
 `skills/synced/`, where the Claude app downloads each account's built in skills, and any `.trash`
@@ -281,6 +286,12 @@ depends on the newer copy and on what else is happening:
   the stretch, and records it in the clone's `.watch-stale`, which `claude-sync status` and the per
   prompt session notice report at once rather than after the usual hour. It restarts by itself once
   a copy that runs is on disk, and the record goes with it.
+- **The newer copy passes that test but fails as the watcher** (#1594): every start is recorded in
+  the clone's `.watch-starts`, and the fourth start of one copy inside five minutes stops there
+  instead of ending too. It stays up, so launchd stops restarting it, sends nothing, logs
+  `NOT watching`, records the stretch in `.watch-stale` (reported by `stuck`, status and the session
+  notice as `watcher-looping`), and posts one desktop notification. It checks the file on disk every
+  minute and hands over, as above, once a different `claude-sync` is there.
 
 Until #1569 it only refused, and recovery waited for the daily timer or a pull by hand: on
 2026-10-22 to 23 the personal MacBook refused 84 times over 16 hours and sent and received nothing.
