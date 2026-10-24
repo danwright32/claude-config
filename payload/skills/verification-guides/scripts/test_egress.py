@@ -74,8 +74,39 @@ class ReaderAndJudgment(unittest.TestCase):
         self.read([report(503, 443, self.m.tag), report(503, 443, self.m.tag, dupes=4)], {})
         out = self.m.judge()
         self.assertEqual(out["verdict"], "not-clean")
-        self.assertEqual(out["unnamed"], [{"process": "node", "port": 443, "reports": 5, "pids": [503]}])
-        self.assertIn("port 443", out["why"])
+        self.assertEqual(out["unnamed"], [{"process": "node", "port": 443, "reports": 5, "pids": [503],
+                                           "name_error": None}])
+        self.assertIn("node port 443 (5 reports): closed before it could be read", out["why"])
+
+    def test_a_connection_lsof_failed_to_name_is_not_said_to_have_closed(self):
+        # lsof is faked at subprocess.run, so _read names each report through the real _name: pid 600's
+        # connection had closed (lsof exits 1 saying nothing), pid 601's lsof failed, and pid 602's
+        # lsof timed out. One cause must never be reported as the other (L11, #1633).
+        def lsof(cmd, **kw):
+            pid = cmd[cmd.index("-p") + 1]
+            if pid == "602":
+                raise egress.subprocess.TimeoutExpired(cmd, 10)
+            if pid == "601":
+                return egress.subprocess.CompletedProcess(cmd, 2, "", "lsof: illegal option")
+            return egress.subprocess.CompletedProcess(cmd, 1, "", "")
+
+        self.m.proc = FakeStream([report(600, 443, self.m.tag), report(601, 443, self.m.tag),
+                                  report(602, 80, self.m.tag, process="curl")])
+        with mock.patch.object(egress.subprocess, "run", side_effect=lsof):
+            self.m._read()
+        out = self.m.judge()
+        self.assertEqual(out["verdict"], "not-clean", out)
+        by_pid = {u["pids"][0]: u for u in out["unnamed"]}
+        self.assertEqual(sorted(by_pid), [600, 601, 602], out["unnamed"])
+        self.assertIsNone(by_pid[600]["name_error"])
+        self.assertEqual(by_pid[601]["name_error"], "lsof exited 2 reading pid 601: lsof: illegal option")
+        self.assertIn("could not read the sockets of pid 602", by_pid[602]["name_error"])
+        self.assertIn("node port 443 (1 report): closed before it could be read", out["why"])
+        self.assertIn("node port 443 (1 report): lsof could not read it: lsof exited 2 reading pid 601:"
+                      " lsof: illegal option", out["why"])
+        self.assertIn("curl port 80 (1 report): lsof could not read it: lsof could not read the sockets of"
+                      " pid 602", out["why"])
+        self.assertEqual(out["why"].count("closed before"), 1, out["why"])
 
     def test_an_allowed_address_is_clean_and_says_which_host(self):
         self.m.allow = list(v.EGRESS_LOCAL_HOSTS) + ["203.0.113.9"]

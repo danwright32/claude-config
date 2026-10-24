@@ -100,7 +100,8 @@ reports (no password), and `lsof` names each one's remote address the moment it 
 canary connection, a UDP connect to the reserved address 198.51.100.1 that sends no packet,
 proves the stream live at the start and again at the end. The field holds `verdict`, `why`,
 `allowed_hosts`, `destinations` (each `{address, port, reports, processes, allowed}`) and
-`unnamed` (connections that closed before their address could be read). `clean` means the monitor
+`unnamed` (connections whose address was never read, each with `name_error`: null when the
+connection closed before lsof could read it, else why lsof could not). `clean` means the monitor
 was proved live for the whole run and every destination was allowed; `not-clean` names what was
 reached, and an unnamed connection is never clean; `unmeasured` gives the reason the monitor could
 not see (not a Mac, `sandbox-exec` missing or refused, the canary never reported, the supervisor

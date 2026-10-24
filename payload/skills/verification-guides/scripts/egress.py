@@ -16,8 +16,10 @@ How, and why this way (measured on macOS 26 without a password, 2026-10-23; see 
     it would anywhere else.
   * The reports are read live with `log stream`, which needs no root. They name the process and
     the port but spell the address as `*`, so each report is NAMED by reading that process's open
-    sockets with `lsof` the moment it arrives. A connection that closed before then stays in the
-    receipt as unnamed, and an unnamed connection is never clean (fail closed).
+    sockets with `lsof` the moment it arrives. A connection that closed before then, or whose
+    sockets lsof could not read (it failed, timed out or could not run), stays in the receipt as
+    unnamed, each saying which of the two it was, and an unnamed connection is never clean (fail
+    closed).
   * The stream is proved live by a CANARY, a process under a profile of its own (tagged apart, so a
     reused pid can never pass a real connection off as the canary's) that connects a UDP
     socket to 198.51.100.1 (TEST-NET-2: reserved, and a UDP connect sends no packet at all). The
@@ -363,13 +365,17 @@ class Monitor:
                     if r["process"] not in d["processes"]:
                         d["processes"].append(r["process"])
             else:
-                u = unnamed.setdefault((r["process"], r["port"]), {"process": r["process"], "port": r["port"],
-                                                                   "reports": 0, "pids": []})
+                # Kept apart by why it went unnamed: null when lsof read the process and the connection
+                # had already closed, else why lsof could not read it, so a failure to read is never
+                # reported as a connection that closed (L11, #1633).
+                err = r.get("name_error")
+                u = unnamed.setdefault((r["process"], r["port"], err), {"process": r["process"], "port": r["port"],
+                                                                        "reports": 0, "pids": [], "name_error": err})
                 u["reports"] += r["count"]
                 if r["pid"] not in u["pids"]:
                     u["pids"].append(r["pid"])
         dests = sorted(dests.values(), key=lambda d: (d["address"], d["port"]))
-        unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"]))
+        unnamed = sorted(unnamed.values(), key=lambda u: (u["process"], u["port"], u["name_error"] or ""))
         outside = [d for d in dests if not d["allowed"]]
         if outside or unnamed:
             parts = []
@@ -378,9 +384,11 @@ class Monitor:
                     "%s port %d (%s, %s)" % (d["address"], d["port"], ", ".join(d["processes"]), plural(d["reports"]))
                     for d in outside))
             if unnamed:
-                parts.append("connections outside this machine closed before their address could be read: "
-                             + "; ".join("%s port %d (%s)" % (u["process"], u["port"], plural(u["reports"]))
-                                         for u in unnamed))
+                parts.append("connections outside this machine whose address was never read: " + "; ".join(
+                    "%s port %d (%s): %s" % (u["process"], u["port"], plural(u["reports"]),
+                                             "lsof could not read it: " + u["name_error"] if u["name_error"]
+                                             else "closed before it could be read")
+                    for u in unnamed))
             return self.field("not-clean", ". ".join(parts), dests, unnamed)
         if dests:
             why = "every connection outside this machine went to an allowed host: " + "; ".join(
