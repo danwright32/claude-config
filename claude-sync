@@ -5040,9 +5040,12 @@ scan_work_names(){
   fi
   [ -z "$list" ] || rm -f "$list"
   [ "$rc" -eq 0 ] && return 0
+  # The override offered is one that works where this is read: the watcher ignores it (above).
+  local override="SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one run"
+  [ "${SYNC_IN_WATCH:-0}" = "1" ] && override="SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one send run by hand (claude-sync send), never in the change watcher"
   if [ "$rc" -eq 1 ]; then
     found="$(printf '%s\n' "$out" | grep -v '^work-names:' | cut -d: -f1,2 | sort -u | tr '\n' ' ')"
-    refusal="a file this send would publish names a work organisation, at: ${found% }. Drop the organisation from prose and provenance (write name#123, never owner/name#123) or invent one in a fixture, then sync again. SYNC_SKIP_WORK_NAMES_SCAN=1 overrides it for one run"
+    refusal="a file this send would publish names a work organisation, at: ${found% }. Drop the organisation from prose and provenance (write name#123, never owner/name#123) or invent one in a fixture, then sync again. $override"
     [ -z "${SEND_REFUSED_FILE:-}" ] || printf '%s\t%s\twork-names\n' "$(date +%s)" "${found% }" > "$SEND_REFUSED_FILE" 2>/dev/null || true
   else
     refusal="the work names scan could not judge what this send would publish, so nothing is sent: $(printf '%s' "$out" | tr '\n' ' ')"

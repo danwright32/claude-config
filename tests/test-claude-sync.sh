@@ -12704,6 +12704,10 @@ check "#1621 and logs that it was ignored" \
   "line_has \"\$(cat '$WNLOG')\" 'SYNC_SKIP_WORK_NAMES_SCAN=1' 'ignored'"
 check "#1621 and the refusal still names the file and line" \
   "line_has \"\$out_wn3\" 'names a work organisation' 'CLAUDE\.md:2'"
+# Its remedy must be one that works where it was read: the watcher's refusal points at a send run by
+# hand, never at an override the watcher has just said it ignores (L111).
+check "#1621 and the watcher's refusal points the override at a send run by hand" \
+  "line_has \"\$out_wn3\" 'names a work organisation' 'one send run by hand' 'claude-sync send'"
 
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
