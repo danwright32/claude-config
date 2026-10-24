@@ -1304,7 +1304,7 @@ Three gates close the three parts of that, all reading commands through one libr
 
 ### What a push actually waits on
 
-Twenty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
