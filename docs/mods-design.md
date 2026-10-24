@@ -3037,7 +3037,8 @@ read no write from a script file's arguments.
 - **Judged as an Edit of the file.** What a script writes cannot be read before it runs, so each file
   it is handed is judged as a write of it: a screen file is held on an issue Dan has not answered for,
   a test, a file in no checkout (the scratchpad) and any file of no look kind run, a mod's `.ts` hook
-  file that draws nothing runs and is read again after (#1296), and the guard's own record is
+  file that draws nothing runs and is read again after (#1296; since #1576 any mod hook file, `.ts`,
+  `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
   `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
 - **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
