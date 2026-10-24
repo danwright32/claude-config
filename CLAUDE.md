@@ -49,3 +49,6 @@ Read a lesson in full, rather than its shortened index line, with:
   An exclusion therefore has to come from the receiving side, not from leaving a file out.
 - The hooks that gate a push (tests, style, issue fields) run from the installed copy in
   `~/.claude`, not from this checkout, so a hook fixed here still blocks until it is installed.
+- To reproduce a failure under load, run `bash tools/load-window.sh`, never a hand written busy
+  loop: it takes the Mac's one load window and waits until no merge or full suite is running, so
+  it does not break other sessions' work (README "Reproducing a failure under load", #1618).
