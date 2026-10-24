@@ -69,7 +69,7 @@ check "the read back measures the length too" \
 # and each joined into one line, so where the markdown happens to wrap cannot fail it.
 step4="$(awk '/^### 4\. /{on=1; next} /^### /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
 step7="$(awk '/^### 7\. /{on=1; next} /^### /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
-list_section="$(awk '/^## The list/{on=1; next} /^## /{on=0} on' "$SKILL" 2>/dev/null)"
+list_section="$(awk '/^## The list/{on=1; next} /^## /{on=0} on' "$SKILL" 2>/dev/null | tr '\n' ' ' | tr -s ' ')"
 check "step 4 is there to read" "$([ -n "$step4" ] && echo ok || echo "no ### 4. section")"
 check "step 7 is there to read" "$([ -n "$step7" ] && echo ok || echo "no ### 7. section")"
 check "the Description template has a closing part for the row" \
@@ -90,8 +90,10 @@ check "step 7 writes the record id back into the Description" \
   "$(grep -qi 'record id' <<< "$step7" && grep -qF 'slack_update_list_record' <<< "$step7" && echo ok || echo "no write back of the record id")"
 check "the read back confirms the Description names its own record id" \
   "$(grep -qi 'names its own record id' <<< "$step7" && echo ok || echo "no read back of the record id")"
-check "the schema check confirms the Status options the row moves through" \
-  "$(grep -qF '`In progress`' <<< "$list_section" && grep -qF '`Done`' <<< "$list_section" && echo ok || echo "The list section names no In progress and Done options")"
+# The stop rule itself, not just the option names: the Status row of the table names them too, so a
+# check for the words alone passes with the stop rule deleted.
+check "the schema check stops when a Status option the row moves through is missing" \
+  "$(grep -qF 'Status has no `Waiting`, `In progress` or `Done` option' <<< "$list_section" && echo ok || echo "no stop rule for missing Status options")"
 check "the skill holds no long dash" \
   "$(perl -CSD -ne '$f = 1 if /[\x{2013}\x{2014}]/; END { exit($f ? 1 : 0) }' "$SKILL" && echo ok || echo "found one")"
 
