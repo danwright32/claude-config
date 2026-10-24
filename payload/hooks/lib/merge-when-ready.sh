@@ -70,8 +70,10 @@
 # time, and after that only once the base's tip (read from the same compare that measures how far
 # behind it is, so it costs no call) has been unchanged for MWR_SETTLE_SECONDS, so a burst of merges
 # costs one fresh check run, not one per merge. There is no count of updates: the deadline, three
-# hours by default, and the poll count bound the run, and is-it-live's window for a background merge
-# (WAIT_MS) is held at twice that deadline by test-merge-when-ready.sh (L227). Waiting changes only
+# hours by default from taking the repository's turn (claude-config#1604, see out_of_time), and the
+# poll count bound the run, and is-it-live's window for a background merge (WAIT_MS) is held at twice
+# the longest a run can last, its wait in line plus that deadline, by test-merge-when-ready.sh
+# (L227). Waiting changes only
 # WHEN an update is made; what merges is still exactly the head every gate judged, as above.
 #
 # ONE HELPER PER REPOSITORY AT A TIME, IN TURN (claude-config#1515). Settling answers a base that
@@ -88,7 +90,10 @@
 # gates, so a run that lost it never merges under the one that has it. It orders only this Mac's
 # helpers: the other MacBook's, a typed merge and GitHub's merge queue never see it, and settling
 # still answers those. It decides the order of merges, never whether one is right, so a run that
-# cannot take a turn says so and goes on as before, and every gate judges every merge.
+# cannot take a turn says so and goes on as before, and every gate judges every merge. A turn is
+# never taken that the run cannot finish (claude-config#1604): its deadline counts from the turn, the
+# wait in line has a budget of its own, and the turn is not taken when the time it would leave is
+# shorter than the repository's recent check runs took (see turn_weigh).
 #
 # WHAT IT REFUSES TO CARRY. Only the merge method is passed to gh, and --delete-branch is carried
 # out here once the merge has landed: the open pull requests based on the branch are moved onto the
@@ -104,10 +109,13 @@
 #   1  needs a person: a gate refused, the review has findings to read (they are printed, with how to
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
-#      is gone), an update GitHub has still not shown four minutes after it, or a read GitHub
-#      refused or still did not answer after being asked again
+#      is gone), an update GitHub has still not shown four minutes after it, a read GitHub
+#      refused or still did not answer after being asked again, or a whole deadline shorter than
+#      the repository's recent check runs took (claude-config#1604)
 #   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
-#      deadline or the poll count ran out; running it again resumes, at the back of the line
+#      deadline, the time in line or the poll count ran out, or given the turn back with less of its
+#      deadline left than a check run takes (claude-config#1604); running it again resumes, at the
+#      back of the line
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
 #      based on it could not be moved, GitHub could not be read, or the branch holds commits the
 #      merge did not; running it again finishes the branch
@@ -140,8 +148,10 @@
 #
 # Environment (each also a test seam): MWR_POLL_SECONDS (60), MWR_POLL_MAX_SECONDS (180: the ceiling
 # the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
-# GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800),
-# MWR_MAX_POLLS (derived from the two, bounding the loop by count as well as by clock, L704),
+# GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800, counted from when the run first
+# takes the repository's turn, claude-config#1604), MWR_LINE_SECONDS (10800: how long it may wait
+# before that, in line or otherwise; a setting, not a measurement),
+# MWR_MAX_POLLS (derived from those and the pace, bounding the loop by count as well as by clock, L704),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
 # epoch seconds, the clock's seam), MWR_NO_CHECKS_GRACE_SECONDS (180: how long a fresh head with no checks
@@ -181,7 +191,9 @@ SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 POLL="$(num_or "${MWR_POLL_SECONDS:-}" 60)"; [ "$POLL" -ge 1 ] || POLL=1
 DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 10800)"
-MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $((DEADLINE / POLL + 10)))"
+# The wait in line for the repository's turn has its own budget (claude-config#1604, see out_of_time).
+LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
+MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
@@ -432,6 +444,35 @@ read_methods(){
   [ "$rc" -ne 0 ] || return 1
   mt_gh_read_class "$out" "$account"
 }
+# HOW LONG THE REPOSITORY'S CHECKS TAKE (claude-config#1604), read each time this run is about to
+# take the turn (see turn_weigh): sets checks_took, in seconds, empty when there was nothing to
+# measure. It is the longest of the ten most recent heads among the repository's latest successful
+# pull request runs, a head's time running from its first run created (so a wait for a runner counts,
+# as it does for the helper) to its last finished, so two workflows on one head are one check run. A
+# re-run (run_attempt above 1) is left out, since it can finish hours after the run was created, and
+# so is a failed run, which can end early. The longest rather than a typical one because the two
+# errors cost differently (L648): too long refuses a turn the run might have finished, which costs
+# that run a rerun; too short lets it take a turn and run out, which costs everyone behind it.
+# Measured on claude-config on 2026-10-24: its last 100 such runs took 15 to 23 minutes.
+CHECK_TIMES_JQ='if (.workflow_runs | type) != "array" then error("no list of runs") else
+  [.workflow_runs[] | select(.conclusion == "success" and ((.run_attempt // 1) == 1) and ((.created_at | type) == "string") and ((.updated_at | type) == "string"))]
+  | group_by(.head_sha)
+  | map({at: (map(.created_at) | min), took: ((map(.updated_at | fromdateiso8601) | max) - (map(.created_at | fromdateiso8601) | min))})
+  | sort_by(.at) | reverse | .[0:10] | map(.took) | max // "" end'
+read_check_times(){
+  local out rc
+  checks_took=""
+  out="$(gh_as api "repos/$slug/actions/runs?status=success&event=pull_request&per_page=50" 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ] && checks_took="$(printf '%s' "$out" | jq -r "$CHECK_TIMES_JQ" 2>/dev/null)"; then
+    case "$checks_took" in ''|*[!0-9]*) checks_took="" ;; esac
+    return 0
+  fi
+  checks_took=""
+  read_err="${out:0:300}, exit $rc"
+  [ "$rc" -ne 0 ] && ghp_rate_limited "$out" && return 5
+  if [ "$rc" -eq 0 ]; then read_err="GitHub's answer was not a list of runs: ${out:0:200}"; return 1; fi
+  mt_gh_read_class "$out" "$account"
+}
 # "squash", "squash and rebase", "squash, merge and rebase"
 and_list(){
   local n=$# out="" i=0 w
@@ -642,10 +683,36 @@ tip_seen=""; tip_moved_at=""
 # The last update this run made (claude-config#1500): the head it was made to, when, and whether a
 # compare has answered since. See head_is_tip and not_caught_up.
 updated_from=""; updated_at=0; catching_up=""
+# WHICH CLOCK BOUNDS A WAIT (claude-config#1604). The deadline used to run from the helper's start,
+# and the turn was taken whatever was left of it. On 2026-10-23 about 20 helpers queued in one
+# repository: each spent most of its three hours in line, took the turn, updated its pull request
+# onto main (restarting checks of 10 to 20 minutes) and ran out with them still running, exit 3,
+# nothing merged. Three turns in a row went that way, and nothing of that session's merged for about
+# three hours. So the deadline, MWR_DEADLINE_SECONDS, now counts from the moment this run first took
+# the turn (taken_at), and the time before it, in line or before the first look took a place, has a
+# budget of its own, MWR_LINE_SECONDS. Neither restarts: a run passed over and back in line is
+# still on the deadline it started when it first took the turn, so the longest a run can last is
+# the two added together, which is what is-it-live's window is held to (test-merge-when-ready.sh).
+# A run that could take no turn at all goes on as before #1515, on its deadline from its start.
+taken_at=""
+budget_left(){   # sets BUDGET_LEFT (seconds) and BUDGET_SAID (which budget, in words)
+  local t; t="$(now)"
+  if [ -n "$taken_at" ]; then
+    BUDGET_LEFT=$(( DEADLINE - (t - taken_at) )); BUDGET_SAID="its $(span "$DEADLINE") deadline from taking the turn"
+  elif [ "$turn_state" = off ]; then
+    BUDGET_LEFT=$(( DEADLINE - (t - t0) )); BUDGET_SAID="its $(span "$DEADLINE") deadline"
+  else
+    BUDGET_LEFT=$(( LINE - (t - t0) )); BUDGET_SAID="its $(span "$LINE") in line for a turn"
+  fi
+}
 # Out of time while waiting on something: the same stop wherever the wait is.
 out_of_time(){   # $1 = what it was still waiting for
-  if [ "$polls" -ge "$MAX_POLLS" ] || [ $(( $(now) - t0 )) -ge "$DEADLINE" ]; then
-    stop 3 "Out of time: #$pr at ${head:0:7} $1 after $polls look(s). Nothing was merged; run the same command again to resume."
+  budget_left
+  if [ "$BUDGET_LEFT" -le 0 ]; then
+    stop 3 "Out of time: #$pr at ${head:0:7} $1 after $polls look(s), at the end of $BUDGET_SAID. Nothing was merged; run the same command again to resume."
+  fi
+  if [ "$polls" -ge "$MAX_POLLS" ]; then
+    stop 3 "Out of time: #$pr at ${head:0:7} $1 after $polls look(s), the most it makes (MWR_MAX_POLLS). Nothing was merged; run the same command again to resume."
   fi
 }
 # An update GitHub has not shown, other than as a branch ahead of its pull request, which
@@ -715,7 +782,8 @@ nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on
 take_a_look(){
   local key line still
   while ! ghp_take "$(now)"; do
-    [ $(( $(now) - t0 )) -lt "$DEADLINE" ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s). Nothing was merged; run the same command again to resume."
+    budget_left
+    [ "$BUDGET_LEFT" -gt 0 ] || stop 3 "Out of time: #$pr was still waiting $([ "$GHP_WHY" = pause ] && echo "for GitHub's rate limit to lift" || echo "for this session's next look at GitHub") after $polls look(s), at the end of $BUDGET_SAID. Nothing was merged; run the same command again to resume."
     if [ "$GHP_WHY" = pause ]; then
       key="pause"; still="Still paused for GitHub's rate limit"
       line="Paused for GitHub's rate limit (${GHP_SAID:-it refused a read}): this session's looks at GitHub wait $(dur "$GHP_WAIT") for it."
@@ -732,6 +800,9 @@ take_a_look(){
   case "$wait_key" in pause|cap) wait_key="" ;; esac
 }
 mins(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then printf '%dm' "$(( $1 / 60 ))"; else printf '%ds' "$1"; fi; }
+# A setting said as a person reads it: in minutes when it is a whole number of them, and in minutes
+# and seconds otherwise (claude-config#1604).
+span(){ if [ "$1" -ge 60 ] && [ $(( $1 % 60 )) -eq 0 ]; then mins "$1"; else dur "$1"; fi; }
 
 # WHETHER GITHUB'S HEAD IS THE BRANCH'S TIP (claude-config#1458, see the header). Returns 0 when it
 # is. Otherwise it waits a look, sets the base again once, or stops, and returns 1 for the caller to
@@ -813,8 +884,40 @@ turn_say_passed(){
   [ -n "$TURN_SAID" ] || return 0
   while IFS= read -r l; do [ -z "$l" ] || say "$l"; done <<<"$TURN_SAID"
 }
+# NEVER A TURN IT CANNOT FINISH (claude-config#1604). Asked each time the turn comes to this run and
+# before it takes it: the time the turn would leave it (its whole deadline the first time, what is
+# left of it after being passed over) is weighed against how long the repository's recent check
+# runs took (read_check_times), since the turn is held through an update whose fresh checks take
+# that long. When it is shorter, the turn is not taken. A run with its deadline running gives its
+# place up and stops, exit 3, so the next pull request in line goes at once: the issue proposed
+# staying in line, but the head of the line holds every run behind it, and its time left only
+# shrinks while it waits, so staying would only spend the line's time. A whole deadline shorter than
+# the check runs could never be finished by running again, so that stops for a person, exit 1.
+# Unmeasured (no runs, or an unreadable list) is said with the take and the turn is taken as before
+# #1604; what that misses is a run passed over late in its deadline running out, as any could then.
+# Sets turn_left (seconds of deadline the take leaves) and turn_weighed (what is said with the take).
+turn_left=0; turn_weighed=""
+turn_weigh(){   # $1 = now
+  local rrc what="how long $slug's recent check runs took"
+  turn_weighed=""
+  if [ -n "$taken_at" ]; then turn_left=$(( DEADLINE - ($1 - taken_at) )); else turn_left="$DEADLINE"; fi
+  with_retries "$what" read_check_times; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    turn_weighed="; $(signin_or_unread "$what" "$rrc"), so it was weighed against nothing"
+    return 0
+  fi
+  if [ -z "$checks_took" ]; then
+    turn_weighed="; there are no recent successful pull request check runs in $slug to weigh its deadline against"
+    return 0
+  fi
+  if [ "$checks_took" -gt "$turn_left" ]; then
+    [ -n "$taken_at" ] || stop 1 "Stopped: #$pr's whole deadline, $(span "$DEADLINE") (MWR_DEADLINE_SECONDS), is shorter than the $(dur "$checks_took") $slug's recent check runs took, so it would take the turn and run out before an update's checks finished. Nothing was merged; give it a longer deadline, then run the same command again."
+    stop 3 "Did not take the turn to merge in $slug back: $(dur "$turn_left") is left of #$pr's $(span "$DEADLINE") deadline, shorter than the $(dur "$checks_took") its recent check runs took, so it would hold the turn and run out before an update's checks finished. Its place in line is given up so the next pull request goes now. Nothing was merged; run the same command again to resume, on a deadline that starts again when it next takes the turn."
+  fi
+  turn_weighed="; the longest of $slug's recent check runs took $(dur "$checks_took")"
+}
 turn_check(){
-  local t
+  local t clock
   [ "$turn_state" = off ] && return 0
   t="$(now)"
   if [ -z "$TURN_TICKET" ]; then
@@ -840,12 +943,20 @@ turn_check(){
   fi
   if [ "$TURN_MINE" = 1 ]; then
     if [ "$turn_state" != held ]; then
-      if [ -n "$turn_waited_from" ]; then
-        say "It is #$pr's turn to merge in $slug now, after waiting $(dur $(( t - turn_waited_from ))) for it. Other helpers on this Mac wait until it has merged or stopped, for up to $(mins "$TURN_HOLD")."
+      # Never a turn it cannot finish (claude-config#1604): stops here rather than take it.
+      turn_weigh "$t"
+      if [ -n "$taken_at" ]; then
+        clock="$(dur "$turn_left") of its $(span "$DEADLINE") deadline is left"
       else
-        say "Took the turn to merge in $slug: other helpers on this Mac wait until #$pr has merged or stopped, for up to $(mins "$TURN_HOLD")."
+        clock="Its $(span "$DEADLINE") to merge counts from now"
+      fi
+      if [ -n "$turn_waited_from" ]; then
+        say "It is #$pr's turn to merge in $slug now, after waiting $(dur $(( t - turn_waited_from ))) for it. Other helpers on this Mac wait until it has merged or stopped, for up to $(mins "$TURN_HOLD"). $clock$turn_weighed."
+      else
+        say "Took the turn to merge in $slug: other helpers on this Mac wait until #$pr has merged or stopped, for up to $(mins "$TURN_HOLD"). $clock$turn_weighed."
       fi
       turn_state=held; turn_waited_from=""
+      [ -n "$taken_at" ] || taken_at="$t"
     fi
     return 0
   fi

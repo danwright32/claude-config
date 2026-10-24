@@ -149,6 +149,13 @@ case "$*" in
     mt="$(rd main-tip)"
     printf '{"status":"%s","ahead_by":1,"behind_by":%s,"base_commit":{"sha":"%s"}}\n' "$st" "$b" "${mt:-aaaaaaa}"
     ;;
+  # The repository's recent successful pull request runs, read for how long its checks take before a
+  # turn is taken (claude-config#1604): recent-runs holds GitHub's answer, and with none there are none.
+  "api repos/acme/widget/actions/runs?status=success"*)
+    printf '%s\n' "$(rd clock)" >> "$ST/recent-runs-times"
+    fail_read recent-runs
+    if [ -s "$ST/recent-runs" ]; then cat "$ST/recent-runs"; else printf '%s\n' '{"total_count":0,"workflow_runs":[]}'; fi
+    ;;
   "api repos/acme/widget/actions/runs"*)
     # The workflow runs GitHub has created for the head (claude-config#1087): none unless a test
     # writes some to runs, the shape a repository whose runs have all finished answers with too.
@@ -1801,6 +1808,130 @@ fresh "$OLD" 0 "$GREEN"
 printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
 out="$(run 7 --squash)"; rc=$?
 check "#1618 a window that ended minutes before is named as ended" "A deliberate load window ran on this Mac from 08:45:00 ET to 08:46:30 ET" "$out"
+
+# =================================================================================================
+# 24. Never a turn it cannot finish (claude-config#1604). On 2026-10-23 about 20 helpers queued in
+#     one repository, each spent most of its three hour deadline in line, took the turn, updated its
+#     pull request (restarting checks of 10 to 20 minutes) and ran out with them still running: three
+#     turns in a row were lost and nothing merged for about three hours. Now the deadline counts from
+#     when the turn is taken, the wait in line has its own budget (MWR_LINE_SECONDS), and a run whose
+#     time left is shorter than the repository's recent check runs does not take the turn at all.
+# =================================================================================================
+# runs_of <sha:start:took[:conclusion[:attempt]]>...: GitHub's answer for the repository's recent
+# runs, each created <start> seconds after a fixed moment and finished <took> seconds later.
+runs_of(){ printf '%s\n' "$@" | jq -R -s '{total_count: 0, workflow_runs: [split("\n")[] | select(. != "") | split(":") | {head_sha: .[0], event: "pull_request", status: "completed", conclusion: (.[3] // "success"), run_attempt: ((.[4] // "1") | tonumber), created_at: ((1761200000 + (.[1] | tonumber)) | todate), updated_at: ((1761200000 + (.[1] | tonumber) + (.[2] | tonumber)) | todate)}]}'; }
+# The step that ends #9's hold, whichever ticket it has.
+LEAVE9='for f in "$MWR_TURN_DIR"/acme/widget/[0-9]*; do grep -qx "pr 9" "$f" && rm -f "$f" "$f.head"; done'
+
+# The deadline counts from the turn: a run that waited in line longer than its whole deadline still
+# has all of it once the turn is its, updates, waits out the new head's checks and merges.
+fresh "$OLD" 2 "$GREEN"; printf '%s\n' "$NEW" > "$ST/next-heads"
+"$BIN/take-turn" acme/widget 9
+for _ in $(seq 1 9); do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "$LEAVE9" ':' ':' ':' "printf '%s' '$GREEN' > \"\$ST/rollup\"" >> "$ST/on-sleep"
+out="$(MWR_DEADLINE_SECONDS=200 run 7 --squash)"; rc=$?
+check_eq "#1604 a run that waited in line past its deadline still merges once the turn is its" "0" "$rc"
+check "#1604 having waited for the turn" "It is #7's turn to merge in acme/widget now, after waiting 5m 00s for it" "$out"
+check "#1604 saying its deadline runs from the turn" "Its 3m 20s to merge counts from now" "$out"
+check_eq "#1604 it updated once, after taking the turn" "1" "$(count gh-calls 'pr update-branch')"
+check "#1604 and merged the updated head" "Merged #7 in acme/widget at ${NEW:0:7}" "$out"
+check_eq "#1604 the whole run lasted longer than the deadline" "yes" "$( [ "$(el)" -gt 200 ] && echo yes || echo no)"
+
+# Control: the deadline still bounds the run once the turn is taken, counted from that moment.
+fresh "$OLD" 0 "$PENDING"
+"$BIN/take-turn" acme/widget 9
+for _ in $(seq 1 9); do printf ':\n' >> "$ST/on-sleep"; done
+printf '%s\n' "$LEAVE9" >> "$ST/on-sleep"
+out="$(MWR_DEADLINE_SECONDS=200 run 7 --squash)"; rc=$?
+check_eq "#1604 a run whose checks never finish still runs out" "3" "$rc"
+check "#1604 at the end of its deadline from the turn" "at the end of its 3m 20s deadline from taking the turn" "$out"
+check_eq "#1604 two hundred seconds after the turn at five minutes, not before" "yes" "$( e="$(el)"; [ "$e" -ge 500 ] && [ "$e" -lt 560 ] && echo yes || echo no)"
+check_eq "#1604 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# The wait in line has its own budget: a run that never gets the turn stops at it, resumable.
+fresh "$OLD" 2 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_LINE_SECONDS=600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+check_eq "#1604 a run never given the turn stops at its line budget" "3" "$rc"
+check "#1604 naming what it waited for" "is waiting for its turn to merge in acme/widget, which #9 holds" "$out"
+check "#1604 and that its time in line ran out" "at the end of its 10m in line for a turn" "$out"
+check_eq "#1604 after ten minutes" "yes" "$( e="$(el)"; [ "$e" -ge 600 ] && [ "$e" -lt 630 ] && echo yes || echo no)"
+check_eq "#1604 updating nothing" "0" "$(count gh-calls 'pr update-branch')"
+check_eq "#1604 and its place is given up" "9" "$(ticket_prs)"
+
+# Its default line budget, measured by running it out (L107): three hours, and the most a run can
+# last is that plus its deadline from the turn.
+fresh "$OLD" 0 "$GREEN"
+"$BIN/take-turn" acme/widget 9
+out="$(MWR_POLL_SECONDS=600 MWR_TURN_HOLD_SECONDS=100000 run 7 --squash)"; rc=$?
+default_line=$(el)
+check_eq "#1604 with no line budget set, a run never given the turn stops after three hours" "3 10800" "$rc $default_line"
+# THE RATIO (L227), as #1271 holds it, over the longest a run can now last: is-it-live asks about a
+# merge made in the background for WAIT_MS, so it must stay at least twice the line plus the deadline.
+if [[ "${wait_s:-}" =~ ^[0-9]+$ ]]; then
+  [ "$wait_s" -ge $(( 2 * (default_line + default_deadline) )) ] && ok || bad "#1604 is-it-live's WAIT_MS (${wait_s}s) is not at least twice the longest a run can last, its line budget plus its deadline ($(( default_line + default_deadline ))s)"
+else
+  bad "#1604 WAIT_MS was not read from is-it-live's merges.ts"
+fi
+
+# Too little time left to finish a check run: a run whose turn was taken over late in its deadline,
+# and that comes round to the turn again, does not take it. It leaves the line so the next one goes.
+retake(){ # retake <deadline> <recent run took>: the turn taken, taken over 2500s in, then given back
+  fresh "$OLD" 0 "$PENDING"
+  runs_of "a:0:$2" > "$ST/recent-runs"
+  printf '%s\n' "printf '%s' \"\$(( \$(cat \"\$ST/clock\") + 2500 ))\" > \"\$ST/clock\"; rm -f \"\$MWR_TURN_DIR/acme/widget/1\" \"\$MWR_TURN_DIR/acme/widget/1.head\"; \"\$BIN_DIR/take-turn\" acme/widget 9" > "$ST/on-sleep"
+  printf '%s\n' "$LEAVE9; printf '%s' '$GREEN' > \"\$ST/rollup\"" >> "$ST/on-sleep"
+  out="$(BIN_DIR="$BIN" MWR_DEADLINE_SECONDS="$1" run 7 --squash)"; rc=$?
+}
+retake 3600 1200
+check_eq "#1604 a run with less time left than a check run does not take the turn back" "3" "$rc"
+check "#1604 it took the turn at first, with time enough" "Took the turn to merge in acme/widget" "$out"
+check "#1604 then says why it will not take it again" "Did not take the turn to merge in acme/widget back: 17m 20s is left of #7's 60m deadline, shorter than the 20m 00s its recent check runs took" "$out"
+check_eq "#1604 its place is given up, so the next in line goes now" "" "$(tickets)"
+check_eq "#1604 nothing was updated or merged" "0 0" "$(count gh-calls 'pr update-branch') $(count gh-calls 'pr merge')"
+# Control, the other way (L497): with check runs shorter than the time left, it takes the turn back.
+retake 3600 600
+check_eq "#1604 control: with time enough left it takes the turn back and merges" "0" "$rc"
+check "#1604 control: saying it is its turn again, with the time it has left" "It is #7's turn to merge in acme/widget now" "$out"
+check "#1604 control: and how much of its deadline is left" "17m 20s of its 60m deadline is left" "$out"
+check_not "#1604 control: never a refusal" "Did not take the turn" "$out"
+
+# A whole deadline shorter than the check runs can never be finished: it stops at once, for a person.
+fresh "$OLD" 2 "$GREEN"
+runs_of "a:0:1200" > "$ST/recent-runs"
+out="$(MWR_DEADLINE_SECONDS=600 run 7 --squash)"; rc=$?
+check_eq "#1604 a deadline shorter than the check runs is refused before the turn" "1" "$rc"
+check "#1604 saying so, and what to change" "Stopped: #7's whole deadline, 10m (MWR_DEADLINE_SECONDS), is shorter than the 20m 00s acme/widget's recent check runs took" "$out"
+check_eq "#1604 with no wait" "0" "$(count sleeps .)"
+check_eq "#1604 no update" "0" "$(count gh-calls 'pr update-branch')"
+check_eq "#1604 and no place kept in line" "" "$(tickets)"
+check "#1604 the runs read are the repository's recent successful pull request runs" "api repos/acme/widget/actions/runs?status=success&event=pull_request" "$(cat "$ST/gh-calls")"
+
+# How long the check runs took: the longest of the ten most recent heads, each head's time from its
+# first run created to its last finished (two workflows on one head are one check run), a re-run and
+# a failure left out. Both directions (L497): a deadline just over the longest head is enough and one
+# just under it is not (fixture values, not measured).
+RECENT="$(runs_of "h0:0:5000" "h1:10000:600" "h2:11000:600" "h3:12000:600" "h4:13000:600" "h5:14000:600" "h5:14000:20000:success:2" "h6:15000:600" "h6:15000:30000:failure" "h7:16000:600" "h8:17000:600" "h9:18000:600" "h10:19000:600" "h10:19000:1300")"
+fresh "$OLD" 0 "$GREEN"; printf '%s' "$RECENT" > "$ST/recent-runs"
+out="$(MWR_DEADLINE_SECONDS=1350 run 7 --squash)"; rc=$?
+check_eq "#1604 an older head, a re-run and a failure are not the check run time" "0" "$rc"
+check "#1604 the longest recent head is said with the turn" "the longest of acme/widget's recent check runs took 21m 40s" "$out"
+fresh "$OLD" 0 "$GREEN"; printf '%s' "$RECENT" > "$ST/recent-runs"
+out="$(MWR_DEADLINE_SECONDS=1250 run 7 --squash)"; rc=$?
+check_eq "#1604 two workflows on one head are one check run, as long as the longer" "1" "$rc"
+
+# Not measured: GitHub answers no runs, or cannot be read. Either is said, and the turn is taken as
+# before, its deadline weighed against nothing (the fallback: a retake late in a deadline can run
+# out, as every turn could before #1604).
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1604 no recent check runs: the turn is taken and the merge made" "0" "$rc"
+check "#1604 saying there was nothing to weigh the deadline against" "no recent successful pull request check runs in acme/widget to weigh its deadline against" "$out"
+fresh "$OLD" 0 "$GREEN"
+printf 'gh: Server Error (HTTP 502)\n' > "$ST/recent-runs-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1604 an unreadable run list does not stop a merge" "0" "$rc"
+check "#1604 but says it could not read them, with GitHub's error" "could not read how long acme/widget's recent check runs took (gh: Server Error (HTTP 502)" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
