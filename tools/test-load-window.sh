@@ -295,7 +295,7 @@ fresh real
 unset SYNC_PS_FIXTURE
 mkdir -p "$W/real"; printf 'sleep 600\n' > "$W/real/merge-when-ready.sh"
 bash "$W/real/merge-when-ready.sh" & dummy=$!; BG="$dummy"
-wait_for "ps -o command= -p $dummy | grep -q merge-when-ready.sh" || true
+wait_for "case \"\$(ps -o command= -p $dummy)\" in *merge-when-ready.sh*) true ;; *) false ;; esac" || true
 run --status
 says "#1618 --status reads the real process table" "a merge-when-ready.sh run (bash $W/real/merge-when-ready.sh)" "$OUT"
 child="$(pgrep -P "$dummy")"; kill -9 "$dummy" 2>/dev/null; wait "$dummy" 2>/dev/null; [ -z "$child" ] || kill -9 $child 2>/dev/null; BG=""

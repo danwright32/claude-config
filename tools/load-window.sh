@@ -140,7 +140,7 @@ busy_now(){
     [ -s "$f" ] || continue
     pid="$(turn_field "$f" pid)"; st="$(turn_field "$f" start)"; pr="$(turn_field "$f" pr)"
     turn_alive "$pid" "$st" || continue
-    printf '%s\n' "$seen" | grep -q "^$pid " && continue
+    case $'\n'"$seen"$'\n' in *$'\n'"$pid "*) continue ;; esac
     slug="${f%/*}"; slug="${slug#"$MERGE_TURNS"/}"
     seen="${seen:+$seen$'\n'}$pid a merge-when-ready.sh run holding a place to merge $slug#$pr"
   done
