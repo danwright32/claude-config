@@ -903,7 +903,7 @@ test('a job watcher that fails to answer is named once in the debug log, and the
 
 // #697: pressing Compact replaces the conversation, so the hour of cache it was counting down
 // belongs to a conversation that is gone: the clock starts again from nothing, as after a /clear,
-// and a Compact row that showed for the cache goes with it.
+// and the Compact row's cache line goes with it.
 test('a Compact that runs resets the cache clock: the row it showed for goes, and the status line shows no cache', withKit, async ($, on) => {
   // A context large enough that compacting it saves something, so the cache row offers Compact (#1596).
   const { files, clock, w, toasts } = world(on, { usage: 16, tokens: 160_000, window: 1_000_000 })
