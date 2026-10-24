@@ -846,11 +846,20 @@ never ends, an eval that changes directory, wrapping past five deep) is reported
 naming it, and `check-wrapped-commands.sh` refuses any such command that names git, gh or rtk, once
 for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bash ./build.sh && git
 push` is refused, since what the script does is not in the command: run the script and the push as
-two commands. One narrowing (#1574, #1610): a script, or one subcommand of it, that the gate
+two commands. A script run by its path or sourced is the same script file (#1623): `./build.sh &&
+git push`, `scripts/x.sh; gh pr create`, `~/bin/x && rtk init` and `source ./env.sh && git push` are
+refused alike. A path is any command word holding a slash, judged from the word alone (no file is
+opened), except one named git, gh or rtk, which every gate reads by that name, and a program in the
+directories the system and Homebrew install programs in (`/bin`, `/sbin`, `/usr/bin`, `/usr/sbin`,
+`/usr/libexec`, `/System`, the command line tools, `/usr/local/bin` and `sbin`, `/opt/homebrew/bin`
+and `sbin`), which run what the bare name runs. Still unread, and passed: a script on PATH run by its
+bare name, an interpreter running a file (`python3 x.py`, `node x.js`), a command word that is a
+variable with no slash (`$CMD`), a command word whose name before its first slash holds `=` or `:`
+(read as an assignment or a URL), and a shell function or alias. One narrowing (#1574, #1610): a script, or one subcommand of it, that the gate
 declares in `DATA_ARGUMENT_SCRIPTS` as running none of its arguments (`issue-spool.sh note`, and
 every argument of the milestone duplicate check `milestone-candidates.sh`) is not refused for git,
 gh or rtk inside an argument quoted whole, when the call stands alone with nothing a shell would do
-beyond splitting words and removing quotes. In front of it only the account rule's
+beyond splitting words and removing quotes, whether bash runs it or it is run by its path. In front of it only the account rule's
 `GH_TOKEN=$(gh auth token -u <login>)` may stand, with a plain login; behind it only `2>&1` and
 pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
 tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
@@ -860,7 +869,8 @@ anything else or a second command are refused as before, and a declared script r
 shape is told the shapes its declared call passes in.
 
 Every refusal it makes is recorded, overrides included (#1492), one line each in
-`~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category
+`~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper (`direct` for a
+script run by its path, `source` for one sourced), a reason category
 (`variable`, `quote`, `input`, `depth`, `eval-cd`, `script-file`, `execdir`, `unended`, or why it
 could not judge at all) and whether it was refused or overridden. Never the command and never a path.
 Per Mac and never synced, and capped, keeping the newest (5,000 by default, set by `WRAPPED_REFUSAL_LEDGER_MAX`). A record it cannot
@@ -1266,7 +1276,7 @@ Eleven of them came after the 2026-09-21 timing further down, which measured the
 | `require-verification-run.sh` (#1529) | 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
-| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23) |
+| `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |
 | `simplify-before-push.sh` | not measured: a model call of up to 90 seconds when the push changes source files, none otherwise |
 | `pr-review-push-gate.sh` (#599) | not measured: on a branch it waits for the lessons review of the head, at most 100 seconds, and that review is usually finished by the push, having started at the commit |
 
