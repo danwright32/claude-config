@@ -846,12 +846,18 @@ never ends, an eval that changes directory, wrapping past five deep) is reported
 naming it, and `check-wrapped-commands.sh` refuses any such command that names git, gh or rtk, once
 for every gate, with `SKIP_WRAPPED_CHECK=1` as its one command override. So `bash ./build.sh && git
 push` is refused, since what the script does is not in the command: run the script and the push as
-two commands. One narrowing (#1574): a script subcommand the gate declares, in
-`DATA_ARGUMENT_SCRIPTS`, as running none of its arguments (only `issue-spool.sh note` so far) is not
-refused for git, gh or rtk inside an argument quoted whole, when the call stands alone with nothing a
-shell would do beyond splitting words and removing quotes. So a spool note about those tools passes;
-the same words unquoted, a substitution, another script, another subcommand or a second command are
-refused as before.
+two commands. One narrowing (#1574, #1610): a script, or one subcommand of it, that the gate
+declares in `DATA_ARGUMENT_SCRIPTS` as running none of its arguments (`issue-spool.sh note`, and
+every argument of the milestone duplicate check `milestone-candidates.sh`) is not refused for git,
+gh or rtk inside an argument quoted whole, when the call stands alone with nothing a shell would do
+beyond splitting words and removing quotes. In front of it only the account rule's
+`GH_TOKEN=$(gh auth token -u <login>)` may stand, with a plain login; behind it only `2>&1` and
+pipes into grep, head, tail or cut, which read what they are given and print it (not sed, awk or
+tee, which can write or run). So a spool note about those tools passes, and so does the duplicate
+check of an idea about them piped to grep, for another account too; the same words unquoted, a
+substitution, another script, another subcommand, any other assignment in front, a pipe into
+anything else or a second command are refused as before, and a declared script refused for its
+shape is told the shapes its declared call passes in.
 
 Every refusal it makes is recorded, overrides included (#1492), one line each in
 `~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper, a reason category
@@ -2601,6 +2607,15 @@ file, line and test name, again from the files alone (#1016). `claude plugin tes
 test, which compares a list against a yardstick measured in the same run, failed at that limit
 three times out of three beside 96 CPU burners with nothing broken. The comparison is the
 judgement, and the test's own limit is set where only a hang reaches it.
+Since #1577 that limit is every mod test's, set in one place: each test file takes `test` from
+mod-kit's `tests/hang-ceiling.ts` (a byte for byte copy under the mod's `tests/mod-kit/tests`,
+mod-kit's own tests beside it), which gives every test two minutes, and a file taking it so has
+every test limited for the rule above. The runner's `test` has no file wide or global setting, and
+its 5,000 ms judged load, not code: on 2026-10-23 twenty copies of mod-kit's tests at once under
+load failed 20 of 20 with nothing broken, and passed 20 of 20 on the shared ceiling under the same
+load. It is a ceiling for hangs, not a judgement of speed. `tools/check-mod-shared-parts.sh` fails a
+test file, in any mod, that takes `test` from `claude-code/testing` itself, naming the `cp` and the
+import to use instead.
 It also runs `tools/check-mod-dependencies.sh`, which fails a mod whose `plugin.json` lists a
 dependency its code never uses (neither a noun the dependency's contract declares on `$` nor the
 dependency's name, comments left out by `tools/lib/ts_source.py`, which reads a regex literal and JSX text as what they are (#735), in any source file of the mod but its tests and contract),

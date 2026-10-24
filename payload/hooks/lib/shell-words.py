@@ -39,11 +39,12 @@ hook that slow is killed and the command goes unscreened.
   shell-words.py bare       stdin: one command
       the command with the contents of every $( ) and backquote substitution taken out, so a caller
       can ask what it runs itself rather than inside them (claude-config#1062); see bare().
-  shell-words.py data-blanked '<path> <subcommand>'...   stdin: a whole command
-      when the command is exactly `bash <path> <subcommand> <words>` for one of the declared pairs
-      (path under ~/), it printed with every argument after the subcommand that is quoted whole
-      replaced by '', exit 0; for any other shape nothing, exit 1 (claude-config#1574). The reader
-      check-wrapped-commands.sh asks before refusing a script file; see data_blanked().
+  shell-words.py data-blanked '<path>[ <subcommand>]'...   stdin: a whole command
+      when the command is exactly `bash <path> [<subcommand>] <words>` for one of the declared
+      entries (path under ~/), with nothing in front but GH_TOKEN=$(gh auth token -u <login>), it
+      printed from `bash` on with every argument after the path (or the subcommand) that is quoted
+      whole replaced by '', exit 0; for any other shape nothing, exit 1 (claude-config#1574, #1610).
+      The reader check-wrapped-commands.sh asks before refusing a script file; see data_blanked().
 
 The context stack: " ' ` quotes, $( and ${ substitutions, and plain ( inside a substitution.
 Inside a substitution quotes open afresh, so X="$(a "b c")" is one word.
@@ -1211,16 +1212,60 @@ def read(s):
 
 # A script whose arguments are data (claude-config#1574). `bash ./x.sh` cannot be read, since its
 # commands are in the file, so check-wrapped-commands.sh refuses it beside any word git, gh or rtk,
-# quoted argument text included. A few script subcommands are known to run none of their arguments
-# (issue-spool.sh's note hands each to python as a string), and the guard declares them; for one of
-# them, called alone, the words inside its arguments are data. data_blanked() reads that one shape and
-# nothing else: the command as written with every argument after the subcommand that is quoted whole
-# replaced by '', so the guard can look for git, gh and rtk in what is left; None for any other
-# shape, which the guard refuses exactly as before. Anything a shell would do more than split words
-# and remove quotes ends the reading with None: an operator, a redirection, a substitution or
-# variable (a $ or a backtick, quoted or not), a backslash, a glob or brace outside quotes, a comment,
-# an assignment or option before the script, a newline outside quotes, a quote that never closes.
+# quoted argument text included. A few scripts, or subcommands of them, are known to run none of
+# their arguments (issue-spool.sh's note hands each to python as a string; milestone-candidates.sh,
+# #1610, only reads from GitHub), and the guard declares them; for one of them the words inside its
+# arguments are data. data_blanked() reads that one shape and nothing else: the call, with only
+# DATA_TOKEN_PREFIX in front and only 2>&1 and pipes into DATA_FILTERS behind, printed with every
+# argument after the path (or subcommand) that is quoted whole replaced by '', so the guard can look
+# for git, gh and rtk in what is left; None for any other shape, which the guard refuses exactly as
+# before. Anything a shell would do more than split words and remove quotes ends the reading with
+# None: another operator or redirection, a substitution or variable (a $ or a backtick, quoted or
+# not), a backslash, a glob or brace outside quotes, a comment, any other assignment or an option
+# before the script, a newline outside quotes, a quote that never closes.
 DATA_UNQUOTED_REFUSED = set(";&|<>()$`\\*?[]{}!#\n")
+
+# The one thing that may stand in front of a declared call (claude-config#1610): the account rule's
+# GH_TOKEN=$(gh auth token -u <login>), which reads another account's repository without switching
+# the shared one. The login is plain, as GitHub allows it (letters, digits, single hyphens inside, at
+# most 39), so nothing else can ride in the substitution; any other assignment, a second one, the
+# value quoted or the login written any other way is no match, and the reading ends with None.
+DATA_TOKEN_PREFIX = re.compile(
+    r"GH_TOKEN=\$\(gh auth token -u (?=[A-Za-z0-9-]{1,39}\))[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\)[ \t]+")
+
+# What may stand behind a declared call (claude-config#1610): its output piped into one of these,
+# named as written, each of which only reads what it is given and prints it, and `2>&1` before the
+# first pipe. sed is not among them, since its w writes a file and GNU sed's e runs a command, nor is
+# awk (system()), tee (writes) or anything that runs its arguments (xargs, a shell).
+DATA_FILTERS = ("grep", "head", "tail", "cut")
+
+
+def _data_pipes(s):
+    """s split at each | outside quotes, or None for || or |& or a quote never closed, so each piece
+    can be read by _data_words on its own."""
+    pieces, start, k, quote = [], 0, 0, ""
+    while k < len(s):
+        ch = s[k]
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif quote == '"':
+            if ch == "\\":
+                k += 1
+            elif ch == '"':
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "|":
+            if s[k + 1:k + 2] in ("|", "&"):
+                return None
+            pieces.append(s[start:k])
+            start = k + 1
+        k += 1
+    if quote:
+        return None
+    pieces.append(s[start:])
+    return pieces
 
 
 def _data_words(s):
@@ -1267,23 +1312,42 @@ def _data_words(s):
 
 
 def data_blanked(s, declared, home):
-    """s with every argument quoted whole after a declared script subcommand replaced by '', when s is
-    exactly `bash <script> <subcommand> <arguments>` for one of declared ("<path> <subcommand>", the
-    path under ~/), else None. The script is matched on its whole path, written ~/ or from home, so a
-    script of the same name elsewhere is no match."""
+    """s with every argument quoted whole after a declared script (and its subcommand, when the entry
+    names one) replaced by '', when s is exactly `bash <script> [<subcommand>] <arguments>` for one of
+    declared ("<path>" or "<path> <subcommand>", the path under ~/), else None. The script is matched
+    on its whole path, written ~/ or from home, so a script of the same name elsewhere is no match.
+    Only DATA_TOKEN_PREFIX may stand in front, and it is left out of what is returned: it names gh
+    itself, and what it runs, one plain `gh auth token`, is read as its own command by every gate.
+    Behind the call only `2>&1` and pipes into DATA_FILTERS may stand, each filter's arguments read
+    the same way, its quoted ones set aside as data."""
+    s = s.strip(" \t\n")
+    token = DATA_TOKEN_PREFIX.match(s)
+    if token:
+        s = s[token.end():]
+    pieces = _data_pipes(s)
+    if not pieces:
+        return None
+    s, filtered = re.sub(r"[ \t]2>&1[ \t]*$", "", pieces[0]), []
+    for piece in pieces[1:]:
+        fw = _data_words(piece)
+        if not fw or fw[0][0] not in DATA_FILTERS:
+            return None
+        filtered.append(" ".join(["|", fw[0][0]] + ["''" if whole else r for r, _, whole in fw[1:]]))
     words = _data_words(s)
-    if not words or len(words) < 3 or words[0][0] != "bash" or not home.startswith("/"):
+    if not words or len(words) < 2 or words[0][0] != "bash" or not home.startswith("/"):
         return None
     raw_path, path, _ = words[1]
     if raw_path.startswith("~/"):
         path = home.rstrip("/") + raw_path[1:]
     for entry in declared:
-        script, _, sub = entry.rpartition(" ")
-        if not script.startswith("~/") or not sub:
+        script, _, sub = entry.partition(" ")
+        if not script.startswith("~/") or " " in sub or path != home.rstrip("/") + script[1:]:
             continue
-        if path == home.rstrip("/") + script[1:] and words[2][1] == sub:
-            kept = [w[0] for w in words[:3]] + ["''" if whole else r for r, _, whole in words[3:]]
-            return " ".join(kept)
+        fixed = 3 if sub else 2
+        if sub and (len(words) < 3 or words[2][1] != sub):
+            continue
+        kept = [w[0] for w in words[:fixed]] + ["''" if whole else r for r, _, whole in words[fixed:]]
+        return " ".join(kept + filtered)
     return None
 
 
@@ -1302,8 +1366,9 @@ def main(argv):
     elif mode == "bare":
         sys.stdout.write(bare(data))
     elif mode == "data-blanked":
-        # stdin is the command; each argument after the mode is one declared "<path> <subcommand>"
-        # pair. Exit 1, printing nothing, for any other shape (claude-config#1574).
+        # stdin is the command; each argument after the mode is one declared "<path>" or "<path>
+        # <subcommand>" entry. Exit 1, printing nothing, for any other shape (claude-config#1574,
+        # #1610).
         shown = data_blanked(data, argv[2:], os.environ.get("HOME", ""))
         if shown is None:
             return 1
@@ -1326,7 +1391,7 @@ def main(argv):
         assigns, rest = split(data)
         sys.stdout.write("".join(a + "\n" for a in assigns) + "\x1f\n" + rest)
     else:
-        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text, or data-blanked '<path> <subcommand>'... < text\n")
+        sys.stderr.write("usage: shell-words.py read|commands|split|words|gitdir|bare|tool < text, or data-blanked '<path>[ <subcommand>]'... < text\n")
         return 64
     return 0
 

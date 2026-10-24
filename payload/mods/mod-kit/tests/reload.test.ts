@@ -1,4 +1,5 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { On } from 'claude-code'
 
 // #960, measured 2026-10-08 with throwaway mods in a session this suite never touches: when one

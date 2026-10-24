@@ -118,6 +118,13 @@
 # tool.check chain a call is judged by before it runs. A test raising it itself (engine.tool.check
 # in its world) fails, naming the copy of mod-kit's tests/core.ts to use instead.
 #
+# And one every mod's tests, mod-kit's own included, must take from mod-kit (#1577): `test` itself,
+# from mod-kit's tests/hang-ceiling.ts, whose limit per test only a hang reaches. The runner's own
+# `test` gives each test 5,000 ms of wall clock (its setting, not a measurement) and has no file
+# wide or global setting, so a file
+# taking it from 'claude-code/testing' is judged by how busy the Mac is. Read by ts_source.py
+# kit-test-takers, comments taken out, in any spelling of the import.
+#
 # One part of mod-kit a mod must hold at RUN time, not ask for (#1281): hooks/skew.ts, the reader of
 # a call to another mod's noun that failed because the noun or member is not there. It cannot be a
 # member of mod-kit's noun, since it is needed exactly when the mod-kit loaded in the session is the
@@ -196,6 +203,28 @@ for d in "$dir"/*/; do
   [ -f "$d.claude-plugin/plugin.json" ] || continue
   n=$((n + 1))
   name="$(basename "$d")"
+  # hang ceiling (#1577): every test file, mod-kit's own included, takes `test` from mod-kit's
+  # tests/hang-ceiling.ts, never from 'claude-code/testing' itself, whose 5,000 ms per test has no
+  # file wide or global setting and so judged how busy the Mac was (twenty copies of mod-kit's tests
+  # under load failed 20 of 20 on 2026-10-23, nothing broken). Any spelling of the import is read:
+  # on one line or across lines, renamed, or the whole module; a type alone is not a test.
+  # Exit 1 is a file it could not read, named among the lines; any other exit is the reader broken.
+  takers="$(python3 "$TS_SOURCE" kit-test-takers "${d%/}")"; rc=$?
+  if [ "$rc" -gt 1 ]; then
+    failed=1
+    echo "check-mod-shared-parts: $name's source could not be read for where its tests take test from (the reader exited $rc), so it was not checked."
+  fi
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    failed=1
+    if [ "${h% (cannot be read:*}" != "$h" ]; then
+      echo "check-mod-shared-parts: $name's $h, so where it takes test from was not checked."
+    elif [ "$name" = mod-kit ]; then
+      echo "check-mod-shared-parts: mod-kit's $h takes test from 'claude-code/testing' itself, so its 5,000 ms per test judges how busy the Mac is: import { test } from './hang-ceiling.ts', whose limit only a hang reaches."
+    else
+      echo "check-mod-shared-parts: $name's $h takes test from 'claude-code/testing' itself, so its 5,000 ms per test judges how busy the Mac is: take it from a copy of mod-kit's tests/hang-ceiling.ts, whose limit only a hang reaches (cp \"$dir/mod-kit/tests/hang-ceiling.ts\" \"${d%/}/tests/mod-kit/tests/hang-ceiling.ts\", then import { test } from './mod-kit/tests/hang-ceiling.ts')."
+    fi
+  done <<< "$takers"
   [ "$name" = mod-kit ] && continue
   [ -d "$d/hooks" ] || continue
   sd="$stripped/$name/"

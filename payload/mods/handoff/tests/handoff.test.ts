@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ageOf, bandLines, changesOf, keyOf, namesIn, readingOf } from '../hooks/handoff.ts'
 import type { Reading } from '../hooks/handoff.ts'
 

@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { accountKey, combine, isWorthWriting, macFiles, merge, mergeNicknames, nicknameRefusal, parseMacFile, parseNicknames, serialize, serializeNicknames, withAccount, withName, withSighting } from '../hooks/store.ts'
 import type { Account } from '../hooks/room.ts'
 import type { MacFile } from '../hooks/store.ts'

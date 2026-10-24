@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { alreadyPut, ASLEEP_DELIVERY, deliveryOf, heldAsleep, heldAtWake, heldUntilWake } from '../hooks/nightheld.ts'
 
 // #1284: while asleep nothing is handed to Dan, in any session; what a session would have delivered

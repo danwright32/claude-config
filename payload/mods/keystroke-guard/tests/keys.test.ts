@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { appNameOf, classify, judge } from '../hooks/keys.ts'
 
 const OVERTURE = '/Applications/Overture.app/Contents/MacOS/Overture'

@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { actsOf, addAnswer, dirsOf, HOLD_MERGES, isListed, judgeNight, MAY_DEPLOY, MERGE_NO_DEPLOY, nightRepos, policyOf, readMarker, readRepoLists, refusalOf, repoQuestion, type Place, type Scripts, type Where } from '../hooks/mergedeploy.ts'
 import type { ModKitGh } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { Cmd } from '../hooks/nobuild.ts'

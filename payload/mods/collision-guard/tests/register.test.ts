@@ -1,4 +1,5 @@
-import { expect, test, type Engine } from 'claude-code/testing'
+import { expect, type Engine } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import { branchAt } from './mod-kit/hooks/branch.ts'
 import { reasonOf, standInCore } from './mod-kit/tests/core.ts'

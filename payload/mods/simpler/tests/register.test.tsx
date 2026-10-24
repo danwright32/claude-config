@@ -1,4 +1,5 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { Engine } from 'claude-code/testing'
 import type { On, PromptOrigin, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
