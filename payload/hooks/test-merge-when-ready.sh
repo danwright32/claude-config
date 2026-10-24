@@ -456,11 +456,16 @@ check_eq "#851 a key that is not a key is refused" "64" "$rc"
 # no gate counts the helper as a merge, so a Bash call that runs it, greps the key from what it
 # printed and runs it again merged with nobody having read anything. The real review gate is shown
 # the loop first, exactly as Claude Code would show it, and the loop then runs as typed.
-LOOP='out="$(bash "$HELPER" 7 --squash 2>&1)"; key="$(printf "%s\n" "$out" | sed -n "s/.*PR_REVIEW_READ=\([a-f0-9][a-f0-9]*\).*/\1/p")"; PR_REVIEW_READ="$key" bash "$HELPER" 7 --squash'
+# The helper's own path is written into the loop, as a session types it, so the gate reads a command
+# naming merge-when-ready.sh, gets past its first filter and judges the key in front of the rerun
+# (lessons review at a58c6bb: through "$HELPER" the gate never read the loop at all).
+LOOP="out=\"\$(bash '$HELPER' 7 --squash 2>&1)\"; key=\"\$(printf '%s\\n' \"\$out\" | sed -n 's/.*PR_REVIEW_READ=\\([a-f0-9][a-f0-9]*\\).*/\\1/p')\"; PR_REVIEW_READ=\"\$key\" bash '$HELPER' 7 --squash"
+check "#1673 the loop names the helper, so the gate reads it" "merge-when-ready.sh' 7 --squash" "$LOOP"
 fresh "$OLD" 0 "$GREEN"
 printf '5eed5eed5eed5eed' > "$ST/review-key"
 gate_out="$(present "$LOOP")"; grc=$?
-out="$(cd "$REPO" && HELPER="$HELPER" bash -c "$LOOP" 2>&1)"; rc=$?
+check_eq "#1673 and records no key for it, since none was typed" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
+out="$(cd "$REPO" && bash -c "$LOOP" 2>&1)"; rc=$?
 check_eq "#1673 the review gate does not refuse the loop itself (the helper judges its key)" "0" "$grc"
 check_eq "#1673 a key grepped from the helper's own refusal merges nothing" "0" "$(count gh-calls 'pr merge')"
 check_eq "#1673 the rerun carrying it is refused before anything" "64" "$rc"
