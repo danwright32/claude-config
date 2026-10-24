@@ -112,7 +112,8 @@ esac
 # merge-when-ready.sh retries its reads, but it hands the final pinned merge to this gate, whose one
 # shot reads turned a single TLS timeout or reset into a refusal that stopped the merge after the whole
 # CI wait. So each read below is a reader returning 0 (answered), 1 (GitHub answered no, or failed in
-# a way nobody recognised) or 2 (mt_gh_transient), run through mt_retry_read, the one retry loop the
+# a way nobody recognised), 2 (mt_gh_transient) or MT_SIGNIN_RC (GitHub refused the sign in, below),
+# run through mt_retry_read, the one retry loop the
 # helper uses too. A refusal is believed the first time, and a read still failing after its tries
 # refuses exactly as before: nothing merges on an unconfirmed read.
 #
