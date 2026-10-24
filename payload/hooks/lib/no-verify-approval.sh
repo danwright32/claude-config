@@ -29,10 +29,23 @@ case "$LIFE" in ''|*[!0-9]*) LIFE=7200 ;; esac
 now() { case "${NO_VERIFY_NOW:-}" in ''|*[!0-9]*) date +%s ;; *) printf '%s\n' "$NO_VERIFY_NOW" ;; esac; }
 
 usage() {
-  echo "usage: no-verify-approval.sh approve <agent id> \"<why>\" | revoke <agent id> | list" >&2
+  echo "usage: no-verify-approval.sh approve <agent id> \"<why>\" | revoke <agent id> | list | check <agent id>" >&2
   exit 64
 }
 plain_id() { [[ "$1" =~ ^[A-Za-z0-9_-]{1,64}$ ]]; }
+
+# Reads one approval file into EXP (0 when unreadable) and REASON, the first of each.
+read_approval() {   # $1 = file
+  local k v
+  EXP=""; REASON=""
+  while IFS='=' read -r k v; do
+    case "$k" in
+      expires) [ -n "$EXP" ] || EXP="$v" ;;
+      reason) [ -n "$REASON" ] || REASON="$v" ;;
+    esac
+  done < "$1"
+  case "$EXP" in ''|*[!0-9]*) EXP=0 ;; esac
+}
 
 cmd="${1:-}"
 case "$cmd" in
@@ -40,7 +53,7 @@ case "$cmd" in
     id="${2:-}"
     reason="${*:3}"
     plain_id "$id" || { echo "no-verify-approval: '$id' is not an agent id (letters, digits, - and _ only)." >&2; exit 64; }
-    [ -n "${reason//[[:space:]]/}" ] || { echo "no-verify-approval: an approval needs a reason, in words Dan can read later." >&2; exit 64; }
+    case "$reason" in *[![:space:]]*) ;; *) echo "no-verify-approval: an approval needs a reason, in words Dan can read later." >&2; exit 64 ;; esac
     mkdir -p "$DIR" || { echo "no-verify-approval: could not create $DIR, so nothing was approved." >&2; exit 1; }
     t="$(now)"
     tmp="$DIR/.$id.$$"
@@ -54,15 +67,23 @@ case "$cmd" in
     if [ -f "$DIR/$id" ]; then rm -f "$DIR/$id" && echo "Revoked the approval for agent $id."
     else echo "Agent $id had no approval."; fi
     ;;
+  check)
+    # For no-verify-gate.sh: exit 0 printing "<minutes left> <reason>" when the agent holds an
+    # approval in force, 1 when it does not. One reading of the file, here (L370).
+    id="${2:-}"
+    plain_id "$id" && [ -f "$DIR/$id" ] || exit 1
+    read_approval "$DIR/$id"
+    t="$(now)"
+    [ "$EXP" -gt "$t" ] || exit 1
+    echo "$(( (EXP - t) / 60 )) $REASON"
+    ;;
   list)
     t="$(now)"; n=0
     for f in "$DIR"/*; do
       [ -f "$f" ] || continue
-      exp="$(sed -n 's/^expires=//p' "$f" | head -1)"
-      reason="$(sed -n 's/^reason=//p' "$f" | head -1)"
-      case "$exp" in ''|*[!0-9]*) exp=0 ;; esac
-      if [ "$exp" -gt "$t" ]; then
-        echo "$(basename "$f"): $(( (exp - t) / 60 )) minutes left: $reason"; n=$((n + 1))
+      read_approval "$f"
+      if [ "$EXP" -gt "$t" ]; then
+        echo "${f##*/}: $(( (EXP - t) / 60 )) minutes left: $REASON"; n=$((n + 1))
       fi
     done
     [ "$n" -gt 0 ] || echo "No agent is approved to skip git hooks."

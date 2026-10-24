@@ -40,6 +40,9 @@ import os
 import re
 import sys
 
+# Loading shell-words.py would otherwise leave a __pycache__ in lib/, which is the synced payload
+# (test-push-scope.sh holds lib/ to none, #1017).
+sys.dont_write_bytecode = True
 _here = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location("shell_words", os.path.join(_here, "shell-words.py"))
 sw = importlib.util.module_from_spec(_spec)

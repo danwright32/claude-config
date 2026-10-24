@@ -278,7 +278,7 @@ hb b6 'No overrides.'
 allowed "third: let through so the report is not stranded"
 says "and it says the report contradicts the commands" "contradicts"
 if grep -rq "b6" "$CLAUDE_ISSUE_SPOOL_DIR" 2>/dev/null; then check "the contradiction is spooled for the main session" ok
-else check "the contradiction is spooled for the main session" "nothing under $CLAUDE_ISSUE_SPOOL_DIR mentions b6: $(ls -R "$CLAUDE_ISSUE_SPOOL_DIR" 2>&1 | head -5)"; fi
+else check "the contradiction is spooled for the main session" "nothing under $CLAUDE_ISSUE_SPOOL_DIR mentions b6: $(ls -R "$CLAUDE_ISSUE_SPOOL_DIR" 2>&1)"; fi
 
 hb b404 'No overrides.'
 allowed "an agent whose transcript cannot be found is let through"

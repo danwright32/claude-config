@@ -76,7 +76,7 @@ case "$rc" in
   1) exit 0 ;;
   0) ;;
   *)
-    echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not compare agent $agent's report with its commands (lib/agent-overrides.py exit $rc: $(printf '%s' "$found" | tail -1)), so its claims about skipping checks were NOT checked." >&2
+    echo "HANDBACK CLAIMS CHECK DID NOT RUN: handback-claims-gate.sh could not compare agent $agent's report with its commands (lib/agent-overrides.py exit $rc: ${found##*$'\n'}), so its claims about skipping checks were NOT checked." >&2
     exit 0 ;;
 esac
 

@@ -95,31 +95,25 @@ case "$rc" in
   *)
     case "$cmd" in
       *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
-        refuse "REFUSED (no-verify-gate.sh): agent $agent's command names a way to skip the repository's git hooks, and lib/agent-overrides.py could not read it (exit $rc: $(printf '%s' "$found" | tail -1)), so the gate cannot tell whether it really skips them. Run the command without the skip." ;;
+        refuse "REFUSED (no-verify-gate.sh): agent $agent's command names a way to skip the repository's git hooks, and lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'}), so the gate cannot tell whether it really skips them. Run the command without the skip." ;;
     esac
     exit 0 ;;
 esac
 
-# An approval the main session gave this agent, still in force.
-dir="${NO_VERIFY_APPROVAL_DIR:-$HOME/.claude-no-verify-approvals}"
-case "${NO_VERIFY_NOW:-}" in ''|*[!0-9]*) now="$(date +%s)" ;; *) now="$NO_VERIFY_NOW" ;; esac
-if [[ "$agent" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && [ -f "$dir/$agent" ]; then
-  exp="$(sed -n 's/^expires=//p' "$dir/$agent" | head -1)"
-  reason="$(sed -n 's/^reason=//p' "$dir/$agent" | head -1)"
-  case "$exp" in ''|*[!0-9]*) exp=0 ;; esac
-  if [ "$exp" -gt "$now" ]; then
-    msg="no-verify-gate.sh: agent $agent skips the repository's git hooks with the main session's approval ($reason), $(( (exp - now) / 60 )) minutes left: $(printf '%s' "$found" | head -3 | tr '\n' ' ')Say so in the hand-back report."
-    if command -v jq >/dev/null 2>&1; then
-      jq -nc --arg m "$msg" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
-    else
-      printf '%s\n' "$msg"
-    fi
-    exit 0
+# An approval the main session gave this agent, still in force: the approval script's own reading of
+# its file, so the two cannot disagree about what an approval is (L370).
+if approval="$(bash "$HOOK_DIR/lib/no-verify-approval.sh" check "$agent" 2>/dev/null)"; then
+  msg="no-verify-gate.sh: agent $agent skips the repository's git hooks with the main session's approval (${approval#* }), ${approval%% *} minutes left: ${found//$'\n'/; }. Say so in the hand-back report."
+  if command -v jq >/dev/null 2>&1; then
+    jq -nc --arg m "$msg" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $m}}'
+  else
+    printf '%s\n' "$msg"
   fi
+  exit 0
 fi
 
 refuse "REFUSED (no-verify-gate.sh): agent $agent ran a git command that skips the repository's own git hooks:
-$(printf '%s' "$found" | head -5 | sed 's/^/  /')
+  ${found//$'\n'/$'\n'  }
 Those hooks are the only check that runs before the commit exists, and an agent skipping them is what claude-config#1587 records. Run it without the skip and wait for the hooks in the foreground, however slow they are. If the skip is genuinely needed, stop and hand back to the main session saying why; only the main session can approve it, for this agent and two hours, with:
   $APPROVE_HOW
 Whatever happens, never report a skip as not having happened."
