@@ -42,6 +42,7 @@ mirrors ~/.claude to a public repository, and receipts hold screenshots of priva
 VERIFICATION_TRANSCRIPTS (default ~/.claude/projects) for whoami.
 """
 
+import ipaddress
 import json
 import os
 import re
@@ -71,7 +72,13 @@ LOCAL_URL = re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?(
 
 COMMANDS_REQUIRED = ("serve", "ready", "stop", "drive")
 COMMANDS_OPTIONAL = ("stamp",)
-TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "stop_s": 60}
+TIMEOUT_DEFAULTS = {"ready_s": 300, "ready_interval_s": 2, "max_run_s": 3600, "stop_s": 60, "egress_s": 30}
+# The hosts a served app may always reach: this machine. areas.json's egress.allow adds to them,
+# and a run's egress verdict is clean only when nothing outside the combined list was reached.
+EGRESS_LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+EGRESS_HOST = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                         r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+EGRESS_VERDICTS = ("clean", "not-clean", "unmeasured")
 MODES = ("warn", "block")
 RESULTS = ("pass", "fail")
 BLAMES = ("code", "guide")
@@ -278,11 +285,39 @@ def parse_areas(text, root=None):
         if not one_line(ex.get("why")):
             p.append(("areas-exempt-no-why", "%s needs a one line why: an exemption with no reason has no reviewer" % where))
 
+    allow = list(EGRESS_LOCAL_HOSTS)
+    egress = doc.get("egress", {})
+    if not isinstance(egress, dict):
+        p.append(("areas-wrong-type", "egress must be an object"))
+        egress = {}
+    extra = egress.get("allow", [])
+    if not isinstance(extra, list):
+        p.append(("areas-wrong-type", "egress.allow must be a list"))
+        extra = []
+    for i, host in enumerate(extra):
+        if not egress_host_ok(host):
+            p.append(("areas-bad-egress-host", "egress.allow[%d] %r is not a host name or an IP address: give"
+                      " the bare host, with no scheme, port, path or wildcard" % (i, host)))
+        elif host not in allow:
+            allow.append(host)
+
     if p:
         raise VerificationError(p)
     doc["timeouts"] = timeouts
     doc.setdefault("exempt", [])
+    doc["egress"] = dict(egress, allow=allow)
     return doc
+
+
+def egress_host_ok(host):
+    """A bare host name or IP address, the only shape egress.allow accepts."""
+    if not isinstance(host, str):
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return bool(EGRESS_HOST.match(host))
 
 
 def load_areas(path, root=None):
