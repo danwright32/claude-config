@@ -1658,7 +1658,8 @@ morning offers what the night proposed, filing nothing he has not picked.
   (`needsIn` in `hooks/wake.ts` reads it; nothing in the mod derives a row of its own). The session
   that ended the night hands over Needs a look (7.n), read after its wake render, and says so when
   that render did not finish; each session hands over its own Parked and failed rows (8.n), and one
-  whose session has closed is its repository's, claimed with that repository's proposals. Each
+  that names no session or whose session has closed is handed over by the session that ended sleep,
+  whatever its repository, so a repository with no session open never keeps it from Dan. Each
   action the ban list refuses at the call (#834) is kept in the session's held list as `banned` and
   asked about at its morning (9.n), the refusal telling Claude it is kept; a Bash call with no
   command keeps nothing. Every row and action is its own picker, in the one data block. A needs file

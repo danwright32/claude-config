@@ -206,7 +206,7 @@ export const morningPrompt = (o: {
   unchecked?: string
   /** The night's report's Needs a look rows this session hands over (#1665): the one that ended sleep. */
   look?: readonly string[]
-  /** Its Parked and failed rows this session hands over (#1665): its own, and those no open session will. */
+  /** Its Parked and failed rows this session hands over (#1665): its own, and in the session that ended sleep those no open session will. */
   parked?: readonly string[]
   /** The actions Dan bans while he sleeps that sleep mode refused in this session (#1665). */
   banned?: readonly HeldDelivery[]
@@ -258,7 +258,7 @@ export const morningPrompt = (o: {
   if (o.needsUnfinished)
     out.push("The night's report was not finished at wake, so Needs a look may lack what only the end of the night shows (a session that ended unexpectedly, what GitHub shows done): read Needs a look in this session's report too, and put to Dan, each in its own picker, any row not listed here.")
   if (parked.length) {
-    out.push("What the night's report lists under Parked and failed for this session, numbered 8.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying what was set aside or failed and why, and offering what can be done (pick it up now, file an issue for it, or leave it), and act on what he picks.")
+    out.push("What the night's report lists under Parked and failed that this session hands over (its own, and in the session that ended sleep those of sessions since closed), numbered 8.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time, saying what was set aside or failed and why, and offering what can be done (pick it up now, file an issue for it, or leave it), and act on what he picks.")
     data.push(...parked.map((t, k) => `8.${k + 1} ${t}`))
   }
   if (banned.length) {

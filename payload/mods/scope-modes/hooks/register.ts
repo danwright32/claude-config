@@ -1644,23 +1644,37 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   }
   // What the night's report says needs Dan (#1665), as the report script wrote it beside the notes:
   // Needs a look is the night's, handed over by the session that ended it, which reads it after the
-  // wake render; each Parked and failed row is its session's, and one whose session will not hand it
-  // over is its repository's, claimed below with that repository's proposals. A file that cannot be
-  // read, or is not there, is said, never read as nothing needing Dan (L215).
+  // wake render; each Parked and failed row is its own session's, and one no open session will hand
+  // over (it names no session, or its session has closed) is the session that ended sleep's, whatever
+  // its repository, since a repository with no session open would otherwise keep it from Dan
+  // (lessons review at 53fe8bd). Only that one session ends the night, so no claim is needed. A file
+  // that cannot be read, or is not there, is said, never read as nothing needing Dan (L215).
   const needs = night.generation === null ? null : await needsOfNight($, night.generation)
   const needsSaid = (): Pick<Parameters<typeof morningPrompt>[0], 'look' | 'needsUnread' | 'needsUnfinished'> => {
     if (needs === null) return {}
     if ('unread' in needs) return { needsUnread: { why: needs.unread, withLook: night.offers } }
     return night.offers ? { look: needs.look, ...(needs.final ? {} : { needsUnfinished: true }) } : {}
   }
-  const ownParked = needs !== null && !('unread' in needs) ? needs.parked.filter(r => r.by === self).map(r => r.text) : []
+  const parkedRows = needs !== null && !('unread' in needs) ? needs.parked : []
+  let open: Set<string> | null = null
+  const othersAsk = !('unread' in read) && read.questions.some(q => q.by !== null && q.by !== self)
+  if (othersAsk || (night.offers && parkedRows.some(r => r.by !== null && r.by !== self))) {
+    try {
+      open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
+    } catch (err) {
+      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions and parked work from other sessions are left to them`, { to: 'debug' })
+    }
+  }
+  // One no open session will hand over: it names no session, or its session has closed.
+  const orphaned = (by: string | null) => by !== self && (by === null || (open !== null && !open.has(by)))
+  const parked = parkedRows.filter(r => r.by === self || (night.offers && orphaned(r.by))).map(r => r.text)
   if ('unread' in read) {
     // Notes that cannot be read send the session that ended sleep to the report, for its own
     // repository's proposals and the lessons only (lessons review of #1315).
     const p = { issues: [], lessons: [], unread: read.unread }
     const own = night.offers ? (await repoOf($)).slug : null
     return {
-      prompt: morningPrompt({ ...needsSaid(), worker: night.worker, offers: night.offers, held: deliveries, merges, banned, parked: ownParked, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }),
+      prompt: morningPrompt({ ...needsSaid(), worker: night.worker, offers: night.offers, held: deliveries, merges, banned, parked, questions: [], ...p, ...(own ? { forRepo: own } : {}), ...(reportName ? { reportName } : {}) }),
       anything: true,
     }
   }
@@ -1671,30 +1685,14 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   // or whose claim cannot be written, is left (and the latter logged), never offered twice.
   const mine = (await repoOf($)).slug
   const keys = new Set<string>([...(mine ? [mine] : []), ...(night.offers ? [UNATTRIBUTED, LESSONS_KEY] : [])])
-  const parkedRows = needs !== null && !('unread' in needs) ? needs.parked : []
-  let open: Set<string> | null = null
-  if (read.questions.some(q => q.by !== null && q.by !== self) || parkedRows.some(r => r.by !== null && r.by !== self)) {
-    try {
-      open = new Set((await $.sessions.list()).open.map(o => o.sessionId))
-    } catch (err) {
-      $.ui.log(`scope-modes: which sessions are open could not be read (${msg(err)}), so questions and parked work from other sessions are left to them`, { to: 'debug' })
-    }
-  }
-  // One no open session will hand over: it names no session, or its session has closed.
-  const orphaned = (by: string | null) => by !== self && (by === null || (open !== null && !open.has(by)))
   const orphans: { q: NightQuestion; key: string }[] = []
   for (const q of read.questions) {
     if (!orphaned(q.by)) continue
     orphans.push({ q, key: repoKey(q.repo ?? (q.cwd ? await folderRepo($, q.cwd) : null)) })
   }
-  const parkedOrphans: { text: string; key: string }[] = []
-  for (const r of parkedRows) {
-    if (!orphaned(r.by)) continue
-    parkedOrphans.push({ text: r.text, key: repoKey(r.repo ?? (r.cwd ? await folderRepo($, r.cwd) : null)) })
-  }
   const has = (key: string) => (key === LESSONS_KEY ? read.lessons.length > 0 : read.issues.some(i => repoKey(i.repo) === key) || orphans.some(o => o.key === key))
   const claimed = new Set<string>()
-  if (night.generation !== null) for (const key of keys) if ((has(key) || parkedOrphans.some(p => p.key === key)) && (await claimOffer($, night.generation, key))) claimed.add(key)
+  if (night.generation !== null) for (const key of keys) if (has(key) && (await claimOffer($, night.generation, key))) claimed.add(key)
   // Each claimed issue is sorted before it is offered (#1389): one already filed is said, one another
   // open session claimed is left to it, and the rest are claimed one by one for this session.
   const sorted = await sortProposals(
@@ -1708,7 +1706,6 @@ const morningOf = async ($: EngineInterface, night: Night, self: string, held: r
   // "Nothing proposed" is said only where nothing was: proposals another session claimed are its to
   // offer, and this session says nothing of them (lessons review).
   const offers = issues.length > 0 || lessons.length > 0 || sorted.filed.length > 0 || sorted.declined.length > 0 || sorted.elsewhere > 0 || (night.offers && ![...keys].some(has))
-  const parked = [...ownParked, ...parkedOrphans.filter(p => claimed.has(p.key)).map(p => p.text)]
   const said = needsSaid()
   return {
     prompt: morningPrompt({

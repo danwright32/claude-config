@@ -353,7 +353,7 @@ describe('morningPrompt puts what the report says needs Dan, and what sleep mode
     expect(p).toContain('7.1 Done overnight, check it: Milestone touched overnight: o/r "Ungrouped"')
   })
   test('each Parked and failed row is its own picker too', () => {
-    expect(p).toMatch(/What the night's report lists under Parked and failed for this session, numbered 8\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
+    expect(p).toMatch(/What the night's report lists under Parked and failed that this session hands over \(its own, and in the session that ended sleep those of sessions since closed\), numbered 8\.n in the block below: put each to Dan in its own AskUserQuestion picker, one at a time/)
     expect(p).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
   })
   test('each action sleep mode refused as banned is asked about in its own picker, with the call it would make', () => {

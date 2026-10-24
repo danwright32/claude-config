@@ -3246,6 +3246,23 @@ test('a session that did not end sleep hands over only its own Parked and failed
   expect(m).toContain('8.1 Failed a repo not named: the auto mode classifier refused Bash: it gave no reason')
   expect(m).not.toContain('Milestone touched overnight')
   expect(m).not.toMatch(/was not finished at wake/)
+  // A closed session's row is the session that ended sleep's to hand over, never this one's (lessons review at 53fe8bd).
+  expect(m).not.toContain('Parked o/r#30')
+})
+
+test("a closed session's Parked and failed row is handed over by the session that ended sleep, whatever its repository, and when the notes cannot be read (lessons review at 53fe8bd)", withDeps, async ($, on) => {
+  const rows = [
+    { section: 'parked', text: 'Parked acme/slate#8 (branch fix-8): the build would not start', by: 's4', repo: 'acme/slate' },
+    { section: 'parked', text: 'Failed a repo not named: a note with no session', cwd: '/elsewhere' },
+  ]
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord({ workers: ['s1', 's4'] }), [NEEDS_AT]: needsFixture(rows), [PROPOSED_AT]: PROPOSED }, unreadableFiles: [PROPOSED_AT] })
+  await start($ as never, clock)
+  await command($ as never, 'wake')
+  await clock.settle()
+  const m = morningOf(w)[0] as string
+  expect(m).toMatch(/The night's notes could not be read/)
+  expect(m).toContain('8.1 Parked acme/slate#8 (branch fix-8): the build would not start')
+  expect(m).toContain('8.2 Failed a repo not named: a note with no session')
 })
 
 test("what the report says needs Dan that cannot be read is said in the morning, never read as nothing (#1665)", withDeps, async ($, on) => {
