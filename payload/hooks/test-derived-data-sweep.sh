@@ -236,7 +236,8 @@ run_state() {   # run_state <root> <state dir> [args...]  -> sets OUT and RC
 # launching loops (load average 121 to 438 on 12 cores) failed 16 of 16, every one because the
 # automatic sweep took longer than 30 s to record, and the seven checks of its record after it. The
 # suite's own wall clock deadline (lib/suite-deadline.sh) stays the outer bound.
-HANG_S=300
+# The ceiling itself is the one every suite's wait shares, lib/hang-wait.sh's (claude-config#1620).
+. "$DIR/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
 # Waits on a finished record with no sweep still marked in progress.
 wait_finished() {   # wait_finished <state dir> -> 0 once finished, 1 at the ceiling
   local deadline=$(( $(date +%s) + HANG_S ))

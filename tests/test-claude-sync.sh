@@ -2164,6 +2164,16 @@ else
   load_average_busy(){ return 1; }
 fi
 SUITE_LOAD_FIGURE=""
+# Every wait on a condition below gives up at the one ceiling only a hang reaches, lib/hang-wait.sh's
+# (claude-config#1620): they were 5, 20, 60 and 120 seconds, written as a few hundred ticks of a
+# tenth or a `date +%s` plus a minute, the shape that failed 16 of 16 loaded copies of
+# test-derived-data-sweep.sh (#1577). A copy without the file cannot wait on anything safely, so it
+# refuses rather than guessing a ceiling.
+if ! . "$(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh"; then
+  echo "FAIL: $(dirname "$SCRIPT")/payload/hooks/lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+fi
 SUITE_LOAD_CORES=""
 # Exits 0 when the machine was busier than its cores beyond this suite's own shards, and leaves the
 # figures it read in SUITE_LOAD_FIGURE and SUITE_LOAD_CORES (empty where they could not be read).
@@ -8419,13 +8429,10 @@ check "#152 and that is worded differently from the no-progress message" \
 # reason: a watchdog outliving its run holds a process id the system may reuse.
 # Polled finely rather than in whole seconds: this waits on a CONDITION, and the common case is
 # that it is already true, so a one second granularity only ever costs the case where it is not
-# (L290). The ceiling it gives up at is the same five seconds as before.
-_st_wd=0; _st_wait=0
-while [ "$_st_wait" -lt 25 ]; do
-  _st_wd="$(pgrep -f "suite-deadline-watchdog.$_st_tag" 2>/dev/null | wc -l | tr -d ' ')"
-  [ "${_st_wd:-0}" -eq 0 ] && break
-  sleep 0.2; _st_wait=$((_st_wait + 1))
-done
+# (L290). It gave up at five seconds, which a watchdog descheduled on a loaded Mac can pass with
+# nothing wrong; it now gives up at the hang ceiling (#1620).
+hang_wait "[ \"\$(pgrep -f 'suite-deadline-watchdog.$_st_tag' 2>/dev/null | wc -l | tr -d ' ')\" -eq 0 ]" 0.2
+_st_wd="$(pgrep -f "suite-deadline-watchdog.$_st_tag" 2>/dev/null | wc -l | tr -d ' ')"
 check "#152 none of those runs left a watchdog behind" "[ '${_st_wd:-0}' -eq 0 ]"
 
 # ---- and it watches sections of its OWN, not a prefix of the real suite (claude-config#334) ----
@@ -8628,15 +8635,13 @@ _mklock "$_lockdir/waited" "$_lw_holder" "$_thishost" "$((_now - 30))"
 _lw_log="$WORK/lock-waited.log"
 _try_lock_waiting "$_lockdir/waited" 120 > "$_lw_log" &
 _lw_pid=$!
-_lw_n=0
-while ! grep -q 'Waiting up to 120s' "$_lw_log" 2>/dev/null && [ "$_lw_n" -lt 600 ]; do sleep 0.1; _lw_n=$((_lw_n + 1)); done
+hang_wait "grep -q 'Waiting up to 120s' '$_lw_log' 2>/dev/null"
 check "#1297 a run asked to wait says it is waiting, and for how long at most" "grep -q 'Waiting up to 120s' '$_lw_log'"
 check "#1297 and it has not started while the lock is held" "! grep -q '^SUITE-LOCK-WAITED' '$_lw_log'"
 # The holder finishes the way a run does: its lock goes with it.
 rm -rf "$_lockdir/waited"
 kill "$_lw_holder" 2>/dev/null; wait "$_lw_holder" 2>/dev/null
-_lw_n=0
-while kill -0 "$_lw_pid" 2>/dev/null && [ "$_lw_n" -lt 1200 ]; do sleep 0.1; _lw_n=$((_lw_n + 1)); done
+hang_wait "! kill -0 $_lw_pid 2>/dev/null"
 wait "$_lw_pid"; _lw_rc=$?
 check "#1297 once the lock goes the waiting run takes it and runs (exit $_lw_rc)" "[ '$_lw_rc' -eq 0 ]"
 check "#1297 and it says how long it waited, in the line the runner subtracts from its time" \
@@ -8765,7 +8770,7 @@ _int_outer=$!
 # rounded each of these three waits up to a whole second for nothing. The deadlines are unchanged
 # in seconds, only their resolution moves.
 _int_pid=""; _int_kids=""; _int_waited=0
-while [ "$_int_waited" -lt 900 ]; do
+while [ "$_int_waited" -lt $(( HANG_S * 10 )) ]; do
   _int_pid="$(cat "$_int_lock/pid" 2>/dev/null || true)"
   case "$_int_pid" in ''|*[!0-9]*) _int_pid="" ;; esac
   if [ -n "$_int_pid" ] && grep -q 'hanging deliberately' "$_int_log" 2>/dev/null; then
@@ -8781,7 +8786,7 @@ check "#163 and it had children of its own to leave behind" \
 
 kill -TERM "$_int_pid" 2>/dev/null || true
 _int_gone=0
-while [ "$_int_gone" -lt 300 ] && kill -0 "$_int_pid" 2>/dev/null; do sleep 0.1; _int_gone=$(( _int_gone + 1 )); done
+hang_wait "! kill -0 $_int_pid 2>/dev/null"
 # And then for the handler's own kills to LAND, which used to be a flat `sleep 1`: a fixed wait for
 # something to finish is a bet on how loaded the machine is, and it is both too long when the
 # machine is idle and too short when it is not (L290). Waited on instead, with the same ceiling: the
@@ -8789,7 +8794,7 @@ while [ "$_int_gone" -lt 300 ] && kill -0 "$_int_pid" 2>/dev/null; do sleep 0.1;
 # It is not asserted here, only waited for. The checks below are what judge it, and they must be
 # able to fail, so this gives up rather than looping until they would pass.
 _int_settle=0
-while [ "$_int_settle" -lt 300 ]; do
+while [ "$_int_settle" -lt $(( HANG_S * 10 )) ]; do
   _int_still=""
   for _int_k in $_int_kids; do kill -0 "$_int_k" 2>/dev/null && _int_still="$_int_still $_int_k"; done
   [ -z "$_int_still" ] && [ ! -e "$_int_lock/pid" ] && break
@@ -18351,7 +18356,7 @@ cp '$WR_SELF' '$WR/good'
 cp '$WR_SELF' '$WR/next'; printf '\\nif then\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'
 echo one
 n=0
-while [ ! -s '$WR/clone/.watch-stale' ] && [ "\$n" -lt 200 ]; do sleep 0.1; n=\$((n+1)); done
+while [ ! -s '$WR/clone/.watch-stale' ] && [ "\$n" -lt $((HANG_S * 10)) ]; do sleep 0.1; n=\$((n+1)); done
 cp '$WR/good' '$WR/next'; printf '\\n# fixed\\n' >> '$WR/next'; mv '$WR/next' '$WR_SELF'
 echo two
 FSEOF
@@ -22208,14 +22213,14 @@ w604_fswatch(){ cat > "$W04/fswatch" <<FSEOF
 #!/usr/bin/env bash
 trap '' PIPE
 echo one
-n=0; while [ ! -e "$W04GO" ] && [ \$n -lt 400 ]; do sleep 0.05; n=\$((n+1)); done
+n=0; while [ ! -e "$W04GO" ] && [ \$n -lt $((HANG_S * 20)) ]; do sleep 0.05; n=\$((n+1)); done
 echo two
 # Spaced wider than the loop's one second drain, or a loop still reading would keep draining these
 # for ever and never reach the send that shows it carried on.
 n=0; while [ \$n -lt 12 ]; do sleep 1.5; echo more 2>/dev/null || { echo ended > "$W04DONE"; exit 0; }; n=\$((n+1)); done
 FSEOF
 chmod +x "$W04/fswatch"; }
-w604_wait(){ local n=0; while ! eval "$1" && [ $n -lt 400 ]; do sleep 0.05; n=$((n+1)); done; }
+w604_wait(){ hang_wait "$1" 0.05; }
 # 1. ORPHANED: the top process is killed outright, and the loop carries on.
 w604_fswatch; : > "$W04HITS"; rm -f "$W04GO" "$W04DONE" "$W04PID"
 SYNC_FSWATCH="$W04/fswatch" SYNC_WATCH_SEND="printf 'x\n' >> '$W04HITS'" SYNC_WATCH_PID_FILE="$W04PID" \
@@ -22478,14 +22483,7 @@ qw_hold(){
   printf '%s\n' "the change watcher's send" > "$QWLOCK/command"
 }
 # Waits on a CONDITION with a deadline of its own, never a fixed sleep (L290).
-qw_until(){   # $1 = a command that succeeds once the state is reached
-  local t0; t0="$(date +%s)"
-  until eval "$1"; do
-    [ "$(( $(date +%s) - t0 ))" -ge 60 ] && return 1
-    sleep 0.1
-  done
-  return 0
-}
+qw_until(){ hang_wait "$1"; }   # $1 = a command that succeeds once the state is reached
 # AT THE DEADLINE: refused, in words that name the holder, the wait and the setting.
 qw_hold
 out_qw1="$(env $(qwenv) SYNC_PULL_LOCK_WAIT=1 bash "$SCRIPT" pull 2>&1)"; rc_qw1=$?

@@ -37,15 +37,9 @@ says(){ case "$3" in *"$2"*) ok ;; *) bad "$1 (wanted [$2] in: ${3:0:600})" ;; e
 lacks(){ case "$3" in *"$2"*) bad "$1 (did not want [$2] in: ${3:0:600})" ;; *) ok ;; esac; }
 eq(){ if [ "$2" = "$3" ]; then ok; else bad "$1 (wanted '$2', got '$3')"; fi; }
 
-# A wait on a condition, ceiling only a hang reaches (it judges nothing about speed).
-HANG_S=120
-wait_for(){   # wait_for <shell condition> -> 0 once true, 1 at the ceiling
-  local n=0
-  until eval "$1"; do
-    n=$((n + 1)); [ "$n" -lt $((HANG_S * 10)) ] || return 1
-    sleep 0.1
-  done
-}
+# A wait on a condition, with the one ceiling only a hang reaches (lib/hang-wait.sh, #1620).
+. "$DIR/../payload/hooks/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+wait_for(){ hang_wait "$1"; }   # wait_for <shell condition> -> 0 once true, 1 at the ceiling
 # Gone means not running: a killed process waiting to be reaped (state Z) is gone, since it runs
 # nothing and holds nothing, and whether the system has reaped it yet is not the helper's to decide.
 gone(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) true ;; *) false ;; esac; }
