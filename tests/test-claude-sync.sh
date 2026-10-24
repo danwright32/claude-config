@@ -2755,6 +2755,14 @@ seed_unmanaged_list(){   # $1 = a clone directory holding a copied claude-sync
   mkdir -p "$1/payload/hooks/lib"
   cp "$(dirname "$SCRIPT")/payload/hooks/lib/unmanaged-skills.sh" "$1/payload/hooks/lib/unmanaged-skills.sh"
 }
+# A send refuses when the work names scanner is not beside the tool (claude-config#1621), so a copy
+# of the tool that sends is given the scanner, and the registry reader it asks, exactly as its own
+# checkout would hold them. Never an exemption: the copy is scanned like any send.
+seed_work_names_scanner(){   # $1 = a clone directory holding a copied claude-sync
+  mkdir -p "$1/payload/hooks/lib"
+  cp "$(dirname "$SCRIPT")/payload/hooks/lib/work-names.py" "$1/payload/hooks/lib/work-names.py"
+  cp "$(dirname "$SCRIPT")/payload/hooks/lib/dev-update-registry.js" "$1/payload/hooks/lib/dev-update-registry.js"
+}
 # SUITE_DEBUG=1 prints tool output a scenario would otherwise throw away. It exists because a
 # failure that only happens on a machine you cannot run has to be MEASURED there, and a check
 # reports which assertion failed while saying nothing about what the tool actually did. Two wrong
@@ -3788,7 +3796,7 @@ section "== pull/sync auto-restarts the watch daemon when claude-sync itself cha
 # automatically, not rely on a manual launchctl step on each Mac (issue #5).
 RSBARE="$WORK/rsbare.git"; git init -q --bare -b main "$RSBARE"
 RSA="$WORK/rsrepoA"; git clone -q "$RSBARE" "$RSA"
-cp "$SCRIPT" "$RSA/claude-sync"; seed_unmanaged_list "$RSA"
+cp "$SCRIPT" "$RSA/claude-sync"; seed_unmanaged_list "$RSA"; seed_work_names_scanner "$RSA"
 mkdir -p "$RSA/payload/hooks"; echo '#!/bin/sh' > "$RSA/payload/hooks/dummy.sh"   # non-empty payload, or apply dies with "no payload in repo"
 git -C "$RSA" add -A && git -C "$RSA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RSA" push -q -u origin main
 
@@ -4892,7 +4900,7 @@ section "== #14: rule files merge entry by entry instead of one Mac's copy winni
 # keeps both.
 RM="$WORK/rmbare.git"; git init -q --bare -b main "$RM"
 RMA="$WORK/rmrepoA"; git clone -q "$RM" "$RMA" 2>/dev/null
-cp "$SCRIPT" "$RMA/claude-sync"
+cp "$SCRIPT" "$RMA/claude-sync"; seed_work_names_scanner "$RMA"
 mkdir -p "$RMA/payload/hooks"; echo '#!/bin/sh' > "$RMA/payload/hooks/x.sh"
 echo '{"hooks":{}}' > "$RMA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$RMA/payload/CLAUDE.md"
@@ -5016,7 +5024,7 @@ check "#15 and names the number involved"      "grep -q 'L5 used 2 times' <<< \"
 # surface at apply time too, since by then it is already in the file.
 LNM="$WORK/lnmbare.git"; git init -q --bare -b main "$LNM"
 LNMA="$WORK/lnmA"; git clone -q "$LNM" "$LNMA" 2>/dev/null
-cp "$SCRIPT" "$LNMA/claude-sync"; seed_unmanaged_list "$LNMA"
+cp "$SCRIPT" "$LNMA/claude-sync"; seed_unmanaged_list "$LNMA"; seed_work_names_scanner "$LNMA"
 mkdir -p "$LNMA/payload/hooks"; echo '#!/bin/sh' > "$LNMA/payload/hooks/x.sh"
 # A skill, so the scan below is exercised against a nested path and not only against the
 # flat mirror dirs. skills/ is synced alongside hooks, agents and commands.
@@ -5741,7 +5749,7 @@ section "== a manual publish records what went up, and names what it kept back (
 # Both halves are fixed here, because the silence would still hide a Mac that is genuinely behind.
 HKB="$WORK/holdback-bare.git"; git init -q --bare -b main "$HKB"
 HKA="$WORK/holdbackA"; git clone -q "$HKB" "$HKA" 2>/dev/null
-cp "$SCRIPT" "$HKA/claude-sync"; seed_unmanaged_list "$HKA"
+cp "$SCRIPT" "$HKA/claude-sync"; seed_unmanaged_list "$HKA"; seed_work_names_scanner "$HKA"
 mkdir -p "$HKA/payload/hooks"
 echo '{"hooks":{}}' > "$HKA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$HKA/payload/CLAUDE.md"
@@ -5833,7 +5841,7 @@ section "== a send never reverts the other Mac over a file it is holding back (c
 # the record says nothing about it either way.
 SRV="$WORK/send-revert-bare.git"; git init -q --bare -b main "$SRV"
 SRA="$WORK/send-revertA"; git clone -q "$SRV" "$SRA" 2>/dev/null
-cp "$SCRIPT" "$SRA/claude-sync"; seed_unmanaged_list "$SRA"
+cp "$SCRIPT" "$SRA/claude-sync"; seed_unmanaged_list "$SRA"; seed_work_names_scanner "$SRA"
 mkdir -p "$SRA/payload/hooks"
 echo '{"hooks":{}}' > "$SRA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$SRA/payload/CLAUDE.md"
@@ -5896,7 +5904,7 @@ section "== status names config this clone holds and has not applied (claude-con
 # and reporting it would put a paragraph on a healthy day (L36).
 UAB="$WORK/unapplied-bare.git"; git init -q --bare -b main "$UAB"
 UAA="$WORK/unappliedA"; git clone -q "$UAB" "$UAA" 2>/dev/null
-cp "$SCRIPT" "$UAA/claude-sync"; seed_unmanaged_list "$UAA"
+cp "$SCRIPT" "$UAA/claude-sync"; seed_unmanaged_list "$UAA"; seed_work_names_scanner "$UAA"
 mkdir -p "$UAA/payload"
 echo '{"hooks":{}}' > "$UAA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$UAA/payload/CLAUDE.md"
@@ -6089,7 +6097,7 @@ section "== a lesson renumbered on the other Mac must not come back under its ol
 # with no wedge notification. The renumbering has to survive the merge that follows it.
 RN="$WORK/rnbare.git"; git init -q --bare -b main "$RN"
 RNA="$WORK/rnrepoA"; git clone -q "$RN" "$RNA" 2>/dev/null
-cp "$SCRIPT" "$RNA/claude-sync"
+cp "$SCRIPT" "$RNA/claude-sync"; seed_work_names_scanner "$RNA"
 mkdir -p "$RNA/payload/hooks"; echo '#!/bin/sh' > "$RNA/payload/hooks/x.sh"
 echo '{"hooks":{}}' > "$RNA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$RNA/payload/CLAUDE.md"
@@ -6183,7 +6191,7 @@ section "== #257: an exact duplicate is dropped, but must not be called a renumb
 # preserve_local_conflicts already records happening once here.
 DUP="$WORK/dupbare.git"; git init -q --bare -b main "$DUP"
 DUPA="$WORK/duprepoA"; git clone -q "$DUP" "$DUPA" 2>/dev/null
-cp "$SCRIPT" "$DUPA/claude-sync"
+cp "$SCRIPT" "$DUPA/claude-sync"; seed_work_names_scanner "$DUPA"
 mkdir -p "$DUPA/payload/hooks"; echo '#!/bin/sh' > "$DUPA/payload/hooks/x.sh"
 echo '{"hooks":{}}' > "$DUPA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$DUPA/payload/CLAUDE.md"
@@ -11908,7 +11916,7 @@ section "== a full band inside a pull rolls over, instead of renumbering to noth
 # that is untouched below: this rolls a band the Mac already holds, which is a different thing.
 FBB="$WORK/fullband-bare.git"; git init -q --bare -b main "$FBB"
 FBA="$WORK/fullbandA"; git clone -q "$FBB" "$FBA" 2>/dev/null
-cp "$SCRIPT" "$FBA/claude-sync"; seed_unmanaged_list "$FBA"
+cp "$SCRIPT" "$FBA/claude-sync"; seed_unmanaged_list "$FBA"; seed_work_names_scanner "$FBA"
 mkdir -p "$FBA/payload" "$FBA/lesson-bands"
 echo '{"hooks":{}}' > "$FBA/payload/settings.hooks.json"
 printf '# rules\n@LESSONS.md\n' > "$FBA/payload/CLAUDE.md"
@@ -12628,13 +12636,22 @@ check "#415 and carries no skills at all, the platform's least of all" \
 # and not about something else this copy lacks.
 mkdir -p "$ULC/payload/hooks/lib"
 cp "$ULREPO/payload/hooks/lib/unmanaged-skills.sh" "$ULC/payload/hooks/lib/unmanaged-skills.sh"
+# The list alone is not enough: this copy has no work names scanner beside it either, and a send
+# that cannot run that scanner refuses rather than publishing what nothing judged (claude-config#1621,
+# L98). #1568 let it through with a notice, so the guard keeping work names out of a public
+# repository failed open wherever the tool ran from a copy.
+if out_ulw="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" push 2>&1)"; then rc_ulw=0; else rc_ulw=$?; fi
+dbg "push with the list and no scanner: $out_ulw"
+check "#1621 a copy with no work names scanner beside it refuses the send" "[ '$rc_ulw' -ne 0 ]"
+check "#1621 and says the scan could not judge it, naming the scanner it could not find" \
+  "line_has \"\$out_ulw\" 'work names scan could not judge' 'work-names\.py'"
+# The control: the same copy given the scanner sends, so the refusal above is about the scanner.
+seed_work_names_scanner "$ULC"
 if out_ul2="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" push 2>&1)"; then rc_ul2=0; else rc_ul2=$?; fi
-dbg "push with the list: $out_ul2"
-check "#415 with the list beside it the same copy sends" "[ '$rc_ul2' -eq 0 ]"
-# And this copy has no work names scanner beside it either (#1568): the send goes ahead, as a copy
-# run outside its checkout must, and says out loud that it was not scanned.
-check "#1568 a copy with no work names scanner beside it says its send was not scanned" \
-  "line_has \"\$out_ul2\" 'NOT scanned for work organisation names' 'work-names\.py'"
+dbg "push with the list and the scanner: $out_ul2"
+check "#415 with the list and the scanner beside it the same copy sends" "[ '$rc_ul2' -eq 0 ]"
+check "#1621 and that send was scanned, so it never says it went unscanned" \
+  "out_lacks \"\$out_ul2\" 'NOT scanned'"
 check "#415 a skill of my own is carried"       "[ -f '$ULR/payload/skills/mine/SKILL.md' ]"
 check "#415 and the platform's still is not"     "[ ! -e '$ULR/payload/skills/synced' ]"
 # A home with no skills anywhere does not need the list, and several sections run a copy of the tool
@@ -12656,6 +12673,49 @@ if out_ul5="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1
 dbg "status with no list and skills present: $out_ul5"
 check "#415 status with skills present and no list stops and says why" \
   "[ '$rc_ul5' -ne 0 ] && line_has \"\$out_ul5\" 'cannot read the list of skills' 'unmanaged-skills\.sh'"
+
+section "== a send carrying a work organisation name is refused, and its one run override is said and logged (#1568, #1621) =="
+# The organisation is invented and handed to the scanner as a hash, the seam hooks/test-work-names.sh
+# uses, so no real name is written here. HOME is an empty fixture so the scan reads no Mac's registry
+# and judges only what this section put in front of it.
+WNH="$WORK/worknames-home"; mkdir -p "$WNH"; echo '{"hooks":{}}' > "$WNH/settings.json"
+printf '# rules\nsee acme-hq/widgets#12 for the history\n' > "$WNH/CLAUDE.md"
+WNE="$WORK/worknames-emptyhome"; mkdir -p "$WNE"
+WNR="$WORK/worknames-repo"; mkdir -p "$WNR/payload"
+WNLOG="$WORK/worknames-sync.log"
+WNHASH="$(printf '%s' "acme-hq" | shasum -a 256 | cut -d' ' -f1)"
+_wn(){ HOME="$WNE" WORK_NAMES_EXTRA_HASHES="$WNHASH" SYNC_LOG_FILE="$WNLOG" CLAUDE_HOME="$WNH" SYNC_REPO="$WNR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$SCRIPT" push 2>&1; }
+if out_wn1="$(_wn)"; then rc_wn1=0; else rc_wn1=$?; fi
+dbg "push carrying the invented organisation: $out_wn1"
+check "#1568 a send carrying a work organisation name is refused" "[ '$rc_wn1' -ne 0 ]"
+check "#1568 and names the file and line, never the name" \
+  "line_has \"\$out_wn1\" 'names a work organisation' 'CLAUDE\.md:2' && out_lacks \"\$out_wn1\" 'acme-hq'"
+# The override lets that one hand run send through, and says so where the person sees it and in the
+# sync log, so a send nothing scanned leaves a record (claude-config#1621).
+: > "$WNLOG"
+if out_wn2="$(SYNC_SKIP_WORK_NAMES_SCAN=1 _wn)"; then rc_wn2=0; else rc_wn2=$?; fi
+dbg "push with the override: $out_wn2"
+check "#1621 the override lets that one send through" "[ '$rc_wn2' -eq 0 ]"
+check "#1621 and says the send was not scanned, and why" \
+  "line_has \"\$out_wn2\" 'NOT scanned for work organisation names' 'SYNC_SKIP_WORK_NAMES_SCAN=1'"
+check "#1621 and writes the same to the sync log" \
+  "line_has \"\$(cat '$WNLOG')\" 'NOT scanned for work organisation names' 'SYNC_SKIP_WORK_NAMES_SCAN=1'"
+# The change watcher sends on every change for as long as it runs, so an override in its environment
+# would cover every send it ever makes. It is ignored there, and the watcher's send is scanned.
+: > "$WNLOG"
+if out_wn3="$(SYNC_IN_WATCH=1 SYNC_SKIP_WORK_NAMES_SCAN=1 _wn)"; then rc_wn3=0; else rc_wn3=$?; fi
+dbg "watcher push with the override: $out_wn3"
+check "#1621 the change watcher's send ignores the override and is still refused" "[ '$rc_wn3' -ne 0 ]"
+check "#1621 and says the override was ignored there" \
+  "line_has \"\$out_wn3\" 'SYNC_SKIP_WORK_NAMES_SCAN=1' 'ignored' 'change watcher'"
+check "#1621 and logs that it was ignored" \
+  "line_has \"\$(cat '$WNLOG')\" 'SYNC_SKIP_WORK_NAMES_SCAN=1' 'ignored'"
+check "#1621 and the refusal still names the file and line" \
+  "line_has \"\$out_wn3\" 'names a work organisation' 'CLAUDE\.md:2'"
+# Its remedy must be one that works where it was read: the watcher's refusal points at a send run by
+# hand, never at an override the watcher has just said it ignores (L111).
+check "#1621 and the watcher's refusal points the override at a send run by hand" \
+  "line_has \"\$out_wn3\" 'names a work organisation' 'one send run by hand' 'claude-sync send'"
 
 section "== a pull never promises to send local files a send will refuse (#388) =="
 # The pull's "would have reverted these local edits" line says they go up on the next send. For a
@@ -13692,7 +13752,7 @@ check "#947 a send let past the scan clears that record"     "[ ! -e '$RFKR/.sen
 # sent nothing. The new copy prints a marker, so the hand off is proven to have happened.
 RFUB="$WORK/refused-self-bare.git"; git init -q --bare -b main "$RFUB"
 RFUA="$WORK/refused-self-repoA"; git clone -q "$RFUB" "$RFUA" 2>/dev/null
-cp "$SCRIPT" "$RFUA/claude-sync"; seed_unmanaged_list "$RFUA"
+cp "$SCRIPT" "$RFUA/claude-sync"; seed_unmanaged_list "$RFUA"; seed_work_names_scanner "$RFUA"
 mkdir -p "$RFUA/payload/agents"; printf 'base\n' > "$RFUA/payload/agents/base.md"
 git -C "$RFUA" checkout -q -b main 2>/dev/null || true
 git -C "$RFUA" add -A && git -C "$RFUA" -c user.name=t -c user.email=t@e commit -q -m seed && git -C "$RFUA" push -q -u origin main
@@ -17957,7 +18017,7 @@ check "#1240 a send started by the watcher runs a suite without the watcher's ow
 # A remembered verdict rests on the tool that ran the suite as much as on the hooks: test-claude-sync.sh
 # judges claude-sync itself, so a fix to the tool reused the failure it had fixed. The same hook
 # with a failing suite is recorded red, then a changed copy of the tool must run it again.
-WETOOL="$WORK/watchenv-tool"; mkdir -p "$WETOOL"; cp "$SCRIPT" "$WETOOL/claude-sync"
+WETOOL="$WORK/watchenv-tool"; mkdir -p "$WETOOL"; cp "$SCRIPT" "$WETOOL/claude-sync"; seed_work_names_scanner "$WETOOL"
 printf '#!/usr/bin/env bash\necho we changed\n' > "$WEH/hooks/we.sh"
 cat > "$WEH/hooks/test-we.sh" <<EOS
 #!/usr/bin/env bash
