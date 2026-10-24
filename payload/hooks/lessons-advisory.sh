@@ -190,7 +190,7 @@ TRIG_WHAT=(
 )
 TRIG_RE1=(
   ''
-  '(cron|setInterval|\.schedule\(|scheduleJob|CronCreate|BackgroundTasks|celery|sidekiq|queue\.(add|push|send))'
+  '((^|[^[:alnum:]_])cron|setInterval|\.schedule\(|scheduleJob|CronCreate|BackgroundTasks|celery|sidekiq|queue\.(add|send))'
   '((app|router|server)\.(get|post|put|patch|delete)\(|export[[:space:]]+(async[[:space:]]+)?function[[:space:]]+(GET|POST|PUT|PATCH|DELETE)|@(app|router)\.route|addEventListener\([[:punct:]]fetch)'
   '(DROP[[:space:]]+TABLE|DROP[[:space:]]+COLUMN|TRUNCATE[[:space:]]|DELETE[[:space:]]+FROM|rm[[:space:]]+-rf|fs\.rm\(|unlinkSync|\.drop\()'
   ''
@@ -256,9 +256,30 @@ trig_code_matches(){   # $1 = a file holding the added lines  $2 = the path  $3 
 # and runs later, a shell string run through a variable or piped into bash, and a schedule named only
 # by a string or a JSON key (`add_job(fn, "cron")`, `"crons": [...]`). Measured on 150 claude-config
 # and 60 Overture merges before it shipped; the pull request records what each dropped flag was.
+#
+# What the word list matches (claude-config#1578). `cron` counts only at the START of a word, so
+# crontab, CronJob, @Cron( and cron.schedule fire while Overture #4541's `endsAcronym` does not; a
+# camelCase compound (scheduleCron) is missed. `queue.push` is gone: it is how a breadth first search
+# or any work list appends to an array (claude-config #1277's rules.ts), and a job queue's enqueue is
+# add or send. And a job a shell script starts with `&` counts, outside test files only: a detached
+# runner a hook leaves behind is the case L13 and L71 are about, while a test backgrounding a fake
+# and waiting on it is the suite's own business and would make this fire on about one push in ten.
+# Measured on 2026-10-24 over 210 claude-config and 59 Overture merges; the pull request lists every
+# hit, and every one outside a test was a real background job.
 trig_background_work(){   # $1 = a file holding the added lines  $2 = the path
-  trig_code_matches "$1" "$2" "${TRIG_RE1[1]}"
+  trig_code_matches "$1" "$2" "${TRIG_RE1[1]}" && return 0
+  [ "$(fh_lang "$2")" = shell ] || return 1
+  is_test "$2" && return 1
+  # An arithmetic expression, $(( x & mask )) or (( mode & bit )), is removed first: its & is a
+  # bitwise and, and its operands are bare names (found by the lessons review of this change). One
+  # nested in further parentheses is left, and fires.
+  grep -Eq -- "$TRIG_SHELL_JOB_RE" <<< "$(fh_code_only "$2" < "$1" | sed -E 's/\(\([^()]*\)\)//g')"
 }
+
+# An `&` that starts a job: not half of && or |&, not a redirection (>&2, 2>&1, &>file), and followed
+# by the end of the command or by another command after a space. So `cmd &`, `( ... ) &` and
+# `cmd & pid=$!` match, while `$st & 127` in a perl program and `?a=1&b=2` in a URL do not.
+TRIG_SHELL_JOB_RE='(^|[^&<>|])&([[:space:]]*($|[;)}#])|[[:space:]]+[[:alpha:]_])'
 
 trig_fixed_wait(){   # $1 = a file holding the added lines  $2 = the path
   trig_code_matches "$1" "$2" "${TRIG_RE1[6]}"

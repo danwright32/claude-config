@@ -37,15 +37,9 @@ says(){ case "$3" in *"$2"*) ok ;; *) bad "$1 (wanted [$2] in: ${3:0:600})" ;; e
 lacks(){ case "$3" in *"$2"*) bad "$1 (did not want [$2] in: ${3:0:600})" ;; *) ok ;; esac; }
 eq(){ if [ "$2" = "$3" ]; then ok; else bad "$1 (wanted '$2', got '$3')"; fi; }
 
-# A wait on a condition, ceiling only a hang reaches (it judges nothing about speed).
-HANG_S=120
-wait_for(){   # wait_for <shell condition> -> 0 once true, 1 at the ceiling
-  local n=0
-  until eval "$1"; do
-    n=$((n + 1)); [ "$n" -lt $((HANG_S * 10)) ] || return 1
-    sleep 0.1
-  done
-}
+# A wait on a condition, with the one ceiling only a hang reaches (lib/hang-wait.sh, #1620).
+. "$DIR/../payload/hooks/lib/hang-wait.sh" || { echo "FAIL: lib/hang-wait.sh is missing"; printf 'SUITE-RESULT passed=0 failed=1\n'; exit 1; }
+wait_for(){ hang_wait "$1"; }   # wait_for <shell condition> -> 0 once true, 1 at the ceiling
 # Gone means not running: a killed process waiting to be reaped (state Z) is gone, since it runs
 # nothing and holds nothing, and whether the system has reaped it yet is not the helper's to decide.
 gone(){ ! kill -0 "$1" 2>/dev/null || case "$(ps -o stat= -p "$1" 2>/dev/null)" in *Z*) true ;; *) false ;; esac; }
@@ -159,6 +153,33 @@ printf '%s\n' "6161 1 00:01 grep -n merge-when-ready.sh notes.txt" "6162 1 00:01
 run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
 lacks "#1618 a grep, an editor and a single suite are not runs to wait for" "Waiting for" "$OUT"
 eq "#1618 so the window ran at once" 0 "$RC"
+# A suite's own fixtures are not runs either (#1620): the runner started by test-run-all-tests.sh and
+# the merge helper started by test-merge-when-ready.sh, as on 2026-10-24, when one builder's full run
+# read as five full suite runs. Only the root run counts.
+fresh fixtures
+printf '%s\n' "7001 1 00:01 bash /w/payload/hooks/test-run-all-tests.sh" \
+  "7002 7001 00:01 bash /tmp/claude-sync-work.runner.x/run-all-tests.sh" \
+  "7003 1 00:01 bash /w/payload/hooks/test-merge-when-ready.sh" \
+  "7004 7003 00:01 bash /w/payload/hooks/lib/merge-when-ready.sh 7 --squash" > "$case_dir/ps"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+lacks "#1620 a suite's own runner and merge helper are fixtures, not runs to wait for" "Waiting for" "$OUT"
+fresh nested
+printf '%s\n' "7101 1 05:00 bash /w/payload/hooks/run-all-tests.sh" \
+  "7102 7101 01:00 bash /w/payload/hooks/test-run-all-tests.sh" \
+  "7103 7102 00:01 bash /tmp/claude-sync-work.runner.x/run-all-tests.sh" > "$case_dir/ps"
+printf '%s\n' ": > \"$case_dir/ps\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1620 a full run is one run however many fixtures it starts" "Waiting for a full suite run (bash /w/payload/hooks/run-all-tests.sh)," "$OUT"
+# Several runs are said by kind and count, once while the kinds and counts stay as they are, rather
+# than once per look as the runs inside them come and go.
+fresh many
+printf '%s\n' "7201 1 05:00 bash /w/a/payload/hooks/run-all-tests.sh" "7202 1 05:00 bash /w/b/payload/hooks/run-all-tests.sh" \
+  "7203 1 00:30 bash /x/.claude/hooks/lib/merge-when-ready.sh 9 --squash" > "$case_dir/ps"
+printf '%s\n' "printf '%s\n' '7201 1 05:00 bash /w/a/payload/hooks/run-all-tests.sh' '7204 1 00:01 bash /w/c/payload/hooks/run-all-tests.sh' '7203 1 00:30 bash /x/.claude/hooks/lib/merge-when-ready.sh 9 --squash' > \"$case_dir/ps\"" > "$case_dir/hook.1"
+printf '%s\n' ": > \"$case_dir/ps\"" > "$case_dir/hook.2"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1620 several runs are said by kind and count" "Waiting for 1 merge-when-ready.sh run and 2 full suite runs, among them a full suite run (bash /w/a/payload/hooks/run-all-tests.sh)" "$OUT"
+eq "#1620 and said once while the kinds and counts stay the same" 1 "$(printf '%s\n' "$OUT" | grep -c 'Waiting for')"
 
 # =================================================================================================
 # 5. The merge helper's own turn folders: a live ticket is a run whatever its command line says
@@ -298,12 +319,15 @@ says "#1618 and says why that time" "its run recorded no end" "$n"
 # =================================================================================================
 fresh real
 unset SYNC_PS_FIXTURE
-mkdir -p "$W/real"; printf 'sleep 600\n' > "$W/real/merge-when-ready.sh"
-bash "$W/real/merge-when-ready.sh" & dummy=$!; BG="$dummy"
-wait_for "case \"\$(ps -o command= -p $dummy)\" in *merge-when-ready.sh*) true ;; *) false ;; esac" || true
+# Started from a subshell that exits at once, so its parent is no longer this suite: a run under a
+# suite is a fixture and is rightly not counted (#1620), and a real merge is not started by one.
+mkdir -p "$W/real"; printf 'echo $$ > "%s"\nsleep 600\n' "$W/real/pid" > "$W/real/merge-when-ready.sh"
+( bash "$W/real/merge-when-ready.sh" >/dev/null 2>&1 & )
+wait_for "[ -s '$W/real/pid' ]" || true
+dummy="$(cat "$W/real/pid" 2>/dev/null)"; BG="$dummy"
 run --status
 says "#1618 --status reads the real process table" "a merge-when-ready.sh run (bash $W/real/merge-when-ready.sh)" "$OUT"
-child="$(pgrep -P "$dummy")"; kill -9 "$dummy" 2>/dev/null; wait "$dummy" 2>/dev/null; [ -z "$child" ] || kill -9 $child 2>/dev/null; BG=""
+child="$(pgrep -P "$dummy")"; kill -9 "$dummy" 2>/dev/null; [ -z "$child" ] || kill -9 $child 2>/dev/null; BG=""
 
 echo
 echo "passed: $pass, failed: $fail"

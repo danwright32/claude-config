@@ -1820,8 +1820,9 @@ bash tools/load-window.sh --seconds 180 --workers 24 --spawners 12 --label "#162
 
 It takes this Mac's one load window turn (the merge helper's own queue, `hooks/lib/merge-turn.sh`,
 so a dead holder is passed over at once and a stuck one after `LOAD_WINDOW_HOLD_SECONDS`), waits
-until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, plus the merge
-helper's live turn tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
+until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, counting only a run
+with no suite above it, so a suite's own fixtures are not runs, plus the merge helper's live turn
+tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
 workers and the command for at most `--seconds` (180 at most), and stops early, also exit 75, if a
 merge or a full suite starts meanwhile. Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
@@ -1831,6 +1832,13 @@ tidied included, and on every read it asks again) and the
 suite pile notice name a window running or ended within 15 minutes, in ET. Every number in this
 paragraph is a setting, not a measurement. To see what is recorded and what a window would wait for:
 `bash tools/load-window.sh --status`.
+
+What a load reproduction usually finds is a wait with a short ceiling: a `date +%s` plus a few
+seconds, or a `sleep 0.1` loop of a few hundred ticks, which a loaded Mac reaches with nothing broken
+(#1577, #1620). A wait on a condition in a suite takes its ceiling from `hooks/lib/hang-wait.sh`
+instead (`hang_wait "<condition>"`, giving up at `HANG_S`), one number only a hang reaches, which
+`SUITE_HANG_SECONDS` lowers for one run when a control has to show a wait still fails. That ceiling
+is a setting, not a measurement.
 
 ### Measuring the section time budget's margin
 
@@ -2567,7 +2575,16 @@ when a reload fails, so a second notice would only repeat it, on every pull that
 Both baselines, the rule files and the mods, are taken at SessionStart, when the session loads them,
 so a change between starting a session and its first prompt is reported too (#1544); the first
 prompt takes them only for a session with no start record. A start that finds a record already
-there, which is what a resume or a compaction of the same session is, keeps it and says nothing.
+there, which is what a resume or a compaction of the same session is, says nothing and keeps the
+mods record. It re-takes the rule file record at a compaction or a resume, because Claude Code
+re-reads the rule files from disk at both: measured on the real engine with Claude Code 2.1.309 on
+2026-10-24 by `tests/test-rule-files-reload.sh` (a headless session with a scripted stand-in model,
+no paid call), which found the model sent the copy on disk at the compaction, and on a resume the
+copy on disk then with Claude Code's own note that it replaces the earlier one, while nothing
+re-reads them between prompts. Keeping the old record there would have had the next prompt say "the
+older copy is in this session's context" about a copy the session no longer held (#1580). A
+`/clear` starts a new session id, which has no record to keep. The interactive `/resume` picker is
+not offered in a headless session, so it is the one path not measured.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
 
