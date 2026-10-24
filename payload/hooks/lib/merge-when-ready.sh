@@ -306,8 +306,9 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # queued merges each waited 7 to 16 minutes for CI, then stopped on one "TLS handshake timeout" or
 # "connection reset by peer" reading the compare, and the wait was thrown away. So each read below
 # is a reader that sets its globals and returns 0 (answered), 1 (GitHub answered no, or failed in a
-# way nobody recognised) or 2 (the transport or GitHub's server failed, mt_gh_transient), and
-# with_retries asks again only on 2, READ_TRIES times in all with READ_WAIT between, through the
+# way nobody recognised), 2 (the transport or GitHub's server failed, mt_gh_transient) or
+# MT_SIGNIN_RC (GitHub refused the sign in, below), and with_retries asks again only on those last
+# two, READ_TRIES times in all with READ_WAIT between, through the
 # same injected sleep (L524). A read still failing after that stops exactly as before, naming the
 # last error: nothing merges on an unconfirmed read. A write (update-branch, the merge) is never
 # asked again here: its failure can be a refusal, and it is judged by reading the state it left.

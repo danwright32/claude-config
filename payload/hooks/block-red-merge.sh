@@ -337,7 +337,12 @@ if [ -n "$foreign" ]; then
       remote_tool="$MT_REMOTE_TOOL"
       if [ "$remote_rc" = 0 ]; then
         deny "$repo_flag merges through its own commit pinned tool ($remote_tool), not through $merge_route. From a checkout of $repo_flag, run: $(mt_pinned_how_for "$remote_tool" "${pr:-}") . It judges the checks against the commit at the head and hands GitHub that commit, and it confirms afterwards that the commit landed on the base its checks were run against. A plain merge skips all of that and looks identical afterwards. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>, which skips this rule only: the merge must still pin its commit."
-      elif [ "$remote_rc" = 2 ]; then
+      elif [ "$remote_rc" != 1 ]; then
+        # Anything but 0 (it carries one) and 1 (it carries none) is not knowing, whatever code a
+        # later reader adds (#1615): a refused sign in is said as one, and every other refuses below.
+        if [ "${MT_SIGNIN_REFUSALS:-0}" -gt 0 ] || [ "${MT_SIGNIN_NOTOKENS:-0}" -gt 0 ]; then
+          deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool): $(mt_signin_said "$remote_tool in $repo_flag" "$MT_REMOTE_ERR"). Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
+        fi
         deny "Refusing to merge: could not tell whether $repo_flag carries its own commit pinned merge tool ($remote_tool), because GitHub did not answer that question${MT_REMOTE_ERR:+ (gh said: $MT_REMOTE_ERR)}. Where one exists it is the only way this gate lets that repository merge, so not knowing is not the same as it being absent. Run the merge from a checkout of $repo_flag, where the file can be read from disk. Deliberate override: SKIP_MERGE_TOOL=1 <the same command>."
       fi
       ;;

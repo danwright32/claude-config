@@ -1615,6 +1615,16 @@ out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
 if denied "$out" && holds "$out" "HTTP 403"; then pass; else fail "#1096 a probe GitHub refused was not refused naming GitHub's answer: $out"; fi
 if [ "$(sleeps)" = 0 ]; then pass; else fail "#1096 a refusal (403) of the probe was asked again ($(sleeps) waits)"; fi
 rm -f "$f"
+# A probe whose sign in is refused every time is asked again, then refuses in its own words, never
+# falling through to an allow (#1615).
+NOAUTH='gh: Requires authentication (HTTP 401)'
+: > "$BRM_SLEEP_LOG"
+f=$(fails_file "$NOAUTH" "$NOAUTH" "$NOAUTH" "$NOAUTH" "$NOAUTH")
+out=$(GH_API_FAILS="$f" run_hook "$dir" "gh pr merge 7 --repo other/repo $PIN")
+if denied "$out" && says "$out" "could not tell whether other/repo" && holds "$out" "GitHub refused the sign in 3 times"; then pass
+else fail "#1615 a merge tool probe whose sign in was refused every time did not refuse as a refused sign in: $out"; fi
+if [ "$(sleeps)" = 2 ]; then pass; else fail "#1615 the refused probe was not tried three times in all ($(sleeps) waits)"; fi
+rm -f "$f"
 rm -rf "$dir"
 # The workflows probe, asked when the pull request has no checks at all. The tool rule is skipped so
 # the only probe is this one.

@@ -1406,10 +1406,12 @@ mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its defaul
   printf '%s' "$2"
 }
 
-# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient), up to
+# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient) or
+# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class), up to
 # $1 tries in all with $2 seconds between them (both the caller's settings, not measured), slept
 # through the command $3 so a test never waits on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
-# recognised: believed the first time, since asking again cannot turn a refusal into a yes) or 2. It
+# recognised: believed the first time, since asking again cannot turn a refusal into a yes), 2 or
+# MT_SIGNIN_RC. It
 # is called in this shell, never a subshell, so the globals it sets reach the caller.
 #
 # $4, when not empty, is a deadline in the shell's own SECONDS: a retry whose wait would end past it
