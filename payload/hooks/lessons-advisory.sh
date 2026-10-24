@@ -270,7 +270,10 @@ trig_background_work(){   # $1 = a file holding the added lines  $2 = the path
   trig_code_matches "$1" "$2" "${TRIG_RE1[1]}" && return 0
   [ "$(fh_lang "$2")" = shell ] || return 1
   is_test "$2" && return 1
-  trig_code_matches "$1" "$2" "$TRIG_SHELL_JOB_RE"
+  # An arithmetic expression, $(( x & mask )) or (( mode & bit )), is removed first: its & is a
+  # bitwise and, and its operands are bare names (found by the lessons review of this change). One
+  # nested in further parentheses is left, and fires.
+  grep -Eq -- "$TRIG_SHELL_JOB_RE" <<< "$(fh_code_only "$2" < "$1" | sed -E 's/\(\([^()]*\)\)//g')"
 }
 
 # An `&` that starts a job: not half of && or |&, not a redirection (>&2, 2>&1, &>file), and followed

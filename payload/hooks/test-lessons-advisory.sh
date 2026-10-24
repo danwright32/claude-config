@@ -638,7 +638,8 @@ printf '%s\n' 'fake_server > "$W/log" 2>&1 & pid=$!' 'wait "$pid"' > "$R/hooks/t
 printf '%s\n' 'build && ship || exit 1' 'echo "refused" >&2' 'run 2>&1 | tee "$log"' 'probe &>/dev/null' \
   'out="$(gh_as api "repos/$slug/actions/runs?status=success&event=pull_request&per_page=50" 2>&1)"' \
   "perl -e 'exit(\$st & 127 ? 128 + (\$st & 127) : \$st >> 8)'" \
-  'echo "start it with & and wait"  # then: cmd & wait' > "$R/hooks/plain.sh"
+  'echo "start it with & and wait"  # then: cmd & wait' \
+  'masked=$(( flags & MASK ))' '(( mode & owner_bit )) && echo set' > "$R/hooks/plain.sh"
 printf '%s\n' 'const masked = flags & MASK' > "$R/src/bits.ts"
 git -C "$R" add -A && git -C "$R" commit -qm not-jobs
 out=$(run_hook "git push" "$R")
