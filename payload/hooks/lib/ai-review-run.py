@@ -574,6 +574,19 @@ STARTED_BY = ("stream_event", "assistant", "result")
 OTHER_KEPT_CHARS = 20000
 
 
+def model_answered(ev):
+    """False for the events Claude Code writes when no request reached the model: an assistant
+    message from model `<synthetic>` (an API error it reports as a message, the same marker
+    tools/cache-usage.py skips) and a result marked is_error. Neither means the cache was written,
+    so neither may let the reviews behind it start as if it had (lessons review of #1619)."""
+    if ev.get("type") == "assistant":
+        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+        return msg.get("model") != "<synthetic>"
+    if ev.get("type") == "result":
+        return not ev.get("is_error")
+    return True
+
+
 def new_stream():
     return {"result": None, "events": 0, "other": []}
 
@@ -594,7 +607,7 @@ def read_event(raw, got, on_start):
         return
     got["events"] += 1
     kind = ev.get("type")
-    if kind in STARTED_BY:
+    if kind in STARTED_BY and model_answered(ev):
         on_start()
     if kind == "result":
         got["result"] = ev

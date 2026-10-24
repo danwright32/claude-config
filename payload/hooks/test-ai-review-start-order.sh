@@ -268,6 +268,12 @@ result("every line was read as an event", got["events"] == 6 and not got["other"
 got, seen = feed([init, whole, res])
 result("with no partial events, the whole answer marks it instead", seen[:1] == [1], seen)
 
+synthetic = json.dumps({"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "API Error: 401"}]}})
+failed = json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": "API Error: 401"})
+got, seen = feed([init, synthetic, failed])
+result("an error Claude Code writes when no request reached the model marks nothing", not seen, seen)
+result("though its result is still read", (got["result"] or {}).get("is_error") is True, got["result"])
+
 got, seen = feed(["", "   "])
 result("blank lines are nothing at all", got["events"] == 0 and not got["other"] and not seen, got)
 
@@ -276,7 +282,7 @@ result("a line that is not an event is kept as printed text", got["other"] == ["
 result("and marks nothing", not seen and got["result"] is None, seen)
 EOF
 )"
-tally "the stream" 8 "$stream_out"
+tally "the stream" 10 "$stream_out"
 
 # ===========================================================================
 # 4. The runner itself, end to end, against a fake claude that writes the stream. Each run gets its
