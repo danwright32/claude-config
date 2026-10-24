@@ -1707,8 +1707,11 @@ test('a stop Claude Code refuses leaves the job named as running', withDeps, asy
   expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
 })
 
-const notice = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>`
-const notify = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, id: string) => $.prompt.submit({ text: notice(id), origin: { kind: 'task-notification' }, wait: false } as never)
+// The shape measured from this Mac's transcripts (#1579): a status line only where Claude Code gives one.
+const notice = (id: string, status: string | null) =>
+  `<task-notification>\n<task-id>${id}</task-id>\n${status === null ? '' : `<status>${status}</status>\n`}<summary>Background command completed (exit code 0)</summary>\n</task-notification>`
+const notify = ($: { prompt: { submit: (e: never) => Promise<unknown> } }, id: string, status: string | null = 'completed') =>
+  $.prompt.submit({ text: notice(id, status), origin: { kind: 'task-notification' }, wait: false } as never)
 
 test('a job Claude Code reports as ended is no longer named, without waiting for the next look', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
@@ -1723,14 +1726,45 @@ test('a job Claude Code reports as ended is no longer named, without waiting for
   expect(w.extra[w.extra.length - 1]).toEqual([])
 })
 
-test('a report of a job whose process group still runs keeps it named (what it started outlived it)', withDeps, async ($, on) => {
+// #1579 (the #706 decision kept, its wording changed): a job Claude Code reports as completed whose
+// process group still runs stays named, as finished rather than running, since TaskStop then answers
+// "is not running (status: completed)" (measured on 2.1.309), so the remedy is its traced group.
+test('a report of a job whose process group still runs keeps it named, as finished, with a remedy that works (what it started outlived it)', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   world(on, { tail: 'serving\n', size: 8 })
   await start($)
   await $.tool.call({ tool: 'Bash', command: 'npm run dev &', run_in_background: true } as never)
   await notify($, 'job1')
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toContain(`${REMINDER} background job job1`)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(contextOf(next)).toBe(
+    'Claude Code has finished background job job1 (npm run dev &), but what it started still runs in its process group 501. TaskStop has no task to stop: end it with kill -TERM -501, or keep it with mcp__job-watcher__keep_job and a reason, before you finish.',
+  )
+  // Still on the status bar: something of it still runs.
+  expect((await jobsOf($)).length).toBe(1)
+})
+
+test('a report of a job naming no status, or one that has not ended, leaves it named as running', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'serving\n', size: 8 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev &', run_in_background: true } as never)
+  await notify($, 'job1', null)
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain(`${REMINDER} background job job1`)
+  await notify($, 'job1', 'running')
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain(`${REMINDER} background job job1`)
+})
+
+test('a report of a failed job whose group has ended drops it at once, and the watcher says nothing of it', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'error\n', size: 6 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  job.gone = true
+  await notify($, 'job1', 'failed')
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toBe('')
+  expect(await jobsOf($)).toEqual([])
 })
 
 // #706: the 2026-09-22 loop printed one line; a loop printing its error and then a retry line on

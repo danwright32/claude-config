@@ -76,10 +76,32 @@ describe('a background job, from what starting it said', () => {
 
 // #706: Claude Code's notice that a background job ended names it by id (seen in a session,
 // 2026-10-04), so the watcher can stop naming it at once rather than at its next look.
+// #1579: and says beside each id what it has done with it, which the watcher reads as it reads the
+// in flight list sent with a subagent's stop. Shapes measured from this Mac's transcripts on
+// 2026-10-24: one status a block, ahead of the summary; several ids in one block for the tasks a
+// previous session left, all with the one status; and no status at all for a Monitor event.
 describe('a task notification', () => {
-  test('names the jobs it reports on', () => {
+  test('names the jobs it reports on, each with the status Claude Code gives it', () => {
     const text = '<task-notification>\n<task-id>boljn4dt6</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/private/tmp/x/tasks/boljn4dt6.output</output-file>\n<status>completed</status>\n<summary>Background command "x" completed (exit code 0)</summary>\n</task-notification>'
-    expect(notifiedTasks(text)).toEqual(['boljn4dt6'])
+    expect(notifiedTasks(text)).toEqual([{ id: 'boljn4dt6', status: 'completed' }])
+  })
+  test('a block naming several jobs gives each the one status it carries', () => {
+    const text = '<task-notification>\n<task-id>bl0wsbafp</task-id>\n<task-id>bu00kg29i</task-id>\n<status>stopped</status>\n<summary>2 background shell command tasks did not finish before the previous session ended.</summary>\n</task-notification>'
+    expect(notifiedTasks(text)).toEqual([
+      { id: 'bl0wsbafp', status: 'stopped' },
+      { id: 'bu00kg29i', status: 'stopped' },
+    ])
+  })
+  test('a status is never carried from one block to the next', () => {
+    const text = '<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n</task-notification>\n<task-notification>\n<task-id>b2</task-id>\n<summary>Monitor event: "x"</summary>\n<event>line</event>\n</task-notification>'
+    expect(notifiedTasks(text)).toEqual([
+      { id: 'b1', status: 'failed' },
+      { id: 'b2', status: undefined },
+    ])
+  })
+  test('a Monitor event names its task with no status, since it has not ended', () => {
+    const text = '<task-notification>\n<task-id>bd9ekvlqc</task-id>\n<summary>Monitor event: "new pull request"</summary>\n<event>opened #12</event>\n</task-notification>'
+    expect(notifiedTasks(text)).toEqual([{ id: 'bd9ekvlqc', status: undefined }])
   })
   test('anything else names none', () => {
     expect(notifiedTasks('the task-id was boljn4dt6')).toEqual([])

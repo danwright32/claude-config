@@ -106,7 +106,21 @@ export const holdRefusal = (held: InFlight[]): string =>
 
 // The jobs a notice from Claude Code reports on, by id: "<task-id>X</task-id>" (seen in a session on
 // 2026-10-04). Only ever a prompt to look again; the watcher drops a job on its own evidence.
-export const notifiedTasks = (text: string): string[] => [...text.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)].map(m => m[1] as string)
+// #1579: each with the status its block gives it, read as the in flight list's status is (#1517).
+// Measured over this Mac's transcripts on 2026-10-24 (1,380 distinct blocks, 2.1.278 to 2.1.309):
+// every block closed, never two in one message and never two statuses in one; several ids share one
+// block, and its one status, only for the tasks a previous session left; a Monitor event carries no
+// status, so it gives none, never a finished one. A status is read only inside its own block.
+export type Notified = { id: string; status: string | undefined }
+const NOTIFICATION = /<task-notification>([\s\S]*?)<\/task-notification>/g
+export const notifiedTasks = (text: string): Notified[] => {
+  const blocks = [...text.matchAll(NOTIFICATION)].map(m => m[1] as string)
+  return (blocks.length ? blocks : [text]).flatMap(block => {
+    const statuses = [...block.matchAll(/<status>([^<]*)<\/status>/g)].map(m => (m[1] as string).trim())
+    const status = statuses.length === 1 && statuses[0] ? statuses[0] : undefined
+    return [...block.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)].map(m => ({ id: m[1] as string, status }))
+  })
+}
 
 // A line that reports a failure. A waiting loop is stopped by itself only when the line it keeps
 // repeating is one of these (decided with Dan, 2026-10-04): a loop repeating "waiting" may just be
