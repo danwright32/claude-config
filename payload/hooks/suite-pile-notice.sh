@@ -125,5 +125,12 @@ if [ -n "$kill" ]; then
   fi
 fi
 msg="${msg}${status_says} This is said once in this session, and again only if the pile clears for ${SYNC_SUITE_PILE_REARM}s and comes back."
+# A deliberate load window running or just ended is named beside it (claude-config#1618): on
+# 2026-10-23 one overlapped four builders' full suites and nothing said so. Read from
+# lib/load-window.sh's record, which tools/load-window.sh writes; a lib that will not load adds nothing.
+if . "$(dirname "${BASH_SOURCE[0]}")/lib/load-window.sh" 2>/dev/null; then
+  wn="$(load_window_note "$now")"
+  [ -z "$wn" ] || msg="${msg} ${wn}"
+fi
 printf '%s\n' "$msg"
 exit 0
