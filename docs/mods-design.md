@@ -476,6 +476,20 @@ plainest reading of the decisions above:
   drops it, as before; it never shows an ended row. The sighting behind the issue (b2kmw3u3u, PET,
   2026-10-22) was on the work MacBook, whose session record was not read, so which of a lingering
   process and an unreadable measure it was is not known.
+- **This conversation's own jobs (#1579).** The in flight list arrives only with a subagent's stop,
+  so a conversation that runs no agents never gets a reading of its own jobs from it. Claude Code's
+  word on those comes from the task notification instead: the `<status>` in each
+  `<task-notification>` block is recorded beside the block's ids as the job's reading, exactly as
+  the in flight list's is, and the job is then measured as before. Measured over this Mac's
+  transcripts on 2026-10-24 (1,380 distinct blocks, 2.1.278 to 2.1.309): ids shaped like a Bash
+  job's (which a Monitor's share) carried completed 668 times, failed 8, stopped 6 and killed 5,
+  and agents completed 589, failed 35, stopped 16 and killed 1; every block was closed and none held
+  two statuses; several ids shared one block, and
+  its one status, only in the notice of tasks a previous session left; and 49 Monitor events carried
+  no status at all, so a block without one says nothing of its job rather than finishing it. The
+  #706 decision that a reported job whose group still runs stays named is kept; only its wording
+  changed, from running with TaskStop to finished with `kill -TERM -<group>` (the open question on
+  the issue, taken as it proposed).
 - **Every result reminds.** A refused tool result carries no context, and one refused by a mod
   outside the watcher never reaches it, so the reminder about unkept jobs goes into such a result's
   row as the conversation keeps it: Claude reads it there, and Dan's screen draws the row as it was.

@@ -1273,12 +1273,17 @@ export const register: Register = on => {
   // Claude Code's notice that a job ended names it (#706): it is dropped then, on the watcher's own
   // evidence that its group has ended, rather than at the next minute's look. One whose shell ended
   // while what it started runs on is still running, and stays.
+  // #1579: the status the notice gives the job is what Claude Code says of it, recorded as a
+  // subagent's stop records its list's (#1517), so one it has finished whose group still runs is
+  // named as finished, with its group as the remedy, since TaskStop then answers "not running". A
+  // notice with no status (a Monitor event) says nothing of the job.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     if (e.origin.kind !== 'task-notification') return result
-    for (const id of notifiedTasks(e.text)) {
+    for (const { id, status } of notifiedTasks(e.text)) {
       const job = jobs.get(id)
       if (!job) continue
+      if (status !== undefined) watchOf(job).harness = status
       try {
         if (await ended($, job, watchOf(job), () => true)) await drop($, job)
       } catch (err) {
