@@ -1716,6 +1716,32 @@ It answers with three states and an exit code for each: PROVED (0), NOT PROVED (
 leaves the check passing for the reason it always did and that reads exactly like a check which
 cannot discriminate.
 
+### Reproducing a failure under load
+
+A check that fails only when the Mac is busy has to be reproduced busy before it is fixed (L681),
+and that load is felt by every session on the Mac. On 2026-10-23 a builder's hand written busy loops
+overlapped four other builders' full suites and other sessions' merges, the load average reached
+342, `merge-when-ready.sh 1606` stopped five times on GitHub reads, and nothing said a deliberate
+load was running (#1618). So a load reproduction runs inside ONE helper, never hand written loops:
+
+```bash
+bash tools/load-window.sh --seconds 180 --workers 24 --spawners 12 --label "#1620 repro" -- bash payload/hooks/test-pr-review.sh
+```
+
+It takes this Mac's one load window turn (the merge helper's own queue, `hooks/lib/merge-turn.sh`,
+so a dead holder is passed over at once and a stuck one after `LOAD_WINDOW_HOLD_SECONDS`), waits
+until no `merge-when-ready.sh` run and no full suite run is active (one `ps`, plus the merge
+helper's live turn tickets; up to `LOAD_WINDOW_WAIT_SECONDS`, then it refuses with exit 75), runs the
+workers and the command for at most `--seconds` (180 at most), and stops early, also exit 75, if a
+merge or a full suite starts meanwhile. Everything it starts is in its own process group with a
+watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
+recorded in `~/.claude/state/load-window/windows.tsv` (`hooks/lib/load-window.sh`), and
+`merge-when-ready.sh` (on every stop with a non zero exit, a merge whose branch could not then be
+tidied included, and on every read it asks again) and the
+suite pile notice name a window running or ended within 15 minutes, in ET. Every number in this
+paragraph is a setting, not a measurement. To see what is recorded and what a window would wait for:
+`bash tools/load-window.sh --status`.
+
 ### Measuring the section time budget's margin
 
 The sync suite fails a run whose sections add up past a fraction of the ceiling (#492). The margin

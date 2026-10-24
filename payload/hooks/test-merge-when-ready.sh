@@ -236,6 +236,9 @@ export GH_POLL_STATE_DIR="$WORKDIR/gh-poll"
 export CLAUDE_CODE_SESSION_ID="mwr-suite"
 # The per repository turn (claude-config#1515) is kept here, never in this Mac's own state.
 export MWR_TURN_DIR="$WORKDIR/turns"
+# And the record of deliberate load windows (claude-config#1618), so a real window on this Mac never
+# adds a sentence to what these sections read.
+export LOAD_WINDOW_DIR="$WORKDIR/load-window"
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
@@ -1731,6 +1734,46 @@ out="$(MWR_TURN_DIR="$WORKDIR/turns-not-a-folder" run 7 --squash)"; rc=$?
 check_eq "#1515 a turn folder that cannot be made does not stop a merge" "0" "$rc"
 check "#1515 but says it goes on without a turn, and where" "Could not take a turn to merge in acme/widget (could not make $WORKDIR/turns-not-a-folder/acme/widget)" "$out"
 check "#1515 and merges through the gates as before" "Merged #7 in acme/widget at ${OLD:0:7}" "$out"
+
+# =================================================================================================
+# 23. A deliberate load window is named beside a failure (claude-config#1618). On 2026-10-23 this
+#     helper stopped five times on GitHub reads at a load average of 342 while a builder's load
+#     reproduction ran, and nothing it said named that load. tools/load-window.sh records each
+#     window; a stop that is not a merge, and every read asked again, says the running or just ended
+#     one, in ET. A merge that lands says nothing about it.
+# =================================================================================================
+rm -rf "$LOAD_WINDOW_DIR"
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1618 with no window recorded, a refusal still stops" "1" "$rc"
+check_not "#1618 and says nothing about a load window" "load window" "$out"
+
+( . "$DIR/lib/load-window.sh" && load_window_begin "w1" 999900 1000080 4242 24 6 "repro of #1620" )
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1618 a refusal during a load window still stops" "1" "$rc"
+check "#1618 and names the window running, with its workers and label" "A deliberate load window is running on this Mac (tools/load-window.sh, pid 4242, 24 busy and 6 process launching workers, \"repro of #1620\")" "$out"
+check "#1618 in ET, on the helper's own clock" "until 08:48:00 ET at the latest" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1618 a read asked again during a window still merges" "0" "$rc"
+check "#1618 and the retry names the window" "GitHub refused the sign in reading pull request #7 (try 1 of 4" "$out"
+check "#1618 right beside it" "A deliberate load window is running on this Mac" "$out"
+
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1618 a green merge during a window" "0" "$rc"
+check_not "#1618 says nothing about it once merged" "load window" "$out"
+
+( . "$DIR/lib/load-window.sh" && load_window_finish "w1" 999990 "the command finished (exit 0)" )
+fresh "$OLD" 0 "$GREEN"
+printf 'Refusing to merge PR #7 at 1111111 until every area it touches has a passing verification run there.' > "$ST/verify-gate-deny"
+out="$(run 7 --squash)"; rc=$?
+check "#1618 a window that ended minutes before is named as ended" "A deliberate load window ran on this Mac from 08:45:00 ET to 08:46:30 ET" "$out"
 
 echo
 echo "passed: $pass, failed: $fail"
