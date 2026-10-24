@@ -486,7 +486,8 @@ done
 
 # Each reason the reader can give has a category of its own, so a new one arriving in
 # lib/shell-words.py with no category here fails this, rather than being counted as "other" for ever
-# (L96). The eight cases above are one per reason.
+# (L96). The first eight cases above are one per reason; the last two, a script run by its path and
+# one sourced (claude-config#1623), share the script-file reason under wrappers of their own.
 whys="$(python3 -c 'import re, sys; print(len(re.findall(r"^WHY_[A-Z_]+ = ", open(sys.argv[1]).read(), re.M)))' "$DIR/lib/shell-words.py")"
 check_eq "#1492 every reason the reader gives is one of the eight categories recorded above" "8" "$whys"
 
