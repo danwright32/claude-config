@@ -31,6 +31,7 @@ BIN="$WORK/bin"; mkdir -p "$BIN"
 cat > "$BIN/claude" <<'EOS'
 #!/usr/bin/env bash
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
+printf '%s' "${CLAUDE_CODE_PROMPT_CACHE_TTL:-unset}" > "$FAKE_LOG/ttl"
 n=$(( $(cat "$FAKE_LOG/n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_LOG/n"
 case "${FAKE_MODE:-good}" in
   good) printf 'L1\tdiff\nL2\tdesign\nL3\toperate\n' ;;
@@ -52,6 +53,9 @@ check "L2 is design" $'L2\tdesign' "$out"
 check "L3 is operate" $'L3\toperate' "$out"
 check "the reviewer runs with hooks off" "disableAllHooks" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
 check "the prompt carries the lesson lines themselves" "State the data volume" "$(tr '\036' '\n' < "$FAKE_LOG/args")"
+# Its batches run one after another, so each reads back the last one's prefix within five minutes;
+# the default one hour lifetime would write it at twice the input price instead (claude-config#1601).
+check "the reader caches its prompt for five minutes, not the one hour default" "TTL=5m" "CLAUDE_CODE_PROMPT_CACHE_TTL=$(cat "$FAKE_LOG/ttl" 2>/dev/null || echo 'not reached')"
 
 out="$(FAKE_MODE=missing_then_good run)"; rc=$?
 check_rc "a lesson missing from the first answer is asked again" 0 "$rc"

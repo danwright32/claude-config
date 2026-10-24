@@ -1722,6 +1722,9 @@ lessons, while sessions driven through Bash or an MCP server, which open files w
 tool, would have lost the lessons entirely. The conclusion drawn that day, that interactive sessions
 therefore keep every lesson, was REVERSED the next day (below); the headless runs hooks start still
 switch the global config off or say why they keep it, enforced by `hooks/test-headless-claude-config.sh` (#538).
+The same scan makes each headless launch choose its prompt cache lifetime (`DISABLE_PROMPT_CACHING=1`,
+`CLAUDE_CODE_PROMPT_CACHE_TTL=<lifetime>`, or a `# prompt-cache-ok: <reason>` comment), because on a
+subscription the default writes to the one hour cache at twice the input price (#1573, #1601).
 
 **Every lesson in every session was reversed on 2026-09-24, in favour of a core and a checkpoint**
 (milestone 17, plan record on #560, recorded here by #565). Dan's decisions: "Small core,

@@ -5487,6 +5487,7 @@ report_shared_effort_model(){
     why="no claude command was found to ask (looked for ${bin:-claude on PATH})"
   else
     # claude-mds-ok: excluded twice, by --bare here and CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 on the launch below; /model is answered locally and reads no rules.
+    # prompt-cache-ok: /model is answered locally and sends no request to the model, so nothing is cached at any lifetime.
     local args=(-p --bare --no-session-persistence)
     [ -n "$model" ] && args+=(--model "$model")
     args+=(--output-format stream-json --verbose /model)
