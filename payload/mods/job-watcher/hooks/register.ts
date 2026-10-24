@@ -44,7 +44,8 @@ type Watch = {
   /**
    * #1517: what Claude Code last said of the job in the in flight list sent with a subagent's stop:
    * its status there, or 'unlisted' when the stopping agent's own list left out a job that agent
-   * started. Undefined until a readable list says anything of it.
+   * started; or, for any job (#1579), the status its task notification gave it, whichever came
+   * last. Undefined until a readable list or a notification with a status says anything of it.
    */
   harness?: string
   /** What the last measure of its processes found while it had not ended: its group runs, or unknown. */
@@ -523,8 +524,8 @@ const measure = async ($: EngineInterface, job: Job, w: Watch, live: Live, quiet
   return 'unknown'
 }
 
-// #1517: Claude Code has finished the job by its own word (a list sent with a subagent's stop),
-// which alone never ends it: only the measure of its processes does. What it changes is the remedy.
+// #1517: Claude Code has finished the job by its own word (a list sent with a subagent's stop, or
+// the status in its task notification, #1579), which alone never ends it: only the measure of its processes does. What it changes is the remedy.
 // TaskStop of a task Claude Code has finished answers "is not running" or "No task found" (both
 // measured on 2.1.309), so a job whose shell ended while what it started runs on in its group is
 // ended by its traced group (L1011), never by TaskStop.
@@ -1272,13 +1273,18 @@ export const register: Register = on => {
 
   // Claude Code's notice that a job ended names it (#706): it is dropped then, on the watcher's own
   // evidence that its group has ended, rather than at the next minute's look. One whose shell ended
-  // while what it started runs on is still running, and stays.
+  // while what it started runs on in its group stays on the record, named as finished (below).
+  // #1579: the status the notice gives the job is what Claude Code says of it, recorded as a
+  // subagent's stop records its list's (#1517), so one it has finished whose group still runs is
+  // named as finished, with its group as the remedy, since TaskStop then answers "not running". A
+  // notice with no status (a Monitor event) says nothing of the job.
   on('prompt.submit', async ($, e, next) => {
     const result = await next(e)
     if (e.origin.kind !== 'task-notification') return result
-    for (const id of notifiedTasks(e.text)) {
+    for (const { id, status } of notifiedTasks(e.text)) {
       const job = jobs.get(id)
       if (!job) continue
+      if (status !== undefined) watchOf(job).harness = status
       try {
         if (await ended($, job, watchOf(job), () => true)) await drop($, job)
       } catch (err) {
