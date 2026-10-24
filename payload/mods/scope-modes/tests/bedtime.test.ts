@@ -10,6 +10,7 @@ import {
   goalAnswer,
   goalOptions,
   goalQuestion,
+  goalUnreadQuestion,
   NO_GOAL,
   groupQuestions,
   orderQuestions,
@@ -156,6 +157,13 @@ describe('the goal a session has set (#1242)', () => {
     expect(q).toMatch(/^The session in o\/r \("Fix the parser"\) has no \/goal set/)
     expect(q).toMatch(/does no work tonight/)
     expect(goalOptions()).toEqual([NO_GOAL, GO_TO_SLEEP])
+  })
+  // #1636: a goal that could not be read is never said as none.
+  test('a goal that could not be read is asked with why, and never says the session has no /goal set', () => {
+    const q = goalUnreadQuestion('this session', 'its transcript was not found')
+    expect(q).toMatch(/^The \/goal of this session could not be read, because its transcript was not found\. It may have one set/)
+    expect(q).toMatch(/does no work tonight unless you give it one here/)
+    expect(q).not.toMatch(/has no \/goal set/)
   })
   test('an answer typed is the goal; no work, an empty answer and going to sleep are none', () => {
     expect(goalAnswer('  Close #12 and #14 ')).toEqual({ goal: 'Close #12 and #14' })
