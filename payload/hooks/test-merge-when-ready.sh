@@ -294,10 +294,16 @@ elif [ -s "$ST/verify-gate-context" ]; then
 fi
 exit 0
 EOS
+cat > "$STUBS/closing-gate.sh" <<'EOS'
+#!/usr/bin/env bash
+cat >> "$ST/closing-gate-payloads"; printf '\n' >> "$ST/closing-gate-payloads"
+[ -s "$ST/closing-gate-deny" ] && jq -nc --arg r "$(cat "$ST/closing-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+exit 0
+EOS
 chmod +x "$STUBS"/*.sh
 export MWR_RED_GATE="$STUBS/red-gate.sh" MWR_REVIEW_GATE="$STUBS/review-gate.sh" MWR_REVIEW_LIB="$STUBS/pr-review.sh"
 export MWR_CHANGELOG_GATE="$STUBS/changelog-gate.sh" MWR_DESIGN_GATE="$STUBS/design-gate.sh"
-export MWR_VERIFY_GATE="$STUBS/verify-gate.sh"
+export MWR_VERIFY_GATE="$STUBS/verify-gate.sh" MWR_CLOSING_GATE="$STUBS/closing-gate.sh"
 
 # --- a checkout of acme/widget to run from ---------------------------------------------------------
 REPO="$(cd "$WORKDIR" && pwd -P)/widget"
@@ -770,6 +776,27 @@ out="$(run 7 --repo acme/widget --squash)"; rc=$?
 check_eq "#1529 a warn mode allow lets the merge through" "0" "$rc"
 check "#1529 the verification gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/verify-gate-payloads" 2>/dev/null)"
 check "#1529 and the warn verdict it hands back is shown in the log, not dropped" "would be refused in block mode" "$out"
+
+# The closing keyword gate (#1550) is asked once before the wait, since a body does not depend on the
+# head or its checks (L667), and again at the merge, about the exact pinned command, because the body
+# can be edited while this waits.
+fresh "$OLD" 0 "$PENDING"
+printf 'Refusing to merge PR #7: this body says otherwise about #4358.' > "$ST/closing-gate-deny"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1550 a body the closing keyword gate refuses stops the helper" "1" "$rc"
+check "#1550 in the gate's words, naming it" "check-closing-merge.sh refused the merge of #7 before any wait" "$out"
+check_eq "#1550 before any wait" "0" "$(count sleeps '.')"
+check_eq "#1550 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
+fresh "$OLD" 0 "$GREEN"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1550 with the closing keyword gate allowing it, the merge goes through" "0" "$rc"
+check "#1550 the closing keyword gate judges the exact pinned merge command" "gh pr merge 7 --repo acme/widget --squash --match-head-commit $OLD" "$(cat "$ST/closing-gate-payloads" 2>/dev/null)"
+fresh "$OLD" 0 "$PENDING"
+printf '%s\n' "printf '%s' '$GREEN' > \"\$ST/rollup\"; printf 'body now says #4358 stays open' > \"\$ST/closing-gate-deny\"" > "$ST/on-sleep"
+out="$(run 7 --repo acme/widget --squash)"; rc=$?
+check_eq "#1550 a body edited during the wait stops the merge" "1" "$rc"
+check "#1550 in the gate's words" "body now says #4358 stays open" "$out"
+check_eq "#1550 and nothing is merged" "0" "$(count gh-calls 'pr merge')"
 
 # THE CLASS (L30, L96): the gates this helper asks must be every gate a typed merge meets. The list
 # here is written by hand, so it is checked against the hooks block: every PreToolUse Bash hook that

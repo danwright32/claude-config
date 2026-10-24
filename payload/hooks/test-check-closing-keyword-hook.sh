@@ -74,6 +74,10 @@ run "#1478 a commit in bash -c"                $BLOCK "bash -c 'git commit -m \"
 run "#1478 a commit through timeout"           $BLOCK 'timeout 30 git commit -m "this does not fix #12"'
 run "#1188 control: a flag in front of pr view" $ALLOW 'gh -R o/x pr view 12 --json body --jq ".body" | grep "does not close #5"'
 
+# --- The sentences lib/closing-keyword.py learned with #1550 reach this hook too ---
+run "#1550 a conditional close"               $BLOCK 'gh pr create --title x --body "The parser change would also have closed #2584."'
+run "#1550 a close of an issue called part of" $BLOCK 'gh pr edit 12 --body "Part of #953. The next PR closes #953."'
+
 # --- A genuine close must sail through, or the hook is useless ---
 run "a real close"                    $ALLOW 'gh pr create --title x --body "Closes #897."'
 run "the safe phrasing"               $ALLOW 'gh pr create --title x --body "Part of #897, which stays open."'
