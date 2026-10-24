@@ -11,6 +11,15 @@ import { commandWrites } from '../hooks/writes.ts'
 
 type Entry = { method: 'commands' | 'writes' | 'git'; input: Record<string, unknown>; want: unknown }
 const ENTRIES: Entry[] = [
+  {"method":"commands","input":{"command":"python3 tools/fix.py notes.txt"},"want":[["python3","tools/fix.py","notes.txt"]]},
+  {"method":"git","input":{"words":["python3","tools/fix.py","notes.txt"]},"want":null},
+  {"method":"writes","input":{"command":"python3 tools/fix.py notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 script file","script":"tools/fix.py","path":"/repo/tools/fix.py","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}},
+  {"method":"commands","input":{"command":"python3 tools/fix.py --check other.txt"},"want":[["python3","tools/fix.py","--check","other.txt"]]},
+  {"method":"git","input":{"words":["python3","tools/fix.py","--check","other.txt"]},"want":null},
+  {"method":"writes","input":{"command":"python3 tools/fix.py --check other.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 script file","script":"tools/fix.py","path":"/repo/tools/fix.py","args":[{"word":"other.txt","path":"/repo/other.txt"}]}]}},
+  {"method":"commands","input":{"command":"./tidy.sh notes.txt"},"want":[["./tidy.sh","notes.txt"]]},
+  {"method":"git","input":{"words":["./tidy.sh","notes.txt"]},"want":null},
+  {"method":"writes","input":{"command":"./tidy.sh notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a script file run directly","script":"./tidy.sh","path":"/repo/tidy.sh","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}},
   {"method":"commands","input":{"command":"git checkout main -- notes.txt"},"want":[["git","checkout","main","--","notes.txt"]]},
   {"method":"git","input":{"words":["git","checkout","main","--","notes.txt"]},"want":{"sub":"checkout","args":["main","--","notes.txt"]}},
   {"method":"writes","input":{"command":"git checkout main -- notes.txt","cwd":"/repo","home":""},"want":{"files":[],"changes":[],"unnamed":[],"byGit":[{"word":"notes.txt","path":"/repo/notes.txt","does":"write","tree":true,"from":"main"}]}},
@@ -200,8 +209,8 @@ const ask = (e: Entry): unknown => {
 }
 
 describe("the collision guard's table of mod-kit answers", () => {
-  test('holds 179 entries', () => {
-    expect(ENTRIES.length).toBe(179)
+  test('holds 188 entries', () => {
+    expect(ENTRIES.length).toBe(188)
   })
   for (const e of ENTRIES) {
     test(`${e.method} ${JSON.stringify(e.input)}`, () => {

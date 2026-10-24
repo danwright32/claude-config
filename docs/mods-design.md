@@ -3033,7 +3033,7 @@ read no write from a script file's arguments.
   an address or another machine's path is none. It sits apart from `files`, `changes` and `unnamed`,
   as `byGit` does, so the guards that judge those are unchanged: no build allows script runs by
   design, and ask before saving, overnight and the collision guard were left as they are, the same
-  gap in each recorded as its own finding.
+  gap in each recorded as its own finding, closed by #1592 below.
 - **Judged as an Edit of the file.** What a script writes cannot be read before it runs, so each file
   it is handed is judged as a write of it: a screen file is held on an issue Dan has not answered for,
   a test, a file in no checkout (the scratchpad) and any file of no look kind run, a mod's `.ts` hook
@@ -3053,6 +3053,34 @@ read no write from a script file's arguments.
   through `npx` or a runner the reader does not take off. A script that only reads a screen file,
   such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
   no answer; run it on the scratchpad copy before the cp.
+
+### What #1592 changed, 2026-10-23
+
+The gap #1586 left in three other gates: `python3 tool.py ~/.claude/projects/<p>/memory/MEMORY.md`
+wrote lasting memory without ask before saving asking, `python3 x.py payload/LESSONS.md` passed
+scope modes' overnight LESSONS.md check, and a script handed a file another session was editing ran
+past the collision guard, because each read `files`, `changes`, `unnamed` and `byGit` but not `runs`.
+
+- **Each reads `runs` through the shared reader, no copy.** Every argument a script file is handed
+  is judged as an Edit of that file is, in each gate's own way and with its own approval flow:
+  - ask before saving (`rules.ts` `lastingFiles`) counts a lasting memory file handed to a script as
+    one the words name, and asks Dan in the dialog as for any Bash save. For good approves that
+    exact command in that folder (`saveKey` is the command and the folder for a Bash call), so the
+    same call sent again goes through once, as an Edit's does. The refusal says the file is handed
+    to a script, which may write it (`writesWhat`'s `handed`), never that it writes it (L11).
+  - the overnight check (`overnight.ts`) refuses a script handed LESSONS.md as `write to LESSONS.md`.
+    It has no approval: the call waits for the morning, as every other route to LESSONS.md does.
+  - the collision guard (`collide.ts` `judgedWrites`) judges each argument with a path as an edit:
+    asked of Sonnet when another open session edited it, and noted as this session's edit once it
+    ran. Noting it costs at most a later judgment that comes back Proceed when the script only read
+    the file, where leaving it out would hide a real clash (the same side the recorder takes).
+- **Not read, by design.** No build allows running scripts, so `writesRefusal` (`nobuild.ts`) still
+  ignores `runs`, now pinned by a test. Winding down's note of the files a call wrote
+  (`winddown.ts` `filesWritten`) does not read it either; whether a script's arguments should count
+  as this session's uncommitted work is recorded as its own finding.
+- **Known cost.** A script that only reads a lasting memory file (`python3 check.py CLAUDE.md`) is
+  now asked about, and one that only reads LESSONS.md is refused overnight. No documented routine in
+  the config hands one to a script, measured by a search of the skills, commands and agents.
 
 ### What #1576 changed, 2026-10-23
 

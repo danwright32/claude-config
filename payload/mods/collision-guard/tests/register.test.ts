@@ -139,6 +139,16 @@ const rec = (id: string, over: Record<string, unknown> = {}) => ({
 // What mod-kit's readers give for each request these tests make (commands, writes and git), each
 // measured from the reader itself (#712).
 const KIT = new Map<string, unknown>([
+  // #1592: a script file handed files as its arguments, measured from mod-kit's readers on 2026-10-23.
+  ["commands {\"command\":\"python3 tools/fix.py notes.txt\"}",[["python3","tools/fix.py","notes.txt"]]],
+  ["git {\"words\":[\"python3\",\"tools/fix.py\",\"notes.txt\"]}",null],
+  ["writes {\"command\":\"python3 tools/fix.py notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 script file","script":"tools/fix.py","path":"/repo/tools/fix.py","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}],
+  ["commands {\"command\":\"python3 tools/fix.py --check other.txt\"}",[["python3","tools/fix.py","--check","other.txt"]]],
+  ["git {\"words\":[\"python3\",\"tools/fix.py\",\"--check\",\"other.txt\"]}",null],
+  ["writes {\"command\":\"python3 tools/fix.py --check other.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a python3 script file","script":"tools/fix.py","path":"/repo/tools/fix.py","args":[{"word":"other.txt","path":"/repo/other.txt"}]}]}],
+  ["commands {\"command\":\"./tidy.sh notes.txt\"}",[["./tidy.sh","notes.txt"]]],
+  ["git {\"words\":[\"./tidy.sh\",\"notes.txt\"]}",null],
+  ["writes {\"command\":\"./tidy.sh notes.txt\",\"cwd\":\"/repo\",\"home\":\"\"}",{"files":[],"changes":[],"unnamed":[],"runs":[{"what":"a script file run directly","script":"./tidy.sh","path":"/repo/tidy.sh","args":[{"word":"notes.txt","path":"/repo/notes.txt"}]}]}],
   // #1136: what git itself changes, measured from mod-kit's readers on 2026-10-13.
   ["commands {\"command\":\"git checkout main -- notes.txt\"}",[["git","checkout","main","--","notes.txt"]]],
   ["git {\"words\":[\"git\",\"checkout\",\"main\",\"--\",\"notes.txt\"]}",{"sub":"checkout","args":["main","--","notes.txt"]}],
@@ -744,8 +754,34 @@ test('a read only command on a file another session edited is neither judged nor
   expect(w.edits).toEqual([])
 })
 
+// #1592: a script file handed a file another session edited ran unjudged, since mod-kit's reader
+// gives a script's arguments apart, in `runs` (#1586). Each is judged as an Edit of it is.
+test('a script file handed a file another open session edited is judged like an edit, and a Stop blocks it (#1592)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })], judge: '{"verdict":"Stop","reason":"They are rewriting the notes."}' })
+  const r = await $.tool.call(bash('python3 tools/fix.py notes.txt', 'sc1'))
+  expect(w.reached).not.toContain('Bash')
+  expect(w.prompts[0]?.prompt).toContain('/repo/notes.txt')
+  expect(w.prompts[0]?.prompt).toContain('python3 tools/fix.py notes.txt')
+  expect(refusal(r)).toBe('Blocked: Another session is working on notes.txt. They are rewriting the notes. Leave it to the other session, or ask Dan.')
+  expect(w.cards[0]?.toolUseId).toBe('sc1')
+  expect(w.sent[0]?.text).toBe('Another session wanted to edit "notes.txt" while you are working on it, so it was stopped. Nothing here was touched.')
+  expect(w.edits).toEqual([])
+})
+
+test('a script file handed that file, judged Proceed, runs once with the toast and is noted; handed another file it runs unjudged (#1592)', withDeps, async ($, on) => {
+  const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
+  await $.tool.call(bash('./tidy.sh notes.txt', 'sc2'))
+  expect(w.reached).toEqual(['Bash'])
+  expect(w.toasts).toContain('Checked with the other session: safe to edit notes.txt.')
+  expect(w.edits).toEqual(['/repo/notes.txt'])
+  await $.tool.call(bash('python3 tools/fix.py --check other.txt', 'sc3'))
+  expect(w.reached).toEqual(['Bash', 'Bash'])
+  expect(w.prompts.length).toBe(1)
+  expect(w.edits).toEqual(['/repo/notes.txt', '/repo/other.txt'])
+})
+
 // Decided (docs/mods-design.md, #654): a write the command reader cannot see is not guessed at.
-test('a script that writes the file is not seen, so it is neither judged nor noted', withDeps, async ($, on) => {
+test('a script whose own text writes the file, handed it as no argument, is not seen, so it is neither judged nor noted', withDeps, async ($, on) => {
   const w = world($, on, { open: [rec('them', { edits: ['/repo/notes.txt'] })] })
   await $.tool.call(bash(`python3 -c "open('notes.txt','a').write('x')"`))
   expect(w.reached).toContain('Bash')

@@ -456,8 +456,10 @@ export type ModKitWrites = {
    * its absolute path where its words name one, a cd and a variable the command set followed, or the
    * `folder` a pattern lands in; an option's value written `--name=value` is that value, and an
    * option, `-`, an address and another machine's path are none. `script` is the script's own word
-   * and `path` its file. Kept apart from `files`, `changes` and `unnamed`, as `byGit` is, so the guards
-   * that judge those are unchanged by it; the design round guard reads it.
+   * and `path` its file. Kept apart from `files`, `changes` and `unnamed`, as `byGit` is, so a guard
+   * reads it by choice: the design round guard, ask before saving, the collision guard and scope
+   * modes' overnight LESSONS.md check judge each argument as a write of that file (#1592); no build,
+   * which allows running scripts, and winding down's note of the files a call wrote do not read it.
    */
   runs?: { what: string; script: string; path?: string; args: { word: string; path?: string; folder?: string }[] }[]
 }
