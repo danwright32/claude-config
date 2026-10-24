@@ -988,12 +988,12 @@ export const commentOnlyChange = (before: string, after: string, jsx: boolean): 
 }
 
 /**
- * What a refusal says of a mod hook file a shell command writes (#1341): what the command leaves
- * cannot be read before it runs, so the whole file was judged, and the Edit tool, whose change the
- * guard reads first, lets a change to comments alone through unasked.
+ * What a refusal says of a mod hook file a shell command writes that could not be read before it ran
+ * (#1576): a shell write there is judged by what it leaves, against the file as it was, so a file that
+ * cannot be read first is judged whole.
  */
-export const shellUnread = (file: string): string =>
-  `The design round guard cannot read what a shell command leaves in ${file} before it runs, so it judged the whole file as a look change. A change that touches only comments there goes through unasked when it is made with the Edit tool, whose change the guard reads first: if that is all this change does, make it that way rather than asking Dan.`
+export const shellUnread = (file: string, why: string): string =>
+  `The design round guard could not read ${file} before the command ran (${why}), so it could not judge what the command changes there by what it leaves, and judged the whole file as a look change.`
 
 /**
  * What a refusal says of a file a script run is handed as its argument (#1586): what the script does
@@ -1238,6 +1238,35 @@ const readMod = (f: ModFile): ModRead | null => {
       }
     }
     return n
+  }
+  // The values an expression in [a, b) may give (#1576): a conditional `c ? x : y` gives x and y, each
+  // read so in turn, its test being what a value is only tested for; anything else, a function it
+  // makes included, gives itself. So `return c ? undefined : x` gives what `if (c) return undefined;
+  // return x` gives, and turning one into the other changes no value a mod draws.
+  const isQuestion = (j: number) => blank[j] === '?' && blank[j + 1] !== '.' && blank[j + 1] !== '?' && blank[j - 1] !== '?'
+  const branches = ([a, b]: Span): Span[] => {
+    const trimmed = (x: number, y: number): Span => [skipOn(x), skipBack(y - 1) + 1]
+    let q = -1
+    for (let j = a; j < b && q < 0; j++) {
+      if (mask[j]) continue
+      const c = blank[j]
+      if (c === '(' || c === '[' || c === '{') j = close.get(j) ?? b
+      else if (c === '=' && blank[j + 1] === '>') return [[a, b]]
+      else if (isQuestion(j)) q = j
+    }
+    if (q < 0) return [[a, b]]
+    let depth = 0
+    for (let j = q + 1; j < b; j++) {
+      if (mask[j]) continue
+      const c = blank[j]
+      if (c === '(' || c === '[' || c === '{') j = close.get(j) ?? b
+      else if (isQuestion(j)) depth++
+      else if (c === ':') {
+        if (depth > 0) depth--
+        else return [...branches(trimmed(q + 1, j)), ...branches(trimmed(j + 1, b))]
+      }
+    }
+    return [[a, b]]
   }
   // The names each parameter or pattern in [a, b) binds, by position: one for a plain name, every name
   // a destructured one binds, its type and default aside.
@@ -1606,7 +1635,7 @@ const readMod = (f: ModFile): ModRead | null => {
   const returns = (k: number): Span[] => {
     const g = fns[k] as Fn
     if (g.returns) return g.returns
-    if (blank[g.body] !== '{') g.returns = [[g.body, g.to]]
+    if (blank[g.body] !== '{') g.returns = branches([g.body, g.to])
     else {
       g.returns = []
       for (const m of blank.slice(g.body, g.to).matchAll(/(?:^|[^\w$.])return\b/g)) {
@@ -1616,7 +1645,7 @@ const readMod = (f: ModFile): ModRead | null => {
         const v = at + (/^[ \t]*/.exec(blank.slice(at, at + 200)) as RegExpExecArray)[0].length
         if (blank[v] === '\n' || blank[v] === ';' || blank[v] === '}') continue
         const end = exprEnd(v)
-        if (end > v) g.returns.push([v, end])
+        if (end > v) g.returns.push(...branches([v, end]))
       }
     }
     return g.returns
@@ -1814,7 +1843,8 @@ export const drawnParts = (files: readonly ModFile[], name: string): string[] | 
   for (const s of r.statements) if (s.name !== undefined && drawn.has(`${name}\n${s.name}`)) parts.set(`${s.from}:${s.to}`, [s.from, s.to])
   const followed = new Map(extra.get(name) ?? [])
   for (const key of parts.keys()) followed.delete(key)
-  return [...[...parts.values()].map(u => r.code(u)), ...[...followed.values()].map(s => r.cutCode(s))].sort()
+  // A followed value given the same way twice (two returns of `undefined`) is one value (#1576).
+  return [...[...parts.values()].map(u => r.code(u)), ...new Set([...followed.values()].map(s => r.cutCode(s)))].sort()
 }
 
 /**

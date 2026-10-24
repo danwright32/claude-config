@@ -32,6 +32,9 @@ MERGE="gh pr me""rge"
 # The override is the hook's own, and a test that inherited it from the shell would pass every case
 # for the wrong reason.
 unset ALLOW_UNVERIFIED_MERGE
+# merge-when-ready.sh's read budget for the gates it asks (claude-config#1615): a case that wants it
+# sets it.
+unset MT_GATE_READ_BUDGET_SECONDS
 # A sleep record that does not exist, so the notice hook is never silenced by this Mac really being
 # asleep while the suite runs (lib/sleep.sh).
 export CLAUDE_SLEEP_RECORD="/nonexistent/sleep-record.json"
@@ -208,6 +211,48 @@ setup '{}'
 printf 'Get "https://api.github.com/x": net/http: TLS handshake timeout\n' > "$FAKE/comments.json.flaky"
 out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
 expect_allow "a read that fails once inside the budget is asked again and answers" "$out"
+
+echo "require-verification-run: a refused sign in is asked again, and said as one (claude-config#1615)"
+# GitHub answering 401 to a request that carried no token, as it did to merge-when-ready.sh 1606 three
+# times at a load average of 342 on 2026-10-23, is asked again; one that outlasts the tries refuses in
+# its own words, never as GitHub being unreadable (L11), and never allows.
+SIGNIN='HTTP 401: Requires authentication (https://api.github.com/graphql)'
+setup '{}'
+printf '%s\n' "$SIGNIN" > "$FAKE/areas.json.flaky"
+: > "$WORK/slept"
+out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "an areas.json read whose sign in is refused once is asked again and answers" "$out"
+[ "$(grep -c . "$WORK/slept")" = 1 ] && pass || fail "the refused sign in was not waited for once: $(cat "$WORK/slept")"
+setup '{}'
+printf '%s\n' "$SIGNIN" > "$FAKE/view.json.fail"
+out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a pull request read refused on every try" "$out" "GitHub refused the sign in 3 times" "ALLOW_UNVERIFIED_MERGE=1"
+case "$out" in *"could not be read"*) fail "a refused sign in was said as GitHub unreadable: $out" ;; *) pass ;; esac
+setup '{}'
+printf '%s\n' "$SIGNIN" > "$FAKE/areas.json.fail"
+out="$(VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "areas.json refused on every try" "$out" "GitHub refused the sign in 3 times reading .claude/verification/areas.json at the base commit"
+
+echo "require-verification-run: asked by merge-when-ready.sh, it takes the helper's read budget (claude-config#1615)"
+# On 2026-10-23, at a load average of 342, its own 15 seconds were spent before it read areas.json, twice. Asked by
+# merge-when-ready.sh it runs under no harness timeout, so the helper names a longer budget: a retry
+# 20 seconds out is made inside 60 and refused inside the default 15. Either way nothing allows on a
+# read that never answered.
+setup '{}'
+printf 'Get "https://api.github.com/x": net/http: TLS handshake timeout\n' > "$FAKE/comments.json.flaky"
+: > "$WORK/slept"
+out="$(VR_READ_RETRY_SECONDS=20 VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a retry past its own 15 seconds is not made" "$out" "budget"
+setup '{}'
+printf 'Get "https://api.github.com/x": net/http: TLS handshake timeout\n' > "$FAKE/comments.json.flaky"
+: > "$WORK/slept"
+out="$(MT_GATE_READ_BUDGET_SECONDS=60 VR_READ_RETRY_SECONDS=20 VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_allow "the same retry is made inside the budget merge-when-ready.sh hands it" "$out"
+[ "$(cat "$WORK/slept")" = 20 ] && pass || fail "the retry inside the helper's budget was not waited for once: $(cat "$WORK/slept")"
+setup '{}'
+printf 'Get "https://api.github.com/x": net/http: TLS handshake timeout\n' > "$FAKE/view.json.fail"
+out="$(MT_GATE_READ_BUDGET_SECONDS=60 VR_READ_RETRY_SECONDS=20 VR_SLEEP="$WORK/sleep-stub" run_hook "$MERGE 7 --squash --match-head-commit $HEAD")"
+expect_deny "a read that never answers still refuses inside the helper's budget" "$out" "ALLOW_UNVERIFIED_MERGE=1"
 
 echo "require-verification-run: every refusal, in block mode"
 setup '{}'
