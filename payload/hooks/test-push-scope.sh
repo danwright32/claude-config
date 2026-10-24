@@ -1265,6 +1265,30 @@ for c in "echo \"bash -c 'git push'\"" "git commit -m \"eval git push\"" "grep -
 done
 got="$(ps_add_scope "echo \"bash -c 'git add -A'\" && git commit -m x && git push" | awk 'NR == 1')"
 [ "$got" = INDEX ] && check "#1478 control: an add only echoed takes nothing" ok || check "#1478 control: an add only echoed takes nothing" "scope [$got]"
+# A script run by its path or sourced is unreadable (claude-config#1623), but unlike a wrapper it
+# holds no records of its own: it is the command itself. So a gate whose action is that script, a
+# repo's merge tool run as `./scripts/merge-when-green.sh 7`, still finds it, as it did before the
+# script was reported unreadable; a wrapper around it is still a container and not a second action.
+is_merge_tool() { case "$1" in *merge-when-green.sh*) return 0 ;; esac; return 1; }
+for c in "./scripts/merge-when-green.sh 7" "cd $WT && scripts/merge-when-green.sh 7" "~/bin/merge-when-green.sh 7"; do
+  n="$(ps__action_records "$c" is_merge_tool | tr -cd '\036' | wc -c | tr -d ' ')"
+  [ "$n" = 1 ] && check "#1623 a merge tool run by its path is still one action: $c" ok \
+    || check "#1623 a merge tool run by its path is still one action: $c" "found $n"
+done
+n="$(ps__action_records "bash -c './scripts/merge-when-green.sh 7'" is_merge_tool | tr -cd '\036' | wc -c | tr -d ' ')"
+[ "$n" = 1 ] && check "#1623 inside bash -c it is one action, the wrapper none" ok \
+  || check "#1623 inside bash -c it is one action, the wrapper none" "found $n"
+ps_unreadable "./build.sh && git push" && [ "$PS_UNREAD_WRAPPER" = direct ] \
+  && check "#1623 a script run by its path is unreadable, as a direct run" ok \
+  || check "#1623 a script run by its path is unreadable, as a direct run" "wrapper [$PS_UNREAD_WRAPPER]"
+ps_unreadable ". ./env.sh && git push" && [ "$PS_UNREAD_WRAPPER" = source ] \
+  && check "#1623 a sourced file is unreadable, as a source" ok \
+  || check "#1623 a sourced file is unreadable, as a source" "wrapper [$PS_UNREAD_WRAPPER]"
+ps_unreadable "/usr/bin/git push && /opt/homebrew/bin/gh pr list" \
+  && check "#1623 control: git and gh by their paths are read, not scripts" "wrapper [$PS_UNREAD_WRAPPER]" \
+  || check "#1623 control: git and gh by their paths are read, not scripts" ok
+[ "$(asked ps_is_git_push "/opt/homebrew/bin/git push")" = yes ] && check "#1623 control: a push by git's path is a push" ok \
+  || check "#1623 control: a push by git's path is a push" "not seen"
 rm -rf "$WR"
 
 echo "passed: $pass, failed: $fail"
