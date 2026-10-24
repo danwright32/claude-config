@@ -232,6 +232,15 @@ POLL_MAX="$(num_or "${MWR_POLL_MAX_SECONDS:-}" "$GHP_MAX_DEFAULT")"; [ "$POLL_MA
 interval="$POLL"
 # shellcheck source=merge-turn.sh
 . "$MWR_LIB/merge-turn.sh" 2>/dev/null || { echo "merge-when-ready: $MWR_LIB/merge-turn.sh is missing, so the repository's turn to merge cannot be taken. Nothing was merged." >&2; exit 1; }
+# A DELIBERATE LOAD WINDOW is named beside every failure (claude-config#1618). On 2026-10-23 this
+# helper stopped five times on GitHub reads at a load average of 342 while a builder's load
+# reproduction ran, and nothing it said named that load. tools/load-window.sh records each window in
+# lib/load-window.sh's record, and load_note says the running or just ended one, or nothing. Missing,
+# it says so on a failure rather than staying quiet, since quiet reads as no window (L90).
+# shellcheck source=load-window.sh
+if ! . "$MWR_LIB/load-window.sh" 2>/dev/null; then
+  load_window_note(){ printf '%s is missing, so whether a deliberate load window overlapped this run is unknown.' "$MWR_LIB/load-window.sh"; }
+fi
 # A place in the line is given up however this run ends: a stop, a signal, or the end of the
 # script. Only a kill that cannot be caught leaves it, and the next run passes it over (see
 # merge-turn.sh). The signals exit, so the EXIT trap runs for them too.
@@ -258,7 +267,8 @@ say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
 # tidies the merged branch's agent worktree once its own line is said. The tidy is never able to
 # change the exit: a merge that landed is reported as landed whatever the tidy found.
 merged_now=""
-stop(){ say "$2"; [ -z "$merged_now" ] || { merged_now=""; tidy_worktree || true; }; exit "$1"; }
+load_note(){ local n; n="$(load_window_note "$(now)")"; [ -z "$n" ] || say "$n"; }
+stop(){ say "$2"; [ "$1" = 0 ] || load_note; [ -z "$merged_now" ] || { merged_now=""; tidy_worktree || true; }; exit "$1"; }
 
 account=""
 gh_as(){
@@ -334,6 +344,7 @@ announce_retry(){
   else
     say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
   fi
+  load_note
 }
 # The loop itself is mt_retry_read, shared with block-red-merge.sh's own reads (claude-config#1081).
 # A reader answering 5 was refused for GitHub's rate limit (claude-config#1482, lib/gh-poll.sh's
