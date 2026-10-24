@@ -1297,6 +1297,19 @@ exit 75, when that is under the budget plus `PR_REVIEW_REPORT_RATE_MARGIN` (1000
 into a checkout: a final head the checkout lacks is fetched into a scratch repository that borrows
 the checkout's objects read only. `--no-github` asks GitHub nothing.
 
+Each finding is placed at the line its `Quote:` names in the file at the reviewed head (#1357), and
+one that cannot be placed keeps its cited number with a `[review harness: not placed, <why>, ...]`
+mark. How often that happens, and why, is `python3 ~/.claude/hooks/lib/ai-review-placement.py
+[--since WHEN]` on each Mac (#1368): reviews, findings, the placed share, the not placed ones by
+reason, and how the placed ones were placed, from the `placement=` value each review records. On
+the personal MacBook, over the 646 reviews started from 2026-10-20 02:56 ET to 2026-10-24 11:04 ET,
+13 of 323 findings were not placed: 9 quoted a phrase of one long line rather than the whole of it,
+and 4 cited a path that was not a file (a `..`, a stray folder in front, a bare file name). So a
+quote matching no whole line, as given or without the diff's leading `+` or `-`, is now looked for
+inside lines when it is 20 characters or longer, and a path that is not a file is tried as the one
+changed file it fits, kept only when the quote then places it. Read the report again a few days
+after this reaches each Mac, to see how often each fallback fires and what is still not placed.
+
 #### Scoring the review itself
 
 `tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:
