@@ -44,7 +44,11 @@ fi
 if ps_reader_missing python3; then
   refuse "REFUSED (monitor-action-gate.sh): python3 is not on PATH, so this gate cannot read whether the Monitor's command merges, pushes or commits, and $WHY. Install python3. $DO"
 fi
-parsed="$(ps_parse_payload "$payload" raw 2>/dev/null)" || parsed=""
+# A payload holding those words that cannot be read is refused like any other command this cannot
+# read (lessons review at 310f5f0): passing it is the route this gate closes. A Monitor with no command
+# at all (a WebSocket) reads as empty and is allowed.
+parsed="$(ps_parse_payload "$payload" raw 2>/dev/null)" \
+  || refuse "REFUSED (monitor-action-gate.sh): the Monitor's hook payload names a merge, push or commit and could not be read, and $WHY. $DO"
 cmd="${parsed%%$'\x1f'*}"
 [ -n "$cmd" ] || exit 0
 

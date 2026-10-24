@@ -39,16 +39,22 @@ case "$payload" in *'"agent_id"'*) ;; *) exit 0 ;; esac
 case "$payload" in *git*|*no-verify-approval*) ;; *) exit 0 ;; esac
 
 refuse() { printf '%s\n' "$1" >&2; exit 2; }
-SKIP_WORDS_WHY="this agent's command names a way to skip the repository's git hooks, and"
 
-# The payload and the skip are both read with python3. Without it nothing here can tell a skip from
-# a mention, so an agent's command naming a skip's words is refused, saying what is missing (L490).
-if ! . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || ps_reader_missing python3; then
-  case "$payload" in
-    *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
-      refuse "REFUSED (no-verify-gate.sh): $SKIP_WORDS_WHY python3 (or lib/push-scope.sh) is missing, so the gate cannot read whether it really skips them. Install python3, or run the command without the skip." ;;
+# EVERY path that cannot read the command judges the same words the reading path acts on: a skip's
+# words, the approval script, and the approvals folder. Three lessons review rounds on #1587 each found
+# a degraded path judging fewer things than the normal one, so they share this one list (L370).
+refuse_unread() {   # $1 = the text to look in, $2 = why it could not be read
+  case "$1" in
+    *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*|*.claude-no-verify-approvals*)
+      refuse "REFUSED (no-verify-gate.sh): this agent's command names a way to skip the repository's git hooks, or the main session's approvals for that, and $2, so the gate cannot tell what it does. Run the command without it." ;;
   esac
   exit 0
+}
+
+# The payload and the skip are both read with python3. Without it nothing here can tell a skip from
+# a mention, so an agent's command naming those words is refused, saying what is missing (L490).
+if ! . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null || ps_reader_missing python3; then
+  refuse_unread "$payload" "python3 (or lib/push-scope.sh) is missing; install python3"
 fi
 
 parsed="$(printf '%s' "$payload" | python3 -c '
@@ -64,13 +70,7 @@ cmd = ti.get("command") if isinstance(ti, dict) else ""
 sys.stdout.write(str(d.get("agent_id") or "") + "\x1f" + (cmd if isinstance(cmd, str) else ""))
 ' 2>/dev/null)"; prc=$?
 [ "$prc" -eq 4 ] && exit 0
-if [ "$prc" -ne 0 ]; then
-  case "$payload" in
-    *no-verify*|*hooksPath*|*hookspath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
-      refuse "REFUSED (no-verify-gate.sh): $SKIP_WORDS_WHY the gate could not read the hook payload to tell whether it really skips them. Run the command without the skip." ;;
-  esac
-  exit 0
-fi
+[ "$prc" -eq 0 ] || refuse_unread "$payload" "the gate could not read the hook payload"
 agent="${parsed%%$'\x1f'*}"
 cmd="${parsed#*$'\x1f'}"
 [ -n "$agent" ] || agent="(no id given)"
@@ -98,12 +98,7 @@ found="$(printf '%s' "$cmd" | python3 "$HOOK_DIR/lib/agent-overrides.py" skips 2
 case "$rc" in
   1) exit 0 ;;
   0) ;;
-  *)
-    case "$cmd" in
-      *no-verify*|*hooksPath*|*hookspath*|*HooksPath*|*HUSKY*|*LEFTHOOK*|*SIMPLE_GIT_HOOKS*)
-        refuse "REFUSED (no-verify-gate.sh): agent $agent's command names a way to skip the repository's git hooks, and lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'}), so the gate cannot tell whether it really skips them. Run the command without the skip." ;;
-    esac
-    exit 0 ;;
+  *) refuse_unread "$cmd" "lib/agent-overrides.py could not read it (exit $rc: ${found##*$'\n'})" ;;
 esac
 
 # An approval the main session gave this agent, still in force: the approval script's own reading of

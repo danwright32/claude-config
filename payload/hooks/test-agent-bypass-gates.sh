@@ -190,6 +190,10 @@ mon 'gh pr checks 2679 --watch'
 allowed "watching checks is allowed"
 run_hook "$MON_GATE" '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://x"}},"hook_event_name":"PreToolUse"}'
 allowed "a WebSocket Monitor has no command and is allowed"
+# Every path that cannot read the command judges what the reading path would (lessons review at
+# 310f5f0, and the two rounds before it, each found a degraded path judging less).
+run_hook "$MON_GATE" '{"tool_name":"Monitor","tool_input":{"command":"until gh pr merge 7; do sleep 60; done"'
+refused "a Monitor payload naming a merge that cannot be parsed is refused"
 
 # ---------------------------------------------------------------------------------------------
 echo "handback-claims-gate.sh: a report's 'no overrides' against the agent's own commands"
@@ -318,6 +322,12 @@ refused "no-verify-gate.sh refuses an agent's skip it cannot read"
 says "naming python3" "python3"
 run_nopy "$NV_GATE" "$(bash_payload 'git commit -m wip' a1b2c3d4)"
 allowed "and lets a command naming no skip through"
+run_nopy "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\n' > ~/.claude-no-verify-approvals/a1b2c3d4" a1b2c3d4)"
+refused "no-verify-gate.sh with no python3 still refuses an agent writing an approval"
+run_nopy "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 x" a1b2c3d4)"
+refused "and an agent running the approval"
+run_hook "$NV_GATE" '{"agent_id":"a1b2c3d4","tool_name":"Bash","tool_input":{"command":"printf x > ~/.claude-no-verify-approvals/a1b2c3d4 # git"'
+refused "an agent payload that cannot be parsed and names the approvals folder is refused"
 run_nopy "$MON_GATE" "$(bash_payload 'until gh pr merge 7; do sleep 60; done' '' Monitor)"
 refused "monitor-action-gate.sh refuses a merge it cannot read"
 says "naming python3" "python3"
