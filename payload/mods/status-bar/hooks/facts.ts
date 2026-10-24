@@ -3,7 +3,7 @@ import type { StatusBarMode } from '../types/index.d.ts'
 // The status bar's judgments, pure so each is tested on its own (#610, docs/mods-design.md
 // "Status bar (#610)"). The wording follows the design rounds' renderings, the jobs' as #784
 // reworded them: "PR #636 checks failing", "1 job running", "dev server running 2h 14m",
-// "2 unpushed commits", "ctx 74%".
+// "2 unpushed commits", "context 74%".
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -11,7 +11,7 @@ const DAY = 24 * HOUR
 
 /** Context above this share of the window shows the Compact row (the spec's "about 70%"). */
 export const CONTEXT_LOOK = 70
-/** The Compact row also shows this close to the prompt cache going cold, and the toast fires. */
+/** The Compact row's cache line shows this close to the prompt cache going cold, and the toast fires. */
 export const CACHE_WARN_MS = 5 * MIN
 
 /** A length of time as the band shows it: 14m, 2h 14m, 1d 3h; under a minute <1m. */
@@ -136,13 +136,65 @@ export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | 
 }
 
 /**
- * Whether the Compact row shows: context above 70%, or the cache within 5 minutes of going cold. Not
- * the cache while a main turn runs (`isWorking`): each request it makes keeps the cache warm, and
- * Dan has nothing to do about a cache Claude is about to use again (#697).
+ * The context size, in tokens, from which compacting costs less than letting the cache go cold, so
+ * the cache row offers Compact beside "send any message" (#1596). Below it the row offers only the
+ * message: compacting a small conversation costs more than the cold re-read it avoids.
+ *
+ * The arithmetic, in units of the base input price, at Anthropic's LIST prices (Opus 4.5: input $5,
+ * output $25, one hour cache write $10, cache read $0.50 per million tokens; Sonnet 4.5 the same
+ * multiples at $3, $15, $6, $0.30), so it holds for any model priced at those multiples: output 5x,
+ * a one hour cache write 2x, a cache read 0.1x. With T the context now, S the summary a compaction
+ * writes and T2 the context the first request after it carries (system prompt and tools included,
+ * which no compaction removes):
+ *
+ *   left to go cold, the next request writes T again:          2 T
+ *   compacted, the call reads T warm and writes S, and the
+ *   next request writes T2:                                    0.1 T + 5 S + 2 T2
+ *
+ * so compacting saves once 1.9 T > 5 S + 2 T2, that is T > (5 S + 2 T2) / 1.9.
+ *
+ * Measured on 2026-10-23 over the 31 compactions in this Mac's transcripts that could be paired
+ * with their summary and the request after (S estimated as the summary's characters / 4): S median
+ * 3,207 and p90 4,454; T2 median 110,061 and p90 127,565; the break even per compaction median
+ * 126,838, p90 142,718, max 182,651 (23 of the 31 were main sessions, p90 142,718). 150,000 is past
+ * the break even of 21 of those 23. It leans high on purpose (L648): an offer that saves nothing
+ * costs a summary call and the detail compacting drops, while one left out costs only the
+ * difference, and /compact and the context row above 70% are still there.
  */
-export const compactDue = (f: { contextPercent: number | undefined; cacheExpiresAt: number | null; now: number; isWorking: boolean }): boolean => {
-  if ((f.contextPercent ?? 0) > CONTEXT_LOOK) return true
-  if (f.isWorking || f.cacheExpiresAt === null) return false
-  const left = f.cacheExpiresAt - f.now
-  return left > 0 && left <= CACHE_WARN_MS
+export const COMPACT_SAVES_TOKENS = 150_000
+
+/** A part of the Compact row: text, or the Compact button with what to type where a click cannot land. */
+export type CompactPart = LookPart | { button: 'compact'; label: 'Compact'; instead: LookPart[] }
+const COMPACT_BUTTON: CompactPart = { button: 'compact', label: 'Compact', instead: [{ text: 'type: ', dim: true }, { text: '/compact' }] }
+
+/**
+ * The Compact row's lines, each saying why it shows (#1596, Dan 2026-10-23: "ctx 18% [ Compact ]"
+ * read as the context being full). Empty when it does not show.
+ * - Context above 70%: "context 82%" and Compact.
+ * - The cache within 5 minutes of going cold: "cache goes cold in 4m: send any message to keep it
+ *   warm", since any message reads the cache and starts its hour again; ", or [ Compact ]" only from
+ *   COMPACT_SAVES_TOKENS. Not while a main turn runs (`isWorking`): each request it makes keeps the
+ *   cache warm, and Dan has nothing to do about a cache Claude is about to use again (#697).
+ * - Both: the context line with Compact, then the cache line, so each reason is said once and each
+ *   line fits an 80 column band.
+ */
+export const compactLines = (f: {
+  contextPercent: number | undefined
+  contextTokens: number | undefined
+  cacheExpiresAt: number | null
+  now: number
+  isWorking: boolean
+}): CompactPart[][] => {
+  const percent = f.contextPercent
+  const byContext = percent !== undefined && percent > CONTEXT_LOOK
+  const left = f.cacheExpiresAt === null ? 0 : f.cacheExpiresAt - f.now
+  const byCache = !f.isWorking && left > 0 && left <= CACHE_WARN_MS
+  const lines: CompactPart[][] = []
+  if (byContext) lines.push([{ text: `context ${Math.round(percent)}% `, color: AMBER }, COMPACT_BUTTON])
+  if (byCache) {
+    const cold = `cache goes cold in ${span(left)}: send any message to keep it warm`
+    const saves = !byContext && (f.contextTokens ?? 0) >= COMPACT_SAVES_TOKENS
+    lines.push(saves ? [{ text: `${cold}, or `, color: AMBER }, COMPACT_BUTTON] : [{ text: cold, color: AMBER }])
+  }
+  return lines
 }

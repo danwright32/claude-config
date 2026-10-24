@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { BOOT_TIME_TOLERANCE_S, bootOf, bootSessionOf, endSaid, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
 import { BOOT_FIXTURES, SESSION_FIXTURES, SLEEP_FIXTURES } from './sleep-fixtures.ts'
 

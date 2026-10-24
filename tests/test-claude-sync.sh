@@ -12623,6 +12623,10 @@ cp "$ULREPO/payload/hooks/lib/unmanaged-skills.sh" "$ULC/payload/hooks/lib/unman
 if out_ul2="$(CLAUDE_HOME="$ULH" SYNC_REPO="$ULR" SYNC_NO_GIT=1 SYNC_NO_NOTIFY=1 bash "$ULC/claude-sync" push 2>&1)"; then rc_ul2=0; else rc_ul2=$?; fi
 dbg "push with the list: $out_ul2"
 check "#415 with the list beside it the same copy sends" "[ '$rc_ul2' -eq 0 ]"
+# And this copy has no work names scanner beside it either (#1568): the send goes ahead, as a copy
+# run outside its checkout must, and says out loud that it was not scanned.
+check "#1568 a copy with no work names scanner beside it says its send was not scanned" \
+  "line_has \"\$out_ul2\" 'NOT scanned for work organisation names' 'work-names\.py'"
 check "#415 a skill of my own is carried"       "[ -f '$ULR/payload/skills/mine/SKILL.md' ]"
 check "#415 and the platform's still is not"     "[ ! -e '$ULR/payload/skills/synced' ]"
 # A home with no skills anywhere does not need the list, and several sections run a copy of the tool

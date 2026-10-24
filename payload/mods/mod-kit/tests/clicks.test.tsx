@@ -1,4 +1,5 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type { ModKitBandRow, ModKitPane } from '../types/index.d.ts'
 import { appleTerminalTrusted, clicksReach, mostRows } from '../hooks/band.ts'

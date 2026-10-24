@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { answerOf, contentsPath, entriesOf, fileOf, fromBase64, isRepoName, putBody, shaAfterPut, toBase64, unseenWhy } from '../hooks/github.ts'
 
 // The readings repository's answers as gh gives them (#750). Each stderr below is copied from a run

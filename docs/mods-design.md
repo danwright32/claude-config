@@ -313,7 +313,7 @@ not recorded, so another session editing that same file is not judged against it
 | Account | The session's own account, the one its limits belong to (#815, Dan 2026-10-05: "the status bar must always name the right account for the session"), superseding the picker's "whatever the login file names now". The mod reads the login file at session start into the facts file, as the account room reads it at its start, so the bar and the rename dialog name the same account; a Switch made in another session no longer changes this one's. A facts file written before #815 falls back to the login file as it stands; one whose start read failed says "account unknown". The account room's nickname for the account replaces the name and org when one is set (live check, 2026-10-05). |
 | Colour | The status line is all grey, but for a limit's share past its threshold: amber over 70% on the 5 hour limit or over 85% on the weekly, red at 100%, the number alone, judged on the share as shown (Dan, 2026-10-05, picked over amber alone and red alone); the needs-a-look items in the band are amber; the Compact button is Claude Code's own bold white (colour round, design rounds). A deliberate exception to standing rule 1: a running PR, a running job, a job kept on purpose and a scope mode label are amber though nothing needs doing yet, because Dan chose to keep work in flight in view (status round 2, colour round, kept job round) and a mode changes what Claude will do; the scope mode label shows even when nothing else is in the band (scope mode round). |
 | Where it is drawn | The always-shown facts stay on the classic status line script below the prompt, fed by the mod. The amber items are drawn by the mod in the band above the prompt, only while something needs a look or a scope mode is on (picker, after the probe below; scope mode round). |
-| The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). |
+| The band | Two rows when both show: the amber line, then the Compact row carrying the context figure, so context shows once. Either row alone otherwise (design round). The Compact row is two lines when it shows for context and the cache at once (#1596). |
 | Order of the amber line | A scope mode (NO BUILD, WINDING DOWN, AWAY) leads it in bold, since it changes what Claude will do (scope mode round). Then most urgent first: a failing or running PR, a running job, unpushed commits, so a narrow window cuts off what can wait longest (design round) |
 | Compact button | Claude Code's default button, `[ Compact ]` in bold white, pressed by clicking or ctrl+x tab then Enter (design round, styles copied from a live probe) |
 
@@ -350,9 +350,20 @@ the spec rather than chosen afresh, and open to Dan changing:
   tool result, with the agent, how long, and the last tool call it started and whether it returned.
 - A PR whose refresh failed keeps what was last read with its age: "PR #649 checks running, as of
   12m ago" (the spec's "stale with its age"). One that last read as passing stays hidden.
-- The Compact row reads "ctx 74%" in amber, then `[ Compact ]`, whether it showed for context or
-  for the cache. A compaction that does not run says why in a toast: "Compact did not run: ...".
-- The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes."
+- The Compact row says why it shows, in amber (#1596, Dan on 2026-10-23, of "ctx 18% [ Compact ]",
+  which he read as the context being full: "Doesn't the cache refresh when I send a message. That's
+  what it should tell me to do."). For context above 70% it reads "context 82%", then `[ Compact ]`.
+  For the cache 5 minutes from cold it reads "cache goes cold in 4m: send any message to keep it
+  warm", since any message's request reads the cache and starts its hour again (the status line's
+  clock moves with it, as the mod's tests hold), and adds ", or `[ Compact ]`" only from 150,000
+  tokens of context, the size from which compacting costs less than the cold re-read it avoids
+  (measured from this Mac's compactions at list prices; the arithmetic is on `COMPACT_SAVES_TOKENS`
+  in `hooks/facts.ts`, and it is judged in tokens, never a share of the window). Both at once are
+  two lines, the context's with Compact, then the cache's, each under 80 columns. A compaction that
+  does not run says why in a toast: "Compact did not run: ...". Built from the issue's wording; Dan
+  chose to skip a design round for it.
+- The toast 5 minutes before the cache goes cold reads "The prompt cache goes cold in 5 minutes:
+  send any message to keep it warm."
 - The cache's hour is measured from the last main request, as the spec says, not from the end of
   the turn (#697): each request of a turn starts it again, a subagent's does not (it carries its
   own conversation). While a main turn runs neither the toast nor a Compact row for the cache
@@ -2994,7 +3005,70 @@ content is unchanged from what it wrote, passes; any hand edit to such a file is
   with a script that wrote nothing): no write is read from a script file's arguments, so the same is
   true of any screen file a script is handed. That is older than this change, which never runs its
   seal check for such a call (a test says so) and so neither relies on it nor widens it; it is
-  recorded as its own finding.
+  recorded as its own finding. #1586 closed it, below.
+
+### What #1586 changed, 2026-10-23
+
+Measured live on 2026-10-23 by the #1524 builder: a script file run with a screen file named only
+as its argument (`python3 some/script.py <checkout>/app/page.tsx`, make-settled.py handed a page under
+`docs/design`) was not held on a branch with no answer for its issue, because mod-kit's write reader
+read no write from a script file's arguments.
+
+- **Read in mod-kit, kept apart.** The write reader gives `runs` (mod-kit's `writes.ts`): each script
+  file a command runs, an interpreter's script operand (`python3 gen.py`, `bash x.sh`, `node
+  build.mjs`; never inline code, a script on standard input, `python -m` or awk's and sed's program
+  file) or a script run by its own name (ending in a script language's extension, or named by `./`
+  or `../`), with every word after it that may name a file, as a path where its words name one, a cd
+  and a variable the command set followed. An option is none, `--name=value` gives its value, and
+  an address or another machine's path is none. It sits apart from `files`, `changes` and `unnamed`,
+  as `byGit` does, so the guards that judge those are unchanged: no build allows script runs by
+  design, and ask before saving, overnight and the collision guard were left as they are, the same
+  gap in each recorded as its own finding.
+- **Judged as an Edit of the file.** What a script writes cannot be read before it runs, so each file
+  it is handed is judged as a write of it: a screen file is held on an issue Dan has not answered for,
+  a test, a file in no checkout (the scratchpad) and any file of no look kind run, a mod's `.ts` hook
+  file that draws nothing runs and is read again after (#1296), and the guard's own record is
+  refused. The refusal says the guard cannot read what the script does with the file (rules.ts
+  `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
+- **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
+  seal checked, since there is no text to check before it runs, so make-settled.py run straight into
+  `docs/design` is held on an issue with no answer. The skill now writes it into the session's
+  scratchpad and copies it in with a cp alone, which #1524 reads before it runs and passes while
+  sealed, and the refusal says so (rules.ts `SCRIPT_RECORD`). Judging such a run after it ran and
+  undoing an unsealed result, as #1296 does for a mod's `.ts` file, was the other way, and was not
+  taken: the cp needs no undo, and the skill's one command becomes two.
+- **What stays unread.** A file a script writes that no argument names (a path in its own text), a
+  folder it is handed (`python3 codemod.py app/`), a module run with `python -m`, and a tool run
+  through `npx` or a runner the reader does not take off. A script that only reads a screen file,
+  such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
+  no answer; run it on the scratchpad copy before the cp.
+
+### What #1576 changed, 2026-10-23
+
+Building #1483, an Edit to scope modes' `nobuild.ts` was refused as a look change, and the builder
+suspected words in a code comment quoting Dan's "picker answer". Then the #1524 builder found a shell
+edit of this guard's own `register.ts` held while the same change by the Edit tool passed.
+
+- **Reproduced first, and comments were not why.** Run against the real files, the #1483 edit turned
+  `return inNotes(path) ? undefined : { what: ... }` into an if returning `undefined`, a second for
+  the lesson approval, and `return { what: ... }`. No build's refusal is drawn on its blocked card,
+  so the returned value is followed (#1296), and it was read whole: its `? undefined :` changed
+  though the words drawn did not. Now a returned conditional, or an arrow's, is read as each value it
+  may return, its test being what a value is only tested for, and a value drawn the same way twice is
+  one value (rules.ts `drawnParts`). The real #1483 change now draws nothing new; changing the words,
+  or a branch to draw something else, still does. Words in comments already drew nothing (#1341).
+- **The shell route agrees with the Edit route.** A shell write to a mod's hook file, `.ts`, `.tsx`
+  or `.jsx`, one that already draws included, now runs and is read again once it ran (afterShell),
+  as #1296 did only for a `.ts` file that drew nothing (Dan, 2026-10-17: judge after, and undo). A
+  `.ts` file is judged by `drawsChange` and a `.tsx` or `.jsx` file by the rule an Edit of it is
+  (`nothingShown`), so a logic or comment change stands and a change to what the mod draws, on an
+  issue Dan has not answered for, is put back with its text kept first, and waits on him. This
+  replaces #1341's hold before the run, whose refusal told Claude to use the Edit tool. A file that
+  cannot be read before the command runs is held whole, saying so (rules.ts `shellUnread`). An app's
+  own screen file is still held before a shell write runs.
+- **What judging after costs.** The command's other effects stand when a file is put back, and a put
+  back can fail or meet a file changed again since, each said and never called undone, as #1296
+  records.
 
 ## Picker manners (#615), built 2026-10-04
 

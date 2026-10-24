@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -51,11 +52,31 @@ None yet.
 """
 
 FAKE_SERVE = r'''
-import os, signal, sys
+import os, signal, socket, sys
 d = os.environ["FAKE_DIR"]
 with open(os.path.join(d, "serve.pid"), "w") as f:
     f.write(str(os.getpid()))
 signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+held = []
+# FAKE_CONNECT: "local" reaches this machine only, by TCP over 127.0.0.1 and UDP over ::1;
+# "outside" opens a TCP connection to 192.0.2.1 (TEST-NET-1, reserved for documentation, so no
+# real host ever answers) and holds it open while serve runs.
+if os.environ.get("FAKE_CONNECT") == "local":
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    c = socket.create_connection(srv.getsockname())
+    u = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    u.connect(("::1", 9))
+    held += [srv, c, u]
+elif os.environ.get("FAKE_CONNECT") == "outside":
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setblocking(False)
+    try:
+        s.connect(("192.0.2.1", 9))
+    except BlockingIOError:
+        pass
+    held.append(s)
 with open(os.path.join(d, "ready.fifo"), "w") as f:
     f.write("ready")
 while True:
@@ -128,6 +149,7 @@ class RunFixture(unittest.TestCase):
             "areas": [{"name": "invoices", "guide": ".claude/verification/guides/invoices.md",
                        "owns": ["src/**"]}],
         }
+        doc.update(self.doc_over)
         files = {
             ".claude/verification/areas.json": json.dumps(doc, indent=2),
             ".claude/verification/guides/invoices.md": GUIDE,
@@ -143,9 +165,12 @@ class RunFixture(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", "fixture")
         return git(self.repo, "rev-parse", "HEAD")
 
+    extra_env = {}
+    doc_over = {}
+
     def env(self, scale="1", deadline="1"):
         return dict(os.environ, VERIFICATION_HOME=self.home, FAKE_DIR=self.fake,
-                    VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline)
+                    VERIFICATION_TIME_SCALE=scale, VERIFICATION_DEADLINE_SCALE=deadline, **self.extra_env)
 
     def cli(self, *args):
         return [sys.executable, os.path.join(HERE, "run_session.py")] + list(args)
@@ -276,7 +301,14 @@ class RunSessionTests(RunFixture):
         self.assertTrue(live_members(rec["serve_pgid"]), "serve should outlive its supervisor")
         s = self.run_cli("stop", rid)
         self.assertEqual(s.returncode, 0, s.stderr)
-        self.assert_fully_stopped(self.receipt(rid), "recovered")
+        rec = self.receipt(rid)
+        self.assert_fully_stopped(rec, "recovered")
+        # The monitor died with its supervisor, so the run cannot show what it reached, and the
+        # report stream it left behind is stopped by the process group it recorded.
+        self.assertEqual(rec["egress"]["verdict"], "unmeasured", rec["egress"])
+        self.assertIn("supervisor", rec["egress"]["why"])
+        if rec.get("egress_monitor_pgid"):
+            self.assertEqual(live_members(rec["egress_monitor_pgid"]), [], "the report stream survived")
 
     def test_a_second_run_of_the_same_project_is_refused_while_one_is_live(self):
         sha = self.commit()
@@ -322,6 +354,154 @@ class RunSessionTests(RunFixture):
         r = self.start(git(self.repo, "rev-parse", "HEAD"))
         self.assertEqual(r.returncode, 3)
         self.assertIn("areas-missing", r.stderr)
+
+
+def sandbox_unavailable():
+    """Why this machine cannot measure egress, or None when it can (L411: detect, never assume)."""
+    if sys.platform != "darwin":
+        return "this is %s, and the monitor is macOS's sandbox-exec" % sys.platform
+    if not os.path.exists("/usr/bin/sandbox-exec"):
+        return "/usr/bin/sandbox-exec is not on this Mac"
+    r = subprocess.run(["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return "sandbox-exec cannot apply a profile here (exit %d: %s)" % (r.returncode, r.stderr.strip()[:200])
+    return None
+
+
+NO_SANDBOX = sandbox_unavailable()
+MEASURED = unittest.skipIf(NO_SANDBOX, "UNMEASURED, not passed: %s" % NO_SANDBOX)
+
+FAKE_LOG_SILENT = r'''#!/bin/sh
+# A report stream that starts and then never reports anything: the canary is never seen.
+echo "Filtering the log data using the fake predicate"
+exec sleep 3600
+'''
+
+
+class EgressTests(RunFixture):
+    """The egress monitor (claude-config#1571): a run's receipt says what serve and the drive helper
+    reached outside this machine, judged against areas.json's egress.allow, and the merge check in
+    block mode passes only a clean verdict. The fixtures reach 127.0.0.1 and ::1, or 192.0.2.1,
+    which is TEST-NET-1: reserved for documentation, so no real host is ever contacted."""
+
+    def run_to_receipt(self, connect, drive_connect=None, wait_for=None):
+        self.extra_env = dict(self.extra_env, FAKE_CONNECT=connect)
+        drive = None
+        if drive_connect:
+            drive = ('python3 -c "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM);'
+                     ' s.connect((\'%s\', 9))"' % drive_connect)
+        sha = self.commit(**({"drive": drive} if drive else {}))
+        r = self.start(sha)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["receipt_id"]
+        d = self.run_cli("drive", rid, "--area", "invoices", "--", "open", "/invoices")
+        self.assertEqual(d.returncode, 0, d.stderr)
+        if wait_for:
+            self.wait_for_named(rid, wait_for)
+        s = self.run_cli("stop", rid)
+        self.assertEqual(s.returncode, 0, s.stderr)
+        return rid, sha, self.receipt(rid)
+
+    def wait_for_named(self, rid, address):
+        """Wait on the condition, the monitor naming the address, never a fixed time (L290)."""
+        path = os.path.join(self.home, "receipts", rid, "egress.jsonl")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            try:
+                with open(path) as f:
+                    if address in f.read():
+                        return
+            except FileNotFoundError:
+                pass
+            time.sleep(0.05)
+        self.fail("the monitor never named %s in %s" % (address, path))
+
+    def merge_verdict(self, rid, sha):
+        """The merge check's judgment in block mode, over this run's real receipt, through the same
+        readers the hook uses (verification.py)."""
+        import merge_check as mc
+        import test_merge_check as tmc
+        f = tmc.Fixture(tempfile.mkdtemp(dir=self.tmp.name))
+        f.home = self.home
+        f.view["headRefOid"] = sha
+        f.pin = "required " + sha
+        f.comments = [tmc.comment(tmc.record(sha=sha, rid=rid))]
+        f.save()
+        out = mc.verdict(f.dir, home=self.home)
+        self.assertEqual(out["mode"], "block")
+        return out
+
+    @MEASURED
+    def test_a_serve_that_reaches_only_this_machine_is_clean(self):
+        rid, sha, rec = self.run_to_receipt("local")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "clean", egress)
+        self.assertEqual(egress["destinations"], [], egress)
+        self.assertEqual(egress["allowed_hosts"], ["127.0.0.1", "localhost", "::1"])
+        self.assertIn("no connection", egress["why"])
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual((out["problems"], out["decision"]), ([], "allow"))
+
+    @MEASURED
+    def test_a_serve_that_reaches_an_outside_host_is_not_clean_and_names_it(self):
+        rid, sha, rec = self.run_to_receipt("outside", wait_for="192.0.2.1")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertIn("192.0.2.1", egress["why"])
+        named = [d for d in egress["destinations"] if d["address"] == "192.0.2.1"]
+        self.assertEqual(len(named), 1, egress)
+        self.assertEqual((named[0]["port"], named[0]["allowed"]), (9, False))
+        self.assertGreaterEqual(named[0]["reports"], 1)
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-not-clean"])
+        self.assertIn("192.0.2.1", out["text"])
+
+    @MEASURED
+    def test_an_allowed_outside_host_is_clean(self):
+        self.doc_over = {"egress": {"allow": ["192.0.2.1"]}}
+        rid, sha, rec = self.run_to_receipt("outside", wait_for="192.0.2.1")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "clean", egress)
+        self.assertEqual([(d["address"], d["allowed"]) for d in egress["destinations"]], [("192.0.2.1", True)])
+
+    @MEASURED
+    def test_the_drive_helper_is_measured_too(self):
+        rid, sha, rec = self.run_to_receipt("local", drive_connect="192.0.2.2")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "not-clean", egress)
+        self.assertIn("port 9", egress["why"])
+
+    def test_a_monitor_that_cannot_start_leaves_unmeasured(self):
+        self.extra_env = {"VERIFICATION_EGRESS_LOG": "/nonexistent/log"}
+        rid, sha, rec = self.run_to_receipt("local")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "unmeasured", egress)
+        self.assertTrue(egress["why"])
+        if not NO_SANDBOX:
+            self.assertIn("/nonexistent/log", egress["why"])
+        self.assertEqual(rec["stopped_by"], "stop", "a monitor that cannot start must not stop the run")
+        out = self.merge_verdict(rid, sha)
+        self.assertEqual(out["decision"], "refuse")
+        self.assertEqual(sorted({p["kind"] for p in out["problems"]}), ["egress-unmeasured"])
+
+    @MEASURED
+    def test_a_report_stream_that_never_shows_the_canary_leaves_unmeasured(self):
+        fake_log = os.path.join(self.fake, "log")
+        with open(fake_log, "w") as f:
+            f.write(FAKE_LOG_SILENT)
+        os.chmod(fake_log, 0o755)
+        self.extra_env = {"VERIFICATION_EGRESS_LOG": fake_log}
+        self.doc_over = {"timeouts": {"ready_s": 20, "ready_interval_s": 1, "max_run_s": 3600, "stop_s": 10,
+                                      "egress_s": 2}}
+        rid, sha, rec = self.run_to_receipt("local")
+        egress = rec["egress"]
+        self.assertEqual(egress["verdict"], "unmeasured", egress)
+        self.assertIn("canary", egress["why"])
+        self.assertIsNone(rec.get("egress_sandbox"), "serve must not run under a profile nothing reads")
+        if rec.get("egress_monitor_pgid"):
+            self.assertEqual(live_members(rec["egress_monitor_pgid"]), [])
 
 
 # The real functions, taken before any test patches them, so an injected failure can let every

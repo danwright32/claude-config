@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { Register } from 'claude-code'
 
 // #707: a mod that answers a tool call itself (manual steps, is it live, handoff, the job watcher,

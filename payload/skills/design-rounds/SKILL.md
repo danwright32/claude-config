@@ -353,14 +353,23 @@ WRITTEN by `make-settled.py` from the round's own builder, the captured chrome a
 committed fixture, never assembled by hand from the switcher:
 
 ```bash
-python3 ~/.claude/skills/design-rounds/make-settled.py settled.json docs/design/<name>.html
+python3 ~/.claude/skills/design-rounds/make-settled.py settled.json <this session's scratchpad>/<name>.html
+```
+
+then, as a command of its own:
+
+```bash
+cp <this session's scratchpad>/<name>.html docs/design/<name>.html
 ```
 
 Its last line is a seal, the SHA-256 of everything above it (claude-config#1524). While the file is
 exactly what make-settled.py wrote, the design round guard lets it be committed under `docs/design`
 on any issue without asking Dan again, written with the Write tool, copied in whole by a cp alone, or
-put back by a git checkout or restore alone. Never edit the file by hand: an edit breaks the seal and
-is held as a look change. Change `settled.json` and run make-settled.py again instead.
+put back by a git checkout or restore alone. make-settled.py is written into the scratchpad first
+because what a script writes cannot be read before it runs: run straight into `docs/design`, it is
+held as a look change on an issue Dan has not answered for (claude-config#1586), while the cp alone
+is read before it runs and goes through. Never edit the file by hand: an edit breaks the seal and is
+held as a look change. Change `settled.json` and run make-settled.py again instead.
 
 `settled.json` names the chrome, builder, styles and fixture as the rounds did, then every frame
 (`id`, `title`, `width`, an optional fixed `height`, and the `variant` its builder is handed), every

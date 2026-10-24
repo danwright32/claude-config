@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { CLAIM_MS, claimEntry, closeMatchIn, declinedEntry, declinedIn, filedEntry, issueLinkIn, judgeProposal, proposalPath } from '../hooks/proposals.ts'
 
 // #1389: an overnight proposal is offered and filed once. On 2026-10-20 an Overture session was

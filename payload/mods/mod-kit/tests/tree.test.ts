@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { workingTree } from '../hooks/tree.ts'
 
 // The git working tree a path sits in, found on the disk by its .git entry (#726): ask before

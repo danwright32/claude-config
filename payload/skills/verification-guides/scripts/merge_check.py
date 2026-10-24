@@ -363,9 +363,9 @@ class _Verdict:
         verdict = egress.get("verdict")
         why = egress.get("why") or "no reason recorded"
         if verdict in (None, "unmeasured"):
-            self.add("egress-unmeasured", name, "receipt %s records egress as unmeasured (%s). Nothing measures egress"
-                     " for a verification run yet, so no receipt can show a clean verdict, and block mode refuses"
-                     " every merge until an egress monitor exists" % (rid, why))
+            self.add("egress-unmeasured", name, "receipt %s records egress as unmeasured (%s), so the run cannot show"
+                     " the served app reached nothing outside the project's egress.allow. Run the area again on a Mac"
+                     " where the egress monitor starts" % (rid, why))
         elif verdict != "clean":
             self.add("egress-not-clean", name, "receipt %s records egress as %s, not clean: %s" % (rid, verdict, why))
         stamp, source = r.get("build_stamp"), r.get("build_stamp_source")
