@@ -3043,6 +3043,33 @@ read no write from a script file's arguments.
   such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
   no answer; run it on the scratchpad copy before the cp.
 
+### What #1576 changed, 2026-10-23
+
+Building #1483, an Edit to scope modes' `nobuild.ts` was refused as a look change, and the builder
+suspected words in a code comment quoting Dan's "picker answer". Then the #1524 builder found a shell
+edit of this guard's own `register.ts` held while the same change by the Edit tool passed.
+
+- **Reproduced first, and comments were not why.** Run against the real files, the #1483 edit turned
+  `return inNotes(path) ? undefined : { what: ... }` into an if returning `undefined`, a second for
+  the lesson approval, and `return { what: ... }`. No build's refusal is drawn on its blocked card,
+  so the returned value is followed (#1296), and it was read whole: its `? undefined :` changed
+  though the words drawn did not. Now a returned conditional, or an arrow's, is read as each value it
+  may return, its test being what a value is only tested for, and a value drawn the same way twice is
+  one value (rules.ts `drawnParts`). The real #1483 change now draws nothing new; changing the words,
+  or a branch to draw something else, still does. Words in comments already drew nothing (#1341).
+- **The shell route agrees with the Edit route.** A shell write to a mod's hook file, `.ts`, `.tsx`
+  or `.jsx`, one that already draws included, now runs and is read again once it ran (afterShell),
+  as #1296 did only for a `.ts` file that drew nothing (Dan, 2026-10-17: judge after, and undo). A
+  `.ts` file is judged by `drawsChange` and a `.tsx` or `.jsx` file by the rule an Edit of it is
+  (`nothingShown`), so a logic or comment change stands and a change to what the mod draws, on an
+  issue Dan has not answered for, is put back with its text kept first, and waits on him. This
+  replaces #1341's hold before the run, whose refusal told Claude to use the Edit tool. A file that
+  cannot be read before the command runs is held whole, saying so (rules.ts `shellUnread`). An app's
+  own screen file is still held before a shell write runs.
+- **What judging after costs.** The command's other effects stand when a file is put back, and a put
+  back can fail or meet a file changed again since, each said and never called undone, as #1296
+  records.
+
 ## Picker manners (#615), built 2026-10-04
 
 **Claude Code's own question dialog asks every question, for good** (decided with Dan on
