@@ -153,6 +153,34 @@ ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 w
   [ -n "$h" ] && grep -qxF "$h" "$kf" 2>/dev/null
 }
 
+# READ KEYS TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). A gate reads a typed merge's key
+# from the command's own text, so only a session that was shown the key can present it. The merge
+# helper, lib/merge-when-ready.sh, takes its key from its ENVIRONMENT, and no gate counts the helper
+# as a merge, so a Bash call that ran it, grepped the key out of its refusal and ran it again with
+# PR_REVIEW_READ="$key" merged with nobody having read the findings (found 2026-10-24 by the #1587
+# builder; #1587 closed only the Monitor form). So pr-review-gate.sh, which sees each Bash command
+# before it runs, records the sha256 of a key TYPED as a literal in front of the helper, and the
+# helper takes a key from its environment only when it was recorded. A key in a variable, an export
+# or a substitution is unknown when the command is read, so it is never recorded. Only the hash is
+# kept, one empty file each, named by it, and swept after 14 days with the reviews themselves.
+ar__helper_keys_dir() { printf '%s/helper-keys' "$AR_STATE_DIR"; }
+ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once recorded
+  local d h
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  h="$(ar__key_hash "$1")"
+  [ -n "$h" ] || return 1
+  d="$(ar__helper_keys_dir)"
+  { mkdir -p "$d" && : > "$d/$h"; } 2>/dev/null || return 1
+  find "$d" -mindepth 1 -maxdepth 1 -type f -mtime +14 -delete 2>/dev/null || true
+  return 0
+}
+ar_helper_key_typed() {   # $1 = the key the helper was given -> 0 when a typed command presented it
+  local h
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  h="$(ar__key_hash "$1")"
+  [ -n "$h" ] && [ -f "$(ar__helper_keys_dir)/$h" ]
+}
+
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
 # rule file, lib/review-redact.sed, which says what it drops and what it redacts. The runner
 # (lib/ai-review-run.py) sends the reviewer's stderr and any unparsed answer through this BEFORE

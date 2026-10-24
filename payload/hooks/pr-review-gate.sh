@@ -62,6 +62,27 @@ fi
 parsed="$(ps_parse_payload "$payload" raw)" || parsed=""
 command="${parsed%%$'\x1f'*}"
 cwd="${parsed#*$'\x1f'}"
+
+# A READ KEY TYPED IN FRONT OF THE MERGE HELPER (claude-config#1673). The helper merges inside itself
+# and takes its key from its environment, so it accepts one only when this gate saw it TYPED as a
+# literal in front of the helper's own command (ar_helper_key_record in lib/ai-review-common.sh says
+# why). Read by the same reader as a typed merge's key, mt_presented_read_key, with the helper as the
+# action. Nothing is refused for carrying no key: the helper waits for the review and asks it itself.
+# A key typed here that cannot be recorded refuses the command, saying so, since the helper would
+# otherwise refuse it for a reason this gate alone knows (L11, L667).
+pr_review_runs_helper() { printf '%s' "$1" | python3 "$HOOK_DIR/lib/agent-overrides.py" runs-script merge-when-ready.sh >/dev/null 2>&1; }
+case "$command" in
+  *merge-when-ready*)
+    helper_key="$(mt_presented_read_key "$command" pr_review_runs_helper)"
+    if [ -n "$helper_key" ]; then
+      { [ "$(type -t ar_helper_key_record)" = function ] || . "$HOOK_DIR/lib/ai-review-common.sh"; } 2>/dev/null
+      if ! ar_helper_key_record "$helper_key" 2>/dev/null; then
+        key_home="${AR_STATE_DIR:-}"; [ -n "$key_home" ] || key_home="the state folder of the lessons review"
+        refuse "Refusing to run the merge helper: the read key typed in front of it could not be recorded under $key_home (lib/ai-review-common.sh missing, shasum missing, or the folder not writable), and the helper takes a key only once this gate has recorded it as typed (claude-config#1673). Fix that folder, or merge with the key typed in front of gh pr merge instead."
+      fi
+    fi ;;
+esac
+
 mt_runs_merge "$command" || exit 0
 
 if ps_has_override "$command" SKIP_PR_REVIEW; then

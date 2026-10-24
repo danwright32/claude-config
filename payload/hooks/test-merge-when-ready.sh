@@ -250,6 +250,9 @@ export MT_SIGNIN_CLOCK="$BIN/fake-now"
 # And the record of deliberate load windows (claude-config#1618), so a real window on this Mac never
 # adds a sentence to what these sections read.
 export LOAD_WINDOW_DIR="$WORKDIR/load-window"
+# And the lessons review's state, where the review gate records a read key a typed command presented
+# to the helper (claude-config#1673), never this Mac's own.
+export AI_REVIEW_STATE_DIR="$WORKDIR/ai-review"
 
 # --- stub gates and review checker: log the payload or arguments, answer from files ---------------
 STUBS="$WORKDIR/stubs"; mkdir -p "$STUBS"
@@ -274,6 +277,13 @@ case "$1" in
   check)
     # on-review: a step run once, while the review is asked, the last thing before the merge's gates.
     if [ -s "$ST/on-review" ]; then s="$(cat "$ST/on-review")"; : > "$ST/on-review"; eval "$s"; fi
+    # review-key: findings whose read key is this, so only a check presenting it is allowed, as the
+    # real checker judges (claude-config#1673).
+    if [ -s "$ST/review-key" ]; then
+      if [ "${PR_REVIEW_READ:-}" = "$(cat "$ST/review-key")" ]; then echo "The lessons review finished with 1 finding(s), read: this merge presented their key."; exit 0; fi
+      printf 'Refusing to merge until these are read: 1 finding.\n    PR_REVIEW_READ=%s <the merge command>\nApp/x.swift:3: swallows the error (L215).\n' "$(cat "$ST/review-key")"
+      exit 1
+    fi
     if [ -s "$ST/review-answers" ]; then
       rc="$(head -1 "$ST/review-answers")"; tail -n +2 "$ST/review-answers" > "$ST/review-answers.tmp"; mv "$ST/review-answers.tmp" "$ST/review-answers"
     else rc=0; fi
@@ -326,13 +336,16 @@ git init -q "$REPO"
 git -C "$REPO" remote add origin https://github.com/acme/widget.git
 
 fresh(){ # fresh <head> <behind> <rollup>
-  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR"; mkdir -p "$ST"
+  rm -rf "$ST" "$GH_POLL_STATE_DIR" "$MWR_TURN_DIR" "$AI_REVIEW_STATE_DIR"; mkdir -p "$ST"
   printf '%s' "$1" > "$ST/head"; printf '%s' "$2" > "$ST/behind"; printf '%s' "$3" > "$ST/rollup"
   printf '%s' "$PENDING" > "$ST/rollup-after-update"
   : > "$ST/next-heads"; : > "$ST/on-sleep"; : > "$ST/stacked"
   printf '1000000' > "$ST/clock"; printf 'm0' > "$ST/main-tip"
 }
 run(){ (cd "$REPO" && bash "$HELPER" "$@" 2>&1); }
+# What Claude Code does before a Bash call runs: the REAL lessons review gate reads the command as
+# typed (claude-config#1673). Prints what it said; exits as it did.
+present(){ jq -nc --arg c "$1" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}' | bash "$DIR/pr-review-gate.sh" 2>&1; }
 count(){ if [ -f "$ST/$1" ]; then grep -c -- "$2" "$ST/$1"; else echo 0; fi; }
 
 # =================================================================================================
@@ -428,13 +441,65 @@ check "#851 and how to come back with their key" "PR_REVIEW_READ=<key> bash ~/.c
 check_eq "#851 nothing merged with findings unread" "0" "$(count gh-calls 'pr merge')"
 
 fresh "$OLD" 0 "$GREEN"
+present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
 out="$(PR_REVIEW_READ=abc123 run 7 --squash)"; rc=$?
-check_eq "#851 with the read key it merges" "0" "$rc"
+check_eq "#851 with the read key typed in front of it, it merges" "0" "$rc"
 check "#851 the key reaches the review checker" "PR_REVIEW_READ=abc123" "$(grep '^check' "$ST/review-calls")"
 check "#851 and stands in front of the merge the review gate judges" "PR_REVIEW_READ=abc123 gh pr merge 7" "$(cat "$ST/review-gate-payloads")"
 fresh "$OLD" 0 "$GREEN"
 out="$(PR_REVIEW_READ='abc; rm -rf x' run 7 --squash)"; rc=$?
 check_eq "#851 a key that is not a key is refused" "64" "$rc"
+
+# A SHELL LOOP READING THE KEY OUT OF THE HELPER'S OWN REFUSAL (claude-config#1673). The key is the
+# proof that whoever merges was SHOWN the findings, so it has to come from a reader: typed, by the
+# session that read them, in front of the command. The helper takes it from its environment, and
+# no gate counts the helper as a merge, so a Bash call that runs it, greps the key from what it
+# printed and runs it again merged with nobody having read anything. The real review gate is shown
+# the loop first, exactly as Claude Code would show it, and the loop then runs as typed.
+LOOP='out="$(bash "$HELPER" 7 --squash 2>&1)"; key="$(printf "%s\n" "$out" | grep -o "PR_REVIEW_READ=[a-f0-9][a-f0-9]*" | head -1 | cut -d= -f2)"; PR_REVIEW_READ="$key" bash "$HELPER" 7 --squash'
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+gate_out="$(present "$LOOP")"; grc=$?
+out="$(cd "$REPO" && HELPER="$HELPER" bash -c "$LOOP" 2>&1)"; rc=$?
+check_eq "#1673 the review gate does not refuse the loop itself (the helper judges its key)" "0" "$grc"
+check_eq "#1673 a key grepped from the helper's own refusal merges nothing" "0" "$(count gh-calls 'pr merge')"
+check_eq "#1673 the rerun carrying it is refused before anything" "64" "$rc"
+check "#1673 saying the key has to be typed in front of the command" "was not typed in front of this command" "$out"
+check_eq "#1673 and the review checker never received the grepped key" "0" "$(count review-calls 'PR_REVIEW_READ=5eed5eed5eed5eed')"
+# The same key, typed by the session that read the findings, merges: a person reading them and passing
+# the key on a typed command is exactly what the key is for.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+gate_out="$(present "PR_REVIEW_READ=5eed5eed5eed5eed bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1673 the gate allows the typed key" "0" "$grc"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1673 the same key typed in front of the helper merges" "0" "$rc"
+check_eq "#1673 once" "1" "$(count gh-calls 'pr merge')"
+# Exported, or carried in a variable, it was not typed in front of the helper, so it is refused too.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+present 'export PR_REVIEW_READ=5eed5eed5eed5eed; bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash' >/dev/null
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1673 an exported key is refused" "64" "$rc"
+check_eq "#1673 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# A key typed for one command does not vouch for a different one in the environment.
+fresh "$OLD" 0 "$GREEN"
+present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+out="$(PR_REVIEW_READ=def456 run 7 --squash)"; rc=$?
+check_eq "#1673 a key other than the one typed is refused" "64" "$rc"
+# Where the typed key cannot be recorded, the gate says so and refuses the command, rather than
+# letting the helper refuse it later for a reason nobody can see (L11, L667).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$WORKDIR"; : > "$WORKDIR/ai-review"
+gate_out="$(present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+rm -f "$WORKDIR/ai-review"
+check_eq "#1673 a typed key that cannot be recorded refuses the command" "2" "$grc"
+check "#1673 naming why" "could not be recorded" "$gate_out"
+# With no key at all the gate stays out of the way: the helper waits for the review itself.
+fresh "$OLD" 0 "$GREEN"
+gate_out="$(present "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1673 no key: the gate allows the helper" "0" "$grc"
+check_eq "#1673 and records nothing" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
 
 fresh "$OLD" 3 "$GREEN"
 : > "$ST/update-fails"
