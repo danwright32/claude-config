@@ -1364,10 +1364,9 @@ Three gates close the three parts of that, all reading commands through one libr
   own git hooks: `--no-verify` on any git subcommand, commit's `-n`, `-c core.hooksPath=...`, and
   `HUSKY=0` and the other hook managers' switches, behind rtk, env, an if or a `bash -c` string, and
   inside a rebase's `--exec`. Words that only mention one are not one. The main session is not
-  judged. It approves one agent, with a reason, for two hours, with
-  `bash ~/.claude/hooks/lib/no-verify-approval.sh approve <agent id> "<why>"` (`list` and `revoke`
-  too); the gate refuses that command from an agent, which is what makes it the main session's.
-  Approvals sit in `~/.claude-no-verify-approvals/`, outside the synced folder.
+  judged. No approval lets an agent through: the one #1587 shipped, a file the main session wrote,
+  was removed on Dan's decision of 2026-10-24 (claude-config#1666), since an agent could write the
+  same file with the Write tool.
 - `monitor-action-gate.sh` (PreToolUse, Monitor) refuses a Monitor whose command merges a pull
   request, pushes, commits, or runs `lib/merge-when-ready.sh`. Every merge and push gate is registered
   for Bash, and Claude Code runs a hook only for the tools its matcher names, so a merge inside a
