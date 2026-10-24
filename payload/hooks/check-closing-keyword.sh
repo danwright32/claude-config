@@ -5,7 +5,11 @@
 #
 # Goal: block a `gh pr create` / `gh pr edit` / `git commit` whose text contains a NEGATED
 # closing keyword next to an issue reference ("this does not close #897"), because GitHub
-# closes the issue anyway.
+# closes the issue anyway. Since claude-config#1550 also a conditional, "which" or partial one
+# ("would also have closed #2584"), and a close of an issue the same text calls "Part of" or says
+# stays open, all read by lib/closing-keyword.py. check-closing-merge.sh asks the same detector
+# about the body GitHub holds when the pull request merges, which catches a body this hook never
+# saw (--body-file, the web, a later edit).
 #
 # Built 2026-07-13 after exactly that happened on Overture #912: a PR body that said, in as
 # many words, "It does not close #897" closed #897 on merge and it had to be reopened by
@@ -23,7 +27,10 @@
 # phrasing itself, e.g. this hook's own tests). Explain why to the user first, never skip
 # silently, same rule as the test gate and the style gate.
 #
-# Fails OPEN: any parse error allows the command.
+# Fails OPEN on a parse error: a command whose text cannot be read is allowed. Fails CLOSED when
+# the detector itself cannot run: python3 or lib/closing-keyword.py missing, or the detector
+# exiting with an error, refuses a command that could link an issue, because a detector that
+# did not run finds nothing (L98).
 
 payload="$(cat)"
 
@@ -36,7 +43,8 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # THE DETECTOR'S OWN READER, asked before anything is measured (claude-config#486, L490).
 #
-# The negation detector below is python3 and nothing here asked whether python3 was installed.
+# The detector, lib/closing-keyword.py (inline here until claude-config#1550), is python3, and
+# nothing here asked whether python3 was installed.
 # Without it the findings came back empty, the emptiness test passed, and this gate exited 0 on
 # exactly the phrasing it exists to stop, with nothing said. A detector that cannot run finds
 # nothing, and finding nothing is exactly what a clean run looks like (L42, L98).
@@ -54,7 +62,7 @@ if ps_reader_missing python3; then
     *SKIP_CLOSING_CHECK=1*) exit 0 ;;
     *"pr create"*|*"pr edit"*|*"git commit"*)
       echo "BLOCKED: $(ps_detector_absent_why "python3 is not on PATH" \
-        "check-closing-keyword.sh reads this text with it, looking for a negated closing keyword beside an issue reference, so with python3 absent nothing here reads the text at all." \
+        "check-closing-keyword.sh reads this text with it (lib/closing-keyword.py), looking for a closing keyword beside an issue the text says it is not closing, so with python3 absent nothing here reads the text at all." \
         "python3")" >&2
       echo "A sentence like \"does not close #897\" closes the issue on merge regardless of the negation, which is why this is a gate rather than a note." >&2
       echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
@@ -103,58 +111,40 @@ if printf '%s' "$cmd" | grep -Eq '(^|[[:space:];&|])SKIP_CLOSING_CHECK=1([[:spac
   exit 0
 fi
 
-findings="$(printf '%s' "$cmd" | python3 -c '
-import sys, re
-
-text = sys.stdin.read()
-
-KEYWORDS = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
-# An issue reference in any form GitHub itself honours: #12, owner/repo#12, or the full URL.
-REF = r"(?:#\d+|[\w.-]+/[\w.-]+#\d+|https?://\S*?/issues/\d+)"
-NEGATIONS = {
-    "not", "dont", "doesnt", "didnt", "wont", "cant", "cannot", "never", "no",
-    "isnt", "arent", "wasnt", "neither", "nor", "without",
-}
-
-findings = []
-for m in re.finditer(KEYWORDS + r"\s+" + REF, text, re.IGNORECASE):
-    # Only a negation that GOVERNS this keyword counts, and two things decide that.
-    #
-    # First, the sentence: text is cut at the last sentence end before the keyword. "This does
-    # not attempt the per-page contract. Closes #910." is ordinary, honest English and must
-    # sail through. Without this the negation from the previous sentence would block it, and a
-    # hook that fires on honest PRs is a hook that gets switched off.
-    #
-    # Second, the distance: within that sentence, only the last few words. Deliberately erring
-    # towards blocking rather than passing, because the two failures are not symmetrical. A
-    # false block is loud, visible, and overridable in one word. A false pass silently closes
-    # an issue nobody meant to close, and is only found later, by accident, if at all.
-    sentence = re.split(r"[.!?\n]", text[:m.start()])[-1]
-    before = sentence
-    # Apostrophes are stripped BEFORE tokenizing, both the ascii one and the typographic one.
-    # Without this, the contraction tokenizes to "doesn" and sails straight past a list holding
-    # "doesnt", and the contraction is the most natural way anybody would write this sentence.
-    # Written as escape codes because this whole detector lives inside a single-quoted shell
-    # string, where a literal apostrophe would end it.
-    flat = re.sub("[\u2019\u0027]", "", before.lower())
-    words = re.findall(r"[a-z]+", flat)[-4:]
-    if any(w in NEGATIONS for w in words):
-        findings.append(" ".join(before.split()[-6:]) + " " + m.group(0))
-
-for f in findings:
-    print(f)
-' 2>/dev/null)"
+# The rule is lib/closing-keyword.py's, the one reading of a closing keyword against its sentence,
+# which check-closing-merge.sh asks too about the body GitHub holds at merge (claude-config#1550), so
+# a sentence is judged the same where it is written and where it takes effect (L263, L370). It lived
+# inline here until then. `text` mode counts every issue a keyword is followed by as closing, and
+# finds the keyword in a negated, conditional, "which" or partial sentence, or an issue the same text
+# also calls "Part of" or says stays open.
+#
+# A detector file that is not there finds nothing, and nothing is what a clean message looks like, so
+# its absence is refused as python3's is above (L98), and so is a detector that ran and failed: a
+# crash prints no finding either. CLOSING_KEYWORD_LIB points it at another file, for the tests.
+DETECTOR="${CLOSING_KEYWORD_LIB:-$HOOK_DIR/lib/closing-keyword.py}"
+if [ ! -f "$DETECTOR" ]; then
+  echo "BLOCKED: $DETECTOR is missing, and it is the rule this hook applies, so nothing here can read this text for a closing keyword that says the opposite of what it does. Restore it with claude-sync pull." >&2
+  echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
+  exit 2
+fi
+findings="$(printf '%s' "$cmd" | python3 "$DETECTOR" text 2>/dev/null)"; det_rc=$?
+if [ "$det_rc" -ne 0 ]; then
+  echo "BLOCKED: $DETECTOR failed (exit $det_rc) reading this text, so whether it puts a closing keyword in front of an issue it says it is not closing is unknown. That is the detector failing, not the text passing." >&2
+  echo "OVERRIDE, this one command: SKIP_CLOSING_CHECK=1 <your original command>" >&2
+  exit 2
+fi
 
 [ -n "$findings" ] || exit 0
 
 cat >&2 <<EOF
-BLOCKED: a negated closing keyword next to an issue reference.
+BLOCKED: a closing keyword next to an issue this text says it is not closing.
 
 $findings
 
-GitHub will CLOSE that issue on merge regardless of the "not". Its linked-issue parser
-matches the keyword plus the reference and does no negation handling at all: the negation is
-invisible to it. This exact sentence closed Overture #897 on a PR that said it did not.
+GitHub will CLOSE that issue on merge whatever the sentence around the keyword says. Its
+linked-issue parser matches the keyword plus the reference and reads nothing else: a "not",
+a "would have", a "which" or a "Part of" elsewhere is invisible to it. "It does not close
+#897" closed Overture #897 on a PR that said it did not.
 
 Rewrite it so the keyword is never next to the number:
   "Part of #897, which stays open."

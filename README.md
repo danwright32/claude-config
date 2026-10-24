@@ -784,7 +784,8 @@ Every gate judges ONE repository, and every merge gate ONE pull request, per com
 doing the same thing twice in different places is refused rather than judged by its first
 occurrence (claude-config#1062): `push-scope-notice.sh` refuses a command pushing from more than one
 repository, `check-add-scope.sh` one adding in more than one, and `block-red-merge.sh`,
-`pr-review-gate.sh` and `require-changelog-tag.sh` one merging more than one pull request. The
+`pr-review-gate.sh`, `require-changelog-tag.sh` and `check-closing-merge.sh` one merging more than
+one pull request. The
 remedy each gives is to run them as separate commands. `ai-review-on-pr.sh`, which only starts
 reviews, starts one in every repository a command commits, pushes or opens a pull request in. The
 changelog gate refuses a command merging several pull requests only when one of them is in a
@@ -806,6 +807,21 @@ merge is held to the overnight judge's answer by one table both suites read,
 `payload/mods/scope-modes/tests/api-merge-cases.ts`. Merging one branch into another with no pull
 request (`repos/<o>/<r>/merges`, `mergeBranch`) is refused overnight but not judged by the gates,
 which have no pull request to read, and the table says so.
+
+GitHub closes every issue a pull request body puts a closing word in front of, whatever the sentence
+around it says (L1018): "This does not close #4358" closed Overture #4358. `check-closing-keyword.sh`
+refuses that sentence in a `gh pr create`, `gh pr edit` or `git commit` as it is typed, and
+`check-closing-merge.sh` (claude-config#1550) reads the body GitHub holds when the pull request
+merges, in every repository and by every route, which also catches a body passed with `--body-file`,
+written on the web or edited later. It refuses when an issue GitHub lists as closing
+(`closingIssuesReferences`, an issue linked by hand in the sidebar included) has its closing word in a
+negated, conditional, "which" or partial sentence, or is also called "Part of #N", or is said to stay
+open, and names each one with the remedy: "Part of #N" or "Refs #N", through `gh pr edit`. Both read
+the sentence through one detector, `lib/closing-keyword.py`. Measured over every merged pull request
+on 2026-10-24, it would have refused 3 of 633 in claude-config and 12 of 1,925 in Overture: 9 of those
+merges closed an issue their body meant to leave open, 4 relinked an issue already closed, and 2 were
+closes the body did intend, each cleared by editing the body. Override for a body that has to quote
+the phrasing: `SKIP_CLOSING_CHECK=1 <the same command>`.
 
 gh takes a subcommand's flags written in front of it, `gh -R owner/name pr merge 7` and `gh pr -R
 owner/name merge 7` (claude-config#1186; before, all three gates let these through unjudged). The
@@ -1055,10 +1071,12 @@ repository: `bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> [--repo owner/nam
 (claude-config#851). It updates the branch, starts the new head's lessons review alongside its
 checks, waits for both, updates again if the base has moved meanwhile, and
 then hands the exact pinned merge command to `block-red-merge.sh`, `pr-review-gate.sh`,
-`require-changelog-tag.sh`, `design-score-gate.sh` and `require-verification-run.sh` and merges only
+`require-changelog-tag.sh`, `check-closing-merge.sh`, `design-score-gate.sh` and
+`require-verification-run.sh` and merges only
 when every one allows it, so it decides nothing any gate would refuse. What a gate allows with
 something to say, such as the verification gate's warn mode verdict, is written to its log. The changelog record gate is also asked at the first look, before any update, wait or
-review, because nothing those do can add a missing label. Asking only the first two let nine Slate
+review, because nothing those do can add a missing label, and so is the closing keyword gate,
+because nothing they do can change a body. Asking only the first two let nine Slate
 pull requests merge with no `changelog/*` label (claude-config#1178), so its suite now checks the
 gates it names against every PreToolUse Bash hook that recognises a merge, and a merge gate added
 to the hooks block but not to the helper fails it. The head it merges is its branch's tip: GitHub's
@@ -1286,7 +1304,7 @@ Three gates close the three parts of that, all reading commands through one libr
 
 ### What a push actually waits on
 
-Twenty-nine PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
+Thirty PreToolUse hooks fire on a `git push` here, declaring timeouts of 10 to 300 seconds,
 which the settings SET and are not measurements of anything. `bash tools/time-push-gates.sh --list`
 names them from the installed settings, and `tools/test-time-push-gates.sh` reads the same list from
 `payload/settings.hooks.json` and fails until this sentence carries its count and its timeouts
@@ -1298,7 +1316,7 @@ they were timed:
 bash tools/time-push-gates.sh --repo <checkout>
 ```
 
-Eleven of them came after the 2026-09-21 timing further down, which measured the first seventeen:
+Twelve of them came after the 2026-09-21 timing further down, which measured the first seventeen:
 
 | Gate | What it costs on a push |
 | --- | --- |
@@ -1308,6 +1326,7 @@ Eleven of them came after the 2026-09-21 timing further down, which measured the
 | `require-changelog-tag.sh` (#1181) | 0.014 seconds, five readings on 2026-10-13, the same way |
 | `design-score-gate.sh` (#1364) | 0.008 seconds on a push whose command names no closing word, five readings on 2026-10-19; 0.07 seconds when the branch name holds one (`feat/1364-close-gate`), which starts its python judge to find no close; it acts on a close or a merge, not a push |
 | `require-verification-run.sh` (#1529) | 0.044 to 0.056 seconds on a push, five readings on 2026-10-23 (load average 166 to 168, other suites running), since a command naming no merge leaves before anything loads. On a merge in a repository whose base branch holds no `.claude/verification/areas.json`, which is every repository today, 0.97 to 1.34 seconds, five readings through the real gh against claude-config: one read of the pull request and one of that file at its base commit, run beside `block-red-merge.sh`, which reads the same pull request |
+| `check-closing-merge.sh` (#1550) | 0.007 to 0.008 seconds on a push naming no merge, five readings on 2026-10-24 (load average 8 to 9), since it leaves before loading anything; 0.051 to 0.053 seconds on a push whose branch name holds the word (`feat/1550-closing-merge-gate`), which loads the shared reader to find no merge. On a merge, 0.51 to 0.69 seconds, five readings through the real gh against claude-config #1639: one read of the pull request's body and closing issues, run beside `block-red-merge.sh`, which reads the same pull request |
 | `check-gh-watch-interval.sh` (#1014) | 0.03 seconds, five readings on 2026-10-12; it answers a command that never mentions a watch before loading anything |
 | `check-rtk-init.sh` (#1468) | 0.01 to 0.03 seconds on a push naming no rtk and init, five readings on 2026-10-21, since it answers that before loading anything; 0.11 to 0.16 seconds on a push whose branch name holds both (`feat/1468-refuse-rtk-init`), which starts the shared reader to find no rtk init; both with the full suite running beside it (load average 234) |
 | `check-wrapped-commands.sh` (#1478) | under 0.05 seconds on a plain `git push`, five readings on 2026-10-21 (load average 6.6 to 8.8), since a push naming no wrapper is answered before anything loads; 0.2 to 0.3 seconds on `bash -c 'git push --force'`, which starts the shared reader, and the wall clock of the reader gates timed beside it went from 0.2 to 0.4 seconds there. The shared reader reads through wrappers for every gate now, and on a plain push the gates beside it measured the same as on main, 0.1 to 0.2 seconds. Recording a refusal (#1492) added 5 to 10 ms to it: 0.044 to 0.047 seconds before, 0.050 to 0.056 after, five readings each on 2026-10-22 (load average 6.0 to 6.3). Reading a declared script's quoted arguments (#1574) adds one python start to a command that reaches a script file refusal, and nothing to any other: 0.09 to 0.12 seconds before, 0.11 to 0.13 after, five readings each on 2026-10-23 (load average 17 to 23). Reading a script run by its path (#1623) left a plain push and a git command holding paths only as arguments at 0.006 to 0.008 seconds, as on main, and `./build.sh && git push` now starts the reader, 0.10 to 0.11 seconds, as `bash ./build.sh && git push` does; five readings each on 2026-10-23 (load average 56 to 101). Over 30 days of this Mac's real commands naming git, gh or rtk (30,078), the fast path answered 24,204 before the reader loaded where main answered 26,842; 2,638 now reach the reader through it, 863 of them refused |

@@ -74,6 +74,17 @@ run "#1478 a commit in bash -c"                $BLOCK "bash -c 'git commit -m \"
 run "#1478 a commit through timeout"           $BLOCK 'timeout 30 git commit -m "this does not fix #12"'
 run "#1188 control: a flag in front of pr view" $ALLOW 'gh -R o/x pr view 12 --json body --jq ".body" | grep "does not close #5"'
 
+# --- The sentences lib/closing-keyword.py learned with #1550 reach this hook too ---
+run "#1550 a conditional close"               $BLOCK 'gh pr create --title x --body "The parser change would also have closed #2584."'
+run "#1550 a close of an issue called part of" $BLOCK 'gh pr edit 12 --body "Part of #953. The next PR closes #953."'
+
+# --- A detector that crashes prints no finding, which must not read as a clean text (L98) ---
+BROKEN_LIB="$(mktemp "${TMPDIR:-/tmp}/closing-keyword-broken.XXXXXXXX")"
+printf 'raise SystemExit(5)\n' > "$BROKEN_LIB"
+CLOSING_KEYWORD_LIB="$BROKEN_LIB" run "#1550 a crashing detector refuses rather than passes" $BLOCK \
+  'gh pr create --title x --body "Part of #897, which stays open."'
+rm -f "$BROKEN_LIB"
+
 # --- A genuine close must sail through, or the hook is useless ---
 run "a real close"                    $ALLOW 'gh pr create --title x --body "Closes #897."'
 run "the safe phrasing"               $ALLOW 'gh pr create --title x --body "Part of #897, which stays open."'
@@ -104,7 +115,8 @@ run "an env-prefixed real command still blocked" $BLOCK \
 
 # --- the detector's own reader (claude-config#486) -----------------------------
 #
-# The negation detector is python3 and nothing asked whether python3 was installed. Without it the
+# The detector (lib/closing-keyword.py since #1550) is python3 and nothing asked whether python3 was
+# installed. Without it the
 # findings came back empty, the emptiness test passed, and this gate exited 0 on exactly the
 # phrasing it exists to stop, with nothing said (L490, L42, L98).
 . "$DIR/lib/no-python-path.sh"
