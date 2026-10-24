@@ -456,7 +456,7 @@ check_eq "#851 a key that is not a key is refused" "64" "$rc"
 # no gate counts the helper as a merge, so a Bash call that runs it, greps the key from what it
 # printed and runs it again merged with nobody having read anything. The real review gate is shown
 # the loop first, exactly as Claude Code would show it, and the loop then runs as typed.
-LOOP='out="$(bash "$HELPER" 7 --squash 2>&1)"; key="$(printf "%s\n" "$out" | grep -o "PR_REVIEW_READ=[a-f0-9][a-f0-9]*" | head -1 | cut -d= -f2)"; PR_REVIEW_READ="$key" bash "$HELPER" 7 --squash'
+LOOP='out="$(bash "$HELPER" 7 --squash 2>&1)"; key="$(printf "%s\n" "$out" | sed -n "s/.*PR_REVIEW_READ=\([a-f0-9][a-f0-9]*\).*/\1/p")"; PR_REVIEW_READ="$key" bash "$HELPER" 7 --squash'
 fresh "$OLD" 0 "$GREEN"
 printf '5eed5eed5eed5eed' > "$ST/review-key"
 gate_out="$(present "$LOOP")"; grc=$?
