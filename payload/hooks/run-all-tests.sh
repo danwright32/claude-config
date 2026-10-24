@@ -821,6 +821,13 @@ if [ "$ran" -gt 0 ]; then
   WRAPPED_REFUSAL_LEDGER_DIR="$WORK/wrapped-refusals"
   export WRAPPED_REFUSAL_LEDGER_DIR
 
+  # And the record of refused GitHub sign ins (claude-config#1626), whose count across runs is what
+  # says this Mac's keyring read is failing often: a suite faking a 401 through any merge gate without
+  # pointing it elsewhere records it here, never as a real refusal. Not bracketed, for the push
+  # ledger's reason.
+  MT_SIGNIN_LEDGER_DIR="$WORK/gh-signin"
+  export MT_SIGNIN_LEDGER_DIR
+
   # And claude-sync's log (claude-config#1486). claude-sync itself logs nowhere for a fixture home,
   # but a suite running it as a home's own config, with HOME left real, would append its lines to the
   # log the real watcher writes. A suite that names its own still wins. Not bracketed like the stores

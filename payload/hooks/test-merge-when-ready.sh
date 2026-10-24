@@ -243,6 +243,10 @@ export GH_POLL_STATE_DIR="$WORKDIR/gh-poll"
 export CLAUDE_CODE_SESSION_ID="mwr-suite"
 # The per repository turn (claude-config#1515) is kept here, never in this Mac's own state.
 export MWR_TURN_DIR="$WORKDIR/turns"
+# And the record of refused sign ins (claude-config#1626), so the refusals this suite fakes are never
+# counted as this Mac's, on the suite's own clock.
+export MT_SIGNIN_LEDGER_DIR="$WORKDIR/gh-signin"
+export MT_SIGNIN_CLOCK="$BIN/fake-now"
 # And the record of deliberate load windows (claude-config#1618), so a real window on this Mac never
 # adds a sentence to what these sections read.
 export LOAD_WINDOW_DIR="$WORKDIR/load-window"
@@ -297,6 +301,7 @@ cat > "$STUBS/verify-gate.sh" <<'EOS'
 #!/usr/bin/env bash
 cat >> "$ST/verify-gate-payloads"; printf '\n' >> "$ST/verify-gate-payloads"
 printf '%s\n' "${MT_GATE_READ_BUDGET_SECONDS:-unset}" >> "$ST/verify-gate-budgets"
+printf '%s\n' "${MT_SIGNIN_RUN:-unset}" >> "$ST/verify-gate-runs"
 if [ -s "$ST/verify-gate-deny" ]; then
   jq -nc --arg r "$(cat "$ST/verify-gate-deny")" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
 elif [ -s "$ST/verify-gate-context" ]; then
@@ -608,6 +613,51 @@ out="$(run 7 --squash)"; rc=$?
 check_eq "#1615 a compare refused on every try stops" "1" "$rc"
 check "#1615 and says the sign in was refused" "GitHub refused the sign in 4 times" "$out"
 check_eq "#1615 and nothing merged" "0" "$(count gh-calls 'pr merge')"
+
+# Refused sign ins are counted across runs too (claude-config#1626): each one this run sees is written
+# to this Mac's ledger, and once the last day holds five, the run says so as a rate across runs, once,
+# where it announces the retry. Four from earlier runs are seeded, inside the day on the fake clock.
+SIGNIN_LEDGER="$MT_SIGNIN_LEDGER_DIR/refusals.tsv"
+seed_signins(){
+  rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+  for t in 990000 995000 999000 999500; do
+    printf '%s\thost\tsess_x\trun-%s\tmerge-when-ready.sh\trefused\tempty\n' "$t" "$t" >> "$SIGNIN_LEDGER"
+  done
+}
+seed_signins
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1626 a refusal that brings the day to five still merges once answered" "0" "$rc"
+check "#1626 and the day's count is said as a rate across runs" "Across runs, this Mac has recorded 5 failed GitHub sign ins in the last 24 hours (5 refused by GitHub, 0 with no token gh could read), in 5 runs" "$out"
+check_eq "#1626 one line written for the one refusal" "5" "$(wc -l < "$SIGNIN_LEDGER" | tr -d ' ')"
+own_run="$(tail -1 "$SIGNIN_LEDGER" | cut -f4)"
+check_eq "#1626 the gates it asks are handed its run, so a run and its gates count as one" "$own_run" "$(tail -1 "$ST/verify-gate-runs" 2>/dev/null)"
+check_eq "#1626 recorded as the helper's" "merge-when-ready.sh" "$(tail -1 "$SIGNIN_LEDGER" | cut -f5)"
+
+seed_signins
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-down"
+out="$(run 7 --squash)"; rc=$?
+check_eq "#1626 a run refused on every try still stops" "1" "$rc"
+check_eq "#1626 the count across runs is said once, not again at the stop" "1" "$(grep -c 'Across runs, this Mac has recorded' <<< "$out")"
+check_eq "#1626 every refusal of the run is recorded" "8" "$(wc -l < "$SIGNIN_LEDGER" | tr -d ' ')"
+
+# Under the threshold, nothing is said beyond what #1615 already says.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"
+out="$(run 7 --squash)"; rc=$?
+check_not "#1626 one refusal in a day says nothing across runs" "Across runs" "$out"
+
+# A ledger that cannot be written is said once, and the merge goes on (L95).
+printf 'x' > "$WORKDIR/signin-file"
+fresh "$OLD" 0 "$GREEN"
+printf '%s\n' "$SIGNIN" > "$ST/view-fails"
+out="$(MT_SIGNIN_LEDGER_DIR="$WORKDIR/signin-file/x" run 7 --squash)"; rc=$?
+check_eq "#1626 an unwritable ledger still merges" "0" "$rc"
+check "#1626 and says the refusal was not recorded" "This refusal could not be recorded in $WORKDIR/signin-file/x/refusals.tsv" "$out"
+rm -rf "$MT_SIGNIN_LEDGER_DIR"
 
 # The gates it asks run under no harness timeout, so they are handed a longer read budget than a typed
 # merge's gate keeps: on 2026-10-23, at a load average of 342, require-verification-run.sh spent its 15

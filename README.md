@@ -1173,7 +1173,15 @@ A sign in GitHub refused for want of a token (HTTP 401 "Requires authentication"
 met under heavy load on 2026-10-23, with a direct read seconds later answering) is asked again by the
 same rule, with a token read after each refusal recording whether the
 keyring gave one, never the token itself; one that outlasts the tries stops as "GitHub refused the
-sign in N times", not as an unreadable pull request (claude-config#1615). The gates the helper asks
+sign in N times", not as an unreadable pull request (claude-config#1615). Each such refusal, and
+each empty token read, is also counted across runs (claude-config#1626): one tab separated line in
+`~/.claude/state/gh-signin/refusals.tsv` (`MT_SIGNIN_LEDGER_DIR`), with the time, the Mac, the
+session, the run (the helper and the gates it asks count as one), what ran it, the outcome and
+whether the token read straight after came back empty or present, never the account, repository,
+error or token. It is only appended to, never trimmed or deleted. Once the last 24 hours hold five
+(`MT_SIGNIN_ALERT_AT`, a setting, since nothing was counted before), the helper says the count once
+as it announces the retry, and every stop on a refused sign in carries it, so a keyring read that now
+fails often no longer looks like one that failed once under load. The gates the helper asks
 run under no hook timeout, so it hands them a longer read budget, `MWR_GATE_READ_BUDGET_SECONDS`
 (90, a setting): a read that never answers still refuses.
 
