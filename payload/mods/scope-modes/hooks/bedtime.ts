@@ -181,6 +181,14 @@ export const NO_GOAL = 'No work for it tonight'
 export const goalQuestion = (who: string) =>
   `${who.charAt(0).toUpperCase()}${who.slice(1)} has no /goal set, so it does no work tonight unless you give it one. What should it work toward: a milestone, issues, or a task, in your words?`
 
+/**
+ * The before bed question for a worker whose /goal could not be read (#1636): never "has no /goal
+ * set", which it may well have, but why it could not be read, so an answer is never taken as proof
+ * there was none. `why` is a clause about the worker ("its transcript was not found").
+ */
+export const goalUnreadQuestion = (who: string, why: string) =>
+  `The /goal of ${who} could not be read, because ${why}. It may have one set, but it does no work tonight unless you give it one here. What should it work toward: a milestone, issues, or a task, in your words?`
+
 /** No work for it, or go to sleep; anything Dan types is the goal. */
 export const goalOptions = () => [NO_GOAL, GO_TO_SLEEP]
 
