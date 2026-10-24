@@ -60,8 +60,9 @@
 # LOAD_WINDOW_MERGE_TURNS (the merge helper's turn folders, default MWR_TURN_DIR or
 # ~/.claude/state/merge-turns), LOAD_WINDOW_DIR (the record and this turn, see lib/load-window.sh).
 # Settings: LOAD_WINDOW_POLL (1: seconds between looks in the window), LOAD_WINDOW_WAIT_POLL (5),
-# LOAD_WINDOW_WAIT_SECONDS (360), LOAD_WINDOW_HOLD_SECONDS (600). The waits plus the ceiling stay
-# under nine minutes, so the whole run fits one foreground command's ten minute limit.
+# LOAD_WINDOW_WAIT_SECONDS (360), LOAD_WINDOW_HOLD_SECONDS (600). At the defaults the wait, the
+# ceiling and the watchdogs' five second margin come to 545 seconds at most, so the whole run fits
+# one foreground command's ten minute limit. These are settings, not measurements.
 set -uo pipefail
 
 SELF_DIR="${BASH_SOURCE[0]%/*}"; [ "$SELF_DIR" != "${BASH_SOURCE[0]}" ] || SELF_DIR=.

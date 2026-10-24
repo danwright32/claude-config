@@ -1692,7 +1692,8 @@ workers and the command for at most `--seconds` (180 at most), and stops early, 
 merge or a full suite starts meanwhile. Everything it starts is in its own process group with a
 watchdog, so it is stopped on every way out, a SIGKILL included. Each window's start and end are
 recorded in `~/.claude/state/load-window/windows.tsv` (`hooks/lib/load-window.sh`), and
-`merge-when-ready.sh` (on every stop that is not a merge, and every read it asks again) and the
+`merge-when-ready.sh` (on every stop with a non zero exit, a merge whose branch could not then be
+tidied included, and on every read it asks again) and the
 suite pile notice name a window running or ended within 15 minutes, in ET. Every number in this
 paragraph is a setting, not a measurement. To see what is recorded and what a window would wait for:
 `bash tools/load-window.sh --status`.
