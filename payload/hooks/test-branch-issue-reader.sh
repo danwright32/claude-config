@@ -50,10 +50,9 @@ SCAN_ONLY="${BRANCH_READER_SCAN_ONLY:-}"
 # three hand written readers (2026-10-23). There it says it cannot run, in the agreed shape, and
 # run-all-tests.sh re-runs it from the checkout claude-sync names (claude-config#237). A repository
 # above that is not this one (a home folder kept in git) is no checkout either: it must hold
-# claude-sync and this very payload.
-REPO="$(git -C "$PAYLOAD" rev-parse --show-toplevel 2>/dev/null || true)"
-if [ -z "$REPO" ] || [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ] \
-   || [ "$(cd "$REPO/payload" && pwd -P)" != "$(cd "$PAYLOAD" && pwd -P)" ]; then
+# claude-sync and this very payload, the one shared test lib/checkout-root.sh makes (#1567).
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$PAYLOAD" 2>/dev/null || true)"
+if [ -z "$REPO" ]; then
   echo "test-branch-issue-reader: $PAYLOAD is not the payload of a claude-config checkout, so there is no list of the files it ships." >&2
   printf 'SUITE-NOT-RUN %s\n' "needs the repository to list the files it ships, and $PAYLOAD is not the payload of one"
   exit 2
@@ -198,7 +197,7 @@ FOREIGN_LINE='var n=branch.match(/\d+/);'
 seed_copy() {   # $1 = the folder standing for payload/ or ~/.claude
   mkdir -p "$1/hooks/lib" "$1/mods/mod-kit/hooks" "$1/$(dirname "$FOREIGN")"
   cp "$DIR/test-branch-issue-reader.sh" "$1/hooks/"
-  cp "$DIR/lib/suite-deadline.sh" "$DIR/lib/repo-files.sh" "$1/hooks/lib/"
+  cp "$DIR/lib/suite-deadline.sh" "$DIR/lib/repo-files.sh" "$DIR/lib/checkout-root.sh" "$1/hooks/lib/"
   printf '%s\n' 'export const issuesOfBranch = () => []' > "$1/mods/mod-kit/hooks/branch.ts"
   printf '%s\n' "$FOREIGN_LINE" > "$1/$FOREIGN"
 }
