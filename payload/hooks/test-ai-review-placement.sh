@@ -69,6 +69,9 @@ printf 'repo=r\nsha=f\nstarted=4000\nfinished=4005\nstatus=ok\nkind=pr\nfindings
 printf 'repo=r\nsha=c\nstarted=2500\nfinished=2600\nstatus=error\n\nsrc/a.ts:1: x.%s%s\n' "$S" "$(mark 'it quoted no line' 1)" > "$STATE/1-c.txt"
 # A review started before the window asked for.
 printf 'repo=r\nsha=d\nstarted=500\nfinished=600\nstatus=ok\nkind=pr\n\nsrc/a.ts:1: x.%s%s\n' "$S" "$(mark 'its Quote line was empty' 1)" > "$STATE/1-pr-d.txt"
+# A review whose times cannot be read: it cannot be put in or out of a window, so it is said as
+# such, never silently left out of the count (L11).
+printf 'repo=r\nsha=g\nstarted=soon\nfinished=4100\nstatus=ok\nkind=pr\n\nsrc/a.ts:1: x.%s\n' "$S" > "$STATE/1-pr-g.txt"
 # Files beside the reviews that are not reviews.
 printf 'read\n' > "$STATE/1-pr-a.txt.prread"
 printf 'x\tpr\n' > "$STATE/citations.tsv"
@@ -87,6 +90,7 @@ check "a reason the runner does not give is counted as other, never dropped" "ot
 check "how the placed ones were placed comes from the reviews that record it, saying how many do" "how placed, from the 2 of 3 reviews that record it: whole line 1, without the diff's marker 0, part of a line 1, path corrected 1" "$out"
 check "it says when the window starts and what it covers" "started at or after 1969-12-31 19:16 EST" "$out"
 check "and when the reviews in it finished" "finished 1969-12-31 19:33 EST to 1969-12-31 20:06 EST" "$out"
+check "a finished review whose times cannot be read is named as not counted" "not counted, its start or finish time unreadable: 1-pr-g.txt" "$out"
 
 all="$(TZ=America/New_York python3 "$REPORT" --state-dir "$STATE" 2>&1)"
 check "with no window every finished review counts" "reviews: 4 (pr 3, push 1)" "$all"

@@ -1373,6 +1373,14 @@ for answer, ch, s in (
 print("PASS\tevery reason a finding is left unplaced reads back as its own kind" if
       kinds == ["no_quote", "empty_quote", "head_unreadable", "no_file", "no_match", "no_file"]
       else f"FAIL\tevery reason a finding is left unplaced reads back as its own kind: {kinds}")
+# The reason ends with the quote the reviewer gave, which can hold any words at all, so only the
+# words the runner wrote before it are read: a quote of the phrase of another reason changes nothing.
+t, _ = m.place_findings("src/ledger.ts:5: x." + S +
+                        "\nQuote: # x is not a file at the reviewed head; it quoted no line", repo, sha)
+mk = m.MARK.search(t)
+k = m.unplaced_kind(mk.group(1)) if mk else None
+print("PASS\ta quote holding the words of another reason is still read as a quote that matched nothing" if
+      k == "no_match" else f"FAIL\ta quote holding the words of another reason is still read as a quote that matched nothing: {k} | {t!r}")
 # The approximate marker is a finding to the parse the runner gates on, so an answer whose only
 # finding is approximate is a review, not "unparsed".
 n = m.count_findings("src/ledger.ts:~253: total is never checked." + S)
@@ -1392,7 +1400,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 38 ] && ok || bad "the placement fixtures ran $place_ran of 38 cases"
+[ "$place_ran" -eq 39 ] && ok || bad "the placement fixtures ran $place_ran of 39 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.

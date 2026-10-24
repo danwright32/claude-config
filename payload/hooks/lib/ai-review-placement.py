@@ -74,7 +74,7 @@ def main(argv):
         return 2
     m = runner()
 
-    reviews, kinds, findings, recorded = 0, {}, 0, 0
+    reviews, kinds, findings, recorded, unreadable, unopened = 0, {}, 0, 0, [], []
     first = last = None
     how = {"whole": 0, "marker": 0, "part": 0, "path": 0}
     why = {k: 0 for k, _ in m.UNPLACED_KINDS}
@@ -85,6 +85,8 @@ def main(argv):
             with open(path, encoding="utf-8", errors="replace") as f:
                 head, _, body = f.read().partition("\n\n")
         except OSError:
+            # Its status cannot be known, so it is named rather than silently left out (L11).
+            unopened.append(os.path.basename(path))
             continue
         meta = dict(line.split("=", 1) for line in head.splitlines() if "=" in line)
         if meta.get("status") != "ok":
@@ -92,6 +94,7 @@ def main(argv):
         try:
             started, finished = int(meta["started"]), int(meta["finished"])
         except (KeyError, ValueError):
+            unreadable.append(os.path.basename(path))
             continue
         if since is not None and started < since:
             continue
@@ -117,10 +120,15 @@ def main(argv):
             k = m.unplaced_kind(reason)
             why[k] += 1
             if k == "no_match":
-                tried["marker"] += "without its leading" in reason
-                tried["part"] += "whole or in part" in reason
-                tried["short"] += "too short to be placed by part of a line" in reason
+                words = m.reason_words(reason)
+                tried["marker"] += "without its leading" in words
+                tried["part"] += "whole or in part" in words
+                tried["short"] += "too short to be placed by part of a line" in words
 
+    if unopened:
+        print(f"not counted, the file could not be opened: {', '.join(unopened)}")
+    if unreadable:
+        print(f"not counted, its start or finish time unreadable: {', '.join(unreadable)}")
     if not reviews:
         print(f"UNMEASURED: no finished review in {a.state_dir}"
               + (f" started at or after {when(since)}." if since is not None else "."))

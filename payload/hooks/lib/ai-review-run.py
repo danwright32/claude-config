@@ -295,21 +295,31 @@ PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
 MARK = re.compile(r"\[review harness: not placed, (.*?), so line [0-9]+ is the reviewer's own number, "
                   r"unchecked\]")
-# Every reason _place gives, as the kind lib/ai-review-placement.py counts it by, tried in order: a
-# corrected path whose quote then matched nothing says both, and is first a path that is not a file.
+# Every reason _place gives, as the kind lib/ai-review-placement.py counts it by, each read from the
+# START of the words the runner wrote: a corrected path whose quote then matched nothing says both,
+# and is first a path that is not a file.
 UNPLACED_KINDS = (
-    ("no_quote", "it quoted no line"),
-    ("empty_quote", "its Quote line was empty"),
-    ("head_unreadable", "the reviewed head could not be read"),
-    ("no_file", " is not a file at the reviewed head"),
-    ("no_match", "its quote matches no line of "),
+    ("no_quote", re.compile(r"^it quoted no line$")),
+    ("empty_quote", re.compile(r"^its Quote line was empty$")),
+    ("head_unreadable", re.compile(r"^the reviewed head could not be read")),
+    ("no_file", re.compile(r"^\S+ is not a file at the reviewed head")),
+    ("no_match", re.compile(r"^its quote matches no line of ")),
 )
+
+
+def reason_words(why):
+    """A reason as the runner wrote it, without the reviewer's quote that ends a quote miss: that
+    quote can hold any words at all, another reason's included, so it is never read as the reason.
+    Everything before it is fixed words and a path, which holds no space, so the first `: "` is
+    where the quote starts."""
+    return why.split(': "', 1)[0]
 
 
 def unplaced_kind(why):
     """The kind of one unplaced finding's reason, as written in its mark, or "other"."""
-    for kind, phrase in UNPLACED_KINDS:
-        if phrase in why:
+    words = reason_words(why)
+    for kind, pattern in UNPLACED_KINDS:
+        if pattern.search(words):
             return kind
     return "other"
 
