@@ -30,6 +30,10 @@ Before those, the newest prompt is read for tests/test-session-id-agreement.sh's
 <prompt>` hands the prompt to a general purpose subagent, `PROBE-RUN: <command>` runs the command,
 each once. The newest prompt, not the first, since a probe step comes after /compact and /clear.
 
+tests/test-rule-files-reload.sh (#1580) drives it with the same PROBE-RUN steps; for it, each request's
+log line also carries the PROBE-RUN command it answers, every rule file marker it was sent, and how
+many of rule-files-changed.sh's notices.
+
 A side call judging a /goal condition (Claude Code's goal evaluator, which must answer JSON) is
 answered that the condition does not hold, so the goal's Stop hook blocks whenever it is reached.
 """
@@ -42,6 +46,11 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOCK = threading.Lock()
+# The rule file markers of tests/test-rule-files-reload.sh (#1580): every one a request carries is
+# logged, so the suite reads which copy of a rule file the model was actually sent, and how many
+# times hooks/rule-files-changed.sh's notice that a rule file changed is in what it was sent.
+MARK = re.compile(r'RULEPROBE-[A-Za-z0-9]+')
+NOTICE = re.compile(r'these rule files changed on disk after this session loaded them')
 
 
 def texts_of(content):
@@ -120,6 +129,13 @@ def probe_step(messages, tools):
         return {'kind': 'tool', 'name': name,
                 'input': {'description': 'Probe step', 'prompt': agent.group(1).strip(), 'subagent_type': 'general-purpose'}}
     return bash(run.group(1).strip())
+
+
+def probe_of(messages):
+    """The PROBE-RUN command the newest prompt names, or '' (logged, so a suite can tell which step a
+    request belongs to)."""
+    run = re.search(r'PROBE-RUN: (.+)', last_prompt(messages)[0])
+    return run.group(1).strip() if run else ''
 
 
 def note_cmd(line):
@@ -257,6 +273,9 @@ class Handler(BaseHTTPRequestHandler):
         a = answer(body)
         with LOCK, open(self.server.log_path, 'a') as log:
             log.write(json.dumps({'method': 'POST', 'path': self.path, 'first': first_user(body.get('messages') or [])[:80],
+                                  'probe': probe_of(body.get('messages') or []),
+                                  'marks': sorted(set(MARK.findall(raw.decode('utf-8', 'replace')))),
+                                  'notices': len(NOTICE.findall(raw.decode('utf-8', 'replace'))),
                                   'tools': len(body.get('tools') or []), 'answer': a}) + '\n')
         mid = 'msg_' + uuid.uuid4().hex[:20]
         if a['kind'] == 'text':
