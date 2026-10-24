@@ -1241,6 +1241,22 @@ header per group, with one read key. It is refused as too large only when no spl
 one file's own diff is over what a group can hold, or because it would take more than
 `PR_REVIEW_MAX_GROUPS` (8) groups.
 
+Reviews launched together send their requests in turn (claude-config#1619), so they share the
+cached lessons. The lessons are the reviewer's appended system prompt, cached for five minutes, and
+measured 2026-10-23 three reviews launched at once each wrote them (57k tokens) instead of reading
+them back. So before it starts claude, `lib/ai-review-run.py` takes a turn, kept in
+`~/.claude/state/ai-review/warm/` (`AI_REVIEW_WARM_DIR`), one per model and lessons: the first
+review goes at once and holds the turn until its reviewer begins answering (the first event of
+claude's stream, which it reads with `--output-format stream-json --include-partial-messages`), and
+the reviews behind it start then. One whose turn holder ends without answering takes over at once,
+so a failed first review never holds the rest, and none waits longer than
+`AI_REVIEW_START_WAIT_SECONDS` (60, at most a quarter of its deadline), which comes out of its own
+deadline. Each review records `start_order` (`first`, `warm`, `followed`, `took-over`, `gave-up` or
+`unavailable`) and `start_wait`, a review in groups records each group's as `group_starts`, and each
+records the cost and token counts claude reported (`cost_usd`, `cache_read_input_tokens` and the
+rest), so `tools/cache-usage.py` and these fields together show what the turns save. The review
+score's `--jobs` reviews take turns the same way, in one folder per run.
+
 Measured 2026-09-24: across the last 150 squash merges of claude-config, Overture, Ovation and
 PostRoll, 11 of 600 branches were over the 300 KB cap it shares with the push review. Two real
 reviews took 195 and 231 seconds against a 600 second deadline. Each review with findings adds a

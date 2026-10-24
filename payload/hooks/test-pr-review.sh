@@ -49,8 +49,16 @@ unset AI_REVIEW_HOSTS SKIP_PR_REVIEW 2>/dev/null || true
 # --- the fake claude: records its call, then answers from the environment the test sets ---
 FAKEBIN="$WORKDIR/bin"; mkdir -p "$FAKEBIN"
 export FAKE_LOG="$WORKDIR/fakelog"; mkdir -p "$FAKE_LOG"
+export FAKE_STREAM="$DIR/lib/fake-claude-stream.py"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
+# The reviewer is asked for the stream (claude-config#1619): the text below is wrapped in its
+# events by the one converter, lib/fake-claude-stream.py.
+for a in "$@"; do
+  if [ "$a" = stream-json ] && [ -z "${FAKE_STREAM_INNER:-}" ]; then
+    FAKE_STREAM_INNER=1 "$0" "$@" | python3 "$FAKE_STREAM"; exit "${PIPESTATUS[0]}"
+  fi
+done
 printf 'called\n' >> "$FAKE_LOG/calls"
 printf '%s\x1e' "$@" > "$FAKE_LOG/args"
 env > "$FAKE_LOG/env"
@@ -576,7 +584,7 @@ FAKE_CLAUDE_EMPTY=1 prr start --dir "$REPO" --sha "$HEAD_SHA" >/dev/null
 wait_final "$HEAD_SHA" || bad "the empty review wrote its file"
 out="$(prr check --dir "$REPO" --sha "$HEAD_SHA")"; rc=$?
 check_eq "an empty answer refuses, never reads as clean" "1" "$rc"
-check "in its own words" "printed nothing" "$out"
+check "in its own words" "answer was empty" "$out"
 
 # 3f2. an answer in neither shape the prompt allows. Measured 2026-09-24, the first real run: the
 #      headless claude ran Dan's global hooks, and what came back was the end of turn issue review,
@@ -1328,6 +1336,8 @@ GF1='G1.swift:3: the first group finding (L1). Should be: x. [severity: major]'
 GF2='G4.swift:5: the second group finding (L2). Should be: y. [severity: major]'
 grp_parts(){ printf '%s/parts/%s-pr-%s.%s' "$AI_REVIEW_STATE_DIR" "$KEY" "$1" "${2:-t1}"; }
 grp_runs(){ ls -d "$AI_REVIEW_STATE_DIR/parts/$KEY-pr-$1".* 2>/dev/null | grep -c . || true; }
+# Cold lessons, so the groups' turns (#1619) are taken from nothing: one goes first.
+rm -rf "$AI_REVIEW_STATE_DIR/warm"
 out="$(PR_REVIEW_MAX_BYTES=$GCAP FAKE_GROUP_1_OUT="$GF1" FAKE_GROUP_2_OUT="$GF2" prr start --dir "$REPO" --sha "$GRP_SHA" --base-ref "$GRP_BASE")"
 check "#601 a branch over the cap that splits is reviewed, not refused" "started" "$out"
 check "#601 in groups of files, said with how many" "in 2 groups" "$out"
@@ -1338,6 +1348,13 @@ check_eq "#601 one reviewer per group, the same runner each time" "2" "$(calls)"
 check_eq "#601 every group returned, so the branch review is ok" "ok" "$(meta "$F" status)"
 check_eq "#601 its findings are every group's together" "2" "$(meta "$F" findings)"
 check_eq "#601 it records how many groups read it" "2" "$(meta "$F" groups)"
+# #1619: launched together, the groups start in turn, and the review keeps the order once the
+# groups' own files are gone: exactly one went first, and the other followed it (or found the
+# lessons already warm), never giving up or starting without a turn.
+gst="$(meta "$F" group_starts)"
+check_eq "#1619 exactly one group went first" "1" "$(grep -o ' first' <<< "$gst" | grep -c .)"
+if [[ "$gst" =~ ^[12]\ (first|followed|warm)\ after\ [0-9]+s,\ [12]\ (first|followed|warm)\ after\ [0-9]+s$ ]]; then ok
+else bad "#1619 and the other followed it, each with its wait recorded (group_starts=$gst)"; fi
 g1="$(cat "$FAKE_LOG/stdin.g1" 2>/dev/null)"; g2="$(cat "$FAKE_LOG/stdin.g2" 2>/dev/null)"
 check "#601 group 1 reads its own files" "+func g1_1() {}" "$g1"
 check_not "#601 and not another group's" "+func g3_1() {}" "$g1"

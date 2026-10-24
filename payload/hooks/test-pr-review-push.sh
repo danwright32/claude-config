@@ -47,8 +47,16 @@ unset AI_REVIEW_HOSTS SKIP_PR_REVIEW PR_REVIEW_READ 2>/dev/null || true
 # --- the fake claude: records each call, answers from the environment the test sets ---
 FAKEBIN="$WORKDIR/bin"; mkdir -p "$FAKEBIN"
 export FAKE_LOG="$WORKDIR/fakelog"; mkdir -p "$FAKE_LOG"
+export FAKE_STREAM="$DIR/lib/fake-claude-stream.py"
 cat > "$FAKEBIN/claude" <<'EOS'
 #!/usr/bin/env bash
+# The reviewer is asked for the stream (claude-config#1619): the text below is wrapped in its
+# events by the one converter, lib/fake-claude-stream.py.
+for a in "$@"; do
+  if [ "$a" = stream-json ] && [ -z "${FAKE_STREAM_INNER:-}" ]; then
+    FAKE_STREAM_INNER=1 "$0" "$@" | python3 "$FAKE_STREAM"; exit "${PIPESTATUS[0]}"
+  fi
+done
 printf 'called\n' >> "$FAKE_LOG/calls"
 cat > "$FAKE_LOG/stdin"
 sleep "${FAKE_CLAUDE_SLEEP:-0}"
