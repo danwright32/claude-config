@@ -134,6 +134,12 @@ refused "an agent's core.hooksPath commit is refused"
 run_hook "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 'slow lint'" a1b2c3d4)"
 refused "an agent running the approval itself is refused"
 says "and told the approval is the main session's" "main session"
+# Nor write one by hand (lessons review at f654145): the folder is the approval, so an agent's command
+# naming it is refused whatever it does there.
+run_hook "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\nreason=x\n' > ~/.claude-no-verify-approvals/a1b2c3d4" a1b2c3d4)"
+refused "an agent writing an approval file by hand is refused"
+run_hook "$NV_GATE" "$(bash_payload "printf 'expires=9999999999\nreason=x\n' > ~/.claude-no-verify-approvals/a1b2c3d4")"
+allowed "the main session's command naming the folder is not this gate's business"
 run_hook "$NV_GATE" "$(bash_payload "bash ~/.claude/hooks/lib/no-verify-approval.sh approve a1b2c3d4 'slow lint'")"
 allowed "the main session running the approval goes through the gate"
 

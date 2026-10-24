@@ -81,6 +81,12 @@ APPROVE_HOW="bash ~/.claude/hooks/lib/no-verify-approval.sh approve $agent \"<wh
 case "$cmd" in
   *no-verify-approval*approve*)
     refuse "REFUSED (no-verify-gate.sh): agent $agent ran the approval for skipping git hooks. Only the main session can approve that; an agent approving itself is the bypass the approval exists to stop (claude-config#1587). If the skip is genuinely needed, stop and hand back to the main session saying why." ;;
+  # The folder IS the approval, so an agent's command naming it is refused whatever it does there: a
+  # file written by hand is an approval nobody gave (lessons review at f654145). The Write tool can
+  # still reach it; that is deliberate forgery rather than a corner cut, and the hand-back check
+  # still catches a report that then denies the skip.
+  *.claude-no-verify-approvals*)
+    refuse "REFUSED (no-verify-gate.sh): agent $agent's command names the folder that holds the main session's approvals to skip git hooks. An agent may not read or write approvals there; only the main session gives them (claude-config#1587)." ;;
 esac
 
 case "$cmd" in
