@@ -39,6 +39,8 @@ import {
   isOwnRecord,
   isDesignRecord,
   sealCheck,
+  SCRIPT_RECORD,
+  scriptUnread,
   settledNotSealed,
   settledUnchecked,
   settledUnread,
@@ -151,9 +153,16 @@ import { errorText } from './mod-kit/skew.ts'
 // - Since #1341: an Edit, MultiEdit or Write changing only the comments of a mod's hook file, .ts, .tsx
 //   or .jsx, a JSX comment standing between tags included, passes unasked (rules.ts
 //   commentOnlyChange); words spelled like a comment in a string, JSX text or a quoted prop are what is
-//   shown, and an app's screen file is not read so, since Tailwind reads its comments for classes. A
-//   shell write there still cannot be read before it runs, so it is held as before, and the refusal
-//   says the Edit tool lets a change to comments alone through (rules.ts shellUnread).
+//   shown, and an app's screen file is not read so, since Tailwind reads its comments for classes.
+// - Since #1576: a shell write to a mod's hook file, .ts, .tsx or .jsx, one that draws included, runs
+//   and is judged by what it leaves, by the rule its Edit is (afterShell), so the two routes agree; and
+//   a returned conditional is read as each value it may return (rules.ts drawnParts), so turning
+//   `return c ? undefined : x` into ifs returning the same values draws nothing new.
+// - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
+//   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
+//   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
+//   scriptUnread); a settled design under docs/design handed to one is never sealed checked, so the
+//   design rounds skill writes make-settled.py's page into the scratchpad and copies it in with a cp alone.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -164,7 +173,9 @@ const fromAgent = new Set<string>()
 
 // #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
 // checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
-type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[] }
+// `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
+// .ts file is judged by drawsChange over `files`.
+type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
 // by the tool.check hook, which judges them, and taken by the tool.call hook around them.
 const watching = new Map<string, Watched[]>()
@@ -234,7 +245,8 @@ const guessAt = async ($: EngineInterface, found: string, folder: string | undef
 // not follow where that is; and the text it will hold, where the call carries it.
 // `folder`, for a shell write whose name is a pattern, is where mod-kit's write reader placed it (#1123).
 // `from`, for a git checkout or restore, is where git puts the file back from (#1158).
-type Target = { path?: string; folder?: string; word: string; text?: string; from?: string }
+// `run`, for a file a script run is handed as its argument, is that script's file (#1586).
+type Target = { path?: string; folder?: string; word: string; text?: string; from?: string; run?: string }
 
 // Every file a call writes or removes, and whether it may write the guard's own record where its
 // words do not say what it writes.
@@ -261,6 +273,12 @@ const targetsOf = async ($: EngineInterface, tool: string, input: Record<string,
   // cannot be followed, or judged as a pattern. What a checkout or restore puts back is judged by the
   // lines it changes, as an edit is (#1158).
   for (const g of w.byGit ?? []) targets.push({ word: g.word, ...(g.path ? { path: g.path } : {}), ...(g.does === 'write' && g.from !== undefined ? { from: g.from } : {}) })
+  // A script file the command runs (#1586, measured live on 2026-10-23: `python3 gen.py app/page.tsx`
+  // and make-settled.py handed a page under docs/design were not held): what it writes cannot be read
+  // before it runs, so each file it is handed as an argument is judged as a write of it, as an Edit of
+  // that file would be. What it writes that no argument names (a path in its own text) is not read.
+  for (const r of w.runs ?? [])
+    for (const a of r.args) targets.push({ word: a.word, ...(a.path ? { path: a.path } : {}), ...(a.folder ? { folder: a.folder } : {}), run: r.path ?? r.script })
   for (const u of w.unnamed) {
     // A program whose text names every file it writes is judged by those files (#830).
     if (u.targets) {
@@ -463,12 +481,13 @@ const nothingShown = async ($: EngineInterface, path: string, tree: string, befo
 // mod draws (#1275): 'held' when it does, or when the mod's hook files cannot be listed or read; the
 // reason, for a git checkout or restore whose lines could not be read, judged whole; 'pass' otherwise,
 // and for a folder no plugin.json makes a mod. What a call leaves: a Write's content, an Edit's or
-// MultiEdit's text applied to the file, what git puts back (#1158). One that cannot be read before it
-// runs (a shell write, an edit that would not apply, a call naming several files) is held where the
-// file draws now and passes where it does not; a shell write passing so goes into `watch`, to be
-// judged by the file it leaves once it ran (afterShell, #1296), and one held so is 'shell', which the
-// refusal says the Edit tool lets through where it only changes comments (#1341). A change to its
-// comments alone passes (rules.ts commentOnlyChange, #1341).
+// MultiEdit's text applied to the file, what git puts back (#1158). A shell write, which cannot be read
+// before it runs, passes into `watch`, to be judged by the file it leaves once it ran (afterShell): one
+// to a file that drew nothing since #1296, and since #1576 one to a file that draws too, so a shell
+// write and an Edit making the same change are judged alike. Any other call that cannot be read before
+// it runs (an edit that would not apply, a call naming several files) is held where the file draws
+// now and passes where it does not. A change to its comments alone passes (rules.ts commentOnlyChange,
+// #1341).
 const drawingChange = async (
   $: EngineInterface,
   t: Target & { path: string },
@@ -477,7 +496,7 @@ const drawingChange = async (
   input: Record<string, unknown>,
   notAlone: string | undefined,
   watch: Watched[],
-): Promise<'held' | 'shell' | 'pass' | { unread: string }> => {
+): Promise<'held' | 'pass' | { unread: string }> => {
   if (!(await $.fs.exists(modManifestOf(t.path)).catch(() => false))) return 'pass'
   const dir = t.path.slice(0, t.path.lastIndexOf('/'))
   const name = t.path.slice(dir.length + 1)
@@ -497,10 +516,11 @@ const drawingChange = async (
     after = back.text
   } else if (tool !== 'Bash' && pathsOf(input).length === 1) after = tool === 'Write' ? editedText('', tool, input) : now === undefined ? undefined : editedText(now, tool, input)
   if (after === undefined) {
-    // Said as 'shell' only where the mod's files can be read, so an Edit there could be judged.
-    if (drawsChange(files, name, undefined, now)) return tool === 'Bash' && drawnParts(files, name) !== null ? 'shell' : 'held'
+    if (tool !== 'Bash') return drawsChange(files, name, undefined, now) ? 'held' : 'pass'
+    // A file whose drawing cannot be read now could not be judged after either: held.
+    if (drawnParts(files, name) === null) return 'held'
     // Once per file, however many of the command's words write it (lessons review).
-    if (tool === 'Bash' && !watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
+    if (!watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name, before: now, files })
     return 'pass'
   }
   if (now !== undefined && commentOnlyChange(now, after, /\.(tsx|jsx)$/i.test(name))) return 'pass'
@@ -558,6 +578,8 @@ const recordText = async (
     const back = await putBack($, t.path, tree, t.from)
     return 'why' in back ? { why: back.why } : { text: back.text }
   }
+  // Handed to a script (#1586), make-settled.py included: what it writes is read only once it ran.
+  if (t.run !== undefined) return { why: SCRIPT_RECORD }
   const src = await copiedFrom($, String(input.command ?? ''), t.path, at)
   if (typeof src !== 'string') return src
   try {
@@ -727,7 +749,7 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       if (drawn === 'pass') continue
       if (drawn !== 'held') {
         const notes = unreadIn.get(tree) ?? []
-        const said = drawn === 'shell' ? shellUnread(relTo(t.path, tree)) : unreadPutBack(relTo(t.path, tree), drawn.unread)
+        const said = unreadPutBack(relTo(t.path, tree), drawn.unread)
         if (!notes.includes(said)) notes.push(said)
         unreadIn.set(tree, notes)
       }
@@ -749,10 +771,29 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
       unreadIn.set(tree, notes)
     } else if (change && (await nothingShown($, t.path, tree, change.before, change.after))) continue
     else if (!change && tool === 'Bash' && t.from === undefined && isModHook(relTo(t.path, tree)) && (await $.fs.exists(modManifestOf(t.path)).catch(() => false))) {
-      // A shell write to a mod's TSX or JSX hook file cannot be read before it runs (#1341), and an
-      // Edit making only a comment change there would pass, so the refusal says so.
+      // A shell write to a mod's TSX or JSX hook file, which cannot be read before it runs (#1341), is
+      // judged by what it leaves once it ran, by the rule an Edit there is (#1576, afterShell). A file
+      // that cannot be read now is held whole, saying so.
+      let before: string | undefined
+      try {
+        before = await textNow($, t.path)
+      } catch (err) {
+        const notes = unreadIn.get(tree) ?? []
+        const said = shellUnread(relTo(t.path, tree), message(err))
+        if (!notes.includes(said)) notes.push(said)
+        unreadIn.set(tree, notes)
+        const files = byTree.get(tree) ?? []
+        if (!files.includes(t.path)) files.push(t.path)
+        byTree.set(tree, files)
+        continue
+      }
+      if (!watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name: t.path.slice(t.path.lastIndexOf('/') + 1), before, files: [], tsx: true })
+      continue
+    } else if (t.run !== undefined && !isDesignRecord(relTo(t.path, tree))) {
+      // A file a script is handed (#1586): the refusal says why it was judged as a write of it. A
+      // settled design's own reason is said above, with the way that goes through.
       const notes = unreadIn.get(tree) ?? []
-      const said = shellUnread(relTo(t.path, tree))
+      const said = scriptUnread(relTo(t.run, tree), relTo(t.path, tree))
       if (!notes.includes(said)) notes.push(said)
       unreadIn.set(tree, notes)
     }
@@ -883,8 +924,9 @@ const undoOne = async ($: EngineInterface, w: Watched, after: string | undefined
   return { file, undone: keep }
 }
 
-// After a shell call the guard let through (#1296): each mod .ts hook file it may have changed, read
-// again. One it made draw, in a checkout whose issue Dan has not answered for (and not his Not a look
+// After a shell call the guard let through (#1296): each mod hook file it may have changed, read again
+// (a .ts file since #1296, a TSX or JSX one and one that already drew since #1576). One whose change
+// shows, by the rule an Edit of it is judged by, in a checkout whose issue Dan has not answered for (and not his Not a look
 // change for this very call), is put back (undoOne) and the call waits on him as a refused edit does,
 // its result withheld for the guard's words; one that cannot be read is said and waits alike.
 const afterShell = async (
@@ -903,7 +945,10 @@ const afterShell = async (
       changed.push({ w, unread: message(err) })
       continue
     }
-    if (after !== w.before && drawsChange(w.files, w.name, w.before, after)) changed.push({ w, after })
+    if (after === w.before) continue
+    // A TSX or JSX hook file by the rule its Edit is judged by (#1576); one made or taken away is a change.
+    const shows = w.tsx ? w.before === undefined || after === undefined || !(await nothingShown($, w.path, w.tree, w.before, after)) : drawsChange(w.files, w.name, w.before, after)
+    if (shows) changed.push({ w, after })
   }
   if (!changed.length) return r
   // What each waits on: its checkout's issue, unless Dan has answered for it.

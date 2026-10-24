@@ -35,9 +35,13 @@
 # path (~/ or the home directory written out), the subcommand, then words, and nothing a shell would do
 # beyond splitting words and removing quotes. Each argument quoted whole is set aside, and the command
 # passes only if what is left names none of the three. Every other shape is refused as before, and so
-# is a note the reader cannot judge.
+# is a note the reader cannot judge. The milestone duplicate check is declared the same way, every
+# argument of it (claude-config#1610), and in front of either call one thing may stand, the account
+# rule's GH_TOKEN=$(gh auth token -u <login>) with a plain login, to read another account's repository;
+# behind it only 2>&1 and pipes into grep, head, tail or cut (lib/shell-words.py DATA_FILTERS). A
+# declared script refused for its shape is told the shapes its declared call passes in.
 #
-# The declared subcommands are DATA_ARGUMENT_SCRIPTS, below.
+# The declared scripts are DATA_ARGUMENT_SCRIPTS, below.
 #
 # When it cannot read the command at all (no python3, a missing lib, a payload nothing can read) and
 # the text names both a wrapper and one of the three, it refuses, saying it could not judge.
@@ -63,14 +67,22 @@
 OVERRIDE=SKIP_WRAPPED_CHECK
 ASK="Write out the command it runs in full, as a command of its own or as a literal string, so every gate can read it. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
 
-# The script subcommands whose arguments are data (claude-config#1574), each "<path under ~/>
-# <subcommand>". issue-spool.sh note: issue_spool_note hands the text and the reporter to python as
-# argv strings, and the directory to cd and git -C as a path; none is run as a command. A new entry
-# needs the same reading of its script, and test-check-wrapped-commands.sh fails until it is changed
-# with it. The ~/ is literal: the reader matches it as written, and against the home directory.
+# The scripts whose arguments are data, each "<path under ~/> <subcommand>" when only that
+# subcommand's are, or "<path under ~/>" when every argument the script takes is.
+#   issue-spool.sh note (claude-config#1574): issue_spool_note hands the text and the reporter to
+#     python as argv strings, and the directory to cd and git -C as a path; none is run as a command.
+#   milestone-candidates.sh, the duplicate check (claude-config#1610): the repository goes to gh as
+#     --repo and into the path of a GET, --like to python as an argv string, --limit and --show to
+#     python's int() and gh's --limit, --snapshot to cat, --closed-since only once it matches a date;
+#     it only reads from GitHub, runs none of them as a command, and writes only its own temp files.
+# A new entry needs the same reading of its script, and test-check-wrapped-commands.sh fails until it
+# is changed with it. The ~/ is literal: the reader matches it as written, and against the home
+# directory. In front of a declared call only the account rule's GH_TOKEN=$(gh auth token -u <login>)
+# may stand (lib/shell-words.py DATA_TOKEN_PREFIX), and nothing else.
 # shellcheck disable=SC2088
 DATA_ARGUMENT_SCRIPTS=(
   "~/.claude/hooks/lib/issue-spool.sh note"
+  "~/.claude/skills/milestone/milestone-candidates.sh"
 )
 
 payload="$(cat)"
@@ -183,13 +195,25 @@ esac
 
 ps_unreadable "$cmd" || exit 0
 why_category "$PS_UNREAD_WHY"
-# A declared script subcommand called alone, whose git, gh and rtk all sit inside arguments quoted
-# whole, is no refusal (claude-config#1574). A reader that fails or prints nothing is no pass.
+# A declared script call (or subcommand call), with nothing in front but the GH_TOKEN prefix and
+# nothing behind but 2>&1 and pipes into plain filters, whose git, gh and rtk all sit inside
+# arguments quoted whole, is no refusal (claude-config#1574, #1610). A reader that fails or prints
+# nothing is no pass.
 if [ "$REASON" = script-file ]; then
   shown="$(printf '%s' "$cmd" | python3 "$PS_SHELL_WORDS" data-blanked "${DATA_ARGUMENT_SCRIPTS[@]}" 2>/dev/null)" \
     && [ -n "$shown" ] \
     && ! [[ $shown =~ (^|[^A-Za-z0-9_.-])(git|gh|rtk)([^A-Za-z0-9_.-]|$) ]] \
     && exit 0
+  # A declared script refused for its shape is told the shapes it passes in, rather than only to
+  # write the command out (claude-config#1610): the remedy is to change the call, not to unwrap it.
+  for entry in "${DATA_ARGUMENT_SCRIPTS[@]}"; do
+    script="${entry%% *}"
+    case "$PS_UNREAD_WHY" in
+      *"script file $script,"*|*"script file $HOME/${script#\~/},"*)
+        ASK="Its declared call, \`bash $entry\`, passes only called alone, or piped into grep, head, tail or cut, with git, gh and rtk only inside quoted arguments and nothing in front but GH_TOKEN=\$(gh auth token -u <login>); run it that way, and anything else as a command of its own. If this refusal is wrong, say so and add $OVERRIDE=1 to that one command."
+        break ;;
+    esac
+  done
 fi
 if [ "$overridden" = 1 ]; then
   record_refusal "$PS_UNREAD_WRAPPER" "$REASON" overridden

@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { GOAL_MARK, goalAt, goalIn, type GoalRun } from '../hooks/goal.ts'
 
 // The goal a session has set with Claude Code's own /goal, read from its transcript (#1242, moved

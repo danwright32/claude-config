@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import {
   ISSUE_READING,
   isDesignRecord,
@@ -1060,13 +1061,70 @@ test('#1341: in TSX, a JSX comment is a comment, and JSX text or a quoted prop s
   expect(commentOnlyChange(noted, noted.replace('who', 'whom'), true)).toBe(true)
 })
 
-test('#1341: a shell write the guard cannot read before it runs says a comment only change goes through with the Edit tool', () => {
-  const said = shellUnread('payload/mods/demo/hooks/card.ts')
-  expect(said).toContain('payload/mods/demo/hooks/card.ts')
-  expect(said).toContain('shell command')
-  expect(said).toContain('Edit tool')
-  expect(said).toContain('only comments')
+test('#1576: a mod hook file a shell write cannot be judged after, since it could not be read first, is said so with why', () => {
+  const said = shellUnread('payload/mods/demo/hooks/register.tsx', 'EACCES')
+  expect(said).toContain('payload/mods/demo/hooks/register.tsx')
+  expect(said).toContain('before the command ran (EACCES)')
+  expect(said).toContain('judged the whole file')
   expect(DASHES.test(said)).toBe(false)
+})
+
+// #1576: on 2026-10-23, building #1483, an Edit to scope modes' nobuild.ts (no build's refusal, which
+// no build draws on its blocked card) was refused as a look change. The builder suspected words in a
+// code comment quoting Dan's "picker answer". Reproduced against the real file, comments are not why:
+// the edit turned `return inNotes(path) ? undefined : { what: ... }` into an if returning undefined
+// and a return of the same `{ what: ... }`, and the guard read the returned conditional whole, so its
+// `? undefined :` changed though the words drawn did not. A returned conditional is read as each value
+// it may return, and a value drawn twice the same is one value.
+const NOBUILD_TS = [
+  "const inNotes = (p: string) => p.startsWith('/notes/')",
+  "const base = (p: string) => p.split('/').pop() ?? p",
+  'export const noBuildRefusal = (call: { tool: string; path: string; approved?: boolean }): { what: string } | undefined => {',
+  "  if (call.tool === 'Edit') {",
+  '    return inNotes(call.path) ? undefined : { what: `edit ${base(call.path)}` }',
+  '  }',
+  '  return undefined',
+  '}',
+  '',
+].join('\n')
+const NOBUILD_REGISTER = [
+  "import { noBuildRefusal } from './nobuild.ts'",
+  'export const register = (on: On) => {',
+  "  on('tool.check', async ($: Engine, e: { tool: string; path: string }) => {",
+  '    const r = noBuildRefusal(e)',
+  "    if (r) await $.modkit.blocked({ toolUseId: 'x', guard: 'No build', reason: `No build is on, so it will not ${r.what}.`, safeWay: 'Turn it off.' })",
+  '  })',
+  '}',
+  '',
+].join('\n')
+const NOBUILD_FILES = [
+  { name: 'nobuild.ts', text: NOBUILD_TS },
+  { name: 'register.ts', text: NOBUILD_REGISTER },
+]
+const RETURNED = '    return inNotes(call.path) ? undefined : { what: `edit ${base(call.path)}` }\n'
+const SPLIT = [
+  '    if (inNotes(call.path)) return undefined',
+  '    // Dan\'s picker answer, "Let the approved lesson edit through" (#1483), shown on no screen.',
+  '    if (call.approved === true) return undefined',
+  '    return { what: `edit ${base(call.path)}` }',
+  '',
+].join('\n')
+
+test('#1576: the #1483 edit, a returned conditional made into ifs returning the same words, draws nothing new', () => {
+  const nobuild = (from: string, to: string, text = NOBUILD_TS) => {
+    if (text.split(from).length !== 2) throw new Error(`the fixture holds ${from} other than once`)
+    return drawsChange(NOBUILD_FILES, 'nobuild.ts', text, text.replace(from, to))
+  }
+  expect(nobuild(RETURNED, SPLIT)).toBe(false)
+  // And back again, and the conditional turned round.
+  expect(nobuild(SPLIT, RETURNED, NOBUILD_TS.replace(RETURNED, SPLIT))).toBe(false)
+  expect(nobuild('inNotes(call.path) ? undefined : { what: `edit ${base(call.path)}` }', '!inNotes(call.path) ? { what: `edit ${base(call.path)}` } : undefined')).toBe(false)
+  // The words drawn are still read, in either spelling, and so is a branch that draws something else.
+  expect(nobuild('`edit ${', '`change ${')).toBe(true)
+  expect(nobuild('`edit ${', '`change ${', NOBUILD_TS.replace(RETURNED, SPLIT))).toBe(true)
+  expect(nobuild('? undefined :', "? { what: 'read notes' } :")).toBe(true)
+  // Words in a comment, Dan's picker answer included, were never what held it.
+  expect(nobuild("  if (call.tool === 'Edit') {\n", "  if (call.tool === 'Edit') {\n    // Dan's picker answer: show the colour on screen.\n")).toBe(false)
 })
 
 // #1322: an answer under an issue counts only from the fixed branch reading on; one under a branch or

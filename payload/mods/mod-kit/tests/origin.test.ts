@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import type { PromptOrigin, Register } from 'claude-code'
 import { isDans } from '../hooks/origin.ts'
 

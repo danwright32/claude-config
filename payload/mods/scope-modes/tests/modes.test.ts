@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { ACK_LEAD, acknowledge, ackOff, ackOffSaid, ackOn, ackOnSaid, MODE_DEF, modeDoes, type Mode } from '../hooks/modes.ts'
 import { FINISHED, NEW_WORK, newWork } from '../hooks/winddown.ts'
 

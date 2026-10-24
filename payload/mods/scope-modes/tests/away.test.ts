@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import { awayAllows, heldCard, heldTool, isTestBuild, needsTheMac, targetPath, targetPaths, typedTarget } from '../hooks/away.ts'
 import { pipeline } from './mod-kit/hooks/commands.ts'
 

@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { commands, pipeline } from '../hooks/commands.ts'
 
 // What each command runs as its program (#712): moved here from scope-modes, which kept the only

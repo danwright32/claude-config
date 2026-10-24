@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
+import { test } from './hang-ceiling.ts'
 import { isTestPath } from '../hooks/testfile.ts'
 
 // Whether a path inside a checkout is a test file (#1508): the design round guard's rule since Dan's

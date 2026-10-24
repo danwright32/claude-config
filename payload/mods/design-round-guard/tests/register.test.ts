@@ -1,4 +1,5 @@
-import { expect, mock, test, type Engine } from 'claude-code/testing'
+import { expect, mock, type Engine } from 'claude-code/testing'
+import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 import type {} from '../types/index.d.ts'
 import { CONTRACT, HEADER, ISSUE_READING, NOT_LOOK, callKey, callText, SETTLED_NO, SETTLED_QUESTION, SETTLED_SOURCE, SETTLED_YES, SKIP_NO, SKIP_QUESTION, SKIP_YES, settledNotYet } from '../hooks/rules.ts'
@@ -1547,15 +1548,20 @@ test('#1275: a look change in a mod line builder file is asked about; a logic on
   expect(w.ran.map(r => r.input.file_path)).toEqual([LINES, `${DEMO}/keys.ts`, `${DEMO}/twice.ts`])
 })
 
-test("#1275: a shell write to a line builder file is asked about, to one that draws nothing passes, and an app's .ts or a mod's test file is never read so", withKit, async ($, on) => {
-  const w = world($, on, { files: { ...DEMO_FILES, '/w/slate/src/mods/shop/hooks/card.ts': LINES_TEXT, '/w/slate/payload/mods/demo/tests/card.test.ts': LINES_TEXT } })
-  // What sed leaves cannot be read before it runs, so a file that draws is held whole.
-  expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/60_000/90_000/' payload/mods/demo/hooks/card.ts" }))).toContain(SKIP_QUESTION)
+test("#1275: a shell write making a line builder file draw differently is undone and asked about, to one that draws nothing passes, and an app's .ts or a mod's test file is never read so", withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [`${SCRATCH}/.keep`]: '', '/w/slate/src/mods/shop/hooks/card.ts': LINES_TEXT, '/w/slate/payload/mods/demo/tests/card.test.ts': LINES_TEXT } })
+  // What sed leaves is read once it ran (#1576, judged after as #1296 judges a file that drew nothing).
+  w.ctl.shell = { [LINES]: LINES_TEXT.replace('bold: true', 'bold: false') }
+  const why = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/bold: true/bold: false/' payload/mods/demo/hooks/card.ts" }))
+  expect(why).toContain(SKIP_QUESTION)
+  expect(why).toContain('was undone')
+  expect(w.files[LINES]).toBe(LINES_TEXT)
+  w.ctl.shell = {}
   expect(refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/steps:/s:/' payload/mods/demo/hooks/keys.ts" }))).toBe('')
   // Under a folder named mods with no plugin.json, and a mod's own test: no mod hook file, as before.
   expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/src/mods/shop/hooks/card.ts' }))).toBe('')
   expect(refusalOf(await call($, { ...DIVIDER, file_path: '/w/slate/payload/mods/demo/tests/card.test.ts' }))).toBe('')
-  expect(w.ran.length).toBe(3)
+  expect(w.ran.length).toBe(4)
 })
 
 // #1341: a python heredoc that only reflowed a comment in this guard's own register.ts was refused as a
@@ -1594,29 +1600,53 @@ test('#1341: an edit to comments alone in a mod hook file passes unasked by Edit
   expect(w.ran.length).toBe(4)
 })
 
-// #1341: what a shell command leaves cannot be read before it runs, so a shell write to a mod hook file
-// that draws stays held whole, and the refusal says the Edit tool lets a comment only change through.
-test('#1341: a shell write to a mod hook file that draws is held whole, and told a comment only change goes through by the Edit tool', withKit, async ($, on) => {
-  const w = world($, on, { files: { ...DEMO_FILES, '/w/slate/app/page.tsx': MOD_TEXT } })
-  const python = {
+// #1576 (its comment, from the #1524 builder on 2026-10-23): a shell edit of this guard's own
+// register.ts, drawing nothing new, was held as a possible look change while the same change by the
+// Edit tool passed, since what a shell command leaves cannot be read before it runs and a file that
+// draws was held whole (#1341). A shell write to a mod's hook file, .ts, .tsx or .jsx, is now judged
+// by what it leaves, by the rule its Edit is judged by: read once it ran, as #1296 reads one that drew
+// nothing (Dan, 2026-10-17: judge after, and undo). One that changes what the mod draws, on an issue
+// Dan has not answered for, is put back, its text kept in the scratchpad, and waits on him.
+test('#1576: a shell write to a mod hook file that draws is judged by what it leaves, as the Edit tool is: logic and comments stand, a look change is undone', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...DEMO_FILES, [`${SCRATCH}/.keep`]: '', '/w/slate/app/page.tsx': MOD_TEXT } })
+  const python = (file: string) => ({
     tool: 'Bash',
-    command: "python3 - <<'EOF'\np = 'payload/mods/demo/hooks/card.ts'\nt = open(p).read()\nopen(p, 'w').write(t.replace('x', 'y'))\nEOF",
-  }
-  for (const c of [python, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/card.ts" }]) {
-    const why = refusalOf(await call($, c))
-    expect(why).toContain(SKIP_QUESTION)
-    expect(why).toContain('payload/mods/demo/hooks/card.ts')
-    expect(why).toContain('Edit tool')
-  }
-  w.files[MOD_HOOK] = MOD_TEXT
-  const tsx = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' payload/mods/demo/hooks/register.tsx" }))
-  expect(tsx).toContain(SKIP_QUESTION)
-  expect(tsx).toContain('Edit tool')
-  // An app's screen file is never let through for its comments, so the refusal promises nothing.
-  const page = refusalOf(await call($, { tool: 'Bash', command: "sed -i '' 's/x/y/' app/page.tsx" }))
+    command: `python3 - <<'EOF'\np = '${file}'\nt = open(p).read()\nopen(p, 'w').write(t.replace('x', 'y'))\nEOF`,
+  })
+  const sed = (file: string) => ({ tool: 'Bash', command: `sed -i '' 's/x/y/' ${file}` })
+  // A .ts line builder: a logic change by sed and a comment by a python heredoc stand.
+  const logic = LINES_TEXT.replace('2 * 60_000', '3 * 60_000')
+  w.ctl.shell = { [LINES]: logic }
+  expect(refusalOf(await call($, sed('payload/mods/demo/hooks/card.ts')))).toBe('')
+  expect(w.files[LINES]).toBe(logic)
+  const noted = `// Dan's picker answer: the card's colour, frame and words stay as they are.\n${logic}`
+  w.ctl.shell = { [LINES]: noted }
+  expect(refusalOf(await call($, python('payload/mods/demo/hooks/card.ts')))).toBe('')
+  expect(w.files[LINES]).toBe(noted)
+  // A change to what it draws is put back, its text kept, and waits on Dan.
+  const divided = noted.replace('  card.steps.forEach((s, i) => {\n', '  card.steps.forEach((s, i) => {\n    if (i > 0) lines.push({ divider: true })\n')
+  w.ctl.shell = { [LINES]: divided }
+  const why = refusalOf(await call($, sed('payload/mods/demo/hooks/card.ts')))
+  expect(why).toContain('was undone')
+  BOTH_WAYS(why)
+  expect(w.files[LINES]).toBe(noted)
+  expect(w.files[KEPT(idIn(why) as string, 'card.ts')]).toBe(divided)
+  // A .tsx hook file, by the rule its Edit is judged by: a logic line stands, a frame is undone.
+  const DRAWS = `${DEMO}/register.tsx`
+  const tested = DRAWS_TEXT.replace('DROPPED_AFTER_MS < 0', 'DROPPED_AFTER_MS <= 0')
+  w.ctl.shell = { [DRAWS]: tested }
+  expect(refusalOf(await call($, sed('payload/mods/demo/hooks/register.tsx')))).toBe('')
+  expect(w.files[DRAWS]).toBe(tested)
+  w.ctl.shell = { [DRAWS]: tested.replace("slot: 'steps',", "slot: 'steps', frame: { kind: 'box' },") }
+  expect(refusalOf(await call($, sed('payload/mods/demo/hooks/register.tsx')))).toContain('was undone')
+  expect(w.files[DRAWS]).toBe(tested)
+  expect(w.ran.length).toBe(5)
+  // An app's screen file is not read so: a shell write there is held before it runs, promising nothing.
+  w.ctl.shell = {}
+  const page = refusalOf(await call($, sed('app/page.tsx')))
   expect(page).toContain(SKIP_QUESTION)
   expect(page).not.toContain('Edit tool')
-  expect(w.ran.length).toBe(0)
+  expect(w.ran.length).toBe(5)
 })
 
 test('#1275: a mod whose hook files cannot be listed or read is asked about rather than passed', withKit, async ($, on) => {
@@ -2256,15 +2286,16 @@ test('#1524: what cannot be read or checked before it runs is held as any look c
   expect(refusalOf(await call($, { tool: 'Bash', command: `D=/w/slate/docs/design; cp ${ROUND}/settled.html $D/slack-channel-picker.html` }))).toContain(SKIP_QUESTION)
   expect(refusalOf(await call($, { tool: 'Bash', command: `printf x >> ${RECORD}` }))).toContain(SKIP_QUESTION)
   expect(w.sealChecks).toEqual([])
-  // A script file run with the record only as its argument is never read as a write of it, so the
-  // seal check is never asked and nothing in #1524 lets it through. That such a run is not held at
-  // all is older than #1524 and holds for any screen file named only as a script's argument (seen
-  // live on 2026-10-23 with a script that wrote nothing); it is recorded as its own finding.
-  await call($, { tool: 'Bash', command: `python3 ~/.claude/skills/design-rounds/make-settled.py ${ROUND}/settled.json ${RECORD}` })
-  await call($, { tool: 'Bash', command: `python3 /w/slate/scripts/gen.py /w/slate/app/page.tsx` })
+  // #1586: a script file run with the record only as its argument writes what cannot be read before it
+  // runs, so the seal check is never asked and nothing in #1524 lets it through: it is held, saying
+  // that make-settled.py writing into the scratchpad and a cp alone copying it in goes through.
+  const made = refusalOf(await call($, { tool: 'Bash', command: `python3 ~/.claude/skills/design-rounds/make-settled.py ${ROUND}/settled.json ${RECORD}` }))
+  expect(made).toContain(SKIP_QUESTION)
+  expect(made).toContain("write it into this session's scratchpad and copy it in with a cp alone")
+  expect(made).toContain('copied in whole by a cp alone')
   expect(w.sealChecks).toEqual([])
   expect(Object.keys(w.store)).toEqual([])
-  w.ran.length = 0
+  expect(w.ran).toEqual([])
   // A check that cannot be run holds the file, never passes it.
   w.ctl.sealFails = true
   const unchecked = refusalOf(await call($, { tool: 'Write', file_path: RECORD, content: SETTLED_PAGE }))
@@ -2278,4 +2309,63 @@ test('#1524: what cannot be read or checked before it runs is held as any look c
   expect(silent).toContain('design_file.py --sealed exited 0: with no message')
   expect(w.ran).toEqual([])
   expect(w.ran).toEqual([])
+})
+
+// #1586: measured live on 2026-10-23 by the #1524 builder, a script FILE run with a screen file named
+// only as its argument (`python3 some/script.py <checkout>/app/page.tsx`, make-settled.py handed a page
+// under docs/design) was not held on a branch with no answer for its issue: mod-kit's write reader
+// read no write from a script file's arguments. What a script writes cannot be read before it runs, so
+// a screen file it is handed is judged as a write of it, as an Edit of that file would be.
+const GEN = (args: string) => ({ tool: 'Bash', command: `python3 /w/slate/scripts/gen.py ${args}` })
+
+test('#1586: a script run handed a screen file as its argument is held, on a branch with no answer, saying why', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    'python3 /w/slate/scripts/gen.py /w/slate/app/page.tsx',
+    'cd /w/slate && python3 scripts/gen.py app/globals.css',
+    'bash /w/slate/scripts/fix.sh -v app/page.tsx',
+    'node /w/slate/build.mjs --out=/w/slate/app/site.css',
+    './scripts/fix app/page.tsx',
+    'P=/w/slate/app/page.tsx; python3 scripts/gen.py "$P"',
+  ]) {
+    const why = refusalOf(await call($, { tool: 'Bash', command }))
+    expect({ command, held: why.includes(SKIP_QUESTION) }).toEqual({ command, held: true })
+    expect({ command, said: why.includes('which it is handed as an argument') }).toEqual({ command, said: true })
+  }
+  const why = refusalOf(await call($, GEN('/w/slate/app/page.tsx')))
+  BOTH_WAYS(why)
+  expect(why).toContain('app/page.tsx')
+  expect(why).toContain('The design round guard cannot read what scripts/gen.py does with app/page.tsx, which it is handed as an argument, before it runs')
+  expect(w.ran).toEqual([])
+})
+
+test('#1586: a script handed no screen file, a test, a file in no checkout, or on an issue Dan answered runs', withKit, async ($, on) => {
+  const w = world($, on)
+  for (const command of [
+    'python3 /w/slate/scripts/gen.py /w/slate/data.json',
+    'python3 /w/slate/scripts/gen.py /w/slate/app/page.test.tsx',
+    `python3 ~/.claude/skills/design-rounds/make-switcher.py ${ROUND}/spec.json ${ROUND}/switcher.html`,
+    'python3 /w/slate/scripts/fetch.py https://example.com/page.html',
+    'bash /w/slate/payload/hooks/run-all-tests.sh',
+  ])
+    expect({ command, why: refusalOf(await call($, { tool: 'Bash', command })) }).toEqual({ command, why: '' })
+  expect(w.ran.length).toBe(5)
+  w.store['record:/w/slate|issue:978'] = { kind: 'settled', at: 1, label: 'issue #978 in slate', reading: ISSUE_READING }
+  expect(refusalOf(await call($, GEN('/w/slate/app/page.tsx')))).toBe('')
+  expect(w.ran.length).toBe(6)
+})
+
+test("#1586: a script handed the guard's own record is refused as a forged answer", withKit, async ($, on) => {
+  const w = world($, on)
+  expect(refusalOf(await call($, GEN(STORE)))).toContain('own record')
+  expect(w.ran).toEqual([])
+})
+
+test('#1586: a script handed a mod .ts hook file that draws nothing runs, and one it made draw is undone and held', withKit, async ($, on) => {
+  const w = world($, on, { files: { ...WITH_SCRATCH } })
+  w.ctl.shell = { [KEYS]: DRAWN_KEYS }
+  const why = refusalOf(await call($, { tool: 'Bash', command: 'python3 scripts/gen.py payload/mods/demo/hooks/keys.ts' }))
+  expect(why).toContain('was undone')
+  expect(w.files[KEYS]).toBe(KEYS_TEXT)
+  expect(w.ran.length).toBe(1)
 })
