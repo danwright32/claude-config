@@ -115,7 +115,8 @@ run "an env-prefixed real command still blocked" $BLOCK \
 
 # --- the detector's own reader (claude-config#486) -----------------------------
 #
-# The negation detector is python3 and nothing asked whether python3 was installed. Without it the
+# The detector (lib/closing-keyword.py since #1550) is python3 and nothing asked whether python3 was
+# installed. Without it the
 # findings came back empty, the emptiness test passed, and this gate exited 0 on exactly the
 # phrasing it exists to stop, with nothing said (L490, L42, L98).
 . "$DIR/lib/no-python-path.sh"
