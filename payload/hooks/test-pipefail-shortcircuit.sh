@@ -55,7 +55,10 @@ if [ ! -f "$RATCHET_LIB" ]; then
 fi
 # shellcheck source=lib/ratchet.sh
 . "$RATCHET_LIB"
-ROOT="${SHORTCIRCUIT_ROOT:-$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || true)}"
+# The checkout this copy is the payload of, found by the one shared test (lib/checkout-root.sh,
+# claude-config#1567): a repository above that is not this one (a home folder kept in git) is no
+# checkout, so its files are never scanned as this repository's.
+ROOT="${SHORTCIRCUIT_ROOT:-$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)}"
 
 pass=0
 fail=0
@@ -67,8 +70,8 @@ check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); else fail=$((fail + 1)
 # reported as NOT RUN rather than as broken code, and never as a pass: the runner refuses the same
 # claim wherever a repository IS present, so this cannot become a way to opt out of being run.
 if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
-  echo "test-pipefail-shortcircuit: no repo above $DIR, so there were no files to read." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read its tracked files, and there is none above $DIR"
+  echo "test-pipefail-shortcircuit: $DIR/.. is not the payload of a claude-config checkout, so there were no files of this repository to read." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository to read its tracked files, and $DIR/.. is not the payload of a claude-config checkout"
   exit 2
 fi
 
