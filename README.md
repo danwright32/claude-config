@@ -1414,8 +1414,13 @@ Three gates close the three parts of that, all reading commands through one libr
   override only. A report the agent will not correct goes through on the third attempt, said to Dan
   and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
   the personal MacBook it found one real contradiction (a report saying "I never used
-  `SKIP_PAYLOAD_WRITE_CHECK=1`" after two commands that set it) and no false one. That Claude Code
-  runs PreToolUse hooks for the SubagentHandback tool at all was not measured when this shipped.
+  `SKIP_PAYLOAD_WRITE_CHECK=1`" after two commands that set it) and no false one. Claude Code does
+  run PreToolUse hooks for the SubagentHandback tool, measured on 2026-10-24 (#1674): a probe agent
+  set `SKIP_HANDBACK_PROBE=1` and handed back "no overrides were used", and the gate refused it, wrote
+  its refusal count under `~/.claude-handback-check/`, and left a `PreToolUse:SubagentHandback` hook
+  record in the agent's transcript. A gate that lets a report through prints nothing, and Claude Code
+  records a hook in the transcript only when it prints, so the 22 earlier hand-backs, none of which
+  contradicted its commands, left no trace either way.
 
 ### What a push actually waits on
 

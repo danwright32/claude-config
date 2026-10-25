@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { APPROVAL_MS, untimed, addedText, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
+import { APPROVAL_MS, untimed, addedText, addsLesson, lessonAddition, callShown, cannotCheck, display, lapseWait, lastingFiles, lastingMemory, madePermanent, mentioned, askInstruction, dialogOptions, resolvePath, ruleOf, saveIdOf, saveKey, sourceOf, stands, withoutPythonText, writesWhat } from '../hooks/rules.ts'
 import { pythonText } from './mod-kit/hooks/code.ts'
 
 // What counts as lasting memory, when Dan's own words already made a rule permanent, and what the
@@ -547,4 +547,49 @@ test('a lapse that cannot be timed names the answer Dan pressed', () => {
   expect(lesson).toContain('The 10 minute limit on Add to LESSONS.md for saving to ~/.claude/LESSONS.md could not be timed (the mod reloaded)')
   expect(lesson).not.toContain('For good')
   expect(untimed({ id: 's', key: 'k', files: ['~/Apps/slate/AGENTS.md'], until: 1 }, 'x')).toContain('The 10 minute limit on For good for saving to ~/Apps/slate/AGENTS.md')
+})
+
+// #1691: Dan answered Add to LESSONS.md for L1030 and was asked For good about it again, because the
+// Edit that added it took whole lines WITH their newline as its old text, a shape the judgement
+// refused, so the approval lapsed unused. The fixture is the real call of 2026-10-24, from the
+// session's transcript, against the lessons file as it then stood around that place.
+const L1030_RULE =
+  "Never put a heredoc inside a $( ) command substitution in a script macOS bash 3.2 runs, because a single quote anywhere in the heredoc's body breaks the parse and the whole script dies before running anything; write the heredoc's output to a file and read the file instead."
+const L1015_SHORT = '  SHORT: A per item `read < <(cmd)` loop kills macOS bash 3.2 part way through a big list; use a command substitution and test at the real count.\n'
+const L1030_ENTRY =
+  "- **L1030. Never put a heredoc inside a $( ) command substitution in a script macOS bash 3.2\n  runs, because a single quote anywhere in the heredoc's body breaks the parse and the whole\n  script dies before running anything; write the heredoc's output to a file and read the\n  file instead.**\n  (claude-config#1690, 2026-10-24)\n  SHORT: A heredoc inside $( ) with a single quote in it breaks macOS bash 3.2's parse and kills the script; write to a file instead.\n"
+const L1030_ADDED = L1030_ENTRY.replace(/\n$/, '')
+const LESSONS_AROUND = `# Lessons\n\n- **L1015. A shell loop that reads through \`< <(command)\` once per item leaks a process.**\n${L1015_SHORT}\n- **L488. A shell script that sources a library with \`.\` and does not run \`set -e\`.**\n`
+
+test('an Edit whose old text is whole lines with their newline adds the entry it inserts, as the same text written whole would', () => {
+  const edit = { file_path: 'x', old_string: L1015_SHORT, new_string: L1015_SHORT + L1030_ENTRY }
+  const added = lessonAddition('Edit', edit, LESSONS_AROUND)
+  expect(added).toBe(L1030_ADDED)
+  expect(addsLesson(added ?? '', L1030_RULE)).toBe(true)
+  // The entry before kept text that starts with its newline, and the same file written whole.
+  expect(lessonAddition('Edit', { file_path: 'x', old_string: '\n- **L488.', new_string: `\n${L1030_ENTRY}- **L488.` }, LESSONS_AROUND)).toBe(L1030_ADDED)
+  // The shape every earlier test used, kept lines without their newline, still adds it.
+  expect(lessonAddition('Edit', { file_path: 'x', old_string: L1015_SHORT.replace(/\n$/, ''), new_string: L1015_SHORT + L1030_ADDED }, LESSONS_AROUND)).toBe(L1030_ADDED)
+  const whole = LESSONS_AROUND.replace(L1015_SHORT, L1015_SHORT + L1030_ENTRY)
+  expect(lessonAddition('Write', { file_path: 'x', content: whole }, LESSONS_AROUND)).toBe(L1030_ADDED)
+})
+
+test('an Edit that does more than insert one entry at a line boundary adds nothing, however its old text is cut', () => {
+  const at = (old_string: string, new_string: string, extra: Record<string, unknown> = {}) => lessonAddition('Edit', { file_path: 'x', old_string, new_string, ...extra }, LESSONS_AROUND)
+  // Spliced into the middle of a line.
+  expect(at('a per item', `a per item\n${L1030_ENTRY}`)).toBeUndefined()
+  // A kept line changed beside the entry.
+  expect(at(L1015_SHORT, L1015_SHORT.replace('big list', 'long list') + L1030_ENTRY)).toBeUndefined()
+  // A kept line dropped for the entry.
+  expect(at(L1015_SHORT, L1030_ENTRY)).toBeUndefined()
+  // Old text found more than once, or not at all, or every occurrence replaced, or none given.
+  expect(at('\n', `\n${L1030_ENTRY}`)).toBeUndefined()
+  expect(at('nowhere in the file\n', `nowhere in the file\n${L1030_ENTRY}`)).toBeUndefined()
+  expect(at(L1015_SHORT, L1015_SHORT + L1030_ENTRY, { replace_all: true })).toBeUndefined()
+  expect(at('', L1030_ENTRY)).toBeUndefined()
+  // Two entries at once: one block, which is not the one approved lesson.
+  const two = at(L1015_SHORT, L1015_SHORT + L1030_ENTRY + L1030_ENTRY.replace('L1030', 'L1031'))
+  expect(two !== undefined && addsLesson(two, L1030_RULE)).toBe(false)
+  // No file to judge against.
+  expect(lessonAddition('Edit', { file_path: 'x', old_string: L1015_SHORT, new_string: L1015_SHORT + L1030_ENTRY }, undefined)).toBeUndefined()
 })
