@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ModKitGoal } from '../.claude-plugin/types/mod-kit/index.d.ts'
 import type { GoalBoxShown } from '../types/index.d.ts'
-import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide, linkedIn, mergeHolds, readInput, type Holds, type Linked, type MergeFacts } from './box.ts'
+import { DESCRIPTION, MOD, NAME, SCHEMA, TOOL, askText, boxText, cardOf, decide, linkedIn, mergeFactsOf, mergeHolds, readInput, type Holds, type Linked } from './box.ts'
 import { askAnyAccount, type GhRun } from './mod-kit/ghaccounts.ts'
 import { errorText } from './mod-kit/skew.ts'
 
@@ -125,10 +125,8 @@ const agentHolds = async ($: EngineInterface): Promise<Holds> => {
 }
 
 const mergeHoldsNow = async ($: EngineInterface): Promise<Holds> => {
-  const facts: MergeFacts = {
-    owed: ((await $.state.get(owedRef)).value ?? []) as MergeFacts['owed'],
-    verdicts: ((await $.state.get(verdictsRef)).value ?? {}) as MergeFacts['verdicts'],
-  }
+  const facts = mergeFactsOf((await $.state.get(owedRef)).value as unknown, (await $.state.get(verdictsRef)).value as unknown)
+  if ('why' in facts) return [`is it live's record of this session's merges could not be read (${facts.why}), so whether a merge or deploy is settled is not known`]
   return mergeHolds(facts)
 }
 
@@ -157,6 +155,16 @@ const markAsked = async ($: EngineInterface, id: string): Promise<boolean> => {
     if ((await $.state.set(askedRef, [...list, id], { ifVersion: held.version })).isSet) return true
   }
   return false
+}
+
+/** Takes a met goal off the asked list, so the next turn end asks for its box again (L368). */
+const unmarkAsked = async ($: EngineInterface, id: string): Promise<void> => {
+  for (let i = 0; i < 10; i++) {
+    const held = await $.state.get(askedRef)
+    const list = held.value ?? []
+    if (!list.includes(id)) return
+    if ((await $.state.set(askedRef, list.filter(x => x !== id), { ifVersion: held.version })).isSet) return
+  }
 }
 
 export const register: Register = on => {
@@ -222,11 +230,19 @@ export const register: Register = on => {
     if ((await $.state.get(interactiveRef)).value !== true) return r
     const goal = await goalNow($)
     if (goal.state !== 'none' || !goal.met) return r
+    // Claimed first, so two turn ends at once send one prompt; released again when the prompt did not
+    // enter (thrown, or dropped by a hook beneath), so a passing failure never loses the box (L368).
     if (!(await markAsked($, goal.met.id))) return r
+    let failed: string | undefined
     try {
-      await $.prompt.submit({ text: askText(goal.met.condition) })
+      const sent = await $.prompt.submit({ text: askText(goal.met.condition) })
+      if (sent.drop !== undefined) failed = sent.drop || 'the prompt was dropped'
     } catch (err) {
-      $.ui.log(`The goal "${goal.met.condition}" was met, but the Goal accomplished box could not be asked for (${msg(err)}).`)
+      failed = msg(err)
+    }
+    if (failed !== undefined) {
+      await unmarkAsked($, goal.met.id)
+      $.ui.log(`The goal "${goal.met.condition}" was met, but the Goal accomplished box could not be asked for (${failed}); it is asked again at the next turn end.`)
     }
     return r
   })

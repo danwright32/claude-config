@@ -3,9 +3,9 @@ import { test } from './mod-kit/tests/hang-ceiling.ts'
 import type { On, Register } from 'claude-code'
 
 // The Goal accomplished box (claude-config#1563) in a session: shown once when a /goal is met (the
-// session is told to show it, at the Stop hook if the met record is already written, else by a
-// prompt of its own once the turn has ended) or when Claude judges the work Dan asked for finished
-// and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
+// session is sent a prompt of its own asking for it once the turn has ended, since the met record
+// lands after the Stop hooks and the mod hooks no Stop) or when Claude judges the work Dan asked for
+// finished and calls the tool; never while a merge, a deploy, an agent or a pull request is in flight.
 
 const T = '/Users/dan/.claude/projects/-repo/s1.jsonl'
 const TOOL = 'mcp__goal-box__goal_accomplished'
@@ -109,12 +109,14 @@ type World = {
   /** What `gh pr list --state open` answers per repository; absent answers an empty list. */
   open: Record<string, Gh>
   agents: { id: string; status: string; spawnedBy?: string; description?: string }[]
+  /** How each of the mod's own next prompts fails, in order: thrown, or dropped by a hook beneath. */
+  submitFails: ('throw' | 'drop')[]
 }
 const link = (repo: string, pr: number, at = '2026-10-24T18:00:00.000Z') =>
   JSON.stringify({ type: 'pr-link', sessionId: 's1', prNumber: pr, prUrl: `https://github.com/${repo}/pull/${pr}`, prRepository: repo, timestamp: at })
 
 const world = (on: On, init: Partial<World> = {}) => {
-  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, owed: [], verdicts: {}, links: [], open: {}, agents: [], ...init }
+  const w: World = { goal: { state: 'none' }, cardFails: '', cards: [], transcript: T, owed: [], verdicts: {}, links: [], open: {}, agents: [], submitFails: [], ...init }
   const runs: string[][] = []
   const submitted: { text: string; origin: unknown }[] = []
   const tools: { name: string; isDeferred?: unknown; description: string }[] = []
@@ -158,6 +160,11 @@ const world = (on: On, init: Partial<World> = {}) => {
     return { value: { tool: `mcp__goal-box__${e.name}` } } as never
   })
   on('prompt.submit', ($, e) => {
+    if ((e.origin as { kind?: string } | undefined)?.kind === 'plugin') {
+      const fails = w.submitFails.shift()
+      if (fails === 'throw') throw new Error('the session is shutting down')
+      if (fails === 'drop') return { drop: 'held by a guard beneath' } as never
+    }
     submitted.push({ text: e.text, origin: e.origin })
     return { text: e.text } as never
   })
@@ -271,6 +278,17 @@ test('not while a merge is unconfirmed or a deploy is not live: refused naming e
   expect(await cards()).toEqual([])
 })
 
+// L50: is it live's record is another mod's state, read here; one not in the shape its contract
+// says (an older or newer copy of that mod) holds the box, saying so, rather than failing the call.
+test("an is it live record not in its contract's shape holds the box, saying so", withLive, async ($, on) => {
+  const { cards } = world(on, { owed: 'not a list' as never, verdicts: { 'danwright32/claude-config#1699': null as never } })
+  await start($)
+  await says($, 'Add the goal box')
+  const r = await box($, ASKED)
+  expect(r.deny).toMatch(/is it live's record of this session's merges could not be read/)
+  expect(await cards()).toEqual([])
+})
+
 test('a merge settled as live holds nothing', withLive, async ($, on) => {
   const { cards } = world(on, { verdicts: { 'danwright32/claude-config#1697': { state: 'live', at: 1 }, 'danwright32/claude-config#1696': { state: 'no-deploy', at: 1 } } })
   await start($)
@@ -365,6 +383,23 @@ test('a /goal met: once the turn has ended the session is sent one prompt to sho
   await turnEnds($)
   expect(submitted).toHaveLength(1)
   expect(await cards()).toHaveLength(1)
+})
+
+// L368: a met goal is recorded as asked about only once its prompt has entered, so a failure (one
+// thrown, or one a hook beneath dropped) is said and asked again at the next turn end, never lost.
+test('a prompt for a met goal that could not be sent is said and sent again at the next turn end', withKit, async ($, on) => {
+  const { submitted, logs } = world(on, { goal: MET, submitFails: ['throw', 'drop'] })
+  await start($)
+  await turnEnds($)
+  expect(submitted).toEqual([])
+  expect(logs.join('\n')).toMatch(/could not be asked for \(.+\); it is asked again at the next turn end/)
+  await turnEnds($)
+  expect(submitted).toEqual([])
+  expect(logs.join('\n')).toMatch(/could not be asked for \(held by a guard beneath\); it is asked again at the next turn end/)
+  await turnEnds($)
+  expect(submitted.map(x => x.text)).toEqual([expect.stringContaining('GOAL ACCOMPLISHED. The /goal "complete issue 1563" was judged met.')])
+  await turnEnds($)
+  expect(submitted).toHaveLength(1)
 })
 
 test("a subagent's turn end, or an interrupted turn, never sends the prompt", withKit, async ($, on) => {

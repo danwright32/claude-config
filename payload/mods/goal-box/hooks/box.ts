@@ -67,7 +67,7 @@ export const boxText = (goal: string, shipped: string[]): string =>
 
 /**
  * The same box as mod-kit's card, as Dan settled it in the #1563 design round (2026-10-24, "Green
- * border and heading", docs/design/1563-goal-box.md): the border, the heading (bold) and the bullets
+ * border and heading", docs/design/1563-goal-box.html): the border, the heading (bold) and the bullets
  * in the success colour, the goal and each shipped line plain.
  */
 export const cardOf = (toolUseId: string, goal: string, shipped: string[]): ModKitCard => {
@@ -118,6 +118,25 @@ export type Holds = string[]
 export type MergeFacts = {
   owed: { pr: number; repo?: string; how: string }[]
   verdicts: Record<string, { state: string }>
+}
+
+/**
+ * is it live's state as read, held to the shape its contract gives (L50: a value read from another
+ * mod's state never feeds a comparison unchecked), or why it is not in that shape. Absent is none.
+ */
+export const mergeFactsOf = (owed: unknown, verdicts: unknown): MergeFacts | { why: string } => {
+  const o = owed ?? []
+  const v = verdicts ?? {}
+  if (!Array.isArray(o)) return { why: 'its owed merges are not a list' }
+  for (const x of o) {
+    const e = x as { pr?: unknown; repo?: unknown; how?: unknown } | null
+    if (!e || typeof e !== 'object' || typeof e.pr !== 'number' || typeof e.how !== 'string' || (e.repo !== undefined && typeof e.repo !== 'string')) return { why: `an owed merge is not a pull request it can name (${JSON.stringify(x)})` }
+  }
+  if (typeof v !== 'object' || Array.isArray(v)) return { why: 'its verdicts are not a record' }
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (!x || typeof x !== 'object' || typeof (x as { state?: unknown }).state !== 'string') return { why: `the verdict for ${k} has no state` }
+  }
+  return { owed: o as MergeFacts['owed'], verdicts: v as MergeFacts['verdicts'] }
 }
 
 const prName = (repo: string | undefined, pr: number) => (repo ? `${repo}#${pr}` : `#${pr}`)
