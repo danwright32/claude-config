@@ -1350,8 +1350,18 @@ startup on each review (#956).
 A branch over the cap first leaves out the files proven to need no reading (claude-config#583): a
 file `.gitattributes` marks generated at both the base and the head (so a branch cannot excuse its
 own file by adding the mark), a data file (json, csv, xml, txt and the like) under a `fixtures`
-folder, and a file under `mods/<mod>/tests/mod-kit/` whose content is byte for byte that of the
-same path in `mods/mod-kit/`, compared blob to blob. Any that still fit are put back, smallest
+folder, a file under `mods/<mod>/tests/mod-kit/` whose content is byte for byte that of the
+same path in `mods/mod-kit/`, compared blob to blob, and a settled design round page: an HTML file
+under `docs/design/` whose text at the head the design rounds skill's own check
+(`design_file.py --sealed`, #1524) says is exactly what `make-settled.py` wrote and sealed
+(claude-config#1696). That page is the captured product page with the round drawn in, often 400 to
+720 KB, and settled by Dan, so on Slate's #4212 one page kept 58 KB of code and a migration from
+being reviewed at all. The seal proves the text has not changed since it was sealed, on either Mac;
+it cannot prove who sealed it, since anyone can compute the hash, which is why such a page is left
+out only on a branch over the cap and is always named. A page edited by hand after its seal, one
+with no seal, and every page when the check cannot run (no `python3`, no `design_file.py`, or one
+older than #1524 that answers in another shape) are read like any file. The merge helper's review is
+this same `pr-review.sh`, so it leaves out the same files. Any that still fit are put back, smallest
 first. The review goes ahead when the rest fits. Every file left out is named, with why and its
 size, in the start line, the reviewer's own file list, and every verdict the gate prints, so none
 is unread without saying so. A branch under the cap leaves out nothing.
