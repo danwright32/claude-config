@@ -89,14 +89,40 @@ OUT="$(read_parts "$NEAR" "$NOW")"; RC=$?
   && check "controls: nothing just outside each predicate counts as measured" ok \
   || check "controls: nothing just outside each predicate counts as measured" "rc=$RC out=$OUT err=$(cat "$WORK/err")"
 
-# 5. A bedtime answer recorded in the ten minutes before the record measures the questions too.
+# 5. A bedtime answer recorded within the reader's bedtime window (BEDTIME_MS, 15 minutes before
+# the record is placed, a window the reader sets, not a measurement) measures the questions too:
+# one at its very start counts, and one a millisecond earlier, or one after the record, does not.
+WINDOW=$((15 * 60000))
+answered_at_ms() {   # answered_at_ms FOLDER MS: a night with one before bed answer recorded at MS
+  rm -rf "$1"
+  night "$1" 2026-10-21 "[]" "{}"
+  mkdir -p "$1/answered"
+  printf '{"repo":"o/r","issue":4,"text":"Which?","answer":"A","at":%s}\n' "$2" > "$1/answered/k.json"
+}
 ANS="$WORK/answered"
-night "$ANS" 2026-10-21 "[]" "{}"
-mkdir -p "$ANS/answered"
-printf '{"repo":"o/r","issue":4,"text":"Which?","answer":"A","at":%s}\n' $((SINCE - 120000)) > "$ANS/answered/k.json"
+answered_at_ms "$ANS" $((SINCE - WINDOW))
 grep -q "^measured${TAB}bedtime-questions${TAB}.*0 left for the morning and 1 answered at bedtime" <<<"$(read_parts "$ANS" "$NOW")" \
-  && check "a before bed answer recorded at bedtime measures the questions" ok \
-  || check "a before bed answer recorded at bedtime measures the questions" "$(read_parts "$ANS" "$NOW")"
+  && check "a before bed answer at the very start of the bedtime window measures the questions" ok \
+  || check "a before bed answer at the very start of the bedtime window measures the questions" "$(read_parts "$ANS" "$NOW")"
+answered_at_ms "$ANS" $((SINCE - WINDOW - 1))
+grep -q "^unmeasured${TAB}bedtime-questions${TAB}" <<<"$(read_parts "$ANS" "$NOW")" \
+  && check "control: an answer a millisecond before the window does not" ok \
+  || check "control: an answer a millisecond before the window does not" "$(read_parts "$ANS" "$NOW")"
+answered_at_ms "$ANS" $((SINCE + 1))
+grep -q "^unmeasured${TAB}bedtime-questions${TAB}" <<<"$(read_parts "$ANS" "$NOW")" \
+  && check "control: nor does one recorded after the record was placed" ok \
+  || check "control: nor does one recorded after the record was placed" "$(read_parts "$ANS" "$NOW")"
+
+# 5a. An answer file that is not an answer (a JSON list, a string, or not JSON) is a failure with
+# the reason, exit 2, never a traceback and never skipped as no answer (L10, L11).
+for _shape in '["at"]' '"at"' '{"at":'; do
+  answered_at_ms "$ANS" "$SINCE"
+  printf '%s\n' "$_shape" > "$ANS/answered/k.json"
+  OUT="$(read_parts "$ANS" "$NOW")"; RC=$?
+  [ "$RC" -eq 2 ] && [ -z "$OUT" ] && grep -q 'could not be read' "$WORK/err" && ! grep -q Traceback "$WORK/err" \
+    && check "an answer file holding $_shape fails with the reason" ok \
+    || check "an answer file holding $_shape fails with the reason" "rc=$RC out=$OUT err=$(head -c 300 "$WORK/err")"
+done
 
 # 6. A record that cannot be read is a failure, said, never a night that showed nothing (L10).
 BAD="$WORK/bad"

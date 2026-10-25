@@ -19,10 +19,12 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 
 HOUR_MS = 60 * 60 * 1000
-# Before bed questions are answered in the ten minutes before the record is placed (QUESTION_MS).
+# How long before the record is placed a before bed answer may be recorded and still count as one:
+# BEDTIME_MS, chosen here, not measured. /sleep gives its questions one round of QUESTION_MS
+# (scope-modes' mergedeploy.ts, ten minutes), and this window is that round with room for the
+# steps either side of it.
 BEDTIME_MS = 15 * 60 * 1000
 
 # Each part: its key, what it is, and why the headless suite cannot measure it.
@@ -79,16 +81,19 @@ def notes_of(state, generation):
 
 
 def answered_at(state):
-    """When each before bed answer was recorded (answered/*.json), in ms."""
+    """When each before bed answer was recorded (answered/*.json), in ms. Each is written whole and
+    moved into place, so one that is not an answer with a time is a failure, never skipped (L10)."""
     out = []
     for path in listing(os.path.join(state, "answered"), ".json"):
         with open(path, encoding="utf-8") as f:
             try:
-                at = json.load(f).get("at")
-            except ValueError:
-                continue
-        if isinstance(at, (int, float)):
-            out.append(at)
+                answer = json.load(f)
+            except ValueError as err:
+                raise ValueError(f"{path} is not JSON ({err})") from err
+        at = answer.get("at") if isinstance(answer, dict) else None
+        if not isinstance(at, (int, float)) or isinstance(at, bool):
+            raise ValueError(f"{path} is not a before bed answer with a time")
+        out.append(at)
     return out
 
 
