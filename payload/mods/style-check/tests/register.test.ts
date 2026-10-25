@@ -375,3 +375,57 @@ test('chat replies with a dash are counted silently and read with /style-count',
   const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
   expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 7 in total.')
 })
+
+// #1703: the engine fires session.start again at every fresh load of the mod (once per process, then
+// once per fresh load, never at /clear), so this session's count, kept in the module and set to
+// nought there, started again from nought at every hot reload while the session went on.
+test("a reload of the mod keeps this session's counts (#1703)", withKit, async ($, on) => {
+  world(on, { scanner: 'missing', store: { chatHits: 5 } })
+  on('session.append', ($, e, next) => next(e))
+  const append = async (text: string, uuid: string) => {
+    try {
+      await $.session.append({ door: 'response', origin: { kind: 'model', model: 'm' }, uuid, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] } } as never)
+    } catch (err) {
+      if (!/no implementation for session.append/.test(String(err))) throw err
+    }
+  }
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await append('a café reply', 'r1')
+  // A hot reload: a second session.start in this process, the session going on.
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await append('another café reply', 'r2')
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 0 this session, 5 in total. 2 replies this session could not be checked.')
+})
+
+test("a reload of the mod keeps this session's count of replies with a dash (#1703)", withKit, async ($, on) => {
+  world(on, { store: { chatHits: 5 } })
+  on('session.append', ($, e, next) => next(e))
+  const append = async (text: string, uuid: string) => {
+    try {
+      await $.session.append({ door: 'response', origin: { kind: 'model', model: 'm' }, uuid, message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text }] } } as never)
+    } catch (err) {
+      if (!/no implementation for session.append/.test(String(err))) throw err
+    }
+  }
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await append(`a reply ${DASH} with a dash`, 'r1')
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await append(`another ${DASH} one`, 'r2')
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 7 in total.')
+})
+
+test('a reply whose count cannot be written says the count may be short, never reads as complete (#1703)', withKit, async ($, on) => {
+  world(on, { store: { chatHits: 5 } })
+  on('session.append', ($, e, next) => next(e))
+  on('state.set', async ($, e, next) => ((e as { plugin?: string }).plugin === 'style-check' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  try {
+    await $.session.append({ door: 'response', origin: { kind: 'model', model: 'm' }, uuid: 'r1', message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: `a reply ${DASH} with a dash` }] } } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 0 this session, 6 in total. This session count may be short: a reply could not be counted.')
+})
