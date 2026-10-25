@@ -1407,6 +1407,13 @@ case "${MT_SIGNIN_RECORD_NOTE:-}" in
   *"could not take the lock"*"claude-config#1670"*) pass ;;
   *) fail "#1670 a record written without its lock is not said: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
 esac
+# Written without the lock, the line is not safely recorded: a trim another run makes at that moment
+# replaces the file and can drop it, so the note claims no more than that (L11).
+case "${MT_SIGNIN_RECORD_NOTE:-}" in
+  *"was recorded"*) fail "#1670 a line written without the lock is said to be recorded: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+  *"written without the lock"*"a trim another run makes at the same moment may drop it"*) pass ;;
+  *) fail "#1670 the note does not say a trim at the same moment may drop the line: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+esac
 rmdir "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock" 2>/dev/null
 printf '2000000' > "$SIGNIN_CLOCK"
 unset MT_SIGNIN_CLOCK

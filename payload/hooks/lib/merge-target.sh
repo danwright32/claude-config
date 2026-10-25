@@ -1484,7 +1484,8 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
 # nothing private and lives with the other per Mac records, in
 # ${MT_SIGNIN_LEDGER_DIR:-~/.claude/state/gh-signin}/refusals.tsv, which claude-sync never carries.
 # Only appended, one short line per write (O_APPEND keeps a line that size whole when two runs write at
-# once), under a lock every writer takes, and kept for 90 days, Dan's choice (claude-config#1670): a
+# once), under a lock each writer waits for (one that cannot take it writes unlocked and says so),
+# and kept for 90 days, Dan's choice (claude-config#1670): a
 # write drops the lines older than that by writing the rest to a new file and moving it over the log,
 # never by editing it in place (mt__signin_trim). It grows only on a refusal, about 80 bytes each.
 #
@@ -1518,9 +1519,10 @@ mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
   session="$(ghp_session_key 2>/dev/null)"; session="${session:-unknown}"
   run="${MT_SIGNIN_RUN:-$$}"; run="${run//[!A-Za-z0-9_.-]/_}"
   caller="${0##*/}"; caller="${caller//[!A-Za-z0-9_.-]/_}"
-  # Every writer holds the log's lock while it appends and trims (claude-config#1670), so a trim,
-  # which replaces the file, can never drop a line another run appends meanwhile. A lock that cannot
-  # be taken in time is written past, unlocked and untrimmed, rather than losing the line, and said.
+  # Every writer waits for the log's lock to append and trim (claude-config#1670), so a trim, which
+  # replaces the file, never drops a line another run appends under it. A lock that cannot be taken in
+  # time is written past, unlocked and untrimmed, rather than not writing the line at all, and said:
+  # that one line is not safe from a trim another run makes at the same moment.
   local locked=0
   if ! err="$(mkdir -p "${ledger%/*}" 2>&1)"; then
     err="${err%%$'\n'*}"
@@ -1538,7 +1540,7 @@ mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
     mt__signin_trim "$ledger" "$now"
     rmdir "$ledger.lock" 2>/dev/null
   else
-    MT_SIGNIN_RECORD_NOTE="This refusal was recorded in $ledger, but the record could not take the lock ($ledger.lock) another run held, so lines older than 90 days were not dropped this time (claude-config#1670)"
+    MT_SIGNIN_RECORD_NOTE="This refusal was written without the lock to $ledger, since the record could not take the lock ($ledger.lock) another run held, so a trim another run makes at the same moment may drop it, and lines older than 90 days were not dropped this time (claude-config#1670)"
   fi
   MT_SIGNIN_TREND="$(mt_signin_trend "$now")"
   return 0
