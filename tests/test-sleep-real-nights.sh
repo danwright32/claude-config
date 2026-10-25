@@ -78,7 +78,7 @@ NEAR="$WORK/near"
 # The starter not enrolled, and a second worker with no goal that worked.
 night "$NEAR" 2026-10-22 "[\"$S2\"]" "{}"
 # A question asked overnight (not at bedtime), a claim by a session that is not a worker, a wait
-# with no error, and heartbeats 59 minutes apart.
+# with no error, and heartbeats just under an hour apart (set by this fixture, not measured).
 note "$NEAR" "{\"kind\":\"question\",\"at\":$((SINCE + 5000)),\"by\":\"$S2\",\"repo\":\"o/r\",\"issue\":4,\"text\":\"Which?\"}"
 note "$NEAR" "{\"kind\":\"claim\",\"at\":$((SINCE + 6000)),\"by\":\"$S3\",\"repo\":\"o/r\",\"issue\":9}"
 note "$NEAR" "{\"kind\":\"wait\",\"at\":$((SINCE + 7000)),\"by\":\"$S2\",\"minutes\":30}"
@@ -106,6 +106,27 @@ OUT="$(read_parts "$BAD" "$NOW")"; RC=$?
 [ "$RC" -eq 2 ] && [ -z "$OUT" ] && grep -q 'a night could not be read' "$WORK/err" \
   && check "an unreadable record fails, saying so, and claims nothing" ok \
   || check "an unreadable record fails, saying so, and claims nothing" "rc=$RC out=$OUT err=$(cat "$WORK/err")"
+
+# 7. A folder of nights or notes that cannot be read is a failure too, never "no nights" or a night
+# with no notes (L10, L11). Root reads a mode 000 folder, so there it is said unmeasured (L411).
+if [ "$(id -u)" -eq 0 ]; then
+  echo "SUITE-PART-UNMEASURED an unreadable folder of nights or notes: this runs as root, which reads a mode 000 folder"
+else
+  LOCKED="$WORK/locked"
+  cp -R "$FULL" "$LOCKED"
+  chmod 000 "$LOCKED/ended"
+  OUT="$(read_parts "$LOCKED" "$NOW")"; RC=$?
+  chmod 755 "$LOCKED/ended"
+  [ "$RC" -eq 2 ] && [ -z "$OUT" ] && grep -q 'could not be read' "$WORK/err" \
+    && check "a folder of nights that cannot be read fails, saying so, never reads as no nights" ok \
+    || check "a folder of nights that cannot be read fails, saying so, never reads as no nights" "rc=$RC out=$OUT err=$(cat "$WORK/err")"
+  chmod 000 "$LOCKED/notes"
+  OUT="$(read_parts "$LOCKED" "$NOW")"; RC=$?
+  chmod 755 "$LOCKED/notes"
+  [ "$RC" -eq 2 ] && [ -z "$OUT" ] && grep -q 'could not be read' "$WORK/err" \
+    && check "a folder of notes that cannot be read fails, saying so, never reads as a night with no notes" ok \
+    || check "a folder of notes that cannot be read fails, saying so, never reads as a night with no notes" "rc=$RC out=$OUT err=$(cat "$WORK/err")"
+fi
 
 printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

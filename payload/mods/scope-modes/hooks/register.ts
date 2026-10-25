@@ -1255,29 +1255,36 @@ let startCwd: string | null = null
 // Mac 2026-10-25, Claude Code 2.1.307). Only a file that is really there, never a guessed path, so a
 // session whose folder Claude Code spells otherwise (a very long one) falls back to the registry as
 // before. Its current folder is tried too, in case this load began after the session moved.
-const atIdsPath = async ($: EngineInterface, self: string): Promise<string | null> => {
-  if (!/^[A-Za-z0-9-]+$/.test(self)) return null
+// A check that fails is no answer (L10, L11): it is kept as `unread`, said beside the registry's
+// own why when the registry finds nothing either, never read as a transcript that is not there.
+type TranscriptFound = { path: string | null; unread?: string }
+const atIdsPath = async ($: EngineInterface, self: string): Promise<TranscriptFound> => {
+  if (!/^[A-Za-z0-9-]+$/.test(self)) return { path: null }
   let home: string | undefined
   let here: string | null = null
+  const unread: string[] = []
   try {
     home = await $.env.get('HOME')
     here = await $.session.cwd()
   } catch (err) {
-    $.ui.log(`scope-modes: this session's transcript was not looked for by its id (${msg(err)}), so the session registry's is used`, { to: 'debug' })
+    unread.push(`where it is kept could not be worked out (${msg(err)})`)
   }
-  if (!home) return null
-  for (const dir of new Set([startCwd, here].filter((d): d is string => !!d))) {
+  if (!home && !unread.length) unread.push('where it is kept could not be worked out (HOME is not set)')
+  for (const dir of home ? new Set([startCwd, here].filter((d): d is string => !!d)) : []) {
     const path = `${home}/.claude/projects/${dir.replace(/[^A-Za-z0-9-]/g, '-')}/${self}.jsonl`
     try {
-      if (await $.fs.exists(path)) return path
+      if (await $.fs.exists(path)) return { path }
     } catch (err) {
-      $.ui.log(`scope-modes: whether this session's transcript is at ${path} could not be checked (${msg(err)})`, { to: 'debug' })
+      unread.push(`whether it is at ${path} could not be checked (${msg(err)})`)
     }
   }
-  return null
+  return { path: null, ...(unread.length ? { unread: unread.join('; ') } : {}) }
 }
 // This session's own transcript: the one Claude Code named to it (#1636), else the one at its id's path (#1678).
-const ownTranscript = async ($: EngineInterface, self: string) => heardFor(self) ?? (await atIdsPath($, self))
+const ownTranscript = async ($: EngineInterface, self: string): Promise<TranscriptFound> => {
+  const named = heardFor(self)
+  return named ? { path: named } : atIdsPath($, self)
+}
 const requestOf = (r: { extra?: Record<string, unknown> }) => {
   const q = (r.extra?.progress as { request?: unknown } | undefined)?.request
   return typeof q === 'string' && q.trim() ? q.trim() : null
@@ -1286,8 +1293,8 @@ const enrol = async ($: EngineInterface, self: string): Promise<{ workers: strin
   const workers = interactive ? [self] : []
   // This session's transcript is first the one Claude Code named to it, else the one at its id's
   // path (#1678), else the registry's (#1636).
-  const own = interactive ? await ownTranscript($, self) : null
-  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own, request: null }] : []
+  const own: TranscriptFound = interactive ? await ownTranscript($, self) : { path: null }
+  const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own.path, ...(own.unread ? { transcriptUnread: own.unread } : {}), request: null }] : []
   let list
   try {
     list = await $.sessions.list()
@@ -1298,9 +1305,12 @@ const enrol = async ($: EngineInterface, self: string): Promise<{ workers: strin
   for (const o of list.open) {
     if (o.sessionId === self) {
       const mine = seats.find(s => s.id === self)
-      if (mine && !own) {
+      if (mine && !own.path) {
         mine.transcript = o.transcriptPath ?? null
-        if (o.transcriptUnread) mine.transcriptUnread = o.transcriptUnread
+        // Every lookup that failed is said, the registry's and the one at the id's path (#1678).
+        const whys = [o.transcriptUnread, own.unread].filter((w): w is string => !!w)
+        if (mine.transcript) delete mine.transcriptUnread
+        else if (whys.length) mine.transcriptUnread = whys.join('; ')
       }
       continue
     }
@@ -2375,7 +2385,10 @@ const titleNow = async ($: EngineInterface): Promise<string | null> => {
   try {
     const self = await $.session.id()
     // This session's own transcript first, as for its goal (#1636, #1678).
-    path = (await ownTranscript($, self)) ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+    const own = await ownTranscript($, self)
+    // A check at the id's path that failed is logged, as every other failure of this read is.
+    if (own.unread) $.ui.log(`scope-modes: this session's transcript could not be looked for by its id: ${own.unread}`, { to: 'debug' })
+    path = own.path ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
   } catch (err) {
     $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
     return null

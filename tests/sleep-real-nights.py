@@ -15,7 +15,6 @@ saying the last night that showed it when one did. Exit 0 whenever it could read
 it could not, saying why on stderr: an unreadable record is a failure, never a night that showed
 nothing (L10).
 """
-import glob
 import json
 import os
 import re
@@ -48,12 +47,24 @@ def fail(why):
     sys.exit(2)
 
 
+def listing(folder, suffix):
+    """The files in a folder ending in suffix. A folder that is not there holds none; one that is
+    there but cannot be read raises, so it is never taken for an empty one (L10)."""
+    try:
+        names = os.listdir(folder)
+    except FileNotFoundError:
+        return []
+    return sorted(os.path.join(folder, n) for n in names if n.endswith(suffix))
+
+
 def notes_of(state, generation):
     path = os.path.join(state, "notes", re.sub(r"[^\w.-]", "_", generation) + ".jsonl")
-    if not os.path.exists(path):
-        return []
     out = []
-    with open(path, encoding="utf-8") as f:
+    try:
+        f = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        return []  # a night that wrote no notes; a notes file that cannot be read raises
+    with f:
         for line in f:
             line = line.strip()
             if not line:
@@ -70,7 +81,7 @@ def notes_of(state, generation):
 def answered_at(state):
     """When each before bed answer was recorded (answered/*.json), in ms."""
     out = []
-    for path in glob.glob(os.path.join(state, "answered", "*.json")):
+    for path in listing(os.path.join(state, "answered"), ".json"):
         with open(path, encoding="utf-8") as f:
             try:
                 at = json.load(f).get("at")
@@ -122,11 +133,8 @@ def main():
         fail("usage: sleep-real-nights.py <sleep state dir> <now, ms> [<max age, days>]")
     state, now = sys.argv[1], int(sys.argv[2])
     max_age_ms = int(sys.argv[3] if len(sys.argv) == 4 else 30) * 24 * HOUR_MS
-    ended = os.path.join(state, "ended")
-    paths = sorted(glob.glob(os.path.join(ended, "*.json"))) if os.path.isdir(ended) else []
-    if os.path.exists(ended) and not os.path.isdir(ended):
-        fail(f"{ended} is not a folder")
     try:
+        paths = listing(os.path.join(state, "ended"), ".json")
         answers = answered_at(state)
         nights = []
         for path in paths:

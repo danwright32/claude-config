@@ -400,6 +400,8 @@ type Opts = {
    * question dismissed, with its own words ("$.process.run(mkdir) aborted").
    */
   refuseFrom?: string
+  /** Paths whether a file is at cannot be checked (#1678): fs.exists fails for each. */
+  existsFails?: string[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -487,7 +489,7 @@ const world = (on: On, o: Opts = {}) => {
   // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
   const isGone = (dir: string) => (o.gone ?? []).includes(dir)
   const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
-  on('fs.exists', ($, e) => w.refusing ? refused('fs.exists') : ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  on('fs.exists', ($, e) => w.refusing ? refused('fs.exists') : o.existsFails?.includes(e.path) ? ({ deny: `EACCES: permission denied, stat '${e.path}'` } as never) : ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   // Each wake check read already moved on the engine's clock, so answering it moves it no further.
   const timed = new WeakSet<object>()
   on('process.run', function answer($, e) {
@@ -2653,6 +2655,23 @@ test("a transcript that is not at its id's path is never guessed: the registry's
   await command($ as never, 'sleep')
   expect(w.goalReads).toEqual([])
   expect(w.asked).toEqual([UNREAD_SELF_Q])
+})
+
+// A check at the id's path that fails is no answer (L10, L11): with the registry finding nothing, it
+// is said as the why, never read as a transcript that was not found; with the registry failing too,
+// both whys are said.
+test("a check at the id's path that fails is said as why the goal could not be read, never as not found (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null }, existsFails: [DERIVED_T] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked[0]).toContain(`its transcript could not be looked up: whether it is at ${DERIVED_T} could not be checked (`)
+  expect(r.text).not.toContain('its transcript was not found')
+})
+test("a check at the id's path that fails is said beside the registry's own failure (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, existsFails: [DERIVED_T] })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked[0]).toContain(`its transcript could not be looked up: ${LOOKUP_FAILED}; whether it is at ${DERIVED_T} could not be checked (`)
 })
 
 // #1677: on 2026-10-23 /sleep said "the list of issues whose before bed question went unanswered
