@@ -43,7 +43,9 @@
 #                               TURN_HEAD_SINCE, TURN_AHEAD (live tickets ahead of this one),
 #                               TURN_WAITING (live tickets in all), TURN_GONE (1 when this run's
 #                               own ticket is no longer there), TURN_SAID (a line per ticket it
-#                               passed over, saying why)
+#                               passed over, saying why), TURN_HEAD_TICKET (the holder's ticket
+#                               number, which changes exactly when the turn passes, so a run in
+#                               line can tell the line moving from it standing still, #1697)
 #   turn_leave                  gives up this run's place
 #
 # TURN_PID and TURN_PID_START name the run (this shell and its start time by default).
@@ -138,7 +140,7 @@ turn_mark(){   # $1 = ticket, $2 = its pid, $3 = now
 
 turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
   local now="$1" bound="$2" n f pid start pr seen_own="" head=""
-  TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""
+  TURN_MINE=0; TURN_HEAD_PR=""; TURN_HEAD_SINCE=""; TURN_HEAD_TICKET=""; TURN_AHEAD=0; TURN_WAITING=0; TURN_GONE=""; TURN_SAID=""
   for n in $(turn_tickets); do
     f="$TURN_REPO_DIR/$n"
     [ -s "$f" ] || continue
@@ -155,7 +157,7 @@ turn_look(){   # $1 = now, $2 = the bound on holding it, in seconds
         TURN_SAID="${TURN_SAID}#${pr:-?}'s turn ran out after $(turn_dur $(( now - turn_since ))), past the $(turn_dur "$bound") any one pull request may hold it, so it passed to the next in line."$'\n'
         continue
       fi
-      head="$n"; TURN_HEAD_PR="$pr"; TURN_HEAD_SINCE="$turn_since"
+      head="$n"; TURN_HEAD_PR="$pr"; TURN_HEAD_SINCE="$turn_since"; TURN_HEAD_TICKET="$n"
     fi
     TURN_WAITING=$((TURN_WAITING + 1))
     if [ "$n" = "$TURN_TICKET" ]; then seen_own=1; elif [ -z "$seen_own" ]; then TURN_AHEAD=$((TURN_AHEAD + 1)); fi

@@ -110,10 +110,13 @@
 #      come back carrying their key), GitHub refused the update (a conflict), the pull request is
 #      closed, its head is still not its branch's tip after the base was set again (or the branch
 #      is gone), an update GitHub has still not shown four minutes after it, a read GitHub
-#      refused or still did not answer after being asked again, or a whole deadline shorter than
+#      refused or still did not answer after being asked again, or that gh still could not connect
+#      to GitHub for (claude-config#1675), or a whole deadline shorter than
 #      the repository's recent check runs took (claude-config#1604)
 #   3  still waiting (on checks, the review, a base still moving, or the repository's turn) when the
-#      deadline, the time in line or the poll count ran out, or given the turn back with less of its
+#      deadline, the time in line (the line standing still for MWR_LINE_SECONDS, or its ceiling,
+#      MWR_LINE_MAX_SECONDS, each said as which, claude-config#1697) or the poll count ran out, or
+#      given the turn back with less of its
 #      deadline left than a check run takes (claude-config#1604); running it again resumes, at the
 #      back of the line
 #   4  merged, but with --delete-branch the branch was left in place, saying why: a pull request
@@ -153,7 +156,10 @@
 # the wait on checks and review grows to), lib/gh-poll.sh's own settings (GH_POLL_PER_MINUTE,
 # GH_POLL_STATE_DIR and the rest), MWR_DEADLINE_SECONDS (10800, counted from when the run first
 # takes the repository's turn, claude-config#1604), MWR_LINE_SECONDS (10800: how long it may wait
-# before that, in line or otherwise; a setting, not a measurement),
+# before that with the line standing still, counting only time in which nothing ahead of it
+# advanced, claude-config#1697; a setting, not a measurement), MWR_LINE_MAX_SECONDS (32400: the
+# ceiling on the whole wait before that, however much the line moves, room for about 27 merges of 20
+# minutes ahead of it where Slate's line of 15 ran out of three hours on 2026-10-24; a setting),
 # MWR_MAX_POLLS (derived from those and the pace, bounding the loop by count as well as by clock, L704),
 # MWR_SETTLE_SECONDS (300: how long the base must have been still before a pull request it moved
 # past is updated again; a setting, not a measurement), MWR_NOW (a command printing the time in
@@ -194,9 +200,11 @@ SLEEP="${MWR_SLEEP:-sleep}"
 num_or(){ case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 POLL="$(num_or "${MWR_POLL_SECONDS:-}" 60)"; [ "$POLL" -ge 1 ] || POLL=1
 DEADLINE="$(num_or "${MWR_DEADLINE_SECONDS:-}" 10800)"
-# The wait in line for the repository's turn has its own budget (claude-config#1604, see out_of_time).
+# The wait in line for the repository's turn has its own budget (claude-config#1604, see out_of_time):
+# LINE of the line standing still, inside LINE_MAX in all (claude-config#1697, see budget_left).
 LINE="$(num_or "${MWR_LINE_SECONDS:-}" 10800)"
-MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE + DEADLINE) / POLL + 10 )))"
+LINE_MAX="$(num_or "${MWR_LINE_MAX_SECONDS:-}" 32400)"
+MAX_POLLS="$(num_or "${MWR_MAX_POLLS:-}" $(( (LINE_MAX + DEADLINE) / POLL + 10 )))"
 SETTLE="$(num_or "${MWR_SETTLE_SECONDS:-}" 300)"
 NOW_CMD="${MWR_NOW:-}"
 GRACE="$(num_or "${MWR_NO_CHECKS_GRACE_SECONDS:-}" 180)"
@@ -268,10 +276,23 @@ interval="$POLL"
 if ! . "$MWR_LIB/load-window.sh" 2>/dev/null; then
   load_window_note(){ printf '%s is missing, so whether a deliberate load window overlapped this run is unknown.' "$MWR_LIB/load-window.sh"; }
 fi
+# WHICH PHASE IT IS IN, for tools/load-window.sh (claude-config#1676). A load window used to wait for
+# any helper, and on 2026-10-24 got a turn once in 42 tries because another session's helper, mostly
+# waiting on a CI run that loads nothing here, was nearly always running. So this run publishes its
+# phase through lib/merge-phase.sh: waiting just before each sleep on GitHub (rest), good only until
+# that sleep is over plus MP_SLACK_SECONDS, and local before every gate it asks, the lessons review it
+# starts and checks, and while that review runs. A record the window cannot believe (none, expired,
+# a run that has gone) counts as busy, so a crash can only make a window wait. Missing, the library's
+# writers do nothing, and every run of this counts as busy, as before.
+# shellcheck source=merge-phase.sh
+if ! . "$MWR_LIB/merge-phase.sh" 2>/dev/null; then
+  mp_set(){ return 1; }; mp_clear(){ return 0; }
+fi
 # A place in the line is given up however this run ends: a stop, a signal, or the end of the
 # script. Only a kill that cannot be caught leaves it, and the next run passes it over (see
-# merge-turn.sh). The signals exit, so the EXIT trap runs for them too.
-trap 'turn_leave' EXIT
+# merge-turn.sh). The signals exit, so the EXIT trap runs for them too. The phase record goes the
+# same way; one a kill leaves names a pid no longer running, which no reader believes.
+trap 'turn_leave; mp_clear' EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 for t in gh jq git; do
   command -v "$t" >/dev/null 2>&1 || { echo "merge-when-ready: $t is not on PATH. Nothing was merged." >&2; exit 1; }
@@ -299,6 +320,21 @@ say(){ printf 'merge-when-ready: [%s] %s\n' "$(elapsed)" "$*"; }
 merged_now=""
 load_note(){ local n; n="$(load_window_note "$(now)")"; [ -z "$n" ] || say "$n"; }
 stop(){ say "$2"; [ "$1" = 0 ] || load_note; [ -z "$merged_now" ] || { merged_now=""; tidy_worktree || true; }; exit "$1"; }
+
+# The phase this run publishes (claude-config#1676, see the trap above). phase_local before local
+# work; rest, the one way this run sleeps, publishes waiting for exactly that sleep, or local while
+# its lessons review runs in the background (review_busy), since that review is local work too.
+review_busy=""; last_status=""; head=""
+phase_local(){ mp_set local "$1" "$(now)" "" || true; }
+rest(){   # $1 = seconds
+  local t; t="$(now)"
+  if [ -n "$review_busy" ]; then
+    mp_set local "the lessons review of ${head:0:7} is running" "$t" "" || true
+  else
+    mp_set waiting "${last_status:-waiting on GitHub}" "$t" $(( t + $1 + ${MP_SLACK_SECONDS:-60} )) || true
+  fi
+  "$SLEEP" "$1"
+}
 
 account=""
 gh_as(){
@@ -330,6 +366,8 @@ merge_text(){ printf 'gh'; printf ' %s' "${merge_argv[@]}" --match-head-commit "
 GATE_BUDGET="$(num_or "${MWR_GATE_READ_BUDGET_SECONDS:-}" 90)"
 ask_gate(){   # $1 = gate script, $2 = command text
   local payload out rc reason context
+  # A gate is local work (claude-config#1676): it runs here, and a load window must not overlap it.
+  phase_local "asking ${1##*/} about the merge of #$pr"
   payload="$(jq -nc --arg c "$2" --arg d "$top" '{session_id:"merge-when-ready",cwd:$d,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
   out="$(printf '%s' "$payload" | MWR_DELETE_BRANCH="$want_delete" MT_GATE_READ_BUDGET_SECONDS="$GATE_BUDGET" bash "$1" 2>&1)"; rc=$?
   reason="$(printf '%s' "$out" | jq -r 'select(.hookSpecificOutput.permissionDecision == "deny") | .hookSpecificOutput.permissionDecisionReason' 2>/dev/null)"
@@ -362,6 +400,12 @@ ask_gate(){   # $1 = gate script, $2 = command text
 # (mt_gh_read_class, MT_SIGNIN_RC), every retry says it as the sign in refused with what a token read
 # straight after came to, and one that outlasts the tries stops as GitHub refusing the sign in N times
 # (signin_or_unread), never as a pull request GitHub could not show (L11).
+#
+# A CONNECTION GH COULD NOT MAKE ("error connecting to api.github.com") is asked again by the same
+# rule too (claude-config#1675): on 2026-10-24 it stopped #1640 at 41m 36s with no retry, and another
+# builder's run the same way, because it names none of the transport words and was believed. The
+# reading is lib/merge-target.sh's (MT_CONNECT_RC), each retry says it as this Mac not connecting, and
+# one that outlasts the tries stops as that, N times, never as GitHub not answering or refusing.
 READ_TRIES="$(num_or "${MWR_READ_TRIES:-}" 4)"; [ "$READ_TRIES" -ge 1 ] || READ_TRIES=1
 READ_WAIT="$(num_or "${MWR_READ_RETRY_SECONDS:-}" 20)"
 read_err=""
@@ -371,6 +415,8 @@ announce_retry(){
     say "gh read no token to sign in with reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
   elif [ "${2:-}" = "$MT_SIGNIN_RC" ]; then
     say "GitHub refused the sign in reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}; a token read straight after came back ${MT_SIGNIN_TOKEN:-unread}); asking again in ${READ_WAIT}s."
+  elif [ "${2:-}" = "$MT_CONNECT_RC" ]; then
+    say "Could not connect to GitHub reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}): gh could not reach it from this Mac, so GitHub never saw the read; asking again in ${READ_WAIT}s."
   else
     say "GitHub did not answer reading $reading (try $1 of $READ_TRIES: ${read_err:0:200}); asking again in ${READ_WAIT}s."
   fi
@@ -391,10 +437,13 @@ signin_across_runs(){
 # ghp_rate_limited): never asked again here, since asking again in seconds is what a rate limit
 # forbids. The session's looks are paused (rate_pause), and the caller goes round, where the next
 # look waits out the pause.
+# The wait between tries is a wait on GitHub, published as one (claude-config#1676), saying what it
+# is asked again for without changing the line a later wait compares itself with.
+rest_retry(){ local s="$last_status"; last_status="asking GitHub again for $reading"; rest "$1"; last_status="$s"; }
 with_retries(){   # $1 = what is being read, for the line it says; $2 = the reader
   local rc
   reading="$1"
-  mt_retry_read "$READ_TRIES" "$READ_WAIT" "$SLEEP" "" announce_retry "$2"; rc=$?
+  mt_retry_read "$READ_TRIES" "$READ_WAIT" rest_retry "" announce_retry "$2"; rc=$?
   [ "$rc" -eq 5 ] && rate_pause "reading $1" "$read_err"
   return "$rc"
 }
@@ -411,10 +460,13 @@ rate_pause(){   # $1 = what was asked, $2 = GitHub's answer
 }
 tried(){ [ "$1" -eq 2 ] && [ "$READ_TRIES" -gt 1 ] && printf ', still failing after %s tries over %ss' "$READ_TRIES" "$(( (READ_TRIES - 1) * READ_WAIT ))"; }
 # The clause a stop names a failed read with: "could not read <what> (<GitHub's error>, still failing
-# after...)", or, when GitHub refused the sign in on every try, that in its own words (#1615).
+# after...)", or, when GitHub refused the sign in on every try, that in its own words (#1615), and
+# when gh could not connect to GitHub on every try, that in its own (#1675).
 signin_or_unread(){   # $1 = what was being read, $2 = what with_retries returned, $3 = the verb (read)
   if [ "$2" -eq "$MT_SIGNIN_RC" ]; then
     mt_signin_said "$1" "${read_err:0:300}"
+  elif [ "$2" -eq "$MT_CONNECT_RC" ]; then
+    mt_connect_said "$1" "${read_err:0:300}"
   else
     printf 'could not %s %s (%s%s)' "${3:-read}" "$1" "$read_err" "$(tried "$2")"
   fi
@@ -720,18 +772,66 @@ updated_from=""; updated_at=0; catching_up=""
 # the turn (taken_at), and the time before it, in line or before the first look took a place, has a
 # budget of its own, MWR_LINE_SECONDS. Neither restarts: a run passed over and back in line is
 # still on the deadline it started when it first took the turn, so the longest a run can last is
-# the two added together, which is what is-it-live's window is held to (test-merge-when-ready.sh).
+# the wait in line at its longest (since #1697 its ceiling, below) and the deadline added together,
+# which is what is-it-live's window is held to (test-merge-when-ready.sh).
 # A run that could take no turn at all goes on as before #1515, on its deadline from its start.
+#
+# THE LINE BUDGET FOLLOWS THE LINE (claude-config#1697). A fixed three hours in line ran out on
+# 2026-10-24 with Slate's line of about 15 pull requests still moving at about 20 minutes a merge:
+# #4148, #4164 and #4177 each stopped, exit 3, nothing merged, and were queued again by hand at the
+# back, each restart costing polls of its own. So MWR_LINE_SECONDS now counts only time in which
+# nothing ahead advanced: the line moves when the turn passes to another ticket or one ahead of this
+# run leaves (line_note), and each move starts the budget again, so a run keeps its place while the
+# line moves and stops only once it has stood still that long, which is a holder stuck past the
+# point a waiter passes it over (MWR_TURN_HOLD_SECONDS, one hour) or the queue itself not working.
+# A line can move for ever without reaching this run (holders passed over one an hour, each joining
+# again behind), so the whole wait also has a ceiling, MWR_LINE_MAX_SECONDS, nine hours, and each
+# stop says which of the two ended it (L11). The longest a run can last is now that ceiling plus the
+# deadline from the turn, which is-it-live's window is held to (L227, test-merge-when-ready.sh).
 taken_at=""
+line_seen_ticket=""; line_seen_ahead=0; line_moved_at=""; line_long_said=""
 budget_left(){   # sets BUDGET_LEFT (seconds) and BUDGET_SAID (which budget, in words)
-  local t; t="$(now)"
+  local t still total; t="$(now)"
   if [ -n "$taken_at" ]; then
     BUDGET_LEFT=$(( DEADLINE - (t - taken_at) )); BUDGET_SAID="its $(span "$DEADLINE") deadline from taking the turn"
   elif [ "$turn_state" = off ]; then
     BUDGET_LEFT=$(( DEADLINE - (t - t0) )); BUDGET_SAID="its $(span "$DEADLINE") deadline"
   else
-    BUDGET_LEFT=$(( LINE - (t - t0) )); BUDGET_SAID="its $(span "$LINE") in line for a turn"
+    still=$(( LINE - (t - ${line_moved_at:-$t0}) )); total=$(( LINE_MAX - (t - t0) ))
+    if [ "$still" -le "$total" ]; then
+      BUDGET_LEFT="$still"
+      if [ -n "$line_seen_ticket" ]; then
+        BUDGET_SAID="its $(span "$LINE") in line with the line standing still: nothing ahead of it in line has moved for $(span "$LINE") (MWR_LINE_SECONDS), so the holder is stuck or the line is not working"
+      else
+        BUDGET_SAID="its $(span "$LINE") before taking a place in line for a turn (MWR_LINE_SECONDS)"
+      fi
+    else
+      BUDGET_LEFT="$total"
+      if [ "${line_moved_at:-$t0}" -gt "$t0" ]; then
+        BUDGET_SAID="its $(span "$LINE_MAX") ceiling in line (MWR_LINE_MAX_SECONDS), with the line still moving (it last moved $(dur $(( t - line_moved_at ))) ago) but not yet to it"
+      else
+        BUDGET_SAID="its $(span "$LINE_MAX") ceiling in line (MWR_LINE_MAX_SECONDS)"
+      fi
+    fi
   fi
+}
+# Whether the line moved since the last look (claude-config#1697): the turn passed to another ticket,
+# or a ticket ahead of this run left. Returns 0 when it moved, and starts the still budget again.
+line_note(){   # $1 = now
+  local moved=1
+  if [ -n "$line_seen_ticket" ] && { [ "${TURN_HEAD_TICKET:-}" != "$line_seen_ticket" ] || [ "$TURN_AHEAD" -lt "$line_seen_ahead" ]; }; then
+    line_moved_at="$1"; moved=0
+  fi
+  line_seen_ticket="${TURN_HEAD_TICKET:-?}"; line_seen_ahead="$TURN_AHEAD"
+  return "$moved"
+}
+# Said once, when the wait in line passes MWR_LINE_SECONDS with the line still moving, so a run that
+# keeps its place says why rather than reading like one that should have stopped.
+line_long_note(){
+  local t; t="$(now)"
+  [ -z "$line_long_said" ] && [ $(( t - t0 )) -ge "$LINE" ] && [ "${line_moved_at:-$t0}" -gt "$t0" ] && [ $(( t - line_moved_at )) -lt "$LINE" ] || return 0
+  line_long_said=1
+  say "#$pr has waited over $(span "$LINE") in line, but the line is still moving (it last moved $(dur $(( t - line_moved_at ))) ago), so it keeps its place: it stops only once nothing ahead of it has moved for $(span "$LINE") (MWR_LINE_SECONDS), or at $(span "$LINE_MAX") in line (MWR_LINE_MAX_SECONDS)."
 }
 # Out of time while waiting on something: the same stop wherever the wait is.
 out_of_time(){   # $1 = what it was still waiting for
@@ -778,7 +878,12 @@ wait_key=""; wait_since=0
 # $4, when given, is said with the line but is not part of it: a figure that grows at every look
 # (how long the turn's holder has held it, claude-config#1515) would otherwise make every look a
 # change, and the line would be said every look instead of on the heartbeat.
-wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow, $4 = what grows with the line
+#
+# $5, when given, is a check run between the sleeps of the wait at the base pace, which reads no
+# GitHub, and ends the wait early when it returns 0 (claude-config#1697): the wait for the
+# repository's turn grows, since nothing there needs GitHub read every minute, but the turn itself is
+# read locally every POLL, so a turn passing mid wait is taken at once, as before.
+wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-empty to let the wait grow, $4 = what grows with the line, $5 = a local check that ends the wait
   local t pause="$POLL"; t="$(now)"
   if [ "$1" != "$wait_key" ]; then wait_key="$1"; wait_since="$t"; fi
   if [ "$2" != "$last_status" ]; then
@@ -790,19 +895,34 @@ wait_a_look(){   # $1 = what is being waited on, $2 = the status line, $3 = non-
     fi
   fi
   [ -n "${3:-}" ] && pause="$interval"
-  nap "$pause" "$2 Still waiting"
+  nap "$pause" "$2 Still waiting" "${5:-}"
 }
 # Sleep the wait it is given through the injected sleep, in one call when it is no longer than the heartbeat,
 # and otherwise a heartbeat at a time, saying $2 with how long this wait has lasted and when the next
-# look is, so a long wait (a grown one, or a rate limit's pause) still says it is alive.
-nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on
-  local left="$1" t
+# look is, so a long wait (a grown one, or a rate limit's pause) still says it is alive. With a check
+# ($3, see wait_a_look) it sleeps at most POLL at a time, runs the check after each sleep but the
+# last, and returns as soon as the check does; the heartbeat is then said on its own clock.
+nap(){   # $1 = seconds, $2 = what the heartbeat says is still going on, $3 = a local check, or empty
+  local left="$1" t step
+  if [ -n "${3:-}" ]; then
+    step="$POLL"; [ "$HEARTBEAT" -ge "$step" ] || step="$HEARTBEAT"
+    while [ "$left" -gt "$step" ]; do
+      rest "$step"; left=$(( left - step ))
+      "$3" && return 0
+      t="$(now)"
+      if [ $(( t - last_said )) -ge "$HEARTBEAT" ]; then
+        say "$2, for $(dur $(( t - wait_since ))) so far; next look in $(dur "$left")."; last_said="$t"
+      fi
+    done
+    [ "$left" -le 0 ] || rest "$left"
+    return 0
+  fi
   while [ "$left" -gt "$HEARTBEAT" ]; do
-    "$SLEEP" "$HEARTBEAT"; left=$(( left - HEARTBEAT ))
+    rest "$HEARTBEAT"; left=$(( left - HEARTBEAT ))
     t="$(now)"
     say "$2, for $(dur $(( t - wait_since ))) so far; next look in $(dur "$left")."; last_said="$t"
   done
-  [ "$left" -le 0 ] || "$SLEEP" "$left"
+  [ "$left" -le 0 ] || rest "$left"
 }
 # Every look first takes its place in the session's looks (lib/gh-poll.sh's ghp_take), waiting while
 # a rate limit pause is in force or while the session's loops have used their looks for this minute,
@@ -886,7 +1006,7 @@ head_is_tip(){
     fi
     resynced_at="$(now)"
     say "After $(mins "$LAG_WAIT"), $lagged, so its base was set again to $base, which makes GitHub read the branch again. Looking again for the real head."
-    "$SLEEP" "$POLL"
+    rest "$POLL"
     return 1
   fi
   if [ $(( $(now) - resynced_at )) -lt "$LAG_WAIT" ]; then
@@ -969,6 +1089,8 @@ turn_check(){
     turn_look "$t" "$TURN_HOLD"
     turn_say_passed
   fi
+  # Whether the line moved since the last look, for the budget in line (claude-config#1697).
+  [ "$TURN_MINE" = 1 ] || line_note "$t" || true
   if [ "$TURN_MINE" = 1 ]; then
     if [ "$turn_state" != held ]; then
       # Never a turn it cannot finish (claude-config#1604): stops here rather than take it.
@@ -993,6 +1115,17 @@ turn_check(){
   turn_line="Head ${head:0:7}: waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds ($TURN_AHEAD ahead of it in line)."
   turn_extra=" #${TURN_HEAD_PR:-?} has held it for $(dur $(( t - ${TURN_HEAD_SINCE:-$t} ))), of the $(mins "$TURN_HOLD") any one pull request may hold it."
   return 1
+}
+# The local check the wait for the turn runs between its sleeps (claude-config#1697, see wait_a_look):
+# reads the queue on this Mac, never GitHub, and ends the wait when the turn is this run's, its place
+# is gone, or the line moved, so the next look reads GitHub and says the line as it now stands.
+turn_moved(){
+  local t; t="$(now)"
+  turn_look "$t" "$TURN_HOLD"
+  turn_say_passed
+  [ "$TURN_MINE" = 1 ] && return 0
+  [ -n "$TURN_GONE" ] && return 0
+  line_note "$t"
 }
 
 while :; do
@@ -1045,10 +1178,14 @@ while :; do
   # helper's merge would put behind (claude-config#1515). Each look while waiting still reads the
   # pull request, so one merged or closed meanwhile stops here as it would have anyway.
   if ! turn_check; then
+    line_long_note
     out_of_time "is waiting for its turn to merge in $slug, which #${TURN_HEAD_PR:-?} holds"
-    # Not a growing wait: the turn can pass at any look, and a waiter that looked only every few
-    # minutes would leave the repository idle for that long after the holder has merged.
-    wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" "" "$turn_extra"
+    # A growing wait on GitHub since claude-config#1697, which lets a run wait hours in a moving line:
+    # at one read a minute a line of 15 waiters spent about 900 of the account's 5,000 GraphQL points
+    # an hour on reads that only confirm the pull request is still open. The turn itself is read
+    # locally at the base pace between them (turn_moved), so a waiter never leaves the repository
+    # idle after the holder has merged.
+    wait_a_look "turn:${TURN_HEAD_PR:-?}" "$turn_line" grows "$turn_extra" turn_moved
     continue
   fi
 
@@ -1106,7 +1243,8 @@ while :; do
     updated_from="$head"; updated_at="$(now)"; catching_up=1; tip_ok_for=""
     noun="commits"; [ "$behind" -eq 1 ] && noun="commit"
     say "Head ${head:0:7} was $behind $noun behind $base, so it was updated (update $updates). Waiting for the new head's checks and lessons review."
-    "$SLEEP" "$POLL"; continue
+    review_busy=""
+    rest "$POLL"; continue
   fi
 
   # The review of THIS head runs alongside its checks: started the first time the head is seen. A
@@ -1118,7 +1256,9 @@ while :; do
   rev_args+=(--pr "$pr")
   if [ "$started_for" != "$head" ]; then
     started_for="$head"
+    phase_local "starting the lessons review of ${head:0:7}"
     bash "$REVIEW_LIB" start "${rev_args[@]}" >/dev/null 2>&1 || true
+    review_busy=1
   fi
 
   waiting=""
@@ -1143,7 +1283,10 @@ while :; do
       waiting="checks still running (none reported yet)"
     fi
   fi
+  phase_local "asking the lessons review of ${head:0:7}"
   rev_out="$(PR_REVIEW_READ="$read_key" bash "$REVIEW_LIB" check "${rev_args[@]}" 2>&1)"; rev_rc=$?
+  # Still running (3) is local work going on beside the wait (claude-config#1676, see rest).
+  if [ "$rev_rc" -eq 3 ]; then review_busy=1; else review_busy=""; fi
   case "$rev_rc" in
     # An allow can carry findings that repeat ones already answered, listed as answered
     # (claude-config#1338), and minor findings, printed as advisory (claude-config#1356), so the
