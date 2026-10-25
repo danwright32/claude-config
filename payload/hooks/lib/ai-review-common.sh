@@ -182,25 +182,54 @@ ar__helper_secret_ok() {   # $1 = the secret file -> 0 when it holds a secret (6
   case "$s" in *[!a-f0-9]*) return 1 ;; esac
   return 0
 }
-# Made by the gate alone, the first time it records a key. Two gates making it at once both link the
-# same name and the first wins, so neither records under a secret the other then replaces. One that
-# is there but is not a secret (cut short, emptied) is replaced: it could check nothing anyway.
+# Made by the gate alone, the first time it records a key, and in both cases the FIRST maker wins, so
+# no gate records under a secret another then replaces (assume it runs twice):
+# With none there, each links its own under the name, which only one link can take, and the others
+# drop theirs and read the winner's. With one there that is not a secret (cut short, emptied), which
+# could check nothing anyway, it is replaced only under a lock (a mkdir, which only one can make),
+# and the holder looks again once it has the lock, so a gate that saw it damaged after another had
+# already replaced it leaves the new one alone. The rename puts the new secret in place in one step,
+# so it is never missing. A gate that finds the lock held waits for the holder and reads its secret,
+# and never replaces it itself. A lock over a minute old was left by a gate that died holding it, and
+# is cleared.
+# AR_HELPER_SECRET_SLEEP and AR_HELPER_SECRET_PAUSE are the test's: the sleep between looks at a held
+# lock (L524), and a pair of fifos holding a gate just after it has seen the secret damaged, so the
+# race above can be run in a set order. Neither changes what is recorded.
 ar__helper_secret_make() {   # -> 0 once a secret is in place
-  local f t s
+  local f t s lock tries
   f="$(ar__helper_secret_file)"
   ar__helper_secret_ok "$f" && return 0
+  if [ -n "${AR_HELPER_SECRET_PAUSE:-}" ]; then
+    printf 'reached\n' > "$AR_HELPER_SECRET_PAUSE.reached"; read -r _ < "$AR_HELPER_SECRET_PAUSE.go"
+  fi
   command -v od >/dev/null 2>&1 && [ -r /dev/urandom ] || return 1
   s="$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
   [ "${#s}" -eq 64 ] || return 1
   t="$f.$$.tmp"
   { ( umask 077 && printf '%s' "$s" > "$t" ) && chmod 600 "$t"; } 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
-  if [ -e "$f" ]; then
-    mv -f "$t" "$f" 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
-  else
+  if ! [ -e "$f" ]; then
     ln "$t" "$f" 2>/dev/null
-    rm -f "$t" 2>/dev/null
+    if ar__helper_secret_ok "$f"; then rm -f "$t" 2>/dev/null; return 0; fi
   fi
-  ar__helper_secret_ok "$f"
+  lock="$f.lock"
+  [ -n "$(find "$lock" -maxdepth 0 -type d -mmin +1 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  if mkdir "$lock" 2>/dev/null; then
+    ar__helper_secret_ok "$f" || mv -f "$t" "$f" 2>/dev/null
+    rm -f "$t" 2>/dev/null
+    rmdir "$lock" 2>/dev/null
+    ar__helper_secret_ok "$f"
+    return
+  fi
+  rm -f "$t" 2>/dev/null
+  # Fifty looks a fiftieth of a second apart (set here, not measured): the holder only looks again
+  # and renames, so a wait longer than that means it died, and its lock is cleared on a later try.
+  tries=0
+  while [ "$tries" -lt 50 ]; do
+    ar__helper_secret_ok "$f" && [ ! -d "$lock" ] && return 0
+    "${AR_HELPER_SECRET_SLEEP:-sleep}" 0.02
+    tries=$((tries + 1))
+  done
+  return 1
 }
 # The HMAC, in python so the secret is read from its file and never passed on a command line, where
 # any process could read it while it ran.
