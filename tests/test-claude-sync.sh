@@ -2280,8 +2280,8 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 #
 # A FRACTION OF THE CEILING rather than a number of seconds, so a slower machine given a larger
 # SUITE_TIMEOUT is not judged against a threshold calibrated on a fast one (L376). At CI's ceiling
-# of 1800 the budget is 1260s against a measured 980s, which is room for 28% more work, and it
-# speaks well before the wall clock guard, which needs 1800s of section time to reach its 900s.
+# of 1800 the budget is 1368s (76%), and it speaks well before the wall clock guard, which needs
+# 1800s of section time to reach its 900s.
 #
 # CI's runners come in TWO speeds, and the budget runs out on the slower (claude-config#1494). Over
 # 30 CI runs of this suite at 3022 checks, on 2026-10-21 and 22, the section time fell into two
@@ -2290,6 +2290,17 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # work, and it went past 1260s three times. #1494 brought it back to 1176s by cutting work rather
 # than moving the budget, which still speaks at the same fraction of the ceiling for the reason
 # given above. The margin on the slower runners is the one to read.
+#
+# SET FROM THAT SPREAD, 2026-10-25 (claude-config#1667). The 40 runs of the tests workflow on main
+# from 2026-10-24 01:17 to 2026-10-25 04:24 UTC, read from their logs with gh, are in
+# tests/ci-section-time-readings.tsv: the same two groups, 885s to 1092s and 1192s to 1362s, the
+# slower one 1221s at its median. At 70% the budget was 1260s, inside the slower group, so it turned
+# runs red with nothing grown: two of those 40 on main (1280s and 1362s) and pull request #1656
+# (1268s). 76% is 1368s, above every recorded run, which still speaks at about 12% of growth on the
+# slower runners. The suite holds the budget above the highest recorded run, so a new reading past
+# it fails here rather than a pull request at random. The lever NOT pulled (L308): judging the work
+# against the runner's own speed, measured in the same run, which would let the faster group be held
+# as tightly as the slower; at 76% growth there is caught only past about 39%.
 #
 # MEASURED AGAINST THAT BUDGET 2026-09-20, with tools/measure-section-time.sh, which takes several
 # readings and records the machine state beside each one (claude-config#517). The two figures that
@@ -2324,7 +2335,7 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 # A reading under a load this tool STARTS rather than one it found is MEASURE_LOAD_PROCS, and it
 # was not taken. Named here rather than left to be rediscovered (L308): the two arms above already
 # differ by roughly 2x in ambient CPU, which asks the same question of a real machine.
-SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-70}"
+SUITE_WORK_BUDGET_PCT="${SUITE_WORK_BUDGET_PCT:-76}"
 # Every shard's SUITE-WORK line, added up. Prints NOTHING when any shard did not emit one, so a
 # shard that died takes the total with it rather than quietly shrinking it (claude-config#492).
 fan_work_over_dir(){   # $1 = the shard output directory   $2 = how many shards to expect
@@ -17207,15 +17218,18 @@ section "== how much WORK this run is, against a budget that scales with its cei
 #
 # The budget is a FRACTION OF THE CEILING that machine is given rather than a number of seconds, so
 # a slower machine with a larger SUITE_TIMEOUT is not judged against a threshold calibrated on a
-# fast one (L376). At the CI ceiling of 1800 the budget is 1260s against a measured 980s, which is
-# room for 28% more work before it speaks, and it speaks well before the wall clock guard, which
-# needs 1800s of section time to reach its 900s of wall.
+# fast one (L376). At the CI ceiling of 1800 the budget is 1368s, set above CI's own run to run
+# spread (#1667, the paragraph above SUITE_WORK_BUDGET_PCT), and it speaks well before the wall
+# clock guard, which needs 1800s of section time to reach its 900s of wall.
 #
 # Its own fixture: sections are dealt to parallel workers by measured time, so one that reads a
 # neighbour's variable passes until the day the deal changes.
 # A quiet machine, set rather than measured, so a check below cannot turn on how busy this Mac is
 # (L290, L411): the budget now asks the load average whether its reading can be trusted (#1259).
 _wb(){ LOAD_AVERAGE_CMD="echo 2.00" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "${3-2000}" 2>&1; }
+# The budget at a local ceiling of 3600, from the fraction in force, so a deliberate change to it
+# (#1667) moves these expectations with it rather than leaving a number nobody recomputed.
+_wb_local=$(( 3600 * SUITE_WORK_BUDGET_PCT / 100 ))
 
 # Under budget says NOTHING. A report printed on every run is one nobody reads (L36), and this one
 # has to stay quiet on the ordinary day or it stops being a signal.
@@ -17231,7 +17245,7 @@ _wb_over="$(_wb 3000 3600)"; _wb_over_rc=$?
 check "#492 a run past its work budget fails"    "[ '$_wb_over_rc' -eq 1 ]"
 check "#492 and says so where the runner prints it" "case \"\$_wb_over\" in FAIL:*) true ;; *) false ;; esac"
 check "#492 and names what it measured and what it is allowed" \
-  "line_has \"\$_wb_over\" '3000' '2520'"
+  "line_has \"\$_wb_over\" '3000' '$_wb_local'"
 # A remedy that names an action which changes the state the reader is stuck in (L111). "It got
 # slower" is not one.
 check "#492 and names something to do about it" \
@@ -17249,6 +17263,24 @@ check "#492 and accepted under a larger one"                  "[ '$_wb_big_rc' -
 _wb_pct="$(SUITE_WORK_BUDGET_PCT=10 _wb 500 3600)"; _wb_pct_rc=$?
 check "#492 the fraction can be set, and a tighter one refuses work that passed before" \
   "[ '$_wb_pct_rc' -eq 1 ]"
+
+# THE BUDGET AT CI'S CEILING SITS ABOVE CI'S OWN RUN TO RUN SPREAD (claude-config#1667). At 70% it
+# was 1260s, inside the spread of ordinary runs on CI's slower runners, so a pull request went red
+# by chance (#1656 at 1268s, on 2026-10-24) and so did two runs of main (1280s and 1362s, measured
+# from their logs on 2026-10-25) with nothing grown. The
+# runs the budget was set from are in tests/ci-section-time-readings.tsv, taken from the logs of the
+# tests workflow on main with gh, and the budget is held above the highest of them here, so a new
+# reading past it fails this suite until the budget is reconsidered rather than turning a pull
+# request red. The ceiling is read from the workflow that sets it, never restated (L41).
+_ci_rec="$(dirname "$SCRIPT")/tests/ci-section-time-readings.tsv"
+_ci_ceiling="$(awk '/^[[:space:]]*SUITE_TIMEOUT:[[:space:]]*[0-9]+[[:space:]]*$/ { print $2; exit }' "$(dirname "$SCRIPT")/.github/workflows/tests.yml" 2>/dev/null)"
+_ci_runs="$(awk -F'\t' 'NR > 1 && $5 ~ /^[0-9]+$/ { n++ } END { print n + 0 }' "$_ci_rec" 2>/dev/null)"
+_ci_hi="$(awk -F'\t' 'NR > 1 && $5 ~ /^[0-9]+$/ && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }' "$_ci_rec" 2>/dev/null)"
+check "#1667 the CI readings the budget was set from are recorded, 30 runs or more ($_ci_runs)" "[ \"\${_ci_runs:-0}\" -ge 30 ]"
+check "#1667 CI's ceiling is read from the workflow ($_ci_ceiling)" "[ -n '$_ci_ceiling' ]"
+_ci_budget=$(( ${_ci_ceiling:-0} * SUITE_WORK_BUDGET_PCT / 100 ))
+check "#1667 the budget at CI's ceiling (${_ci_budget}s) sits above the highest recorded CI run (${_ci_hi}s)" \
+  "[ '$_ci_budget' -gt '${_ci_hi:-0}' ]"
 
 # A sum it could NOT read must never be treated as zero: zero clears every budget there is, so a
 # broken reader would be indistinguishable from a suite that costs nothing (L90, L98). Said out
@@ -17296,7 +17328,8 @@ check "#492 and it does not fail on a reading it could not attribute" "[ '$_wb_n
 # reported as UNMEASURED with the load it saw, and only the load beyond this suite's own shards
 # counts, since its own work competing with itself is what the budget exists to see (L411). The
 # load is SET here through the shared reader's seam, never measured (L290).
-_wbl(){ LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" 2>&1; }
+# Judged at 70%, the fraction that run was judged against, so its figures stay a replay of it.
+_wbl(){ SUITE_WORK_BUDGET_PCT=70 LOAD_AVERAGE_CMD="echo $4" LOAD_AVERAGE_CORES=12 SUITE_JOBS=4 suite_work_report "$1" "$2" "$3" 2>&1; }
 _wbl_busy="$(_wbl 2536 3600 1379 59.86)"; _wbl_busy_rc=$?
 check "#1259 the 2026-10-16 run, past budget at load 59.86 on 12 cores, does not fail" "[ '$_wbl_busy_rc' -eq 0 ]"
 check "#1259 and it is not dressed as a failure" "! line_has \"\$_wbl_busy\" '^FAIL:' 'test suite'"
@@ -17332,7 +17365,7 @@ check "#1259 a run inside its budget says nothing however busy the machine" "[ -
 # the NUMBER goes on the headline the run already prints every time, which is a report.
 _wn_ok="$(fan_work_note 892 3600)"
 check "#492 the headline carries the section time and the budget it was judged against" \
-  "line_has \"\$_wn_ok\" '892' '2520'"
+  "line_has \"\$_wn_ok\" '892' '$_wb_local'"
 _wn_none="$(fan_work_note '' 3600)"
 check "#492 and says so when it could not be totalled, rather than leaving the number out" \
   "case \"\$_wn_none\" in *totalled*) true ;; *) false ;; esac"
@@ -17347,7 +17380,7 @@ check "#492 and it says nothing at all when the budget is turned off" "[ -z \"\$
 # emitted in that shape as well as on the headline.
 _wn_marked="$(fan_work_note 892 3600)"
 check "#505 the work figure is also emitted in the shape the runner carries to CI" \
-  "case \"\$(fan_work_note_line 892 3600)\" in 'SUITE-NOTE '*892*2520*) true ;; *) false ;; esac"
+  "case \"\$(fan_work_note_line 892 3600)\" in 'SUITE-NOTE '*892*$_wb_local*) true ;; *) false ;; esac"
 check "#505 and there is nothing to carry when the budget is off" \
   "[ -z \"\$(fan_work_note_line 892 0)\" ]"
 check "#505 and the marked line says the same thing as the headline" \

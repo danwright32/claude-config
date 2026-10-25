@@ -1908,6 +1908,14 @@ recomputes the median, lowest and highest per arm from that file and requires th
 columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
 back by NAME, so adding a column cannot silently re-aim the reader (#524).
 
+CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 40 runs
+of the tests workflow on main, read from their logs with gh on 2026-10-25 (#1667). They fall into
+two groups by runner speed, 885s to 1092s and 1192s to 1362s, and the budget's fraction was raised
+from 70% to 76% (1368s at CI's 1800s ceiling) so it sits above every one of them; at 70% it sat
+inside the slower group and turned runs red by chance. The sync suite fails while the budget at
+CI's ceiling, read from the workflow, is not above the highest recorded run, so a slower run
+appended there is a decision to make rather than a pull request gone red at random.
+
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
 ```bash
