@@ -289,8 +289,11 @@ else:
 for verdict, name in said:
     print(f'{verdict}\t{name}')
 PY
-# The mods half, read the same way and added to the same verdicts (#1684).
-python3 - "$WORK/model.log" "$WORK/m1.jsonl" "$WORK/m2.jsonl" "$WORK/starts.log" "$SID2" >> "$WORK/verdict" <<'PY'
+# The mods half, read the same way and added to the same verdicts (#1684). Read outside a command
+# substitution (#1690), and checked: a reader that raises, or prints no verdict on the mods, would
+# otherwise leave the first reader's lines to read as a measured run that measured nothing of the
+# mods (L98, L11).
+IFS= read -r -d '' MODS_READER <<'PY' || true
 import json, re, sys
 model_log, m1, m2, starts, sid2 = sys.argv[1:]
 said = []
@@ -335,6 +338,29 @@ for line in open(starts):
 for verdict, name in said:
     print(f'{verdict}\t{name}')
 PY
+mods_verdict(){ # mods_verdict <work dir> -> its verdict lines, or one failing line saying why there are none
+  local out rc
+  out="$(python3 -c "$MODS_READER" "$1/model.log" "$1/m1.jsonl" "$1/m2.jsonl" "$1/starts.log" "$SID2" 2>"$1/mods-reader.err" </dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'the mods reader failed (exit %s): %s\tthe mods half of the steps could be read\n' "$rc" "$(tail -n 1 "$1/mods-reader.err" 2>/dev/null | tr '\t' ' ')"
+    return 0
+  fi
+  case "$out" in
+    *"	the mods sessions reported their init lines"*|*"	the resumed prompt is told a mod is missing only when"*) printf '%s\n' "$out" ;;
+    *) printf 'the mods reader printed no verdict on the mods\tthe mods half of the steps could be read\n' ;;
+  esac
+}
+mods_verdict "$WORK" >> "$WORK/verdict"
+# The control: the same reader over a copy of this run's logs with no SessionStart log in it, which
+# is what a hook that never ran leaves. It has to be said as a failure, never pass quietly (L1).
+mkdir -p "$WORK/no-starts"
+cp "$WORK/model.log" "$WORK/m1.jsonl" "$WORK/m2.jsonl" "$WORK/no-starts/" 2>/dev/null
+ctl="$(mods_verdict "$WORK/no-starts")"
+case "$ctl" in
+  *"	the mods half of the steps could be read"*) [ "${ctl%%	*}" != ok ] && check "a mods reader with a log missing is said as a failure, not passed over" ok \
+      || check "a mods reader with a log missing is said as a failure, not passed over" "it said: $ctl" ;;
+  *) check "a mods reader with a log missing is said as a failure, not passed over" "it said: ${ctl:-nothing}" ;;
+esac
 VERDICT="$(cat "$WORK/verdict")"
 while IFS=$'\t' read -r verdict name; do
   [ -n "$name" ] || continue
