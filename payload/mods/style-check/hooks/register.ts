@@ -103,8 +103,45 @@ const lineWords = (scannerOut: string): string => {
 }
 // Replies counted this session; the total across sessions is in the mod's store. Replies the
 // scanner could not check are counted apart, so a broken scanner never reads as clean writing.
-let sessionHits = 0
-let sessionUnchecked = 0
+// This session's counts are in $.state (#1703), which the engine holds for the session across a hot
+// reload: a reload fires session.start again in a fresh module, and the counts kept here started
+// again from nought while the session went on. Each is counted by version, retried, so two replies
+// counted at once both land (assume it runs twice). A count that cannot be written is said with the
+// count, never left to read as complete.
+const COUNT_TRIES = 5
+const countHit = async ($: EngineInterface) => {
+  for (let i = 0; i < COUNT_TRIES; i++) {
+    const held = await $.state.get({ plugin: 'style-check', key: 'hits' })
+    if ((await $.state.set({ plugin: 'style-check', key: 'hits' }, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error(`the count kept changing underneath ${COUNT_TRIES} writes in a row`)
+}
+const countUnchecked = async ($: EngineInterface) => {
+  for (let i = 0; i < COUNT_TRIES; i++) {
+    const held = await $.state.get({ plugin: 'style-check', key: 'unchecked' })
+    if ((await $.state.set({ plugin: 'style-check', key: 'unchecked' }, (held.value ?? 0) + 1, { ifVersion: held.version })).isSet) return
+  }
+  throw new Error(`the count kept changing underneath ${COUNT_TRIES} writes in a row`)
+}
+// Whether a reply this session could not be counted: /style-count then says its count may be short.
+// A session fact like the counts it qualifies, so kept in $.state with them (push review of PR for
+// #1703); this module's own flag holds it too, for when that write fails as well.
+let uncounted = false
+const counting = async ($: EngineInterface, which: 'hits' | 'unchecked') => {
+  try {
+    if (which === 'hits') await countHit($)
+    else await countUnchecked($)
+  } catch (err) {
+    uncounted = true
+    $.ui.log(`style-check: could not count a reply for this session: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    try {
+      await $.state.set({ plugin: 'style-check', key: 'uncounted' }, true)
+    } catch (again) {
+      $.ui.log(`style-check: could not keep that this session's count may be short: ${again instanceof Error ? again.message : String(again)}`, { to: 'debug' })
+    }
+  }
+}
+// Said once in this module's life: a reload says it once more at most.
 let noteSaid = false
 let countChain: Promise<unknown> = Promise.resolve()
 const UNCHECKED_NOTE = "Style check couldn't run, so this wasn't checked for dashes or emoji. The push check still will."
@@ -116,18 +153,23 @@ const unchecked = ($: EngineInterface, why: string) => {
 }
 
 export const register: Register = on => {
+  // Fires once per process and again at every hot reload of the mod (never at /clear), so it leaves
+  // this session's counts as they stand (#1703); a new process starts with none.
   on('session.start', async ($, e, next) => {
-    sessionHits = 0
-    sessionUnchecked = 0
     noteSaid = false
+    uncounted = false
     await $.command.register({ name: 'style-count', description: 'How many of my replies used a dash or emoji.' })
     return next(e)
   })
 
   on('command.run', { command: 'style-count' }, async $ => {
     const total = ((await $.store.get('chatHits')) as number | undefined) ?? 0
+    const sessionHits = (await $.state.get({ plugin: 'style-check', key: 'hits' })).value ?? 0
+    const sessionUnchecked = (await $.state.get({ plugin: 'style-check', key: 'unchecked' })).value ?? 0
     const gap = sessionUnchecked === 0 ? '' : ` ${sessionUnchecked} ${sessionUnchecked === 1 ? 'reply' : 'replies'} this session could not be checked.`
-    return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.${gap}` }
+    const kept = (await $.state.get({ plugin: 'style-check', key: 'uncounted' }).catch(() => ({ value: undefined }))).value === true
+    const short = uncounted || kept ? ' This session count may be short: a reply could not be counted.' : ''
+    return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.${gap}${short}` }
   })
 
   on('tool.call', async ($, e, next) => {
@@ -157,7 +199,7 @@ export const register: Register = on => {
       const v = await scan($, text)
       if (v.kind === 'hit') {
         // Counted silently, read with /style-count (Dan, 2026-10-03).
-        sessionHits += 1
+        await counting($, 'hits')
         // One queue for the stored total, so two replies counted at once both land (L690).
         const counted = countChain.then(async () => {
           await $.store.set('chatHits', (((await $.store.get('chatHits')) as number | undefined) ?? 0) + 1)
@@ -166,7 +208,7 @@ export const register: Register = on => {
         await counted
       } else if (v.kind === 'unchecked') {
         // Kept apart from the count (lessons review).
-        sessionUnchecked += 1
+        await counting($, 'unchecked')
         unchecked($, v.why)
       }
     }

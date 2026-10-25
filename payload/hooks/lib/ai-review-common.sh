@@ -159,26 +159,108 @@ ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 w
 # as a merge, so a Bash call that ran it, grepped the key out of its refusal and ran it again with
 # PR_REVIEW_READ="$key" merged with nobody having read the findings (found 2026-10-24 by the #1587
 # builder; #1587 closed only the Monitor form). So pr-review-gate.sh, which sees each Bash command
-# before it runs, records the sha256 of a key TYPED as a literal in front of the helper, and the
-# helper takes a key from its environment only when it was recorded. A key in a variable, an export
-# or a substitution is unknown when the command is read, so it is never recorded. Only the hash is
-# kept, one empty file each, named by it, and swept after 14 days with the reviews themselves.
+# before it runs, records a key TYPED as a literal in front of the helper, and the helper takes a key
+# from its environment only when it was recorded. A key in a variable, an export or a substitution is
+# unknown when the command is read, so it is never recorded. Each record is one empty file, swept
+# after 14 days with the reviews themselves.
+#
+# A RECORD A SESSION CANNOT MINT (claude-config#1700). The record was named by the key's sha256, so
+# a session's own shell command could make one by hand for a key it had grepped, which is the very
+# merge the gate exists to stop. It is now named by an HMAC-SHA256 of the key under a secret that only
+# the gate creates, kept beside the folder as helper-keys.secret, readable by its owner alone, and
+# pr-review-gate.sh refuses any Bash command naming the folder, the secret or the functions below that
+# write them. A file made without the secret is named by nothing the helper looks for. The helper
+# reads the secret to check a record and never creates one, so with no secret no key is accepted.
+# What this does not stop, being one user's files: a session that hides the name from the gate (a
+# glob, an escape, a script file written first) can still read the secret or call the recorder.
 ar__helper_keys_dir() { printf '%s/helper-keys' "$AR_STATE_DIR"; }
+ar__helper_secret_file() { printf '%s/helper-keys.secret' "$AR_STATE_DIR"; }
+ar__helper_secret_ok() {   # $1 = the secret file -> 0 when it holds a secret (64 lowercase hex)
+  local s
+  s="$(cat "$1" 2>/dev/null)" || return 1
+  [ "${#s}" -eq 64 ] || return 1
+  case "$s" in *[!a-f0-9]*) return 1 ;; esac
+  return 0
+}
+# Made by the gate alone, the first time it records a key, and in both cases the FIRST maker wins, so
+# no gate records under a secret another then replaces (assume it runs twice):
+# With none there, each links its own under the name, which only one link can take, and the others
+# drop theirs and read the winner's. With one there that is not a secret (cut short, emptied), which
+# could check nothing anyway, it is replaced only under a lock (a mkdir, which only one can make),
+# and the holder looks again once it has the lock, so a gate that saw it damaged after another had
+# already replaced it leaves the new one alone. The rename puts the new secret in place in one step,
+# so it is never missing. A gate that finds the lock held waits for the holder and reads its secret,
+# and never replaces it itself. A lock over a minute old was left by a gate that died holding it, and
+# is cleared.
+# AR_HELPER_SECRET_SLEEP and AR_HELPER_SECRET_PAUSE are the test's: the sleep between looks at a held
+# lock (L524), and a pair of fifos holding a gate just after it has seen the secret damaged, so the
+# race above can be run in a set order. Neither changes what is recorded.
+ar__helper_secret_make() {   # -> 0 once a secret is in place
+  local f t s lock tries
+  f="$(ar__helper_secret_file)"
+  ar__helper_secret_ok "$f" && return 0
+  if [ -n "${AR_HELPER_SECRET_PAUSE:-}" ]; then
+    printf 'reached\n' > "$AR_HELPER_SECRET_PAUSE.reached"; read -r _ < "$AR_HELPER_SECRET_PAUSE.go"
+  fi
+  command -v od >/dev/null 2>&1 && [ -r /dev/urandom ] || return 1
+  s="$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ "${#s}" -eq 64 ] || return 1
+  t="$f.$$.tmp"
+  { ( umask 077 && printf '%s' "$s" > "$t" ) && chmod 600 "$t"; } 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
+  if ! [ -e "$f" ]; then
+    ln "$t" "$f" 2>/dev/null
+    if ar__helper_secret_ok "$f"; then rm -f "$t" 2>/dev/null; return 0; fi
+  fi
+  lock="$f.lock"
+  [ -n "$(find "$lock" -maxdepth 0 -type d -mmin +1 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+  if mkdir "$lock" 2>/dev/null; then
+    ar__helper_secret_ok "$f" || mv -f "$t" "$f" 2>/dev/null
+    rm -f "$t" 2>/dev/null
+    rmdir "$lock" 2>/dev/null
+    ar__helper_secret_ok "$f"
+    return
+  fi
+  rm -f "$t" 2>/dev/null
+  # Fifty looks a fiftieth of a second apart (set here, not measured): the holder only looks again
+  # and renames, so a wait longer than that means it died, and its lock is cleared on a later try.
+  tries=0
+  while [ "$tries" -lt 50 ]; do
+    ar__helper_secret_ok "$f" && [ ! -d "$lock" ] && return 0
+    "${AR_HELPER_SECRET_SLEEP:-sleep}" 0.02
+    tries=$((tries + 1))
+  done
+  return 1
+}
+# The HMAC, in python so the secret is read from its file and never passed on a command line, where
+# any process could read it while it ran.
+ar__helper_key_mac() {   # $1 = a key -> its HMAC-SHA256 under the secret, or return 1
+  local f
+  f="$(ar__helper_secret_file)"
+  ar__helper_secret_ok "$f" || return 1
+  printf '%s' "$1" | python3 -c '
+import hashlib, hmac, sys
+with open(sys.argv[1], "rb") as fh:
+    secret = bytes.fromhex(fh.read().decode("ascii").strip())
+sys.stdout.write(hmac.new(secret, sys.stdin.buffer.read(), hashlib.sha256).hexdigest())
+' "$f" 2>/dev/null
+}
 ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once recorded
-  local d h
+  local d m
   case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
-  h="$(ar__key_hash "$1")"
-  [ -n "$h" ] || return 1
   d="$(ar__helper_keys_dir)"
-  { mkdir -p "$d" && : > "$d/$h"; } 2>/dev/null || return 1
+  { mkdir -p "$d"; } 2>/dev/null || return 1
+  ar__helper_secret_make || return 1
+  m="$(ar__helper_key_mac "$1")"
+  [ "${#m}" -eq 64 ] || return 1
+  { : > "$d/$m"; } 2>/dev/null || return 1
   find "$d" -mindepth 1 -maxdepth 1 -type f -mtime +14 -delete 2>/dev/null || true
   return 0
 }
 ar_helper_key_typed() {   # $1 = the key the helper was given -> 0 when a typed command presented it
-  local h
+  local m
   case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
-  h="$(ar__key_hash "$1")"
-  [ -n "$h" ] && [ -f "$(ar__helper_keys_dir)/$h" ]
+  m="$(ar__helper_key_mac "$1")" || return 1
+  [ "${#m}" -eq 64 ] && [ -f "$(ar__helper_keys_dir)/$m" ]
 }
 
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
@@ -324,9 +406,36 @@ ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
 #               that of <prefix>mods/mod-kit/<path> at the head (the copy that
 #               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
 #               blobs, never by trusting that check
+#   design      a settled design round page (claude-config#1696): an HTML file under docs/design at
+#               the repository's top, the place the design round guard calls a settled design's
+#               (isDesignRecord), whose text at the head the design rounds skill's own check,
+#               design_file.py --sealed (#1524), answers "sealed": exactly what make-settled.py wrote,
+#               the captured product page with the round drawn in, settled by Dan. Slate's #4212 was
+#               refused whole for one 521 KB page. The seal proves the text is unchanged since it was
+#               sealed, on either Mac; it does not prove who sealed it, since anyone can compute the
+#               hash, so a page is left out only on a branch over the cap, and named wherever the
+#               review is reported. A hand edited or unsealed page, or one the check cannot be run on
+#               (no python3, no design_file.py, an older one that answers in another shape), is read.
 # Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
 AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson|csv|tsv|xml|txt)$'
 AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
+AR_DESIGN_RECORD_RE='^[Dd][Oo][Cc][Ss]/[Dd][Ee][Ss][Ii][Gg][Nn]/[^/].*\.[Hh][Tt][Mm][Ll]?$'
+# The skill's check, beside these hooks in the checkout (payload/skills) and once installed
+# (~/.claude/skills) alike. AR_DESIGN_FILE_PY overrides it, for tests. Made absolute here, by
+# parameter expansion and builtins only (test-lib-self-locate.sh), because a caller may cd before
+# asking (the lessons advisory reads from the repository's top).
+AR_COMMON_DIR="${BASH_SOURCE[0]%/*}"; [ "$AR_COMMON_DIR" != "${BASH_SOURCE[0]}" ] || AR_COMMON_DIR=.
+AR_COMMON_DIR="$(cd "${AR_COMMON_DIR:-/}" 2>/dev/null && pwd)"
+
+# Whether the file at $2 in commit $1 is a settled design exactly as make-settled.py sealed it. Only
+# an exit 0 that says "sealed" counts, as the design round guard reads it: a design_file.py from
+# before #1524 ignores --sealed and exits 0 saying nothing.
+ar__design_sealed() {   # $1 = commit, $2 = path
+  local py="${AR_DESIGN_FILE_PY:-$AR_COMMON_DIR/../../skills/design-rounds/design_file.py}" out
+  [ -f "$py" ] || return 1
+  out="$(git show "$1:$2" 2>/dev/null | python3 -I "$py" --sealed 2>/dev/null)" || return 1
+  [ "$out" = sealed ]
+}
 ar_left_out_candidates() {   # $1 = base, $2 = head
   local base="$1" head="$2" names gen p src a b
   names="$(git -c core.quotepath=false diff --name-only "$base" "$head" 2>/dev/null)"
@@ -345,6 +454,9 @@ $p
 "*) printf '%s\tgenerated\tmarked generated in .gitattributes\n' "$p"; continue ;; esac
     if [[ "$p" =~ $AR_FIXTURE_DATA_RE ]]; then
       printf '%s\tfixture\tfixture data\n' "$p"; continue
+    fi
+    if [[ "$p" =~ $AR_DESIGN_RECORD_RE ]] && [[ "/$p/" != */../* ]] && ar__design_sealed "$head" "$p"; then
+      printf '%s\tdesign\ta settled design round page, sealed by make-settled.py\n' "$p"; continue
     fi
     if [[ "$p" =~ $AR_MODKIT_COPY_RE ]] && [ "${BASH_REMATCH[2]}" != "mod-kit" ]; then
       src="${BASH_REMATCH[1]}mods/mod-kit/${BASH_REMATCH[3]}"

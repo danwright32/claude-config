@@ -79,6 +79,38 @@ let toldSave = false
 let turnRunning = false
 // A Compact pressed while a turn ran, to run when it ends (#1278); cleared by Cancel or by running.
 let compactQueued = false
+// #1703: both are session facts, kept in $.state, which the engine holds for the session across a
+// hot reload of the mod. A reload in the middle of a turn read it as over, so a Compact pressed then
+// was sent to a turn that refused it, and one queued before the reload never ran. The two variables
+// above are this module's cache of them: filled from $.state at each session start, and each change
+// written through. A write that fails is logged; the cache still holds the change for this module.
+const turnRef = { plugin: 'status-bar', key: 'turnRunning' } as const
+const queuedRef = { plugin: 'status-bar', key: 'compactQueued' } as const
+// What $.state is known to hold of each, apart from what this module holds: the module takes a change
+// at once, and a write that failed is tried again at the next change to the same value, rather than
+// read as written (push review of PR for #1703).
+let keptTurn: boolean | undefined
+let keptQueued: boolean | undefined
+const setTurnRunning = async ($: EngineInterface, value: boolean) => {
+  turnRunning = value
+  if (keptTurn === value) return
+  try {
+    await $.state.set(turnRef, value)
+    keptTurn = value
+  } catch (err) {
+    $.ui.log(`status-bar: could not record that the turn ${value ? 'started' : 'ended'}: ${msg(err)}`, { to: 'debug' })
+  }
+}
+const setCompactQueued = async ($: EngineInterface, value: boolean) => {
+  compactQueued = value
+  if (keptQueued === value) return
+  try {
+    await $.state.set(queuedRef, value)
+    keptQueued = value
+  } catch (err) {
+    $.ui.log(`status-bar: could not record that a Compact is ${value ? 'queued' : 'no longer queued'}: ${msg(err)}`, { to: 'debug' })
+  }
+}
 // The session has ended (not a /clear, after which it carries on): nothing writes its facts again.
 let ended = false
 let chain: Promise<unknown> = Promise.resolve()
@@ -459,6 +491,19 @@ export const register: Register = on => {
     if (!e.isInteractive) return next(e)
     interactive = true
     ended = false
+    // Taken up from $.state, so a reload in the middle of a turn keeps it running and keeps a Compact
+    // queued for its end (#1703); a new process has neither. One that cannot be read is neither, as
+    // before this was kept, and is logged.
+    keptTurn = undefined
+    keptQueued = undefined
+    try {
+      turnRunning = keptTurn = (await $.state.get(turnRef)).value === true
+      compactQueued = keptQueued = (await $.state.get(queuedRef)).value === true
+    } catch (err) {
+      turnRunning = false
+      compactQueued = false
+      $.ui.log(`status-bar: could not read whether a turn is running or a Compact queued: ${msg(err)}`, { to: 'debug' })
+    }
     startCwd = e.cwd
     home = await $.env.get('HOME')
     if (home) {
@@ -488,7 +533,7 @@ export const register: Register = on => {
     if (interactive && e.agentId === undefined) {
       // Also what takes this conversation's quiet background commands off the band while Claude
       // works (#1583): cacheMoved below draws the band again from it.
-      turnRunning = true
+      await setTurnRunning($, true)
       try {
         await $.state.set(cacheRef, (await $.clock.now()) + CACHE_MS)
         $.clock.after(0, () => void cacheMoved($))
@@ -521,10 +566,10 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (interactive && e.agentId === undefined) {
-      turnRunning = false
+      await setTurnRunning($, false)
       // A Compact queued during the turn runs now, from this later event, as Claude Code asks (#1278).
       if (compactQueued) {
-        compactQueued = false
+        await setCompactQueued($, false)
         $.clock.after(0, () => {
           void compactNow($).catch(err => $.ui.toast(`Compact did not run: ${msg(err)}`))
         })
@@ -564,7 +609,7 @@ export const register: Register = on => {
   // Compact, pressed by a click or by /press (#939): mod-kit raises both as modkit.press.
   on('modkit.press', ($, e, next) => {
     if (e.element === 'status-bar:compact-cancel') {
-      compactQueued = false
+      void setCompactQueued($, false)
       void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       return { value: { isAnswered: true } }
     }
@@ -572,7 +617,7 @@ export const register: Register = on => {
     // #1278: Claude Code refuses a compaction while a turn runs, so a press then is queued, shown on
     // the row, and run when the turn ends.
     if (turnRunning) {
-      compactQueued = true
+      void setCompactQueued($, true)
       void publish().catch(err => $.ui.log(`status-bar: the band could not be updated: ${msg(err)}`, { to: 'debug' }))
       return { value: { isAnswered: true } }
     }
@@ -598,8 +643,8 @@ export const register: Register = on => {
     if (e.reason === 'clear') {
       await $.state.set(cacheRef, null)
       toastedFor = null
-      turnRunning = false
-      compactQueued = false
+      await setTurnRunning($, false)
+      await setCompactQueued($, false)
       context = undefined
       contextTokens = undefined
       usageStale = true

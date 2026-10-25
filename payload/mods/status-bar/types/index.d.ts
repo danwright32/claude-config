@@ -44,12 +44,18 @@ export type StatusBarAccount = {
   organizationType?: string
 }
 
+/** A yes or no the status bar keeps for the session. */
+export type StatusBarFlag = boolean
+
 declare module 'claude-code' {
   interface EngineInterface {
     statusbar: StatusBar
   }
   interface PluginState {
-    /** In $.state so a reload of the mod keeps them: the modes on, when the prompt cache goes cold, and the session's account. */
-    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null }
+    /**
+     * In $.state so a reload of the mod keeps them: the modes on, when the prompt cache goes cold, the
+     * session's account, whether a main turn is running, and a Compact queued for its end (#1278, #1703).
+     */
+    'status-bar': { modes: StatusBarMode[]; cacheExpiresAt: number | null; account: StatusBarAccount | null; turnRunning: StatusBarFlag; compactQueued: StatusBarFlag }
   }
 }

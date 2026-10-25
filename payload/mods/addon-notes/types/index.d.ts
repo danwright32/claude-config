@@ -17,8 +17,15 @@ export type AddonNotes = {
   resumeLine: (q: { text: string }) => Promise<AddonNotesResume | null>
 }
 
+/** Whether the main loop's last turn ended because Dan interrupted it, not yet answered. */
+export type AddonNotesInterrupted = boolean
+
 declare module 'claude-code' {
   interface EngineInterface {
     addonNotes: AddonNotes
+  }
+  interface PluginState {
+    /** In $.state so a hot reload of the mod keeps it (#1703). */
+    'addon-notes': { interrupted: AddonNotesInterrupted }
   }
 }

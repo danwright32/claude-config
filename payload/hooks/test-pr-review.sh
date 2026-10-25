@@ -1324,6 +1324,65 @@ mcand="$(cd "$MREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_c
 check "#583 a file the base already marked generated is a candidate" "old.gen" "$mcand"
 check_not "#583 a file marked generated only by this branch is not" "new.gen" "$mcand"
 
+# A settled design round page under docs/design (claude-config#1696). Slate's #4212 was refused whole
+# because docs/design/alerts-learning-retirement.html alone was 521 KB of diff, so its 58 KB of code
+# and a migration were never reviewed. The proof is the page's seal, checked by the design rounds
+# skill's own design_file.py --sealed (#1524), the same check the design round guard runs: the text is
+# exactly what make-settled.py wrote. A hand edited, unsealed or misplaced page is still read, and so
+# is every page when the check cannot run or answers in another shape.
+DESIGN_PY="$DIR/../skills/design-rounds/design_file.py"
+seal_page(){   # $1 = the page's words -> a settled design page, sealed by design_file.py's own seal()
+  python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import design_file
+page = "<html><body><p>" + sys.argv[2] + "</p>\n" \
+  + "<script type=\"application/json\" id=\"decision-map\">{\"decisions\": []}</script>\n" \
+  + "<script type=\"application/json\" id=\"design-frames\">{\"frames\": []}</script>\n" \
+  + "<script>try { load() } catch (e) { return [] }</script></body></html>\n"
+sys.stdout.write(design_file.seal(page))' "${DESIGN_PY%/*}" "$1"
+}
+DREPO="$WORKDIR/design"; git init -q "$DREPO"
+DG(){ git -C "$DREPO" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+printf 'base\n' > "$DREPO/README.md"; DG add README.md; DG commit -q -m base; DB="$(DG rev-parse HEAD)"
+mkdir -p "$DREPO/docs/design/older" "$DREPO/src"
+seal_page "the picker" > "$DREPO/docs/design/picker.html"
+seal_page "an older round" > "$DREPO/docs/design/older/round.HTML"
+seal_page "the edited one" | sed 's/the edited one/the edited one, by hand/' > "$DREPO/docs/design/edited.html"
+seal_page "unsealed" | sed '$d' > "$DREPO/docs/design/unsealed.html"
+seal_page "outside docs/design" > "$DREPO/src/page.html"
+DG add docs src; DG commit -q -m pages; DH="$(DG rev-parse HEAD)"
+dcand="$(cd "$DREPO" && bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check "#1696 a sealed design round page is a candidate" $'docs/design/picker.html\tdesign\t' "$dcand"
+check "#1696 named as a settled design round page in the left out note" "settled design round page" "$dcand"
+check "#1696 one in a folder under docs/design, of any case, too" "docs/design/older/round.HTML" "$dcand"
+check_not "#1696 a page edited by hand after its seal is not" "edited.html" "$dcand"
+check_not "#1696 a page with no seal is not" "unsealed.html" "$dcand"
+check_not "#1696 a sealed page outside docs/design is not" "src/page.html" "$dcand"
+dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/no-such/design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 with no design_file.py to check the seal, no page is" "docs/design" "$dcand"
+printf 'import sys\nsys.exit(0)\n' > "$WORKDIR/silent_design_file.py"
+dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/silent_design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 nor with an older design_file.py that exits 0 saying nothing" "docs/design" "$dcand"
+# End to end, as the merge gate and the merge helper both run it (pr-review.sh start, then check): a
+# branch over the cap only because of its settled page is reviewed, its code read, the page named.
+reset_state
+G checkout -q -b feat/design main
+mkdir -p "$REPO/docs/design"
+seal_page "$(seq 1 600 | sed 's/^/drawn /' | tr '\n' ' ')" > "$REPO/docs/design/round.html"
+printf 'func designCode() {}\n' > "$REPO/Design.swift"
+G add docs/design/round.html Design.swift
+G commit -q -m "a settled round and its code"
+DSN_SHA="$(G rev-parse HEAD)"; DSN_BASE="$(G rev-parse main)"
+G checkout -q feat/sync
+out="$(PR_REVIEW_MAX_BYTES=$DCAP FAKE_CLAUDE_OUT='No issues found.' prr start --dir "$REPO" --sha "$DSN_SHA" --base-ref "$DSN_BASE")"
+check "#1696 a branch over the cap only because of a settled page is reviewed" "started" "$out"
+check_not "#1696 and is not refused as too large" "too large" "$out"
+wait_final "$DSN_SHA" || bad "#1696 the branch with its settled page left out was reviewed: $out"
+stdin="$(cat "$FAKE_LOG/stdin" 2>/dev/null)"
+check "#1696 its code is read" "+func designCode" "$stdin"
+check_not "#1696 the settled page is not in the diff" "drawn 1 drawn 2" "$stdin"
+out="$(PR_REVIEW_MAX_BYTES=$DCAP prr check --dir "$REPO" --sha "$DSN_SHA" --base-ref "$DSN_BASE")"; rc=$?
+check_eq "#1696 the clean review of the rest allows the merge" "0" "$rc"
+check "#1696 and the verdict names the page and why it was not read" "docs/design/round.html (a settled design round page, sealed by make-settled.py" "$out"
+
 # ===========================================================================================
 # 12. A branch still over the cap is reviewed in groups of files, each fitting, rather than refused
 #     (claude-config#601). Slate #3049 (456 KB across about 86 files, 2026-10-02) could only merge by Dan
