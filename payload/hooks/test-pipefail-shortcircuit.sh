@@ -113,7 +113,46 @@ fi
 # cannot be judged from here. It is not counted, and it is not passed either: the counter names its line as UNJUDGED, and the tree check further down
 # fails on one, because a site nobody has judged is not a site that is known not to short circuit
 # (L98). Still one count per LINE, as grep -c gave, so every recorded number keeps its meaning.
-_SC_COUNTER="$(cat <<'AWK'
+# Read OUTSIDE a command substitution (claude-config#1661, #1690): bash 3.2 scans a substitution's
+# text for quotes and parentheses before it reads a heredoc inside it, so the program used to keep
+# every single quote, backquote and lone parenthesis out of itself to parse at all.
+IFS= read -r -d '' _SC_COUNTER <<'AWK' || true
+# Which characters of a line are the shell's own code, "c", and which are quoted text it carries, "q"
+# (claude-config#1661). The pipes were found by searching the line's text, so a command line held in
+# a quoted argument, a suite's test data, read as that suite's own pipeline. A `$( ... )` opens code
+# again even inside double quotes, so a pipe there still counts; a `#` after a space starts a comment.
+# A string the line hands to an evaluator IS code, however it is quoted: the sync suite's check runs
+# its second argument through eval, as eval does its own, and a pipe there runs under pipefail. So a
+# double quoted string standing as `check "<name>" "<here>"` or `eval "<here>"` is read as code up to
+# its closing quote; any other quoted string is text the line carries.
+function codemask(s,    m, i, n, c, st, stk, ev) {
+  m = ""; n = length(s); st = ""; stk = ""; ev = 0
+  if (match(s, /^[[:space:]]*(check[[:space:]]+"[^"]*"[[:space:]]+|eval[[:space:]]+)"/)) ev = RLENGTH
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (st == "" && i == ev) { st = "E"; m = m "c"; continue }
+    if (st == "E") {
+      if (c == "\\") { m = m "cc"; i++; continue }
+      if (c == DQ) st = ""
+      m = m "c"; continue
+    }
+    if (st == "") {
+      if (c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;]/)) { while (i <= n) { m = m "q"; i++ }; break }
+      if (c == "\\") { m = m "cc"; i++; continue }
+      if (c == "$" && substr(s, i + 1, 1) == "(" && substr(s, i + 2, 1) != "(") { stk = stk "N"; m = m "cc"; i++; continue }
+      if (c == ")" && stk != "") { st = (substr(stk, length(stk)) == "D") ? DQ : ""; stk = substr(stk, 1, length(stk) - 1); m = m "c"; continue }
+      if (c == SQ) { st = (i > 1 && substr(s, i - 1, 1) == "$") ? "A" : SQ; m = m "q"; continue }
+      if (c == DQ) { st = DQ; m = m "q"; continue }
+      m = m "c"; continue
+    }
+    if (st == SQ) { if (c == SQ) st = ""; m = m "q"; continue }
+    if (c == "\\") { m = m "qq"; i++; continue }
+    if (st == DQ && c == "$" && substr(s, i + 1, 1) == "(" && substr(s, i + 2, 1) != "(") { stk = stk "D"; st = ""; m = m "qq"; i++; continue }
+    if ((st == "A" && c == SQ) || (st == DQ && c == DQ)) st = ""
+    m = m "q"
+  }
+  return m
+}
 function tok(s,    n, c, d, pos, len, t, intok, j, closed) {
   split("", T); split("", TEND)
   UNTERM = 0
@@ -157,8 +196,8 @@ function tok(s,    n, c, d, pos, len, t, intok, j, closed) {
 # program has CODE, which it cannot read, from one inside a string, a substitution or an address,
 # which is a value the program matches or prints and cannot make it leave. A dollar
 # sign before a single quote is the ANSI C quoting form, and one before a space or the end is plain
-# text. The backquote and the opening parenthesis are named by their codes, 96 and 40, because bash
-# 3.2 reads this heredoc inside a command substitution, where a lone one of either fails the parse.
+# text. The backquote and the opening parenthesis are named by their codes, 96 and 40, a habit from
+# when this program sat inside a command substitution, where bash 3.2 failed on a lone one (#1661).
 function expands(s, pos,    c, d) {
   c = substr(s, pos, 1)
   if (c == sprintf("%c", 96)) return 1
@@ -250,14 +289,18 @@ END {
   for (i = 1; i <= NR; i++) {
     line = L[i]
     if (line ~ /^[[:space:]]*#/) continue
-    rest = line; hit = 0; UNJ = 0
+    rest = line; hit = 0; UNJ = 0; off = 0; MASK = codemask(line)
     while (!hit && match(rest, /(^|[^|])\|/)) {
       # Kept before anything else can call match(), which resets RSTART for the whole program.
       after = RSTART + RLENGTH
+      bar = off + after - 1
       s = substr(rest, after)
       rest = s
+      off += after - 1
       # A second bar makes a logical OR (claude-config#282), and a bar then an ampersand pipes both streams.
-      if (substr(s, 1, 1) == "|") { rest = substr(s, 2); continue }
+      if (substr(s, 1, 1) == "|") { rest = substr(s, 2); off++; continue }
+      # A bar inside a quoted string is text the line carries, never a pipe (claude-config#1661).
+      if (substr(MASK, bar, 1) != "c") continue
       if (substr(s, 1, 1) == "&") s = substr(s, 2)
       text = s; k = i
       n = tok(text)
@@ -280,7 +323,6 @@ END {
   if (unjudged != "") print "unjudged" unjudged
 }
 AWK
-)"
 # One pass over a file answers both questions: the count on the first line, then, when there are
 # any, `unjudged` and the line numbers of the piped programs read from a file.
 sc_scan() { # sc_scan <file>
@@ -327,6 +369,28 @@ _PIPE='|'
 [ "$(count_uncommented "$TMPROOT/probe.sh")" = "2" ] \
   && check "the counter sees a piped grep -q and a piped head, and nothing else" ok \
   || check "the counter sees a piped grep -q and a piped head, and nothing else" "it counted $(count_uncommented "$TMPROOT/probe.sh")"
+
+# A BAR INSIDE A QUOTED STRING IS TEXT, NOT A PIPE (claude-config#1661). The counter found its pipes
+# by searching the line's text, so a suite's test data, a command line handed as a quoted argument to
+# the guard it tests, read as that suite's own pipeline: test-check-wrapped-commands.sh's two strings
+# ending `| head -20` and `| head -5` (#1610) were counted, and the suite was made to pass by naming
+# head through a variable. These are those two strings, a single quoted one, and two real pipes: one
+# inside a command substitution inside double quotes, which is code however it is quoted, and one
+# after a string that has closed, and two handed to an evaluator. Only the four real ones count.
+{
+  printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf '%s\n' "allowed \"the check piped to head\" \"bash \$MC \\\"o/r\\\" --like \\\"a gh title\\\" $_PIPE head -20\""
+  printf '%s\n' "allowed \"the check piped through grep then head\" \"bash \$MC \\\"o/r\\\" --like \\\"a gh title\\\" 2>&1 $_PIPE grep -E 'DUPLICATE${_PIPE}CLOSE' $_PIPE head -5\""
+  printf '%s\n' "allowed 'single quoted' 'cmd $_PIPE grep -q x'"
+  printf '%s\n' "x=\"\$(printf a $_PIPE head -1)\""
+  printf '%s\n' "printf '%s' \"a\" $_PIPE head -1"
+  # And a string handed to an evaluator is code: the sync suite's check evals its second argument.
+  printf '%s\n' "check \"a grep over the output\" \"printf '%s' \\\"\\\$out\\\" $_PIPE grep -q needle\""
+  printf '%s\n' "eval \"cat f $_PIPE head -1\""
+} > "$TMPROOT/probe-quoted.sh"
+[ "$(count_uncommented "$TMPROOT/probe-quoted.sh")" = "4" ] \
+  && check "#1661 a bar inside a quoted string is text, and a pipe inside a substitution, after a closed string or in a string handed to an evaluator is counted" ok \
+  || check "#1661 a bar inside a quoted string is text, and a pipe inside a substitution, after a closed string or in a string handed to an evaluator is counted" "it counted $(count_uncommented "$TMPROOT/probe-quoted.sh") of 4"
 
 # Every SPELLING of the quiet flag, not only the ones ending in `q` (claude-config#153). The
 # pattern read `-[a-zA-Z]*q`, which requires the cluster to END in q, so `-q` and `-Eq` counted and

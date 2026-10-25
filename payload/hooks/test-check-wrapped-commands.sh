@@ -184,9 +184,6 @@ check_eq "#1574 a spool note that passes is not recorded as a refusal" "absent" 
 # Behind a declared call, its output may be piped into grep, head, tail or cut, which only read
 # what they are given and print it; `2>&1` may stand before the first pipe. Nothing else follows.
 MC='~/.claude/skills/milestone/milestone-candidates.sh'
-# head is named through a variable, so the pipefail ratchet does not read these command strings as
-# this suite's own pipelines.
-HEAD=head
 allowed "the duplicate check, as the docs give it" "bash $MC \"danwright32/claude-config\" --like \"Stop the gh poll loop before git push\""
 allowed "the duplicate check through the absolute path" "bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"owner/repo\" --like \"an rtk rewrite\""
 allowed "the duplicate check with the repository unquoted" "bash $MC danwright32/claude-config --like 'a gh issue title'"
@@ -198,10 +195,10 @@ allowed "another account, a spool note" "GH_TOKEN=\$(gh auth token -u danwright3
 # invented account and repository standing for the real ones): each piped its output to grep.
 allowed "a real refused duplicate check, piped to grep" "bash $MC \"danwright32/claude-config\" --like \"Stop the wrapped command guard refusing an issue spool note that mentions gh git or rtk\" 2>&1 | grep -E \"DUPLICATE|CLOSE-MATCH\""
 allowed "the real refused check for another account, piped to grep" "GH_TOKEN=\$(gh auth token -u other-acct) bash $HOME/.claude/skills/milestone/milestone-candidates.sh \"example-org/enrollment-tracker\" --like \"Delete the stale wildcard allow rules from local Claude settings\" | grep -v -E \"^\\\\s+DESC\""
-allowed "the check piped to head" "bash $MC \"o/r\" --like \"a gh title\" | $HEAD -20"
+allowed "the check piped to head" "bash $MC \"o/r\" --like \"a gh title\" | head -20"
 allowed "the check piped to tail" "bash $MC \"o/r\" --like \"a gh title\" | tail -n 5"
 allowed "the check piped to cut" "bash $MC \"o/r\" --like \"a gh title\" | cut -c1-200"
-allowed "the check piped through grep then head" "bash $MC \"o/r\" --like \"a gh title\" 2>&1 | grep -E 'DUPLICATE|CLOSE' | $HEAD -5"
+allowed "the check piped through grep then head" "bash $MC \"o/r\" --like \"a gh title\" 2>&1 | grep -E 'DUPLICATE|CLOSE' | head -5"
 allowed "a filter whose quoted pattern says gh" "bash $MC \"o/r\" --like \"x\" | grep 'gh pr'"
 allowed "a spool note piped to tail" "bash $SPOOL note . \"git push\" \"builder\" | tail -1"
 refused "the check piped to a shell" "bash $MC \"o/r\" --like \"gh\" | sh" "bash"
