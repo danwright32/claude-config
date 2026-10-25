@@ -242,7 +242,19 @@ const giveDoneBack = async ($: EngineInterface, n: number) => {
 // the step still sent and its turn never started, Done comes back. Armed at the press and again at
 // each main turn's end; only the latest arming may act, so the one armed at the press cannot fire
 // seconds after the turn it waited behind ended, while the settings hooks still run.
-let runningTurn: string | null = null
+// The main turn running now is in $.state (#1703): a reload in the middle of a turn read it as none,
+// and a Done pressed then came back while the turn it waited behind still ran. Which arming is the
+// latest describes this module's own timer, which a reload cancels, so it stays here.
+const runningTurnRef = { plugin: 'manual-steps', key: 'runningTurn' } as const
+// A turn that cannot be recorded is logged and never fails the turn event it rides on: a start not
+// recorded can only let a dropped Done come back early, the #734 behaviour before the turn was kept.
+const setRunningTurn = async ($: EngineInterface, turnId: string | null) => {
+  try {
+    await $.state.set(runningTurnRef, turnId)
+  } catch (err) {
+    $.ui.log(`manual-steps: could not record that the main turn ${turnId === null ? 'ended' : 'started'}: ${message(err)}`, { to: 'debug' })
+  }
+}
 let armed = 0
 let fallback: { cancel: () => void } | undefined
 const armFallback = ($: EngineInterface) => {
@@ -257,7 +269,9 @@ const armFallback = ($: EngineInterface) => {
   }
 }
 const giveBackDropped = async ($: EngineInterface, mine: number) => {
-  if (mine !== armed || runningTurn !== null) return
+  if (mine !== armed) return
+  // A turn running, or one that cannot be read, holds the Done: the next turn's end arms this again.
+  if (((await $.state.get(runningTurnRef)).value ?? null) !== null) return
   const card = (await $.state.get(cardRef)).value ?? null
   // Several steps can be sent at once (#1239): each whose turn never started comes back.
   const waiting = (await $.state.get(waitingRef)).value?.step
@@ -538,7 +552,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     // Only the main loop raises turn.start; a subagent's run raises none.
-    runningTurn = e.turnId
+    await setRunningTurn($, e.turnId)
     const n = /^step (\d+) done$/.exec(e.text.trim())?.[1]
     const card = (await $.state.get(cardRef)).value ?? null
     if (n !== undefined && card?.steps[Number(n) - 1]?.isSent) await $.state.set(waitingRef, { turnId: e.turnId, step: Number(n) })
@@ -551,7 +565,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
-    runningTurn = null
+    await setRunningTurn($, null)
     const waiting = (await $.state.get(waitingRef)).value ?? null
     if (!waiting || waiting.turnId !== e.turnId) {
       // A step still sent whose turn has not started may be queued behind this one, or dropped
