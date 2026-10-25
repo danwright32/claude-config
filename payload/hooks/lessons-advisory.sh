@@ -42,6 +42,10 @@
 # Seams for tests: LESSONS_FILE overrides the lessons path, TMPDIR the cooldown
 # stamp directory.
 #
+# The README's "The lessons advisory on every push" lists every trigger and its lessons
+# (test-lessons-advisory.sh fails when the table and TRIG_IDS disagree), and says how to measure a
+# trigger change before shipping it: measure-lessons-advisory.sh, beside this hook.
+#
 # Fails QUIET: it is an advisor, so a broken advisor should add nothing rather
 # than nag. The one thing it will not do quietly is lose a lesson: an id that no
 # longer resolves, or a lessons file it cannot read, is reported in the advisory

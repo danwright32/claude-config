@@ -784,6 +784,43 @@ for n in payload/CLAUDE.md payload/hooks/lessons-advisory.sh README.md src/lesso
   fi
 done
 
+# --- the README's trigger table names every trigger's lessons (claude-config#1687) ---------------
+# The README's section on this hook lists each trigger and the lessons it names. A trigger added,
+# or a lesson id changed, with the table left as it was would leave the manual describing a hook
+# that no longer runs (L244). Read from the hook's own array, never restated here (L107).
+ADVISORY_README="${ADVISORY_README:-$REPO_ROOT/README.md}"
+if [ ! -f "$ADVISORY_README" ] || [ ! -d "$REPO_ROOT/payload" ]; then
+  echo "NOTE: $REPO_ROOT is not a checkout of this repo, so the README's trigger table could not be compared."
+else
+  readme_section="$(awk '/^### The lessons advisory on every push/ { on = 1; next } on && /^#/ { exit } on' "$ADVISORY_README")"
+  if [ -z "$readme_section" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL: $ADVISORY_README has no section headed 'The lessons advisory on every push'"
+  else
+    readme_ids="$(
+      # shellcheck disable=SC1090
+      eval "$(sed -n '/^TRIG_IDS=(/,/^)/p' "$HOOK")"
+      printf '%s\n' "${TRIG_IDS[@]}"
+    )"
+    while IFS= read -r ids; do
+      [ -n "$ids" ] || continue
+      want="| ${ids//,/, } |"
+      if grep -Fq -- "$want" <<< "$readme_section"; then
+        PASS=$((PASS+1)); echo "PASS: the README's trigger table names $ids"
+      else
+        FAIL=$((FAIL+1)); echo "FAIL: the README's trigger table has no row ending '$want', for the trigger naming $ids"
+      fi
+    done <<< "$readme_ids"
+    rows="$(grep -c '^| [A-Z]' <<< "$readme_section")"
+    n_ids="$(printf '%s\n' "$readme_ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+    # One row more than the triggers: the table's own header row starts the same way.
+    if [ "$rows" -eq $((n_ids + 1)) ]; then
+      PASS=$((PASS+1)); echo "PASS: the README's trigger table has one row per trigger ($n_ids)"
+    else
+      FAIL=$((FAIL+1)); echo "FAIL: the README's trigger table has $((rows - 1)) rows for $n_ids triggers"
+    fi
+  fi
+fi
+
 # --- the reader that DELIVERS the advice (claude-config#486) -------------------
 #
 # The advice is handed over as JSON built by python3. With no python3 the emit produced nothing

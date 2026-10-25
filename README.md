@@ -732,6 +732,54 @@ disagree about it. The same answer says when a push sent no commits at all (one 
 remote branches), and the advisory review skips those too rather than reviewing whatever the head
 last pushed.
 
+### The lessons advisory on every push
+
+`lessons-advisory.sh` runs before every `git push` in every project and never blocks one. It scans
+only the lines the push ADDS (merge base to head, plus what a `git commit` in the same command is
+about to take), never whole files, so a pattern that already lived in a file is not raised again
+each time that file is touched. When one of its triggers matches it hands Claude a `LESSONS CHECK`
+naming what was spotted, the files it was spotted in (three by name, then a count), and the full
+text of each lesson, quoted from `LESSONS.md` at that moment so a reworded lesson needs no second
+copy updated. Claude is asked to check each one against the change and say in a line where one
+does not apply. It exits 0 and emits no permission decision, so the push goes ahead either way.
+
+It is advisory, and never a gate, on purpose: most lessons are about design, which is settled by
+push time, and a third overridable push gate would teach the habit of typing `SKIP_` past the two
+that refuse. For the same reason it never reports a clean result. Silence means no pattern matched,
+never that the push honours the lessons (L96).
+
+| Trigger | What it matches in the added lines | Lessons |
+| --- | --- | --- |
+| An error path returning empty or success | A catch (`lib/failure-handling.sh`, read as code) with a `return []`, `{}`, `null`, `None`, `true`, an empty string or a bare `return` or `pass` beside it | L10, L11, L95 |
+| New scheduled, queued or background work | `cron`, `celery` or `sidekiq` at the start of a word, after an underscore, at a camelCase join (`scheduleCron`) or after a flag's dashes, but not after a hyphen inside a word (`bg-cron`); `setInterval`, `.schedule(`, `scheduleJob`, `BackgroundTasks`, `queue.add` and `queue.send`. In a shell file outside the tests, a job started with `&`. A file with no extension is read by its shebang, and as prose when it has none | L13, L71 |
+| A new route or endpoint | `app.get(` and its siblings on `app`, `router` or `server`, an exported `GET` or `POST` handler, `@app.route`, a `fetch` event listener | L18, L19 |
+| A destructive data operation | `DROP TABLE`, `DROP COLUMN`, `TRUNCATE`, `DELETE FROM`, `rm -rf`, `fs.rm(`, `unlinkSync`, `.drop(`, less an `rm -rf` whose every target is a directory the same lines made with `mktemp` | L5, L7, L9 |
+| New retry or failure handling | A retry construct, as `lib/failure-handling.sh` reads it (the predicate the push gate and the lessons review share) | L33, L35, L77, L524 |
+| A parsed value flowing into a comparison | `parseInt`, `parseFloat`, `JSON.parse` or `Number(` with a comparison operator in the same file | L50 |
+| A test waiting a fixed time | `sleep`, `setTimeout(`, `waitForTimeout(`, `Task.sleep` and the like, in test files only | L290, L524 |
+| A workflow job with no timeout | A job under `.github/workflows/` (a key with `runs-on` or `uses`) added without `timeout-minutes` | L313 |
+
+The background work, fixed wait and failure triggers read the added lines as code, with string
+contents and comments removed, so a word in a fixture argument or a comment does not fire. A file
+the repository marks generated in `.gitattributes` is still scanned but its matches raise no
+lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
+never read, because they quote the very words the triggers look for. The same finding in the same
+repository is said once per 90 seconds; a different one gets through at once. A lesson id that no
+longer resolves, or a lessons file that cannot be read, is said in the advisory rather than
+dropped. With no `python3` the advice cannot be built as JSON, so it is printed as plain text on
+stderr with exit 1, which Claude Code shows without stopping the push. A headless run
+(`CLAUDE_DETACHED_RUN`) skips it.
+
+**Measure a trigger change before shipping it (L172).** A trigger that fires on ordinary code is
+read once and ignored after, so every change to one is replayed over real history first.
+`bash ~/.claude/hooks/measure-lessons-advisory.sh <repo> [<repo>...] -n 50` runs the shipping hook
+over the last 50 commits of each repository, in a throwaway clone, and prints how many would have
+been advised and which triggers spoke. For a change to one trigger, run the branch's predicate and
+main's over the same merges (claude-config's last 250 and Overture's last 60 are the history used
+so far) and list every file that started or stopped firing, with the line that did it, in the pull
+request: a count alone cannot tell a stopped false hit from a lost real one. #1578 and #1688 record
+theirs in their pull requests.
+
 ### The lessons review before a merge
 
 Every pull request's whole branch, merge base to head and every file type, is read against the
