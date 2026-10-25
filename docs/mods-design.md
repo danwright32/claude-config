@@ -2401,16 +2401,21 @@ and the band question is removed rather than kept beside it (L29). Three defects
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
-  lessons reviews of #869 found a new shape each round). An Edit's old text must be one or more
-  whole lines of the file as it is now, found exactly once, and its new text that old text, a newline
-  and the entry block, or the entry block, a newline and the old text. A Write must be the file with
-  exactly the entry block inserted at one line boundary. The entry block is one entry in a fixed
+  lessons reviews of #869 found a new shape each round): the file the write leaves must be the file
+  as it is now with exactly the entry block inserted at one line boundary. A Write leaves its
+  content; an Edit, never replace_all, whose old text is found exactly once leaves the file with that
+  text replaced. An Edit was once judged by the shape of its two texts instead, which refused old
+  text cut as whole lines with their newline, the shape Claude sent for L1030, so Dan's add lapsed
+  unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
   is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
-  Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
+  Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
+  way, only once its write lands (#1691): an Edit or Write that errors, or that a guard beneath
+  refuses, gives it back for the same call sent again; a shell command that ran and failed spends
+  it, since it may have written part of what it does. Project memory instead and Skip
   approve nothing, and a subagent's picker records nothing.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,

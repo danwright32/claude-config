@@ -1244,6 +1244,48 @@ test('For good whose save then fails says so to Dan, and never that it was saved
   expect(contextOf(r)).not.toContain('Saved to')
 })
 
+// #1691, the class (L30): a For good approval was spent when the guard let the call through, so an
+// Edit or Write the tool then failed (text not found, a file not read yet) used it up, and the same
+// call sent again once corrected asked Dan a second time. An Edit or Write that errors wrote nothing,
+// so its approval stands again for the rest of its time, as a lesson approval already did. A shell
+// command that errors may have written part of what it does before failing, so its approval is spent.
+test('For good whose Edit fails still stands, so the same call sent again goes through without asking', withKit, async ($, on) => {
+  const w = world($, on, { failWrites: true })
+  const input = { tool: 'Edit', file_path: 'CLAUDE.md', old_string: 'gone', new_string: 'gone\n- rule' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/CLAUDE.md')
+  const failed = await call($, input)
+  expect(failed.isError).toBe(true)
+  expect(contextOf(failed)).toContain("Dan's For good still stands until it lapses")
+  w.ctl.failWrites = false
+  const again = await call($, input)
+  expect(refusalOf(again)).toBe('')
+  expect(contextOf(again)).toContain('Saved to ~/Apps/slate/CLAUDE.md, as Dan answered For good.')
+  expect(w.ran.length).toBe(2)
+  expect(w.asked.length).toBe(1)
+  // Used once it landed: the same save a third time is asked about.
+  expect(refusalOf(await call($, input))).toContain(ASKS)
+})
+
+test('For good whose Edit fails and is never sent again lapses as refused, never as unused', withKit, async ($, on) => {
+  const w = world($, on, { failWrites: true })
+  const input = { tool: 'Write', file_path: 'CLAUDE.md', content: '- rule\n' }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/CLAUDE.md')
+  await call($, input)
+  await w.clock.advance(APPROVAL_MS)
+  expect(w.toasts.join('\n')).not.toContain('unused')
+  expect(w.toasts.join('\n')).toContain('lapsed after 10 minutes: Claude sent the save, but it was refused before it was saved (String to replace not found in file.)')
+})
+
+test('For good whose shell command fails is spent, since the command may have written part of it', withKit, async ($, on) => {
+  const w = world($, on, { failWrites: true })
+  const input = { tool: 'Bash', command: "printf '%s\\n' '- rule' >> CLAUDE.md" }
+  await askDan($, w, refusalOf(await call($, input)), 'For good', '~/Apps/slate/CLAUDE.md')
+  expect((await call($, input)).isError).toBe(true)
+  w.ctl.failWrites = false
+  expect(refusalOf(await call($, input))).toContain(ASKS)
+  expect(w.ran.length).toBe(1)
+})
+
 test('an approval the session ends before Claude uses is dropped, and Dan is told it was never used', withKit, async ($, on) => {
   const w = world($, on, { auto: true })
   const input = { tool: 'Write', file_path: 'AGENTS.md', content: '- Use pnpm.\n' }
@@ -1497,6 +1539,25 @@ test('an approved lesson write a settings hook refuses gives the approval back, 
   refuse = false
   expect((await call($, addLesson)).deny).toBeUndefined()
   expect(w.ran.length).toBe(1)
+})
+
+// #1691: the real lesson Dan approved on 2026-10-24 (L1030), added by the real Edit, whose old text
+// was a whole line with its newline. It was asked about For good a second time and its approval
+// lapsed unused. From the session's transcript, against the lessons file as it stood around there.
+test('an approved lesson added by an Edit whose old text ends with its newline goes through with no second question (#1691)', withKit, async ($, on) => {
+  const rule =
+    "Never put a heredoc inside a $( ) command substitution in a script macOS bash 3.2 runs, because a single quote anywhere in the heredoc's body breaks the parse and the whole script dies before running anything; write the heredoc's output to a file and read the file instead."
+  const short = '  SHORT: A per item `read < <(cmd)` loop kills macOS bash 3.2 part way through a big list; use a command substitution and test at the real count.\n'
+  const entry =
+    "- **L1030. Never put a heredoc inside a $( ) command substitution in a script macOS bash 3.2\n  runs, because a single quote anywhere in the heredoc's body breaks the parse and the whole\n  script dies before running anything; write the heredoc's output to a file and read the\n  file instead.**\n  (claude-config#1690, 2026-10-24)\n  SHORT: A heredoc inside $( ) with a single quote in it breaks macOS bash 3.2's parse and kills the script; write to a file instead.\n"
+  const text = `# Lessons\n\n- **L1015. A shell loop that reads through \`< <(command)\` once per item leaks a process.**\n${short}\n- **L488. A shell script that sources a library.**\n`
+  const w = world($, on, { auto: true, files: { [LESSONS]: text } })
+  await proposeLesson($, w, 'Add to LESSONS.md', {}, rule)
+  const added = await call($, { tool: 'Edit', file_path: LESSONS, old_string: short, new_string: short + entry })
+  expect(refusalOf(added)).toBe('')
+  expect(contextOf(added)).toContain(`Added to ${LESSONS_SHOWN}, as Dan answered Add to LESSONS.md.`)
+  expect(w.ran.map(x => x.tool)).toEqual(['Edit'])
+  expect(w.asked.length).toBe(1)
 })
 
 // Lessons review of #869: an approved lesson let anything else ride along with the rule. The added

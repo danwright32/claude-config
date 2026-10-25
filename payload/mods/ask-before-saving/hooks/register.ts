@@ -88,13 +88,11 @@ const approved = new Set<string>()
 // it writes no lasting memory either. Counted per key, so one of two identical calls finishing never
 // clears the other's mark while it is still on its way down (lessons review of #783).
 const fromAgent = new Map<string, number>()
-// The calls the tool.check hook let through on a For good approval, by tool_use_id, with where each
-// saves to: read back by the tool.call hook above it in the same dispatch, to say what became of it.
-const reissued = new Map<string, string>()
-// The calls the tool.check hook let through on an approval from the durable lesson picker (#867), by
-// tool_use_id, with that approval: taken from $.state as the call passed, so a second matching call
-// meanwhile is asked about, and given back by the tool.call hook above when the write did not land.
-const lessonUsed = new Map<string, AskBeforeSavingApproval>()
+// The calls the tool.check hook let through on an approval, For good or from the durable lesson picker
+// (#867), by tool_use_id, with that approval: taken from $.state as the call passed, so a second
+// matching call meanwhile is asked about, and read back by the tool.call hook above it in the same
+// dispatch, to say what became of it and give it back when the write did not land (#1691).
+const taken = new Map<string, AskBeforeSavingApproval>()
 
 // The arguments the tool takes, without the keys the engine carries beside them.
 const argsOf = (e: Record<string, unknown>): Record<string, unknown> => {
@@ -525,28 +523,31 @@ export const register: Register = on => {
       if (files.length) approved.add((key = saveKey(tool, input, at.cwd, at.home)))
     }
     let r: Awaited<ReturnType<typeof next>>
-    let forGood: string | undefined
-    let lesson: AskBeforeSavingApproval | undefined
+    let used: AskBeforeSavingApproval | undefined
     try {
       r = await next(e)
     } finally {
       // Taken by the tool.check hook when the call reached it; dropped here when a guard refused first.
       if (key !== undefined) approved.delete(key)
-      forGood = reissued.get(id)
-      reissued.delete(id)
-      lesson = lessonUsed.get(id)
-      lessonUsed.delete(id)
+      used = taken.get(id)
+      taken.delete(id)
     }
-    // A lesson added on Dan's answer in the durable lesson picker (#867). One that did not land (an
-    // Edit whose text was not found, a settings hook refusing it) gives the approval back for the rest
-    // of its time, so the corrected call is not asked about either, and records why, so its lapse
-    // never calls it unused; Dan, who pressed add believing it saved, is told it was not.
-    if (lesson !== undefined) {
-      const where = lesson.files.join(', ')
-      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `Added to ${where}, as Dan answered ${LESSON_ADD}.`] }
+    // A save sent on an approval, For good or Dan's Add to LESSONS.md in the durable lesson picker
+    // (#867). The approval is spent only once the write lands (#1691, L30): one that did not (an Edit
+    // whose text was not found or whose file was not read yet, a guard or settings hook beneath
+    // refusing it) gives it back for the rest of its time, so the call sent again is not asked about,
+    // and records why, so its lapse never calls it unused; Dan, who answered believing it saved, is
+    // told it was not. A shell command that ran and failed may have written part of what it does, so
+    // its approval is spent: running it again would write that part twice.
+    if (used !== undefined) {
+      const where = used.files.join(', ')
+      const lesson = used.lesson !== undefined
+      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `${lesson ? 'Added' : 'Saved'} to ${where}, as Dan answered ${pressed(used)}.`] }
       const why = String(r.deny ?? r.text ?? 'the tool reported an error')
-      const back: AskBeforeSavingApproval = { ...lesson, refused: why }
-      $.ui.toast(`Not added to ${where}: ${why}`, { timeoutMs: 10_000 })
+      const not = lesson ? 'Not added' : 'Not saved'
+      $.ui.toast(`${not} to ${where}: ${why}`, { timeoutMs: 10_000 })
+      if (tool === 'Bash' && r.deny === undefined) return r
+      const back: AskBeforeSavingApproval = { ...used, refused: why }
       if (!stands(back.until, await $.clock.now())) {
         $.ui.toast(lapsedFor(back), { timeoutMs: 10_000 })
         return r
@@ -554,7 +555,8 @@ export const register: Register = on => {
       await update($, approvalsRef, a => [...(a ?? []), back])
       // A refusal carries no context: Claude reads the refusal itself.
       if (r.deny !== undefined) return r
-      return { ...r, context: [...(r.context ?? []), `Not added to ${where}. Dan's ${LESSON_ADD} still stands until it lapses: correct the call and send it again, and it is added without asking him.`] }
+      const again = lesson ? 'correct the call and send it again, and it is added' : 'send the same call again once what failed is put right, and it is saved'
+      return { ...r, context: [...(r.context ?? []), `${not} to ${where}. Dan's ${pressed(used)} still stands until it lapses: ${again} without asking him.`] }
     }
     // A save Dan answered For good, sent again, refused before the tool.check hook could take its
     // approval (#764): by another guard's tool.call hook (a deny), or by a settings hook, which since
@@ -562,7 +564,7 @@ export const register: Register = on => {
     // and the approval, which still stands for a later send, records why, so its lapse never calls it
     // unused. A call that reached tool.check took its approval, so one still standing was not reached.
     const refusedWhy = r.deny ?? (r.isError ? (r.text ?? 'the call was refused') : undefined)
-    if (forGood === undefined && refusedWhy !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
+    if (refusedWhy !== undefined && ((await $.state.get(approvalsRef)).value ?? []).length) {
       const at = await whereOf($)
       const k = saveKey(tool, input, at.cwd, at.home)
       // Typed through a cast: the assignment is inside a callback, which narrowing cannot see (lessons review of #806).
@@ -587,13 +589,6 @@ export const register: Register = on => {
         return (a ?? []).map(x => (!fit && stands(x.until, now) && addsThis(x, added) ? (fit = { ...x, refused: refusedWhy }) : x))
       })
       if (fit) $.ui.toast(`Not added to ${fit.files.join(', ')}: ${refusedWhy}`, { timeoutMs: 10_000 })
-      return r
-    }
-    if (forGood !== undefined) {
-      // Tested on r itself, so the result it spreads is known to be one that went through.
-      if (r.deny === undefined && !r.isError) return { ...r, context: [...(r.context ?? []), `Saved to ${forGood}, as Dan answered For good.`] }
-      // Claude reads the failure in the result; Dan, who answered For good, would otherwise not.
-      $.ui.toast(`Not saved to ${forGood}: ${r.deny ?? r.text ?? 'the tool reported an error'}`, { timeoutMs: 10_000 })
       return r
     }
     if (!files.length || r.deny !== undefined || r.isError) return r
@@ -624,7 +619,7 @@ export const register: Register = on => {
     // beneath (the auto mode classifier among them), never asked about again.
     const { live, lapsed } = await takeApproval($, key)
     if (live) {
-      reissued.set(String(raw.tool_use_id ?? ''), live.files.join(', '))
+      taken.set(String(raw.tool_use_id ?? ''), live)
       return next(e)
     }
     // A lesson Dan answered Add to LESSONS.md for in the durable lesson picker (#867), added by a call
@@ -632,7 +627,7 @@ export const register: Register = on => {
     const added = await lessonAdded($, tool, input, at)
     const lesson = added === undefined ? { live: undefined, lapsed: undefined } : await takeLesson($, added)
     if (lesson.live) {
-      lessonUsed.set(String(raw.tool_use_id ?? ''), lesson.live)
+      taken.set(String(raw.tool_use_id ?? ''), lesson.live)
       return next(e)
     }
     // The settings hooks beneath (the payload write gate among them) decide first, so Dan is never

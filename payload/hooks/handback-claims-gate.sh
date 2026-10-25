@@ -28,9 +28,11 @@
 # where Claude Code writes it. One that cannot be found or read is let through, saying on stderr that
 # it was not checked: refusing would strand the report over the gate's own failure (L98).
 #
-# NOT MEASURED when this shipped: that Claude Code runs PreToolUse hooks for the SubagentHandback tool
-# at all. Every other tool's hooks run (Bash, Write, Read, the Playwright tools are all hooked here), so
-# it is expected to; claude-config#1587's PR names the check that confirms it.
+# MEASURED on 2026-10-24 (claude-config#1674): Claude Code runs PreToolUse hooks for the
+# SubagentHandback tool. A probe agent that set SKIP_HANDBACK_PROBE=1 and handed back "no overrides were
+# used" was refused here, its count was written under ~/.claude-handback-check/, and its transcript holds
+# a PreToolUse:SubagentHandback hook record. A pass prints nothing and leaves no record, so the absence
+# of one in a transcript says nothing about whether this ran.
 
 set -uo pipefail
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
