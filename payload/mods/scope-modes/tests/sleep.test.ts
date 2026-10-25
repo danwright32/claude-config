@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { BOOT_TIME_TOLERANCE_S, bootOf, bootSessionOf, endSaid, etWhen, isDaytimeEt, nightOf, readSleep, untilOf } from '../hooks/sleep.ts'
+import { BOOT_TIME_TOLERANCE_S, bootOf, bootSessionOf, endSaid, etWhen, interruptedSaid, isDaytimeEt, nightOf, readSleep, sleepInterrupted, untilOf } from '../hooks/sleep.ts'
 import { BOOT_FIXTURES, SESSION_FIXTURES, SLEEP_FIXTURES } from './sleep-fixtures.ts'
 
 type Fixture = { name: string; text: string | null; now: number; boot: number | null; session?: string | null; state: string }
@@ -184,4 +184,28 @@ describe('bootOf: this boot, from sysctl kern.boottime', () => {
       expect(bootOf(f.text)).toBe(f.boot)
     })
   }
+})
+
+// #1677: an abandoned /sleep is told by its command's signal, or by the engine's own refusal words
+// in what it said, never read as the step it was on failing.
+describe('whether /sleep was abandoned (#1677)', () => {
+  test('its signal firing says so, whatever it said', () => {
+    const c = new AbortController()
+    expect(sleepInterrupted(c.signal, 'Sleep mode did not start: the record did not read back as written.')).toBe(false)
+    c.abort()
+    expect(sleepInterrupted(c.signal, 'Sleep mode did not start: the record did not read back as written.')).toBe(true)
+  })
+  test("the engine's refusal of a call says so with no signal, in the words seen on 2026-10-23", () => {
+    expect(sleepInterrupted(undefined, 'Sleep mode did not start: the list of issues whose before bed question went unanswered could not be written (scope-modes: $.process.run(mkdir) aborted).')).toBe(true)
+    expect(sleepInterrupted(undefined, 'failed: $.fs.write aborted')).toBe(true)
+  })
+  test('any other failure is the step that failed, said as it was', () => {
+    expect(sleepInterrupted(undefined, 'Sleep mode did not start: its preparing marker could not be written (EACCES: permission denied).')).toBe(false)
+    expect(sleepInterrupted(undefined, 'the merge was aborted by Dan')).toBe(false)
+    expect(sleepInterrupted(new AbortController().signal, 'Sleep mode is on until noon ET.')).toBe(false)
+  })
+  test('what it says depends on whether the record was in place', () => {
+    expect(interruptedSaid(false)).toBe('/sleep was interrupted, so sleep mode did not start. Type /sleep again to start it.')
+    expect(interruptedSaid(true)).toMatch(/^\/sleep was interrupted after sleep mode started: it is on/)
+  })
 })
