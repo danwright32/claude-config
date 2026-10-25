@@ -123,7 +123,9 @@ const countUnchecked = async ($: EngineInterface) => {
   }
   throw new Error(`the count kept changing underneath ${COUNT_TRIES} writes in a row`)
 }
-// Whether a reply of this module's could not be counted: /style-count then says its count may be short.
+// Whether a reply this session could not be counted: /style-count then says its count may be short.
+// A session fact like the counts it qualifies, so kept in $.state with them (push review of PR for
+// #1703); this module's own flag holds it too, for when that write fails as well.
 let uncounted = false
 const counting = async ($: EngineInterface, which: 'hits' | 'unchecked') => {
   try {
@@ -132,6 +134,11 @@ const counting = async ($: EngineInterface, which: 'hits' | 'unchecked') => {
   } catch (err) {
     uncounted = true
     $.ui.log(`style-check: could not count a reply for this session: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    try {
+      await $.state.set({ plugin: 'style-check', key: 'uncounted' }, true)
+    } catch (again) {
+      $.ui.log(`style-check: could not keep that this session's count may be short: ${again instanceof Error ? again.message : String(again)}`, { to: 'debug' })
+    }
   }
 }
 // Said once in this module's life: a reload says it once more at most.
@@ -150,6 +157,7 @@ export const register: Register = on => {
   // this session's counts as they stand (#1703); a new process starts with none.
   on('session.start', async ($, e, next) => {
     noteSaid = false
+    uncounted = false
     await $.command.register({ name: 'style-count', description: 'How many of my replies used a dash or emoji.' })
     return next(e)
   })
@@ -159,7 +167,8 @@ export const register: Register = on => {
     const sessionHits = (await $.state.get({ plugin: 'style-check', key: 'hits' })).value ?? 0
     const sessionUnchecked = (await $.state.get({ plugin: 'style-check', key: 'unchecked' })).value ?? 0
     const gap = sessionUnchecked === 0 ? '' : ` ${sessionUnchecked} ${sessionUnchecked === 1 ? 'reply' : 'replies'} this session could not be checked.`
-    const short = uncounted ? ' This session count may be short: a reply could not be counted.' : ''
+    const kept = (await $.state.get({ plugin: 'style-check', key: 'uncounted' }).catch(() => ({ value: undefined }))).value === true
+    const short = uncounted || kept ? ' This session count may be short: a reply could not be counted.' : ''
     return { text: `Replies with a dash or emoji: ${sessionHits} this session, ${total} in total.${gap}${short}` }
   })
 

@@ -512,17 +512,17 @@ export const register: Register = on => {
   })
   on('goalTracker.waitingOnYou', waitingNoun)
 
-  // Everything the module keeps belongs to one session: a later start in the same process begins
-  // again rather than reading the last one's (lessons review of #634).
+  // A later start in the same process is a hot reload of the mod, the session going on (#1703): the
+  // module's own bookkeeping begins again, as a fresh module's does, and the conversation's progress
+  // and run of failures are taken up from $.state; a new process has none, and begins afresh.
   on('session.start', async ($, e, next) => {
     // A clock that cannot be read never stops the pane and /goals being set up.
     await beginAgain($)
-    // #1703: session.start fires again at every fresh load of the mod (never at /clear), with the
-    // session going on, so the conversation's progress kept in $.state is taken up again; a new
-    // process has none, and begins as above.
     try {
       const kept = (await $.state.get({ plugin: 'goal-tracker', key: 'progress' })).value
-      if (isProgress(kept)) progress = kept
+      // The waiting mark is owned by the question or permission this module holds, which the reload
+      // dropped, so it is derived again from what this module holds now (push review of PR for #1703).
+      if (isProgress(kept)) progress = withWaiting(kept)
       const run = (await $.state.get({ plugin: 'goal-tracker', key: 'streak' })).value
       if (typeof run === 'number' && Number.isInteger(run) && run >= 0) streak = keptStreak = run
     } catch (err) {

@@ -544,6 +544,34 @@ test('a reload in the middle of a turn keeps it running: a Compact pressed after
   await ui.unmount()
 })
 
+// Push review of PR for #1703: a turn's start whose write failed is written again at the next request,
+// so a reload after it still finds the turn running.
+test("a turn's start whose write failed is written again at its next request, so a reload still finds it running (#1703)", withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  let refused = false
+  on('state.set', async ($, e, next) => {
+    if (!refused && (e as { key?: string }).key === 'turnRunning') {
+      refused = true
+      return { deny: 'state store unavailable' } as never
+    }
+    return next(e)
+  })
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  expect(refused).toBe(true)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
 test('a Compact queued before a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
   const { clock, compacts, toasts, w } = world(on)
   await start($, clock)

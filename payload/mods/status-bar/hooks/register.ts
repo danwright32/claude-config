@@ -86,20 +86,27 @@ let compactQueued = false
 // written through. A write that fails is logged; the cache still holds the change for this module.
 const turnRef = { plugin: 'status-bar', key: 'turnRunning' } as const
 const queuedRef = { plugin: 'status-bar', key: 'compactQueued' } as const
+// What $.state is known to hold of each, apart from what this module holds: the module takes a change
+// at once, and a write that failed is tried again at the next change to the same value, rather than
+// read as written (push review of PR for #1703).
+let keptTurn: boolean | undefined
+let keptQueued: boolean | undefined
 const setTurnRunning = async ($: EngineInterface, value: boolean) => {
-  if (turnRunning === value) return
   turnRunning = value
+  if (keptTurn === value) return
   try {
     await $.state.set(turnRef, value)
+    keptTurn = value
   } catch (err) {
     $.ui.log(`status-bar: could not record that the turn ${value ? 'started' : 'ended'}: ${msg(err)}`, { to: 'debug' })
   }
 }
 const setCompactQueued = async ($: EngineInterface, value: boolean) => {
-  if (compactQueued === value) return
   compactQueued = value
+  if (keptQueued === value) return
   try {
     await $.state.set(queuedRef, value)
+    keptQueued = value
   } catch (err) {
     $.ui.log(`status-bar: could not record that a Compact is ${value ? 'queued' : 'no longer queued'}: ${msg(err)}`, { to: 'debug' })
   }
@@ -487,9 +494,11 @@ export const register: Register = on => {
     // Taken up from $.state, so a reload in the middle of a turn keeps it running and keeps a Compact
     // queued for its end (#1703); a new process has neither. One that cannot be read is neither, as
     // before this was kept, and is logged.
+    keptTurn = undefined
+    keptQueued = undefined
     try {
-      turnRunning = (await $.state.get(turnRef)).value === true
-      compactQueued = (await $.state.get(queuedRef)).value === true
+      turnRunning = keptTurn = (await $.state.get(turnRef)).value === true
+      compactQueued = keptQueued = (await $.state.get(queuedRef)).value === true
     } catch (err) {
       turnRunning = false
       compactQueued = false

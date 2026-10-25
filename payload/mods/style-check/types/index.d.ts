@@ -1,5 +1,7 @@
 /** A count of this session's replies, for /style-count. */
 export type StyleCheckCount = number
+/** Whether this session's counts may be short. */
+export type StyleCheckShort = boolean
 
 declare module 'claude-code' {
   interface PluginState {
@@ -13,6 +15,8 @@ declare module 'claude-code' {
       hits: StyleCheckCount
       /** Replies this session the scanner could not check. */
       unchecked: StyleCheckCount
+      /** Whether a reply this session could not be counted, so the counts may be short. */
+      uncounted: StyleCheckShort
     }
   }
 }

@@ -3208,6 +3208,29 @@ test("a reload keeps each agent's last sign of life, so a quiet agent is said at
   expect(said).toContain('the last one it started, Bash (git status), finished')
 })
 
+// Push review of PR for #1703: a turn's end whose write another write beat is written again, never
+// lost, so the conversation is not left read as busy and never woken.
+test("a turn's end whose write is beaten by another write is written again, so the idle conversation is still woken (#1703)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  let missed = false
+  on('state.set', async ($, e, next) => {
+    const s = e as { plugin?: string; key?: string; value?: unknown; ifVersion?: number }
+    if (!missed && s.plugin === 'job-watcher' && s.key === 'mainTurn' && s.value === 'idle' && s.ifVersion !== 0) {
+      missed = true
+      return { value: { isSet: false, version: 99 } } as never
+    }
+    return next(e)
+  })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
+  expect(missed).toBe(true)
+  await sendHanging($, w)
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+})
+
 test('a reload during a turn of this conversation keeps it busy, so a quiet agent is told on its next call, never woken (#1703)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })

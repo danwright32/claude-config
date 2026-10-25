@@ -271,8 +271,9 @@ const turnOf = async ($: EngineInterface): Promise<'idle' | 'busy' | 'unknown'> 
 }
 const setTurn = async ($: EngineInterface, turn: 'idle' | 'busy') => {
   try {
-    // The latest turn event is the truth, so it is written whatever stood before.
-    await mainTurnFact($).set(turn, (await mainTurnFact($).get()).version)
+    // The latest turn event is the truth, so it is written whatever stood before, and written again
+    // when another write beat it (push review of PR for #1703), never left read as the turn before.
+    await changeFact<'idle' | 'busy', 'idle' | 'busy' | undefined>(mainTurnFact($), () => undefined, () => turn, t => t ?? turn)
   } catch (err) {
     $.ui.log(`job-watcher: could not record that this conversation's turn is ${turn === 'busy' ? 'running' : 'over'}: ${message(err)}`, { to: 'debug' })
   }

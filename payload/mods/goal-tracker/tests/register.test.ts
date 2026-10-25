@@ -403,6 +403,24 @@ test('a reload of the mod keeps the to-do list, and writes its first activity at
   expect(last(w)).toMatchObject({ total: 1, current: 'Building', lastActivityAt: 10_000 })
 })
 
+// Push review of PR for #1703: the waiting mark is owned by the question or permission this module
+// holds, which a reload drops, so a mark taken up with the list would stand with nothing to clear it.
+test('a reload takes up the list but not a waiting mark nothing now holds, so a later call never leaves it standing (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world($, on, { clock, questionOpenMs: 5_000 })
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  const asking = $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Which colour?', header: 'Colour', options: [], multiSelect: false }] } as never)
+  await clock.advance(1_000)
+  expect(last(w)?.waiting?.question).toBe('Which colour?')
+  await start($)
+  await $.tool.call(bash('ls'))
+  expect(last(w)).toMatchObject({ total: 1 })
+  expect(last(w)?.waiting).toBeUndefined()
+  await clock.advance(5_000)
+  await asking
+})
+
 test('a reload of the mod keeps a list built by the task tools, so a later update still lands on it (#1703)', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on)

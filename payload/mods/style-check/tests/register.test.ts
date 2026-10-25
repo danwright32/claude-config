@@ -416,6 +416,23 @@ test("a reload of the mod keeps this session's count of replies with a dash (#17
   expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 2 this session, 7 in total.')
 })
 
+// Push review of PR for #1703: that a count may be short is itself a session fact, so a reload keeps
+// saying so while the counts it qualifies are kept.
+test('a reload keeps saying the count may be short, as long as the counts are kept (#1703)', withKit, async ($, on) => {
+  world(on, { store: { chatHits: 5 } })
+  on('session.append', ($, e, next) => next(e))
+  on('state.set', async ($, e, next) => ((e as { plugin?: string; key?: string }).plugin === 'style-check' && (e as { key?: string }).key === 'hits' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  try {
+    await $.session.append({ door: 'response', origin: { kind: 'model', model: 'm' }, uuid: 'r1', message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: `a reply ${DASH} with a dash` }] } } as never)
+  } catch (err) {
+    if (!/no implementation for session.append/.test(String(err))) throw err
+  }
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  const out = await $.command.run({ command: 'style-count', args: '', origin: { kind: 'human' }, presentation: {} } as never)
+  expect((out as { text?: string }).text).toBe('Replies with a dash or emoji: 0 this session, 6 in total. This session count may be short: a reply could not be counted.')
+})
+
 test('a reply whose count cannot be written says the count may be short, never reads as complete (#1703)', withKit, async ($, on) => {
   world(on, { store: { chatHits: 5 } })
   on('session.append', ($, e, next) => next(e))
