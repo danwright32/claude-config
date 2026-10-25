@@ -2105,7 +2105,8 @@ check "#1604 but says it could not read them, with GitHub's error" "could not re
 leave(){ printf 'for f in "$MWR_TURN_DIR"/acme/widget/[0-9]*; do grep -qx "pr %s" "$f" && rm -f "$f" "$f.head"; done' "$1"; }
 
 # Three ahead, each leaving after 15 looks of 30s: the run waits 22m 30s in all, far past a 10m line
-# budget, but the line never stands still for 10m, so it keeps its place and merges.
+# budget, but the line never stands still for 10m, so it keeps its place and merges. Every figure
+# here is a fixture setting, not measured.
 fresh "$OLD" 0 "$GREEN"
 for p in 9 10 11; do "$BIN/take-turn" acme/widget "$p"; done
 for p in 9 10 11; do
@@ -2162,7 +2163,7 @@ check_eq "#1697 reading GitHub fewer times than once a minute while in line (5 r
 
 # Its default ceiling, measured by running it out (L107), with a line that moves at every look: each
 # of twenty pull requests ahead holds the turn for a look and is passed over. Nine hours, so a line of
-# about 27 merges at 20 minutes each, longer than Slate's 15, is waited through.
+# about 27 merges at 20 minutes each, longer than Slate's 15 on 2026-10-24, is waited through.
 fresh "$OLD" 0 "$GREEN"
 for p in $(seq 101 120); do "$BIN/take-turn" acme/widget "$p"; done
 out="$(MWR_POLL_SECONDS=1800 MWR_HEARTBEAT_SECONDS=1800 MWR_TURN_HOLD_SECONDS=1800 run 7 --squash)"; rc=$?
