@@ -571,7 +571,21 @@ export const register: Register = on => {
     if (home) {
       await $.process.run(['mkdir', '-p', dirOf(home)])
       await prune($, home, await $.clock.now())
-      rec = await fresh($, await $.session.id(), e.cwd)
+      const id = await $.session.id()
+      // #1703: session.start fires again at every fresh load of this mod (once per process, then
+      // once per fresh load, never at /clear), with the session going on. Its own record still open
+      // on disk is that session's, so it is taken up again rather than written over with a blank one,
+      // which dropped its start time, its edits and every other mod's keys. Open means as the list
+      // judges it: not closed, and seen within DEAD_MS (the beat stamps it each minute), so a record a
+      // crashed process left is never revived with its old edits. One that has closed, gone quiet,
+      // or cannot be read starts afresh as before.
+      const own = `${dirOf(home)}/${id}.json`
+      const kept = SESSION_ID.test(id) && (await $.fs.exists(own).catch(() => false)) ? parse(await $.fs.read(own).catch(() => undefined)) : null
+      const now = await $.clock.now()
+      if (kept && kept.sessionId === id && isOpenAt(kept, now) && Array.isArray(kept.edits) && kept.extra !== null && typeof kept.extra === 'object') {
+        kept.lastSeen = now
+        rec = kept
+      } else rec = await fresh($, id, e.cwd)
       expectNew = false
       // A write held from before a fresh start has no record of its own to go on.
       held = undefined

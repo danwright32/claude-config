@@ -12,8 +12,15 @@ export type SecretGuard = {
   screen: (call: SecretGuardCall) => Promise<{ deny: string } | null>
 }
 
+/** A .env file written this session, by its path; never a value from it. */
+export type SecretGuardWrittenPath = string
+
 declare module 'claude-code' {
   interface EngineInterface {
     secretGuard: SecretGuard
+  }
+  interface PluginState {
+    /** The .env files written this session, read again at a reload of the mod (#1703). Paths only, never values. */
+    'secret-guard': { written: SecretGuardWrittenPath[] }
   }
 }

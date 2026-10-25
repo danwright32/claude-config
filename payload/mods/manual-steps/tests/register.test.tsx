@@ -846,6 +846,55 @@ test('a Done whose prompt is dropped behind a running turn comes back once nothi
   expect(await call($, VERDICT, { step: 1, checked: 'checked' })).toMatch(/every step is finished/i)
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
+// the middle of a turn: the turn is still running, so a Done pressed then waits behind it as before,
+// and never comes back while that turn runs.
+test('a reload in the middle of a turn keeps it running, so a Done pressed then is never released while it runs (#1703)', withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'fix the tests', 'T1')
+  await start($)
+  await press($, 'done-1')
+  await clock.advance(DROPPED_AFTER_MS * 3)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  sent')
+  expect(w.toasts).toEqual([])
+})
+
+// Push review of PR for #1703: a turn's end whose write fails leaves the ended turn in $.state; this
+// module saw it end, so a Done dropped behind it still comes back.
+test("a turn's end that cannot be recorded never strands a Done dropped behind it (#1703)", withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  on('state.set', async ($, e, next) => {
+    const s = e as { key?: string; value?: unknown }
+    return s.key === 'runningTurn' && s.value === null ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'fix the tests', 'T1')
+  await press($, 'done-1')
+  await turnEnd($, 'T1', 'aborted')
+  await clock.advance(DROPPED_AFTER_MS)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(w.toasts).toEqual([RELEASED])
+})
+
+test('a running turn that cannot be recorded never stops its Done being judged at its end (#1703)', withKit, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world(on)
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'runningTurn' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await hand($, [step()])
+  await press($, 'done-1')
+  await turnStart($, 'step 1 done', 'T1')
+  // The turn ends with no verdict from Claude: its Done comes back at once, with the toast.
+  await turnEnd($, 'T1')
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(w.toasts).toEqual([RELEASED])
+})
+
 test('a Done pressed with nothing running whose prompt starts no turn comes back too (#734)', withKit, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world(on)

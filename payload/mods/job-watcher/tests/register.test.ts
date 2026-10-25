@@ -461,6 +461,9 @@ const world = (on: On, jobOrJobs: Job | Job[], o: World = {}) => {
 }
 
 const start = ($: { session: { start: (e: never) => Promise<unknown> } }) => $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+// #1703: a hot reload of the mod, as the engine raises it: a second session.start in one process,
+// over the same $.state.
+const reload = start
 const contextOf = (r: unknown) => ((r as { context?: string[] }).context ?? []).join('\n')
 // The reminder about running jobs nobody kept (Dan, 2026-10-04) rides on every result while one
 // runs; the other notices are what the older tests are about, so they read them without it.
@@ -2627,9 +2630,13 @@ test('a turn whose end fails beneath the watcher still leaves the conversation i
   expect((quietSaid(w)[0] as { text: string }).text).toContain(HUNG)
 })
 
-// Lessons review of #1234: a wake still in flight when a new session starts must not, failing,
-// hand the old session's notice to the new one, which would read it as about its own agents.
-test("a wake that fails after a new session has started never carries the old session's notice into it (#1234)", withDeps, async ($, on) => {
+// The lessons review of #1234 held that a second session.start was a new session, so a wake in
+// flight across one must not carry the old session's notice into it. The engine's contract says
+// otherwise (#1695, #1703): a second start in one process is a reload of this same session, never a
+// new one, which starts in a new process with nothing in $.state. So a wake in flight across a reload
+// is this session's: one that fails is carried on the next tool call, and one that goes through is
+// said once, never carried as well.
+test('a wake that fails across a reload is carried on the next tool call instead (#1234, #1703)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   let fail = () => {}
   const failed = new Promise<void>(r => { fail = r })
@@ -2638,19 +2645,15 @@ test("a wake that fails after a new session has started never carries the old se
   await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w).length).toBe(1)
-  await start($)
+  await reload($)
   fail()
   await clock.advance(1)
   await turnStarts($)
-  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
-  // Nothing about it reaches the new session's transcript either: the drop goes to the debug log.
-  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([])
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain('has been quiet')
+  expect(w.logs.filter(l => l.includes('could not wake'))).toEqual([expect.stringContaining('Claude is told on its next tool call instead')])
 })
 
-// Lessons review of #1234, second round: a new session starting while the wake still waits on the
-// sleep check must stop the wake there, so even a submit that would succeed never sends the old
-// session's notice to the new one as a prompt of its own.
-test("a wake whose session ends while it waits on the sleep check is never submitted (#1234)", withDeps, async ($, on) => {
+test('a wake waiting on the sleep check across a reload is submitted once, and never carried as well (#1234, #1703)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   let answer = () => {}
   const answered = new Promise<void>(r => { answer = r })
@@ -2659,10 +2662,10 @@ test("a wake whose session ends while it waits on the sleep check is never submi
   await sendHanging($, w)
   await clock.advance(21 * MIN)
   expect(quietSaid(w)).toEqual([])
-  await start($)
+  await reload($)
   answer()
   await clock.advance(1)
-  expect(quietSaid(w)).toEqual([])
+  expect(quietSaid(w).length).toBe(1)
   await turnStarts($)
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).not.toContain('has been quiet')
 })
@@ -2900,16 +2903,6 @@ test('an entry of the in flight list that names no task is passed over, and the 
   await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
   const r = await subagentStop($, 'a1', [null, { type: 'shell' }, 'mon1', shell('mon1', 'gh run watch 99')])
   expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
-})
-
-test('a new session forgets which agent started what (#1326)', withDeps, async ($, on) => {
-  mock.clock(on, { now: 0 })
-  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
-  STOP_BENEATH(on)
-  await start($)
-  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI' }))
-  await start($)
-  expect((await subagentStop($, 'a1', [shell('mon1', 'gh run watch 99')])).block).toBeUndefined()
 })
 
 // #1387: on 2026-10-20 a merge helper a subagent ran in the foreground timed out into the background
@@ -3151,4 +3144,218 @@ test("another agent's stop leaving a job out of its list says nothing of that jo
   const mine = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   expect(contextOf(mine)).toContain(`${REMINDER} background job job1 (gh pr checks 9 --watch, left by agent fix CI)`)
   expect(contextOf(mine)).not.toContain(FINISHED)
+})
+
+// #1703: the engine fires session.start again at every fresh load of the mod (once per process,
+// then once per fresh load, never at /clear) and runs its code in a fresh module, so a session fact
+// kept only in module memory is gone after a reload while the session goes on. The #1695 builder
+// moved the job list to $.state and found the rest still in the module: whose work each background
+// task is, how often each agent's stop was refused, the notices queued for Claude, each agent's last
+// sign of life; the sweep found two more, whether this conversation has a turn running and what the
+// watcher measured of each job. Each test below reloads the mod mid session (a second session.start
+// over the same $.state, which the engine keeps for the session) and asks for the fact afterwards.
+// The older test that a second start forgets which agent started what (#1326) asserted the reverse:
+// its premise, that a second start is a new session, is the one the engine's contract contradicts,
+// and a real new session starts in a new process with nothing in $.state (L430).
+
+test("a reload keeps which agent started each piece of work, so that agent's stop is still held (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  await reload($)
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('mon1', 'gh run watch 99')])
+  expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
+})
+
+test("work whose starter cannot be recorded still holds that agent's stop in this module (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  on('state.set', async ($, e, next) => ((e as { plugin?: string; key?: string }).plugin === 'job-watcher' && (e as { key?: string }).key === 'startedBy' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('mon1', 'gh run watch 99')])
+  expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
+})
+
+test("a reload keeps how often an agent's stop was refused, so it is never held past the bound (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  const listed = [subagentEntry('a1'), shell('mon1', 'gh run watch 99')]
+  expect((await subagentStop($, 'a1', listed)).block).toContain(HOLD)
+  expect((await subagentStop($, 'a1', listed)).block).toContain(HOLD)
+  await reload($)
+  expect((await subagentStop($, 'a1', listed)).block).toBeUndefined()
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('ended still holding background work it started')
+})
+
+test('a notice queued for Claude before a reload is carried on the first tool result after it (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  // The minute's look says the job has gone silent; no tool call has carried it yet.
+  await clock.advance(11 * MIN)
+  await reload($)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/job1 \(npm run dev\) has had no new output/)
+})
+
+test("a reload keeps each agent's last sign of life, so a quiet agent is said at twenty minutes, with its last call (#1703)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'git status' }))
+  await clock.advance(5 * MIN)
+  await reload($)
+  await clock.advance(16 * MIN)
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain('Background agent "fix CI" (a1) has been quiet for 20 minutes')
+  expect(said).toContain('the last one it started, Bash (git status), finished')
+})
+
+// Push review of PR for #1703: a turn's end whose write another write beat is written again, never
+// lost, so the conversation is not left read as busy and never woken.
+test("a turn's end whose write is beaten by another write is written again, so the idle conversation is still woken (#1703)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  let missed = false
+  on('state.set', async ($, e, next) => {
+    const s = e as { plugin?: string; key?: string; value?: unknown; ifVersion?: number }
+    if (!missed && s.plugin === 'job-watcher' && s.key === 'mainTurn' && s.value === 'idle' && s.ifVersion !== 0) {
+      missed = true
+      return { value: { isSet: false, version: 99 } } as never
+    }
+    return next(e)
+  })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
+  expect(missed).toBe(true)
+  // Read from $.state alone, as a fresh module after a reload reads it.
+  await reload($)
+  await sendHanging($, w)
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+test("a turn's end that cannot be recorded at all still leaves this conversation idle here, so it is woken (#1703)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  on('state.set', async ($, e, next) => {
+    const s = e as { plugin?: string; key?: string; value?: unknown; ifVersion?: number }
+    return s.plugin === 'job-watcher' && s.key === 'mainTurn' && s.value === 'idle' && s.ifVersion !== 0 ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
+  await sendHanging($, w)
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+test('a reload during a turn of this conversation keeps it busy, so a quiet agent is told on its next call, never woken (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  await start($)
+  await turnStarts($)
+  await sendHanging($, w)
+  await reload($)
+  await clock.advance(21 * MIN)
+  expect(quietSaid(w)).toEqual([])
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))).toContain(HUNG)
+})
+
+test('a reload keeps when a job last wrote output, so a job writing all along is never said to be silent since its start (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: 'building\n', size: 9 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  for (let i = 0; i < 30; i++) {
+    job.size += 10
+    await clock.advance(MIN)
+  }
+  await reload($)
+  await clock.advance(MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toBe('')
+})
+
+test('a reload keeps that Claude was told a job went silent, so the same quiet spell is not said again (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/no new output/)
+  await reload($)
+  await clock.advance(2 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toBe('')
+})
+
+test('a reload keeps what Claude Code said of a job, so one it finished is still named as finished (#1703)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'serving\n', size: 8 })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev &', run_in_background: true } as never)
+  await notify($, 'job1')
+  await reload($)
+  const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(next)).not.toContain(REMINDER)
+  expect(contextOf(next)).toContain('Claude Code has finished background job job1 (npm run dev &)')
+})
+
+// #1703, failure paths: a fact the engine will not read or write is said, or the module holds it, and
+// no stop is ever held on a count that could not be kept.
+// Refuses the read or write of one of the watcher's facts while `when.on` is set (from the start
+// when not given).
+const refusing = (on: On, event: 'state.get' | 'state.set', key: string, when = { on: true }) => {
+  const hook = async (_$: unknown, e: { plugin?: string; key?: string }, next: (e: never) => Promise<unknown>) =>
+    when.on && e.plugin === 'job-watcher' && e.key === key ? { deny: 'state store unavailable' } : next(e as never)
+  if (event === 'state.get') on('state.get', hook as never)
+  else on('state.set', hook as never)
+}
+
+test('a notice that cannot be queued in the session state is still carried on the next tool result (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: 'listening on 3000\n', size: 18 })
+  refusing(on, 'state.set', 'notices')
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/job1 \(npm run dev\) has had no new output/)
+})
+
+test("a stop whose refusal cannot be counted goes ahead, and this conversation is told what the agent left (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  refusing(on, 'state.set', 'stopRefusals')
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  expect((await subagentStop($, 'a1', [subagentEntry('a1'), shell('mon1', 'gh run watch 99')])).block).toBeUndefined()
+  const said = contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said).toContain('could not count how often its stop was refused')
+  expect(said).toContain('mon1 (gh run watch 99)')
+})
+
+test("a record of who started what that cannot be read checks the agent's Bash jobs alone, and says so (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'pending\n', size: 8 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  const unreadable = { on: false }
+  refusing(on, 'state.get', 'startedBy', unreadable)
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Bash', command: 'gh pr checks 9 --watch', run_in_background: true }))
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  unreadable.on = true
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('job1', 'gh pr checks 9 --watch'), shell('mon1', 'gh run watch 99')])
+  expect(r.block).toContain(`${HOLD} job1 (gh pr checks 9 --watch)`)
+  expect(r.block).not.toContain('mon1')
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('could not read which agent started which background work')
 })
