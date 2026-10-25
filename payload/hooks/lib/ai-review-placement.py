@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """How often this Mac's lessons reviews leave a finding unplaced, and why (claude-config#1368).
 
-    python3 ~/.claude/hooks/lib/ai-review-placement.py [--since WHEN] [--state-dir DIR]
+    python3 ~/.claude/hooks/lib/ai-review-placement.py [--since WHEN] [--state-dir DIR] [--misses]
 
 The review runner (ai-review-run.py) places each finding at the line its `Quote:` names, and one it
 cannot place keeps the number it cited and carries `[review harness: not placed, <why>, ...]`. This
@@ -10,6 +10,13 @@ counts, over the finished reviews in the state folder (AI_REVIEW_STATE_DIR, else
 ones by reason, and how the placed ones were placed from the `placement=` value reviews record since
 #1368. The reason is read back by the runner's own classifier (unplaced_kind), so every reason the
 runner writes is a kind here; one it does not know is counted as other, never dropped.
+
+It also gives the lengths of the quotes placed by part of a line (from the `part_quote_lengths=`
+reviews record since #1701) and of the quotes that matched no line (from their marks), in bands
+around the runner's 20 character floor for part of a line, so that floor can be set from them
+(claude-config#1701). A mark from before #1701 kept only the first 60 characters of a longer
+quote, so such a quote is counted on its own, its length unknown. --misses lists every quote that
+matched no line, one per line, as its mark keeps it (a line break written as an escape).
 
 WHEN is a time in epoch seconds, or a date (`2026-10-20`) or date and time (`2026-10-20 02:56`) on
 this Mac's clock. A review counts when its status is ok and it STARTED at or after WHEN, so a change
@@ -58,11 +65,29 @@ def share(n, total):
     return f"{n} ({100.0 * n / total:.1f}%)"
 
 
+# Length bands for the quote length lines, finest around the runner's 20 character floor for part
+# of a line (PART_MIN), which is what the lines exist to judge (claude-config#1701).
+BANDS = ((0, 9, "under 10"), (10, 19, "10 to 19"), (20, 29, "20 to 29"), (30, 39, "30 to 39"),
+         (40, 59, "40 to 59"), (60, 99, "60 to 99"), (100, None, "100 or more"))
+
+
+def bands(lengths):
+    counts = [0] * len(BANDS)
+    for n in lengths:
+        for i, (lo, hi, _) in enumerate(BANDS):
+            if n >= lo and (hi is None or n <= hi):
+                counts[i] += 1
+                break
+    return ", ".join(f"{label}: {c}" for (_, _, label), c in zip(BANDS, counts))
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description="How often lessons review findings go unplaced, and why.")
     ap.add_argument("--since", help="epoch seconds, or a local date or date and time")
     ap.add_argument("--state-dir", default=os.environ.get("AI_REVIEW_STATE_DIR")
                     or os.path.expanduser("~/.claude/state/ai-review"))
+    ap.add_argument("--misses", action="store_true",
+                    help="also list every quote that matched no line, one per line, as its mark keeps it")
     a = ap.parse_args(argv)
     since = read_since(a.since)
     if since == "bad":
@@ -80,6 +105,7 @@ def main(argv):
     why = {k: 0 for k, _ in m.UNPLACED_KINDS}
     why["other"] = 0
     tried = {"marker": 0, "part": 0, "short": 0}
+    part_lengths, part_recorded, miss_lengths, miss_cut, miss_lines = [], 0, [], 0, []
     for path in sorted(glob.glob(os.path.join(a.state_dir, "*.txt"))):
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
@@ -109,6 +135,10 @@ def main(argv):
                 k, _, n = part.partition(":")
                 if k in how and n.isdigit():
                     how[k] += int(n)
+        # Recorded by reviews since #1701, empty when none was placed by part of a line.
+        if "part_quote_lengths" in meta:
+            part_recorded += 1
+            part_lengths += [int(n) for n in meta["part_quote_lengths"].split(",") if n.isdigit()]
         for line in body.splitlines():
             if not m.FINDING.match(line):
                 continue
@@ -124,6 +154,15 @@ def main(argv):
                 tried["marker"] += "without its leading" in words
                 tried["part"] += "whole or in part" in words
                 tried["short"] += "too short to be placed by part of a line" in words
+                quote, length = m.mark_quote(reason)
+                if length is None:
+                    miss_cut += 1
+                    said = f"longer than {m.OLD_QUOTE_SHOWN}, only its first {m.OLD_QUOTE_SHOWN} kept"
+                else:
+                    miss_lengths.append(length)
+                    said = f"{length} characters"
+                where = m.FINDING.match(line).group(0)
+                miss_lines.append(f"{os.path.basename(path)} {where}{said}: {m._one_line(quote or '')}")
 
     if unopened:
         print(f"not counted, the file could not be opened: {', '.join(unopened)}")
@@ -156,6 +195,14 @@ def main(argv):
     print(f"how placed, from the {recorded} of {reviews} reviews that record it: whole line {how['whole']}, "
           f"without the diff's marker {how['marker']}, part of a line {how['part']}, "
           f"path corrected {how['path']}")
+    print(f"quote lengths placed by part of a line, from the {part_recorded} of {reviews} reviews that "
+          f"record them: {bands(part_lengths)}")
+    print(f"quote lengths matching no line: {bands(miss_lengths)}, and longer than {m.OLD_QUOTE_SHOWN} "
+          f"but cut to {m.OLD_QUOTE_SHOWN} by a mark from before #1701: {miss_cut}")
+    if a.misses:
+        print("quotes that matched no line:" if miss_lines else "no quote matched no line.")
+        for row in miss_lines:
+            print(row)
     return 0
 
 

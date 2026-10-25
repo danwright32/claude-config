@@ -1411,6 +1411,15 @@ inside lines when it is 20 characters or longer, and a path that is not a file i
 changed file it fits, kept only when the quote then places it. Read the report again a few days
 after this reaches each Mac, to see how often each fallback fires and what is still not placed.
 
+A finding whose quote matched nothing keeps that quote in its mark, whole up to 1000 characters,
+with its length (#1701); a mark written before then kept only the first 60 characters, which hid
+whether 7 of the first 10 misses ran past the end of the line they partly matched. Each review
+also records the length of every quote it placed by part of a line as `part_quote_lengths=`, and
+the report gives both sets of lengths in bands around the 20 character floor (under 10, 10 to 19,
+20 to 29, and up), with an older cut quote counted on its own. `--misses` lists every quote that
+matched no line, one per line. The floor was set without measuring it; set it from those lengths
+once a week of reviews has recorded them.
+
 #### Scoring the review itself
 
 `tools/review-score.py` (claude-config#1355) measures how good the review is, not whether it ran:

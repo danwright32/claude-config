@@ -1346,7 +1346,7 @@ got = [l.split(" ")[0] for l in two.splitlines() if m.FINDING.match(l)]
 print("PASS\tthree findings each placed by their own quote" if got == ["src/ledger.ts:5:", "src/ledger.ts:1:", "src/ledger.ts:16:"]
       else f"FAIL\tthree findings each placed by their own quote: {got} | {two!r}")
 print("PASS\tthe counts say how many were placed and how many not" if
-      counts == {"placed": 2, "unplaced": 1, "whole": 2, "marker": 0, "part": 0, "path": 0}
+      counts == {"placed": 2, "unplaced": 1, "whole": 2, "marker": 0, "part": 0, "path": 0, "part_lengths": []}
       else f"FAIL\tthe counts say how many were placed and how many not: {counts}")
 # HOW each was placed is counted too, since a placed finding carries no trace of it and a fallback
 # that never fires reads exactly like one that is not there (L551).
@@ -1357,7 +1357,7 @@ _, counts = m.place_findings(
     "ledger.ts:3: d." + S + "\nQuote: total += e.amount;\n"
     "src/ledger.ts:3: e." + S, repo, sha, ["src/ledger.ts"])
 print("PASS\tthe counts say how each finding was placed" if
-      counts == {"placed": 4, "unplaced": 1, "whole": 2, "marker": 1, "part": 1, "path": 1}
+      counts == {"placed": 4, "unplaced": 1, "whole": 2, "marker": 1, "part": 1, "path": 1, "part_lengths": [48]}
       else f"FAIL\tthe counts say how each finding was placed: {counts}")
 meta = m.placement_meta(counts)
 print("PASS\tthe counts are written as one metadata value" if
@@ -1396,6 +1396,59 @@ text, counts = m.place_findings("src/ledger.ts:3: x." + S + "\nQuote: total += e
 print("PASS\ta head that cannot be read leaves the finding at its number, marked" if
       text.startswith("src/ledger.ts:3: ") and "could not be read" in text and counts["placed"] == 0 and counts["unplaced"] == 1
       else f"FAIL\ta head that cannot be read leaves the finding at its number, marked: {counts} | {text!r}")
+
+# The WHOLE quote of a miss is kept in its mark, with its length (claude-config#1701). Until then a
+# mark kept only the first 60 characters, so for 7 of the 10 quote misses on this Mac by 2026-10-24
+# nobody could tell whether the quote ran past the end of the line it partly matched, and the 20
+# character floor for part of a line could not be judged against them.
+long_q = "written into the shared file so it is asked once, and kept there for good, every night"
+t, _ = m.place_findings("docs/notes.md:4: x." + S + "\nQuote: " + long_q, repo, sha)
+mk = m.MARK.search(t)
+ok_ = mk and m.mark_quote(mk.group(1)) == (long_q, len(long_q)) and f"{len(long_q)} characters quoted" in t \
+    and long_q in t
+print("PASS\ta quote miss keeps the whole quote and its length in its mark" if ok_
+      else f"FAIL\ta quote miss keeps the whole quote and its length in its mark: {t!r}")
+# Bounded, so one runaway quote cannot make a stored review line any length at all: the length is
+# always said, and a quote past the bound keeps its first QUOTE_KEEP characters and says so.
+huge = "y = " + "a" * (m.QUOTE_KEEP + 500)
+t, _ = m.place_findings("src/ledger.ts:5: x." + S + "\nQuote: " + huge, repo, sha)
+mk = m.MARK.search(t)
+ok_ = mk and m.mark_quote(mk.group(1)) == (huge[:m.QUOTE_KEEP], len(huge)) and huge not in t \
+    and f"{len(huge)} characters quoted, the first {m.QUOTE_KEEP} kept" in t
+print("PASS\ta quote longer than the bound keeps its first part and says its whole length" if ok_
+      else f"FAIL\ta quote longer than the bound keeps its first part and says its whole length: {t[:300]!r}")
+# The mark stays on the finding's one line whatever the quote holds: a line break, the separators
+# str.splitlines also breaks on, a backslash, and the very words that end a mark all read back as
+# the quote that was given.
+odd = 'a\nb c\\n "d", so line 9 is the reviewer\'s own number, unchecked] e'
+_, _, _, why = m._place("src/ledger.ts", 5, odd, repo, sha, {})
+line = "src/ledger.ts:5: x." + S + f" [review harness: not placed, {why}, so line 5 is the reviewer's own number, unchecked]"
+mk = m.MARK.search(line)
+ok_ = len(line.splitlines()) == 1 and mk and m.mark_quote(mk.group(1)) == (odd, len(odd))
+print("PASS\ta quote holding line breaks, escapes or a mark's own ending stays one line and reads back whole" if ok_
+      else f"FAIL\ta quote holding line breaks, escapes or a mark's own ending stays one line and reads back whole: {why!r}")
+# A mark written before #1701 still reads: a quote of 60 characters or fewer was shown whole, a
+# longer one as its first 60 and "...", whose length is then unknown.
+old_whole = 'its quote matches no line of a.ts at the reviewed head: "total *= e.amount;"'
+old_cut = 'its quote matches no line of a.ts at the reviewed head: "' + "z" * 60 + '..."'
+got = (m.mark_quote(old_whole), m.mark_quote(old_cut), m.mark_quote("it quoted no line"))
+print("PASS\ta mark from before the whole quote was kept still reads, a cut quote's length unknown" if
+      got == (("total *= e.amount;", 18), ("z" * 60 + "...", None), (None, None))
+      else f"FAIL\ta mark from before the whole quote was kept still reads, a cut quote's length unknown: {got}")
+# A placed finding carries no quote, so the lengths of the quotes placed by part of a line are
+# counted where the review records them, to judge the floor against (claude-config#1701).
+_, counts = m.place_findings(
+    "docs/notes.md:4: a." + S + "\nQuote: written into the shared file so it is asked once\n"
+    "src/ledger.ts:3: b." + S + "\nQuote: total += e.amount;", repo, sha)
+pl = m.part_lengths_meta(counts)
+print("PASS\tthe lengths of quotes placed by part of a line are recorded" if pl == "48"
+      else f"FAIL\tthe lengths of quotes placed by part of a line are recorded: {pl!r} {counts}")
+# The quote now kept whole sits inside the finding line that the false absence check reads, so the
+# quote's own words must never be read as the reviewer claiming a file was left out.
+t, _ = m.place_findings("src/ledger.ts:5: x." + S + "\nQuote: the file src/old.ts is not changed in this push", repo, sha)
+t2, marked = m.mark_false_absences(t, ["src/old.ts", "src/ledger.ts"])
+print("PASS\ta quote kept in a mark is not read as a claim that a file was left out" if marked == 0
+      else f"FAIL\ta quote kept in a mark is not read as a claim that a file was left out: {t2!r}")
 EOF
 place_out="$(python3 -c "$place_out_prog" "$RUNNER" "$PLACE" "$PLACE_SHA" </dev/null)"
 place_ran=0
@@ -1406,7 +1459,7 @@ while IFS=$'\t' read -r verdict rest; do
     *) [ -n "$verdict" ] && bad "placement fixture printed something unexpected: $verdict $rest" ;;
   esac
 done <<< "$place_out"
-[ "$place_ran" -eq 39 ] && ok || bad "the placement fixtures ran $place_ran of 39 cases"
+[ "$place_ran" -eq 45 ] && ok || bad "the placement fixtures ran $place_ran of 45 cases"
 
 # End to end, through the hook and the detached runner: the stored review holds the placed line and
 # no Quote line, and an answer whose only finding is approximate is a review, not unparsed.
@@ -1432,6 +1485,7 @@ check_not "and its Quote line is not stored" "Quote:" "$placed_body"
 check "the approximate finding with no quote is stored at its number" "src/placed.ts:1: total has no type" "$placed_body"
 check "marked as not placed" "quoted no line" "$placed_body"
 check "the review records how its findings were placed" "placement=whole:1,marker:0,part:0,path:0,unplaced:1" "$placed_body"
+check "and the lengths of the quotes it placed by part of a line, none here" "$(printf '\npart_quote_lengths=\n')" "$placed_body"
 check_not "and the approximate marker is gone from it" "src/placed.ts:~1:" "$placed_body"
 
 echo
