@@ -2400,6 +2400,67 @@ out_ls9="$(ls_run)"; code_ls9=$?
   && check "#277 a rule file that LOST a line still fails the run" ok \
   || check "#277 a rule file that LOST a line still fails the run" "exit=$code_ls9 out=$out_ls9"
 
+# A LESSONS FILE THE SYNC GENERATES is rewritten whole, never appended to, when a lesson is recorded
+# (claude-config#1694). On 2026-10-24 a full run failed because LESSONS-CORE-_TOC.md changed in place
+# with the same number of lines (a section's count went up by one) while another session recorded
+# L1030: LESSONS.md and the section's index file only gained lines and were excused, the table of
+# contents was not. Excused only beside LESSONS.md gaining lines in the same window, and only when
+# the generated file kept at least as many lines; each half has a control below.
+rm -f "$LS/suites"/test-linetaker.sh
+printf 'the live rules\n' > "$LS/claude-home/CLAUDE.md"
+lessons_seed(){
+  printf 'L1. the first lesson\nL2. the second lesson\n' > "$LS/claude-home/LESSONS.md"
+  printf '# table of contents\n- Honest failure: 109 lessons\n- Data safety: 45 lessons\n' > "$LS/claude-home/LESSONS-CORE-_TOC.md"
+}
+mk_lessons_suite(){ # mk_lessons_suite <name> <grow LESSONS.md: yes|no> <what the table of contents becomes>
+  {
+    printf '#!/usr/bin/env bash\n'
+    [ "$2" = yes ] && printf 'printf "L1030. a lesson another session recorded\\n" >> "%s"\n' "$LS/claude-home/LESSONS.md"
+    printf 'printf "%s" > "%s"\n' "$3" "$LS/claude-home/LESSONS-CORE-_TOC.md"
+    printf 'printf "SUITE-RESULT passed=1 failed=0\\n"\n'
+  } > "$LS/suites/test-$1.sh"
+  chmod +x "$LS/suites/test-$1.sh"
+}
+lessons_seed
+mk_lessons_suite tocregen yes '# table of contents\n- Honest failure: 110 lessons\n- Data safety: 45 lessons\n'
+out_lt1="$(ls_run)"; code_lt1=$?
+[ "$code_lt1" -eq 0 ] \
+  && check "#1694 the table of contents rewritten beside LESSONS.md gaining a lesson does not fail the run" ok \
+  || check "#1694 the table of contents rewritten beside LESSONS.md gaining a lesson does not fail the run" "exit=$code_lt1 out=$out_lt1"
+case "$out_lt1" in
+  *"LESSONS-CORE-_TOC.md: regenerated"*) check "#1694 and it says the file was regenerated beside the lesson" ok ;;
+  *) check "#1694 and it says the file was regenerated beside the lesson" "out=$out_lt1" ;;
+esac
+# The same rewrite with no lesson recorded is a suite writing the store, and still fails.
+rm -f "$LS/suites"/test-tocregen.sh; lessons_seed
+mk_lessons_suite toconly no '# table of contents\n- Honest failure: 110 lessons\n- Data safety: 45 lessons\n'
+out_lt2="$(ls_run)"; code_lt2=$?
+case "$code_lt2:$out_lt2" in
+  0:*) check "#1694 the table of contents rewritten with no lesson recorded still fails the run" "exit=0 out=$out_lt2" ;;
+  *"SUITES CHANGED A LIVE STORE"*"LESSONS-CORE-_TOC.md"*) check "#1694 the table of contents rewritten with no lesson recorded still fails the run" ok ;;
+  *) check "#1694 the table of contents rewritten with no lesson recorded still fails the run" "exit=$code_lt2 out=$out_lt2" ;;
+esac
+# A lesson recorded while a suite TRUNCATES the table of contents is not a regeneration.
+rm -f "$LS/suites"/test-toconly.sh; lessons_seed
+mk_lessons_suite toccut yes '# table of contents\n'
+out_lt3="$(ls_run)"; code_lt3=$?
+case "$code_lt3:$out_lt3" in
+  0:*) check "#1694 a table of contents that lost lines still fails the run, lesson or not" "exit=0 out=$out_lt3" ;;
+  *"SUITES CHANGED A LIVE STORE"*"LESSONS-CORE-_TOC.md"*) check "#1694 a table of contents that lost lines still fails the run, lesson or not" ok ;;
+  *) check "#1694 a table of contents that lost lines still fails the run, lesson or not" "exit=$code_lt3 out=$out_lt3" ;;
+esac
+# And only a GENERATED lessons file is excused: CLAUDE.md rewritten beside the same lesson still fails.
+rm -f "$LS/suites"/test-toccut.sh; lessons_seed
+mk_lessons_suite tocsame yes '# table of contents\n- Honest failure: 109 lessons\n- Data safety: 45 lessons\n'
+mk_store_writer rulesbeside "$LS/claude-home/CLAUDE.md" 'a rule file rewritten beside a lesson'
+out_lt4="$(ls_run)"; code_lt4=$?
+case "$code_lt4:$out_lt4" in
+  0:*) check "#1694 a rule file that is not generated, rewritten beside a lesson, still fails the run" "exit=0 out=$out_lt4" ;;
+  *"SUITES CHANGED A LIVE STORE"*"CLAUDE.md"*) check "#1694 a rule file that is not generated, rewritten beside a lesson, still fails the run" ok ;;
+  *) check "#1694 a rule file that is not generated, rewritten beside a lesson, still fails the run" "exit=$code_lt4 out=$out_lt4" ;;
+esac
+rm -f "$LS/suites"/test-tocsame.sh "$LS/suites"/test-rulesbeside.sh "$LS/claude-home/LESSONS.md" "$LS/claude-home/LESSONS-CORE-_TOC.md"
+
 # And the control: a run that touched none of them says nothing about any of them. Without this a
 # guard that failed every run would pass every check above (L159).
 rm -f "$LS/suites"/test-linetaker.sh "$LS/hold" "$LS/watch.pid"
