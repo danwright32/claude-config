@@ -1483,11 +1483,14 @@ Three gates close the three parts of that, all reading commands through one libr
   itself ("no other overrides") is not a denial, and one naming an override in full is about that
   override only. Nor is a denial the report withdraws ("the earlier claim that no overrides were used
   is withdrawn", "I withdraw the claim that ...", or one it calls false, wrong, untrue or incorrect),
-  nor one in double quotes straight after a reporting verb whose speaker is not I or we (It says "no
-  overrides were used"), so a report corrected as the refusal asks, or pasting the refusal, goes
+  nor one in double quotes straight after a reporting verb whose speaker is somebody else (It says "no
+  overrides were used", the builder's report said "..."). A quote whose speaker is I, we, my or our
+  something, or the report itself ("The report says", "This summary reads", "My earlier hand-back
+  said") is the report's own words and still a claim, so a report cannot hide its denial behind its
+  own name. So a report corrected as the refusal asks, or pasting the refusal, goes
   through on its first correction (#1702). The retraction word has to be the claim's own predicate,
   so "the claim that no overrides were used is correct and the earlier count was wrong" still denies.
-  A denial merely near such words is still read: over the 969 distinct hand-backs on the personal
+  A denial merely near such words is still read: over the 976 distinct hand-backs on the personal
   MacBook on 2026-10-25 this changed the reading of 5, each a withdrawn or quoted claim. A report the agent will not correct goes through on the third attempt, said to Dan
   and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
   the personal MacBook it found one real contradiction (a report saying "I never used
