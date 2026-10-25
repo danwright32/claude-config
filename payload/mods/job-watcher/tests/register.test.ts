@@ -502,6 +502,35 @@ test('a job gone silent for ten minutes is not stopped, but Claude is told', wit
   expect(contextOf(next)).toMatch(/no new output/)
 })
 
+// #1583: a Bidspoke merge helper piped through tail -6 read as stalled while it waited, healthy, in
+// the merge queue: tail writes nothing until its input ends. Such a job is judged by whether its
+// process group still runs, never by new output; one whose group cannot be read is judged by its
+// output as before, since nothing better was measured.
+const HELD = 'bash ~/.claude/hooks/lib/merge-when-ready.sh 2733 | tail -6'
+test('a job piped through tail is judged by whether it runs: silent and running is never stalled (#1583)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: '', size: 0 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: HELD, run_in_background: true } as never)
+  await clock.advance(31 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).not.toMatch(/no new output/)
+  expect((await jobsOf($)).map(j => j.state)).toEqual(['running'])
+  // Its group ends: it leaves the record, as any job does.
+  job.gone = true
+  await clock.advance(MIN)
+  expect(await jobsOf($)).toEqual([])
+})
+
+test('a job piped through tail whose process ps cannot read is judged by its output, as before (#1583)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0, psFails: true })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: HELD, run_in_background: true } as never)
+  await clock.advance(11 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/no new output for 1\d minutes/)
+})
+
 test('a healthy job says nothing', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const job = { tail: 'built 1\n', size: 8 }
@@ -670,7 +699,11 @@ test('a stopped poll loop is said even when the registry write after it fails', 
   expect(contextOf(next)).toContain('was stopped')
 })
 
-test('a new session start in the same process forgets the last one jobs', withDeps, async ($, on) => {
+// #1695: this once asserted the reverse, that a second session start forgets the jobs, on the
+// premise that it meant a new session in the same process. The engine fires session.start once per
+// process and again only at a fresh load of the mod (a hot reload, an enable, a worker respawn),
+// never at /clear, so forgetting there was the defect: a reload lost every job Claude was told about.
+test('a second session start (a reload of the mod) goes on watching the jobs already running (#1695)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   world(on, { tail: 'listening on 3000\n', size: 18 })
   await start($)
@@ -678,7 +711,7 @@ test('a new session start in the same process forgets the last one jobs', withDe
   await start($)
   await clock.advance(11 * MIN)
   const next = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(contextOf(next)).toBe('')
+  expect(noticesOf(next)).toContain('job1 (npm run dev) has had no new output for 11 minutes')
 })
 
 test('a new session start in the same process keeps one timer: one look a minute', withDeps, async ($, on) => {
@@ -818,6 +851,74 @@ test('keeping a job that is not running is refused, naming the jobs that are', w
   const r = (await $.tool.call(keep({ task_id: 'job9', name: 'x', reason: 'y' }))) as { deny?: string; text?: string }
   expect(r.deny ?? r.text).toContain('job9')
   expect(r.deny ?? r.text).toContain('job1')
+})
+
+// #1695, #1583: the reminder named jobs the keep tool then refused as unknown ("None is running"),
+// while the status bar still counted them. Measured in three real sessions on this Mac (Ovation
+// 2026-10-20, claude-config 2026-10-18 and 2026-10-24): each time Claude Code had reloaded the mod
+// in between ("job-watcher: reloaded"). A reload runs the mod's code again in a fresh module and
+// fires session.start again, and a call already under way when it lands finishes in the OLD module,
+// whose hook records the job and names it in a list the new module never sees. So the one list of
+// jobs is the one the engine holds for the session ($.state), never a module's memory.
+const JOBS_STATE = (e: unknown) => (e as { plugin?: string }).plugin === 'job-watcher' && (e as { key?: string }).key === 'jobs'
+const earlierCopy = (on: On, recorded: unknown[]) =>
+  on('state.get', async ($, e, next) => {
+    const answer = (await next(e)) as { value?: { version?: number } }
+    // What an earlier copy of the module left, until this copy writes the list itself.
+    return (JOBS_STATE(e) && answer.value?.version === 0 ? { value: { value: recorded, version: 0 } } : answer) as never
+  })
+const MERGE = 'bash ~/.claude/hooks/lib/merge-when-ready.sh 2733 | tail -6'
+
+test('a job an earlier copy of the watcher recorded is named, listed for the bar and can be kept (#1695)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'waiting in the merge queue\n', size: 27 })
+  earlierCopy(on, [{ id: 'job1', command: MERGE, outputPath: outOf('job1'), pgid: 501, startedAt: 0 }])
+  // A reload's own session.start, in the module that never saw the job start.
+  await start($)
+  const named = await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  expect(contextOf(named)).toContain('Still running and not kept: background job job1')
+  expect((await jobsOf($)).map(j => j.label)).toEqual([shortCommand(MERGE)])
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge helper for #2733', reason: 'it waits in the merge queue' }))) as { result?: unknown; deny?: string }
+  expect(r.deny).toBeUndefined()
+  expect(String(r.result)).toContain('Kept job1 (merge helper for #2733)')
+  expect((await jobsOf($)).map(j => [j.label, j.kept])).toEqual([['merge helper for #2733', true]])
+})
+
+test('a reload of the watcher keeps the job list: a job named before it can still be kept (#1695)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'waiting in the merge queue\n', size: 27 })
+  await start($)
+  const first = await $.tool.call({ tool: 'Bash', command: MERGE, run_in_background: true } as never)
+  expect(contextOf(first)).toContain('Still running and not kept: background job job1')
+  // A hot reload fires session.start again (the engine's contract for session.start).
+  await start($)
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('background job job1')
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge helper for #2733', reason: 'it waits in the merge queue' }))) as { result?: unknown; deny?: string }
+  expect(r.deny).toBeUndefined()
+  expect(String(r.result)).toContain('Kept job1')
+})
+
+// The one list cannot be read: the keep tool says so rather than calling the job unknown, and the
+// call the reminder rides on still returns its own result, carrying what went wrong.
+test('a job list the engine cannot read is said as such, never as no job running (#1695)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: 'waiting in the merge queue\n', size: 27 })
+  const failing = { on: false }
+  on('state.get', async ($, e, next) => (failing.on && JOBS_STATE(e) ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: MERGE, run_in_background: true } as never)
+  failing.on = true
+  const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge helper', reason: 'it waits in the merge queue' }))) as { deny?: string; text?: string }
+  expect(r.deny ?? r.text).toContain('could not read its list of background jobs')
+  expect(r.deny ?? r.text).toContain('state store unavailable')
+  expect(r.deny ?? r.text).not.toContain('None is running')
+  const other = (await $.tool.call({ tool: 'Bash', command: 'git status' } as never)) as { result?: unknown }
+  expect(other.result).toBe('ran')
+  expect(contextOf(other)).toContain('could not read its list of background jobs')
+  expect(contextOf(other)).not.toContain(REMINDER)
+  // Read again once it can be: the job is still there, and still named.
+  failing.on = false
+  expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('background job job1')
 })
 
 test('keeping a job without a reason or a name is refused', withDeps, async ($, on) => {

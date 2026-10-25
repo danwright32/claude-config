@@ -500,6 +500,22 @@ plainest reading of the decisions above:
   is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
+- **One list, outside the module (#1695).** The jobs are held in `$.state`, which the engine keeps
+  for the session across a hot reload of the mod, never in a module variable. A reload runs the
+  code again in a fresh module and fires `session.start` again (never at `/clear`), and a tool call
+  already under way when it lands finishes in the old module. With the list in the module, that old
+  hook recorded the job and named it in the reminder, while the keep tool, answered by the new
+  module, refused it with "None is running", and the status bar went on counting it. Measured in
+  three sessions on this Mac (2026-10-18, 2026-10-20 and 2026-10-24), each with "job-watcher:
+  reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
+  foreground command started before the reload and moved to the background after it. So
+  `session.start` clears only the module's own bookkeeping, never the list, and the list is written
+  by version, retried, so two copies writing at once lose neither change.
+- **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
+  group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
+  merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
+  by its output, as before, since nothing better was measured. Chosen over telling builders to stop
+  piping background merges through `tail`, because a rule in a brief is a hope (L27).
 
 Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
 #706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
