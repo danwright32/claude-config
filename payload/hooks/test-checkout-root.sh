@@ -95,6 +95,38 @@ for suite in test-two-file-awk.sh test-pipefail-shortcircuit.sh test-lib-self-lo
   check_eq "$suite finds its checkout through lib/checkout-root.sh, with no test of its own" "yes no" "$uses $own"
 done
 
+# ---- and no suite anywhere hand rolls the lookup (claude-config#1663) ----
+# The list above is the suites that scan the whole tree. Any other suite that needs the checkout
+# counts folders up to it just the same, and the lookup it hand rolls is exactly what this helper
+# replaced, so the scan reads every suite in the repository rather than a list of names (L96, L613).
+SCAN="$DIR/lib/hand-rolled-checkout.py"
+mkdir -p "$TMPROOT/scan/payload/hooks"
+_UP='/..''/..'
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'REPO="$(cd "$DIR%s" && pwd)"\n' "$_UP"
+  printf 'REPO="$(cd "$DIR%s/.." && pwd -P)"\n' "$_UP"
+  printf 'ROOT="$(cd "$(dirname "$0")%s"; pwd)"\n' "$_UP"
+  printf 'HOOKS="$(cd "$DIR%s/hooks" && pwd)"\n' "$_UP"
+  printf '# REPO="$(cd "$DIR%s" && pwd)" is what this used to say\n' "$_UP"
+  printf "mk test-careless.sh '#!/usr/bin/env bash\nROOT=\"\$(cd \"\$DIR%s\" && pwd)\"'\n" "$_UP"
+  printf 'REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"\n'
+} > "$TMPROOT/scan/payload/hooks/test-probe.sh"
+cp "$TMPROOT/scan/payload/hooks/test-probe.sh" "$TMPROOT/scan/payload/hooks/probe-helper.sh"
+probe="$(printf 'payload/hooks/test-probe.sh\npayload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMPROOT/scan")"; probe_rc=$?
+probe_lines="$(printf '%s\n' "$probe" | awk -F: 'NF { printf "%s ", $2 }')"
+check_eq "#1663 the scan sees every upward lookup, and not a path down into a folder, a comment, a fixture or the helper" \
+  "1 2 3 4 " "$probe_rc $probe_lines"
+FILES="$(bash "$DIR/lib/repo-files.sh" "$SELF_TOP" 2>/dev/null || true)"
+if [ -n "$SELF_TOP" ] && [ -f "$SELF_TOP/claude-sync" ] && [ -n "$FILES" ]; then
+  found="$(printf '%s\n' "$FILES" | python3 "$SCAN" --root "$SELF_TOP")"; found_rc=$?
+  check_eq "#1663 no suite finds the repository by counting folders up; each asks lib/checkout-root.sh" \
+    "0" "$found_rc${found:+
+$found}"
+else
+  echo "SUITE-PART-UNMEASURED this copy is not in a claude-config checkout, so its suites were not scanned for a hand rolled lookup"
+fi
+
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

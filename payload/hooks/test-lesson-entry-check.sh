@@ -28,7 +28,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/lesson-entry-check.sh"
-REPO="$(cd "$DIR/../.." && pwd)"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 # WHERE THIS IS RUNNING. Two copies of these hooks exist: the repo's payload/hooks, which sits
 # beside a claude-sync and a payload/, and the INSTALLED copy under the config root, which does
 # not. This suite drives the real claude-sync, so in the installed copy it was measuring a tool
@@ -37,9 +39,9 @@ REPO="$(cd "$DIR/../.." && pwd)"
 #
 # Said in the one agreed shape the runner reads, so it is reported as NOT RUN rather than as broken
 # code, and never as a pass.
-if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
-  echo "test-lesson-entry-check: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so the tool this suite drives is not there." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+if [ -z "$REPO" ]; then
+  echo "test-lesson-entry-check: $DIR/.. is not the payload of a claude-config checkout, so the tool this suite drives is not there." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $DIR/.. is not the payload of one"
   echo "passed: 0, failed: 0"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 2

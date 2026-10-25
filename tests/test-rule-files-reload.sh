@@ -51,6 +51,14 @@ ROOT="$(cd "$DIR/.." && pwd)"
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$ROOT/payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 pass=0
 fail=0
 check() { if [[ "$2" == "ok" ]]; then pass=$((pass + 1)); echo "ok: $1"; else fail=$((fail + 1)); echo "FAIL: $1 ($2)"; fi; }
@@ -106,12 +114,21 @@ with open(sys.argv[1], 'a') as f:
     f.write(json.dumps({'session': d.get('session_id'), 'reason': d.get('load_reason'), 'marks': marks}) + '\n')
 PY
 HOOK="$ROOT/payload/hooks/rule-files-changed.sh"
-python3 - "$RULES/settings.json" "$HOOK" "$WORK/loaded.py" "$WORK/loaded.log" <<'PY'
+# Which process each start ran in, as the hook sees it (its parent, and that one's parent), so a
+# resume in a new process can be told from the session's own start by something a hook can read
+# (#1684).
+cat > "$WORK/starts.sh" <<EOF
+#!/bin/bash
+src="\$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("source") or "", d.get("session_id") or "")' 2>/dev/null)"
+p=\$PPID; pp="\$(ps -o ppid= -p "\$p" 2>/dev/null | tr -d ' ')"
+printf '%s\t%s\t%s\t%s\t%s\n' "\$src" "\$p" "\$(ps -o comm= -p "\$p" 2>/dev/null)" "\$pp" "\$(ps -o comm= -p "\$pp" 2>/dev/null)" >> "$WORK/starts.log"
+EOF
+python3 - "$RULES/settings.json" "$HOOK" "$WORK/loaded.py" "$WORK/loaded.log" "$WORK/starts.sh" <<'PY'
 import json, shlex, sys
-out, hook, loaded, log = sys.argv[1:]
+out, hook, loaded, log, starts = sys.argv[1:]
 run = {'hooks': [{'type': 'command', 'command': 'bash ' + shlex.quote(hook)}]}
 json.dump({'hooks': {
-    'SessionStart': [run],
+    'SessionStart': [run, {'hooks': [{'type': 'command', 'command': 'bash ' + shlex.quote(starts)}]}],
     'UserPromptSubmit': [run],
     'InstructionsLoaded': [{'hooks': [{'type': 'command', 'command': 'python3 %s %s' % (shlex.quote(loaded), shlex.quote(log))}]}],
 }}, open(out, 'w'))
@@ -120,8 +137,8 @@ PY
 
 python3 "$DIR/sleep-real-engine-model.py" "$WORK/model.port" "$WORK/model.log" &
 MODEL_PID=$!
-for _ in $(seq 1 50); do [ -s "$WORK/model.port" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
-[ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port after 5 seconds"; finish; }
+hang_wait '[ -s "$WORK/model.port" ]'
+[ -s "$WORK/model.port" ] || { check "the stand-in model starts" "no port within the hang ceiling, ${HANG_S}s"; finish; }
 PORT="$(cat "$WORK/model.port")"
 
 step() { echo "PROBE-RUN: echo $1 # STEP=$1"; }
@@ -134,8 +151,10 @@ session() {
   while [ $# -gt 0 ] && [ "$1" != -- ]; do extra+=("$1"); shift; done
   [ "${1:-}" = -- ] && shift
   local summary
+  # The mods are named in settings.json's env block, as the sync names them, so the caller's own
+  # list is taken away rather than set: set, it could stand in front of the one under test (#1684).
   summary="$(cd "$WORK/repo" && env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_SESSION_ID \
-    CLAUDE_CODE_PLUGIN_DIRS= ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" ANTHROPIC_API_KEY=test-key-not-real \
+    -u CLAUDE_CODE_PLUGIN_DIRS ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" ANTHROPIC_API_KEY=test-key-not-real \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 SHELL=/bin/bash \
     CLAUDE_RULES_DIR="$RULES" CLAUDE_RULES_STATE_DIR="$WORK/state" \
     python3 "$DIR/sleep-real-engine-session.py" "$out" 180 "$#" "$@" -- \
@@ -152,6 +171,35 @@ session "$WORK/s1.jsonl" --session-id "$SID" -- \
 echo "-- edited with no session running, then resumed"
 bash "$WORK/edit.sh" FIVE
 session "$WORK/s2.jsonl" --resume "$SID" -- "$(step resumed)"
+
+# ---- the mods: does a resume in a NEW process name its mods afresh? (claude-config#1684) ----
+# Two probe mods, each a plugin holding one command, named to Claude Code as the sync names them: in
+# settings.json's env block, CLAUDE_CODE_PLUGIN_DIRS. A session starts with the first; the second
+# arrives with no session running, as a pull brings one; then a new process resumes the session, as
+# `claude --resume` does. What the resumed process lists in its own init line is the measurement,
+# and the hook is then held to it: told a mod is missing only when the process did not load it.
+mk_mod(){
+  mkdir -p "$RULES/mods/$1/.claude-plugin" "$RULES/mods/$1/commands"
+  printf '{"name": "%s", "version": "0.0.1", "description": "a probe mod"}\n' "$1" > "$RULES/mods/$1/.claude-plugin/plugin.json"
+  printf -- '---\ndescription: a probe command\n---\nSay probe.\n' > "$RULES/mods/$1/commands/$1-cmd.md"
+}
+name_mods(){
+  python3 - "$RULES/settings.json" "$@" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault('env', {})['CLAUDE_CODE_PLUGIN_DIRS'] = ':'.join(sys.argv[2:])
+json.dump(d, open(p, 'w'))
+PY
+}
+mk_mod rprobe-first
+name_mods "$RULES/mods/rprobe-first"
+SID2="$(uuidgen | tr 'A-Z' 'a-z')"
+echo "-- a session ($SID2) started with one mod, a second mod arriving, then resumed by a new process"
+session "$WORK/m1.jsonl" --session-id "$SID2" -- "$(step mods-start)"
+mk_mod rprobe-later
+name_mods "$RULES/mods/rprobe-first" "$RULES/mods/rprobe-later"
+session "$WORK/m2.jsonl" --resume "$SID2" -- "$(step mods-resumed)"
 stop_model
 
 # ---- what the steps left ----
@@ -206,10 +254,20 @@ check('InstructionsLoaded: the resume loaded the copy on disk then, as a session
 cleared = [x for x in loads if x['session'] != sid]
 check('InstructionsLoaded: /clear started a new session id that loaded the copy on disk then',
       '' if any(x['reason'] == 'session_start' and x['marks'] == ['RULEPROBE-MainFOUR'] for x in cleared) else f'other loads: {cleared}')
-# The copy written mid session and replaced before the compaction is never loaded: nothing re-reads
-# the files between prompts.
-check('InstructionsLoaded: no load between prompts (the copy written mid session is never loaded)',
-      '' if not any(x['marks'] and x['marks'][0].endswith('TWO') for x in loads) else f'loads: {loads}')
+# Nothing re-reads the files between prompts: the session loads its main rule file exactly three
+# times, at its start, at the compaction and at the resume, in that order, and each of those loads
+# reads the import once from the same copy (claude-config#1685). The #1580 builder first asked for
+# every load in order, which failed because Claude Code logs an import's load BEFORE the compaction
+# load of the main file it belongs to; it was loosened to "the copy written mid session is never
+# loaded", which a scratch copy with one more /compact after the THREE edit (a re-read the session
+# did not ask for) passed on every check (measured 2026-10-25). Ordered on the main file only, so
+# the order in which the import's load is logged around it does not matter.
+main = [(r, m[0][len('RULEPROBE-Main'):]) for r, m in mine if m and m[0].startswith('RULEPROBE-Main')]
+check('InstructionsLoaded: no load between prompts (the main rule file is loaded at the start, the compaction and the resume, in that order, and at nothing else)',
+      '' if main == [('session_start', 'ONE'), ('compact', 'THREE'), ('session_start', 'FIVE')] else f'main file loads of {sid}: {main}')
+inc = sorted((r, m[0][len('RULEPROBE-Import'):]) for r, m in mine if m and m[0].startswith('RULEPROBE-Import'))
+check('InstructionsLoaded: and each of those loads read the import once, from the same copy',
+      '' if inc == sorted(('include', v) for _, v in main) else f'import loads of {sid}: {inc}, main loads: {main}')
 
 # The interactive /resume picker: said as unmeasured only when the headless session itself does not
 # offer it, read from its own list of slash commands (L460).
@@ -231,10 +289,84 @@ else:
 for verdict, name in said:
     print(f'{verdict}\t{name}')
 PY
+# The mods half, read the same way and added to the same verdicts (#1684). Read outside a command
+# substitution (#1690), and checked: a reader that raises, or prints no verdict on the mods, would
+# otherwise leave the first reader's lines to read as a measured run that measured nothing of the
+# mods (L98, L11).
+IFS= read -r -d '' MODS_READER <<'PY' || true
+import json, re, sys
+model_log, m1, m2, starts, sid2 = sys.argv[1:]
+said = []
+def check(name, problem):
+    said.append(('ok' if not problem else problem, name))
+def init_of(path):
+    for line in open(path):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get('type') == 'system' and d.get('subtype') == 'init':
+            return d
+    return None
+first = {}
+for line in open(model_log):
+    d = json.loads(line)
+    m = re.search(r'# STEP=(\S+)', d.get('probe') or '')
+    if m and m.group(1) not in first:
+        first[m.group(1)] = d
+i1, i2 = init_of(m1), init_of(m2)
+if i1 is None or i2 is None:
+    check('the mods sessions reported their init lines', 'm1 init %s, m2 init %s' % (i1 is not None, i2 is not None))
+else:
+    t1, t2 = json.dumps(i1), json.dumps(i2)
+    check('the mods are named to Claude Code from settings, as the sync names them: the session starts with the first probe mod and not the later one',
+          '' if 'rprobe-first' in t1 and 'rprobe-later' not in t1 else 'its init line named: %s' % sorted(set(re.findall(r'rprobe-[a-z]+', t1))))
+    loaded = 'rprobe-later' in t2
+    print('measured\ta resume in a new process %s the mod that arrived after the session started (its own init line)' % ('LOADS' if loaded else 'does NOT load'))
+    want = 0 if loaded else 1
+    got = first.get('mods-resumed')
+    if got is None:
+        check('the resumed prompt reached the stand-in model', 'it was never sent')
+    else:
+        check('the resumed prompt is told a mod is missing only when the resumed process did not load it (%d notice wanted)' % want,
+              '' if got.get('mod_notices') == want else 'it carried %s mod notice(s)' % got.get('mod_notices'))
+    got = first.get('mods-start')
+    check('the first prompt of that session carries no mod notice',
+          '' if got is not None and got.get('mod_notices') == 0 else 'it carried %s' % (got or {}).get('mod_notices'))
+for line in open(starts):
+    print('measured\tSessionStart ' + line.strip().replace('\t', ' '))
+for verdict, name in said:
+    print(f'{verdict}\t{name}')
+PY
+mods_verdict(){ # mods_verdict <work dir> -> its verdict lines, or one failing line saying why there are none
+  local out rc
+  out="$(python3 -c "$MODS_READER" "$1/model.log" "$1/m1.jsonl" "$1/m2.jsonl" "$1/starts.log" "$SID2" 2>"$1/mods-reader.err" </dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'the mods reader failed (exit %s): %s\tthe mods half of the steps could be read\n' "$rc" "$(tail -n 1 "$1/mods-reader.err" 2>/dev/null | tr '\t' ' ')"
+    return 0
+  fi
+  case "$out" in
+    *"	the mods sessions reported their init lines"*|*"	the resumed prompt is told a mod is missing only when"*) printf '%s\n' "$out" ;;
+    *) printf 'the mods reader printed no verdict on the mods\tthe mods half of the steps could be read\n' ;;
+  esac
+}
+mods_verdict "$WORK" >> "$WORK/verdict"
+# The control: the same reader over a copy of this run's logs with no SessionStart log in it, which
+# is what a hook that never ran leaves. It has to be said as a failure, never pass quietly (L1).
+mkdir -p "$WORK/no-starts"
+cp "$WORK/model.log" "$WORK/m1.jsonl" "$WORK/m2.jsonl" "$WORK/no-starts/" 2>/dev/null
+ctl="$(mods_verdict "$WORK/no-starts")"
+case "$ctl" in
+  *"	the mods half of the steps could be read"*) [ "${ctl%%	*}" != ok ] && check "a mods reader with a log missing is said as a failure, not passed over" ok \
+      || check "a mods reader with a log missing is said as a failure, not passed over" "it said: $ctl" ;;
+  *) check "a mods reader with a log missing is said as a failure, not passed over" "it said: ${ctl:-nothing}" ;;
+esac
 VERDICT="$(cat "$WORK/verdict")"
 while IFS=$'\t' read -r verdict name; do
   [ -n "$name" ] || continue
-  if [ "$verdict" = unmeasured ]; then echo "SUITE-PART-UNMEASURED $name"; else check "$name" "$verdict"; fi
+  if [ "$verdict" = unmeasured ]; then echo "SUITE-PART-UNMEASURED $name"
+  elif [ "$verdict" = measured ]; then echo "measured: $name"
+  else check "$name" "$verdict"; fi
 done <<< "$VERDICT"
 [ -n "$VERDICT" ] || check "the steps' logs could be read" "the reader printed nothing"
 finish

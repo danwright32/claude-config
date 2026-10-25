@@ -20,7 +20,9 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/failure-handling.sh"
-REPO="$(cd "$DIR/../.." && pwd)"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 
 pass=0
 fail=0
@@ -274,7 +276,12 @@ copies="$(grep -r -n -E -i 'retr(y|ies)[|]|[|]backoff|catch\[\[:space:\]\]|excep
   | grep -v -E '/(test-[^/]*|[^/]*\.test\.[a-z]+|[^/]*_tests?\.py)[:]' \
   | grep -v -E '/tests/' \
   | grep -v -F "$LIB:")"
-if [ -z "$copies" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a failure handling word list outside lib/failure-handling.sh (call the lib instead):"; printf '%s\n' "$copies"; fi
+# Outside a checkout there is no payload to read, and the empty grep above would read as a clean
+# tree (L98): said as unmeasured instead (claude-config#1663, which found it while giving this
+# suite the shared checkout test).
+if [ -z "$REPO" ]; then
+  echo "SUITE-PART-UNMEASURED $DIR/.. is not the payload of a claude-config checkout, so the payload was not read for a second failure word list"
+elif [ -z "$copies" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL: a failure handling word list outside lib/failure-handling.sh (call the lib instead):"; printf '%s\n' "$copies"; fi
 # And the guard is real: it finds the shape it is looking for when one is planted (L1).
 mkdir -p "$WORK/payload/hooks"
 printf '%s\n' "RE='(retry|retries|backoff)'" > "$WORK/payload/hooks/new-gate.sh"

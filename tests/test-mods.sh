@@ -1452,7 +1452,7 @@ fi
 #     2026-10-04, #612), so no settings hook may send one too: Dan would get every one twice. Read
 #     from the hooks block the payload installs, never a copy of it.
 HOOKS_JSON="$ROOT/payload/settings.hooks.json"
-dupes="$(python3 - "$HOOKS_JSON" <<'PY' 2>&1
+IFS= read -r -d '' dupes_prog <<'PY' || true
 import json, sys
 d = json.load(open(sys.argv[1]))
 hooks = d.get("hooks", d)
@@ -1464,7 +1464,7 @@ for event in ("PermissionRequest", "Notification"):
                 found.append(f"{event} ({group.get('matcher', '')!r})")
 print(" ".join(found))
 PY
-)"; code=$?
+dupes="$(python3 -c "$dupes_prog" "$HOOKS_JSON" </dev/null 2>&1)"; code=$?
 [ "$code" -eq 0 ] && [ -z "$dupes" ] && check "no settings hook sends a notification the goal tracker sends" ok \
   || check "no settings hook sends a notification the goal tracker sends" "exit=$code found=$dupes"
 grep -q 'terminal-notifier' "$ROOT/payload/mods/goal-tracker/hooks/register.tsx" \

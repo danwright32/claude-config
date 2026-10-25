@@ -26,13 +26,15 @@ suite_deadline_arm || exit $?
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$DIR/sync-stuck-notice.sh"
-REPO="$(cd "$DIR/../.." && pwd)"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 # The installed copy of these hooks has no claude-sync beside it, and this suite drives the real
 # one, so there it reports NOT RUN in the shape the runner reads rather than failing for a reason
 # that has nothing to do with the hook (the same rule test-lesson-entry-check.sh follows).
-if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
-  echo "test-sync-stuck-notice: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so the tool this suite drives is not there." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+if [ -z "$REPO" ]; then
+  echo "test-sync-stuck-notice: $DIR/.. is not the payload of a claude-config checkout, so the tool this suite drives is not there." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $DIR/.. is not the payload of one"
   echo "passed: 0, failed: 0"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 2

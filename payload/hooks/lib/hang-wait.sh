@@ -36,3 +36,21 @@ hang_wait(){
   done
   return 0
 }
+
+# window_wait <seconds> <condition> [poll]: the other kind of wait (claude-config#1679), for a
+# condition the PASSING case is never meant to meet: a window a fault is given to show itself in,
+# which a sound run always runs out. Its length is the caller's, stated at the call, because it is
+# not a ceiling: reaching it is the expected outcome, and load can only make the window miss a
+# fault, never fail a run with nothing broken. Returns 0 if the condition held inside the window, 1
+# once it passed without it, 2 for a length that is not a whole number of seconds. A wait for
+# something the passing case DOES meet takes hang_wait, and test-hand-rolled-wait.sh fails a suite
+# that hand rolls either.
+window_wait(){
+  local _ww_t0=$SECONDS _ww_s="${1:-}" _ww_poll="${3:-0.1}"
+  case "$_ww_s" in ''|*[!0-9]*) echo "window_wait: the window must be a whole number of seconds, not '$_ww_s'" >&2; return 2 ;; esac
+  until eval "$2"; do
+    [ $(( SECONDS - _ww_t0 )) -lt "$_ww_s" ] || return 1
+    sleep "$_ww_poll"
+  done
+  return 0
+}

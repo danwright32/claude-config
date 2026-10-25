@@ -1966,7 +1966,12 @@ seconds, or a `sleep 0.1` loop of a few hundred ticks, which a loaded Mac reache
 (#1577, #1620). A wait on a condition in a suite takes its ceiling from `hooks/lib/hang-wait.sh`
 instead (`hang_wait "<condition>"`, giving up at `HANG_S`), one number only a hang reaches, which
 `SUITE_HANG_SECONDS` lowers for one run when a control has to show a wait still fails. That ceiling
-is a setting, not a measurement.
+is a setting, not a measurement. A stand in a suite writes runs as a process of its own, so the
+suite exports the ceiling as `FAKE_HANG_S` and the stand in bounds its clock by
+`${FAKE_HANG_S:-300}`. A wait the PASSING case is meant to run out (a window a fault is given to
+show itself in) is a different thing and calls `window_wait <seconds> "<condition>"` with its length
+stated. `hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own
+clock or tick count instead (#1679), with no list of suites excused from it.
 
 ### Measuring the section time budget's margin
 
@@ -1997,6 +2002,14 @@ recomputes the median, lowest and highest per arm from that file and requires th
 `SUITE_WORK_BUDGET_PCT` to quote them, so the prose cannot drift from the data. The record's
 columns are named by the tool that writes them (`tools/measure-section-time.sh --columns`) and read
 back by NAME, so adding a column cannot silently re-aim the reader (#524).
+
+CI's own runs are a second record, `tests/ci-section-time-readings.tsv`: the section time of 40 runs
+of the tests workflow on main, read from their logs with gh on 2026-10-25 (#1667). They fall into
+two groups by runner speed, 885s to 1092s and 1192s to 1362s, and the budget's fraction was raised
+from 70% to 76% (1368s at CI's 1800s ceiling) so it sits above every one of them; at 70% it sat
+inside the slower group and turned runs red by chance. The sync suite fails while the budget at
+CI's ceiling, read from the workflow, is not above the highest recorded run, so a slower run
+appended there is a decision to make rather than a pull request gone red at random.
 
 A fresh reading is taken once a month, at 02:00 on the 1st, waiting for a quiet window:
 
@@ -2711,7 +2724,11 @@ no paid call), which found the model sent the copy on disk at the compaction, an
 copy on disk then with Claude Code's own note that it replaces the earlier one, while nothing
 re-reads them between prompts. Keeping the old record there would have had the next prompt say "the
 older copy is in this session's context" about a copy the session no longer held (#1580). A
-`/clear` starts a new session id, which has no record to keep. The interactive `/resume` picker is
+`/clear` starts a new session id, which has no record to keep. The mods record is re-taken at a
+resume only by a NEW process (`claude --resume`), which names its mods afresh: measured the same
+way on 2026-10-25, where the resumed process loaded a mod that arrived after the session started
+(#1684). The hook tells it by its parent, Claude Code's own process, recorded beside the mods record;
+a resume in the same process, or one whose first process was not recorded, keeps the record. The interactive `/resume` picker is
 not offered in a headless session, so it is the one path not measured.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)

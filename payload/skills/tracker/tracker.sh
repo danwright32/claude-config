@@ -40,7 +40,7 @@ fi
 # refused by name: the placeholders are READ from config.example.json and apps-script.gs, so a
 # renamed placeholder cannot slip past a hand kept list. The token comes back on stdout of
 # this one process, into a variable, never through argv.
-CHECKED="$(python3 - "$CONFIG" "$EXAMPLE" "$SCRIPT_GS" <<'PY'
+IFS= read -r -d '' CHECKED_prog <<'PY' || true
 import json, re, sys
 config, example, script_gs = sys.argv[1:4]
 def fail(msg):
@@ -89,7 +89,7 @@ if problems:
 print(cfg["url"])
 print(cfg["token"])
 PY
-)"
+CHECKED="$(python3 -c "$CHECKED_prog" "$CONFIG" "$EXAMPLE" "$SCRIPT_GS" </dev/null)"
 URL="${CHECKED%%$'\n'*}"
 TOKEN="${CHECKED#*$'\n'}"
 # The sheet the web app must answer for: the one SKILL.md links to, its single declared home
@@ -192,7 +192,7 @@ case "${1:-}" in
     RESTORE=no
     if [ "${1-}" = "--preview" ]; then MODE=preview; shift
     elif [ "${1-}" = "--restore" ]; then RESTORE=yes; shift; fi
-    BODY="$(python3 - "$USAGE" "${1-}" "${2-}" "${3-}" "$#" "$MODE" "${4-}" "$RESTORE" <<'PY'
+    IFS= read -r -d '' BODY_prog <<'PY' || true
 import json, sys
 usage, link, name, cells, argc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
 preview, expect, restore = sys.argv[6] == "preview", sys.argv[7], sys.argv[8] == "yes"
@@ -228,7 +228,7 @@ if restore:
     body["restore"] = True
 print(json.dumps(body))
 PY
-)" || exit 1
+    BODY="$(python3 -c "$BODY_prog" "$USAGE" "${1-}" "${2-}" "${3-}" "$#" "$MODE" "${4-}" "$RESTORE" </dev/null)" || exit 1
     sheet_check
     post "$BODY" "$MODE"
     ;;

@@ -9,7 +9,8 @@
 #
 # No fixed sleeps (L290, L524). A run is held part way by a GATE, a file the stub waits for, and the
 # test waits on conditions: the stub reaching its gate, the runner's process ending. Every wait has
-# a deadline of its own, so a stub this suite forgets is gone within a minute rather than for ever.
+# the hang ceiling (lib/hang-wait.sh, #1679), so a stub this suite forgets is gone within it rather
+# than for ever, and a loaded Mac does not reach it with nothing broken.
 set -uo pipefail
 
 # Its own wall clock, and whatever it starts stopped with it however it ends (claude-config#465).
@@ -19,6 +20,16 @@ set -uo pipefail
   exit 1
 }
 suite_deadline_arm || exit $?
+
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/stale-worktree-nudge.sh"
@@ -64,7 +75,7 @@ printf 'ran %s\n' "$*" >>"$STUB_CALLS"
 python3 -c 'import os; print(os.getsid(0))' >>"$STUB_SIDS" 2>/dev/null
 if [ -n "${STUB_GATE:-}" ]; then
   : >"$STUB_GATE.reached"
-  n=0; while [ ! -e "$STUB_GATE" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done
+  t0=$SECONDS; while [ ! -e "$STUB_GATE" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
 fi
 printf '%s\n' "${STUB_SAYS:-}"
 [ -z "${STUB_ERR:-}" ] || printf '%s\n' "$STUB_ERR" >&2
@@ -88,16 +99,15 @@ fire(){ # fire <session id> [env assignments...]: one prompt in $PROJ
 skey(){ printf '%s' "$1" | shasum | cut -c1-12; }
 # Wait for every run a session started to end, judged by the runner's own process, never a sleep.
 settle(){ # settle <session id>
-  local f="$STATE_DIR/claude-stale-worktrees-$(skey "$1").state" pid n
+  local f="$STATE_DIR/claude-stale-worktrees-$(skey "$1").state" pid
   for pid in $(sed -n 's/^runner //p' "$f" 2>/dev/null); do
-    n=0; while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 600 ]; do sleep 0.05; n=$((n + 1)); done
-    kill -0 "$pid" 2>/dev/null && bad "the run session $1 started (process $pid) finished within 30s"
+    hang_wait "! kill -0 $pid 2>/dev/null" 0.05
+    kill -0 "$pid" 2>/dev/null && bad "the run session $1 started (process $pid) finished within the hang ceiling, ${HANG_S}s"
   done
   return 0
 }
 reached(){ # reached <gate>: wait for the stub to reach it
-  local n=0; while [ ! -e "$1.reached" ] && [ "$n" -lt 600 ]; do sleep 0.05; n=$((n + 1)); done
-  [ -e "$1.reached" ]
+  hang_wait "[ -e '$1.reached' ]" 0.05
 }
 last_record(){ cat "$STATE_DIR"/claude-stale-worktrees-repo-*.last 2>/dev/null; }
 
@@ -246,8 +256,7 @@ check "with what it said on stderr" "syntax error" "$OUT"
 # Said twice is a smaller failure than never said, so with nothing to key the record on it starts a
 # run on every prompt, and says on stderr that it could not hold itself to once per session (L622).
 nosession_settle(){ # wait until the check has run $1 times and the run holding the lock has ended
-  local n=0
-  while [ "$(calls)" -lt "$1" ] && [ "$n" -lt 600 ]; do sleep 0.05; n=$((n + 1)); done
+  hang_wait "[ \"\$(calls)\" -ge $1 ]" 0.05
   python3 -c '
 import fcntl, glob, os, signal, sys
 signal.alarm(30)
@@ -305,7 +314,7 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 : >"$GH_GATE.reached"
-n=0; while [ ! -e "$GH_GATE" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done
+t0=$SECONDS; while [ ! -e "$GH_GATE" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
 cat "$GH_MERGED"
 STUB
 chmod +x "$TMP/bin/gh"

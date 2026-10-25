@@ -20,6 +20,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TREE="$DIR/lib/kill-tree.sh"
 
@@ -52,13 +60,8 @@ trap 'cleanup; exit 143' TERM
 alive(){ kill -0 "$1" 2>/dev/null; }
 # Waits for a condition rather than sleeping a guessed amount: a fixed sleep is a check on what
 # else the machine is running (L224).
-wait_gone(){   # wait_gone <pid> <seconds>
-  local n=0
-  while [ "$n" -lt "${2:-10}" ]; do
-    alive "$1" || return 0
-    sleep 1; n=$((n + 1))
-  done
-  return 1
+wait_gone(){   # wait_gone <pid>: 0 once it is gone, 1 at the hang ceiling (#1679)
+  hang_wait "! alive $1"
 }
 
 # ---------------------------------------------------------------------------
@@ -85,8 +88,7 @@ mkfifo "$TMPROOT/hold" 2>/dev/null
 bash "$victim" "$TMPROOT" &
 v_root=$!
 ALL_PIDS="$ALL_PIDS $v_root"
-n=0
-while [ "$n" -lt 15 ] && { [ ! -s "$TMPROOT/child.pid" ] || [ ! -s "$TMPROOT/gc.pid" ]; }; do sleep 1; n=$((n + 1)); done
+hang_wait '[ -s "$TMPROOT/child.pid" ] && [ -s "$TMPROOT/gc.pid" ]' 0.2
 v_child="$(cat "$TMPROOT/child.pid" 2>/dev/null || true)"
 v_gc="$(cat "$TMPROOT/gc.pid" 2>/dev/null || true)"
 case "$v_child$v_gc" in ''|*[!0-9]*) v_child=""; v_gc="" ;; esac
@@ -96,10 +98,10 @@ ALL_PIDS="$ALL_PIDS $v_child $v_gc"
 if [ -n "$v_child" ] && [ -n "$v_gc" ] && alive "$v_child" && alive "$v_gc"; then
   check "the fixture really built a child and a grandchild" ok
 else
-  check "the fixture really built a child and a grandchild" "child='$v_child' gc='$v_gc' after ${n}s"
+  check "the fixture really built a child and a grandchild" "child='$v_child' gc='$v_gc' within the hang ceiling, ${HANG_S}s"
 fi
 bash "$TREE" "$v_root" "$TMPROOT/report" >/dev/null 2>&1
-wait_gone "$v_gc" 10
+wait_gone "$v_gc"
 alive "$v_gc" \
   && check "a grandchild is reached, not just the direct children" "pid $v_gc is still running" \
   || check "a grandchild is reached, not just the direct children" ok
@@ -134,7 +136,7 @@ ALL_PIDS="$ALL_PIDS $s_child"
 # machine is. It failed on the CI runner on 2026-08-30 and the failure message printed alive=no,
 # because the message re-read the state after the child had finished dying: a check whose own
 # evidence contradicts it (L11, L290). Every other check in this file already uses wait_gone.
-[ -n "$s_child" ] && wait_gone "$s_child" 10
+[ -n "$s_child" ] && wait_gone "$s_child"
 if [ -n "$s_child" ] && ! alive "$s_child"; then
   check "and its own child was killed all the same" ok
 else
@@ -177,13 +179,12 @@ respawn="$TMPROOT/respawn.sh"
 bash "$respawn" "$TMPROOT" &
 r_root=$!
 ALL_PIDS="$ALL_PIDS $r_root"
-n=0
-while [ "$n" -lt 15 ] && [ ! -s "$TMPROOT/spawned" ]; do sleep 1; n=$((n + 1)); done
+hang_wait '[ -s "$TMPROOT/spawned" ]' 0.2
 r_first="$(head -1 "$TMPROOT/spawned" 2>/dev/null || true)"
 case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
 [ -n "$r_first" ] && alive "$r_first" \
   && check "the respawning fixture really has a child to replace" ok \
-  || check "the respawning fixture really has a child to replace" "first='$r_first' after ${n}s"
+  || check "the respawning fixture really has a child to replace" "first='$r_first' within the hang ceiling, ${HANG_S}s"
 # What a caller killing a FOREIGN tree has to do, and what the watchdog does: stop the root so it
 # cannot fork, then walk, then kill it.
 kill -STOP "$r_root" 2>/dev/null
@@ -221,8 +222,7 @@ for mode in running stopped; do
   bash "$pair" "$list" &
   p_root=$!
   ALL_PIDS="$ALL_PIDS $p_root"
-  n=0
-  while [ "$n" -lt 15 ] && [ "$(spawn_count "$list")" -lt 1 ]; do sleep 1; n=$((n + 1)); done
+  hang_wait '[ "$(spawn_count "$list")" -ge 1 ]' 0.2
   before="$(spawn_count "$list")"
   [ "$mode" = stopped ] && kill -STOP "$p_root" 2>/dev/null
   current="$(tail -1 "$list" 2>/dev/null || true)"

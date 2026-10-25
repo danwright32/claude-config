@@ -2366,7 +2366,7 @@ check_eq "#1357 and it refuses like any finding" "1" "$rc"
 check "#1357 shown at the plain number" "App/Place.swift:12: the timeout constant" "$out"
 # The answered match compares claims, never the mark the runner puts on a finding it could not
 # place: two different points carrying the same mark are not one point.
-sim="$(python3 - "$DIR/lib/review-answered.py" <<'PY'
+IFS= read -r -d '' sim_prog <<'PY' || true
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("review_answered", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -2374,7 +2374,7 @@ spec.loader.exec_module(m)
 mark = " [review harness: not placed, it quoted no line, so line 4 is the reviewer's own number, unchecked]"
 print(m.similarity("the cache key ignores the locale" + mark, "retries never back off between attempts" + mark))
 PY
-)"
+sim="$(python3 -c "$sim_prog" "$DIR/lib/review-answered.py" </dev/null)"
 python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.35 else 1)" "${sim:-1}" && ok \
   || bad "#1357 two different claims carrying the same harness mark read as one point (similarity $sim)"
 runners_done || bad "#1357 a runner was still going at the end"

@@ -715,7 +715,9 @@ assert_absent "and nothing is said to be skipped" 'Skipped' "$out"
 # to cover the per section index names before claude-config#473 lands.
 #
 # Read out of both files rather than restated here, so this measures what actually ships.
-REPO_ROOT="$(cd "$(dirname "$HOOK")/../.." && pwd)"
+# The checkout, found by the one shared test, lib/checkout-root.sh (claude-config#1663): empty for
+# an installed copy or a copy inside some other repository.
+REPO_ROOT="$(bash "$(dirname "$HOOK")/lib/checkout-root.sh" "$(dirname "$HOOK")/.." 2>/dev/null || true)"
 SYNC_TOOL="$REPO_ROOT/claude-sync"
 # shellcheck disable=SC1090
 eval "$(sed -n '/^RULE_TEXT_PATH_RE=/p' "$HOOK")"
@@ -739,7 +741,7 @@ if [ -z "${RULE_TEXT_PATH_RE:-}" ]; then
 elif [ ! -f "$SYNC_TOOL" ] || [ ! -d "$REPO_ROOT/payload" ]; then
   # The installed copy has no claude-sync beside it. Said out loud rather than passed, because a
   # silent skip here reads exactly like agreement (L98).
-  echo "NOTE: $REPO_ROOT is not a checkout of this repo, so the sync's own derived file list could not be compared."
+  echo "NOTE: $(dirname "$HOOK")/.. is not the payload of a claude-config checkout, so the sync's own derived file list could not be compared."
 else
   sync_rule_text_names="$(
     # shellcheck disable=SC1090

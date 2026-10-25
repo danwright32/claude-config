@@ -25,6 +25,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The record of refused sign ins (claude-config#1626) is this suite's own, so the refusals it fakes
 # are never counted as this Mac's.
@@ -584,7 +594,7 @@ echo "merge-target: a merge through the GitHub API (claude-config#1181)"
 NO_GH="$(mktemp -d)"
 printf '#!/usr/bin/env bash\necho "no gh in this case" >&2\nexit 1\n' > "$NO_GH/gh"; chmod +x "$NO_GH/gh"
 API_CASES="$HOOK_DIR/../mods/scope-modes/tests/api-merge-cases.ts"
-api_rows="$(python3 - "$API_CASES" <<'PY' 2>&1
+IFS= read -r -d '' api_rows_prog <<'PY' || true
 import json, re, sys
 for line in open(sys.argv[1]):
     s = line.strip()
@@ -597,7 +607,7 @@ for line in open(sys.argv[1]):
     repo = "-" if "repo" not in row else ("!" if row["repo"] is None else row["repo"])
     print(("yes" if want else "no") + "\x1f" + repo + "\x1f" + row["command"])
 PY
-)"
+api_rows="$(python3 -c "$api_rows_prog" "$API_CASES" </dev/null 2>&1)"
 n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
 # The control: a table that read as empty would agree with any recogniser at all (L98).
 if [ "$n_rows" -ge 20 ]; then pass; else fail "#1181 the shared table read as $n_rows rows from $API_CASES: $api_rows"; fi
@@ -1398,15 +1408,14 @@ rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
 printf '%s\thost\tsess_a\trun-old\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000))" > "$LEDGER"
 WAITED="$SIGNIN_WORK/lock-waited"; rm -f "$WAITED" "$SIGNIN_WORK/racer.pid"
 # The second run's lock sleep says it is waiting, then waits on the condition itself, the lock being
-# released, polled under a bound, rather than for a fixed time (L290).
-printf '#!/usr/bin/env bash\ntouch "%s"\nk=0\nwhile [ -d "%s" ] && [ "$k" -lt 400 ]; do sleep 0.025; k=$((k + 1)); done\n' "$WAITED" "$LEDGER.lock" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
+# released, polled under the hang ceiling (#1679) rather than for a fixed time (L290). It was 400
+# looks 25 ms apart, a ten second ceiling a loaded Mac can reach with nothing broken (a setting,
+# not a measurement).
+printf '#!/usr/bin/env bash\ntouch "%s"\nt0=$SECONDS\nwhile [ -d "%s" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.025; done\n' "$WAITED" "$LEDGER.lock" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
 signin_trim_pause() {
   ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
   echo $! > "$SIGNIN_WORK/racer.pid"
-  local k=0
-  while [ "$k" -lt 400 ] && [ ! -f "$WAITED" ] && kill -0 "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null; do
-    sleep 0.025; k=$((k + 1))
-  done
+  hang_wait '[ -f "$WAITED" ] || ! kill -0 "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null' 0.025
 }
 MT_SIGNIN_TRIM_PAUSE=signin_trim_pause MT_SIGNIN_RUN=run-trimmer mt_signin_record refused present
 [ -f "$SIGNIN_WORK/racer.pid" ] && wait "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null
