@@ -107,21 +107,36 @@ describe('lookParts', () => {
     ]
     expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('2 jobs running | dev server running 30m | watcher running 3h 0m')
   })
-  // #706 (spec item 2 of #611), reworded by #784 (Dan, 2026-10-05: "I dont really know how to read
-  // this"): a job the watcher measured as stalled says so in plain words and says who acts on it, so
-  // Dan can see nothing is his to do; it comes ahead of the ones running fine.
-  test('a stalled job says it is not progressing and that it is left to Claude, ahead of the running ones', () => {
-    const jobs = [
-      { label: 'a', runMs: MIN, kept: false, stuck: false },
-      { label: 'b', runMs: MIN, kept: false, stuck: true, state: 'stalled' as const },
-      { label: 'dev server', runMs: 30 * MIN, kept: true, stuck: true, state: 'stalled' as const },
-    ]
-    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job not progressing, left to Claude | dev server not progressing 30m, left to Claude | 1 job running')
-    expect(texts(lookParts({ modes: [], pr: null, jobs: [jobs[1] as (typeof jobs)[number]], unpushed: null, now }))).toBe('1 job not progressing, left to Claude')
+  // #706 (spec item 2 of #611), reworded by #784, then settled by Dan in #1583's design round
+  // (docs/design/1583-quiet-background-command.html): this conversation's stalled background command
+  // is not shown while Claude is working, since nothing is asked of Dan then ("if there's nothing for
+  // me to do, why do I need the notification at all?"). Once Claude's turn has ended and it is still
+  // quiet, nobody is watching it: it is named, with how long it has been quiet, and ", ask Claude to
+  // check" is said once after every such command, ahead of the ones running fine.
+  const STALLED = [
+    { label: 'a', runMs: MIN, kept: false, stuck: false },
+    { label: 'merge helper for #2733', runMs: 20 * MIN, kept: true, stuck: true, state: 'stalled' as const, stall: 'silent' as const, quietMs: 12 * MIN },
+  ]
+  test('a quiet background command is not shown while Claude is working (#1583)', () => {
+    expect(texts(lookParts({ modes: [], pr: null, jobs: STALLED, unpushed: null, now, isWorking: true }))).toBe('1 job running')
   })
-  test('a job from a watcher that reports no state reads its stuck flag, so a bar newer than its watcher still says it (#784)', () => {
-    const jobs = [{ label: 'b', runMs: MIN, kept: false, stuck: true }]
-    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('1 job not progressing, left to Claude')
+  test('once Claude has stopped, a quiet background command is named, with how long, and asks Dan to ask Claude to check (#1583)', () => {
+    expect(texts(lookParts({ modes: [], pr: null, jobs: STALLED, unpushed: null, now, isWorking: false }))).toBe('merge helper for #2733 quiet 12m, ask Claude to check | 1 job running')
+  })
+  test('several quiet commands are each named, with "ask Claude to check" said once after them all (#1583)', () => {
+    const jobs = [
+      { label: 'npm test', runMs: 40 * MIN, kept: false, stuck: true, state: 'stalled' as const, stall: 'silent' as const, quietMs: 31 * MIN },
+      { label: 'merge helper for #2733', runMs: 20 * MIN, kept: true, stuck: true, state: 'stalled' as const, stall: 'silent' as const, quietMs: 12 * MIN },
+      { label: 'node serve.js', runMs: 20 * MIN, kept: false, stuck: true, state: 'stalled' as const, stall: 'repeating' as const, quietMs: null },
+    ]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now, isWorking: false }))).toBe(
+      'npm test quiet 31m, merge helper for #2733 quiet 12m and node serve.js repeating the same output, ask Claude to check',
+    )
+    expect(lookParts({ modes: [], pr: null, jobs, unpushed: null, now, isWorking: true })).toEqual([])
+  })
+  test('a job from a watcher that says nothing of what it measured claims nothing of it (#784, #1583)', () => {
+    const jobs = [{ label: 'npm test', runMs: MIN, kept: false, stuck: true }]
+    expect(texts(lookParts({ modes: [], pr: null, jobs, unpushed: null, now }))).toBe('npm test not progressing, ask Claude to check')
   })
   // #784: a poll loop waiting on something outside (a queued CI run) is waiting, never stuck.
   test('a waiting job says waiting, never stuck', () => {
@@ -183,7 +198,7 @@ describe('lookParts', () => {
     expect(colorOf(running, 'AWAY')).toBe('warning')
     expect(colorOf(running, 'PR #9 checks running')).toBe(LAVENDER)
     expect(colorOf(running, 'agent fix CI quiet 34m, left to Claude')).toBe('warning')
-    expect(colorOf(running, '1 job not progressing, left to Claude')).toBe('warning')
+    expect(colorOf(running, 'b not progressing, ask Claude to check')).toBe('warning')
     expect(colorOf(running, 'drift run waiting 20m')).toBe(LAVENDER)
     expect(colorOf(running, '1 job running')).toBe(LAVENDER)
     expect(colorOf(running, '1 unpushed commit')).toBe('warning')

@@ -503,30 +503,31 @@ const entryBlock = (block: string): string | undefined => {
 /**
  * The entry a write to the lessons file adds, under one fail-safe rule rather than a list of shapes
  * refused (the lessons reviews of #869 found a new shape each round: an entry split around kept text,
- * spliced mid line, beside a removal). `file` is the lessons file as it is now. Anything else is
- * undefined, and is asked about.
- * - An Edit (never replace_all) whose old text is whole lines of the file, found exactly once, and
- *   whose new text is that old text, a newline and the entry block, or the entry block, a newline and
- *   the old text.
- * - A Write whose content is the file with exactly the entry block inserted at one line boundary
- *   (before the end, the block ends at a line end too).
+ * spliced mid line, beside a removal): the file it leaves must be the file as it is now with exactly
+ * the entry block inserted at one line boundary (before the end, the block ends at a line end too).
+ * `file` is the lessons file as it is now. Anything else is undefined, and is asked about.
+ * - A Write leaves its content.
+ * - An Edit (never replace_all) whose old text is found exactly once leaves the file with that text
+ *   replaced, judged by the same rule. It was once judged by the shape of its two texts instead, which
+ *   refused old text cut as whole lines WITH their newline, the shape Claude sent for L1030, so Dan's
+ *   Add to LESSONS.md lapsed unused and he was asked For good about it again (#1691).
  */
 export const lessonAddition = (tool: string, input: Record<string, unknown>, file: string | undefined): string | undefined => {
   if (tool === 'Edit') {
     const from = String(input.old_string ?? '')
-    const to = String(input.new_string ?? '')
-    if (file === undefined || input.replace_all === true || !from || from.startsWith('\n') || from.endsWith('\n')) return undefined
+    if (file === undefined || input.replace_all === true || !from) return undefined
     const at = file.indexOf(from)
     if (at === -1 || file.indexOf(from, at + 1) !== -1) return undefined
-    const end = at + from.length
-    if ((at !== 0 && file[at - 1] !== '\n') || (end !== file.length && file[end] !== '\n')) return undefined
-    if (to.startsWith(`${from}\n`)) return entryBlock(to.slice(from.length + 1))
-    if (to.endsWith(`\n${from}`)) return entryBlock(to.slice(0, to.length - from.length - 1))
-    return undefined
+    return insertedEntry(file, file.slice(0, at) + String(input.new_string ?? '') + file.slice(at + from.length))
   }
   if (tool !== 'Write') return undefined
   const content = String(input.content ?? '')
   if (file === undefined) return entryBlock(content)
+  return insertedEntry(file, content)
+}
+
+// The entry block `content` is `file` with, inserted at one line boundary, or undefined.
+const insertedEntry = (file: string, content: string): string | undefined => {
   const size = content.length - file.length
   if (size <= 0) return undefined
   // What the two share at the start and at the end, measured once: the block can sit only at a line

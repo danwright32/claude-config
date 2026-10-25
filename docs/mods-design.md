@@ -339,9 +339,14 @@ the spec rather than chosen afresh, and open to Dan changing:
   really know how to read this" of "suite summary wait kept 1h 4m, stuck"). "Kept" and "stuck" are
   gone as internal words. A job is running, waiting (a poll loop quiet or repeating a line that is no
   error: it waits on something outside, a queued CI run, and is never stuck), or not progressing
-  (silent ten minutes or repeating, anything else), the last with who it is left to: "1 job not
-  progressing, left to Claude", "suite summary not progressing 1h 4m, left to Claude". Stalled first
-  within each owner. A background agent's jobs are one item under its task's name, so the line never
+  (silent ten minutes or repeating, anything else), the last with who it is left to: "agent fix CI:
+  1 job not progressing, left to the agent". Stalled first within each owner. This conversation's
+  own stalled command is settled by #1583's design round (`docs/design/1583-quiet-background-
+  command.html`, Dan on 2026-10-24: "if there's nothing for me to do, why do I need the
+  notification at all?"): not shown while Claude works; once Claude's turn has ended and it is still
+  quiet, nobody is watching it, so it is named with what was measured and asks Dan to act, said
+  once after every such command: "merge helper for #2733 quiet 12m, ask Claude to check". A
+  repeating one says "repeating the same output", never quiet. A background agent's jobs are one item under its task's name, so the line never
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
@@ -500,6 +505,22 @@ plainest reading of the decisions above:
   is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
+- **One list, outside the module (#1695).** The jobs are held in `$.state`, which the engine keeps
+  for the session across a hot reload of the mod, never in a module variable. A reload runs the
+  code again in a fresh module and fires `session.start` again (never at `/clear`), and a tool call
+  already under way when it lands finishes in the old module. With the list in the module, that old
+  hook recorded the job and named it in the reminder, while the keep tool, answered by the new
+  module, refused it with "None is running", and the status bar went on counting it. Measured in
+  three sessions on this Mac (2026-10-18, 2026-10-20 and 2026-10-24), each with "job-watcher:
+  reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
+  foreground command started before the reload and moved to the background after it. So
+  `session.start` clears only the module's own bookkeeping, never the list, and the list is written
+  by version, retried, so two copies writing at once lose neither change.
+- **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
+  group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
+  merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
+  by its output, as before, since nothing better was measured. Chosen over telling builders to stop
+  piping background merges through `tail`, because a rule in a brief is a hope (L27).
 
 Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
 #706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
@@ -2380,16 +2401,21 @@ and the band question is removed rather than kept beside it (L29). Three defects
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
-  lessons reviews of #869 found a new shape each round). An Edit's old text must be one or more
-  whole lines of the file as it is now, found exactly once, and its new text that old text, a newline
-  and the entry block, or the entry block, a newline and the old text. A Write must be the file with
-  exactly the entry block inserted at one line boundary. The entry block is one entry in a fixed
+  lessons reviews of #869 found a new shape each round): the file the write leaves must be the file
+  as it is now with exactly the entry block inserted at one line boundary. A Write leaves its
+  content; an Edit, never replace_all, whose old text is found exactly once leaves the file with that
+  text replaced. An Edit was once judged by the shape of its two texts instead, which refused old
+  text cut as whole lines with their newline, the shape Claude sent for L1030, so Dan's add lapsed
+  unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
   is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
-  Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
+  Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
+  way, only once its write lands (#1691): an Edit or Write that errors, or that a guard beneath
+  refuses, gives it back for the same call sent again; a shell command that ran and failed spends
+  it, since it may have written part of what it does. Project memory instead and Skip
   approve nothing, and a subagent's picker records nothing.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
