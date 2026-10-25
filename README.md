@@ -1225,7 +1225,9 @@ each empty token read, is also counted across runs (claude-config#1626): one tab
 `~/.claude/state/gh-signin/refusals.tsv` (`MT_SIGNIN_LEDGER_DIR`), with the time, the Mac, the
 session, the run (the helper and the gates it asks count as one), what ran it, the outcome and
 whether the token read straight after came back empty or present, never the account, repository,
-error or token. It is only appended to, never trimmed or deleted. Once the last 24 hours hold five
+error or token. It keeps 90 days (Dan's choice, claude-config#1670): each write drops the lines
+older than that by writing the rest to a new file and moving it over the log, under a lock every
+writer takes, so a line another run appends meanwhile is never lost. Once the last 24 hours hold five
 (`MT_SIGNIN_ALERT_AT`, a setting, since nothing was counted before), the helper says the count once
 as it announces the retry, and every stop on a refused sign in carries it, so a keyring read that now
 fails often no longer looks like one that failed once under load. The gates the helper asks

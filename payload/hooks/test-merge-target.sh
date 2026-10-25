@@ -1342,6 +1342,71 @@ done
 wait
 eq "$(lines)" "20" "#1626 twenty runs at once leave twenty lines"
 eq "$(awk -F'\t' 'NF == 7 && $6 == "refused" && $7 == "present"' "$LEDGER" | cut -f4 | sort -u | wc -l | tr -d ' ')" "20" "#1626 each of them whole and its own"
+
+echo "merge-target: the refused sign in log keeps 90 days, trimmed safely when it is next written (claude-config#1670)"
+# Dan, 2026-10-24: "Keep 90 days". The log is only appended, so the trim writes the kept lines to a
+# new file and moves it over the log, and every writer holds the log's lock while it writes, so a line
+# appended by another run while one run trims is never lost with the old file.
+DAY=86400
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+{
+  printf '%s\thost\tsess_a\trun-91\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000 + 100 * DAY - 91 * DAY))"
+  printf '%s\thost\tsess_a\trun-89\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000 + 100 * DAY - 89 * DAY))"
+  printf 'not-a-time\thost\tsess_a\trun-odd\tmerge-when-ready.sh\trefused\tempty\n'
+} > "$LEDGER"
+printf '%s' "$((2000000 + 100 * DAY))" > "$SIGNIN_CLOCK"
+MT_SIGNIN_RECORD_NOTE=""
+MT_SIGNIN_RUN=run-now mt_signin_record refused present
+runs_left="$(cut -f4 "$LEDGER" | tr '\n' ' ')"
+case " $runs_left" in *" run-91 "*) fail "#1670 a line 91 days old was kept after the next write: $runs_left" ;; *) pass ;; esac
+case " $runs_left" in *" run-89 "*) pass ;; *) fail "#1670 a line 89 days old was dropped: $runs_left" ;; esac
+case " $runs_left" in *" run-now "*) pass ;; *) fail "#1670 the line just written was lost to the trim: $runs_left" ;; esac
+# A line whose time cannot be read is never judged old (L50), so it is kept rather than destroyed.
+case " $runs_left" in *" run-odd "*) pass ;; *) fail "#1670 a line with no readable time was dropped: $runs_left" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 the trim leaves no copy or lock behind"
+eq "${MT_SIGNIN_RECORD_NOTE:-}" "" "#1670 a trim that worked says nothing"
+
+# A run that appends WHILE another trims is not lost: the trim pauses after writing the kept lines
+# (MT_SIGNIN_TRIM_PAUSE, a seam) and starts a second run's append there, then waits until that run
+# is either waiting for the lock (its lock sleep was called) or has finished. Without the lock its
+# line would land in the old file the move then replaces.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
+printf '%s\thost\tsess_a\trun-old\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000))" > "$LEDGER"
+WAITED="$SIGNIN_WORK/lock-waited"; rm -f "$WAITED" "$SIGNIN_WORK/racer.pid"
+printf '#!/usr/bin/env bash\ntouch "%s"\nsleep 0.05\n' "$WAITED" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
+signin_trim_pause() {
+  ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
+  echo $! > "$SIGNIN_WORK/racer.pid"
+  local k=0
+  while [ "$k" -lt 400 ] && [ ! -f "$WAITED" ] && kill -0 "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null; do
+    sleep 0.025; k=$((k + 1))
+  done
+}
+MT_SIGNIN_TRIM_PAUSE=signin_trim_pause MT_SIGNIN_RUN=run-trimmer mt_signin_record refused present
+[ -f "$SIGNIN_WORK/racer.pid" ] && wait "$(cat "$SIGNIN_WORK/racer.pid")" 2>/dev/null
+runs_left="$(cut -f4 "$LEDGER" | tr '\n' ' ')"
+case " $runs_left" in *" run-old "*) fail "#1670 the trim did not run, so the race was not exercised: $runs_left" ;; *) pass ;; esac
+case " $runs_left" in *" run-trimmer "*) pass ;; *) fail "#1670 the trimming run's own line was lost: $runs_left" ;; esac
+case " $runs_left" in *" run-racer "*) pass ;; *) fail "#1670 a line appended while another run trimmed was lost: $runs_left" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 the race leaves no copy or lock behind"
+
+# A lock its holder never released (a run killed mid write) is broken once it is stale, rather than
+# blocking every later record; a fresh one is waited for, then written past and said.
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+touch -t 202001010000 "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+MT_SIGNIN_RUN=run-stale MT_SIGNIN_LOCK_SLEEP=true mt_signin_record refused present
+case "$(cut -f4 "$LEDGER" 2>/dev/null)" in *run-stale*) pass ;; *) fail "#1670 a stale lock stopped the record" ;; esac
+eq "$(ls -A "$MT_SIGNIN_LEDGER_DIR" | tr '\n' ' ')" "refusals.tsv " "#1670 a stale lock is cleared"
+rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock"
+MT_SIGNIN_RECORD_NOTE=""
+MT_SIGNIN_RUN=run-held MT_SIGNIN_LOCK_SLEEP=true mt_signin_record refused present
+case "$(cut -f4 "$LEDGER" 2>/dev/null)" in *run-held*) pass ;; *) fail "#1670 a lock held by another run lost this run's line" ;; esac
+case "${MT_SIGNIN_RECORD_NOTE:-}" in
+  *"could not take the lock"*"claude-config#1670"*) pass ;;
+  *) fail "#1670 a record written without its lock is not said: ${MT_SIGNIN_RECORD_NOTE:-}" ;;
+esac
+rmdir "$MT_SIGNIN_LEDGER_DIR/refusals.tsv.lock" 2>/dev/null
+printf '2000000' > "$SIGNIN_CLOCK"
 unset MT_SIGNIN_CLOCK
 rm -rf "$ghstub"
 
