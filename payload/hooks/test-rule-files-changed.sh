@@ -268,8 +268,10 @@ smod() { # smod <name>: a mod folder under the start fixture
   printf '{ "name": "%s" }\n' "$1" > "$START/mods/$1/.claude-plugin/plugin.json"
 }
 smod first-mod
+# The Claude Code process a run belongs to is SET here, through the hook's seam, rather than read
+# from this suite's own process tree: one process unless a case names another (claude-config#1684).
 event() { # event <session-id> <hook_event_name> [source] -> stdout of one run
-  python3 - "$1" "$2" "${3:-}" <<'PY' | CLAUDE_RULES_DIR="$START" bash "$HOOK" 2>/dev/null
+  python3 - "$1" "$2" "${3:-}" <<'PY' | CLAUDE_RULES_PROCESS="${PROC:-4242}" CLAUDE_RULES_DIR="$START" bash "$HOOK" 2>/dev/null
 import json, sys
 d = {"session_id": sys.argv[1], "cwd": ".", "hook_event_name": sys.argv[2]}
 if sys.argv[2] == "SessionStart":
@@ -348,6 +350,37 @@ ks="$(event kept-startup UserPromptSubmit)"
 grep -q "RTK.md" <<< "$ks" \
   && check "#1580 a startup that finds a record keeps the rule file baseline" ok \
   || check "#1580 a startup that finds a record keeps the rule file baseline" "said: $ks"
+
+# A resume in a NEW PROCESS names its mods afresh (claude-config#1684, measured on the real engine
+# by tests/test-rule-files-reload.sh: `claude --resume` in a new process loaded a mod that arrived
+# after the session started, and listed it in its own init line). So there the mods baseline moves
+# to what is on disk, and a mod that arrived before it is not reported; one arriving after it still
+# is. The process is the hook's parent, which the same measurement showed is Claude Code itself:
+# the same at a session's start, its compaction and its /clear, another at a resume by a new process.
+event new-proc SessionStart startup >/dev/null
+smod mod-before-new-process
+np1="$(PROC=5151 event new-proc SessionStart resume)"
+[ -z "$np1" ] \
+  && check "#1684 a resume in a new process is silent at its start" ok \
+  || check "#1684 a resume in a new process is silent at its start" "said: $np1"
+np2="$(PROC=5151 event new-proc UserPromptSubmit)"
+grep -q "mod-before-new-process" <<< "$np2" \
+  && check "#1684 a resume in a new process loads a mod that arrived before it, so it is not reported" "said: $np2" \
+  || check "#1684 a resume in a new process loads a mod that arrived before it, so it is not reported" ok
+smod mod-after-new-process
+np3="$(PROC=5151 event new-proc UserPromptSubmit)"
+grep -q "mod-after-new-process" <<< "$np3" \
+  && check "#1684 and a mod arriving after that resume is still reported" ok \
+  || check "#1684 and a mod arriving after that resume is still reported" "said: $np3"
+# A baseline with no process recorded beside it (taken before this hook recorded one) cannot say
+# whether a resume is a new process, so it is kept, as before.
+event no-proc SessionStart startup >/dev/null
+rm -f "$CLAUDE_RULES_STATE_DIR/claude-mods-$(printf %s no-proc | shasum | cut -c1-12).process"
+smod mod-before-unknown-process
+nu="$(PROC=6161 event no-proc SessionStart resume; PROC=6161 event no-proc UserPromptSubmit)"
+grep -q "mod-before-unknown-process" <<< "$nu" \
+  && check "#1684 a resume whose first process was not recorded keeps the mods baseline" ok \
+  || check "#1684 a resume whose first process was not recorded keeps the mods baseline" "said: $nu"
 
 # A resume with no record at all (a session from before this hook, or a temp
 # directory cleared since) takes its baseline there, so its first prompt is quiet.

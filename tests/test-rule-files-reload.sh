@@ -114,12 +114,21 @@ with open(sys.argv[1], 'a') as f:
     f.write(json.dumps({'session': d.get('session_id'), 'reason': d.get('load_reason'), 'marks': marks}) + '\n')
 PY
 HOOK="$ROOT/payload/hooks/rule-files-changed.sh"
-python3 - "$RULES/settings.json" "$HOOK" "$WORK/loaded.py" "$WORK/loaded.log" <<'PY'
+# Which process each start ran in, as the hook sees it (its parent, and that one's parent), so a
+# resume in a new process can be told from the session's own start by something a hook can read
+# (#1684).
+cat > "$WORK/starts.sh" <<EOF
+#!/bin/bash
+src="\$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("source") or "", d.get("session_id") or "")' 2>/dev/null)"
+p=\$PPID; pp="\$(ps -o ppid= -p "\$p" 2>/dev/null | tr -d ' ')"
+printf '%s\t%s\t%s\t%s\t%s\n' "\$src" "\$p" "\$(ps -o comm= -p "\$p" 2>/dev/null)" "\$pp" "\$(ps -o comm= -p "\$pp" 2>/dev/null)" >> "$WORK/starts.log"
+EOF
+python3 - "$RULES/settings.json" "$HOOK" "$WORK/loaded.py" "$WORK/loaded.log" "$WORK/starts.sh" <<'PY'
 import json, shlex, sys
-out, hook, loaded, log = sys.argv[1:]
+out, hook, loaded, log, starts = sys.argv[1:]
 run = {'hooks': [{'type': 'command', 'command': 'bash ' + shlex.quote(hook)}]}
 json.dump({'hooks': {
-    'SessionStart': [run],
+    'SessionStart': [run, {'hooks': [{'type': 'command', 'command': 'bash ' + shlex.quote(starts)}]}],
     'UserPromptSubmit': [run],
     'InstructionsLoaded': [{'hooks': [{'type': 'command', 'command': 'python3 %s %s' % (shlex.quote(loaded), shlex.quote(log))}]}],
 }}, open(out, 'w'))
@@ -142,8 +151,10 @@ session() {
   while [ $# -gt 0 ] && [ "$1" != -- ]; do extra+=("$1"); shift; done
   [ "${1:-}" = -- ] && shift
   local summary
+  # The mods are named in settings.json's env block, as the sync names them, so the caller's own
+  # list is taken away rather than set: set, it could stand in front of the one under test (#1684).
   summary="$(cd "$WORK/repo" && env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT -u CLAUDE_CODE_SSE_PORT -u CLAUDE_CODE_OAUTH_TOKEN -u CLAUDE_CODE_SESSION_ID \
-    CLAUDE_CODE_PLUGIN_DIRS= ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" ANTHROPIC_API_KEY=test-key-not-real \
+    -u CLAUDE_CODE_PLUGIN_DIRS ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" ANTHROPIC_API_KEY=test-key-not-real \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 SHELL=/bin/bash \
     CLAUDE_RULES_DIR="$RULES" CLAUDE_RULES_STATE_DIR="$WORK/state" \
     python3 "$DIR/sleep-real-engine-session.py" "$out" 180 "$#" "$@" -- \
@@ -160,6 +171,35 @@ session "$WORK/s1.jsonl" --session-id "$SID" -- \
 echo "-- edited with no session running, then resumed"
 bash "$WORK/edit.sh" FIVE
 session "$WORK/s2.jsonl" --resume "$SID" -- "$(step resumed)"
+
+# ---- the mods: does a resume in a NEW process name its mods afresh? (claude-config#1684) ----
+# Two probe mods, each a plugin holding one command, named to Claude Code as the sync names them: in
+# settings.json's env block, CLAUDE_CODE_PLUGIN_DIRS. A session starts with the first; the second
+# arrives with no session running, as a pull brings one; then a new process resumes the session, as
+# `claude --resume` does. What the resumed process lists in its own init line is the measurement,
+# and the hook is then held to it: told a mod is missing only when the process did not load it.
+mk_mod(){
+  mkdir -p "$RULES/mods/$1/.claude-plugin" "$RULES/mods/$1/commands"
+  printf '{"name": "%s", "version": "0.0.1", "description": "a probe mod"}\n' "$1" > "$RULES/mods/$1/.claude-plugin/plugin.json"
+  printf -- '---\ndescription: a probe command\n---\nSay probe.\n' > "$RULES/mods/$1/commands/$1-cmd.md"
+}
+name_mods(){
+  python3 - "$RULES/settings.json" "$@" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault('env', {})['CLAUDE_CODE_PLUGIN_DIRS'] = ':'.join(sys.argv[2:])
+json.dump(d, open(p, 'w'))
+PY
+}
+mk_mod rprobe-first
+name_mods "$RULES/mods/rprobe-first"
+SID2="$(uuidgen | tr 'A-Z' 'a-z')"
+echo "-- a session ($SID2) started with one mod, a second mod arriving, then resumed by a new process"
+session "$WORK/m1.jsonl" --session-id "$SID2" -- "$(step mods-start)"
+mk_mod rprobe-later
+name_mods "$RULES/mods/rprobe-first" "$RULES/mods/rprobe-later"
+session "$WORK/m2.jsonl" --resume "$SID2" -- "$(step mods-resumed)"
 stop_model
 
 # ---- what the steps left ----
@@ -249,10 +289,58 @@ else:
 for verdict, name in said:
     print(f'{verdict}\t{name}')
 PY
+# The mods half, read the same way and added to the same verdicts (#1684).
+python3 - "$WORK/model.log" "$WORK/m1.jsonl" "$WORK/m2.jsonl" "$WORK/starts.log" "$SID2" >> "$WORK/verdict" <<'PY'
+import json, re, sys
+model_log, m1, m2, starts, sid2 = sys.argv[1:]
+said = []
+def check(name, problem):
+    said.append(('ok' if not problem else problem, name))
+def init_of(path):
+    for line in open(path):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get('type') == 'system' and d.get('subtype') == 'init':
+            return d
+    return None
+first = {}
+for line in open(model_log):
+    d = json.loads(line)
+    m = re.search(r'# STEP=(\S+)', d.get('probe') or '')
+    if m and m.group(1) not in first:
+        first[m.group(1)] = d
+i1, i2 = init_of(m1), init_of(m2)
+if i1 is None or i2 is None:
+    check('the mods sessions reported their init lines', 'm1 init %s, m2 init %s' % (i1 is not None, i2 is not None))
+else:
+    t1, t2 = json.dumps(i1), json.dumps(i2)
+    check('the mods are named to Claude Code from settings, as the sync names them: the session starts with the first probe mod and not the later one',
+          '' if 'rprobe-first' in t1 and 'rprobe-later' not in t1 else 'its init line named: %s' % sorted(set(re.findall(r'rprobe-[a-z]+', t1))))
+    loaded = 'rprobe-later' in t2
+    print('measured\ta resume in a new process %s the mod that arrived after the session started (its own init line)' % ('LOADS' if loaded else 'does NOT load'))
+    want = 0 if loaded else 1
+    got = first.get('mods-resumed')
+    if got is None:
+        check('the resumed prompt reached the stand-in model', 'it was never sent')
+    else:
+        check('the resumed prompt is told a mod is missing only when the resumed process did not load it (%d notice wanted)' % want,
+              '' if got.get('mod_notices') == want else 'it carried %s mod notice(s)' % got.get('mod_notices'))
+    got = first.get('mods-start')
+    check('the first prompt of that session carries no mod notice',
+          '' if got is not None and got.get('mod_notices') == 0 else 'it carried %s' % (got or {}).get('mod_notices'))
+for line in open(starts):
+    print('measured\tSessionStart ' + line.strip().replace('\t', ' '))
+for verdict, name in said:
+    print(f'{verdict}\t{name}')
+PY
 VERDICT="$(cat "$WORK/verdict")"
 while IFS=$'\t' read -r verdict name; do
   [ -n "$name" ] || continue
-  if [ "$verdict" = unmeasured ]; then echo "SUITE-PART-UNMEASURED $name"; else check "$name" "$verdict"; fi
+  if [ "$verdict" = unmeasured ]; then echo "SUITE-PART-UNMEASURED $name"
+  elif [ "$verdict" = measured ]; then echo "measured: $name"
+  else check "$name" "$verdict"; fi
 done <<< "$VERDICT"
 [ -n "$VERDICT" ] || check "the steps' logs could be read" "the reader printed nothing"
 finish

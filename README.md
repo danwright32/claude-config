@@ -2629,7 +2629,11 @@ no paid call), which found the model sent the copy on disk at the compaction, an
 copy on disk then with Claude Code's own note that it replaces the earlier one, while nothing
 re-reads them between prompts. Keeping the old record there would have had the next prompt say "the
 older copy is in this session's context" about a copy the session no longer held (#1580). A
-`/clear` starts a new session id, which has no record to keep. The interactive `/resume` picker is
+`/clear` starts a new session id, which has no record to keep. The mods record is re-taken at a
+resume only by a NEW process (`claude --resume`), which names its mods afresh: measured the same
+way on 2026-10-25, where the resumed process loaded a mod that arrived after the session started
+(#1684). The hook tells it by its parent, Claude Code's own process, recorded beside the mods record;
+a resume in the same process, or one whose first process was not recorded, keeps the record. The interactive `/resume` picker is
 not offered in a headless session, so it is the one path not measured.
 
 ### status says when this Mac's mods are older than the shared repo's (#1535)
