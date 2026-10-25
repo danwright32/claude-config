@@ -55,8 +55,10 @@ PLACED BY QUOTE (claude-config#1357). The reviewer writes a `Quote:` line under 
 line of code it means, and the runner moves the finding to the line of the file at the reviewed
 head that matches it, then drops the Quote line, so the stored review is one line per finding in
 the `<path>:<line>: ` shape every reader parses. A finding it cannot place keeps its number, marked
-as unchecked (place_findings below). An ok review records how its findings were placed as
-`placement=` (whole line, without the diff's marker, part of a line, path corrected, not placed),
+as unchecked (place_findings below); one whose quote matched nothing keeps that quote, whole up
+to 1000 characters, and its length (claude-config#1701). An ok review records how its findings
+were placed as `placement=` (whole line, without the diff's marker, part of a line, path corrected,
+not placed), and the length of each quote placed by part of a line as `part_quote_lengths=`,
 which lib/ai-review-placement.py reports with the marks (claude-config#1368).
 
 TWO KINDS, one reviewer (claude-config#560). `--kind push` (the default) is the advisory review of
@@ -248,7 +250,9 @@ def mark_false_absences(text, paths):
     out, marked = [], 0
     for line in text.splitlines():
         hit = None
-        body = LOCATION.sub("", line, count=1)
+        # The not placed mark is the harness's words and the reviewer's QUOTE, never a claim the
+        # reviewer made, and it keeps the quote whole (claude-config#1701).
+        body = MARK.sub("", LOCATION.sub("", line, count=1))
         for p in sorted(paths, key=len, reverse=True):
             if claims_file_absent(body, p):
                 hit = p
@@ -290,11 +294,26 @@ QUOTE_LINE = re.compile(r"^\s*quote:\s?(.*)$", re.IGNORECASE)
 # A quote shorter than this, once normalised, is never looked for inside lines: a name or a short
 # statement (`e.amount;`, `return total;`) is inside too many of them to say which one it meant.
 # The quotes that matched no whole line in this Mac's reviews from 2026-10-20 to 2026-10-24 were
-# all 59 characters or longer, so the floor leaves every one of them placeable.
+# all 59 characters or longer, so the floor leaves every one of them placeable. The floor itself was
+# not measured; lib/ai-review-placement.py reports the lengths of the quotes placed by part of a line
+# and of the ones that matched nothing, to set it from (claude-config#1701).
 PART_MIN = 20
 # The mark an unplaced finding carries, written in place_findings and read back here only (L41).
-MARK = re.compile(r"\[review harness: not placed, (.*?), so line [0-9]+ is the reviewer's own number, "
+# Greedy, because the mark is the last thing place_findings writes on the line and a kept quote can
+# hold its closing words; the false absence mark written after it never does.
+MARK = re.compile(r"\[review harness: not placed, (.*), so line [0-9]+ is the reviewer's own number, "
                   r"unchecked\]")
+# A quote that matched nothing is kept WHOLE in its mark, with its length (claude-config#1701), so a
+# miss can be diagnosed later and the PART_MIN floor judged against real quotes. Until then a mark
+# kept the first 60 characters, which hid whether 7 of this Mac's 10 misses by 2026-10-24 ran past
+# the end of the line they partly matched. Bounded at a generous 1000 characters, roughly ten times
+# the longest line this repository's style keeps, so one runaway quote cannot make a stored review
+# line any length at all; the length is said either way, so a cut quote is never read as whole.
+QUOTE_KEEP = 1000
+QUOTE_SAID = re.compile(r", ([0-9]+) characters quoted(?:, the first [0-9]+ kept)?$")
+# The length a mark from before #1701 showed a quote whole up to; a longer one became its first 60
+# characters and "...".
+OLD_QUOTE_SHOWN = 60
 # Every reason _place gives, as the kind lib/ai-review-placement.py counts it by, each read from the
 # START of the words the runner wrote: a corrected path whose quote then matched nothing says both,
 # and is first a path that is not a file.
@@ -324,10 +343,76 @@ def unplaced_kind(why):
     return "other"
 
 
+def _one_line(s):
+    """s as a mark keeps it: on one line, every character that would end a line (a newline and the
+    separators str.splitlines also breaks on) written as an escape, and a backslash doubled so the
+    escapes read back exactly (_unescape)."""
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif len(f"a{ch}b".splitlines()) > 1:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _unescape(s):
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == "\\" and i + 1 < len(s):
+            nxt = s[i + 1]
+            if nxt == "u" and re.fullmatch(r"[0-9a-f]{4}", s[i + 2:i + 6]):
+                out.append(chr(int(s[i + 2:i + 6], 16)))
+                i += 6
+                continue
+            out.append({"n": "\n", "r": "\r"}.get(nxt, nxt))
+            i += 2
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
+
+
+def _kept_quote(quote):
+    """The words ending a quote miss's reason: the quote's length, and the quote itself, whole up
+    to QUOTE_KEEP characters."""
+    cut = f", the first {QUOTE_KEEP} kept" if len(quote) > QUOTE_KEEP else ""
+    return f', {len(quote)} characters quoted{cut}: "{_one_line(quote[:QUOTE_KEEP])}"'
+
+
+def mark_quote(why):
+    """(quote, length) of the quote a mark's reason ends with, as the reviewer gave it, or
+    (None, None) for a reason holding none. length is None for a mark from before #1701 that kept
+    only the first 60 characters of a longer quote, since its length was not kept."""
+    if ': "' not in why or not why.endswith('"'):
+        return None, None
+    words, stored = why.split(': "', 1)
+    stored = stored[:-1]
+    said = QUOTE_SAID.search(words)
+    if said:
+        return _unescape(stored), int(said.group(1))
+    if len(stored) == OLD_QUOTE_SHOWN + 3 and stored.endswith("..."):
+        return stored, None
+    return stored, len(stored)
+
+
 def placement_meta(counts):
     """The `placement=` metadata value: how many were placed by the whole line, without the diff's
     marker, by part of a line, and after their path was corrected, and how many were not placed."""
     return ",".join(f"{k}:{counts.get(k, 0)}" for k in ("whole", "marker", "part", "path", "unplaced"))
+
+
+def part_lengths_meta(counts):
+    """The `part_quote_lengths=` metadata value: the length of each quote placed by part of a line,
+    in the order of the findings, empty when none was. A placed finding keeps no quote, so this is
+    the only record of how long they were (claude-config#1701)."""
+    return ",".join(str(n) for n in counts.get("part_lengths", []))
 
 
 def _normal(s):
@@ -426,8 +511,7 @@ def _place(path, cited, quote, repo_dir, sha, cache, changed=None):
         return path, None, None, "the reviewed head could not be read to check it"
     hits, how, tried = _match(lines, quote)
     if not hits:
-        shown = quote if len(quote) <= 60 else quote[:60] + "..."
-        miss = f'its quote matches no line of {fixed or path} at the reviewed head{tried}: "{shown}"'
+        miss = f"its quote matches no line of {fixed or path} at the reviewed head{tried}{_kept_quote(quote)}"
         # A corrected path is kept only when the quote proves it; otherwise the cited one stays,
         # and the mark says what was tried in its place.
         return path, None, None, (f"{path} is not a file at the reviewed head, and {miss}" if fixed else miss)
@@ -438,10 +522,11 @@ def place_findings(text, repo_dir, sha, changed=None):
     """(text, counts): each finding moved to the line its Quote names, its Quote line dropped, and
     every approximate `~N` written as a plain number. counts holds how many were placed and not,
     and of those placed, how many by the whole line, without the diff's marker, by part of a line,
-    and in a corrected path. changed is the push's complete list of changed files, or None."""
+    and in a corrected path, and part_lengths the length of each quote placed by part of a line.
+    changed is the push's complete list of changed files, or None."""
     lines = text.splitlines()
     out, cache = [], {}
-    counts = {"placed": 0, "unplaced": 0, "whole": 0, "marker": 0, "part": 0, "path": 0}
+    counts = {"placed": 0, "unplaced": 0, "whole": 0, "marker": 0, "part": 0, "path": 0, "part_lengths": []}
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -465,6 +550,8 @@ def place_findings(text, repo_dir, sha, changed=None):
         if why is None:
             counts["placed"] += 1
             counts[how] += 1
+            if how == "part":
+                counts["part_lengths"].append(len(quote))
             if where != path:
                 counts["path"] += 1
             out.append(f"{where}:{placed}: {rest}")
@@ -928,6 +1015,7 @@ def main(argv):
                 changed = changed_files(a.diff_file)
                 text, placement = place_findings(text, a.repo_dir, a.sha, changed)
                 meta["placement"] = placement_meta(placement)
+                meta["part_quote_lengths"] = part_lengths_meta(placement)
                 text, marked = mark_false_absences(text, changed)
                 if marked:
                     text = (f"Note: {marked} finding below claims a file this push changed was not changed; "
