@@ -7486,6 +7486,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: An accessible name set apart from a control's visible text must contain those visible words; add context after them, never instead.
 
 ## External systems
+- **L1031. A React web app must be built to survive the browser translating the page: Google
+  Translate replaces the text nodes React owns, so React's next update of that text throws
+  NotFoundError from removeChild or insertBefore and replaces the whole screen with the error
+  boundary. Decide at build time whether to guard those DOM calls or opt the page out of
+  translation, because the first visitor to find it is one who needed the translation.** (nursedex#1240, 2026-10-25)
+  SHORT: A React app must survive browser translation: Translate swaps text nodes React owns and its next update crashes, so guard the DOM or opt out.
 - **L794. A test double for a Cloudflare service binding or RPC stub must model that every property
   read is another remote method, because a plain object double lets code read a method off the stub
   and invoke it with .call or .apply, which throws on the real binding on every call.** (bidspoke#2570, 2026-10-20)
