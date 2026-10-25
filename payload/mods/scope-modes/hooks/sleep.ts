@@ -224,3 +224,18 @@ export const notesOf = (home: string, generation: string) => `${sleepDir(home)}/
 
 /** What the night's report says needs Dan, beside its notes, as hooks/lib/sleep-report.py names it (needs_path, #1665). */
 export const needsFileOf = (home: string, generation: string) => notesOf(home, generation).replace(/\.jsonl$/, '.needs.json')
+
+// Once a command is abandoned (interrupted, or its question dismissed), Claude Code refuses every
+// call the command's hook makes after it, each failing as "$.<noun>.<verb>(...) aborted" (#1677,
+// seen on 2026-10-23 as "scope-modes: $.process.run(mkdir) aborted"). Such a refusal says the
+// command was abandoned, never that the step it was on failed.
+const ENGINE_REFUSAL = /\$\.[A-Za-z]+\.[A-Za-z]+(?:\([^)]*\))? aborted/
+
+/** Whether /sleep was abandoned: its command's signal fired, or what it said carries the engine's refusal. */
+export const sleepInterrupted = (signal: AbortSignal | undefined, said: string): boolean => signal?.aborted === true || ENGINE_REFUSAL.test(said)
+
+/** What /sleep says once abandoned, by whether its record was already in place (#1677). */
+export const interruptedSaid = (began: boolean): string =>
+  began
+    ? "/sleep was interrupted after sleep mode started: it is on, but what it does after placing its record (holding the Mac awake, starting the night's report, telling the other sessions to start) may not all have run. /wake turns it off."
+    : '/sleep was interrupted, so sleep mode did not start. Type /sleep again to start it.'

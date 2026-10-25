@@ -73,7 +73,7 @@ import { errorText, missingOf, skewNews } from './mod-kit/skew.ts'
 import { openQuestionsIn, withQuestion } from './mod-kit/openquestions.ts'
 import { askAnyAccount } from './mod-kit/ghaccounts.ts'
 import { answeredLook, failedLook, nextWaitMs, pollLib, takeLook, type Poll } from './mod-kit/ghpoll.ts'
-import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
+import { bootOf, bootSessionOf, endSaid, etDate, etWhen, goalOf, interruptedSaid, isDaytimeEt, needsFileOf, nightOf, notesOf, readSleep, sleepDir, sleepInterrupted, untilOf, type Boot, type SleepReading, type SleepRecord } from './sleep.ts'
 import {
   awakeAsk,
   BBEDIT,
@@ -424,7 +424,8 @@ const ownerGone = async ($: EngineInterface, m: Marker, now: number, staleMs: nu
     return false
   }
 }
-const claimMarker = async ($: EngineInterface, path: string, staleMs: number): Promise<Claim> => {
+// `abandoned` names a held marker its owner is known to have left (#1677), taken over as one gone is.
+const claimMarker = async ($: EngineInterface, path: string, staleMs: number, abandoned?: (m: Marker) => boolean): Promise<Claim> => {
   const mine: Marker = { owner: await $.session.id(), at: await $.clock.now(), nonce: Math.random().toString(36).slice(2, 10) }
   const tmp = `${path}.${mine.nonce}.tmp`
   try {
@@ -441,7 +442,7 @@ const claimMarker = async ($: EngineInterface, path: string, staleMs: number): P
       const held = await readMarkerAt($, path)
       if (held === null) continue
       if ('unreadable' in held) return held
-      if (!(await ownerGone($, held, mine.at, staleMs))) return { held }
+      if (!abandoned?.(held) && !(await ownerGone($, held, mine.at, staleMs))) return { held }
       const aside = `${path}.taken-${mine.nonce}`
       const mv = await run($, ['mv', path, aside])
       if (mv.exitCode !== 0) {
@@ -1246,14 +1247,46 @@ const hear = (e: { session_id?: unknown; transcript_path?: unknown; agent_id?: u
   if (typeof e.session_id === 'string' && e.session_id && typeof e.transcript_path === 'string' && e.transcript_path) heard = { id: e.session_id, path: e.transcript_path }
 }
 const heardFor = (self: string) => (heard?.id === self ? heard.path : null)
+// The folder this session started in, from its start (#1678), where Claude Code keys its transcripts.
+let startCwd: string | null = null
+// In a fresh session, or right after /clear, no classic hook has named the transcript yet (#1678), so
+// it is looked for where Claude Code keeps it: ~/.claude/projects/<the folder the session started in,
+// each character but a letter, a digit or a hyphen made a hyphen>/<session id>.jsonl (measured on this
+// Mac 2026-10-25, Claude Code 2.1.307). Only a file that is really there, never a guessed path, so a
+// session whose folder Claude Code spells otherwise (a very long one) falls back to the registry as
+// before. Its current folder is tried too, in case this load began after the session moved.
+const atIdsPath = async ($: EngineInterface, self: string): Promise<string | null> => {
+  if (!/^[A-Za-z0-9-]+$/.test(self)) return null
+  let home: string | undefined
+  let here: string | null = null
+  try {
+    home = await $.env.get('HOME')
+    here = await $.session.cwd()
+  } catch (err) {
+    $.ui.log(`scope-modes: this session's transcript was not looked for by its id (${msg(err)}), so the session registry's is used`, { to: 'debug' })
+  }
+  if (!home) return null
+  for (const dir of new Set([startCwd, here].filter((d): d is string => !!d))) {
+    const path = `${home}/.claude/projects/${dir.replace(/[^A-Za-z0-9-]/g, '-')}/${self}.jsonl`
+    try {
+      if (await $.fs.exists(path)) return path
+    } catch (err) {
+      $.ui.log(`scope-modes: whether this session's transcript is at ${path} could not be checked (${msg(err)})`, { to: 'debug' })
+    }
+  }
+  return null
+}
+// This session's own transcript: the one Claude Code named to it (#1636), else the one at its id's path (#1678).
+const ownTranscript = async ($: EngineInterface, self: string) => heardFor(self) ?? (await atIdsPath($, self))
 const requestOf = (r: { extra?: Record<string, unknown> }) => {
   const q = (r.extra?.progress as { request?: unknown } | undefined)?.request
   return typeof q === 'string' && q.trim() ? q.trim() : null
 }
 const enrol = async ($: EngineInterface, self: string): Promise<{ workers: string[]; seats: Seat[]; others: number; left: number; unknown?: string }> => {
   const workers = interactive ? [self] : []
-  // This session's transcript is first the one Claude Code named to it, else the registry's (#1636).
-  const own = heardFor(self)
+  // This session's transcript is first the one Claude Code named to it, else the one at its id's
+  // path (#1678), else the registry's (#1636).
+  const own = interactive ? await ownTranscript($, self) : null
   const seats: Seat[] = interactive ? [{ id: self, root: null, transcript: own, request: null }] : []
   let list
   try {
@@ -1301,7 +1334,26 @@ const startedWhere = async ($: EngineInterface, r: SleepRecord) => `it started a
 // bed questions on the queue's issues (#836) here: paging (phase 2, #841) and the overnight driver
 // (phase 8, #844) build on this record.
 // `began` is set once this call placed the record, so the command acknowledges only a sleep it started (#1086).
-const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }): Promise<string> => {
+// `signal` is the command's own (#1677): once it fires, or a step's failure carries the engine's
+// refusal of every later call, /sleep says it was interrupted rather than naming the step it was on.
+// Nothing can be cleaned up then, since every call is refused, so the preparing marker it may leave
+// is remembered here, without a call, and this session's next /sleep takes it over at once (with
+// the list of unanswered issues it may have written) rather than waiting for it to go stale.
+const abandonedClaims = new Map<string, string>()
+const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: false }, signal?: AbortSignal): Promise<string> => {
+  const held: { claim?: Marker; generation?: string } = {}
+  let said: string
+  try {
+    said = await prepareSleep($, began, held)
+  } catch (err) {
+    if (!sleepInterrupted(signal, msg(err))) throw err
+    said = msg(err)
+  }
+  if (!sleepInterrupted(signal, said)) return said
+  if (!began.is && held.claim && held.generation) abandonedClaims.set(held.claim.nonce, held.generation)
+  return interruptedSaid(began.is)
+}
+const prepareSleep = async ($: EngineInterface, began: { is: boolean }, held: { claim?: Marker; generation?: string }): Promise<string> => {
   // This boot first: without it no record can be judged, and one that is sound must never be
   // called broken for it (L11), nor a new one written that could not be told from an old boot's.
   // The session is kept beside the start when it can be read; without it the record is judged by
@@ -1339,11 +1391,18 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   // gone from the registry, or older than PREPARING_STALE_MS, L523) is taken over in one rename.
   // /wake clears any.
   await run($, ['mkdir', '-p', p.dir])
-  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS)
+  const claim = await claimMarker($, p.preparing, PREPARING_STALE_MS, m => abandonedClaims.has(m.nonce))
   if ('held' in claim) return `Sleep mode is already being prepared in session ${claim.held.owner} since ${etWhen(claim.held.at)}. Nothing changed; if that session has gone, /wake clears it.`
   if ('unreadable' in claim) return `A preparing marker is there but cannot be read (${claim.unreadable}). Nothing changed; /wake clears it.`
   if ('failed' in claim) return `Sleep mode did not start: its preparing marker could not be written (${claim.failed}).`
-  const tookOver = claim.tookOver ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
+  // A claim this session's own abandoned /sleep left goes with the unanswered list it may have
+  // written, for a night that never began (#1677); it is not news, so it is not said.
+  const leftHere = claim.tookOver ? abandonedClaims.get(claim.tookOver.nonce) : undefined
+  if (claim.tookOver && leftHere !== undefined) {
+    abandonedClaims.delete(claim.tookOver.nonce)
+    await run($, ['rm', '-f', `${p.dir}/unanswered/${leftHere}`])
+  }
+  const tookOver = claim.tookOver && leftHere === undefined ? ` A sleep left half prepared by session ${claim.tookOver.owner} since ${etWhen(claim.tookOver.at)} was taken over.` : ''
   // Another /sleep may have placed its record between the read above and this claim: read it again,
   // so the bedtime questions are never asked for a night that has already begun.
   const again = await sleepNow($)
@@ -1360,6 +1419,8 @@ const startSleep = async ($: EngineInterface, began: { is: boolean } = { is: fal
   let startedIn: string
   let placeBefore: ScopeModesPlace
   const generation = `${now}-${self}`
+  held.claim = claim.claimed
+  held.generation = generation
   try {
     e = await enrol($, self)
     // This session's own checkout, found by mod-kit's walk from its folder, as the session registry
@@ -2313,8 +2374,8 @@ const titleNow = async ($: EngineInterface): Promise<string | null> => {
   let path: string | null = null
   try {
     const self = await $.session.id()
-    // The transcript Claude Code named to this session first, as for its goal (#1636).
-    path = heardFor(self) ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
+    // This session's own transcript first, as for its goal (#1636, #1678).
+    path = (await ownTranscript($, self)) ?? (await $.sessions.list()).open.find(o => o.sessionId === self)?.transcriptPath ?? null
   } catch (err) {
     $.ui.log(`scope-modes: this session's title could not be looked up (${msg(err)}), so its report is named by its id`, { to: 'debug' })
     return null
@@ -4295,6 +4356,7 @@ export const register: Register = on => {
     interactive = e.isInteractive === true
     // A transcript heard before this start was another session's or another load's (#1636).
     heard = null
+    startCwd = e.cwd
     await $.tool.register({
       name: 'switch_to_build',
       description:
@@ -4433,10 +4495,12 @@ export const register: Register = on => {
     return { text: `${SCOPE_NAME[scope]} is off.`, context: [`Dan turned ${SCOPE_NAME[scope].toLowerCase()} off: build as usual. ${ackOff(scope)}`] }
   })
   // Sleep and waking are acknowledged as every other switch is (#1086), and only when they switched.
-  on('command.run', { command: 'sleep' }, async $ => {
+  on('command.run', { command: 'sleep' }, async ($, e, next) => {
     const began = { is: false }
-    const text = await startSleep($, began)
-    // The morning reminder (#1107), only for a night this call began.
+    const text = await startSleep($, began, next.signal)
+    // The morning reminder (#1107), only for a night this call began, and never once the command was
+    // abandoned, since every call is then refused (#1677).
+    if (began.is && text === interruptedSaid(true)) return { text, context: [ackOn('sleep')] }
     return began.is ? { text: `${text}${await pinMorning($)}`, context: [ackOn('sleep')] } : { text }
   })
   on('command.run', { command: 'wake' }, async ($, e) => {
