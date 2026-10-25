@@ -41,14 +41,20 @@ refuse() { printf '%s\n' "$1" >&2; exit 2; }
 # helper_key, in any case, since the disk does not tell case apart) is refused before it runs, the
 # way the design round guard refuses a write to its own record: a session making that record by hand
 # is the merge without reading this gate exists to stop. The raw payload is matched first, so every
-# other command leaves at once; one that matches is judged on its command text, and one whose text
-# cannot be read is refused, since a reader that cannot run must not pass what it was asked to judge.
-# There is no override: an override is exactly what a session forging a record would use.
+# other command leaves at once; one that matches is judged on its command text, read through the
+# shared reader once it is known to be installed. Where the library or the reader is missing, or the
+# text cannot be read, the command is refused, since a reader that cannot run must not pass what it
+# was asked to judge (L490). There is no override: an override is exactly what a session forging a
+# record would use.
 pr_review_names_record() { local rc=1; shopt -s nocasematch; case "$1" in *helper[-_]key*) rc=0 ;; esac; shopt -u nocasematch; return "$rc"; }
 if pr_review_names_record "$payload"; then
-  named_command="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)" \
-    || named_command="$(printf '%s' "$payload" | python3 -c 'import json, sys; print((json.load(sys.stdin).get("tool_input") or {}).get("command") or "")' 2>/dev/null)" \
-    || named_command="$payload"
+  . "$HOOK_DIR/lib/merge-target.sh" 2>/dev/null \
+    || refuse "Refused: this command names the record of read keys typed in front of the merge helper, and lib/merge-target.sh is missing, so pr-review-gate.sh cannot read the command to tell whether it touches that record (claude-config#1700). Restore the hooks library and run it again."
+  if ps_reader_missing jq python3; then
+    refuse "Refused: $(ps_reader_absent_why "neither jq nor python3 is on PATH" "pr-review-gate.sh reads this command's text with one of them to tell whether it touches the record of read keys typed in front of the merge helper (claude-config#1700)." "jq")"
+  fi
+  named_parsed="$(ps_parse_payload "$payload" raw)" || named_parsed="$payload"
+  named_command="${named_parsed%%$'\x1f'*}"
   if pr_review_names_record "$named_command"; then
     refuse "Refused: this command names the record of read keys typed in front of the merge helper (the helper-keys folder under the lessons review's state, its secret, or the functions that write them), and only pr-review-gate.sh writes that record, when it sees a key typed in front of the helper (claude-config#1700). To merge, read the findings and type their key in front of the command: PR_REVIEW_READ=<key> bash ~/.claude/hooks/lib/merge-when-ready.sh <pr> ... To read the code that keeps the record, use the Read or Grep tool rather than a shell command."
   fi

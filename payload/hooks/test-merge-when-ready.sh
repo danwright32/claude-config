@@ -531,7 +531,9 @@ mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 
 out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
 check_eq "#1700 a hand made record beside the gate's own is refused" "64" "$rc"
 check_eq "#1700 and merges nothing beside it" "0" "$(count gh-calls 'pr merge')"
-secret_mode="$(stat -f '%Lp' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>/dev/null || stat -c '%a' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>/dev/null)"
+# Read through python rather than stat, whose flags mean different things on macOS and Linux (on
+# Linux `stat -f` reports the filesystem, and printed that in CI).
+secret_mode="$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>&1)"
 check_eq "#1700 the gate's secret is readable by its owner alone" "600" "$secret_mode"
 # A secret that is not one (cut short, emptied) is replaced, never used, and the typed path still works.
 fresh "$OLD" 0 "$GREEN"
@@ -613,6 +615,17 @@ done
 check_eq "#1700 and nothing was recorded by any of them" "" "$(ls "$KEYS_DIR" 2>/dev/null)"
 gate_out="$(present "ls ~/.claude/state/ai-review")"; grc=$?
 check_eq "#1700 a command naming none of it is not refused" "0" "$grc"
+# With no reader for the command's text (neither jq nor python3), a payload naming the record is
+# refused, saying which reader is missing, rather than passed unread. The payload is built here and
+# the gate run on a PATH holding only the basic tools it needs.
+NOREAD="$WORKDIR/no-reader-bin"; mkdir -p "$NOREAD"
+for t in bash cat dirname tr sed awk grep basename; do
+  p="$(command -v "$t")" && ln -sf "$p" "$NOREAD/$t"
+done
+noread_payload="$(jq -nc --arg c ": > ~/.claude/state/ai-review/helper-keys/0123abcd" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
+gate_out="$(printf '%s' "$noread_payload" | PATH="$NOREAD" "$NOREAD/bash" "$DIR/pr-review-gate.sh" 2>&1)"; grc=$?
+check_eq "#1700 with no reader, a command naming the record is refused" "2" "$grc"
+check "#1700 naming the missing reader" "neither jq nor python3 is on PATH" "$gate_out"
 
 fresh "$OLD" 3 "$GREEN"
 : > "$ST/update-fails"
