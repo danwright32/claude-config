@@ -6147,6 +6147,29 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2695, 2026-10-22)
   SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
 
+- **L805. A self-hosted runner that serves pull_request jobs becomes a machine strangers can
+  run code on the moment its repository goes public, and no condition written in a workflow
+  file can prevent it, because a pull_request run uses the workflow files of the pull request's
+  own merge commit, which a fork can rewrite. Keep strangers off it with settings that live
+  outside the repository: the runner group refusing public repositories, and approval required
+  for every outside contributor.**
+  (bidspoke#2772, 2026-10-25; corrected by slate#4216, 2026-10-25, which found the first wording's
+  runs-on clause is deleted by the fork it guards against)
+  SHORT: A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
+
+- **L806. Write every workflow log and Actions artifact as if the repository were public, because
+  a repository can be made public to unblock Actions and every past log, artifact and issue is then
+  downloadable at once, while the history scan that checks secrets never reads any of them.**
+  (slate#4216, 2026-10-25)
+  SHORT: Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
+
+- **L807. A secret scanner's planted canary proves the scanner ran, never that its rules
+  recognise the credential shapes the project actually holds, and a pinned scanner version
+  ages while its green stays the same, so plant one canary per credential shape the project
+  stores and fail when any goes unreported.**
+  (bidspoke#2777, 2026-10-25)
+  SHORT: A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
+
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
   stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the

@@ -45,3 +45,6 @@ which is NOT loaded into the session.
 - L758. Never give the browser a third party credential, even from your own route: every visitor and caller gets it; keep it on the server.
 - L1022. An exception keyed on matched text that is constant (a key header) exempts every match; key it on location and whole value.
 - L802. A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
+- L805. A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
+- L806. Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
+- L807. A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
