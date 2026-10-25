@@ -6154,6 +6154,12 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2772, 2026-10-25)
   SHORT: A self-hosted runner serving pull_request jobs runs strangers' code once its repo goes public: route only same-repo PRs to it, in runs-on, under a test.
 
+- **L806. Write every workflow log and Actions artifact as if the repository were public, because
+  a repository can be made public to unblock Actions and every past log, artifact and issue is then
+  downloadable at once, while the history scan that checks secrets never reads any of them.**
+  (slate#4216, 2026-10-25)
+  SHORT: Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
+
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
   stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the
