@@ -629,7 +629,8 @@ assert_absent "cron, setInterval and queues named only in strings and comments d
 # detached runner nobody watches is the case L13 and L71 are about. Each line below is the real one.
 background_fires bg-cronjob src/jobs.ts 'const job = new CronJob(spec, nightly)' "cron at the start of a word"
 background_fires bg-detach payload/hooks/design-score-reopen.sh 'nohup python3 "$RUNNER" --scheduled --state-dir "$STATE" </dev/null >/dev/null 2>&1 &' "a detached runner a hook starts"
-background_fires bg-parallel claude-sync '( bash "$suite" > "$out" 2>&1; printf '"'%s'"' "$?" > "$out.rc" ) & pids="$pids $!"' "a job started with & in a script with no extension"
+background_fires bg-parallel claude-sync '#!/usr/bin/env bash
+( bash "$suite" > "$out" 2>&1; printf '"'%s'"' "$?" > "$out.rc" ) & pids="$pids $!"' "a job started with & in a script with no extension"
 
 R=$(make_repo bg-not-jobs '            let endsAcronym = i > 0 && name[i - 1].isUppercase && i + 1 < name.count' mac/Overture/Integration/LandingRevert.swift)
 mkdir -p "$R/payload/mods/design-round-guard/hooks" "$R/hooks" "$R/src"
@@ -644,6 +645,33 @@ printf '%s\n' 'const masked = flags & MASK' > "$R/src/bits.ts"
 git -C "$R" add -A && git -C "$R" commit -qm not-jobs
 out=$(run_hook "git push" "$R")
 assert_absent "an identifier holding cron, an array push, a test's own job, and an & that starts no job do not fire" 'background work' "$out"
+
+# --- claude-config#1688: fixture names, extensionless prose, and camelCase compounds -------------
+# Three mismatches #1578 left. This suite's own fixture repo names (bg-cron, bg-celery, bg-cronjob)
+# are bare words in shell code, so every push touching it was told it added background work. An
+# extensionless file was read as shell whatever it held, so "A & B" in a LICENSE started a job. And
+# a camelCase compound such as scheduleCron was missed, because cron counted only at a word start.
+background_fires bg-camel src/jobs.ts 'const task = scheduleCron("0 3 * * *", nightly)' "a camelCase compound, scheduleCron"
+background_fires bg-camel-celery src/worker.ts 'await startCelery(app)' "a camelCase compound, startCelery"
+background_fires bg-snake src/jobs.py 'schedule_cron(nightly, at=3)' "a snake_case compound, schedule_cron"
+background_fires bg-flag hooks/install.sh 'register_hook --cron nightly' "a --cron flag"
+background_fires bg-bin-python bin/worker '#!/usr/bin/env python3
+from celery import Celery' "a python script with no extension, read by its shebang"
+
+R=$(make_repo bg-fixture-names "background_fires bg-cron hooks/install.sh '( crontab -l ) | crontab -' \"a crontab edit\"" hooks/test-fixture-names.sh)
+printf '%s\n' "background_fires bg-celery src/jobs.py '@celery_app.task(bind=True)' \"a celery task\"" \
+  "background_fires bg-cronjob src/jobs.ts 'new CronJob(spec, nightly)' \"a CronJob\"" \
+  'R=$(make_repo bg-sidekiq-words x src/a.rb)' > "$R/hooks/test-more-names.sh"
+git -C "$R" add -A && git -C "$R" commit -qm names
+out=$(run_hook "git push" "$R")
+assert_absent "fixture names holding cron, celery or sidekiq after a hyphen do not fire" 'background work' "$out"
+
+R=$(make_repo bg-license 'Copyright (c) 2026 A & B Contributors
+Permission is granted & cron jobs are not involved' LICENSE)
+printf '%s\n' 'Notes for A & B' > "$R/NOTICE"
+git -C "$R" add -A && git -C "$R" commit -qm notice
+out=$(run_hook "git push" "$R")
+assert_absent "an extensionless file with no shebang is not read as shell" 'background work' "$out"
 
 # --- claude-config#1525: files the repository marks generated are not scanned -----------------
 # A Slate push adding only a design record (docs/design/*.html, linguist-generated in .gitattributes)
