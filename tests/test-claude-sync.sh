@@ -2311,22 +2311,26 @@ suite_headroom_report(){   # $1 = wall clock seconds  $2 = processor seconds or 
 #
 # Every reading is in tests/section-time-readings.tsv, which grows, and the section below holds
 # this paragraph to it: the figures quoted here are recomputed from that record and compared, so a
-# new reading appended there fails the suite until this is updated to match (#520).
+# new reading appended there fails the suite until this is updated to match (#520). Each percentage
+# is of the budget those readings were JUDGED against, the record's budget_seconds column: 2520s,
+# 70% of the local 3600s ceiling, until #1667 raised the fraction to 76% on 2026-10-25. Today's
+# budget is that fraction of the ceiling, set below, and is not restated here, so it cannot go stale.
 #
 #   As found, with another project's Xcode suite and a backup client running:
-#     1034s, 968s, 1139s and 898s. Median 968s, 38% of the budget, at an ambient CPU of 347% to
+#     1034s, 968s, 1139s and 898s. Median 968s, 38% of the 2520s budget, at an ambient CPU of 347% to
 #     575% of one core and a load average reaching 98.
 #   In a quiet window:
 #     866s, 860s and 846s, then 911s from the monthly reading of 2026-10-01. Median 860s (with four
 #     readings, the lower of the middle two, which is the figure the check below computes), 34% of
-#     the budget, at an ambient CPU of 78% to 410% and a load average of 10 to 16.
+#     the 2520s budget, at an ambient CPU of 78% to 410% and a load average of 10 to 16.
 #
-# So the suite's own share is 860s and the margin at the worst of those eight readings is 1381s. The
-# 1847s does not reproduce: the busiest reading taken here, at a load average of 98, reached 1139s.
-# Load is the larger share, as #517 suspected, and it shows in the SPREAD more than in the median,
-# 65s across the quiet arm against 241s across the busy one. So the lever #492 named, sharing
-# fixtures between sections that build the same shape, is not needed at 34% of budget, and the
-# coupling it would create is not worth buying at this margin.
+# So the suite's own share is 860s, and the worst of those eight readings, 1139s, was under half the
+# 2520s budget it was judged against, and further under today's larger one. The 1847s does not
+# reproduce: the busiest reading taken here, at a load average of 98, reached 1139s. Load is the
+# larger share, as #517 suspected, and it shows in the SPREAD more than in the median, 65s across
+# the quiet arm against 241s across the busy one. So the lever #492 named, sharing fixtures between
+# sections that build the same shape, is not needed at 34% of the 2520s budget (less of today's),
+# and the coupling it would create is not worth buying at this margin.
 #
 # The quiet arm's highest, 911s, came at the LOWEST ambient CPU of any reading, 10 days after the
 # other three, so load does not explain it. One reading cannot say whether the suite's own share
