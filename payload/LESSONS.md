@@ -6163,6 +6163,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (slate#4216, 2026-10-25)
   SHORT: Write workflow logs and artifacts as if public: a repo made public exposes every past log, artifact and issue, which no history scan reads.
 
+- **L807. A secret scanner's planted canary proves the scanner ran, never that its rules
+  recognise the credential shapes the project actually holds, and a pinned scanner version
+  ages while its green stays the same, so plant one canary per credential shape the project
+  stores and fail when any goes unreported.**
+  (bidspoke#2777, 2026-10-25)
+  SHORT: A scanner's canary proves it ran, not that its rules see your credential shapes; a pinned version ages, so plant one canary per shape you store.
+
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
   stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the
