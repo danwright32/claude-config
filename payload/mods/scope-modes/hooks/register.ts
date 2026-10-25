@@ -233,10 +233,14 @@ let interactive = false
 let shownAsleep: boolean | undefined
 // The night this session last asked Dan whether he is up (#837), by its generation: once a night. In
 // $.state (#1703), which the engine holds for the session across a hot reload: kept in the module, a
-// reload asked him again. One that cannot be read asks, the way it asked before this was kept, and
-// one that cannot be written is logged.
+// reload asked him again. This module holds the night it asked too, which decides while it holds
+// one, so an ask whose record cannot be written (logged) is still made once by this module (push
+// review of PR for #1703); a fresh module after a reload reads $.state alone. One that cannot be read
+// asks, the way it asked before this was kept.
 const askedUpRef = { plugin: 'scope-modes', key: 'askedUp' } as const
+let askedUpHere: string | undefined
 const askedUpOf = async ($: EngineInterface): Promise<string | null> => {
+  if (askedUpHere !== undefined) return askedUpHere
   try {
     return (await $.state.get(askedUpRef)).value ?? null
   } catch (err) {
@@ -245,6 +249,7 @@ const askedUpOf = async ($: EngineInterface): Promise<string | null> => {
   }
 }
 const setAskedUp = async ($: EngineInterface, generation: string) => {
+  askedUpHere = generation
   try {
     await $.state.set(askedUpRef, generation)
   } catch (err) {
@@ -1083,8 +1088,11 @@ const closedNote = (repo: string | undefined, why: string, at: number, by: strin
 // night per session, so the morning report asks which list it belongs on (#843). Which were noted is
 // in $.state (#1703), which the engine holds for the session across a hot reload: kept in the module,
 // a reload noted the same repository again. Claimed by version before the note is written, so two
-// calls at once note it once (assume it runs twice), and given back when the note fails.
+// calls at once note it once (assume it runs twice), and given back when the note fails. This module
+// holds each one it noted too, so a claim that cannot be written (logged) still notes the repository
+// once from this module (push review of PR for #1703); a fresh module reads $.state alone.
 const firstMetRef = { plugin: 'scope-modes', key: 'firstMet' } as const
+const firstMetHere = new Set<string>()
 const claimFirstMet = async ($: EngineInterface, k: string, take: boolean): Promise<boolean> => {
   for (let i = 0; i < 5; i++) {
     const held = await $.state.get(firstMetRef)
@@ -1098,15 +1106,17 @@ const claimFirstMet = async ($: EngineInterface, k: string, take: boolean): Prom
 const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { repo?: string; why: string }) => {
   if (!over.repo || !over.why.startsWith(`${over.repo} is on neither list`)) return
   const k = `${record.generation}:${over.repo.toLowerCase()}`
+  if (firstMetHere.has(k)) return
+  firstMetHere.add(k)
   try {
     if (!(await claimFirstMet($, k, true))) return
   } catch (err) {
-    $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
-    return
+    $.ui.log(`scope-modes: could not keep that ${over.repo} was noted tonight, so a reload of the mod may note it again: ${msg(err)}`, { to: 'debug' })
   }
   try {
     await sleepNote($, (await sleepPaths($)).current, closedNote(over.repo, over.why, await $.clock.now(), await $.session.id()))
   } catch (err) {
+    firstMetHere.delete(k)
     await claimFirstMet($, k, false).catch(() => undefined)
     $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
   }
@@ -2572,23 +2582,35 @@ const isAbsentNoun = (err: unknown) => {
 const STEP_SAID = 'The reminder to end sleep mode'
 
 // The nights whose step this session has pinned on its card (#1283), and taken off, or tried to: once each.
-// In $.state (#1703), which the engine holds for the session across a hot reload: kept in the module,
-// a reload pinned the reminder again (drawing the card again, and adding the step back once Dan had
-// checked it off) and took it off again. Each is added by version, so two minutes at once lose
-// neither. One that cannot be read is read as pinned, so the card is not drawn again every minute,
-// and as not taken off, so the reminder still comes off; a mark that cannot be written is logged.
+// In $.state (#1703), which the engine holds for the session across a hot reload: kept in the module
+// alone, a reload pinned the reminder again (drawing the card again, and adding the step back once
+// Dan had checked it off) and took it off again. Each is added by version, so two minutes at once lose
+// neither. This module holds each mark it made too, and a night is marked when either says so, so a
+// mark that cannot be written (logged) still stops this module repeating it every minute (push review
+// of PR for #1703); a fresh module after a reload reads $.state alone. One that cannot be read and was
+// not marked here is read as pinned, so the card is not drawn again every minute, and as not taken
+// off, so the reminder still comes off.
 const pinnedRef = { plugin: 'scope-modes', key: 'pinnedHere' } as const
 const takenOffRef = { plugin: 'scope-modes', key: 'takenOff' } as const
-type OnceSet = { get: () => Promise<{ value: string[] | undefined; version: number }>; set: (value: string[], ifVersion: number) => Promise<{ isSet: boolean }> }
+const pinnedHere = new Set<string>()
+const takenOffHere = new Set<string>()
+type OnceSet = {
+  here: Set<string>
+  get: () => Promise<{ value: string[] | undefined; version: number }>
+  set: (value: string[], ifVersion: number) => Promise<{ isSet: boolean }>
+}
 const pinnedSet = ($: EngineInterface): OnceSet => ({
+  here: pinnedHere,
   get: () => $.state.get(pinnedRef),
   set: (value, ifVersion) => $.state.set(pinnedRef, value, { ifVersion }),
 })
 const takenOffSet = ($: EngineInterface): OnceSet => ({
+  here: takenOffHere,
   get: () => $.state.get(takenOffRef),
   set: (value, ifVersion) => $.state.set(takenOffRef, value, { ifVersion }),
 })
 const markOnce = async ($: EngineInterface, s: OnceSet, generation: string, what: string) => {
+  s.here.add(generation)
   try {
     for (let i = 0; i < 5; i++) {
       const held = await s.get()
@@ -2602,6 +2624,7 @@ const markOnce = async ($: EngineInterface, s: OnceSet, generation: string, what
   }
 }
 const isMarked = async ($: EngineInterface, s: OnceSet, generation: string, unread: boolean): Promise<boolean> => {
+  if (s.here.has(generation)) return true
   try {
     return ((await s.get()).value ?? []).includes(generation)
   } catch (err) {
@@ -4437,6 +4460,12 @@ export const register: Register = on => {
     ] as const)
       await $.command.register({ name, description, immediate: true })
     interactive = e.isInteractive === true
+    // This module's own marks start afresh, as a reload's fresh module has them (#1703): the session's
+    // are read from $.state.
+    pinnedHere.clear()
+    takenOffHere.clear()
+    firstMetHere.clear()
+    askedUpHere = undefined
     // A transcript heard before this start was another session's or another load's (#1636).
     heard = null
     startCwd = e.cwd

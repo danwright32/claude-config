@@ -168,10 +168,25 @@ test('after an interrupt and a reload of the mod, an amendment still resumes the
   expect(w.seen).toEqual([{ text: 'also do a direct link to commission', context: [AMENDMENT_CONTEXT] }])
 })
 
+test('an interrupt that cannot be recorded still resumes the step here, and its answer still clears it (#1703)', KIT, async ($, on) => {
+  const w = world(on)
+  on('state.set', async ($, e, next) => ((e as { plugin?: string }).plugin === 'addon-notes' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await $.turn.complete(ended('aborted'))
+  await $.prompt.submit(typed('also do a direct link to commission'))
+  await $.prompt.submit(typed('and open it in bbedit'))
+  expect(w.seen).toEqual([
+    { text: 'also do a direct link to commission', context: [AMENDMENT_CONTEXT] },
+    { text: 'and open it in bbedit', context: [] },
+  ])
+})
+
 test('an interrupt that cannot be read is read as none: the reply goes on exactly as typed (#1703)', KIT, async ($, on) => {
   const w = world(on)
   on('state.get', async ($, e, next) => ((e as { plugin?: string }).plugin === 'addon-notes' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  on('session.start', ($, e) => ({ cwd: e.cwd }) as never)
   await $.turn.complete(ended('aborted'))
+  // A reload, so this module holds nothing of its own and must read $.state, which fails.
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
   await $.prompt.submit(typed('also do a direct link to commission'))
   expect(w.seen).toEqual([{ text: 'also do a direct link to commission', context: [] }])
 })

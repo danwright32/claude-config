@@ -3169,6 +3169,17 @@ test("a reload keeps which agent started each piece of work, so that agent's sto
   expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
 })
 
+test("work whose starter cannot be recorded still holds that agent's stop in this module (#1703)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  on('state.set', async ($, e, next) => ((e as { plugin?: string; key?: string }).plugin === 'job-watcher' && (e as { key?: string }).key === 'startedBy' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await $.tool.call(asAgent({ tool: 'Monitor', command: 'gh run watch 99', description: 'CI on PR 2383' }))
+  const r = await subagentStop($, 'a1', [subagentEntry('a1'), shell('mon1', 'gh run watch 99')])
+  expect(r.block).toContain(`${HOLD} mon1 (gh run watch 99)`)
+})
+
 test("a reload keeps how often an agent's stop was refused, so it is never held past the bound (#1703)", withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   world(on, { tail: '', size: 0 }, { agents: [AGENT] })
@@ -3226,6 +3237,23 @@ test("a turn's end whose write is beaten by another write is written again, so t
   await turnStarts($)
   await turnEnds($)
   expect(missed).toBe(true)
+  // Read from $.state alone, as a fresh module after a reload reads it.
+  await reload($)
+  await sendHanging($, w)
+  await clock.advance(20 * MIN + 1)
+  expect(quietSaid(w).length).toBe(1)
+})
+
+test("a turn's end that cannot be recorded at all still leaves this conversation idle here, so it is woken (#1703)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  on('state.set', async ($, e, next) => {
+    const s = e as { plugin?: string; key?: string; value?: unknown; ifVersion?: number }
+    return s.plugin === 'job-watcher' && s.key === 'mainTurn' && s.value === 'idle' && s.ifVersion !== 0 ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($)
+  await turnStarts($)
+  await turnEnds($)
   await sendHanging($, w)
   await clock.advance(20 * MIN + 1)
   expect(quietSaid(w).length).toBe(1)

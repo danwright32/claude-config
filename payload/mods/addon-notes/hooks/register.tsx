@@ -20,7 +20,12 @@ import { ADD_ON_CONTEXT, AMENDMENT_CONTEXT, TOAST, isAddOnNote, isAmendment, res
 // session fact of a mod now is. One that cannot be read is read as no interrupt, the side that
 // changes nothing (the reply goes on exactly as typed), and one that cannot be written is logged.
 const interruptedRef = { plugin: 'addon-notes', key: 'interrupted' } as const
+// This module holds the latest it recorded too, which decides while it holds one, so a record that
+// cannot be written (logged) neither loses an interrupt nor leaves an answered one standing here
+// (push review of PR for #1703); a fresh module after a reload reads $.state alone.
+let interruptedHere: boolean | undefined
 const wasInterrupted = async ($: EngineInterface): Promise<boolean> => {
+  if (interruptedHere !== undefined) return interruptedHere
   try {
     return (await $.state.get(interruptedRef)).value === true
   } catch (err) {
@@ -29,6 +34,7 @@ const wasInterrupted = async ($: EngineInterface): Promise<boolean> => {
   }
 }
 const setInterrupted = async ($: EngineInterface, value: boolean) => {
+  interruptedHere = value
   try {
     await $.state.set(interruptedRef, value)
   } catch (err) {
@@ -65,6 +71,12 @@ export const register: Register = on => {
       },
     }
     return { ...built, addonNotes }
+  })
+
+  // A reload's fresh module holds nothing of its own (#1703): the interrupt is read from $.state.
+  on('session.start', async ($, e, next) => {
+    interruptedHere = undefined
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {

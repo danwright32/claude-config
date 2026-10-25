@@ -246,15 +246,23 @@ const giveDoneBack = async ($: EngineInterface, n: number) => {
 // and a Done pressed then came back while the turn it waited behind still ran. Which arming is the
 // latest describes this module's own timer, which a reload cancels, so it stays here.
 const runningTurnRef = { plugin: 'manual-steps', key: 'runningTurn' } as const
-// A turn that cannot be recorded is logged and never fails the turn event it rides on: a start not
-// recorded can only let a dropped Done come back early, the #734 behaviour before the turn was kept.
+// This module also holds the latest turn event it saw itself, which decides over $.state while it
+// holds one: a write that fails (logged, and never failing the turn event it rides on) then strands
+// nothing in this module. An end not recorded would otherwise leave the ended turn in $.state, read
+// as running, so a Done dropped behind it never came back (push review of PR for #1703). Only a fresh
+// module after a reload reads $.state alone; a stale turn there holds a dropped Done until the next
+// turn's end, which records the turn and arms the fallback again.
+let turnSeen: { id: string | null } | undefined
 const setRunningTurn = async ($: EngineInterface, turnId: string | null) => {
+  turnSeen = { id: turnId }
   try {
     await $.state.set(runningTurnRef, turnId)
   } catch (err) {
     $.ui.log(`manual-steps: could not record that the main turn ${turnId === null ? 'ended' : 'started'}: ${message(err)}`, { to: 'debug' })
   }
 }
+const runningTurnOf = async ($: EngineInterface): Promise<string | null> =>
+  turnSeen !== undefined ? turnSeen.id : ((await $.state.get(runningTurnRef)).value ?? null)
 let armed = 0
 let fallback: { cancel: () => void } | undefined
 const armFallback = ($: EngineInterface) => {
@@ -271,7 +279,7 @@ const armFallback = ($: EngineInterface) => {
 const giveBackDropped = async ($: EngineInterface, mine: number) => {
   if (mine !== armed) return
   // A turn running, or one that cannot be read, holds the Done: the next turn's end arms this again.
-  if (((await $.state.get(runningTurnRef)).value ?? null) !== null) return
+  if ((await runningTurnOf($)) !== null) return
   const card = (await $.state.get(cardRef)).value ?? null
   // Several steps can be sent at once (#1239): each whose turn never started comes back.
   const waiting = (await $.state.get(waitingRef)).value?.step
@@ -505,6 +513,9 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     interactive = e.isInteractive === true
+    // This module's own bookkeeping starts afresh, as a reload's fresh module has it (#1703): the
+    // running turn is then read from $.state.
+    turnSeen = undefined
     // Steps are for a person at the prompt; a -p run or the SDK has nobody to do them.
     if (!e.isInteractive) return next(e)
     await $.tool.register({

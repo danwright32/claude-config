@@ -862,6 +862,25 @@ test('a reload in the middle of a turn keeps it running, so a Done pressed then 
   expect(w.toasts).toEqual([])
 })
 
+// Push review of PR for #1703: a turn's end whose write fails leaves the ended turn in $.state; this
+// module saw it end, so a Done dropped behind it still comes back.
+test("a turn's end that cannot be recorded never strands a Done dropped behind it (#1703)", withKit, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on)
+  on('state.set', async ($, e, next) => {
+    const s = e as { key?: string; value?: unknown }
+    return s.key === 'runningTurn' && s.value === null ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($)
+  await hand($, [step()])
+  await turnStart($, 'fix the tests', 'T1')
+  await press($, 'done-1')
+  await turnEnd($, 'T1', 'aborted')
+  await clock.advance(DROPPED_AFTER_MS)
+  expect((await bandText($))[1]).toBe('1. Turn on the WAF rule  [done-1]')
+  expect(w.toasts).toEqual([RELEASED])
+})
+
 test('a running turn that cannot be recorded never stops its Done being judged at its end (#1703)', withKit, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world(on)

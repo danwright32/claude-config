@@ -4048,6 +4048,15 @@ test('a reload of the mod keeps that he was asked whether he is up tonight, so h
   expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
 })
 
+test('an ask whose record cannot be written is still made once a night by this module (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'askedUp' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+  expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
 test('a record of the ask that cannot be read asks him, as before it was kept, rather than staying silent (#1703)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
   on('state.get', async ($, e, next) => ((e as { key?: string }).key === 'askedUp' ? ({ deny: 'state store unavailable' } as never) : next(e)))
@@ -4502,12 +4511,16 @@ test('a reload of the mod keeps that a repository first met tonight was noted, s
   expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
 })
 
-test('a record of repositories noted that cannot be written is said, and the merge is still blocked (#1703)', withDeps, async ($, on) => {
+// A record of repositories noted that cannot be written still notes the repository, once, from this
+// module's own mark (push review of PR for #1703), and says the mark will not outlive a reload.
+test('a record of repositories noted that cannot be written still notes the repository once, and says why in the log (#1703)', withDeps, async ($, on) => {
   const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
   on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'firstMet' ? ({ deny: 'state store unavailable' } as never) : next(e)))
   await start($ as never, clock)
   expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
-  expect(w.toasts.filter(t => t.includes('could not note that o/r is on neither list') && t.includes('state store unavailable')).length).toBe(1)
+  expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
+  expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
+  expect(w.logs.filter(l => l.includes('could not keep that o/r was noted') && l.includes('state store unavailable')).length).toBe(1)
 })
 
 test('a record written before this phase, with no lists, refuses every merge and deploy', withDeps, async ($, on) => {
@@ -6369,10 +6382,37 @@ test('a record of where the reminder was pinned that cannot be read or written i
   await clock.advance(MIN)
   expect(stepsCalls(w)).toEqual([ADD_G0])
   expect(w.logs.filter(l => l.includes('could not record that the reminder to end sleep mode was pinned here') && l.includes('state store unavailable')).length).toBe(1)
+  // A reload, so this module holds no mark of its own, and then nothing can be read either.
+  await start($ as never, clock)
   unreadable.on = true
   await clock.advance(3 * MIN)
   expect(stepsCalls(w)).toEqual([ADD_G0])
   expect(w.logs.some(l => l.includes('could not read where the reminder to end sleep mode was pinned or taken off'))).toBe(true)
+})
+
+// Push review of PR for #1703: a mark that cannot be written, while reads work, is still held by this
+// module, so the minute neither pins the reminder again nor takes it off again.
+test('a pin whose mark cannot be written is not repeated every minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  on('state.set', async ($, e, next) => {
+    const k = (e as { key?: string }).key
+    return k === 'pinnedHere' || k === 'takenOff' ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+test('a take off whose mark cannot be written is not repeated every minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'takenOff' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  await clock.advance(4 * MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
 })
 
 test('a reload of the mod keeps that the reminder was taken off here, so it is taken off once (#1703)', withSteps, async ($, on) => {

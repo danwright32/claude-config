@@ -259,8 +259,13 @@ const take = async ($: EngineInterface, loop: string | undefined): Promise<strin
 // turn.complete of the main loop, in $.state (#1703): a reload in the middle of a turn read it as
 // idle, and a quiet agent then woke a conversation that was busy. Unknown until the first session
 // start says idle, and read as not idle, so a session the watcher has not seen start is told on its
-// next tool call as before, never woken; one that cannot be read is unknown too.
+// next tool call as before, never woken; one that cannot be read is unknown too. This module holds
+// the latest turn event it saw itself, which decides while it holds one, so a turn's end that cannot
+// be recorded (logged) still leaves this module idle and able to wake the conversation (push review
+// of PR for #1703); a fresh module after a reload reads $.state alone.
+let turnHere: 'idle' | 'busy' | undefined
 const turnOf = async ($: EngineInterface): Promise<'idle' | 'busy' | 'unknown'> => {
+  if (turnHere !== undefined) return turnHere
   try {
     const v = (await mainTurnFact($).get()).value
     return v === 'idle' || v === 'busy' ? v : 'unknown'
@@ -270,6 +275,7 @@ const turnOf = async ($: EngineInterface): Promise<'idle' | 'busy' | 'unknown'> 
   }
 }
 const setTurn = async ($: EngineInterface, turn: 'idle' | 'busy') => {
+  turnHere = turn
   try {
     // The latest turn event is the truth, so it is written whatever stood before, and written again
     // when another write beat it (push review of PR for #1703), never left read as the turn before.
@@ -293,15 +299,16 @@ let toldAgentsUnrecorded = false
 // stop is the whole session's work (measured on 2.1.302, 2026-10-19), so whose work is whose comes
 // from here, in $.state (#1703). Kept for the session; the list says what is still in flight, so
 // nothing is dropped here.
+// This module holds each it recorded too, and a stop reads both, so a starter that cannot be written
+// (logged) still holds that agent's stop in this module (push review of PR for #1703); only a fresh
+// module after a reload reads $.state alone.
+const startedHere = new Map<string, string>()
 const recordStarter = async ($: EngineInterface, task: string, agentId: string) => {
+  startedHere.set(task, agentId)
   try {
     await changeFact(startedByFact($), startersOf, starters => ({ ...starters, [task]: agentId }), starters => starters)
   } catch (err) {
-    await say(
-      $,
-      agentId,
-      `The background job watcher could not record that you started ${task}: ${message(err)}. Your stop will not be held while it runs, so wait for it in the foreground or stop it with TaskStop before you hand back.`,
-    )
+    $.ui.log(`job-watcher: could not keep that agent ${agentId} started ${task}, so a reload of the mod would not hold its stop for it: ${message(err)}`, { to: 'debug' })
   }
 }
 // How many times running each agent's stop has been refused, in $.state (#1703). Past
@@ -1374,6 +1381,8 @@ export const register: Register = on => {
   // none. The measures are cached here again from $.state.
   on('session.start', async ($, e, next) => {
     await loadWatch($)
+    turnHere = undefined
+    startedHere.clear()
     lateStops.clear()
     reminded.clear()
     unqueued.length = 0
@@ -1574,7 +1583,7 @@ export const register: Register = on => {
     // agent's Bash jobs on the watcher's own list, as an unreadable list from Claude Code does.
     let starters: Record<string, string> | undefined
     try {
-      starters = startersOf((await startedByFact($).get()).value)
+      starters = { ...startersOf((await startedByFact($).get()).value), ...Object.fromEntries(startedHere) }
       toldStartersUnreadable = false
     } catch (err) {
       $.ui.log(`job-watcher: could not read which agent started which background work at agent ${agent}'s stop: ${message(err)}`, { to: 'debug' })
