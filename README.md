@@ -2985,9 +2985,14 @@ session that is not a worker but never a worker the driver has let stop, a sessi
 stop at once, a session kept working through the one issue its goal names by the overnight driver, the notes in the report, and `/wake` with its morning turn. The
 model's answers come from a scripted stand-in, so it costs nothing and runs in every local test run
 (`SLEEP_REAL_ENGINE=0` skips it); CI has no Claude Code, so there it says UNMEASURED. What it cannot
-show, the first real night measures: an interactive session enrolled by `/sleep`, an idle worker
-told to start by it, a real model
-following the overnight rules for hours, and a real usage limit.
+show, only a real night measures: an interactive session enrolled by `/sleep`, an idle worker
+told to start by it, the before bed questions, a real model following the overnight rules, a full
+hour of work, and a real usage limit. So at its end the suite reads this Mac's ended nights, read
+only, with `tests/sleep-real-nights.py` (held to fixtures by `tests/test-sleep-real-nights.sh`): each
+part a night in the last 30 days shows, from the durable record it leaves (an enrolled starter, a
+second worker with a goal that wrote notes, a bedtime question noted or answered, a claim by a
+worker, one worker's heartbeats an hour apart, a wait on a usage limit), is printed as measured on
+that night; each other part is `SUITE-PART-UNMEASURED`, saying why (#1662).
 
 **Test runs never read the real record.** `run-all-tests.sh` hands every suite a sleep record of
 its own that does not exist (`CLAUDE_SLEEP_RECORD`, which `hooks/lib/sleep.sh` reads when a caller
