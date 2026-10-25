@@ -365,11 +365,12 @@ cp <this session's scratchpad>/<name>.html docs/design/<name>.html
 Its last line is a seal, the SHA-256 of everything above it (claude-config#1524). While the file is
 exactly what make-settled.py wrote, the design round guard lets it be committed under `docs/design`
 on any issue without asking Dan again, written with the Write tool, copied in whole by a cp alone, or
-put back by a git checkout or restore alone. make-settled.py is written into the scratchpad first
-because what a script writes cannot be read before it runs: run straight into `docs/design`, it is
-held as a look change on an issue Dan has not answered for (claude-config#1586), while the cp alone
-is read before it runs and goes through. Never edit the file by hand: an edit breaks the seal and is
-held as a look change. Change `settled.json` and run make-settled.py again instead.
+put back by a git checkout or restore alone. A script run handed the file (make-settled.py run
+straight into `docs/design`, `check-decision-map.py` on it) runs, and the guard reads the file again
+once it ran (claude-config#1593): unchanged or still sealed, it stands; otherwise, on an issue Dan
+has not answered for, it is put back as it was and the call waits on him. The scratchpad and cp
+route above goes through as before. Never edit the file by hand: an edit breaks the seal and is held as a look change. Change
+`settled.json` and run make-settled.py again instead.
 
 `settled.json` names the chrome, builder, styles and fixture as the rounds did, then every frame
 (`id`, `title`, `width`, an optional fixed `height`, and the `variant` its builder is handed), every

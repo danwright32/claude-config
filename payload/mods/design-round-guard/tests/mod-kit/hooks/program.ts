@@ -79,8 +79,12 @@ const LONG: Partial<Record<Kind, { inline?: string[]; file?: string[]; value?: s
 const OUTPUT = /^(?:\d*|&)>>?\|?&?(.*)$/
 const INPUT = /^\d*(?:<<<|<<-?|<)(.*)$/
 
-/** What a command runs as its program or script file, by its language's options, given what its standard input holds. */
-export type Reading = { program?: Program; script?: Script }
+/**
+ * What a command runs as its program or script file, by its language's options, given what its
+ * standard input holds. `module`, for python -m (#1682): the module's name and the index in `words`
+ * where its own arguments start.
+ */
+export type Reading = { program?: Program; script?: Script; module?: { name: string; args: number } }
 export const readProgram = (words: readonly string[], stdin: Stdin | undefined): Reading => {
   const kind = kindOf(words[0])
   if (!kind) return {}
@@ -162,8 +166,12 @@ export const readProgram = (words: readonly string[], stdin: Stdin | undefined):
           break
         }
         if (g.value.includes(letter)) {
-          // python -m runs a module, which is no program here, as a script file is not.
-          if (kind === 'python' && letter === 'm') return {}
+          // python -m runs a module, which is no program here, as a script file is not; the module
+          // and where its own arguments start are given (#1682), for the write reader's `runs`.
+          if (kind === 'python' && letter === 'm') {
+            const name = rest || words[i + 1]
+            return name ? { module: { name, args: rest ? i + 1 : i + 2 } } : {}
+          }
           // macOS sed -i takes its suffix as its own word, an empty one arriving as ''.
           if (!rest) i++
           break

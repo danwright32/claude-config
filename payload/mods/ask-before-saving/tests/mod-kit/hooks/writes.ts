@@ -1,7 +1,7 @@
 import type { ModKitChange, ModKitWrite, ModKitWrites } from '../types/index.d.ts'
 import { git, placed, readLine, type Command, type Line } from './commands.ts'
 import { codeOnly, codeTargets } from './code.ts'
-import { kindOf } from './program.ts'
+import { kindOf, readProgram } from './program.ts'
 
 // The one reader of which files a Bash call changes (#705, L613), over the simple commands the
 // shared reader gives. Ask before saving kept its own copy and missed inline scripts, rsync,
@@ -24,6 +24,11 @@ import { kindOf } from './program.ts'
 // (#654); since #1586 each argument it is handed is given apart, in `runs`, for a guard judging what
 // a script's arguments name (the design round guard, whose refusal says so in its rules.ts
 // scriptUnread; ask before saving, the collision guard and the overnight LESSONS.md check, #1592).
+// Since #1682 a module python runs with -m and a tool npx runs are given there the same way. Still
+// unread: a file a run writes that no argument names (a path in its own text), what is under a
+// folder it is handed (`npx codemod app/`, given as the folder alone), npx's -c command line, and a
+// tool run through another runner (pnpm dlx, yarn dlx, npm exec, bunx, uv run, uvx), none of which
+// ran on this Mac in the 14 days measured.
 
 const WRITE_REDIRECT = /^(\d*>>?|\d*>\||&>>?)$/
 const UNNAMEABLE = /[$`*?[\]{}]/
@@ -443,6 +448,21 @@ const scriptArgs = (args: readonly string[]): string[] => {
   return out
 }
 
+// The tool npx runs and where its own arguments start (#1682), past npx's options (npm 10's npm exec):
+// --package, --workspace and their short forms take a value. A command line given by -c or --call is
+// a shell's text, which is not read here, so it names no tool; nor does an npx naming none.
+const NPX_VALUED = new Set(['-p', '--package', '-w', '--workspace'])
+const npxTool = (args: readonly string[]): { name: string; args: number } | undefined => {
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i] as string
+    if (a === '-c' || a === '--call' || a.startsWith('--call=')) return undefined
+    if (a === '--') return args[i + 1] === undefined ? undefined : { name: args[i + 1] as string, args: i + 2 }
+    if (NPX_VALUED.has(a)) i++
+    else if (!a.startsWith('-')) return { name: a, args: i + 1 }
+  }
+  return undefined
+}
+
 /**
  * The files a Bash call changes, read from the reader's commands (`pipeline`, with the assignments it
  * otherwise drops: `commandWrites`): the files it puts content into, each as written and as an
@@ -713,22 +733,28 @@ export const writes = (cmds: readonly Command[], cwd: string | undefined, home: 
     // word after it is the script's own argument, each given as a file it may write.
     // The script's word as the command reads it, variables read as their values.
     const scriptFile = c.script && !c.script.stdin && !c.program ? expand(c.script.files[0] ?? '') : kind === undefined && runsDirectly(args[0]) ? args[0] : undefined
+    // Each word a run is handed, as a path where its words name one.
+    const handedOf = (words: readonly string[]) =>
+      scriptArgs(words).map(w => {
+        const p = abs(w)
+        const folder = p ? undefined : patternFolder(w, dir, home)
+        return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
+      })
     if (scriptFile) {
       const at = kind === undefined ? 0 : args.indexOf(scriptFile, 1)
-      const handed = at < 0 ? [] : scriptArgs(args.slice(at + 1))
+      const handed = at < 0 ? [] : handedOf(args.slice(at + 1))
       if (handed.length) {
         const path = abs(scriptFile)
-        runs.push({
-          what: kind === undefined ? 'a script file run directly' : `a ${name} script file`,
-          script: asWritten.get(scriptFile) ?? scriptFile,
-          ...(path ? { path } : {}),
-          args: handed.map(w => {
-            const p = abs(w)
-            const folder = p ? undefined : patternFolder(w, dir, home)
-            return { word: asWritten.get(w) ?? w, ...(p ? { path: p } : {}), ...(folder ? { folder } : {}) }
-          }),
-        })
+        runs.push({ what: kind === undefined ? 'a script file run directly' : `a ${name} script file`, script: asWritten.get(scriptFile) ?? scriptFile, ...(path ? { path } : {}), args: handed })
       }
+    }
+    // A module python runs with -m, or a tool npx runs (#1682): what either writes cannot be read
+    // before it runs, as a script file's cannot, so each is a run, the module or tool its `script`,
+    // with no file of its own.
+    const tool = kind === 'python' ? readProgram(args, undefined).module : name === 'npx' ? npxTool(args) : undefined
+    if (tool) {
+      const handed = handedOf(args.slice(tool.args))
+      if (handed.length) runs.push({ what: kind === 'python' ? `a ${name} module run with -m` : 'a tool run through npx', script: tool.name, args: handed })
     }
     // A program the reader read (code.ts judged it): one that writes, runs a process or cannot be
     // read is a write the words do not name, and so is one that cannot be read at all (a script
