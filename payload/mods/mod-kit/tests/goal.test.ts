@@ -15,6 +15,11 @@ const att = (a: Record<string, unknown>, o: Record<string, unknown> = {}) =>
 const SET = (c: string) => att({ met: false, sentinel: true, condition: c })
 const CLEARED = (c: string) => att({ met: true, sentinel: true, condition: c })
 const JUDGED = (c: string, met: boolean) => att({ met, condition: c, reason: 'Four issues remain open.' })
+// #1563: a judgement that cleared the goal as met, as Claude Code 2.1.310 wrote one on 2026-10-24
+// (measured in a headless session: the record lands after the Stop hooks, before the turn ends),
+// with the fields every one of the 16 such records on this Mac carries.
+const MET = (c: string, o: Record<string, unknown> = {}) =>
+  att({ met: true, condition: c, reason: 'Issue #12 is closed and its PR #14 is merged.', iterations: 1, durationMs: 8847743, tokens: 84305 }, { uuid: 'met-1', timestamp: '2026-10-20T17:30:23.444Z', ...o })
 
 describe('the goal a session has set, from its transcript lines', () => {
   test('the mark the shell finds the records by is in every one of them', () => {
@@ -28,7 +33,27 @@ describe('the goal a session has set, from its transcript lines', () => {
   })
   test('a goal cleared with /goal clear, or met with no /goal clear at all, is no goal', () => {
     expect(goalIn([SET('close #12'), CLEARED('close #12')].join('\n'))).toEqual({ state: 'none' })
-    expect(goalIn([SET('close #12'), JUDGED('close #12', false), JUDGED('close #12', true)].join('\n'))).toEqual({ state: 'none' })
+    expect(goalIn([SET('close #12'), JUDGED('close #12', false), MET('close #12')].join('\n'))).toEqual({
+      state: 'none',
+      met: { condition: 'close #12', reason: 'Issue #12 is closed and its PR #14 is merged.', id: 'met-1' },
+    })
+  })
+  test('#1563 only a judgement that cleared the goal as met carries the met goal; one ended any other way carries none', () => {
+    expect(goalIn([SET('close #12'), CLEARED('close #12')].join('\n'))).toEqual({ state: 'none' })
+    expect(goalIn([SET('close #12'), JUDGED('close #12', false)].join('\n'))).toEqual({ state: 'set', condition: 'close #12' })
+  })
+  test('#1563 a goal met and then cleared with /goal clear was still met; one set again after it is the new goal', () => {
+    expect(goalIn([SET('close #12'), MET('close #12'), CLEARED('close #12')].join('\n'))).toEqual({
+      state: 'none',
+      met: { condition: 'close #12', reason: 'Issue #12 is closed and its PR #14 is merged.', id: 'met-1' },
+    })
+    expect(goalIn([SET('close #12'), MET('close #12'), SET('finish the parser')].join('\n'))).toEqual({ state: 'set', condition: 'finish the parser' })
+    expect(goalIn([SET('close #12'), MET('close #12'), SET('finish the parser'), CLEARED('finish the parser')].join('\n'))).toEqual({ state: 'none' })
+  })
+  test('#1563 a met judgement is told apart by its record id, else its time; one with no words or a reason that is not text is read with what it has', () => {
+    expect(goalIn(MET('close #12', { uuid: undefined }))).toEqual({ state: 'none', met: { condition: 'close #12', reason: 'Issue #12 is closed and its PR #14 is merged.', id: '2026-10-20T17:30:23.444Z' } })
+    expect(goalIn(att({ met: true, condition: '  ' }, { uuid: 'm' }))).toEqual({ state: 'none' })
+    expect(goalIn(att({ met: true, condition: 'close #12', reason: 7 }, { uuid: 'm' }))).toEqual({ state: 'none', met: { condition: 'close #12', reason: '', id: 'm' } })
   })
   test('the newest record decides: a goal set again after one was cleared is the new one', () => {
     expect(goalIn([SET('close #12'), CLEARED('close #12'), SET('finish the parser')].join('\n'))).toEqual({ state: 'set', condition: 'finish the parser' })
@@ -64,9 +89,9 @@ describe('the goal a session has set, read from its transcript file', () => {
     expect(argv.slice(3)).toEqual(['goal', GOAL_MARK, T])
     expect(argv[2]).toContain('tail -n 50')
   })
-  test('a goal met without /goal clear is no goal', async () => {
-    const { run } = runs({ exitCode: 0, stdout: [SET('close #12'), JUDGED('close #12', true)].join('\n'), stderr: '' })
-    expect(await goalAt(T, run)).toEqual({ state: 'none' })
+  test('a goal met without /goal clear is no goal, and says it was met (#1563)', async () => {
+    const { run } = runs({ exitCode: 0, stdout: [SET('close #12'), MET('close #12')].join('\n'), stderr: '' })
+    expect(await goalAt(T, run)).toEqual({ state: 'none', met: { condition: 'close #12', reason: 'Issue #12 is closed and its PR #14 is merged.', id: 'met-1' } })
   })
   test('a transcript holding no goal record (grep finds nothing) is no goal', async () => {
     expect(await goalAt(T, runs({ exitCode: 1, stdout: '', stderr: '' }).run)).toEqual({ state: 'none' })

@@ -74,10 +74,14 @@ turn_look 1500 3600
 check_eq "#1515 still held later, since the same moment" "1000" "$TURN_HEAD_SINCE"
 check_eq "#1515 and still not this run's" "0" "$TURN_MINE"
 check_eq "#1515 the live holder's ticket is kept" "1" "$(ls "$MWR_TURN_DIR/acme/widget" | grep -cxE '1')"
+# The holder's ticket is named, so a run in line can tell the turn passing from the line standing
+# still (claude-config#1697): the same while #9 holds it, another once it has passed.
+check_eq "#1697 the holder's ticket is named" "1" "${TURN_HEAD_TICKET:-unset}"
 # Its ticket going (its run finished) passes the turn on.
 rm -f "$MWR_TURN_DIR/acme/widget/1" "$MWR_TURN_DIR/acme/widget/1.head"
 turn_look 1600 3600
 check_eq "#1515 once the holder leaves, the next in line holds it" "1" "$TURN_MINE"
+check_eq "#1697 and the holder's ticket named is now this run's" "$TURN_TICKET" "${TURN_HEAD_TICKET:-unset}"
 check_eq "#1515 held from the look that saw it pass" "1600" "$TURN_HEAD_SINCE"
 
 # =================================================================================================

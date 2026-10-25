@@ -22,7 +22,12 @@
 #      run-all-tests.sh, and, as a second source that does not depend on how a command line is
 #      spelled (L1011), every live ticket in the merge helper's own turn folders, which every
 #      merge-when-ready.sh run on this Mac holds from its first look to its merge. Anything this
-#      window started itself is never counted.
+#      window started itself is never counted. A merge helper is counted only while it runs local
+#      work (claude-config#1676): each publishes its phase (lib/merge-phase.sh), and one whose
+#      record, believed only from a run alive with the start time it recorded and only until the
+#      time the record names, says it is waiting on GitHub (its line for the turn, a CI run) is
+#      not counted. One with no record, or one that cannot be believed, is counted, as before:
+#      on 2026-10-24 counting every helper gave a window once in 42 tries.
 #   3. Records the window's start and its deadline in lib/load-window.sh's record, which the merge
 #      helper and the suite pile notice read back and name, in ET.
 #   4. Starts the busy workers and the command, each in a process group of its own, and runs until
@@ -58,7 +63,8 @@
 # Seams, so its tests never wait on a real clock (L290, L524): LOAD_WINDOW_NOW (a command printing
 # epoch seconds), LOAD_WINDOW_SLEEP (the sleep between looks), SYNC_PS_FIXTURE (the process table),
 # LOAD_WINDOW_MERGE_TURNS (the merge helper's turn folders, default MWR_TURN_DIR or
-# ~/.claude/state/merge-turns), LOAD_WINDOW_DIR (the record and this turn, see lib/load-window.sh).
+# ~/.claude/state/merge-turns), LOAD_WINDOW_MERGE_PHASES (the merge helpers' phase records, default
+# MWR_PHASE_DIR or ~/.claude/state/merge-phases), LOAD_WINDOW_DIR (the record and this turn, see lib/load-window.sh).
 # Settings: LOAD_WINDOW_POLL (1: seconds between looks in the window), LOAD_WINDOW_WAIT_POLL (5),
 # LOAD_WINDOW_WAIT_SECONDS (360), LOAD_WINDOW_HOLD_SECONDS (600). At the defaults the wait, the
 # ceiling and the watchdogs' five second margin come to 545 seconds at most, so the whole run fits
@@ -68,7 +74,7 @@ set -uo pipefail
 SELF_DIR="${BASH_SOURCE[0]%/*}"; [ "$SELF_DIR" != "${BASH_SOURCE[0]}" ] || SELF_DIR=.
 SELF_DIR="$(cd "$SELF_DIR" && pwd)"
 LIB="$SELF_DIR/../payload/hooks/lib"
-for f in load-window.sh merge-turn.sh suite-pile.sh load-average.sh; do
+for f in load-window.sh merge-turn.sh merge-phase.sh suite-pile.sh load-average.sh; do
   # shellcheck disable=SC1090
   . "$LIB/$f" 2>/dev/null || { echo "load-window: $LIB/$f is missing, so no window was started." >&2; exit 1; }
 done
@@ -83,6 +89,8 @@ WAIT_MAX="$(setting "${LOAD_WINDOW_WAIT_SECONDS:-}" 360)"
 HOLD="$(setting "${LOAD_WINDOW_HOLD_SECONDS:-}" 600)"
 SLEEP="${LOAD_WINDOW_SLEEP:-sleep}"
 MERGE_TURNS="${LOAD_WINDOW_MERGE_TURNS:-${MWR_TURN_DIR:-$HOME/.claude/state/merge-turns}}"
+# Where the merge helpers publish their phase (lib/merge-phase.sh reads MWR_PHASE_DIR).
+export MWR_PHASE_DIR="${LOAD_WINDOW_MERGE_PHASES:-${MWR_PHASE_DIR:-$HOME/.claude/state/merge-phases}}"
 
 now(){
   local t=""
@@ -156,7 +164,31 @@ busy_now(){
     slug="${f%/*}"; slug="${slug#"$MERGE_TURNS"/}"
     seen="${seen:+$seen$'\n'}$pid a merge-when-ready.sh run holding a place to merge $slug#$pr"
   done
-  [ -z "$seen" ] || printf '%s\n' "$seen"
+  # A merge helper only waiting on GitHub puts no load on this Mac, so it is not counted (#1676):
+  # only a record lib/merge-phase.sh believes (a run alive with the start it recorded, saying it
+  # waits, within the time it names). Every other helper is counted, as before.
+  local kept="" line t
+  t="$(now)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *" a merge-when-ready.sh run"*) mp_waiting "${line%% *}" "$t" && continue ;;
+    esac
+    kept="${kept:+$kept$'\n'}$line"
+  done <<<"$seen"
+  [ -z "$kept" ] || printf '%s\n' "$kept"
+}
+
+# The merge helpers busy_now does not count, for --status: one line each, nothing when none.
+waiting_helpers(){
+  local f b t
+  t="$(now)"
+  for f in "$MWR_PHASE_DIR"/*; do
+    b="${f##*/}"
+    case "$b" in ''|*[!0-9]*) continue ;; esac
+    mp_waiting "$b" "$t" || continue
+    printf 'pid %s, only waiting on GitHub (%s) since %s, which a window does not wait for\n' "$b" "$MP_WHAT" "$(load_window_et "${MP_SINCE:-$t}")"
+  done
 }
 
 # What busy_now found, in words: the one run itself when there is one, else how many of each kind,
@@ -198,6 +230,8 @@ if [ -n "$status" ]; then
   b="$(busy_now)"
   if [ -n "$b" ]; then say "Running now, which a window waits for:"; printf '%s\n' "$b" | sed 's/^[^ ]* /  /; s/^/load-window: /'
   else say "Running now: no merge-when-ready.sh run and no full suite run."; fi
+  w="$(waiting_helpers)"
+  [ -z "$w" ] || { say "Merge helpers not counted (claude-config#1676):"; printf '%s\n' "$w" | sed 's/^/load-window:   /'; }
   exit 0
 fi
 

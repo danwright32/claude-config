@@ -44,11 +44,13 @@
 #                      GitHub answering no
 #   mt_gh_read_class the one reading of a failed gh read every reader returns
 #                      through: transient, GitHub refusing the sign in (a 401
-#                      with no token, MT_SIGNIN_RC, #1615), or an answer to believe
-#   mt_retry_read    asks a read again while it fails transiently or its sign in
-#                      is refused, through an injected sleep, and never on a
-#                      refusal (#1081, #1615); mt_signin_said says a sign in
-#                      that stayed refused
+#                      with no token, MT_SIGNIN_RC, #1615), gh not reaching
+#                      GitHub at all (MT_CONNECT_RC, #1675), or an answer to believe
+#   mt_retry_read    asks a read again while it fails transiently, its sign in
+#                      is refused, or gh could not connect to GitHub at all,
+#                      through an injected sleep, and never on a refusal (#1081,
+#                      #1615, #1675); mt_signin_said says a sign in that stayed
+#                      refused, mt_connect_said a connection never made
 #   mt_signin_record each refused sign in written to this Mac's ledger, counted
 #                      across runs, and mt_signin_trend the sentence once the
 #                      last day holds enough of them (#1626)
@@ -1427,12 +1429,41 @@ mt_gh_signin_refused() {  # $1 = the error text gh printed
   return 1
 }
 
+# A CONNECTION GH COULD NOT MAKE IS ITS OWN OUTCOME (claude-config#1675). On 2026-10-24
+# merge-when-ready.sh stopped #1640 at 41m 36s with "could not read pull request #1640 ... (error
+# connecting to api.github.com). Nothing was merged." and no retry line, and another builder's run
+# stopped the same way. "error connecting to <host>" is what gh prints, with no HTTP status, when it
+# could not reach the host at all (gh 2.89 carries the text, followed by "check your internet
+# connection or https://githubstatus.com"; in gh's source it answers a failed name lookup), and it
+# names none of mt_gh_transient's transport words, so it was believed the first time, as if GitHub
+# had answered. GitHub never saw the request, so asking again is safe: mt_retry_read asks it again as
+# MT_CONNECT_RC, through the same injected sleep, counting each in MT_CONNECT_FAILS, and one that
+# outlasts the tries is said as this Mac not connecting to GitHub (mt_connect_said), never as a pull
+# request GitHub could not show or a sign in it refused (L11). 7, because 2 to 6 already mean
+# something to a reader or a caller (see MT_SIGNIN_RC). Kept apart from mt_gh_transient, whose 2 its
+# callers say as GitHub not answering in time: there the request went out, here it never left.
+MT_CONNECT_RC=7
+mt_gh_unreachable() {  # $1 = the error text gh printed
+  local t
+  t=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  case $'\n'"$t" in
+    *$'\n'"error connecting to "*) return 0 ;;
+  esac
+  return 1
+}
+
 # How a failed gh read is asked again, the one reading every merge time reader returns through (L35):
-# 2 transient (mt_gh_transient), MT_SIGNIN_RC when GitHub refused the sign in, 1 for everything else,
-# which is believed. $2 is the account that was asked (empty for the active one), kept in
-# MT_SIGNIN_ACCOUNT for the token read mt_retry_read makes after a refused sign in.
+# 2 transient (mt_gh_transient), MT_SIGNIN_RC when GitHub refused the sign in, MT_CONNECT_RC when gh
+# could not connect to GitHub at all (#1675), 1 for everything else, which is believed. $2 is the
+# account that was asked (empty for the active one), kept in MT_SIGNIN_ACCOUNT for the token read
+# mt_retry_read makes after a refused sign in. A transport fault named in the same text is still read
+# first, as transient, so no error read before #1675 changes class.
 mt_gh_read_class() {  # $1 = the error text gh printed, $2 = account or empty
   mt_gh_transient "$1" && return 2
+  if mt_gh_unreachable "$1"; then
+    MT_CONNECT_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
+    return "$MT_CONNECT_RC"
+  fi
   if mt_gh_signin_refused "$1"; then
     MT_SIGNIN_ACCOUNT="${2:-}"; MT_SIGNIN_KIND=refused
     MT_SIGNIN_ERR=$(printf '%s\n' "$1" | awk 'NF && !got { print; got = 1 }' | cut -c1-300)
@@ -1468,6 +1499,17 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
   return 0
 }
 
+# The sentence for a read gh could not connect to GitHub for on every try (claude-config#1675), from
+# what mt_retry_read counted. $1, when given, is what was being read; $2 the last error, else
+# MT_CONNECT_ERR, the one the reader saw. It claims only what the error measured: gh did not reach
+# GitHub, so GitHub neither refused the read nor answered it.
+mt_connect_said() {  # $1 = what was being read or empty, $2 = the last error or empty
+  local n="${MT_CONNECT_FAILS:-0}" what="${1:-}" err="${2:-${MT_CONNECT_ERR:-}}" times
+  if [ "$n" = 1 ]; then times="1 time"; else times="$n times"; fi
+  printf "could not connect to GitHub %s%s%s: gh could not reach it from this Mac, so GitHub never answered. That is this Mac's connection or name lookup failing, not GitHub refusing the read or being unable to show it: check the connection, then run the same command again" \
+    "$times" "${what:+ reading $what}" "${err:+ ($err)}"
+}
+
 # REFUSED SIGN INS ARE COUNTED ACROSS RUNS (claude-config#1626). mt_retry_read asks a refused sign in
 # again within one run (#1615), and on its own that is an expected outcome nothing counts (L77): a Mac
 # whose keyring read now fails often looks the same as one where it failed once under load, until a
@@ -1484,9 +1526,10 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
 # nothing private and lives with the other per Mac records, in
 # ${MT_SIGNIN_LEDGER_DIR:-~/.claude/state/gh-signin}/refusals.tsv, which claude-sync never carries.
 # Only appended, one short line per write (O_APPEND keeps a line that size whole when two runs write at
-# once), and never rewritten, trimmed or deleted: there is no rewrite for two runs to race, and how
-# long the evidence is kept is Dan's decision, not a default (L9). It grows only on a refusal, about
-# 80 bytes each.
+# once), under a lock each writer waits for (one that cannot take it writes unlocked and says so),
+# and kept for 90 days, Dan's choice (claude-config#1670): a
+# write drops the lines older than that by writing the rest to a new file and moving it over the log,
+# never by editing it in place (mt__signin_trim). It grows only on a refusal, about 80 bytes each.
 #
 # Read back on every refusal: when the last MT_SIGNIN_WINDOW_SECONDS (86400, a day) hold
 # MT_SIGNIN_ALERT_AT (5) or more, MT_SIGNIN_TREND is the sentence saying so, which mt_signin_said
@@ -1518,13 +1561,77 @@ mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
   session="$(ghp_session_key 2>/dev/null)"; session="${session:-unknown}"
   run="${MT_SIGNIN_RUN:-$$}"; run="${run//[!A-Za-z0-9_.-]/_}"
   caller="${0##*/}"; caller="${caller//[!A-Za-z0-9_.-]/_}"
-  err="$( { mkdir -p "${ledger%/*}" && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$session" "$run" "${caller:-unknown}" "$1" "$2" >> "$ledger"; } 2>&1 )" || {
+  # Every writer waits for the log's lock to append and trim (claude-config#1670), so a trim, which
+  # replaces the file, never drops a line another run appends under it. A lock that cannot be taken in
+  # time is written past, unlocked and untrimmed, rather than not writing the line at all, and said:
+  # that one line is not safe from a trim another run makes at the same moment.
+  local locked=0
+  if ! err="$(mkdir -p "${ledger%/*}" 2>&1)"; then
     err="${err%%$'\n'*}"
+    MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (${err:-its folder could not be made}), so the count of refused sign ins across runs (claude-config#1626) is missing it"
+    return 0
+  fi
+  mt__signin_lock "$ledger" && locked=1
+  err="$( { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$session" "$run" "${caller:-unknown}" "$1" "$2" >> "$ledger"; } 2>&1 )" || {
+    err="${err%%$'\n'*}"
+    [ "$locked" = 1 ] && rmdir "$ledger.lock" 2>/dev/null
     MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (${err:-the write failed}), so the count of refused sign ins across runs (claude-config#1626) is missing it"
     return 0
   }
+  if [ "$locked" = 1 ]; then
+    mt__signin_trim "$ledger" "$now"
+    rmdir "$ledger.lock" 2>/dev/null
+  else
+    MT_SIGNIN_RECORD_NOTE="This refusal was written without the lock to $ledger, since the record could not take the lock ($ledger.lock) another run held, so a trim another run makes at the same moment may drop it, and lines older than 90 days were not dropped this time (claude-config#1670)"
+  fi
   MT_SIGNIN_TREND="$(mt_signin_trend "$now")"
   return 0
+}
+
+# NINETY DAYS ARE KEPT (claude-config#1670). Dan, 2026-10-24, choosing how long the log is kept:
+# "Keep 90 days". When the log is next written, every line whose time is older than 90 days before
+# the clock (MT_SIGNIN_CLOCK) is dropped; a line whose time is not a number is kept, since nothing
+# can say it is old (L50). The log is only appended, so it is never edited in place: the kept lines
+# are written to a new file beside it and moved over it, and only while the writer holds the lock
+# every writer takes, so no line appended meanwhile is lost with the old file. A log with nothing to
+# drop is not rewritten. A trim that fails leaves the log whole and says so. MT_SIGNIN_TRIM_PAUSE
+# names a command run between writing the kept lines and the move, a seam the suite uses to append
+# from a second run at exactly that moment. The 24 hour count (mt_signin_trend) is unaffected.
+MT_SIGNIN_KEEP_SECONDS=$((90 * 86400))
+mt__signin_trim(){  # $1 = ledger  $2 = now
+  local ledger="$1" cutoff=$(( $2 - MT_SIGNIN_KEEP_SECONDS )) trim=""
+  awk -F'\t' -v cutoff="$cutoff" '$1 ~ /^[0-9]+$/ && $1 + 0 < cutoff { found = 1; exit } END { exit !found }' "$ledger" 2>/dev/null || return 0
+  trim="$(mktemp "$ledger.trim.XXXXXX" 2>/dev/null)" \
+    && awk -F'\t' -v cutoff="$cutoff" '!($1 ~ /^[0-9]+$/ && $1 + 0 < cutoff)' "$ledger" > "$trim" 2>/dev/null \
+    && { [ -z "${MT_SIGNIN_TRIM_PAUSE:-}" ] || "$MT_SIGNIN_TRIM_PAUSE"; } \
+    && mv -f "$trim" "$ledger" 2>/dev/null \
+    || {
+      [ -n "$trim" ] && rm -f "$trim" 2>/dev/null
+      MT_SIGNIN_RECORD_NOTE="This refusal was recorded in $ledger, but its lines older than 90 days could not be dropped, so it is growing past what is kept (claude-config#1670)"
+    }
+  return 0
+}
+
+# The log's lock, a directory beside it, since mkdir makes it or fails at once and whole. Waited for
+# MT_SIGNIN_LOCK_TRIES times (100), sleeping 0.05 seconds between through MT_SIGNIN_LOCK_SLEEP (a
+# seam, L524), so about five seconds, where a run holds it for one append and at most one rewrite of
+# a small file. A lock over a minute old was left by a run killed while holding it, and is broken
+# rather than stopping every later record for good. Two runs breaking the same stale lock at once can
+# let one remove the lock the other has just taken: a window of a few instructions, open only after a
+# holder died, whose worst case is the race the lock exists for.
+mt__signin_lock(){  # $1 = ledger
+  local lock="$1.lock" k=0 tries="${MT_SIGNIN_LOCK_TRIES:-}"
+  case "$tries" in ''|*[!0-9]*|0) tries=100 ;; esac
+  while [ "$k" -lt "$tries" ]; do
+    mkdir "$lock" 2>/dev/null && return 0
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rmdir "$lock" 2>/dev/null
+    else
+      "${MT_SIGNIN_LOCK_SLEEP:-sleep}" 0.05 2>/dev/null
+    fi
+    k=$((k + 1))
+  done
+  return 1
 }
 
 # The sentence for the refusals recorded in the last day, or nothing when they are under the
@@ -1563,8 +1670,9 @@ mt_gate_read_budget() {  # $1 = the gate's own setting or empty, $2 = its defaul
   printf '%s' "$2"
 }
 
-# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient) or
-# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class), up to
+# Run a reader, and run it again while it answers 2 (a transient failure, mt_gh_transient),
+# MT_SIGNIN_RC (GitHub refused the sign in, mt_gh_read_class) or MT_CONNECT_RC (gh could not connect
+# to GitHub at all, counted in MT_CONNECT_FAILS, claude-config#1675), up to
 # $1 tries in all with $2 seconds between them (both the caller's settings, not measured), slept
 # through the command $3 so a test never waits on a clock (L524). A reader returns 0 (answered), 1 (GitHub answered no, or failed in a way nobody
 # recognised: believed the first time, since asking again cannot turn a refusal into a yes), 2 or
@@ -1593,10 +1701,14 @@ mt_retry_read() {  # $1 = tries, $2 = wait seconds, $3 = sleep command, $4 = dea
   [ "$tries" -ge 1 ] || tries=1
   case "$wait" in ''|*[!0-9]*) wait=0 ;; esac
   MT_SIGNIN_REFUSALS=0; MT_SIGNIN_NOTOKENS=0; MT_SIGNIN_SEEN=""; MT_SIGNIN_TREND=""; MT_SIGNIN_RECORD_NOTE=""
+  MT_CONNECT_FAILS=0; MT_CONNECT_ERR=""
   while :; do
     MT_SIGNIN_ACCOUNT=""; MT_SIGNIN_KIND=""
     "$reader"; rc=$?
-    if [ "$rc" -eq "$MT_SIGNIN_RC" ]; then
+    if [ "$rc" -eq "$MT_CONNECT_RC" ]; then
+      # gh could not connect to GitHub at all, so GitHub never saw the request (claude-config#1675).
+      MT_CONNECT_FAILS=$((MT_CONNECT_FAILS + 1))
+    elif [ "$rc" -eq "$MT_SIGNIN_RC" ]; then
       if [ "$MT_SIGNIN_KIND" = notoken ]; then MT_SIGNIN_NOTOKENS=$((MT_SIGNIN_NOTOKENS + 1))
       else MT_SIGNIN_REFUSALS=$((MT_SIGNIN_REFUSALS + 1)); fi
       mt_signin_token_state "${MT_SIGNIN_ACCOUNT:-}"

@@ -1,0 +1,8 @@
+{
+  "name": "goal-box",
+  "version": "0.1.0",
+  "description": "Shows the Goal accomplished box, the goal and what shipped, once when a /goal is met or the work Dan asked for is finished, never while a merge, a deploy or an agent is still in flight.",
+  "author": { "name": "Dan Wright" },
+  "types": "./types/index.d.ts",
+  "dependencies": ["mod-kit", "session-registry", "is-it-live"]
+}

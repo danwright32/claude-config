@@ -64,7 +64,7 @@ fresh(){   # a world of its own for each case
   echo "$T0" > "$case_dir/clock"
   export LW_CLOCK="$case_dir/clock" LW_HOOK="$case_dir/hook"
   export LOAD_WINDOW_NOW="cat $case_dir/clock" LOAD_WINDOW_SLEEP="$W/bin/fake-sleep"
-  export SYNC_PS_FIXTURE="$case_dir/ps" LOAD_WINDOW_MERGE_TURNS="$case_dir/merge-turns"
+  export SYNC_PS_FIXTURE="$case_dir/ps" LOAD_WINDOW_MERGE_TURNS="$case_dir/merge-turns" LOAD_WINDOW_MERGE_PHASES="$case_dir/merge-phases"
   export LOAD_WINDOW_DIR="$case_dir/lw" LOAD_WINDOW_WAIT_POLL=5 LOAD_WINDOW_POLL=1
   unset LOAD_WINDOW_WAIT_SECONDS LOAD_WINDOW_HOLD_SECONDS
 }
@@ -328,6 +328,68 @@ dummy="$(cat "$W/real/pid" 2>/dev/null)"; BG="$dummy"
 run --status
 says "#1618 --status reads the real process table" "a merge-when-ready.sh run (bash $W/real/merge-when-ready.sh)" "$OUT"
 child="$(pgrep -P "$dummy")"; kill -9 "$dummy" 2>/dev/null; [ -z "$child" ] || kill -9 $child 2>/dev/null; BG=""
+
+# =================================================================================================
+# 13. A merge helper only waiting on GitHub is not waited for (claude-config#1676). On 2026-10-24 a
+#     window got a turn once in 42 tries between 3:13 and 7:50 AM ET, because another session's
+#     helper, mostly sitting in a CI wait that puts no load on this Mac, was nearly always running.
+#     The helper now publishes its phase (lib/merge-phase.sh), and a window waits only for one doing
+#     local work, one whose phase cannot be believed, or one that publishes none. The helper here is
+#     this suite's own shell, a live pid with a real start time, so its record can be believed.
+# =================================================================================================
+SELF_START="$(ps -o lstart= -p $$ | sed -e 's/^ *//' -e 's/ *$//')"
+helper_ps(){ printf '%s\n' "$$ 1 00:30 bash /Users/x/.claude/hooks/lib/merge-when-ready.sh 7 --squash" > "$case_dir/ps"; }
+# phase <phase> <what> <until>: the record the helper publishes, written through the library itself.
+phase(){ ( . "$DIR/../payload/hooks/lib/merge-turn.sh" && . "$DIR/../payload/hooks/lib/merge-phase.sh" && TURN_PID=$$ TURN_PID_START="$SELF_START" MWR_PHASE_DIR="$LOAD_WINDOW_MERGE_PHASES" mp_set "$1" "$2" "$T0" "$3" ); }
+fresh phasewait
+helper_ps; phase waiting "Head 1111111: waiting, checks still running (1 of 3)." $((T0 + 600))
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+eq "#1676 a merge helper only waiting on GitHub does not hold a window back" 0 "$RC"
+lacks "#1676 so the window does not wait for it" "Waiting for" "$OUT"
+says "#1676 and the command ran in the window" "the command ran" "$OUT"
+# Control, the other way (L497): the same helper doing local work is waited for, as before.
+fresh phaselocal
+helper_ps; phase local "asking block-red-merge.sh about the merge of #7" ""
+printf '%s\n' ": > \"$case_dir/ps\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1676 control: a merge helper doing local work is waited for" "Waiting for a merge-when-ready.sh run" "$OUT"
+eq "#1676 control: and the window runs once it has gone" 0 "$RC"
+# A record that cannot be believed is busy: expired, or none at all (a helper from before #1676).
+fresh phasestale
+helper_ps; phase waiting "waiting for its turn" $((T0 - 1))
+printf '%s\n' ": > \"$case_dir/ps\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1676 a waiting record past the time it names is waited for" "Waiting for a merge-when-ready.sh run" "$OUT"
+fresh phasenone
+helper_ps
+printf '%s\n' ": > \"$case_dir/ps\"" > "$case_dir/hook.1"
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+says "#1676 a helper that publishes no phase is waited for, as before" "Waiting for a merge-when-ready.sh run" "$OUT"
+# A helper seen only by its live turn ticket is judged by its phase the same way.
+fresh phaseticket
+mkdir -p "$LOAD_WINDOW_MERGE_TURNS/acme/widget"
+printf 'pr 9\npid %s\nstart %s\njoined 1\n' "$$" "$SELF_START" > "$LOAD_WINDOW_MERGE_TURNS/acme/widget/1"
+phase waiting "waiting for its turn to merge in acme/widget" $((T0 + 600))
+run --seconds 10 --workers 1 -- bash "$W/report.sh" "$case_dir/r"
+lacks "#1676 a ticket holder only waiting on GitHub is not waited for" "Waiting for" "$OUT"
+eq "#1676 and the window ran" 0 "$RC"
+# During the window: a helper that turns to local work makes it yield, as one starting would.
+fresh phaseflip
+helper_ps; phase waiting "Head 1111111: waiting, checks still running (1 of 3)." $((T0 + 600))
+cat > "$case_dir/hook.3" <<SH
+( . "$DIR/../payload/hooks/lib/merge-turn.sh" && . "$DIR/../payload/hooks/lib/merge-phase.sh" && TURN_PID=$$ TURN_PID_START="$SELF_START" MWR_PHASE_DIR="$LOAD_WINDOW_MERGE_PHASES" mp_set local "asking the merge gates" "$T0" "" )
+SH
+run --seconds 60 --workers 1 -- bash "$W/forever.sh" "$case_dir/f"
+eq "#1676 a helper turning to local work during the window makes it yield" 75 "$RC"
+says "#1676 and says so" "Stopping early: a merge-when-ready.sh run" "$OUT"
+fp="$(cat "$case_dir/f.pid" 2>/dev/null)"
+if [ -n "$fp" ] && gone "$fp"; then ok; else bad "#1676 the yielded window's command is gone (pid '$fp')"; fi
+# --status names a helper it does not count, and why, so the two are told apart.
+fresh phasestatus
+helper_ps; phase waiting "waiting for its turn to merge in acme/widget" $((T0 + 600))
+run --status
+says "#1676 --status names a helper only waiting on GitHub, as not counted" "pid $$, only waiting on GitHub (waiting for its turn to merge in acme/widget) since 20:00:00 ET, which a window does not wait for" "$OUT"
+says "#1676 and says nothing it waits for is running" "Running now: no merge-when-ready.sh run and no full suite run" "$OUT"
 
 echo
 echo "passed: $pass, failed: $fail"
