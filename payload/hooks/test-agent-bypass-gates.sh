@@ -301,6 +301,14 @@ probe p8 'The earlier claim that no overrides were used is withdrawn and nothing
 refused "a fresh denial after a withdrawal is still refused"
 probe p13 'I withdraw the claim that no overrides were used and nothing was bypassed.'
 refused "a fresh denial after an I withdraw is still refused"
+# The retraction word has to be the CLAIM's own predicate, not any later word in the clause (lessons
+# review of #1702): a denial the report stands by, followed by something else being wrong or false.
+probe p15 'The claim that no overrides were used is correct and the earlier count was wrong.'
+refused "a stood-by denial followed by an unrelated was wrong is still refused"
+probe p16 'The claim that nothing was bypassed stands and the old summary was false.'
+refused "a stood-by denial followed by an unrelated was false is still refused"
+probe p17 'The claim that no overrides were used holds even though the first draft is incorrect.'
+refused "a stood-by denial followed by an unrelated is incorrect is still refused"
 probe p9 'Done. "No overrides were used."'
 refused "a denial in quotation marks with nothing attributing it is still refused"
 probe p10 'I said "no overrides were used" and it is true.'

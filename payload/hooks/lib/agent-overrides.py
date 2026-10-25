@@ -266,14 +266,22 @@ NAMED_OVERRIDE = re.compile(r"\b((?:skip|allow)_[a-z0-9_]*[a-z0-9])\b")
 #     incorrect", or "I withdraw/retract the <earlier> claim that <denial>". Only the withdrawn span is
 #     removed (in the second shape, up to the end of the first denial after "that"), so a fresh denial
 #     after it in the same clause is still read; the word "withdrawn" anywhere else ("the withdrawn
-#     branch") retracts nothing.
+#     branch") retracts nothing. In the first shape the retraction word must be the CLAIM's own
+#     predicate: the first is/was/are/has/have after the denial, at most six words on, with no
+#     conjunction between ("and", "but", "though" and the like). So "the claim that no overrides were
+#     used is correct and the earlier count was wrong" still denies (lessons review of #1702).
 #   QUOTED: a span in double quotes (straight or curly) straight after a reporting verb (says, said,
 #     reads, quoted, quotes, stated, claimed, wrote, contains) whose speaker is not I or we. A denial in
 #     quotes nothing attributes ('Done. "No overrides."'), quotes around one word in a denial, and the
 #     agent quoting itself ('I said "no overrides"') are all still read.
-WITHDRAWN_CLAIM = re.compile(
-    r"\b(?:claim|statement)s?\s+that\b.*?\b(?:is|was|are|were|has\s+been|have\s+been)\s+(?:now\s+)?"
-    r"(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
+CLAIM_THAT = re.compile(r"\b(?:claim|statement)s?\s+that\b")
+# What may sit between a claimed denial and the claim's own predicate: the rest of the proposition
+# ("no overrides" + "were used"), never another predicate or a conjunction starting a new statement.
+_GAP_STOP = (r"and|but|or|nor|so|yet|while|whereas|although|though|even|because|since|which|who|that|"
+             r"then|plus|is|was|are|has|have")
+RETRACTED_BY = re.compile(
+    r"(?:\s+(?!(?:" + _GAP_STOP + r")\b)[^\s,;]+){0,6}?\s+(?:is|was|are|were|has\s+been|have\s+been)\s+"
+    r"(?:now\s+)?(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
 WITHDRAWING = re.compile(
     r"\b(?:withdraw|withdrawing|withdrew|retract|retracting)\s+(?:the|my|that)\s+"
     r"(?:earlier\s+|previous\s+|original\s+|first\s+)?(?:claim|statement)s?\s+that\b")
@@ -282,17 +290,34 @@ QUOTED = re.compile(
     "[\"\u201c][^\"\u201c\u201d\\n]*[\"\u201d]", re.I)
 
 
+def _denial_end(text):
+    """Where the first denial in text ends, or None when it holds none."""
+    ends = [d.end() for d in (re.search(p, text) for p in NV_DENIALS + GENERAL_DENIALS) if d]
+    return min(ends) if ends else None
+
+
 def _unretracted(low):
     """The clause with every denial it withdraws removed."""
-    low = WITHDRAWN_CLAIM.sub(" ", low)
+    pos = 0
+    while True:
+        m = CLAIM_THAT.search(low, pos)
+        if not m:
+            break
+        rest = low[m.end():]
+        e = _denial_end(rest)
+        r = RETRACTED_BY.match(rest, e) if e is not None else None
+        if r:
+            low = low[:m.start()] + " " + low[m.end() + r.end():]
+            pos = m.start() + 1
+        else:
+            pos = m.end()
     while True:
         m = WITHDRAWING.search(low)
         if not m:
             return low
-        rest = low[m.end():]
-        ends = [d.end() for d in (re.search(p, rest) for p in NV_DENIALS + GENERAL_DENIALS) if d]
+        e = _denial_end(low[m.end():])
         # A withdrawal naming no denial withdraws nothing this check reads; drop only its own words.
-        cut = m.end() + (min(ends) if ends else 0)
+        cut = m.end() + (e or 0)
         low = low[:m.start()] + " " + low[cut:]
 
 
