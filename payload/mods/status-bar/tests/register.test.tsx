@@ -524,6 +524,66 @@ test('Compact pressed while Claude is working is queued, shown, and runs when th
   await ui.unmount()
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
+// the middle of a turn. The turn is still running, so a Compact pressed after it is queued as before,
+// and one queued before it still runs when the turn ends.
+test('a reload in the middle of a turn keeps it running: a Compact pressed after it is queued, never refused (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  await step($, clock)
+  await start($, clock)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  expect(compacts).toHaveLength(0)
+  expect(toasts).toEqual([])
+  expect(await shown(ui as never)).toBe('context 80% Compact queued, runs when this reply ends ')
+  await ui.unmount()
+})
+
+test('a Compact queued before a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  await start($, clock)
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
+test('a Compact whose queueing cannot be kept for a reload still runs when the turn ends (#1703)', withKit, async ($, on) => {
+  const { clock, compacts, toasts, w } = world(on)
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'compactQueued' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($, clock)
+  await measure($, 80)
+  const ui = await $.ui.mount(band)
+  const press = (ui as unknown as { press: (t: object) => Promise<unknown> }).press
+  await step($, clock)
+  const idle = w.compact
+  busy(w)
+  await press({ key: 'status-bar:compact' })
+  await clock.settle()
+  w.compact = idle
+  await turn($)
+  await clock.settle()
+  expect(compacts).toHaveLength(1)
+  expect(toasts).toEqual([])
+  await ui.unmount()
+})
+
 test('a band that cannot be redrawn after a Compact press or its Cancel is logged, never left unhandled (#1278 lessons review)', withKit, async ($, on) => {
   const { clock, debug, w } = world(on)
   let unreadable = false
