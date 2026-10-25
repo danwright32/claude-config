@@ -764,7 +764,8 @@ contents and comments removed, so a word in a fixture argument or a comment does
 the repository marks generated in `.gitattributes` is still scanned but its matches raise no
 lessons: it is named in one line instead. `LESSONS.md` and the generated index and core files are
 never read, because they quote the very words the triggers look for. The same finding in the same
-repository is said once per 90 seconds; a different one gets through at once. A lesson id that no
+repository is said once per 90 seconds (a window the hook sets, not measured); a different one
+gets through at once. A lesson id that no
 longer resolves, or a lessons file that cannot be read, is said in the advisory rather than
 dropped. With no `python3` the advice cannot be built as JSON, so it is printed as plain text on
 stderr with exit 1, which Claude Code shows without stopping the push. A headless run
