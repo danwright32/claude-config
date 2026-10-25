@@ -257,12 +257,51 @@ def _clauses(report):
 NAMED_OVERRIDE = re.compile(r"\b((?:skip|allow)_[a-z0-9_]*[a-z0-9])\b")
 
 
+# A denial the report WITHDRAWS or QUOTES is not a claim (claude-config#1702). In the #1674 probe on
+# 2026-10-24 an agent corrected its report exactly as the refusal asks, and was refused twice more:
+# once for "so the earlier claim that no overrides were used is withdrawn", once for pasting the
+# refusal, whose own words are It says "Probe report: no overrides were used.". Both readings are kept
+# narrow, so a denial merely NEAR either shape is still read:
+#   RETRACTED: "<the> claim/statement that <denial> is/was withdrawn, retracted, false, wrong, untrue or
+#     incorrect", or "I withdraw/retract the <earlier> claim that <denial>". Only the withdrawn span is
+#     removed (in the second shape, up to the end of the first denial after "that"), so a fresh denial
+#     after it in the same clause is still read; the word "withdrawn" anywhere else ("the withdrawn
+#     branch") retracts nothing.
+#   QUOTED: a span in double quotes (straight or curly) straight after a reporting verb (says, said,
+#     reads, quoted, quotes, stated, claimed, wrote, contains) whose speaker is not I or we. A denial in
+#     quotes nothing attributes ('Done. "No overrides."'), quotes around one word in a denial, and the
+#     agent quoting itself ('I said "no overrides"') are all still read.
+WITHDRAWN_CLAIM = re.compile(
+    r"\b(?:claim|statement)s?\s+that\b.*?\b(?:is|was|are|were|has\s+been|have\s+been)\s+(?:now\s+)?"
+    r"(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
+WITHDRAWING = re.compile(
+    r"\b(?:withdraw|withdrawing|withdrew|retract|retracting)\s+(?:the|my|that)\s+"
+    r"(?:earlier\s+|previous\s+|original\s+|first\s+)?(?:claim|statement)s?\s+that\b")
+QUOTED = re.compile(
+    r"(?<!\bi )(?<!\bwe )\b(says|said|reads|quoted|quotes|stated|claimed|wrote|contains)(\s*:?\s*)"
+    "[\"\u201c][^\"\u201c\u201d\\n]*[\"\u201d]", re.I)
+
+
+def _unretracted(low):
+    """The clause with every denial it withdraws removed."""
+    low = WITHDRAWN_CLAIM.sub(" ", low)
+    while True:
+        m = WITHDRAWING.search(low)
+        if not m:
+            return low
+        rest = low[m.end():]
+        ends = [d.end() for d in (re.search(p, rest) for p in NV_DENIALS + GENERAL_DENIALS) if d]
+        # A withdrawal naming no denial withdraws nothing this check reads; drop only its own words.
+        cut = m.end() + (min(ends) if ends else 0)
+        low = low[:m.start()] + " " + low[cut:]
+
+
 def claims(report):
     """(no-verify denials, general denials): the first a list of clauses, the second of (clause, the
     override names it is about, or None for every override)."""
     nv, gen = [], []
-    for c in _clauses(report):
-        low = c.lower()
+    for c in _clauses(QUOTED.sub(r"\1\2", report)):
+        low = _unretracted(c.lower())
         if QUALIFIED.search(low):
             continue
         if any(re.search(p, low) for p in NV_DENIALS):

@@ -16,6 +16,9 @@
 # was used or nothing bypassed, against those and every SKIP_ or ALLOW_ override the commands set. A
 # command a hook refused never ran and does not count; one that ran and failed does. A clause that
 # qualifies itself ("no OTHER overrides") is not a denial, so a report naming its skip goes through.
+# Nor is a denial the report withdraws ("the earlier claim that no overrides were used is withdrawn")
+# or quotes after a reporting verb (It says "no overrides were used"), so a report corrected the way
+# a refusal asks, or pasting the refusal, is not refused again (claude-config#1702).
 #
 # WHAT IT DOES on a contradiction: refuses the hand-back, quoting the claim and the commands, so the
 # agent corrects its report. A report the agent will not correct is let through on the third attempt
