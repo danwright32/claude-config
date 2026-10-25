@@ -23,6 +23,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL="$DIR/shipped-worktrees.sh"
 
@@ -155,14 +163,15 @@ mkdir -p "$WT/inuse/deeper"
 SQUATTER=$!
 # The squatter really is standing there before anything is judged, or case 9 is about nothing
 # (L159). lsof reports the resolved path, which is why WORK was resolved above.
-seen=""
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+# Waited on with the hang ceiling: it was ten looks a tenth of a second apart, a one second ceiling a
+# loaded Mac can pass with nothing broken (#1679; a setting, not a measurement).
+squatter_in_place(){
   # Read in full, then matched: grep -q on a pipe under pipefail kills lsof mid write (L183).
+  local cwd_now
   cwd_now="$(lsof -a -p "$SQUATTER" -d cwd -Fn 2>/dev/null || true)"
-  if grep -qx "n$WT/inuse/deeper" <<< "$cwd_now"; then seen=1; break; fi
-  perl -e 'select(undef, undef, undef, 0.1)'
-done
-if [ -n "$seen" ]; then ok; else bad "the fixture process never stood in the inuse worktree"; fi
+  grep -qx "n$WT/inuse/deeper" <<< "$cwd_now"
+}
+if hang_wait squatter_in_place; then ok; else bad "the fixture process never stood in the inuse worktree"; fi
 
 # 10. DETACHED: no branch, so no pull request can prove anything about it.
 git_q "$R" worktree add -q --detach "$WT/detached" main

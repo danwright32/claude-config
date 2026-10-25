@@ -21,6 +21,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/make-switcher.py"
 TMP="$(mktemp -d)"
@@ -223,7 +233,7 @@ if [ -n "${FAKE_CLONE_MADE:-}" ]; then
   [ -n "${FAKE_FOREIGN_MADE:-}" ] && mktemp -d "$HEADLESS_DOM_CLONE_DIR/code_sign_clone.XXXXXX" > "$FAKE_FOREIGN_MADE"
   # Waits, bounded, for a process outside this run to open the copy as well.
   if [ -n "${FAKE_WAIT_HELD:-}" ]; then
-    n=0; while [ ! -e "$FAKE_WAIT_HELD" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+    t0=$SECONDS; while [ ! -e "$FAKE_WAIT_HELD" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
   fi
 fi
 # A Chrome that gives up at once: half a page, a clean exit, nothing left running.
@@ -309,9 +319,7 @@ else
   # A copy something outside this run still has open is in use, so it stays though this run's
   # Chrome made it.
   holder(){ # holder <file naming the clone> <ready file>: opens that clone and keeps it open
-    local n=0
-    while [ ! -s "$1" ] && [ "$n" -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
-    [ -s "$1" ] || exit 1
+    hang_wait "[ -s '$1' ]" 0.05 || exit 1
     exec 7< "$(cat "$1")/Google Chrome"
     : > "$2"
     exec sleep 60

@@ -24,6 +24,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand in reviewer as FAKE_HANG_S, since it runs as a process of
+# its own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNER="$DIR/lib/ai-review-run.py"
 WORKDIR="$(mktemp -d)"
@@ -323,7 +333,7 @@ hold = os.environ.get("FAKE_HOLD")
 if hold:
     open(os.path.join(log, "answering"), "w").close()
     t0 = time.time()
-    while not os.path.exists(hold) and time.time() - t0 < 60:
+    while not os.path.exists(hold) and time.time() - t0 < float(os.environ.get("FAKE_HANG_S", "300")):
         time.sleep(0.05)
 usage = {"input_tokens": 12, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 57000, "output_tokens": 40}
 if mode == "error-result":
@@ -395,8 +405,7 @@ check "a review started while the lessons are warm starts at once" "start_order=
 rm -f "$AI_REVIEW_WARM_DIR/$KEY.warm" "$FAKE_LOG/answering"
 FAKE_MODE=ok FAKE_HOLD="$WORKDIR/release-c" review third &
 held_pid=$!
-t0=$SECONDS
-while [ ! -e "$AI_REVIEW_WARM_DIR/$KEY.warm" ] && [ $((SECONDS - t0)) -lt 60 ]; do sleep 0.05; done
+hang_wait '[ -e "$AI_REVIEW_WARM_DIR/$KEY.warm" ]' 0.05
 if [ -e "$AI_REVIEW_WARM_DIR/$KEY.warm" ] && [ ! -e "$E2E/state/third.txt" ]; then ok
 else bad "the lessons are marked warm while the reviewer is still answering, not once it ends"; fi
 lock_free && ok || bad "and the turn is let go then, so the reviews behind it can start"

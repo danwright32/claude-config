@@ -26,6 +26,16 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUSH_HOOK="$DIR/ai-review-on-push.sh"
 NUDGE="$DIR/ai-review-nudge.sh"
@@ -85,8 +95,8 @@ sleep "${FAKE_CLAUDE_SLEEP:-0}"
 # long that takes, so "still running" is a state the suite SETS rather than a race against a
 # sleep (claude-config#1541, L290). The ceiling only stops a broken run hanging for ever.
 if [ -n "${FAKE_CLAUDE_HOLD:-}" ]; then
-  n=0
-  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ "$n" -lt 600 ]; do sleep 0.1; n=$((n + 1)); done
+  t0=$SECONDS
+  while [ ! -e "$FAKE_CLAUDE_HOLD" ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.1; done
 fi
 : > "$FAKE_LOG/finished"
 if [ -n "${FAKE_CLAUDE_OUT:-}" ]; then printf '%s\n' "$FAKE_CLAUDE_OUT"; exit 0; fi
@@ -162,14 +172,10 @@ fire_push(){ # fire_push <command> <exit code> [cwd]
   ELAPSED=$((t1 - t0))
 }
 
-wait_for_final(){ # wait_for_final <sha> <seconds>  -> 0 when the finished file appears
-  local f="$AI_REVIEW_STATE_DIR"/*"-$1.txt" ticks=0
-  while [ "$ticks" -lt "$(( $2 * 10 ))" ]; do
-    # shellcheck disable=SC2086
-    for cand in $f; do [ -f "$cand" ] && return 0; done
-    sleep 0.1; ticks=$((ticks + 1))
-  done
-  return 1
+wait_for_final(){ # wait_for_final <sha>  -> 0 when the finished file appears, 1 at the hang ceiling
+  # It took a ceiling of its own from each caller, 20 or 120 seconds, which a loaded Mac can reach
+  # with nothing broken (#1679; those were settings, not measurements).
+  hang_wait "compgen -G '$AI_REVIEW_STATE_DIR/*-$1.txt' >/dev/null"
 }
 
 # The sessions the nudge cases below speak as, begun HERE, before any push, as a real session's first
@@ -212,7 +218,7 @@ check "and the branch" "branch=main" "$pending_body"
 
 # Released only now, so everything above was judged while the review was certainly running.
 : > "$FIX_HOLD"
-wait_for_final "$SHA_FIX" 20 && ok || bad "the finished file appears within 20 seconds"
+wait_for_final "$SHA_FIX" && ok || bad "the finished file appears"
 final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_FIX".txt )
 FINAL_FIX="${final[0]:-}"
 [ -f "${pending_now[0]:-}" ] && bad "the .pending file is gone once the review has finished" || ok
@@ -376,7 +382,7 @@ SHA_REFUSED="$(G rev-parse HEAD)"
 AI_REVIEW_FULL_FILES=0 fire_push "git push origin main" none
 check "a payload that cannot say whether the push succeeded goes ahead" "started in the background" "$OUT"
 check "and with AI_REVIEW_FULL_FILES=0 the start line says the diff went alone" "diff alone" "$OUT"
-wait_for_final "$SHA_REFUSED" 20 && ok || bad "and that review finishes"
+wait_for_final "$SHA_REFUSED" && ok || bad "and that review finishes"
 check_eq "starting one more review" 2 "$(calls)"
 check_not "and no full file section was sent" "===== FULL FILE" "$(cat "$FAKE_LOG/stdin")"
 check "while the diff itself was" "+export const x = 1;" "$(cat "$FAKE_LOG/stdin")"
@@ -454,7 +460,7 @@ G push -q origin main 2>/dev/null
 SHA_SLOW="$(G rev-parse HEAD)"
 : > "$FAKE_LOG/calls"; rm -f "$FAKE_LOG/finished" "$FAKE_LOG/pid"
 # The review is held on a file nobody creates, so it can end only by being stopped (or, broken, at
-# the fake's own one minute ceiling). Whether the deadline stopped it is judged by what is left, never
+# the hang ceiling the fake is handed). Whether the deadline stopped it is judged by what is left, never
 # by elapsed time (#1577, L290): the review never reached its own end, and its process is gone. This
 # was "the finished file lands within 12 s of the push", a fixed time that load can reach with
 # nothing broken. The wait below is on the finished file, with a ceiling only a hang reaches. Every
@@ -462,7 +468,7 @@ SHA_SLOW="$(G rev-parse HEAD)"
 AI_REVIEW_DEADLINE_SECONDS=1 FAKE_CLAUDE_HOLD="$WORKDIR/never-released" fire_push "git push origin main" 0
 check "the slow review still starts" "started in the background" "$OUT"
 t0="$(ms)"
-wait_for_final "$SHA_SLOW" 120 && ok || bad "a review past its deadline still produces a finished file"
+wait_for_final "$SHA_SLOW" && ok || bad "a review past its deadline still produces a finished file"
 t1="$(ms)"
 slow_pid="$(cat "$FAKE_LOG/pid" 2>/dev/null)"
 if [ -e "$FAKE_LOG/finished" ]; then
@@ -858,7 +864,7 @@ GG remote add origin "$GR_ORIGIN"; GG push -q -u origin main 2>/dev/null
 # Section 7's review runs detached and is not waited for there, so its call to the fake can land
 # AFTER this baseline is read, and did on CI (4 calls counted where 3 were made here). Waited for
 # first, so the difference below counts this section's pushes and nothing else (L134).
-wait_for_final "$(G3 rev-parse HEAD)" 20 && ok || bad "section 7's review finishes before this section counts calls"
+wait_for_final "$(G3 rev-parse HEAD)" && ok || bad "section 7's review finishes before this section counts calls"
 before_gated="$(calls)"
 
 # A branch push: the gate reads it, so nothing starts here, and the skip says so out loud.
@@ -881,7 +887,7 @@ GG push -q 2>/dev/null
 SHA_OVERRIDDEN="$(GG rev-parse HEAD)"
 fire_push "SKIP_PR_REVIEW=1 git push" 0 "$GR"
 check "a branch push carrying SKIP_PR_REVIEW=1 is reviewed here, since the gate did not hold it" "started in the background" "$OUT"
-wait_for_final "$SHA_OVERRIDDEN" 20 && ok || bad "and that review finishes"
+wait_for_final "$SHA_OVERRIDDEN" && ok || bad "and that review finishes"
 
 # A push of the default branch: the gate does not run there, so this review does.
 GG checkout -q main
@@ -891,7 +897,7 @@ GG push -q 2>/dev/null
 SHA_ONMAIN="$(GG rev-parse HEAD)"
 fire_push "git push" 0 "$GR"
 check "a push of the default branch is reviewed here" "started in the background" "$OUT"
-wait_for_final "$SHA_ONMAIN" 20 && ok || bad "and that review finishes"
+wait_for_final "$SHA_ONMAIN" && ok || bad "and that review finishes"
 
 # A push that only deletes a remote branch, made while standing on the default branch, sends no
 # commits, so there is nothing for any review to read. The head it stands on is a new commit nobody
@@ -908,7 +914,7 @@ check_not "and starts nothing" "started in the background" "$OUT"
 [ -e "$AI_REVIEW_STATE_DIR"/*-"$SHA_AFTERDELETE".txt.pending ] && bad "a delete only push writes no pending marker" || ok
 fire_push "git push" 0 "$GR"
 check "the control: the same head pushed for real is reviewed" "started in the background" "$OUT"
-wait_for_final "$SHA_AFTERDELETE" 20 && ok || bad "and that review finishes"
+wait_for_final "$SHA_AFTERDELETE" && ok || bad "and that review finishes"
 
 check_eq "the fake claude was reached by the three pushes that sent commits the gate does not hold, and by nothing else" 3 "$(( $(calls) - before_gated ))"
 covered_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_COVERED".txt )
@@ -956,7 +962,7 @@ check "the control still starts a review for the same push with python3 present"
 # Waited for, so the review this suite started is finished before the scratch directory it writes
 # into is removed. A detached child still writing while its parent's trap deletes the tree leaves
 # both the directory and the process behind (claude-config#465).
-wait_for_final "$SHA_NOPY" 20 && ok || bad "and that control review finishes"
+wait_for_final "$SHA_NOPY" && ok || bad "and that control review finishes"
 
 # ===========================================================================
 # 8. A review that could not find the lessons says so in its own answer (claude-config#539).
@@ -968,7 +974,7 @@ G push -q origin main 2>/dev/null
 SHA_NOLESSONS="$(G rev-parse HEAD)"
 mkdir -p "$WORKDIR/no-lessons-here"
 AI_REVIEW_LESSONS_DIR="$WORKDIR/no-lessons-here" fire_push "git push origin main" 0
-wait_for_final "$SHA_NOLESSONS" 20 && ok || bad "the review with no lessons still finishes"
+wait_for_final "$SHA_NOLESSONS" && ok || bad "the review with no lessons still finishes"
 nolessons_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_NOLESSONS".txt )
 nolessons_body="$(cat "${nolessons_final[0]:-/dev/null}" 2>/dev/null)"
 check "and its answer says it ran without the lessons" "ran without the lessons index: no LESSONS-INDEX-*.md in" "$nolessons_body"
@@ -993,7 +999,7 @@ SHA_WIRE="$(G rev-parse HEAD)"
 FAKE_CLAUDE_OUT='src/wiring.ts:1: The tests expect deploy.yml to call the hash script, but the diff contains no change to `.github/workflows/deploy.yml` to add this wiring. Should be: update .github/workflows/deploy.yml in this push. [severity: critical]
 src/wiring.ts:1: wired is exported but never read. Should be: read it or remove it. [severity: minor]' \
   fire_push "git push origin main" 0
-wait_for_final "$SHA_WIRE" 20 && ok || bad "the workflow review finishes"
+wait_for_final "$SHA_WIRE" && ok || bad "the workflow review finishes"
 wire_stdin="$(cat "$FAKE_LOG/stdin")"
 check "the reviewer is given the complete list of changed files" "===== FILES THIS PUSH CHANGED" "$wire_stdin"
 check "which names the workflow file it is not shown" ".github/workflows/deploy.yml	(changed, not shown" "$wire_stdin"
@@ -1417,7 +1423,7 @@ FAKE_CLAUDE_OUT='src/placed.ts:2: reduce with no initial value throws on an empt
 Quote: return xs.reduce((a, b) => a + b);
 src/placed.ts:~1: total has no type for xs. Should be: type it. [severity: minor]' \
   fire_push "git push origin main" 0
-wait_for_final "$SHA_PLACED" 20 && ok || bad "the placement review finishes"
+wait_for_final "$SHA_PLACED" && ok || bad "the placement review finishes"
 placed_final=( "$AI_REVIEW_STATE_DIR"/*-"$SHA_PLACED".txt )
 placed_body="$(cat "${placed_final[0]:-/dev/null}" 2>/dev/null)"
 check "the stored review is a review, not unparsed" "status=ok" "$placed_body"

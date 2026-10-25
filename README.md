@@ -1871,7 +1871,12 @@ seconds, or a `sleep 0.1` loop of a few hundred ticks, which a loaded Mac reache
 (#1577, #1620). A wait on a condition in a suite takes its ceiling from `hooks/lib/hang-wait.sh`
 instead (`hang_wait "<condition>"`, giving up at `HANG_S`), one number only a hang reaches, which
 `SUITE_HANG_SECONDS` lowers for one run when a control has to show a wait still fails. That ceiling
-is a setting, not a measurement.
+is a setting, not a measurement. A stand in a suite writes runs as a process of its own, so the
+suite exports the ceiling as `FAKE_HANG_S` and the stand in bounds its clock by
+`${FAKE_HANG_S:-300}`. A wait the PASSING case is meant to run out (a window a fault is given to
+show itself in) is a different thing and calls `window_wait <seconds> "<condition>"` with its length
+stated. `hooks/test-hand-rolled-wait.sh` fails any suite that hand rolls a wait bounded by its own
+clock or tick count instead (#1679), with no list of suites excused from it.
 
 ### Measuring the section time budget's margin
 

@@ -23,6 +23,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../../.." && pwd)"
 GUARD="$DIR/check-chrome-launches.py"
@@ -152,9 +160,9 @@ fi
 before(){ ls -1 "$clones" 2>/dev/null | LC_ALL=C sort > "$TMP/clones.before"; }
 left(){ ls -1 "$clones" 2>/dev/null | LC_ALL=C sort | LC_ALL=C comm -13 "$TMP/clones.before" - | tr '\n' ' ' | sed 's/ $//'; }
 # Ends what a test started, by the pid it recorded (L1011), and waits for it to be gone.
-end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kill -KILL "$1" 2>/dev/null; local n=0; while kill -0 "$1" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done; }
+end_tree(){ [ -n "${1:-}" ] || return 0; bash "$KILL_TREE" "$1" 2>/dev/null; kill -KILL "$1" 2>/dev/null; hang_wait "! kill -0 $1 2>/dev/null"; }
 # Waits, bounded, for a file to hold something (L290).
-await_file(){ local n=0; while [ ! -s "$1" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done; [ -s "$1" ]; }
+await_file(){ hang_wait "[ -s '$1' ]"; }
 
 if [ ! -x "$REAL_CHROME" ]; then
   echo "SUITE-PART-UNMEASURED no Chrome at $REAL_CHROME, so whether a killed real Chrome leaves its copy behind was not measured"
@@ -201,7 +209,7 @@ JS
       : > "$TMP/node.out"
       ( cd "$TMP" && exec node "$TMP/abandon.mjs" "$DIR/score/capture-web.mjs" ) > "$TMP/node.out" 2>&1 &
       np=$!
-      n=0; while ! grep -q -e '^drawn ' -e '^NO-PLAYWRIGHT' "$TMP/node.out" && kill -0 "$np" 2>/dev/null && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+      hang_wait "grep -q -e '^drawn ' -e '^NO-PLAYWRIGHT' '$TMP/node.out' || ! kill -0 $np 2>/dev/null"
       said="$(head -c 400 "$TMP/node.out")"
       kids="$(pgrep -P "$np" | tr '\n' ' ')"
       kill -KILL "$np" 2>/dev/null; wait "$np" 2>/dev/null

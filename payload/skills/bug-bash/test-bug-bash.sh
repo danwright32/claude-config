@@ -19,6 +19,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$DIR/target-guard.sh"
 REPORT="$DIR/report.py"
@@ -154,10 +162,7 @@ printf '{"proxy":"http://127.0.0.1:1","pid":%s}\n' "$DEAD_PID" > "$TMP/proxy/pro
 # The upstream deadline is shortened so a stalled site is seen to time out within the suite.
 NODE_EXTRA_CA_CERTS="$TMP/site.crt" node "$PROXY_JS" --state "$TMP/proxy" --upstream-timeout-ms 1000 >"$TMP/proxy.out" 2>&1 & PROXY_PID=$!
 BG_PIDS="$BG_PIDS $PROXY_PID"
-for _ in $(seq 1 400); do
-  [ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" 2>/dev/null && break
-  sleep 0.05
-done
+hang_wait '[ -s "$TMP/plain.port" ] && [ -s "$TMP/tls.port" ] && [ -s "$TMP/impostor.port" ] && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" 2>/dev/null' 0.05
 PROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy/proxy.json" 2>/dev/null)"
 PROXY_CA="$TMP/proxy/certs/ca.pem"
 PLAIN="http://127.0.0.1:$(cat "$TMP/plain.port" 2>/dev/null)"
@@ -207,7 +212,7 @@ else
   # A browser that goes away mid answer takes the proxy's upstream request with it: the site sees
   # its reader leave within seconds, not after the whole answer.
   code_of -x "$PROXY" --max-time 1 "$PLAIN/drip" >/dev/null
-  for _ in $(seq 1 100); do grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && break; sleep 0.1; done
+  hang_wait 'grep -q "^DROPPED /drip" "$TMP/plain.log.dropped" 2>/dev/null'
   grep -q '^DROPPED /drip' "$TMP/plain.log.dropped" 2>/dev/null && ok || bad "a request the browser abandons is dropped upstream too"
   # A site that drops its answer part way ends the browser's request at once: curl then reports a
   # short transfer (18), never its own deadline (28).
@@ -330,7 +335,7 @@ with socketserver.TCPServer(("127.0.0.1", 0), handler) as httpd:
 PY
 SERVER_PID=$!
 # Waited on the condition itself, with a deadline, never a fixed sleep.
-for _ in $(seq 1 200); do [ -s "$PORT_FILE" ] && break; sleep 0.05; done
+hang_wait '[ -s "$PORT_FILE" ]' 0.05
 PORT="$(cat "$PORT_FILE" 2>/dev/null)"
 if [ -z "$PORT" ]; then
   bad "the fixture server started"
@@ -643,7 +648,7 @@ reset_fake
 mkdir -p "$TMP/proxy-e"
 PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/proxy-e.out" 2>&1 & EPROXY_PID=$!
 BG_PIDS="$BG_PIDS $EPROXY_PID"
-for _ in $(seq 1 200); do grep -q "\"pid\":$EPROXY_PID" "$TMP/proxy-e/proxy.json" 2>/dev/null && break; kill -0 "$EPROXY_PID" 2>/dev/null || break; sleep 0.05; done
+hang_wait 'grep -q "\"pid\":$EPROXY_PID" "$TMP/proxy-e/proxy.json" 2>/dev/null || ! kill -0 "$EPROXY_PID" 2>/dev/null' 0.05
 EPROXY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["proxy"])' "$TMP/proxy-e/proxy.json" 2>/dev/null)"
 RECPORT="${PLAIN##*:}"
 eguard() { fakeenv bash "$GUARD" --read-only --proxy "$EPROXY" "$@" 2>&1; }
@@ -798,7 +803,7 @@ else
   reset_fake
   mkdir -p "$TMP/proxy-k"
   PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-k" --egress >"$TMP/proxy-k.out" 2>&1 & kp=$!
-  for _ in $(seq 1 200); do grep -q "\"pid\":$kp" "$TMP/proxy-k/proxy.json" 2>/dev/null && break; sleep 0.05; done
+  hang_wait 'grep -q "\"pid\":$kp" "$TMP/proxy-k/proxy.json" 2>/dev/null' 0.05
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$kp" >/dev/null 2>&1
   [ "$(owner_now)" = "$kp" ] && ok || bad "the rule is loaded for the proxy about to be killed" "owner $(owner_now)"
   kill -9 "$kp" 2>/dev/null; wait "$kp" 2>/dev/null
@@ -832,7 +837,7 @@ else
   # nothing as it exits (lessons review of #938).
   reset_fake
   PATH="$FAKE/bin:$PATH" node "$PROXY_JS" --state "$TMP/proxy-e" --egress >"$TMP/second-e.out" 2>&1 & second=$!
-  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  hang_wait '! kill -0 "$second" 2>/dev/null'
   if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
   [ "$rc" = 3 ] && ! grep -q 'unload' "$FAKE/sudo.calls" 2>/dev/null && ok \
     || bad "a --egress proxy that never listened unloads nothing as it exits (rc $rc)" "$(cat "$FAKE/sudo.calls" 2>/dev/null)"
@@ -844,16 +849,16 @@ else
   reset_fake; rm -f "$FAKE/overlap" "$FAKE/entered" "$FAKE/hung" "$FAKE/hang.pids" "$FAKE"/go*
   touch "$FAKE/knob-hang-load"
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >/dev/null 2>&1 & hl=$!
-  for _ in $(seq 1 200); do [ -e "$FAKE/hung" ] && break; sleep 0.05; done
+  hang_wait '[ -e "$FAKE/hung" ]' 0.05
   for p in $(cat "$FAKE/hang.pids" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
   wait "$hl" 2>/dev/null
   rm -f "$FAKE/knob-hang-load"; touch "$FAKE/knob-slow-load"
   BUG_BASH_EGRESS_TEST_TAKEOVER_GATE="$FAKE/go" fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-b.out" 2>&1 & rb=$!
-  for _ in $(seq 1 200); do [ -e "$FAKE/go.seen" ] && break; sleep 0.05; done
+  hang_wait '[ -e "$FAKE/go.seen" ]' 0.05
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$$" >"$TMP/race-a.out" 2>&1 & ra=$!
-  for _ in $(seq 1 200); do [ -e "$FAKE/entered" ] && break; sleep 0.05; done
+  hang_wait '[ -e "$FAKE/entered" ]' 0.05
   touch "$FAKE/go"
-  for _ in $(seq 1 400); do kill -0 "$ra" 2>/dev/null || kill -0 "$rb" 2>/dev/null || break; sleep 0.05; done
+  hang_wait '! kill -0 "$ra" 2>/dev/null && ! kill -0 "$rb" 2>/dev/null' 0.05
   wait "$ra"; rca=$?; wait "$rb"; rcb=$?
   [ -e "$FAKE/go.seen" ] && [ -s "$FAKE/hang.pids" ] && [ ! -e "$FAKE/overlap" ] && [ "$rca" = 0 ] && [ "$rcb" = 0 ] && ok \
     || bad "two helpers racing for a stale lock are never inside at once, and both finish (rc $rca $rcb)" "$(cat "$FAKE/overlap" "$TMP/race-a.out" "$TMP/race-b.out" 2>/dev/null)"
@@ -868,7 +873,7 @@ else
   fakeenv bash "$EGRESS" load 127.0.0.1 "$dead_port" "$PROXY_PID" >"$TMP/guard-wait.out" 2>&1 & gw=$!
   sleep 5
   rm -f "$FAKE/state/held.takeover"
-  for _ in $(seq 1 300); do kill -0 "$gw" 2>/dev/null || break; sleep 0.05; done
+  hang_wait '! kill -0 "$gw" 2>/dev/null' 0.05
   wait "$gw"; rc=$?
   [ "$rc" = 0 ] && [ "$(owner_now)" = "$PROXY_PID" ] && ok || bad "a waiter outlasts a takeover under way and then loads (rc $rc)" "$(cat "$TMP/guard-wait.out")"
   fakeenv bash "$EGRESS" unload >/dev/null 2>&1
@@ -877,7 +882,7 @@ else
   reset_fake
   out="$(eguard "https://app.example.com:$dead_port/")"
   kill "$EPROXY_PID" 2>/dev/null
-  for _ in $(seq 1 200); do kill -0 "$EPROXY_PID" 2>/dev/null || break; sleep 0.05; done
+  hang_wait '! kill -0 "$EPROXY_PID" 2>/dev/null' 0.05
   nothing_loaded && grep -q -- '-X 4242' "$FAKE/pfctl.calls" && ok \
     || bad "a stopped --egress proxy takes its rule away and releases its pf reference" "$(cat "$TMP/proxy-e.out") $(cat "$FAKE/pfctl.calls" 2>/dev/null)"
 fi
@@ -895,7 +900,7 @@ nothing_loaded && ok || bad "a failed self test takes its rule away"
 # listener left holding the output open would otherwise hold the suite too.
 reset_fake; echo 4242 > "$FAKE/knob-exempt-gid"; echo 4242 > "$FAKE/knob-pf-gid"
 fakeenv bash "$EGRESS" selftest > "$TMP/selftest.out" 2>&1 & st=$!
-for _ in $(seq 1 300); do kill -0 "$st" 2>/dev/null || break; sleep 0.05; done
+hang_wait '! kill -0 "$st" 2>/dev/null' 0.05
 if kill -0 "$st" 2>/dev/null; then kill "$st" 2>/dev/null; rc=hung; else wait "$st"; rc=$?; fi
 out="$(cat "$TMP/selftest.out")"
 [ "$rc" = 0 ] && grep -q '^PASS' <<< "$out" && grep -q '^exempt: ' <<< "$out" && ok || bad "the self test passes where the rule blocks and exempts (rc $rc)" "$out"
@@ -1145,7 +1150,7 @@ if [ -n "${PROXY_PID:-}" ]; then
   # Started in the background and waited on with a deadline, so a proxy that wrongly starts is
   # stopped and reported rather than holding the suite.
   node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/second.out" 2>&1 & second=$!
-  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  hang_wait '! kill -0 "$second" 2>/dev/null'
   if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
   out="$(cat "$TMP/second.out")"
   [ "$rc" = 3 ] && grep -q "already running" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
@@ -1155,7 +1160,7 @@ if [ -n "${PROXY_PID:-}" ]; then
   # refuses instead, saying why, and leaves the file alone.
   : > "$TMP/local.log"
   STUB_LOCAL_PORT="${PROXY##*:}" localenv node "$PROXY_JS" --state "$TMP/proxy" >"$TMP/second.out" 2>&1 & second=$!
-  for _ in $(seq 1 100); do kill -0 "$second" 2>/dev/null || break; sleep 0.1; done
+  hang_wait '! kill -0 "$second" 2>/dev/null'
   if kill -0 "$second" 2>/dev/null; then kill "$second" 2>/dev/null; wait "$second" 2>/dev/null; rc=running; else wait "$second"; rc=$?; fi
   out="$(cat "$TMP/second.out")"
   [ "$rc" = 4 ] && grep -q "this Mac could not open a connection.*EADDRNOTAVAIL" <<< "$out" && grep -q "\"pid\":$PROXY_PID" "$TMP/proxy/proxy.json" && ok \
@@ -1167,7 +1172,7 @@ mkdir -p "$TMP/proxy3"
 printf '{"proxy":"http://127.0.0.1:%s","pid":%s}\n' "$dead_port" "$$" > "$TMP/proxy3/proxy.json"
 node "$PROXY_JS" --state "$TMP/proxy3" >"$TMP/third.out" 2>&1 & third=$!
 BG_PIDS="$BG_PIDS $third"
-for _ in $(seq 1 200); do grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && break; kill -0 "$third" 2>/dev/null || break; sleep 0.05; done
+hang_wait 'grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null || ! kill -0 "$third" 2>/dev/null' 0.05
 grep -q "\"pid\":$third" "$TMP/proxy3/proxy.json" 2>/dev/null && ok \
   || bad "a proxy.json whose pid was reused by something that is not a proxy does not stop a new proxy" "$(cat "$TMP/third.out")"
 kill "$third" 2>/dev/null; wait "$third" 2>/dev/null
@@ -1175,7 +1180,7 @@ kill "$third" 2>/dev/null; wait "$third" 2>/dev/null
 # here on a hangup, the signal a closed terminal sends.
 if [ -n "${PROXY_PID:-}" ]; then
   kill -HUP "$PROXY_PID" 2>/dev/null
-  for _ in $(seq 1 200); do kill -0 "$PROXY_PID" 2>/dev/null || break; sleep 0.05; done
+  hang_wait '! kill -0 "$PROXY_PID" 2>/dev/null' 0.05
   [ ! -e "$TMP/proxy/proxy.json" ] && ok || bad "a stopped proxy removes its proxy.json" "$(cat "$TMP/proxy/proxy.json" 2>/dev/null)"
 fi
 # A proxy that cannot start (here, no openssl to make its certificates) refuses by name, and leaves

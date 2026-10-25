@@ -8290,14 +8290,11 @@ check "#31 and a run one second over that bound is refused" \
 
 # A watchdog that outlives the run it watches is holding a process id that the system is free to
 # hand to something else, and it kills what it finds there. Each one exits within a poll of its
-# own run ending, so this waits a few seconds for that rather than reading the instant after.
+# own run ending, so this waits for that, up to the hang ceiling (#1679), rather than reading the
+# instant after.
 _wd_now=0
-_wd_wait=0
-while [ "$_wd_wait" -lt 10 ]; do
-  _wd_now="$(pgrep -f "suite-deadline-watchdog.$_wd_tag" 2>/dev/null | wc -l | tr -d ' ')"
-  [ "${_wd_now:-0}" -eq 0 ] && break
-  sleep 1; _wd_wait=$((_wd_wait + 1))
-done
+_wd_gone(){ _wd_now="$(pgrep -f "suite-deadline-watchdog.$_wd_tag" 2>/dev/null | wc -l | tr -d ' ')"; [ "${_wd_now:-0}" -eq 0 ]; }
+hang_wait _wd_gone 0.2
 check "#31 the runs above left no watchdog of their own behind" "[ '${_wd_now:-0}' -eq 0 ]"
 # The control, and it is what stops the check above passing by looking for something that could
 # never exist. A pattern that matches nothing reads exactly like a clean answer (L98, L1), and a
@@ -8875,11 +8872,7 @@ sleep 600 &
 _or_bystander=$!
 # Given a moment to become what they claim to be: `exec -a` replaces the process, and reading its
 # command line before that has happened would test the shell that is about to be replaced.
-_or_w=0
-while [ "$_or_w" -lt 20 ]; do
-  case "$(ps -o command= -p "$_or_stray" 2>/dev/null || true)" in *orphan-fixture*) break ;; esac
-  sleep 1; _or_w=$(( _or_w + 1 ))
-done
+hang_wait 'case "$(ps -o command= -p "$_or_stray" 2>/dev/null || true)" in *orphan-fixture*) true ;; *) false ;; esac' 0.2
 printf '%s\n%s\n' "$_or_stray" "$_or_bystander" > "$_or_reg"
 _mklock "$_or_lock" "99999999" "$_thishost" "$((_now - 5))"
 printf '%s\n' "$_or_reg" > "$_or_lock/registry"
@@ -8921,11 +8914,7 @@ rm -rf "$_or2_lock"
 _or2_reg="$WORK/orphan-registry-2"
 bash -c 'exec -a "bash '"$SCRIPT_SELF"' --orphan-fixture-2" sleep 600' &
 _or2_stray=$!
-_or2_w=0
-while [ "$_or2_w" -lt 20 ]; do
-  case "$(ps -o command= -p "$_or2_stray" 2>/dev/null || true)" in *orphan-fixture-2*) break ;; esac
-  sleep 1; _or2_w=$(( _or2_w + 1 ))
-done
+hang_wait 'case "$(ps -o command= -p "$_or2_stray" 2>/dev/null || true)" in *orphan-fixture-2*) true ;; *) false ;; esac' 0.2
 printf '%s
 ' "$_or2_stray" > "$_or2_reg"
 _mklock "$_or2_lock" "99999997" "$_thishost" "$((_now - 5))"
@@ -18528,11 +18517,10 @@ wl_watch(){   # $1 = the clock, as an epoch
     SYNC_REPO="$WL/clone" SYNC_NO_NOTIFY=0 SYNC_NOTIFIER="$WL_NOTIFIER" SYNC_HOSTNAME=wl-mac \
     SYNC_WATCH_PID_FILE="$WL/watch.pid" SYNC_HOLD_FILE="$WL/hold" bash "$WL_SELF" watch
 }
-# Waits until $2 holds, for at most twenty seconds, and no longer than process $1 lives: a watcher
-# that exits rather than park fails the checks below at once instead of after the bound.
+# Waits until $2 holds, up to the hang ceiling (#1679), and no longer than process $1 lives: a
+# watcher that exits rather than park fails the checks below at once instead of after the bound.
 wl_wait(){   # $1 = a pid   $2 = a condition
-  local n=0
-  while ! eval "$2" && kill -0 "$1" 2>/dev/null && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n+1)); done
+  hang_wait "{ $2; } || ! kill -0 $1 2>/dev/null"
   return 0
 }
 wl_field(){ awk -v f="$1" 'NR==1{print $f}' "$WL/clone/.watch-stale" 2>/dev/null; }

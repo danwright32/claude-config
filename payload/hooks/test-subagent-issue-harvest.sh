@@ -21,6 +21,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPOOL_LIB="$DIR/lib/issue-spool.sh"
 HARVEST="$DIR/subagent-issue-harvest.sh"
@@ -715,8 +723,8 @@ early="$(found_for test-agent-id)"
 PAYLOAD_AGENT_ID=third-agent PAYLOAD_BG_TASKS="[]" payload "$REPO" \
   | CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 7200))" bash "$HARVEST" >/dev/null 2>&1
 # The sweep starts the overdue harvest in the background, so this waits on its RECORD, bounded by a
-# count of checks rather than a fixed sleep (L290).
-for _ in $(seq 1 300); do [ "$(found_for test-agent-id)" -ge 1 ] && break; sleep 0.1; done
+# the hang ceiling (lib/hang-wait.sh, #1679) rather than a fixed sleep (L290).
+hang_wait '[ "$(found_for test-agent-id)" -ge 1 ]'
 [ "$early" = 0 ] && [ "$(found_for test-agent-id)" = 1 ] && [ -z "$(ls -A "$PENDING_DIR" 2>/dev/null)" ] \
   && check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" ok \
   || check "#898 an agent that ended with its own Monitor running is swept once overdue, and not before" "early=$early later=$(found_for test-agent-id) pending=$(ls -A "$PENDING_DIR" 2>&1)"
@@ -730,10 +738,8 @@ PAYLOAD_BG_TASKS="[$SELF_TASK,$OWN_MONITOR]" payload "$REPO" "$WAITING_TRANSCRIP
 PAYLOAD_AGENT_ID=third-agent PAYLOAD_BG_TASKS="[]" payload "$REPO" \
   | CLAUDE_ISSUE_SPOOL_LIB="$FAILING_SPOOL_LIB" CLAUDE_ISSUE_HARVEST_NOW="$((T0 + 7200))" bash "$HARVEST" >/dev/null 2>&1
 # Waits on the swept harvest FINISHING, which is its claim leaving the name it holds while it runs.
-for _ in $(seq 1 300); do
-  held="$(ls "$PENDING_DIR" 2>/dev/null | grep -c '\.claimed\.[0-9]')"
-  [ "$held" = 0 ] && break; sleep 0.1
-done
+no_claim_held(){ [ "$(ls "$PENDING_DIR" 2>/dev/null | grep -c '\.claimed\.[0-9]')" = 0 ]; }
+hang_wait no_claim_held
 [ -f "$PENDING_DIR/test-agent-id.json.claimed" ] \
   && check "#898 a swept harvest that could not write its record keeps the claim for a later sweep" ok \
   || check "#898 a swept harvest that could not write its record keeps the claim for a later sweep" "pending=$(ls -A "$PENDING_DIR" 2>&1)"
