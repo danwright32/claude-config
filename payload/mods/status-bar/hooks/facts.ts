@@ -56,7 +56,22 @@ export type UnpushedReading = { count: number; readAt: number; isStale: boolean 
  * One background job as the job watcher (#611) reports it through $.jobs. state and owner came with
  * #784; a watcher older than that sends neither, and its stuck flag stands for stalled.
  */
-export type Job = { label: string; runMs: number; kept: boolean; stuck: boolean; state?: 'running' | 'waiting' | 'stalled'; owner?: string | null; ownerId?: string | null }
+export type Job = {
+  label: string
+  runMs: number
+  kept: boolean
+  stuck: boolean
+  state?: 'running' | 'waiting' | 'stalled'
+  owner?: string | null
+  ownerId?: string | null
+  /**
+   * #1583: how the watcher measured a stalled job: silent, no new output for quietMs; or repeating,
+   * the same output over and over. Null while it is not stalled; a watcher from before sends neither.
+   */
+  stall?: 'silent' | 'repeating' | null
+  /** How long a silent stalled job has printed nothing, as the watcher measured it. */
+  quietMs?: number | null
+}
 /** A background agent listed as running whose tool calls stopped twenty minutes ago or more (#759). */
 export type QuietAgent = { name: string; quietMs: number }
 
@@ -90,6 +105,25 @@ const jobPhrases = (jobs: readonly Job[], actor: string): Item[] => {
   return out
 }
 
+// #1583, settled with Dan in its design round (docs/design/1583-quiet-background-command.html): a
+// background command of this conversation's own that the watcher measured as stalled. Not shown
+// while Claude works, since nothing is asked of Dan then; once Claude's turn has ended and it is
+// still quiet, nobody is watching it, so each is named with what was measured and the line asks Dan
+// to ask Claude to check, once after them all (L605). Only what was measured is said (L11): a
+// repeating one is never called quiet, and one from a watcher that says neither claims neither.
+const quietPhrase = (j: Job): string =>
+  j.stall === 'silent' && typeof j.quietMs === 'number'
+    ? `${j.label} quiet ${span(j.quietMs)}`
+    : j.stall === 'repeating'
+      ? `${j.label} repeating the same output`
+      : `${j.label} not progressing`
+const listed = (phrases: readonly string[]): string =>
+  phrases.length < 2 ? (phrases[0] ?? '') : `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`
+const quietItem = (jobs: readonly Job[], isWorking: boolean): Item[] => {
+  const quiet = jobs.filter(j => stateOf(j) === 'stalled')
+  return quiet.length && !isWorking ? [{ text: `${listed(quiet.map(quietPhrase))}, ask Claude to check`, color: AMBER }] : []
+}
+
 /**
  * The needs-a-look line, amber where something needs a look and lavender for work only going
  * along, most urgent first so a narrow window cuts off what can wait longest: the scope modes in bold (no build or winding down, and away, can be on at once, each its own
@@ -98,7 +132,16 @@ const jobPhrases = (jobs: readonly Job[], actor: string): Item[] => {
  * jobs under its task's name, and unpushed commits. Empty when nothing needs a look and no mode is
  * on, so the band does not show.
  */
-export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | null; jobs: readonly Job[]; agents?: readonly QuietAgent[]; unpushed: UnpushedReading | null; now: number }): LookPart[] => {
+export const lookParts = (f: {
+  modes: readonly StatusBarMode[]
+  pr: PrReading | null
+  jobs: readonly Job[]
+  agents?: readonly QuietAgent[]
+  unpushed: UnpushedReading | null
+  now: number
+  /** A main turn is running (#1583): this conversation's quiet background commands wait for its end. */
+  isWorking?: boolean
+}): LookPart[] => {
   const items: Item[] = []
   // A reading whose refresh since failed is kept with its age, never blanked (L682).
   const age = (r: { readAt: number; isStale: boolean }) => (r.isStale ? `, as of ${span(f.now - r.readAt)} ago` : '')
@@ -107,7 +150,10 @@ export const lookParts = (f: { modes: readonly StatusBarMode[]; pr: PrReading | 
   for (const a of f.agents ?? []) items.push({ text: `agent ${a.name} quiet ${span(a.quietMs)}, left to Claude`, color: AMBER })
   // This conversation's own jobs, a stalled one ahead of those running fine (#706), then each
   // background agent's as one item under its task's name (#784).
-  items.push(...jobPhrases(f.jobs.filter(j => !j.owner), 'Claude'))
+  // Its quiet ones only once Claude's turn has ended (#1583), the rest as before.
+  const own = f.jobs.filter(j => !j.owner)
+  items.push(...quietItem(own, f.isWorking === true))
+  items.push(...jobPhrases(own.filter(j => stateOf(j) !== 'stalled'), 'Claude'))
   // Grouped by the agent's id, never its description: two agents given the same task stay apart,
   // each then named with the start of its id (lessons review of PR 794).
   const keyOf = (j: Job) => j.ownerId ?? j.owner ?? ''

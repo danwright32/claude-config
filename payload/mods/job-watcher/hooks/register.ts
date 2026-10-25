@@ -50,6 +50,8 @@ type Watch = {
   harness?: string
   /** What the last measure of its processes found while it had not ended: its group runs, or unknown. */
   measured?: 'runs' | 'unknown'
+  /** #1583: how it stalled, while it is stalled, for the status bar to say what was measured. */
+  stalledBy?: 'silent' | 'repeating'
 }
 
 const MOD = 'job-watcher'
@@ -676,6 +678,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   // group could not be read is judged by its output below, since nothing better was measured.
   if (holdsOutputBack(job.command) && w.measured === 'runs') {
     w.state = 'running'
+    w.stalledBy = undefined
     return
   }
   const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
@@ -708,6 +711,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   // poll loop quiet or repeating a line that is no error waits on what it polls (#784).
   const waits = isPollLoop(job.command) && (a.state === 'silent' || (a.state === 'repeating' && !isErrorLine(a.line)))
   w.state = a.state === 'running' ? 'running' : waits ? 'waiting' : 'stalled'
+  w.stalledBy = w.state === 'stalled' && a.state !== 'running' ? a.state : undefined
   if (a.state === 'running') {
     if (w.told) {
       w.healthySince ??= now
@@ -1112,8 +1116,14 @@ export const register: Register = on => {
       const now = await built.clock.now()
       const jobs = listOf((await built.state.get({ plugin: 'job-watcher', key: 'jobs' })).value)
       return [...jobs.values()].map(j => {
-        const state = watch.get(j.id)?.state ?? 'running'
+        const w = watch.get(j.id)
+        const state = w?.state ?? 'running'
+        // #1583: what the bar says of a stalled job is only what was measured: how it stalled and,
+        // for one gone silent, how long since its output last changed, read as of now.
+        const stall = state === 'stalled' ? (w?.stalledBy ?? null) : null
         return {
+          stall,
+          quietMs: stall === 'silent' && w ? Math.max(0, now - w.lastGrowth) : null,
           label: j.kept ? j.kept.name : shortCommand(j.command),
           runMs: Math.max(0, now - j.startedAt),
           kept: Boolean(j.kept),

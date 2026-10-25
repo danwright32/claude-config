@@ -17,6 +17,10 @@ export type JobsEntry = {
   owner: string | null
   /** That agent's id, so two agents given the same description stay apart; null for this conversation's own. */
   ownerId: string | null
+  /** #1583: how a stalled job stalled (no new output, or the same output over and over); null while it is not stalled. */
+  stall: 'silent' | 'repeating' | null
+  /** How long a silent stalled job has printed nothing, in milliseconds, as of the read; null otherwise. */
+  quietMs: number | null
 }
 
 /** A background agent listed as running whose tool calls have stopped for twenty minutes (#759). */

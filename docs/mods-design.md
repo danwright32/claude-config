@@ -339,9 +339,14 @@ the spec rather than chosen afresh, and open to Dan changing:
   really know how to read this" of "suite summary wait kept 1h 4m, stuck"). "Kept" and "stuck" are
   gone as internal words. A job is running, waiting (a poll loop quiet or repeating a line that is no
   error: it waits on something outside, a queued CI run, and is never stuck), or not progressing
-  (silent ten minutes or repeating, anything else), the last with who it is left to: "1 job not
-  progressing, left to Claude", "suite summary not progressing 1h 4m, left to Claude". Stalled first
-  within each owner. A background agent's jobs are one item under its task's name, so the line never
+  (silent ten minutes or repeating, anything else), the last with who it is left to: "agent fix CI:
+  1 job not progressing, left to the agent". Stalled first within each owner. This conversation's
+  own stalled command is settled by #1583's design round (`docs/design/1583-quiet-background-
+  command.html`, Dan on 2026-10-24: "if there's nothing for me to do, why do I need the
+  notification at all?"): not shown while Claude works; once Claude's turn has ended and it is still
+  quiet, nobody is watching it, so it is named with what was measured and asks Dan to act, said
+  once after every such command: "merge helper for #2733 quiet 12m, ask Claude to check". A
+  repeating one says "repeating the same output", never quiet. A background agent's jobs are one item under its task's name, so the line never
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
