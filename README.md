@@ -1488,9 +1488,10 @@ Three gates close the three parts of that, all reading commands through one libr
   something, or the report itself ("The report says", "This summary reads", "My earlier hand-back
   said") is the report's own words and still a claim, so a report cannot hide its denial behind its
   own name. So a report corrected as the refusal asks, or pasting the refusal, goes
-  through on its first correction (#1702). The retraction word has to be the claim's own predicate,
-  so "the claim that no overrides were used is correct and the earlier count was wrong" still denies.
-  A denial merely near such words is still read: over the 976 distinct hand-backs on the personal
+  through on its first correction (#1702). The retraction has to come straight after the denial, with
+  nothing between but the denial's own "were used", so "the claim that no overrides were used stands
+  as the count was wrong" still denies.
+  A denial merely near such words is still read: over the 977 distinct hand-backs on the personal
   MacBook on 2026-10-25 this changed the reading of 5, each a withdrawn or quoted claim. A report the agent will not correct goes through on the third attempt, said to Dan
   and spooled for the end of turn review, so a report is never stranded. Over the 911 hand-backs on
   the personal MacBook it found one real contradiction (a report saying "I never used

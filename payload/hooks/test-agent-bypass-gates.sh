@@ -309,6 +309,22 @@ probe p16 'The claim that nothing was bypassed stands and the old summary was fa
 refused "a stood-by denial followed by an unrelated was false is still refused"
 probe p17 'The claim that no overrides were used holds even though the first draft is incorrect.'
 refused "a stood-by denial followed by an unrelated is incorrect is still refused"
+# The retraction has to come straight after the denial, nothing between (second lessons review of
+# #1702): a stood-by denial, a subordinator, and something else being wrong.
+probe p18 'The claim that no overrides were used stands as the count was wrong.'
+refused "a stood-by denial then as ... was wrong is still refused"
+probe p19 'The claim that nothing was bypassed holds if the draft was wrong.'
+refused "a stood-by denial then if ... was wrong is still refused"
+probe p20 'The claim that no overrides were used stands after the draft was false.'
+refused "a stood-by denial then after ... was false is still refused"
+probe p21 'The claim that nothing was bypassed holds when the old note was wrong.'
+refused "a stood-by denial then when ... was wrong is still refused"
+probe p22 'The claim that nothing was bypassed holds unless the log is wrong.'
+refused "a stood-by denial then unless ... is wrong is still refused"
+probe p23 'The claim that no overrides were used stands as both counts were wrong.'
+refused "a stood-by denial then as ... were wrong is still refused"
+probe p24 'The claim that no overrides were used, which were wrong, stands.'
+refused "a stood-by denial then which were wrong is still refused"
 probe p9 'Done. "No overrides were used."'
 refused "a denial in quotation marks with nothing attributing it is still refused"
 probe p10 'I said "no overrides were used" and it is true.'

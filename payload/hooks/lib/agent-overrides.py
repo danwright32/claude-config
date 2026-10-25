@@ -266,10 +266,11 @@ NAMED_OVERRIDE = re.compile(r"\b((?:skip|allow)_[a-z0-9_]*[a-z0-9])\b")
 #     incorrect", or "I withdraw/retract the <earlier> claim that <denial>". Only the withdrawn span is
 #     removed (in the second shape, up to the end of the first denial after "that"), so a fresh denial
 #     after it in the same clause is still read; the word "withdrawn" anywhere else ("the withdrawn
-#     branch") retracts nothing. In the first shape the retraction word must be the CLAIM's own
-#     predicate: the first is/was/are/has/have after the denial, at most six words on, with no
-#     conjunction between ("and", "but", "though" and the like). So "the claim that no overrides were
-#     used is correct and the earlier count was wrong" still denies (lessons review of #1702).
+#     branch") retracts nothing. In the first shape the retraction must come STRAIGHT after the denial,
+#     nothing between: the denial ("no overrides"), at most its own passive verb ("were used"), then
+#     is/was/are/has been/have been, an optional "now", and the retraction word. So "the claim that no
+#     overrides were used stands as the count was wrong" still denies; a word list of what may sit
+#     between was patched twice by the lessons review of #1702 and was still incomplete.
 #   QUOTED: a span in double quotes (straight or curly) straight after a reporting verb (says, said,
 #     reads, quoted, quotes, stated, claimed, wrote, contains) whose speaker is somebody else: the
 #     refusal ('It says "..."'), another agent or another report ('The builder's report said "..."').
@@ -280,13 +281,11 @@ NAMED_OVERRIDE = re.compile(r"\b((?:skip|allow)_[a-z0-9_]*[a-z0-9])\b")
 #     in quotes nothing attributes ('Done. "No overrides."') and quotes around one word in a denial
 #     are still read too.
 CLAIM_THAT = re.compile(r"\b(?:claim|statement)s?\s+that\b")
-# What may sit between a claimed denial and the claim's own predicate: the rest of the proposition
-# ("no overrides" + "were used"), never another predicate or a conjunction starting a new statement.
-_GAP_STOP = (r"and|but|or|nor|so|yet|while|whereas|although|though|even|because|since|which|who|that|"
-             r"then|plus|is|was|are|has|have")
+# Matched exactly at a denial's end. The only words allowed before the predicate are the denial's own
+# passive verb, which the denial patterns stop short of ("no overrides" | "were used"); nothing else.
 RETRACTED_BY = re.compile(
-    r"(?:\s+(?!(?:" + _GAP_STOP + r")\b)[^\s,;]+){0,6}?\s+(?:is|was|are|were|has\s+been|have\s+been)\s+"
-    r"(?:now\s+)?(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
+    r"(?:\s+(?:was|were)\s+(?:used|set|passed|applied|run|needed|taken))?"
+    r"\s+(?:is|was|are|has\s+been|have\s+been)\s+(?:now\s+)?(?:withdrawn|retracted|false|wrong|untrue|incorrect)\b")
 WITHDRAWING = re.compile(
     r"\b(?:withdraw|withdrawing|withdrew|retract|retracting)\s+(?:the|my|that)\s+"
     r"(?:earlier\s+|previous\s+|original\s+|first\s+)?(?:claim|statement)s?\s+that\b")
@@ -326,8 +325,8 @@ def _unretracted(low):
         if not m:
             break
         rest = low[m.end():]
-        e = _denial_end(rest)
-        r = RETRACTED_BY.match(rest, e) if e is not None else None
+        ends = sorted({d.end() for d in (re.search(p, rest) for p in NV_DENIALS + GENERAL_DENIALS) if d})
+        r = next((x for x in (RETRACTED_BY.match(rest, e) for e in ends) if x), None)
         if r:
             low = low[:m.start()] + " " + low[m.end() + r.end():]
             pos = m.start() + 1
