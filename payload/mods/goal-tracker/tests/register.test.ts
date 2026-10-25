@@ -363,7 +363,13 @@ test('a TaskCreate whose result carries no task id still counts as activity', wi
   expect(last(w)?.lastActivityAt).toBe(MIN)
 })
 
-test('a new session start in the same process writes its first activity at once', withDeps, async ($, on) => {
+// #1703: a second session start in one process is a hot reload of the mod (the engine fires it once
+// per process, then once per fresh load, never at /clear), with the session going on. This test
+// asserted the list was dropped there, on the premise that a second start is a new session, which the
+// engine's contract contradicts (L430): the reload wrote an empty list over the session's own, and a
+// list built by TaskCreate and TaskUpdate never came back. It keeps the list now, and still writes its
+// first activity at once.
+test('a reload of the mod keeps the to-do list, and writes its first activity at once (#1703)', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const w = world($, on)
   await start($)
@@ -371,7 +377,39 @@ test('a new session start in the same process writes its first activity at once'
   await clock.advance(10_000)
   await start($)
   await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
-  expect(last(w)).toMatchObject({ total: 0, lastActivityAt: 10_000 })
+  expect(last(w)).toMatchObject({ total: 1, current: 'Building', lastActivityAt: 10_000 })
+})
+
+test('a reload of the mod keeps a list built by the task tools, so a later update still lands on it (#1703)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'Read', description: 'x', activeForm: 'Reading' } as never)
+  await start($)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' } as never)
+  expect(last(w)).toMatchObject({ done: 1, total: 1 })
+})
+
+test('a start whose kept progress cannot be read begins the list again and says why in the debug log (#1703)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  on('state.get', async ($, e, next) => ((e as { plugin?: string }).plugin === 'goal-tracker' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(last(w)).toMatchObject({ total: 0 })
+  expect(w.debug.filter(l => l.includes("could not read this session's progress kept for a reload") && l.includes('state store unavailable')).length).toBe(1)
+})
+
+test('a reload after a /clear never brings back the list of the conversation the /clear ended (#1703)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Build', status: 'in_progress', activeForm: 'Building' }] } as never)
+  await $.session.end({ reason: 'clear', sessionId: 'me' } as never)
+  await clock.advance(10_000)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(last(w)).toMatchObject({ total: 0 })
 })
 
 test('a registry that still cannot be written is said again after a new session start', withDeps, async ($, on) => {

@@ -23,10 +23,25 @@ let toldUnwritten = false
 // never overwrites one still waiting (lessons review of 327a767).
 const notices: string[] = []
 let toldNoClock = false
+// #1703: the progress is kept in $.state too, each time it is published, which the engine holds for
+// the session across a hot reload of the mod, so a reload's session.start takes it up again rather
+// than writing an empty list over the session's own (below). Written whole, as the registry copy is:
+// the module holds the one copy it changes, so a later write is always the newer. One that cannot be
+// written is logged, and a reload then begins this conversation's list again, as before.
+const keepProgress = async ($: EngineInterface, p: Progress | null) => {
+  try {
+    await $.state.set({ plugin: 'goal-tracker', key: 'progress' }, p)
+  } catch (err) {
+    $.ui.log(`goal-tracker: could not keep this session's progress for a reload: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
+const isProgress = (x: unknown): x is Progress =>
+  typeof x === 'object' && x !== null && Array.isArray((x as Progress).steps) && typeof (x as Progress).startedAt === 'number' && typeof (x as Progress).lastActivityAt === 'number'
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
   // The throttle counts attempts, so a failing registry is not retried on every tool call.
   lastTried = now
+  await keepProgress($, progress)
   try {
     await $.sessions.setExtra({ key: 'progress', value: progress })
     toldUnwritten = false
@@ -488,6 +503,15 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // A clock that cannot be read never stops the pane and /goals being set up.
     await beginAgain($)
+    // #1703: session.start fires again at every fresh load of the mod (never at /clear), with the
+    // session going on, so the conversation's progress kept in $.state is taken up again; a new
+    // process has none, and begins as above.
+    try {
+      const kept = (await $.state.get({ plugin: 'goal-tracker', key: 'progress' })).value
+      if (isProgress(kept)) progress = kept
+    } catch (err) {
+      $.ui.log(`goal-tracker: could not read this session's progress kept for a reload, so it begins again: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    }
     startCwd = e.cwd
     beat?.cancel()
     beat = $.clock.every(STILL_WORKING_MS, () => stillWorking($))
@@ -499,7 +523,11 @@ export const register: Register = on => {
   // written here: the registry closes this session's record now, and the next tool call writes the
   // new conversation's progress at once.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await beginAgain($)
+    if (e.reason === 'clear') {
+      await beginAgain($)
+      // A reload after the /clear never takes up the list of the conversation it ended (#1703).
+      await keepProgress($, null)
+    }
     return next(e)
   })
 
