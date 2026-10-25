@@ -17,6 +17,10 @@ export type JobsEntry = {
   owner: string | null
   /** That agent's id, so two agents given the same description stay apart; null for this conversation's own. */
   ownerId: string | null
+  /** #1583: how a stalled job stalled (no new output, or the same output over and over); null while it is not stalled. */
+  stall: 'silent' | 'repeating' | null
+  /** How long a silent stalled job has printed nothing, in milliseconds, as of the read; null otherwise. */
+  quietMs: number | null
 }
 
 /** A background agent listed as running whose tool calls have stopped for twenty minutes (#759). */
@@ -35,8 +39,33 @@ export type Jobs = {
   agents: () => Promise<QuietAgent[]>
 }
 
+/** Claude kept the job on purpose, with a reason (Dan, 2026-10-04). quiet: never reported for going silent. */
+export type WatchedJobKept = { name: string; reason: string; quiet: boolean; at: number }
+/**
+ * One background job on the watcher's record. pgid: its process group, traced through its output
+ * file, or null while untraced. owner: the background agent whose loop started it, absent for this
+ * conversation's own.
+ */
+export type WatchedJob = {
+  id: string
+  command: string
+  outputPath: string
+  pgid: number | null
+  startedAt: number
+  kept?: WatchedJobKept
+  owner?: { id: string; name: string }
+}
+
 declare module 'claude-code' {
   interface EngineInterface {
     jobs: Jobs
+  }
+  interface PluginState {
+    /**
+     * The one list of this session's background jobs (#1695): in $.state, which the engine holds
+     * for the session across a hot reload of the mod, so the reminder, the keep tool and the status
+     * bar read the same list whichever copy of the module recorded a job.
+     */
+    'job-watcher': { jobs: WatchedJob[] }
   }
 }
