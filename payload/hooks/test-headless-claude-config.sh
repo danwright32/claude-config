@@ -316,15 +316,117 @@ for spec in \
   silent_on "and not its config" "$OUT" "$CONFIG_MSG"
 done
 
+echo "headless claude launches found by what runs, not one spelling (claude-config#1681)"
+
+# A launch through a variable program name, its -p in an argument array: claude-sync's /model check.
+fresh
+cat > "$FIX/model-check.sh" <<'EOF'
+find_bin(){ command -v claude 2>/dev/null; }
+report(){
+  local bin args
+  bin="$(find_bin)"
+  args=(-p --bare --no-session-persistence)
+  out="$(cd / && run_bounded 30 env -u ANTHROPIC_MODEL "$bin" "${args[@]}" 2>/dev/null)" || rc=$?
+}
+EOF
+run
+check "a launch through a variable program name with -p in an array fails the scan" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
+says "and names the line that runs it" "$OUT" "model-check.sh:6"
+# The program found through a function whose name says what it finds, and -p written out.
+fresh
+cat > "$FIX/by-function.sh" <<'EOF'
+bin="$(sync_claude_bin)"
+"$bin" --model haiku -p < prompt.txt
+EOF
+run
+check "a variable set by a function finding claude is a launch" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
+says "and it is named" "$OUT" "by-function.sh:2"
+# Options before -p, and claude by its path, are the same launch.
+fresh
+printf 'claude --model haiku -p < prompt.txt\n' > "$FIX/later-p.sh"
+printf '"$HOME/.local/bin/claude" -p < prompt.txt\n' > "$FIX/by-path.sh"
+cat > "$FIX/continued.sh" <<'EOF'
+claude --model haiku \
+  --print < prompt.txt
+EOF
+run
+says "an option before -p does not hide the launch" "$OUT" "later-p.sh:1"
+says "nor claude run by its path" "$OUT" "by-path.sh:1"
+says "nor --print on a continued line" "$OUT" "continued.sh:1"
+# The same launches deciding both pass, so the find is not a blanket failure.
+fresh
+cat > "$FIX/model-check.sh" <<'EOF'
+report(){
+  local bin args
+  bin="$(command -v claude)"
+  args=(-p --bare)
+  # prompt-cache-ok: nothing is cached, since /model is answered locally and sends no request.
+  out="$(env CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 "$bin" "${args[@]}")"
+}
+EOF
+run
+check "a variable launch that decides both passes" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "and was counted" "$OUT" "checked 1 headless"
+# A program variable never run with -p is not a launch, nor is -p given to another program.
+fresh
+cat > "$FIX/version.sh" <<'EOF'
+bin="$(command -v claude)"
+"$bin" --version
+mkdir -p "$HOME/.claude/state"
+cp -p "$bin" /tmp/x
+EOF
+printf 'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 DISABLE_PROMPT_CACHING=1 claude -p < p.txt\n' > "$FIX/real.sh"
+run
+check "claude asked its version, and -p to mkdir or cp, are no launch" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "and only the real launch was counted" "$OUT" "checked 1 headless"
+
+# Python: an argv is a list the parser builds, so a docstring quoting the two words side by side is
+# prose, and a list holding claude then -p anywhere after it is a launch, whatever sits between.
+fresh
+cat > "$FIX/quoted.py" <<'EOF'
+"""Runs ["claude", "-p", prompt] with the config off."""
+def run(prompt):
+    """The argv is "claude", "-p", then the prompt."""
+    note = 'built as "claude", "-p"'
+    return ["env", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1", "DISABLE_PROMPT_CACHING=1", "claude", "-p", prompt]
+EOF
+run
+check "python text quoting the two words is not a launch" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
+says "and only the real argv was counted" "$OUT" "checked 1 headless"
+fresh
+cat > "$FIX/spread.py" <<'EOF'
+cmd = ["claude", "--model", model, "-p", prompt]
+EOF
+cat > "$FIX/variable.py" <<'EOF'
+cmd = [claude_bin, "--print", prompt]
+EOF
+run
+says "a python argv with options before -p is a launch" "$OUT" "spread.py:1"
+says "and one whose program is a variable naming claude" "$OUT" "variable.py:1"
+
 echo "headless claude config: the real tree"
 
 OUT="$(python3 "$SCAN" "$REPO/payload" "$REPO/tools" "$REPO/claude-sync" 2>&1)"; RC=$?
 check "every headless launch in this repository decides its config and its cache lifetime" "$([ "$RC" -eq 0 ] && echo ok || echo "exit $RC: $OUT")"
-# The five known launches (the harvester, the judge twice, the PR review, the lesson tagger) must be
-# among what was checked, so a scan that silently stopped seeing one of them fails here rather than
-# passing on the others (L63).
+# The seven known launches (the harvester, the judge twice, the PR review, the lesson tagger, and
+# claude-sync's /model check twice, found since #1681) must be among what was checked, so a scan that
+# silently stopped seeing one of them fails here rather than passing on the others (L63).
 count="$(printf '%s' "$OUT" | sed -n 's/.*checked \([0-9][0-9]*\) headless.*/\1/p')"
-check "and it saw at least the five known launches" "$([ "${count:-0}" -ge 5 ] && echo ok || echo "saw ${count:-none}: $OUT")"
+check "and it saw at least the seven known launches" "$([ "${count:-0}" -ge 7 ] && echo ok || echo "saw ${count:-none}: $OUT")"
+
+# claude-sync's /model check is found as it stands, through "$bin" and its args array, and with its
+# cache markers taken out the scan names it (claude-config#1681), so the find is proven on the real
+# shape and not only on a fixture written to match it (L48).
+fresh
+grep -v "# prompt-cache-ok: nothing is cached at any lifetime" "$REPO/claude-sync" > "$FIX/claude-sync"
+if cmp -s "$REPO/claude-sync" "$FIX/claude-sync"; then
+  check "claude-sync's /model check carries cache markers to remove" "none was removed, so nothing was planted"
+else
+  OUT="$(python3 "$SCAN" "$FIX/claude-sync" 2>&1)"; RC=$?
+  check "claude-sync's /model check without its cache markers fails the scan" "$([ "$RC" -eq 1 ] && echo ok || echo "exit $RC: $OUT")"
+  says "and both of its launches are named for the cache" "$OUT" "2 without a decision about the prompt cache lifetime"
+  silent_on "and neither for its config, which is switched off on the launch" "$OUT" "$CONFIG_MSG"
+fi
 
 echo
 echo "passed: $pass, failed: $fail"

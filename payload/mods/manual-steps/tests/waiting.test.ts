@@ -195,6 +195,48 @@ describe('waitingPhrase', () => {
       expect(waitingPhrase(said)).toBe('waiting on you')
   })
 
+  // #1680: #863's other four phrases, measured over whole turns of the 30 days to 2026-10-25, each
+  // sentence paraphrased from what fired, never copied.
+  test('"once you approve" a decision, or "once you click Done" on the card, passes (#1680)', () => {
+    for (const said of [
+      'The sleep work will get its own milestone once you approve the plan.',
+      "Once you approve a lesson in the picker, it's written without a second question.",
+      'Its heading reads "waiting" while the step is open, and drops it once you click Done.',
+      "The row goes grey once you've clicked **Done** on the card.",
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  test('a later or conditional "you need to", and the phrases quoted, pass (#1680)', () => {
+    for (const said of [
+      "A fifth agent is building the permission test, and I'll tell you before you need to click Allow.",
+      'If you need to run it again, the command is in the README.',
+      'The other phrases still misfire ("once you approve" for a plan, "before you need to click Allow" about a later sign in).',
+      'Sentences like "the calendar needs you to sign in" and "that is your step" were read one by one.',
+    ])
+      expect(waitingPhrase(said)).toBeNull()
+  })
+
+  // Every real hand off the four made in those 30 days, paraphrased: narrowing must keep each one.
+  test("#863's other four handing Dan a step still fire (#1680)", () => {
+    for (const [said, phrase] of [
+      ["Once everything above is merged, you'll need to run `/goal clear`, since I can't clear it myself.", "you'll need to run"],
+      ['Once you run the command from my last message, I will record the reply and start the merges.', 'Once you run'],
+      ["I'll test the permissions with the public key once you've pasted the database change.", "once you've pasted"],
+      ["Once it's installed, that check needs you to run `/login` once.", 'needs you to run'],
+      ["The tracker redeploy: that's your step, already noted.", 'your step'],
+      ["Once you've run `/winddown off`, I'll open the one line pull request.", "Once you've run"],
+      ["My output doesn't reach your screen, so you'll need to run it yourself: paste this into the prompt.", "you'll need to run"],
+      ["Nothing needs you beyond step 4, and I'll find the log line once you've run it.", "once you've run"],
+      ["To clear the goal you need to run one command yourself, because I can't; it's on the card.", 'you need to run'],
+      ['The test I run after your step will show which, and I will send a corrected file.', 'your step'],
+      ['The calendar connection needs you to sign in before I can change it.', 'needs you to sign in'],
+      // Not among the 30 days' hits: an approval that is a step, of a pull request on GitHub.
+      ['Once you approve the pull request on GitHub, I will merge it.', 'Once you approve'],
+    ] as const)
+      expect(waitingPhrase(said)).toBe(phrase)
+  })
+
   test('the phrase quoted, as the name of a notification or a state, passes', () => {
     for (const said of [
       'Its permission request is notified as "is waiting on you", and nothing else notifies it.',

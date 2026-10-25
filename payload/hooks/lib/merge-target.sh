@@ -1484,9 +1484,10 @@ mt_signin_said() {  # $1 = what was being read or empty, $2 = the last error or 
 # nothing private and lives with the other per Mac records, in
 # ${MT_SIGNIN_LEDGER_DIR:-~/.claude/state/gh-signin}/refusals.tsv, which claude-sync never carries.
 # Only appended, one short line per write (O_APPEND keeps a line that size whole when two runs write at
-# once), and never rewritten, trimmed or deleted: there is no rewrite for two runs to race, and how
-# long the evidence is kept is Dan's decision, not a default (L9). It grows only on a refusal, about
-# 80 bytes each.
+# once), under a lock each writer waits for (one that cannot take it writes unlocked and says so),
+# and kept for 90 days, Dan's choice (claude-config#1670): a
+# write drops the lines older than that by writing the rest to a new file and moving it over the log,
+# never by editing it in place (mt__signin_trim). It grows only on a refusal, about 80 bytes each.
 #
 # Read back on every refusal: when the last MT_SIGNIN_WINDOW_SECONDS (86400, a day) hold
 # MT_SIGNIN_ALERT_AT (5) or more, MT_SIGNIN_TREND is the sentence saying so, which mt_signin_said
@@ -1518,13 +1519,77 @@ mt_signin_record(){  # $1 = refused|notoken, $2 = present|empty
   session="$(ghp_session_key 2>/dev/null)"; session="${session:-unknown}"
   run="${MT_SIGNIN_RUN:-$$}"; run="${run//[!A-Za-z0-9_.-]/_}"
   caller="${0##*/}"; caller="${caller//[!A-Za-z0-9_.-]/_}"
-  err="$( { mkdir -p "${ledger%/*}" && printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$session" "$run" "${caller:-unknown}" "$1" "$2" >> "$ledger"; } 2>&1 )" || {
+  # Every writer waits for the log's lock to append and trim (claude-config#1670), so a trim, which
+  # replaces the file, never drops a line another run appends under it. A lock that cannot be taken in
+  # time is written past, unlocked and untrimmed, rather than not writing the line at all, and said:
+  # that one line is not safe from a trim another run makes at the same moment.
+  local locked=0
+  if ! err="$(mkdir -p "${ledger%/*}" 2>&1)"; then
     err="${err%%$'\n'*}"
+    MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (${err:-its folder could not be made}), so the count of refused sign ins across runs (claude-config#1626) is missing it"
+    return 0
+  fi
+  mt__signin_lock "$ledger" && locked=1
+  err="$( { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$now" "${host:-unknown}" "$session" "$run" "${caller:-unknown}" "$1" "$2" >> "$ledger"; } 2>&1 )" || {
+    err="${err%%$'\n'*}"
+    [ "$locked" = 1 ] && rmdir "$ledger.lock" 2>/dev/null
     MT_SIGNIN_RECORD_NOTE="This refusal could not be recorded in $ledger (${err:-the write failed}), so the count of refused sign ins across runs (claude-config#1626) is missing it"
     return 0
   }
+  if [ "$locked" = 1 ]; then
+    mt__signin_trim "$ledger" "$now"
+    rmdir "$ledger.lock" 2>/dev/null
+  else
+    MT_SIGNIN_RECORD_NOTE="This refusal was written without the lock to $ledger, since the record could not take the lock ($ledger.lock) another run held, so a trim another run makes at the same moment may drop it, and lines older than 90 days were not dropped this time (claude-config#1670)"
+  fi
   MT_SIGNIN_TREND="$(mt_signin_trend "$now")"
   return 0
+}
+
+# NINETY DAYS ARE KEPT (claude-config#1670). Dan, 2026-10-24, choosing how long the log is kept:
+# "Keep 90 days". When the log is next written, every line whose time is older than 90 days before
+# the clock (MT_SIGNIN_CLOCK) is dropped; a line whose time is not a number is kept, since nothing
+# can say it is old (L50). The log is only appended, so it is never edited in place: the kept lines
+# are written to a new file beside it and moved over it, and only while the writer holds the lock
+# every writer takes, so no line appended meanwhile is lost with the old file. A log with nothing to
+# drop is not rewritten. A trim that fails leaves the log whole and says so. MT_SIGNIN_TRIM_PAUSE
+# names a command run between writing the kept lines and the move, a seam the suite uses to append
+# from a second run at exactly that moment. The 24 hour count (mt_signin_trend) is unaffected.
+MT_SIGNIN_KEEP_SECONDS=$((90 * 86400))
+mt__signin_trim(){  # $1 = ledger  $2 = now
+  local ledger="$1" cutoff=$(( $2 - MT_SIGNIN_KEEP_SECONDS )) trim=""
+  awk -F'\t' -v cutoff="$cutoff" '$1 ~ /^[0-9]+$/ && $1 + 0 < cutoff { found = 1; exit } END { exit !found }' "$ledger" 2>/dev/null || return 0
+  trim="$(mktemp "$ledger.trim.XXXXXX" 2>/dev/null)" \
+    && awk -F'\t' -v cutoff="$cutoff" '!($1 ~ /^[0-9]+$/ && $1 + 0 < cutoff)' "$ledger" > "$trim" 2>/dev/null \
+    && { [ -z "${MT_SIGNIN_TRIM_PAUSE:-}" ] || "$MT_SIGNIN_TRIM_PAUSE"; } \
+    && mv -f "$trim" "$ledger" 2>/dev/null \
+    || {
+      [ -n "$trim" ] && rm -f "$trim" 2>/dev/null
+      MT_SIGNIN_RECORD_NOTE="This refusal was recorded in $ledger, but its lines older than 90 days could not be dropped, so it is growing past what is kept (claude-config#1670)"
+    }
+  return 0
+}
+
+# The log's lock, a directory beside it, since mkdir makes it or fails at once and whole. Waited for
+# MT_SIGNIN_LOCK_TRIES times (100), sleeping 0.05 seconds between through MT_SIGNIN_LOCK_SLEEP (a
+# seam, L524), so about five seconds, where a run holds it for one append and at most one rewrite of
+# a small file. A lock over a minute old was left by a run killed while holding it, and is broken
+# rather than stopping every later record for good. Two runs breaking the same stale lock at once can
+# let one remove the lock the other has just taken: a window of a few instructions, open only after a
+# holder died, whose worst case is the race the lock exists for.
+mt__signin_lock(){  # $1 = ledger
+  local lock="$1.lock" k=0 tries="${MT_SIGNIN_LOCK_TRIES:-}"
+  case "$tries" in ''|*[!0-9]*|0) tries=100 ;; esac
+  while [ "$k" -lt "$tries" ]; do
+    mkdir "$lock" 2>/dev/null && return 0
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rmdir "$lock" 2>/dev/null
+    else
+      "${MT_SIGNIN_LOCK_SLEEP:-sleep}" 0.05 2>/dev/null
+    fi
+    k=$((k + 1))
+  done
+  return 1
 }
 
 # The sentence for the refusals recorded in the last day, or nothing when they are under the
