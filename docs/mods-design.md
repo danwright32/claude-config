@@ -3108,13 +3108,14 @@ read no write from a script file's arguments.
   `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
   `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
-- **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
-  seal checked, since there is no text to check before it runs, so make-settled.py run straight into
-  `docs/design` is held on an issue with no answer. The skill now writes it into the session's
-  scratchpad and copies it in with a cp alone, which #1524 reads before it runs and passes while
-  sealed, and the refusal says so (rules.ts `SCRIPT_RECORD`). Judging such a run after it ran and
-  undoing an unsealed result, as #1296 does for a mod's `.ts` file, was the other way, and was not
-  taken: the cp needs no undo, and the skill's one command becomes two. #1593 took it, below.
+- **The settled page went through by a cp, until #1593.** As #1586 shipped, a page under
+  `docs/design` handed to a script was never seal checked, since there is no text to check before it
+  runs, so make-settled.py run straight into `docs/design` was held on an issue with no answer. The
+  skill wrote it into the session's scratchpad and copied it in with a cp alone, which #1524 reads
+  before it runs and passes while sealed, and the refusal said so (rules.ts `SCRIPT_RECORD`, since
+  deleted). Judging such a run after it ran and undoing an unsealed result, as #1296 does for a mod's
+  `.ts` file, was the other way, and was not taken then. #1593 took it, below: such a run now goes
+  ahead and the page is judged by what the run leaves.
 - **What stays unread.** A file a script writes that no argument names (a path in its own text), a
   folder it is handed (`python3 codemod.py app/`), a module run with `python -m`, and a tool run
   through `npx` or a runner the reader does not take off; #1682 reads the module and the npx tool,
