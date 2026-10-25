@@ -1,0 +1,8 @@
+{
+  "goal": "complete all open issues",
+  "shipped": [
+    "#1691 and #1674 closed, PR #1704 merged and live",
+    "#1697, #1675 and #1676 closed, PR #1705 merged and live",
+    "#1695 and #1583 closed, PR #1706 merged and live"
+  ]
+}
