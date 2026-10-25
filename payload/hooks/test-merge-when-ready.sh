@@ -511,6 +511,122 @@ gate_out="$(present "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")";
 check_eq "#1673 no key: the gate allows the helper" "0" "$grc"
 check_eq "#1673 and records nothing" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
 
+# A RECORD MADE BY HAND (claude-config#1700). The record of a typed key was an empty file named by the
+# key's sha256, which anything able to write the folder could make, a session's own shell included.
+# It is now named by an HMAC of the key under a secret only the gate creates, so a file made by hand,
+# under the old name or any other a session can compute without that secret, vouches for nothing.
+KEYS_DIR="$AI_REVIEW_STATE_DIR/helper-keys"
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a record made by hand, with no gate ever having run, is refused" "64" "$rc"
+check_eq "#1700 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# The same, once the gate has made its secret by recording another key: the hand made name is still
+# not the one the gate would write.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a hand made record beside the gate's own is refused" "64" "$rc"
+check_eq "#1700 and merges nothing beside it" "0" "$(count gh-calls 'pr merge')"
+# Read through python rather than stat, whose flags mean different things on macOS and Linux (on
+# Linux `stat -f` reports the filesystem, and printed that in CI).
+secret_mode="$(python3 -c 'import os, sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>&1)"
+check_eq "#1700 the gate's secret is readable by its owner alone" "600" "$secret_mode"
+# A secret that is not one (cut short, emptied) is replaced, never used, and the typed path still works.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$AI_REVIEW_STATE_DIR"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+gate_out="$(present "PR_REVIEW_READ=5eed5eed5eed5eed bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a damaged secret is replaced and the typed key recorded" "0" "$grc"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 and the typed key then merges" "0" "$rc"
+# TWO GATES REPLACING ONE DAMAGED SECRET AT ONCE (lessons review of #1700). Both see it damaged; if
+# each then put its own secret over it, the second would silently replace the first and the key the
+# first recorded would stop counting. Gate B is held, through the pause the library offers for this,
+# right after it has seen the secret damaged; gate A replaces it and records its key in full; then B
+# goes on. Both keys must count, under one secret. The fifos make the order exact, so nothing here
+# waits on a clock (L290).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+RACE="$WORKDIR/race"; rm -f "$RACE.reached" "$RACE.go"; mkfifo "$RACE.reached" "$RACE.go"
+# B says "done" on the same fifo when it ends, so a B that never pauses cannot leave this waiting.
+( AR_HELPER_SECRET_PAUSE="$RACE" present "PR_REVIEW_READ=bbbb2222 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" > "$WORKDIR/race-b.out"; echo $? > "$WORKDIR/race-b.rc"; printf 'done\n' > "$RACE.reached" ) &
+race_b=$!
+read -r race_said < "$RACE.reached"
+check_eq "#1700 race: the second gate is held after seeing the secret damaged" "reached" "$race_said"
+gate_out="$(present "PR_REVIEW_READ=aaaa1111 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+if [ "$race_said" = reached ]; then printf 'go\n' > "$RACE.go"; read -r _ < "$RACE.reached"; fi
+wait "$race_b"
+check_eq "#1700 race: the first gate to replace the damaged secret records its key" "0" "$grc"
+check_eq "#1700 race: and so does the second" "0" "$(cat "$WORKDIR/race-b.rc" 2>/dev/null)"
+check_eq "#1700 race: the first gate's key still counts once the second has run" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed aaaa1111) && echo yes || echo no)"
+check_eq "#1700 race: and the second gate's key counts too, under the same secret" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed bbbb2222) && echo yes || echo no)"
+check_eq "#1700 race: and neither left a spare secret or its lock behind" "helper-keys helper-keys.secret" "$(ls "$AI_REVIEW_STATE_DIR" | tr '\n' ' ' | sed 's/ $//')"
+rm -f "$RACE.reached" "$RACE.go"
+# A gate that finds another one still replacing waits for it, briefly, and never replaces it itself.
+# With the lock held by nobody who will finish it, the wait runs out and the key is not recorded
+# rather than being recorded under a secret the holder is about to replace (the sleep is injected).
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+gate_out="$(AR_HELPER_SECRET_SLEEP=true present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a replacement another gate holds and never finishes refuses the command" "2" "$grc"
+check "#1700 saying the key could not be recorded" "could not be recorded" "$gate_out"
+check_eq "#1700 and leaves the secret to the holder" "short" "$(cat "$AI_REVIEW_STATE_DIR/helper-keys.secret")"
+# And when the holder does finish while it waits, it records under the holder's secret. The injected
+# sleep plays the holder: on its first call it puts a secret in place and lets the lock go.
+fresh "$OLD" 0 "$GREEN"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+HOLDER_SECRET="$(printf 'c%.0s' $(seq 64))"
+cat > "$WORKDIR/holder-finishes" <<EOS
+#!/usr/bin/env bash
+printf '%s' '$HOLDER_SECRET' > '$AI_REVIEW_STATE_DIR/helper-keys.secret'
+rmdir '$AI_REVIEW_STATE_DIR/helper-keys.secret.lock' 2>/dev/null
+exit 0
+EOS
+chmod +x "$WORKDIR/holder-finishes"
+gate_out="$(AR_HELPER_SECRET_SLEEP="$WORKDIR/holder-finishes" present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a gate that waited out another's replacement records its key" "0" "$grc"
+check_eq "#1700 under the secret the other put in place" "$HOLDER_SECRET" "$(cat "$AI_REVIEW_STATE_DIR/helper-keys.secret")"
+check_eq "#1700 and the key counts" "yes" "$( (. "$DIR/lib/ai-review-common.sh" && ar_helper_key_typed abc123) && echo yes || echo no)"
+mkdir -p "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+# A lock left by a gate that died mid replacement is cleared once it is over a minute old, so one
+# killed gate cannot stop every later key being recorded.
+touch -t 202601010000 "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock"
+gate_out="$(AR_HELPER_SECRET_SLEEP=true present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a stale lock is cleared and the key recorded" "0" "$grc"
+check_eq "#1700 and the lock is gone" "no" "$([ -e "$AI_REVIEW_STATE_DIR/helper-keys.secret.lock" ] && echo yes || echo no)"
+# A COMMAND THAT NAMES THE RECORD (claude-config#1700). However the name is spelled or cased, a Bash
+# command that writes into the folder, reads the secret, or calls the function that records a key is
+# refused before it runs, since only the gate may make a record.
+fresh "$OLD" 0 "$GREEN"
+for forged in \
+  ": > ~/.claude/state/ai-review/helper-keys/0123abcd" \
+  "touch \"\$HOME/.claude/state/ai-review/HELPER-KEYS/0123abcd\"" \
+  "cat ~/.claude/state/ai-review/helper-keys.secret" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_helper_key_record 5eed5eed5eed5eed" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; touch \"\$(ar__helper_keys_dir)/x\""; do
+  gate_out="$(present "$forged")"; grc=$?
+  check_eq "#1700 a command naming the typed key record is refused: $forged" "2" "$grc"
+  check "#1700 saying only the gate writes it: $forged" "only pr-review-gate.sh writes" "$gate_out"
+done
+check_eq "#1700 and nothing was recorded by any of them" "" "$(ls "$KEYS_DIR" 2>/dev/null)"
+gate_out="$(present "ls ~/.claude/state/ai-review")"; grc=$?
+check_eq "#1700 a command naming none of it is not refused" "0" "$grc"
+# With no reader for the command's text (neither jq nor python3), a payload naming the record is
+# refused, saying which reader is missing, rather than passed unread. The payload is built here and
+# the gate run on a PATH holding only the basic tools it needs.
+NOREAD="$WORKDIR/no-reader-bin"; mkdir -p "$NOREAD"
+for t in bash cat dirname tr sed awk grep basename; do
+  p="$(command -v "$t")" && ln -sf "$p" "$NOREAD/$t"
+done
+noread_payload="$(jq -nc --arg c ": > ~/.claude/state/ai-review/helper-keys/0123abcd" --arg d "$REPO" '{tool_name:"Bash",tool_input:{command:$c},cwd:$d}')"
+gate_out="$(printf '%s' "$noread_payload" | PATH="$NOREAD" "$NOREAD/bash" "$DIR/pr-review-gate.sh" 2>&1)"; grc=$?
+check_eq "#1700 with no reader, a command naming the record is refused" "2" "$grc"
+check "#1700 naming the missing reader" "neither jq nor python3 is on PATH" "$gate_out"
+
 fresh "$OLD" 3 "$GREEN"
 : > "$ST/update-fails"
 out="$(run 7 --squash)"; rc=$?
