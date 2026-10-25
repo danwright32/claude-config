@@ -956,8 +956,40 @@ for (const [what, stored] of [
     expect(r.deny ?? r.text).toContain('could not read its list of background jobs')
     expect(r.deny ?? r.text).not.toContain('None is running')
     expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('could not read its list of background jobs')
+    // Said once until a read succeeds: a read that fails is never counted as one that succeeded
+    // (lessons review of PR 1705), so the next result does not say it again.
+    expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).not.toContain('could not read its list of background jobs')
   })
 }
+
+// Lessons review of PR 1705: the minute's look reads the list again before each job, and a list
+// that cannot be read part way through is said once, as unreadable, and ends that look, rather
+// than being said as a failed look at each job in turn.
+test("a job list that cannot be read part way through the minute's look is said once and ends it (#1695)", withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const w = world(on, [{ tail: 'building\n', size: 9 }, { tail: 'testing\n', size: 8 }])
+  // passes: how many more reads of the list answer before every read fails; null for never failing.
+  const reads: { passes: number | null } = { passes: null }
+  on('state.get', async ($, e, next) => {
+    if (!JOBS_STATE(e) || reads.passes === null) return next(e)
+    if (reads.passes > 0) {
+      reads.passes -= 1
+      return next(e)
+    }
+    return { deny: 'state store unavailable' } as never
+  })
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', run_in_background: true } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm test', run_in_background: true } as never)
+  const before = w.stats
+  // The look's first read answers; the read before its first job does not.
+  reads.passes = 1
+  await clock.advance(MIN)
+  expect(w.stats).toBe(before)
+  const said = contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))
+  expect(said.split('could not read its list of background jobs').length - 1).toBe(1)
+  expect(said).not.toContain('could not check its jobs')
+})
 
 test('keeping a job without a reason or a name is refused', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })

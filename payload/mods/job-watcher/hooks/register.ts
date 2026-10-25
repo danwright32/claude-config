@@ -105,8 +105,11 @@ const listOf = (value: unknown): JobList => {
 }
 const readJobs = async ($: EngineInterface): Promise<JobList> => {
   const held = await $.state.get({ plugin: 'job-watcher', key: 'jobs' })
+  const list = listOf(held.value)
+  // Only a read that succeeded ends an unreadable spell: a stored value listOf refuses is a read
+  // that failed, so the notice stays said once (lessons review of PR 1705).
   toldListUnreadable = false
-  return listOf(held.value)
+  return list
 }
 // change edits the list in place and says whether it changed anything; nothing is written when not.
 // The registry copy (for the leftover judge of a later session) is written after the list itself.
