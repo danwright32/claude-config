@@ -6,6 +6,8 @@
 # (claude-config#1567). The one test every whole tree scan suite asks before it lists the files the
 # repository ships with lib/repo-files.sh: test-two-file-awk.sh, test-pipefail-shortcircuit.sh,
 # test-lib-self-locate.sh and test-branch-issue-reader.sh.
+# Every other suite that needs the checkout asks it too, and test-checkout-root.sh fails a suite that
+# finds the repository by counting folders up instead (claude-config#1663).
 #
 # A git repository above the folder is not enough. Installed in ~/.claude there is no checkout, and
 # a copy sitting inside some other repository (a home folder kept in git) would otherwise have that

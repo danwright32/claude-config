@@ -32,7 +32,8 @@ suite_deadline_arm || exit $?
 }
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$DIR/../../.." && pwd)"
+# Found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663).
+REPO="$(bash "$DIR/../../hooks/lib/checkout-root.sh" "$DIR/../.." 2>/dev/null || true)"
 GUARD="$DIR/check-chrome-launches.py"
 HEADLESS_DOM="$DIR/headless-dom.sh"
 KILL_TREE="$DIR/../../hooks/lib/kill-tree.sh"
@@ -110,12 +111,12 @@ chmod 600 "$TMP/locked/hidden.sh"
 # --- 2. the guard, on this whole repository ---
 # Three folders up is the checkout only when this runs from one: from the installed copy in
 # ~/.claude/skills it is the home folder, which is never scanned (check-root-guard.sh, #503).
-if [ -e "$REPO/claude-sync" ] && [ -d "$REPO/payload" ]; then
+if [ -n "$REPO" ]; then
   python3 -I "$GUARD" "$REPO" > "$TMP/repo.out" 2>&1; rc=$?
   check_eq "every headless Chrome this repository starts goes through headless-dom.sh" "0" "$rc"
   [ "$rc" -eq 0 ] || sed 's/^/    /' "$TMP/repo.out"
 else
-  echo "SUITE-PART-UNMEASURED $REPO is not a claude-config checkout (no claude-sync and payload there), so the repository was not scanned for Chrome started around headless-dom.sh"
+  echo "SUITE-PART-UNMEASURED $DIR/../.. is not the payload of a claude-config checkout, so the repository was not scanned for Chrome started around headless-dom.sh"
 fi
 
 # --- 3. HEADLESS_DOM_EXEC, on a stand in Chrome ---

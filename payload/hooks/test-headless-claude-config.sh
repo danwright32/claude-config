@@ -32,10 +32,12 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCAN="$DIR/lib/headless-claude-config.py"
 # The installed copy of these hooks has no repository above it, and this suite is about the
 # repository (see test-scan-subshell-globals.sh for what walking $HOME instead cost).
-REPO="$(cd "$DIR/../.." && pwd)"
-if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
-  echo "test-headless-claude-config: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so there was nothing here to scan." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$REPO" ]; then
+  echo "test-headless-claude-config: $DIR/.. is not the payload of a claude-config checkout, so there was nothing here to scan." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $DIR/.. is not the payload of one"
   echo "passed: 0, failed: 0"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 2

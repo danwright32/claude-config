@@ -49,10 +49,12 @@ eq "bytes that are not valid text pass through" $'\377\376 /h \200\n' "$FIX/o"
 # claude-sync carries its own copy, being one whole script: it must be this one, byte for byte.
 # Only a checkout has claude-sync above its hooks; the installed copy under the config root does not,
 # so there the comparison is said to be not made, never counted as a pass (L411).
-REPO="$(cd "$DIR/../.." && pwd)"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
 SYNC="$REPO/claude-sync"
 if [ ! -f "$SYNC" ] || [ ! -d "$REPO/payload" ]; then
-  echo "test-home-token: $REPO is not a checkout of this repo, so claude-sync's copy of the swap was NOT compared here; a checkout's run compares it."
+  echo "test-home-token: $DIR/.. is not the payload of a claude-config checkout, so claude-sync's copy of the swap was NOT compared here; a checkout's run compares it."
 else
   mine="$(grep -F 'perl -pe' "$DIR/lib/home-token.sh")"
   theirs="$(grep -F 'perl -pe' "$SYNC")"
