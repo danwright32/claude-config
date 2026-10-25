@@ -324,9 +324,36 @@ ar_left_out_note() {   # $1 = the .leftout file, $2 = the review's status
 #               that of <prefix>mods/mod-kit/<path> at the head (the copy that
 #               tools/check-mod-shared-parts.sh holds identical), proven here by comparing the two
 #               blobs, never by trusting that check
+#   design      a settled design round page (claude-config#1696): an HTML file under docs/design at
+#               the repository's top, the place the design round guard calls a settled design's
+#               (isDesignRecord), whose text at the head the design rounds skill's own check,
+#               design_file.py --sealed (#1524), answers "sealed": exactly what make-settled.py wrote,
+#               the captured product page with the round drawn in, settled by Dan. Slate's #4212 was
+#               refused whole for one 521 KB page. The seal proves the text is unchanged since it was
+#               sealed, on either Mac; it does not prove who sealed it, since anyone can compute the
+#               hash, so a page is left out only on a branch over the cap, and named wherever the
+#               review is reported. A hand edited or unsealed page, or one the check cannot be run on
+#               (no python3, no design_file.py, an older one that answers in another shape), is read.
 # Anything not proven is not printed, and so is read: an unproven file is never left out (L93).
 AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson|csv|tsv|xml|txt)$'
 AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
+AR_DESIGN_RECORD_RE='^[Dd][Oo][Cc][Ss]/[Dd][Ee][Ss][Ii][Gg][Nn]/[^/].*\.[Hh][Tt][Mm][Ll]?$'
+# The skill's check, beside these hooks in the checkout (payload/skills) and once installed
+# (~/.claude/skills) alike. AR_DESIGN_FILE_PY overrides it, for tests. Made absolute here, by
+# parameter expansion and builtins only (test-lib-self-locate.sh), because a caller may cd before
+# asking (the lessons advisory reads from the repository's top).
+AR_COMMON_DIR="${BASH_SOURCE[0]%/*}"; [ "$AR_COMMON_DIR" != "${BASH_SOURCE[0]}" ] || AR_COMMON_DIR=.
+AR_COMMON_DIR="$(cd "${AR_COMMON_DIR:-/}" 2>/dev/null && pwd)"
+
+# Whether the file at $2 in commit $1 is a settled design exactly as make-settled.py sealed it. Only
+# an exit 0 that says "sealed" counts, as the design round guard reads it: a design_file.py from
+# before #1524 ignores --sealed and exits 0 saying nothing.
+ar__design_sealed() {   # $1 = commit, $2 = path
+  local py="${AR_DESIGN_FILE_PY:-$AR_COMMON_DIR/../../skills/design-rounds/design_file.py}" out
+  [ -f "$py" ] || return 1
+  out="$(git show "$1:$2" 2>/dev/null | python3 -I "$py" --sealed 2>/dev/null)" || return 1
+  [ "$out" = sealed ]
+}
 ar_left_out_candidates() {   # $1 = base, $2 = head
   local base="$1" head="$2" names gen p src a b
   names="$(git -c core.quotepath=false diff --name-only "$base" "$head" 2>/dev/null)"
@@ -345,6 +372,9 @@ $p
 "*) printf '%s\tgenerated\tmarked generated in .gitattributes\n' "$p"; continue ;; esac
     if [[ "$p" =~ $AR_FIXTURE_DATA_RE ]]; then
       printf '%s\tfixture\tfixture data\n' "$p"; continue
+    fi
+    if [[ "$p" =~ $AR_DESIGN_RECORD_RE ]] && [[ "/$p/" != */../* ]] && ar__design_sealed "$head" "$p"; then
+      printf '%s\tdesign\ta settled design round page, sealed by make-settled.py\n' "$p"; continue
     fi
     if [[ "$p" =~ $AR_MODKIT_COPY_RE ]] && [ "${BASH_REMATCH[2]}" != "mod-kit" ]; then
       src="${BASH_REMATCH[1]}mods/mod-kit/${BASH_REMATCH[3]}"
