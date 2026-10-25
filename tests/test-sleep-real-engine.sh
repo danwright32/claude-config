@@ -52,6 +52,8 @@
 #   - /sleep telling an idle worker to start (#1242) needs a second live interactive session to
 #     send to, so the send and the turn it starts are measured only by the mod's own suite.
 #   - A full hour of work, a real usage limit and a real model's night: the first real night.
+# Each of these six is read from this Mac's real nights at the end of the run (real_nights, #1662):
+# measured when a night in the last 30 days shows it, else UNMEASURED with why.
 #
 # It costs nothing (the key it is given is not a real one, so nothing it sends could be billed) and
 # takes under a minute, so it runs in every local run; SLEEP_REAL_ENGINE=0 skips it. Wherever there
@@ -131,6 +133,26 @@ cleanup() {
 trap cleanup EXIT
 
 unmeasured_parts=()
+# Six parts no headless run with a scripted model can show (#1662): a real interactive session's
+# enrolment, an idle worker told to start, the before bed questions, a real model following the
+# overnight rules, a full hour of work and a real usage limit. Each is measured only by a real night,
+# so tests/sleep-real-nights.py reads this Mac's ended nights, read only, from the durable record
+# each part leaves, and says which real night last showed it (tests/test-sleep-real-nights.sh holds
+# it to fixtures). A part no night in the last 30 days shows is UNMEASURED, saying why, as is every
+# part where the nights cannot be read (L557: a part never once measured is the one to look at).
+real_nights() {
+  local out line state="$REAL_HOME/.claude/state/sleep"
+  if ! out="$(python3 -I "$DIR/sleep-real-nights.py" "$state" "$(($(date +%s) * 1000))" 2>&1)"; then
+    echo "SUITE-PART-UNMEASURED the six parts only a real night shows (a real interactive session's enrolment, an idle worker told to start, the before bed questions, a real model following the overnight rules, a full hour of work, a real usage limit): this Mac's nights could not be read ($(clip "$out" 300))"
+    return
+  fi
+  while IFS=$'\t' read -r verdict _ said; do
+    case "$verdict" in
+      measured) echo "measured on a real night, not by this run: $said" ;;
+      *) echo "SUITE-PART-UNMEASURED $said" ;;
+    esac
+  done <<<"$out"
+}
 # The stand-in model is stopped and reaped quietly, so the SUITE-RESULT line stays the last thing said.
 stop_model() { if [ -n "$MODEL_PID" ]; then { kill "$MODEL_PID"; wait "$MODEL_PID"; } 2>/dev/null; MODEL_PID=""; fi; }
 finish() {
@@ -138,7 +160,7 @@ finish() {
   echo "time: $(( $(date +%s) - STARTED )) seconds; cost: none, the model is the scripted stand-in"
   local u
   for u in ${unmeasured_parts[@]+"${unmeasured_parts[@]}"}; do echo "SUITE-PART-UNMEASURED $u"; done
-  echo "SUITE-PART-UNMEASURED a real interactive session's enrolment by /sleep (a headless run is never one), an idle worker told to start by /sleep, the before bed questions, a real model following the overnight rules, a full hour of work and a real usage limit; the first real night measures them"
+  real_nights
   printf 'SUITE-RESULT passed=%d failed=%d\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
   exit $?

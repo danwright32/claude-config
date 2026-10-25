@@ -368,6 +368,26 @@ describe('whose uncommitted files they are (#1108)', () => {
     expect(stashTaken(['list'])).toBeUndefined()
     expect(stashTaken([])).toBeUndefined()
   })
+  // #1664: a file handed to a script as its argument counts as written, as every other gate has
+  // counted it since #1592, so winding down never lets it go uncommitted unmentioned. A pattern the
+  // reader can only place in a folder names no file, since that folder may hold another session's.
+  test("a file handed to a script as its argument is this session's, as mod-kit's write reader gives it in runs (#1664)", () => {
+    const writes = { ...none, runs: commandWrites('python3 tool.py src/a.ts "src/*.md"', '/repo', '/Users/x').runs }
+    expect(writes.runs?.length).toBe(1)
+    expect(filesWritten({ tool: 'Bash', input: {}, writes })).toEqual(['/repo/src/a.ts'])
+    expect(whoseFiles(['src/a.ts', 'src/theirs.md', 'tool.py'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['src/a.ts'], others: ['src/theirs.md', 'tool.py'] })
+    // A script run by its own name, handed a file under home.
+    const direct = { ...none, runs: commandWrites('./fix.sh ~/notes/today.md', '/repo', '/Users/x').runs }
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: direct })).toEqual(['/Users/x/notes/today.md'])
+    // Since #1682 the reader gives a `python -m` module and an `npx` tool the same way, so their
+    // arguments count too.
+    const module = { ...none, runs: commandWrites('python3 -m tool src/a.ts', '/repo', '/Users/x').runs }
+    expect(module.runs?.length).toBe(1)
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: module })).toEqual(['/repo/src/a.ts'])
+    const npx = { ...none, runs: commandWrites('npx prettier src/b.ts', '/repo', '/Users/x').runs }
+    expect(npx.runs?.length).toBe(1)
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: npx })).toContain('/repo/src/b.ts')
+  })
   test("a git mv into an existing folder claims the moved file, never another session's file beside it (#1123 lessons review)", () => {
     const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', '/Users/x').byGit }
     expect(whoseFiles(['lib/a.ts', 'lib/theirs.ts'], '/repo', filesWritten({ tool: 'Bash', input: {}, writes }))).toEqual({ own: ['lib/a.ts'], others: ['lib/theirs.ts'] })
