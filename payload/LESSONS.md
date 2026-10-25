@@ -6148,11 +6148,14 @@ for reference; L6 was reviewed and deliberately not adopted.
   SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
 
 - **L805. A self-hosted runner that serves pull_request jobs becomes a machine strangers can
-  run code on the moment its repository goes public, so a job may reach it only when its pull
-  request comes from the repository itself, enforced in the runs-on expression and held by a
-  test, never by a variable someone can switch back.**
-  (bidspoke#2772, 2026-10-25)
-  SHORT: A self-hosted runner serving pull_request jobs runs strangers' code once its repo goes public: route only same-repo PRs to it, in runs-on, under a test.
+  run code on the moment its repository goes public, and no condition written in a workflow
+  file can prevent it, because a pull_request run uses the workflow files of the pull request's
+  own merge commit, which a fork can rewrite. Keep strangers off it with settings that live
+  outside the repository: the runner group refusing public repositories, and approval required
+  for every outside contributor.**
+  (bidspoke#2772, 2026-10-25; corrected by slate#4216, 2026-10-25, which found the first wording's
+  runs-on clause is deleted by the fork it guards against)
+  SHORT: A fork PR runs its own workflow file, so no runs-on clause keeps it off a self-hosted runner: refuse public repos in its group, approve outsiders.
 
 - **L806. Write every workflow log and Actions artifact as if the repository were public, because
   a repository can be made public to unblock Actions and every past log, artifact and issue is then
