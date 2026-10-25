@@ -1,6 +1,6 @@
 import { describe, expect } from 'claude-code/testing'
 import { test } from './mod-kit/tests/hang-ceiling.ts'
-import { assess, harnessFinished, holdRefusal, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
+import { assess, harnessFinished, holdRefusal, holdsOutputBack, inFlight, listedStatuses, isErrorLine, isPollLoop, leftoverLine, notifiedTasks, parseVerdict, runFor, shortCommand, shortLine, startedJob, startedTask } from '../hooks/jobs.ts'
 
 const MIN = 60_000
 
@@ -116,6 +116,30 @@ describe('a poll loop', () => {
   test('anything else is not', () => {
     expect(isPollLoop('npm run dev')).toBe(false)
     expect(isPollLoop('for f in *.ts; do echo $f; done')).toBe(false)
+  })
+})
+
+// #1583: tail writes nothing until its input ends, and head nothing after its first lines, so a
+// command piped through either is silent while it works, and silence says nothing about it.
+describe('a command whose output is held back', () => {
+  test('a pipe into tail or head holds it back, with or without stderr joined', () => {
+    expect(holdsOutputBack('bash ~/.claude/hooks/lib/merge-when-ready.sh 2733 | tail -6')).toBe(true)
+    expect(holdsOutputBack('npm test 2>&1 | tail -n 20')).toBe(true)
+    expect(holdsOutputBack('make |& tail -3')).toBe(true)
+    expect(holdsOutputBack('find . -name "*.ts" | head -50')).toBe(true)
+    expect(holdsOutputBack('npm test 2>&1|tail')).toBe(true)
+  })
+  test('anything else does not: no pipe, an or, tail reading a file, or the word elsewhere', () => {
+    expect(holdsOutputBack('npm run dev')).toBe(false)
+    expect(holdsOutputBack('make || tail -5 build.log')).toBe(false)
+    expect(holdsOutputBack('tail -f server.log')).toBe(false)
+    expect(holdsOutputBack('npm run build | tee build.log')).toBe(false)
+    expect(holdsOutputBack('npm run headless | grep ok')).toBe(false)
+  })
+  // Quoting is not parsed, so a pipe inside quotes counts. That errs to the harmless side (L648): such
+  // a job is judged by whether it runs, as any other, rather than accused of being silent.
+  test('a pipe into tail inside quotes counts too, the harmless way to be wrong', () => {
+    expect(holdsOutputBack('echo "x | tail" > notes')).toBe(true)
   })
 })
 

@@ -39,7 +39,7 @@ import {
   isOwnRecord,
   isDesignRecord,
   sealCheck,
-  SCRIPT_RECORD,
+  RECORD_REMOVED,
   scriptUnread,
   settledNotSealed,
   settledUnchecked,
@@ -161,8 +161,12 @@ import { errorText } from './mod-kit/skew.ts'
 // - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
 //   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
 //   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
-//   scriptUnread); a settled design under docs/design handed to one is never sealed checked, so the
-//   design rounds skill writes make-settled.py's page into the scratchpad and copies it in with a cp alone.
+//   scriptUnread); a settled design under docs/design handed to one is judged after it runs (#1593).
+// - Since #1593: a settled design under docs/design a script run is handed is judged by what the run
+//   leaves (afterShell), as a mod's hook file is: unchanged, or still sealed by the skill's own check,
+//   it stands; otherwise, on an issue Dan has not answered for, it is put back, what the script wrote
+//   kept first, and the call waits on him. Since #1682 mod-kit's `runs` also gives a module run with
+//   python -m and a tool run through npx, each judged here as a script run is.
 // - Anything it cannot tell (the branch, the checkout, its own record) refuses, saying which.
 
 const pendingRef = { plugin: 'design-round-guard', key: 'pending' } as const
@@ -174,8 +178,9 @@ const fromAgent = new Set<string>()
 // #1296: a mod's .ts hook file a shell write may change, as it stood before the command ran: its path,
 // checkout, name in its hooks folder, text (undefined for one not there) and the mod's hook files.
 // `tsx` for a TSX or JSX hook file (#1576), judged after by the rule its Edit is (nothingShown), where a
-// .ts file is judged by drawsChange over `files`.
-type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true }
+// .ts file is judged by drawsChange over `files`. `record` for a settled design under docs/design a
+// script run is handed (#1593), judged after by the design rounds skill's seal check (sealedAfter).
+type Watched = { path: string; tree: string; name: string; before: string | undefined; files: ModFile[]; tsx?: true; record?: true }
 // The main session's passing shell calls with files to read again once they ran, by tool_use_id: set
 // by the tool.check hook, which judges them, and taken by the tool.call hook around them.
 const watching = new Map<string, Watched[]>()
@@ -578,8 +583,6 @@ const recordText = async (
     const back = await putBack($, t.path, tree, t.from)
     return 'why' in back ? { why: back.why } : { text: back.text }
   }
-  // Handed to a script (#1586), make-settled.py included: what it writes is read only once it ran.
-  if (t.run !== undefined) return { why: SCRIPT_RECORD }
   const src = await copiedFrom($, String(input.command ?? ''), t.path, at)
   if (typeof src !== 'string') return src
   try {
@@ -606,9 +609,17 @@ const settledRecord = async (
   const file = relTo(t.path, tree)
   const r = await recordText($, t, tree, tool, input, at, notAlone)
   if ('why' in r) return settledUnread(file, r.why)
-  const argv = sealCheck(at.home)
+  return sealed($, file, r.text, at.home)
+}
+
+// Whether `text` is a settled design exactly as make-settled.py wrote and sealed it, by the design
+// rounds skill's own check (rules.ts sealCheck): true, or what the refusal says of `file`, the check's
+// own reason or why it could not be run, each held, never passed. The one reading a call's text before
+// it runs (settledRecord) and a script run's after it ran (sealedAfter, #1593) share.
+const sealed = async ($: EngineInterface, file: string, text: string, home: string): Promise<true | string> => {
+  const argv = sealCheck(home)
   try {
-    const run = await $.process.run(argv, { stdin: r.text, timeoutMs: 10_000 })
+    const run = await $.process.run(argv, { stdin: text, timeoutMs: 10_000 })
     if (run.exitCode === 0 && run.stdout.trim() === 'sealed') return true
     const said = run.stdout.trim().replace(/^not sealed: /, '')
     if (run.exitCode === 1 && said) return settledNotSealed(file, said)
@@ -616,6 +627,16 @@ const settledRecord = async (
   } catch (err) {
     return settledUnchecked(file, message(err))
   }
+}
+
+// What a script run left in a settled design's place under docs/design (#1593), read once it ran:
+// undefined while it is still a settled design exactly as make-settled.py sealed it, else what the
+// refusal says of it. One the run took away is no settled design.
+const sealedAfter = async ($: EngineInterface, w: Watched, after: string | undefined): Promise<string | undefined> => {
+  const file = relTo(w.path, w.tree)
+  if (after === undefined) return settledNotSealed(file, RECORD_REMOVED)
+  const s = await sealed($, file, after, (await $.env.get('HOME')) ?? '')
+  return s === true ? undefined : s
 }
 
 type Verdict =
@@ -732,6 +753,26 @@ const judged = async ($: EngineInterface, tool: string, input: Record<string, un
     // whatever the issue's answers (#1524, Dan, 2026-10-23: "Let it through"): it changes no screen of
     // the product, and the design it holds was settled on the issue it came from. Any other text there,
     // a hand edit included, is judged as before, and the refusal says why it was not let through.
+    // One a script run is handed (#1593), check-decision-map.py and make-settled.py among them, runs and
+    // is read again once it ran (afterShell): what a script writes cannot be read before it runs. One
+    // that cannot be read now could not be judged after either, and is held, saying so.
+    if (!modTs && t.run !== undefined && isDesignRecord(relTo(t.path, tree))) {
+      let before: string | undefined
+      try {
+        before = await textNow($, t.path)
+      } catch (err) {
+        const notes = unreadIn.get(tree) ?? []
+        const said = shellUnread(relTo(t.path, tree), message(err))
+        if (!notes.includes(said)) notes.push(said)
+        unreadIn.set(tree, notes)
+        const files = byTree.get(tree) ?? []
+        if (!files.includes(t.path)) files.push(t.path)
+        byTree.set(tree, files)
+        continue
+      }
+      if (!watch.some(x => x.path === t.path)) watch.push({ path: t.path, tree, name: t.path.slice(t.path.lastIndexOf('/') + 1), before, files: [], record: true })
+      continue
+    }
     if (!modTs && isDesignRecord(relTo(t.path, tree))) {
       if (tool === 'Bash' && t.from !== undefined && notAlone === null) notAlone = await restoreAlone($, String(input.command ?? ''))
       const sealed = await settledRecord($, { ...t, path: t.path }, tree, tool, input, at, notAlone ?? undefined)
@@ -925,7 +966,8 @@ const undoOne = async ($: EngineInterface, w: Watched, after: string | undefined
 }
 
 // After a shell call the guard let through (#1296): each mod hook file it may have changed, read again
-// (a .ts file since #1296, a TSX or JSX one and one that already drew since #1576). One whose change
+// (a .ts file since #1296, a TSX or JSX one and one that already drew since #1576), and each settled
+// design under docs/design a script run was handed, by its seal (#1593). One whose change
 // shows, by the rule an Edit of it is judged by, in a checkout whose issue Dan has not answered for (and not his Not a look
 // change for this very call), is put back (undoOne) and the call waits on him as a refused edit does,
 // its result withheld for the guard's words; one that cannot be read is said and waits alike.
@@ -936,7 +978,8 @@ const afterShell = async (
   call: { id: string; tool: string; agent: boolean; input: Record<string, unknown> },
 ): Promise<typeof r> => {
   if (r.deny !== undefined) return r
-  const changed: { w: Watched; after?: string; unread?: string }[] = []
+  // `why`, for a settled design (#1593), what the refusal says of it: the seal check's own reason.
+  const changed: { w: Watched; after?: string; unread?: string; why?: string }[] = []
   for (const w of watch) {
     let after: string | undefined
     try {
@@ -946,6 +989,12 @@ const afterShell = async (
       continue
     }
     if (after === w.before) continue
+    // A settled design a script run was handed (#1593), by the skill's seal check of what it left.
+    if (w.record) {
+      const why = await sealedAfter($, w, after)
+      if (why !== undefined) changed.push({ w, after, why })
+      continue
+    }
     // A TSX or JSX hook file by the rule its Edit is judged by (#1576); one made or taken away is a change.
     const shows = w.tsx ? w.before === undefined || after === undefined || !(await nothingShown($, w.path, w.tree, w.before, after)) : drawsChange(w.files, w.name, w.before, after)
     if (shows) changed.push({ w, after })
@@ -989,15 +1038,16 @@ const afterShell = async (
   const said: string[] = []
   for (const c of held) {
     const file = relTo(c.w.path, c.w.tree)
-    if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }))
-    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`)))
+    if (c.unread !== undefined) said.push(shellOutcome({ file, unread: c.unread }, c.w.record))
+    else said.push(shellOutcome(await undoOne($, c.w, c.after, file, scratch && `${scratch}/design-round-guard/${call.id}-${c.w.name}`), c.w.record))
   }
   const files = held.map(c => relTo(c.w.path, c.w.tree))
+  const whys = held.flatMap(c => (c.why === undefined ? [] : [c.why]))
   const v: Exclude<Verdict, { pass: true }> = unknown.files.length
     ? { unsure: unknown.files, why: unknown.why.join('; ') }
     : unread.files.length
       ? { unreadable: { files: unread.files, subjects: unread.subjects, why: unread.why.join('; ') } }
-      : { missing: { files, subjects: lacking, trees, unread: [] } }
+      : { missing: { files, subjects: lacking, trees, unread: whys } }
   const refused = await refuse($, v, { id: call.id, tool: call.tool, agent: call.agent, called })
   // What the command printed is never repeated here: only the tool's own result passes the secret
   // guard's scrub, so a secret it printed would reach Claude through this text (lessons review).

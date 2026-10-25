@@ -339,9 +339,14 @@ the spec rather than chosen afresh, and open to Dan changing:
   really know how to read this" of "suite summary wait kept 1h 4m, stuck"). "Kept" and "stuck" are
   gone as internal words. A job is running, waiting (a poll loop quiet or repeating a line that is no
   error: it waits on something outside, a queued CI run, and is never stuck), or not progressing
-  (silent ten minutes or repeating, anything else), the last with who it is left to: "1 job not
-  progressing, left to Claude", "suite summary not progressing 1h 4m, left to Claude". Stalled first
-  within each owner. A background agent's jobs are one item under its task's name, so the line never
+  (silent ten minutes or repeating, anything else), the last with who it is left to: "agent fix CI:
+  1 job not progressing, left to the agent". Stalled first within each owner. This conversation's
+  own stalled command is settled by #1583's design round (`docs/design/1583-quiet-background-
+  command.html`, Dan on 2026-10-24: "if there's nothing for me to do, why do I need the
+  notification at all?"): not shown while Claude works; once Claude's turn has ended and it is still
+  quiet, nobody is watching it, so it is named with what was measured and asks Dan to act, said
+  once after every such command: "merge helper for #2733 quiet 12m, ask Claude to check". A
+  repeating one says "repeating the same output", never quiet. A background agent's jobs are one item under its task's name, so the line never
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
@@ -500,6 +505,22 @@ plainest reading of the decisions above:
   is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
+- **One list, outside the module (#1695).** The jobs are held in `$.state`, which the engine keeps
+  for the session across a hot reload of the mod, never in a module variable. A reload runs the
+  code again in a fresh module and fires `session.start` again (never at `/clear`), and a tool call
+  already under way when it lands finishes in the old module. With the list in the module, that old
+  hook recorded the job and named it in the reminder, while the keep tool, answered by the new
+  module, refused it with "None is running", and the status bar went on counting it. Measured in
+  three sessions on this Mac (2026-10-18, 2026-10-20 and 2026-10-24), each with "job-watcher:
+  reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
+  foreground command started before the reload and moved to the background after it. So
+  `session.start` clears only the module's own bookkeeping, never the list, and the list is written
+  by version, retried, so two copies writing at once lose neither change.
+- **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
+  group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
+  merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
+  by its output, as before, since nothing better was measured. Chosen over telling builders to stop
+  piping background merges through `tail`, because a rule in a brief is a hope (L27).
 
 Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
 #706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
@@ -2380,16 +2401,21 @@ and the band question is removed rather than kept beside it (L29). Three defects
   approval: keyed to `~/.claude/LESSONS.md` and the rule, for the same 10 minutes as For good, and
   lapsing, refused on its age and said at session end the same way. The write it lets through is an
   Edit or Write to that file under one fail-safe rule, rather than a list of shapes refused (the
-  lessons reviews of #869 found a new shape each round). An Edit's old text must be one or more
-  whole lines of the file as it is now, found exactly once, and its new text that old text, a newline
-  and the entry block, or the entry block, a newline and the old text. A Write must be the file with
-  exactly the entry block inserted at one line boundary. The entry block is one entry in a fixed
+  lessons reviews of #869 found a new shape each round): the file the write leaves must be the file
+  as it is now with exactly the entry block inserted at one line boundary. A Write leaves its
+  content; an Edit, never replace_all, whose old text is found exactly once leaves the file with that
+  text replaced. An Edit was once judged by the shape of its two texts instead, which refused old
+  text cut as whole lines with their newline, the shape Claude sent for L1030, so Dan's add lapsed
+  unused and he was asked For good about it again (#1691). The entry block is one entry in a fixed
   shape: `- **L<n>.`, the rule word for word (bold marks and wrapping ignored), then only its
   provenance as `(repo#N, YYYY-MM-DD)` (owner qualified or not) and one SHORT line whose index line
   is within the cap, with no blank line inside. Nothing Dan did not read rides along with it.
   Anything else, a shell append included, is asked about as before. It is used once; a write that does not land gives it back for the rest of its
   time, so the corrected write is not asked about either, and a refusal by another guard is said to
-  Dan and recorded, so its lapse never calls it unused (#764). Project memory instead and Skip
+  Dan and recorded, so its lapse never calls it unused (#764). A For good approval is spent the same
+  way, only once its write lands (#1691): an Edit or Write that errors, or that a guard beneath
+  refuses, gives it back for the same call sent again; a shell command that ran and failed spends
+  it, since it may have written part of what it does. Project memory instead and Skip
   approve nothing, and a subagent's picker records nothing.
 - **What Dan reads as the rule:** Claude's own plain sentence and the file (#777). The band showed a
   new file's whole text, the lines a rewrite adds, an Edit's new text, or a Bash command as written,
@@ -3093,8 +3119,8 @@ read no write from a script file's arguments.
 
 - **Read in mod-kit, kept apart.** The write reader gives `runs` (mod-kit's `writes.ts`): each script
   file a command runs, an interpreter's script operand (`python3 gen.py`, `bash x.sh`, `node
-  build.mjs`; never inline code, a script on standard input, `python -m` or awk's and sed's program
-  file) or a script run by its own name (ending in a script language's extension, or named by `./`
+  build.mjs`; never inline code, a script on standard input or awk's and sed's program file; as #1586
+  shipped, `python -m` too, which #1682 now reads) or a script run by its own name (ending in a script language's extension, or named by `./`
   or `../`), with every word after it that may name a file, as a path where its words name one, a cd
   and a variable the command set followed. An option is none, `--name=value` gives its value, and
   an address or another machine's path is none. It sits apart from `files`, `changes` and `unnamed`,
@@ -3108,18 +3134,20 @@ read no write from a script file's arguments.
   `.tsx` or `.jsx`, one that already draws included, below), and the guard's own record is
   refused. The refusal says the guard cannot read what the script does with the file (rules.ts
   `scriptUnread`); where the script only reads it, Dan's Not a look change lets that one call through.
-- **The settled page goes through by a cp.** A page under `docs/design` handed to a script is never
-  seal checked, since there is no text to check before it runs, so make-settled.py run straight into
-  `docs/design` is held on an issue with no answer. The skill now writes it into the session's
-  scratchpad and copies it in with a cp alone, which #1524 reads before it runs and passes while
-  sealed, and the refusal says so (rules.ts `SCRIPT_RECORD`). Judging such a run after it ran and
-  undoing an unsealed result, as #1296 does for a mod's `.ts` file, was the other way, and was not
-  taken: the cp needs no undo, and the skill's one command becomes two.
+- **The settled page went through by a cp, until #1593.** As #1586 shipped, a page under
+  `docs/design` handed to a script was never seal checked, since there is no text to check before it
+  runs, so make-settled.py run straight into `docs/design` was held on an issue with no answer. The
+  skill wrote it into the session's scratchpad and copied it in with a cp alone, which #1524 reads
+  before it runs and passes while sealed, and the refusal said so (rules.ts `SCRIPT_RECORD`, since
+  deleted). Judging such a run after it ran and undoing an unsealed result, as #1296 does for a mod's
+  `.ts` file, was the other way, and was not taken then. #1593 took it, below: such a run now goes
+  ahead and the page is judged by what the run leaves.
 - **What stays unread.** A file a script writes that no argument names (a path in its own text), a
   folder it is handed (`python3 codemod.py app/`), a module run with `python -m`, and a tool run
-  through `npx` or a runner the reader does not take off. A script that only reads a screen file,
-  such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
-  no answer; run it on the scratchpad copy before the cp.
+  through `npx` or a runner the reader does not take off; #1682 reads the module and the npx tool,
+  below. A script that only reads a screen file is held too on an issue with no answer. Since #1593
+  one handed a settled page under `docs/design` (`check-decision-map.py`) runs, and the page is
+  judged by what the run leaves, below.
 
 ### What #1592 changed, 2026-10-23
 
@@ -3175,6 +3203,58 @@ edit of this guard's own `register.ts` held while the same change by the Edit to
 - **What judging after costs.** The command's other effects stand when a file is put back, and a put
   back can fail or meet a file changed again since, each said and never called undone, as #1296
   records.
+
+### What #1682 changed, 2026-10-25
+
+mod-kit's write reader gave no `runs` for a module run with `python -m` or a tool run through `npx`,
+so `npx prettier --write app/page.tsx` changed a screen file past every gate reading `runs` (ask
+before saving, the overnight LESSONS.md check, the collision guard, the design round guard).
+
+- **Measured first (L147).** Over this Mac's transcripts for the 14 days to 2026-10-24, 33,918 Bash
+  calls: 469 ran a tool through npx, 358 of them with a path among its words (vitest 215, prettier
+  100, tsc 69, playwright 52, eslint 19, tsx 5), and 24 ran a python module, 17 with a path
+  (unittest 13, http.server 4, py_compile 4, json.tool 2). pnpm dlx, yarn dlx, npm exec, bunx, pnpx,
+  uv run and uvx ran none, so they are left unread.
+- **Each is a run, as a script file is.** A module python runs with `-m` (read by python's own
+  options in mod-kit's `program.ts`, `-I -m x`, `-mx`, `-W ignore -m x`) and a tool npx runs (past
+  `--yes`, `--package` and `--workspace` and their values, or after `--`) are given in `runs`, their
+  `script` the module or tool, with no `path`, every word after it that may name a file in `args`.
+  Every gate reading `runs` judges them as it judges a script's arguments, with no change of its own.
+- **What it costs.** A test runner handed a test file (`npx vitest run x.test.ts`, the commonest
+  form) is now, to the collision guard, a possible edit of that file, as a script handed one has been
+  since #1592; to the design round guard a test passes. A read only tool handed a screen file (`npx
+  eslint app/page.tsx` without `--fix`) is held on an issue with no answer, and Dan's Not a look
+  change lets it through. No list of tools that only read was added: such a list exempts whatever it
+  misses (L96), and an exemption is Dan's to sign off.
+- **Still unread.** A file a run writes that no argument names (a path in a script's own text), what
+  is under a folder a run is handed (`npx codemod app/`, judged as the folder alone, which is no look
+  file), npx's `-c` command line, and the runners above.
+
+### What #1593 changed, 2026-10-25
+
+Since #1586 a script run handed a settled page under `docs/design` was held on an issue with no
+answer, read only scripts included (`check-decision-map.py`, `capture-web.mjs --design`), since what
+a script writes cannot be read before it runs and so could not be seal checked (`SCRIPT_RECORD`, now
+deleted).
+
+- **Judged after it runs, as #1296 judges a mod's hook file.** The page is read before the command
+  runs and again once it ran (afterShell, `record`): unchanged, it stands without the seal check
+  being asked; changed, it stands while the design rounds skill's own check says it is still a
+  settled design exactly as make-settled.py sealed it (register.ts `sealed`, the one call of
+  `sealCheck` the before and after readings share). Otherwise, on an issue Dan has not answered for
+  and not his Not a look change for that call, it is put back as it was, what the script wrote kept
+  in the session's scratchpad first, a page the script made taken away, one it took away written
+  back, and the call waits on him with the check's reason; the outcome is said as the page no longer
+  being sealed, never as a mod's drawing (rules.ts `shellOutcome`'s `record`). A seal check that
+  cannot run after is a page put back, never passed.
+- **Fails closed before it runs.** A page that cannot be read before the command runs could not be
+  judged after either, so it is held whole, saying so (rules.ts `shellUnread`).
+- **What it costs.** The script's other effects stand when the page is put back, and a put back can
+  fail or meet a page changed again since, each said, as #1296 records. make-settled.py run straight
+  into `docs/design` now goes through; the skill keeps its scratchpad and cp route, which still does.
+- **The remaining unread routes** are #1682's, above: a module and an npx tool are now read; a path
+  in a script's own text, a folder handed to a codemod, npx's `-c` and the other runners stay known
+  limits.
 
 ## Picker manners (#615), built 2026-10-04
 

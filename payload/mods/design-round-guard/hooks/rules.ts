@@ -1003,8 +1003,6 @@ export const shellUnread = (file: string, why: string): string =>
 export const scriptUnread = (script: string, file: string): string =>
   `The design round guard cannot read what ${script} does with ${file}, which it is handed as an argument, before it runs, so it judged it as a write of that file.`
 
-/** Why a settled design a script run is handed cannot be read before it runs (#1586), said through settledUnread. */
-export const SCRIPT_RECORD = "a script writes it, and what a script writes cannot be read before it runs: write it into this session's scratchpad and copy it in with a cp alone"
 
 /**
  * Whether a file, by its path inside its checkout, is one of a Claude Code mod's own hook files in
@@ -2067,17 +2065,25 @@ export type ShellOutcome =
   | { file: string; changed: string }
   | { file: string; failed: string; kept: string }
   | { file: string; unread: string }
-export const shellOutcome = (o: ShellOutcome): string => {
-  const notUndone = `The command ran and changed what the mod draws in ${o.file}, and that change was NOT undone:`
-  if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: it changed what the mod draws on screen. What the command wrote there is kept at ${o.undone}.`
+// `record`, for a settled design under docs/design a script run was handed (#1593): what the change
+// did is said as the page no longer being sealed, never as a mod's drawing (L11).
+export const shellOutcome = (o: ShellOutcome, record = false): string => {
+  const did = record ? `left ${o.file} no settled design exactly as make-settled.py wrote it` : `changed what the mod draws in ${o.file}`
+  const notUndone = `The command ran and ${did}, and that change was NOT undone:`
+  const why = record ? 'it left no settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws on screen'
+  if ('undone' in o) return `The command ran, and its change to ${o.file} was undone: ${why}. What the command wrote there is kept at ${o.undone}.`
   if ('unkept' in o) return `${notUndone} the design round guard could not keep a copy of what the command wrote (${o.unkept}), so it left the file as the command left it.`
   if ('changed' in o) return `${notUndone} the file changed again after the command wrote it, so putting the earlier text back would lose that later change. What the command wrote is kept at ${o.changed}.`
   if ('failed' in o) return `${notUndone} putting the earlier text back failed (${o.failed}). The file still holds what the command wrote, also kept at ${o.kept}.`
-  return `The command ran, and the design round guard could not read ${o.file} after it (${o.unread}), so whether it changed what the mod draws is unknown; the file was left as the command left it.`
+  const unknown = record ? 'it is still a settled design exactly as make-settled.py wrote it' : 'it changed what the mod draws'
+  return `The command ran, and the design round guard could not read ${o.file} after it (${o.unread}), so whether ${unknown} is unknown; the file was left as the command left it.`
 }
 /** A check after a shell write that itself failed (#1296): the command ran, and nothing was undone. */
 export const shellUnchecked = (why: string): string =>
-  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws (${why}), so nothing was undone. Check the mod's hook files the command wrote, and tell Dan.`
+  `The command ran, but the design round guard could not check afterwards whether it changed what a mod draws or a settled design under docs/design (${why}), so nothing was undone. Check the files the command wrote, and tell Dan.`
+
+/** What a refusal says of a settled design under docs/design a script run took away (#1593). */
+export const RECORD_REMOVED = 'the command took it away'
 
 /** What the skip question's `onScreen` asks for, as the refusal shows Claude it (#1138). */
 export const ON_SCREEN_HINT = '<one plain sentence for Dan: what on screen this edit changes, which control or area on which screen, or that nothing visible changes>'
