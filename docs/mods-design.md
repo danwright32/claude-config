@@ -339,9 +339,14 @@ the spec rather than chosen afresh, and open to Dan changing:
   really know how to read this" of "suite summary wait kept 1h 4m, stuck"). "Kept" and "stuck" are
   gone as internal words. A job is running, waiting (a poll loop quiet or repeating a line that is no
   error: it waits on something outside, a queued CI run, and is never stuck), or not progressing
-  (silent ten minutes or repeating, anything else), the last with who it is left to: "1 job not
-  progressing, left to Claude", "suite summary not progressing 1h 4m, left to Claude". Stalled first
-  within each owner. A background agent's jobs are one item under its task's name, so the line never
+  (silent ten minutes or repeating, anything else), the last with who it is left to: "agent fix CI:
+  1 job not progressing, left to the agent". Stalled first within each owner. This conversation's
+  own stalled command is settled by #1583's design round (`docs/design/1583-quiet-background-
+  command.html`, Dan on 2026-10-24: "if there's nothing for me to do, why do I need the
+  notification at all?"): not shown while Claude works; once Claude's turn has ended and it is still
+  quiet, nobody is watching it, so it is named with what was measured and asks Dan to act, said
+  once after every such command: "merge helper for #2733 quiet 12m, ask Claude to check". A
+  repeating one says "repeating the same output", never quiet. A background agent's jobs are one item under its task's name, so the line never
   reads as though the conversation in front of Dan is hung: "agent fix CI: PR 776 rerun wait
   waiting 12m, 1 job running". No job item asks Dan to act. An entry whose process and output file
   are both gone is dropped rather than shown.
@@ -500,6 +505,22 @@ plainest reading of the decisions above:
   is not recorded: Claude Code stops each one at
   its own timeout, thirty minutes at most, and its output reaches Claude as it comes, so it cannot
   run on unseen.
+- **One list, outside the module (#1695).** The jobs are held in `$.state`, which the engine keeps
+  for the session across a hot reload of the mod, never in a module variable. A reload runs the
+  code again in a fresh module and fires `session.start` again (never at `/clear`), and a tool call
+  already under way when it lands finishes in the old module. With the list in the module, that old
+  hook recorded the job and named it in the reminder, while the keep tool, answered by the new
+  module, refused it with "None is running", and the status bar went on counting it. Measured in
+  three sessions on this Mac (2026-10-18, 2026-10-20 and 2026-10-24), each with "job-watcher:
+  reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
+  foreground command started before the reload and moved to the background after it. So
+  `session.start` clears only the module's own bookkeeping, never the list, and the list is written
+  by version, retried, so two copies writing at once lose neither change.
+- **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
+  group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
+  merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
+  by its output, as before, since nothing better was measured. Chosen over telling builders to stop
+  piping background merges through `tail`, because a rule in a brief is a hope (L27).
 
 Decided with Dan on 2026-10-04 (his approval of a lessons review finding on #721, recorded on
 #706): the leftover judge reads a job's text only as data. The repeated line or pass a leftover
