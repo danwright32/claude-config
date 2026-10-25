@@ -531,6 +531,26 @@ test('a job piped through tail whose process ps cannot read is judged by its out
   expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/no new output for 1\d minutes/)
 })
 
+// Lessons review of PR 1705: while its group ran, the held output return skipped the output
+// bookkeeping, so once ps could not read the group the output judgement dated its silence from the
+// job's start, and a head-piped job that printed at minute 5 was called silent for 15 minutes at 15.
+test('a held output job whose ps stops answering is judged from its last real output, never its start (#1583)', withDeps, async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  const job: Job = { tail: '', size: 0 }
+  world(on, job)
+  await start($)
+  await $.tool.call({ tool: 'Bash', command: 'find . -name "*.ts" | head -50', run_in_background: true } as never)
+  await clock.advance(5 * MIN)
+  job.tail = 'a.ts\nb.ts\n'
+  job.size = 10
+  await clock.advance(9 * MIN)
+  job.psFails = true
+  await clock.advance(MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).not.toMatch(/no new output/)
+  await clock.advance(2 * MIN)
+  expect(noticesOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toMatch(/no new output for 1[12] minutes/)
+})
+
 test('a healthy job says nothing', withDeps, async ($, on) => {
   const clock = mock.clock(on, { now: 0 })
   const job = { tail: 'built 1\n', size: 8 }
@@ -920,6 +940,24 @@ test('a job list the engine cannot read is said as such, never as no job running
   failing.on = false
   expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('background job job1')
 })
+
+// Lessons review of PR 1705 (L10, L11): a stored list that is not a list of jobs is unreadable, never
+// an empty list, so nothing reads it as no job running.
+for (const [what, stored] of [
+  ['not a list', { job1: 'running' }],
+  ['a list holding something that is not a job', [{ id: 'job1', command: MERGE }]],
+] as const) {
+  test(`a stored job list that is ${what} is said as unreadable, never as no job running (#1695)`, withDeps, async ($, on) => {
+    mock.clock(on, { now: 0 })
+    world(on, { tail: '', size: 0 })
+    on('state.get', async ($, e, next) => (JOBS_STATE(e) ? ({ value: { value: stored, version: 3 } } as never) : next(e)))
+    await start($)
+    const r = (await $.tool.call(keep({ task_id: 'job1', name: 'merge helper', reason: 'it waits' }))) as { deny?: string; text?: string }
+    expect(r.deny ?? r.text).toContain('could not read its list of background jobs')
+    expect(r.deny ?? r.text).not.toContain('None is running')
+    expect(contextOf(await $.tool.call({ tool: 'Bash', command: 'git status' } as never))).toContain('could not read its list of background jobs')
+  })
+}
 
 test('keeping a job without a reason or a name is refused', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
@@ -2805,6 +2843,21 @@ test('with the in flight list unreadable and no job on record, the subagent stop
   const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
   expect(said.split('could not read the list of background work').length - 1).toBe(1)
   expect(said).toContain('Monitors and agents it started were not checked')
+})
+
+// Lessons review of PR 1705 (L11): with neither Claude Code's in flight list nor the watcher's own
+// list readable, nothing the agent left was checked, and the notice says exactly that rather than
+// claiming its Bash jobs on record were checked.
+test("with neither the in flight list nor the watcher's own list readable, the notice says nothing was checked (#1695)", withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  world(on, { tail: '', size: 0 }, { agents: [AGENT] })
+  STOP_BENEATH(on)
+  on('state.get', async ($, e, next) => (JOBS_STATE(e) ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  expect((await subagentStop($, 'a1', 'absent')).block).toBeUndefined()
+  const said = noticesOf(await $.tool.call({ tool: 'Bash', command: 'ls' } as never))
+  expect(said).toContain("nor its own list of background jobs, so nothing agent fix CI left running was checked")
+  expect(said).not.toContain('its background Bash jobs on the watcher')
 })
 
 test('an entry of the in flight list that names no task is passed over, and the rest still read (#1326)', withDeps, async ($, on) => {

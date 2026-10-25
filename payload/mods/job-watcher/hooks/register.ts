@@ -93,7 +93,16 @@ type JobList = Map<string, Job>
 // What Claude is told when the list cannot be read: never as no job running (L10), and once until a
 // read succeeds again, rather than on every tool result meanwhile.
 let toldListUnreadable = false
-const listOf = (value: unknown): JobList => new Map((Array.isArray(value) ? value.filter(isJob) : []).map(j => [j.id, j]))
+// Never written is the one empty list. Anything else that is not a list of jobs is unreadable and
+// throws, so no reader takes it for no job running (L10, lessons review of PR 1705): only this mod
+// writes it, so such a value is a fault to say, never data to skip.
+const listOf = (value: unknown): JobList => {
+  if (value === undefined) return new Map()
+  if (!Array.isArray(value)) throw new Error(`the stored list is not a list (${typeof value})`)
+  const bad = value.findIndex(j => !isJob(j))
+  if (bad >= 0) throw new Error(`entry ${bad + 1} of the stored list is not a job record`)
+  return new Map((value as Job[]).map(j => [j.id, j]))
+}
 const readJobs = async ($: EngineInterface): Promise<JobList> => {
   const held = await $.state.get({ plugin: 'job-watcher', key: 'jobs' })
   toldListUnreadable = false
@@ -516,12 +525,23 @@ const lookAll = async ($: EngineInterface, live: Live) => {
   }
   for (const listed of [...all.values()]) {
     if (!live()) return
-    const w = watchOf(listed)
+    // Read again as each is looked at: one forgotten while an earlier job was looked at (stopped by
+    // Claude, or ended) is not looked at, and gets no watch entry nothing would delete (lessons review
+    // of PR 1705); one kept meanwhile is looked at as kept. A list that cannot be read now is said
+    // once, as at the start of the look, and ends it.
+    let job: Job | undefined
     try {
-      // Read again as each is looked at: one forgotten while an earlier job was looked at (stopped by
-      // Claude, or ended) is not looked at, and one kept meanwhile is looked at as kept.
-      const job = (await readJobs($)).get(listed.id)
-      if (!job) continue
+      job = (await readJobs($)).get(listed.id)
+    } catch (err) {
+      if (live() && !toldListUnreadable) {
+        toldListUnreadable = true
+        say(undefined, unreadableList(err))
+      }
+      return
+    }
+    if (!job) continue
+    const w = watchOf(job)
+    try {
       await look($, job, w, now, live)
       if (live()) w.toldLookFailed = false
     } catch (err) {
@@ -674,12 +694,14 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   }
   if (!live()) return
   // #1583: a command piped through tail or head is silent while it works, so while its process group
-  // is measured as running it is running, whatever its output; told nothing, never stalled. One whose
-  // group could not be read is judged by its output below, since nothing better was measured.
-  if (holdsOutputBack(job.command) && w.measured === 'runs') {
+  // is measured as running it is running, whatever its output; told nothing, never stalled. Its
+  // output is still read and dated below, so a later look that cannot read its group, and judges it
+  // by its output, counts silence from its last real output, never its start (lessons review of
+  // PR 1705).
+  const held = holdsOutputBack(job.command) && w.measured === 'runs'
+  const runsHeld = () => {
     w.state = 'running'
     w.stalledBy = undefined
-    return
   }
   const statOut = await run($, ['stat', '-f', '%z', job.outputPath])
   const size = statOut === undefined ? NaN : Number(statOut.trim())
@@ -689,8 +711,10 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
   // The first look dates what is already there from the job's start: it grew before anyone looked.
   if (Number.isNaN(w.lastSize) && Number.isFinite(size)) w.lastSize = size
   // An output file that cannot be read says nothing about the job, so it is never judged silent:
-  // Claude is told it could not be read, once, until it can be again.
+  // Claude is told it could not be read, once, until it can be again. A held output job measured as
+  // running is running however its file reads.
   if (!Number.isFinite(size) || tail === undefined) {
+    if (held) return runsHeld()
     if (!w.toldUnreadable) {
       w.toldUnreadable = true
       say(job.owner?.id, `Background job ${job.id} (${shortCommand(job.command)}): could not read its output file ${job.outputPath}, so whether it is stuck is unknown.`)
@@ -703,6 +727,7 @@ const look = async ($: EngineInterface, job: Job, w: Watch, now: number, live: L
     w.lastSize = size
     w.lastGrowth = now
   }
+  if (held) return runsHeld()
   // Read again for quiet: a keep that landed while this look waited is honoured (L443).
   const current = (await readJobs($)).get(job.id) ?? job
   if (!live()) return
@@ -1205,13 +1230,16 @@ export const register: Register = on => {
     if (!reason) return { deny: `Give a reason why ${id} must keep running.` }
     const kept: Kept = { name, reason, quiet: input.quiet === true, at }
     // Written onto the record as it is after the waits, so a group traced meanwhile is kept (L443).
+    // Read from the list the write left, never from a variable the callback assigns (lessons review
+    // of PR 1705): the record as written, kept, or none when the job ended meanwhile.
     let current: Job | undefined
     try {
-      await changeJobs($, list => {
-        current = list.get(id)
-        if (current) list.set(id, { ...current, kept })
-        return current !== undefined
+      const after = await changeJobs($, list => {
+        const found = list.get(id)
+        if (found) list.set(id, { ...found, kept })
+        return found !== undefined
       })
+      current = after.get(id)
     } catch (err) {
       return { deny: `The background job watcher could not record the keep of ${id}: ${message(err)}. It is not kept; try again, or stop it with TaskStop.` }
     }
@@ -1321,9 +1349,11 @@ export const register: Register = on => {
     // The one list (#1695). One that cannot be read holds nothing the stop can be refused for; that
     // is said, once until it can be read, and Claude Code's own list is still checked.
     let jobs: JobList = new Map()
+    let jobsUnread = false
     try {
       jobs = await readJobs($)
     } catch (err) {
+      jobsUnread = true
       $.ui.log(`job-watcher: could not read the job list at agent ${agent}'s stop: ${message(err)}`, { to: 'debug' })
       if (!toldListUnreadable) {
         toldListUnreadable = true
@@ -1349,7 +1379,15 @@ export const register: Register = on => {
       $.ui.log(`job-watcher: the background_tasks sent with agent ${agent}'s stop could not be read as a list`, { to: 'debug' })
       if (!toldInFlightUnreadable) {
         toldInFlightUnreadable = true
-        say(undefined, `The background job watcher could not read the list of background work Claude Code sent with agent ${await agentName($, agent)}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`)
+        const who = await agentName($, agent)
+        // With its own list unreadable too, nothing was checked, and it says so (L11, lessons review
+        // of PR 1705), never that the record it could not read was checked.
+        say(
+          undefined,
+          jobsUnread
+            ? `The background job watcher could not read the list of background work Claude Code sent with agent ${who}'s stop, nor its own list of background jobs, so nothing agent ${who} left running was checked. Ask it, or stop what it left with TaskStop.`
+            : `The background job watcher could not read the list of background work Claude Code sent with agent ${who}'s stop, so only its background Bash jobs on the watcher's own record were checked; any Monitors and agents it started were not checked. Ask it, or stop them with TaskStop, if it may have left some running.`,
+        )
       }
     }
     // #1387: a Bash job on the watcher's record whose process group has ended holds nothing, listed
