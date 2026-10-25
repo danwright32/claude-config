@@ -36,12 +36,12 @@ export const VIEW_FIELDS = 'number,state,mergedAt,url'
 export const SKEW_MS = 10 * 60_000
 /**
  * How long a merge the helper makes in the background is asked about before it is let go: twice the
- * longest the helper can run (claude-config#1271), which since claude-config#1604 is its three hours
- * in line for the repository's turn plus its deadline of three hours from taking it. A ratio
- * test-merge-when-ready.sh checks against the helper's measured budgets, so neither number can be
- * raised alone (L227).
+ * longest the helper can run (claude-config#1271), which since claude-config#1697 is its ceiling of
+ * nine hours in line for the repository's turn (a line that keeps moving keeps its place) plus its
+ * deadline of three hours from taking it. A ratio test-merge-when-ready.sh checks against the
+ * helper's measured budgets, so neither number can be raised alone (L227).
  */
-export const WAIT_MS = 12 * 60 * 60_000
+export const WAIT_MS = 24 * 60 * 60_000
 
 /**
  * What GitHub said about the PR a merge named, for a command that ran at `since`: merged by it, open

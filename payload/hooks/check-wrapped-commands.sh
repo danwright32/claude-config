@@ -57,6 +57,11 @@
 #
 # The declared scripts are DATA_ARGUMENT_SCRIPTS, below.
 #
+# A CALL DECLARED READ ONLY (claude-config#1669). `claude-sync lesson <id>` only reads, so, unlike the
+# scripts above, it may stand BESIDE git, gh or rtk: as a command of its own of exactly the declared
+# shape (read_only_record) it is no unread wrapper, and the refusal is judged on the command's other
+# unread records only (first_unexcused). The declared calls are READ_ONLY_CALLS, below.
+#
 # When it cannot read the command at all (no python3, a missing lib, a payload nothing can read) and
 # the text names both a wrapper and one of the three, it refuses, saying it could not judge.
 #
@@ -97,6 +102,23 @@ ASK="Write out the command it runs in full, as a command of its own or as a lite
 DATA_ARGUMENT_SCRIPTS=(
   "~/.claude/hooks/lib/issue-spool.sh note"
   "~/.claude/skills/milestone/milestone-candidates.sh"
+)
+
+# The script calls that are read only, each "<path under ~/> <subcommand>", taking one plain id
+# (claude-config#1669). Unlike the scripts above, such a call may stand BESIDE git, gh or rtk: it runs
+# none of them, so it is no unread wrapper, and the rest of the command is judged by the gates as
+# usual. Only as a command of its own (read_only_record): nothing in front, one id of letters and
+# digits after, and at most 2>&1 or a pipe behind.
+#   claude-sync lesson, by the live clone's path (Dan, 2026-10-24: "Allow lesson only"): do_lesson
+#     reads LESSONS.md, hands the id to awk as a -v string and prints one entry; it takes no lock,
+#     writes nothing and runs no git, gh or rtk, and nothing claude-sync does before its dispatch
+#     does either. Every other subcommand (sync, send, pull, next-lesson, ...) commits, pushes, pulls
+#     or reserves, and stays refused. The development checkout's ./claude-sync is not declared: it is
+#     a copy a branch may be changing.
+# A new entry is Dan's decision, and test-check-wrapped-commands.sh fails until it is changed with it.
+# shellcheck disable=SC2088
+READ_ONLY_CALLS=(
+  "~/claude-config-sync/claude-sync lesson"
 )
 
 # A script run by its path, or sourced, where a command can begin (claude-config#1623), read off the
@@ -208,6 +230,52 @@ why_category() {   # $1 = the reason, as the reader says it; sets REASON
   esac
 }
 
+# Is reading record $1 a declared read only call (READ_ONLY_CALLS)? Its words, as the shell reads them,
+# must be exactly `[bash] <declared path> <subcommand> <id>`, optionally followed by 2>&1, with no
+# assignment in front, the path written ~/ or with the home directory written out, and the id one
+# plain word of letters and digits, so nothing in it can expand, substitute or redirect. A command
+# naming BASH_ENV anywhere has none, since bash runs the file it names before any script.
+read_only_record() {   # $1 = record index
+  local -a w=()
+  local k=0 n entry path sub id_re='^[A-Za-z0-9]{1,64}$'
+  [ -z "${PS__R_ASSIGNS[$1]}" ] || return 1
+  case "$cmd" in *BASH_ENV*) return 1 ;; esac
+  case "${PS__R_WRAP[$1]%%$'\x1d'*}" in direct|bash) ;; *) return 1 ;; esac
+  IFS=$'\x1f' read -r -a w <<< "${PS__R_WORDS[$1]}"
+  [ "${w[0]:-}" = bash ] && k=1
+  n=$(( ${#w[@]} - k ))
+  [ "${w[${#w[@]}-1]:-}" = "2>&1" ] && n=$((n - 1))
+  [ "$n" -eq 3 ] || return 1
+  [[ ${w[k+2]} =~ $id_re ]] || return 1
+  for entry in "${READ_ONLY_CALLS[@]}"; do
+    path="${entry%% *}"; sub="${entry#* }"
+    [ "${w[k+1]}" = "$sub" ] || continue
+    [ "${w[k]}" = "$path" ] || [ "${w[k]}" = "$HOME/${path#\~/}" ] || continue
+    return 0
+  done
+  return 1
+}
+
+# Sets PS_UNREAD_WRAPPER and PS_UNREAD_WHY to the first unread record of the command's reading that
+# is not a declared read only call, as ps_unreadable does for the first of all; fails when every one
+# is such a call. Read off the reading ps_unreadable has just made, so it costs no second reading.
+first_unexcused() {   # $1 = command
+  local i="${PS__M_FIRST[$PS__HIT]}" end u
+  end=$((i + PS__M_COUNT[PS__HIT]))
+  while [ "$i" -lt "$end" ]; do
+    u="${PS__R_WRAP[$i]}"
+    case "$u" in
+      *$'\x1d'*)
+        if ! read_only_record "$i"; then
+          PS_UNREAD_WRAPPER="${u%%$'\x1d'*}"; PS_UNREAD_WHY="${u#*$'\x1d'}"
+          return 0
+        fi ;;
+    esac
+    i=$((i + 1))
+  done
+  return 1
+}
+
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/push-scope.sh
 . "$HOOK_DIR/lib/push-scope.sh" 2>/dev/null \
@@ -235,6 +303,9 @@ case $? in
 esac
 
 ps_unreadable "$cmd" || exit 0
+# A declared read only call is no unread wrapper (claude-config#1669): the refusal is judged on the
+# first script record that is not one, and a command whose only ones are passes.
+first_unexcused "$cmd" || exit 0
 why_category "$PS_UNREAD_WHY"
 # A declared script call (or subcommand call), with nothing in front but the GH_TOKEN prefix and
 # nothing behind but 2>&1 and pipes into plain filters, whose git, gh and rtk all sit inside

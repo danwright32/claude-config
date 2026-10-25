@@ -24,6 +24,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL="$(cd "$HERE/.." && pwd)"
 SCORE="$HERE/design_score.py"
@@ -525,8 +533,8 @@ PY
   python3 "$CS/serve.py" "$CS/site" "$CS/port" > "$CS/serve.log" 2>&1 &
   CSP_SERVER=$!
   trap 'kill "$CSP_SERVER" 2>/dev/null; rm -rf "$T"' EXIT
-  # Waited on as a condition, the port file appearing, bounded by the suite's own deadline (L290).
-  for _ in $(seq 1 200); do [ -s "$CS/port" ] && break; kill -0 "$CSP_SERVER" 2>/dev/null || break; sleep 0.05; done
+  # Waited on as a condition, the port file appearing, bounded by the hang ceiling (L290, #1679).
+  hang_wait '[ -s "$CS/port" ] || ! kill -0 "$CSP_SERVER" 2>/dev/null' 0.05
   if [ ! -s "$CS/port" ]; then
     bad "the local server for the content security policy builds starts" "$(cat "$CS/serve.log")"
   else

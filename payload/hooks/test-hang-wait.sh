@@ -35,6 +35,13 @@ eq "#1620 a condition that becomes true while it waits is met" 0 "$rc"
 # One that never holds gives up at the ceiling, here set to one second, with 1.
 eq "#1620 a condition that never holds gives up at the ceiling with 1" 1 "$(SUITE_HANG_SECONDS=1 bash -c ". '$LIB'; hang_wait false 0.05; echo \$?")"
 
+# window_wait (#1679): a window the passing case runs out, its length the caller's.
+eq "#1679 a window whose condition holds is met with 0" 0 "$(bash -c ". '$LIB'; window_wait 1 true; echo \$?")"
+eq "#1679 a window run out without its condition ends with 1" 1 "$(bash -c ". '$LIB'; window_wait 1 false 0.05; echo \$?")"
+eq "#1679 and it runs out at the caller's length, not the hang ceiling" "1 early" \
+  "$(SUITE_HANG_SECONDS=600 bash -c ". '$LIB'; t0=\$SECONDS; window_wait 1 false 0.05; r=\$?; [ \$((SECONDS - t0)) -lt 60 ] && echo \"\$r early\" || echo \"\$r late\"")"
+eq "#1679 a window that is not a whole number of seconds is refused with 2" 2 "$(bash -c ". '$LIB'; window_wait soon true 2>/dev/null; echo \$?")"
+
 echo
 echo "passed: $pass, failed: $fail"
 printf 'SUITE-RESULT passed=%s failed=%s\n' "$pass" "$fail"

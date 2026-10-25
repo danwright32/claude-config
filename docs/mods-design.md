@@ -80,6 +80,24 @@ and settles its own surfaces in rounds of its own before it is built.
    twenty mod folders the look took about a tenth of a second. A mod whose touch fails is named in
    the session (by a turn's look only the first time) and tried again at the next look or mod-kit
    reload; a change in a folder beneath a module's `hooks` folder counts.
+6. **A session fact lives in `$.state`, never only in the module (#1695, #1703).** The engine fires
+   `session.start` once per process and then once per fresh load of a mod (a hot reload, which a
+   sync pull of a changed mod causes), never at `/clear`, and runs the code again in a fresh module
+   while the session goes on. So a second `session.start` is never a new session, and anything a
+   mod keeps in a module variable is gone after a reload. A fact about the session (what it has
+   recorded, counted, been told or asked, whether a turn runs) is kept in `$.state`, which the
+   engine holds for the session across a reload; one that more than one hook or copy of the module
+   changes is written by version and retried, so two writes at once lose neither. A module variable
+   stays only for what a reload may lose: a cache filled from `$.state` (or from disk) at each start
+   and written through, a flag that holds a notice to once (a reload says it once more at most), a
+   timer (the engine cancels the old module's waits and each start arms them again), or the
+   bookkeeping of a call still in flight (only the module awaiting it can finish it). A secret's
+   value is never kept there: the secret guard keeps the paths of the `.env` files written, and
+   reads them again. A mod's `session.start` puts its own module bookkeeping back to how a fresh
+   module has it, so a test reloads a mod mid session by calling `session.start` a second time over
+   the same `$.state`, and every fact moved by #1703 has such a test, seen failing first. The sweep
+   of every mod, with each module variable that stays and why, is in the description of the pull
+   request that closed #1703.
 
 ## Guard surfaces (#607, #608, #609)
 
@@ -515,7 +533,14 @@ plainest reading of the decisions above:
   reloaded" between the reminder and the refused keep; in the 2026-10-24 one the job was a
   foreground command started before the reload and moved to the background after it. So
   `session.start` clears only the module's own bookkeeping, never the list, and the list is written
-  by version, retried, so two copies writing at once lose neither change.
+  by version, retried, so two copies writing at once lose neither change. Since #1703 the watcher's
+  other session facts live there too, by the same versioned write: which agent started each piece
+  of background work, how often each agent's stop was refused, the notices queued for Claude, each
+  agent's last sign of life (which agents are live is read from it), whether this conversation has
+  a turn running, and what the watcher last measured of each job (cached in the module, filled at
+  each start). A reload had let a subagent's held stop through, reset its refusal count, dropped a
+  queued notice, dated a quiet agent from the reload, read a busy turn as idle (so a wake went to a
+  conversation mid turn), and said a job writing all along had had no new output since it started.
 - **Held output (#1583).** A command piped through `tail` or `head` is judged by whether its process
   group still runs, never by new output: `tail` writes nothing until its input ends, so a healthy
   merge helper piped through `tail -6` read as stalled. One whose group cannot be read is judged
@@ -1927,7 +1952,7 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   reads Claude's own final message (`last_assistant_message`, never Dan's; since #1608 every
   message of the turn, below) for a step handed over
   in prose: "waiting on you" (since #1613 only where it hands over a step, below), "once you run" (or apply, paste, click, approve), "you'll need to run",
-  "needs you to paste" and the like, "your step". One negated right before it, in its own clause
+  "needs you to paste" and the like, "your step" (each of these four narrowed since #1680, below). One negated right before it, in its own clause
   and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
   as the name of a thing ("is waiting on you", the notification) does not count; a negation in
   another clause ("the deploy did not finish, so it's waiting on you") does not hide it. When one is there and no unfinished step is on a card Dan can see
@@ -2033,6 +2058,28 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   hit was false is false even where another sentence in it, which no phrase matched, did hand him a
   step. The false shapes are failing cases in `tests/waiting.test.ts` and every real one a firing
   case, all paraphrased.
+- **#863's other four phrases narrowed** (#1680). Measured the same way over the 30 days to
+  2026-10-25 (9,763 turns), "once you run" and the like, "you'll need to run" and the like, "needs
+  you to ..." and "your step" fired in 16 turns, 11 handing Dan a step and 5 not: "once you approve"
+  said of a plan and of a lesson in the picker, "once you click Done" describing the card's own
+  button, "before you need to click Allow" about a sign in still to come, and the phrases quoted in
+  talk about this check. A third of the turns, chosen by a hash of each turn's id before any was
+  read, were held out. Now:
+  - "once you approve" does not count when what is approved, within the next few words, is a plan,
+    proposal, lesson, picker, idea, design, approach, option, direction, wording or spec, a
+    decision answered in the conversation (`APPROVED_DECISION`);
+  - "once you click Done" does not count, since Done is the card's own button (`CLICK_DONE`);
+  - "you need to" does not count after before, when, whenever, if, until, after or in case, a need
+    still to come (`LATER_NEED`);
+  - none of the four counts inside a quotation opened earlier on its line, the rule #1613 gave
+    "waiting on you", now shared (`quotedOnLine`).
+
+  The first two were fitted on the 9 turns not held out (6 real, 3 false) and then scored once on
+  the 7 held out (5 real, 2 false): every real one kept, and both false ones still fired, since both
+  were "you need to" and the fitting turns held no false one of it. The last two were then added for
+  those two, so they are fitted on the held out turns and no unseen reading of them remains; the
+  transcripts hold only 186 turns from the 30 days before, in which none of the four fires. Together:
+  16 turns to 11, all 11 real, none of the 5 false.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
@@ -3586,6 +3633,46 @@ the mod path faked the runner, so it was measured against the real engine (Claud
   (about five seconds, the scripted stand-in model, so nothing is billed) and says UNMEASURED where
   there is no Claude Code or no macOS. Not measured, and said: an interactive `/resume` picker, a
   teammate, and a fork subagent.
+
+## Goal box (#1563), settled 2026-10-24
+
+Dan, 2026-10-23: "show me a green (if possible) box that says the goal has been accomplished when
+you either literally accomplish a goal or just complete what I originally asked you to do", the box
+listing the goal and a short list of what shipped (issues closed, pull requests merged and live),
+once per accomplishment, never while part of the request is open, a merge unconfirmed or a deploy
+not live. The look was settled in one design round on 2026-10-24: Dan chose "Green border and
+heading" over a grey card, a green heading in a grey card, and a text box in the reply. The settled
+file is `docs/design/1563-goal-box.html`, drawn from `docs/design/1563-goal-box.fixture.json`.
+
+- **The box.** The mod's `goal_accomplished` tool result, drawn as mod-kit's card with `border:
+  'success'` (the one card with a border of its own colour, a field mod-kit gained for it), the
+  heading GOAL ACCOMPLISHED bold in the success green, then the goal and one line per thing that
+  shipped, each led by a green bullet, the words themselves plain. The tool's text result is the
+  same box as text, a three line double box the shape of SESSION REFLECTION, which is what the model
+  reads and what a surface that cannot draw the card shows; the model is told not to repeat it.
+- **A /goal met.** Read through mod-kit's one goal reader, whose `none` reading now carries `met`
+  when Claude Code's own check cleared the goal as met (a goal_status record without the sentinel;
+  16 of the 159 goal records on this Mac on 2026-10-24, the 22 ended sentinels being /goal clear or
+  a pause). Measured on 2.1.310 with a probe mod in a headless session: an unmet verdict is the Stop
+  chain's own block, and the met record is appended after the Stop chain returns, before
+  turn.complete. So the mod's turn.complete hook finds it and sends the session one prompt of its
+  own asking for the box, once per met goal (`asked`), only in an interactive session, never from a
+  subagent's or an interrupted turn. It hooks no Stop: Claude Code's built-in security default sends
+  every classic event past the tier mods load in (#875), and the transcript comes from the session's
+  own record in the session registry for the same reason. The box is shown under the goal's own
+  condition, whatever the model calls it.
+- **No /goal.** The finish is the session's own judgement, so the session calls the tool, whose
+  description (offered in full, not behind tool search) says when. What can be read is enforced, each
+  refusal naming what holds it: a /goal still set or unreadable; an agent the session started
+  (`spawnedBy` absent) still pending, running or waiting; is it live's `owed` merges and verdicts
+  `deploying` or `unconfirmed`; a pull request the session touched still open. The pull requests are
+  Claude Code's own `pr-link` transcript records (888 across 54 transcripts on 2026-10-24: 93 first
+  seen at a create, 144 at a merge, 13 at a view, 638 while an agent worked), so one only viewed and
+  left open holds the box too, the conservative side. GitHub is asked once per repository, as each
+  account gh is logged in to; a repository it cannot be asked about holds the box, saying why.
+- **Once.** A box is recorded in the session's state by a read and a versioned write, so two calls
+  at once show one; a goal's box by its met record's id, a request's by how many messages Dan had
+  typed (mod-kit's one reader of his own words), and a second box needs a new one.
 
 ## Not design decisions
 

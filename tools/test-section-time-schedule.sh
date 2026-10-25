@@ -15,6 +15,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAKE="$DIR/take-section-time-reading.sh"
 INSTALL="$DIR/install-section-time-schedule.sh"
@@ -76,7 +84,7 @@ printf '#!/usr/bin/env bash\nsleep 5\n' > "$BUSY"; chmod +x "$BUSY"
 SECTION_TIME_MEASURER="$BUSY" SECTION_TIME_RECORD="$REC" SECTION_TIME_LOG="$LOG" SECTION_TIME_LOCK="$TMPROOT/lock" bash "$TAKE" >/dev/null 2>&1 &
 first=$!
 # Wait on the lock appearing rather than on the clock (L290).
-n=0; while [ ! -e "$TMPROOT/lock" ] && [ "$n" -lt 200 ]; do n=$((n+1)); sleep 0.05; done
+hang_wait '[ -e "$TMPROOT/lock" ]' 0.05
 out3="$(SECTION_TIME_MEASURER="$FAKE" SECTION_TIME_RECORD="$REC" SECTION_TIME_LOG="$LOG" SECTION_TIME_LOCK="$TMPROOT/lock" bash "$TAKE" 2>&1)"; rc3=$?
 case "$out3" in *"already"*) check "a second reading refuses while one is running" ok ;;
   *) check "a second reading refuses while one is running" "rc=$rc3 out=$out3" ;; esac

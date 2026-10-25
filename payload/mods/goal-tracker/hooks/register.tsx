@@ -23,10 +23,25 @@ let toldUnwritten = false
 // never overwrites one still waiting (lessons review of 327a767).
 const notices: string[] = []
 let toldNoClock = false
+// #1703: the progress is kept in $.state too, each time it is published, which the engine holds for
+// the session across a hot reload of the mod, so a reload's session.start takes it up again rather
+// than writing an empty list over the session's own (below). Written whole, as the registry copy is:
+// the module holds the one copy it changes, so a later write is always the newer. One that cannot be
+// written is logged, and a reload then begins this conversation's list again, as before.
+const keepProgress = async ($: EngineInterface, p: Progress | null) => {
+  try {
+    await $.state.set({ plugin: 'goal-tracker', key: 'progress' }, p)
+  } catch (err) {
+    $.ui.log(`goal-tracker: could not keep this session's progress for a reload: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
+const isProgress = (x: unknown): x is Progress =>
+  typeof x === 'object' && x !== null && Array.isArray((x as Progress).steps) && typeof (x as Progress).startedAt === 'number' && typeof (x as Progress).lastActivityAt === 'number'
 const publish = async ($: EngineInterface, now: number) => {
   if (!progress) return
   // The throttle counts attempts, so a failing registry is not retried on every tool call.
   lastTried = now
+  await keepProgress($, progress)
   try {
     await $.sessions.setExtra({ key: 'progress', value: progress })
     toldUnwritten = false
@@ -345,6 +360,20 @@ const paneOnPrompt = async ($: EngineInterface, e: { text: string }, isPerson: b
 // Failed, decided with Dan (2026-10-04, after the review of #634): three tool calls in a row failed
 // or refused, nothing succeeding between; the next success clears it.
 let streak = 0
+// #1703: the run is kept in $.state, which the engine holds for the session across a hot reload, so
+// a reload in the middle of one goes on counting it rather than starting again from nought. This
+// module's count is a cache of it, taken up at each start and written through as it changes; one
+// that cannot be written is logged.
+let keptStreak: number | undefined
+const keepStreak = async ($: EngineInterface) => {
+  if (streak === keptStreak) return
+  try {
+    await $.state.set({ plugin: 'goal-tracker', key: 'streak' }, streak)
+    keptStreak = streak
+  } catch (err) {
+    $.ui.log(`goal-tracker: could not keep this session's run of failed calls for a reload: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
 // The failure is recorded as its first line, cut to a short length: the registry is shared with
 // every session on this Mac, so a tool's whole output never goes into it (L657, lessons review).
 const FAILED_MAX = 200
@@ -483,11 +512,22 @@ export const register: Register = on => {
   })
   on('goalTracker.waitingOnYou', waitingNoun)
 
-  // Everything the module keeps belongs to one session: a later start in the same process begins
-  // again rather than reading the last one's (lessons review of #634).
+  // A later start in the same process is a hot reload of the mod, the session going on (#1703): the
+  // module's own bookkeeping begins again, as a fresh module's does, and the conversation's progress
+  // and run of failures are taken up from $.state; a new process has none, and begins afresh.
   on('session.start', async ($, e, next) => {
     // A clock that cannot be read never stops the pane and /goals being set up.
     await beginAgain($)
+    try {
+      const kept = (await $.state.get({ plugin: 'goal-tracker', key: 'progress' })).value
+      // The waiting mark is owned by the question or permission this module holds, which the reload
+      // dropped, so it is derived again from what this module holds now (push review of PR for #1703).
+      if (isProgress(kept)) progress = withWaiting(kept)
+      const run = (await $.state.get({ plugin: 'goal-tracker', key: 'streak' })).value
+      if (typeof run === 'number' && Number.isInteger(run) && run >= 0) streak = keptStreak = run
+    } catch (err) {
+      $.ui.log(`goal-tracker: could not read this session's progress kept for a reload, so it begins again: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+    }
     startCwd = e.cwd
     beat?.cancel()
     beat = $.clock.every(STILL_WORKING_MS, () => stillWorking($))
@@ -499,7 +539,13 @@ export const register: Register = on => {
   // written here: the registry closes this session's record now, and the next tool call writes the
   // new conversation's progress at once.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await beginAgain($)
+    if (e.reason === 'clear') {
+      await beginAgain($)
+      // A reload after the /clear never takes up the list, or the run of failures, of the
+      // conversation it ended (#1703).
+      await keepProgress($, null)
+      await keepStreak($)
+    }
     return next(e)
   })
 
@@ -664,6 +710,7 @@ export const register: Register = on => {
       progress ??= withWaiting(empty(await nowOr($)))
       const before = progress.failed
       progress = counted(progress, block.is_error ? oneLine(resultText(block.content) || 'it failed') : undefined)
+      await keepStreak($)
       if (progress.failed !== before) changed = true
     }
     if (changed) await publish($, await nowOr($))
@@ -748,6 +795,7 @@ export const register: Register = on => {
         question = undefined
         callEnded(id)
         progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }
+        await keepStreak($)
         noteCounted(input.tool_use_id)
         await publish($, after)
       }
@@ -783,9 +831,11 @@ export const register: Register = on => {
 
     if (fromSubagent || why !== undefined) {
       progress = { ...(fromSubagent ? progress : counted(progress, why)), lastActivityAt: at }
+      await keepStreak($)
       if (!fromSubagent) noteCounted(input.tool_use_id)
     } else {
       progress = counted(progress, undefined)
+      await keepStreak($)
       noteCounted(input.tool_use_id)
       if (e.tool === 'TodoWrite') {
         const todos = Array.isArray(input.todos) ? (input.todos as { content: string; status: unknown; activeForm: string }[]) : []

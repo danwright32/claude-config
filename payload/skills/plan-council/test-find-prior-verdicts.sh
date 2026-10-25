@@ -14,6 +14,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$DIR/find-prior-verdicts.sh"
 LITE="$DIR/../plan-lite/SKILL.md"
@@ -118,8 +126,9 @@ check "the refusal says why" "COULD NOT SEARCH" "$out"
 #     rather than hanging the suite.
 for flag in --dir --repo; do
   PATH="$TMP/bin:$PATH" bash "$SCRIPT" "x" "$flag" >"$TMP/trail.out" 2>&1 &
-  pid=$!; t0=$SECONDS
-  while kill -0 "$pid" 2>/dev/null && [ $((SECONDS - t0)) -lt 5 ]; do sleep 0.1; done
+  pid=$!
+  # Waited on with the hang ceiling: it was 5 s, which bash starting under load can pass (#1679; a setting, not a measurement).
+  hang_wait "! kill -0 $pid 2>/dev/null"
   if kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     fail=$((fail + 1)); echo "FAIL: $flag given last hangs instead of being refused"

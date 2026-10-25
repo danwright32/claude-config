@@ -17,6 +17,14 @@ set -uo pipefail
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679).
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/sleep.sh"
 PY="$DIR/lib/sleep-report.py"
@@ -187,7 +195,7 @@ has "#1279 a question left before bed says why" "o/r#14: Keep the old flag? (lef
 # render must never put back a report that is missing the second note. Each wait is on a marker
 # the render drops, with a deadline, never a fixed sleep.
 PAUSE="$WORK/pause"; MARKS="$WORK/marks"; mkdir -p "$PAUSE" "$MARKS"
-upto(){ local end=$((SECONDS + 20)); while [ "$SECONDS" -lt "$end" ]; do eval "$1" && return 0; sleep 0.05; done; return 1; }
+upto(){ hang_wait "$1" 0.05; }   # its 20 s ceiling was a setting a loaded Mac can reach (#1679)
 SLEEP_REPORT_PAUSE="$PAUSE" SLEEP_REPORT_MARKS="$MARKS" note '{"kind":"finding","by":"a","text":"held render A"}' >/dev/null 2>&1 &
 held=$!
 upto 'ls "$MARKS"/paused.* >/dev/null 2>&1' || { fail=$((fail + 1)); echo "FAIL: the held render never reached its pause"; }

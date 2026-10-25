@@ -18,6 +18,16 @@ set -u
 }
 suite_deadline_arm || exit $?
 
+# Every wait on a condition gives up at the one ceiling only a hang reaches (lib/hang-wait.sh,
+# claude-config#1679), handed to the stand ins this suite writes as FAKE_HANG_S, since they run as
+# processes of their own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../payload/hooks/lib/hang-wait.sh" || {
+  echo "FAIL: $(basename "$0"): lib/hang-wait.sh is missing, so this suite's waits have no ceiling."
+  printf 'SUITE-RESULT passed=0 failed=1\n'
+  exit 1
+}
+export FAKE_HANG_S="$HANG_S"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="$DIR/lib/pinned-compiler.sh"
 REAL_TS="$DIR/typescript"
@@ -35,8 +45,8 @@ trap 'rm -rf "$T"' EXIT
 # its .bin/tsc as a relative link into it, and npm's hidden lockfile. Every call is logged.
 #   FAKE_NPM_MODE=fail   exits 1 with npm's own words for a package missing from the cache, offline
 #   FAKE_NPM_MODE=hang   starts a child that sleeps, records its pid, and waits on it
-#   FAKE_NPM_BARRIER=d   waits until two installs have started, so they overlap, bounded by a limit
-#                        the stub sets (not measured) so a lone install is never held for ever
+#   FAKE_NPM_BARRIER=d   waits until two installs have started, so they overlap, bounded by the hang
+#                        ceiling the suite hands it (FAKE_HANG_S), so a lone install is never held for ever
 NPM="$T/npm"; NPM_LOG="$T/npm-calls"
 cat > "$NPM" <<'STUB'
 #!/bin/bash
@@ -46,7 +56,7 @@ for a in "$@"; do [ "$prev" = --prefix ] && prefix="$a"; prev="$a"; done
 [ -f "$prefix/package-lock.json" ] || { echo "npm error code EUSAGE: no package-lock.json in $prefix" >&2; exit 1; }
 if [ -n "${FAKE_NPM_BARRIER:-}" ]; then
   mkdir -p "$FAKE_NPM_BARRIER"; : > "$FAKE_NPM_BARRIER/$$"
-  for _ in $(seq 1 200); do [ "$(ls "$FAKE_NPM_BARRIER" | wc -l)" -ge 2 ] && break; sleep 0.05; done
+  t0=$SECONDS; while [ "$(ls "$FAKE_NPM_BARRIER" | wc -l)" -lt 2 ] && [ $((SECONDS - t0)) -lt "${FAKE_HANG_S:-300}" ]; do sleep 0.05; done
 fi
 case "${FAKE_NPM_MODE:-ok}" in
   fail) printf 'npm error code ENOTCACHED\nnpm error request to https://registry.npmjs.org/typescript failed: cache mode is only-if-cached\n' >&2; exit 1 ;;

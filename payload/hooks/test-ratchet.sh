@@ -132,10 +132,12 @@ echo "ratchet: there is no fourth copy"
 #
 # Said in the one agreed shape the runner reads, so it is reported as NOT RUN rather than as broken
 # code, and never as a pass: this suite is about the repo, and the installed copy is not one.
-REPO="$(cd "$DIR/../.." && pwd)"
-if [ ! -f "$REPO/claude-sync" ] || [ ! -d "$REPO/payload" ]; then
-  echo "test-ratchet: $REPO is not a checkout of this repo (no claude-sync and payload/ in it), so there was nothing here to scan." >&2
-  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $REPO is not one"
+# The checkout is found by the one shared test, lib/checkout-root.sh (claude-config#1567, #1663),
+# which prints nothing for an installed copy or a copy inside some other repository.
+REPO="$(bash "$DIR/lib/checkout-root.sh" "$DIR/.." 2>/dev/null || true)"
+if [ -z "$REPO" ]; then
+  echo "test-ratchet: $DIR/.. is not the payload of a claude-config checkout, so there was nothing here to scan." >&2
+  printf 'SUITE-NOT-RUN %s\n' "needs the repository above it, and $DIR/.. is not the payload of one"
   echo "passed: 0, failed: 0"
   printf 'SUITE-RESULT passed=0 failed=0\n'
   exit 2

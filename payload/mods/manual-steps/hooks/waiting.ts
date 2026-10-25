@@ -34,16 +34,21 @@ const DECISION = /\b(?:decision|decisions|decide|decided|answer|question|questio
 // How far past the phrase a step may be named.
 const REACH = 500
 
+// Inside a quotation opened earlier on its line: quoted, not said to Dan ("a sentence like "it's
+// waiting on you" never fires"). The quote right before the phrase is QUOTED's, below. #1613 for
+// "waiting on you", #1680 for #863's other four.
+const quotedOnLine = (before: string): boolean => {
+  const line = before.slice(before.lastIndexOf('\n') + 1)
+  const count = (rx: RegExp) => (line.match(rx) ?? []).length
+  return count(/"/g) % 2 === 1 || count(/“/g) > count(/”/g)
+}
+
 /** Whether "waiting on you" at `at` to `end` in `plain` hands Dan a step (#1613). */
 const handsOverAStep = (plain: string, at: number, end: number): boolean => {
   const before = plain.slice(0, at)
   const after = plain.slice(end)
   if (!LEADS.test(before) && !SAID_OF.test(before) && !(THING.test(before) && THING_NAMED.test(after))) return false
-  // Inside a quotation opened earlier on its line: quoted, not said to Dan ("a sentence like "it's
-  // waiting on you" never fires"). The quote right before the phrase is QUOTED's, below.
-  const line = before.slice(before.lastIndexOf('\n') + 1)
-  const count = (rx: RegExp) => (line.match(rx) ?? []).length
-  if (count(/"/g) % 2 === 1 || count(/“/g) > count(/”/g)) return false
+  if (quotedOnLine(before)) return false
   // Said of the steps card, which already shows Dan the step ("the card is the only thing still
   // waiting on you"); a heading's colon ends the sentence, so a list under it is not this sentence.
   const sentenceEnd = after.search(/[.!?:\n]/)
@@ -60,18 +65,53 @@ const handsOverAStep = (plain: string, at: number, end: number): boolean => {
   return step >= 0 && (decision < 0 || step < decision)
 }
 
+// #1680: "once you ..." was said of an approval that is a decision ("once you approve the plan",
+// "once you approve a lesson in the picker") and of the card's own button ("drops it once you click
+// Done") in 3 of the 7 turns of the 30 days to 2026-10-25 it fired in. Neither is a step to pin: the
+// first is answered in the conversation, the second is the card itself.
+const ONCE_YOU = /\bonce you(?:'ve| have)? (?:run|ran|apply|applied|paste|pasted|click|clicked|approve|approved)\b/gi
+// What an approval is of when it is a decision, within the next few words of its sentence.
+const APPROVED_DECISION = /^\s+(?:(?:the|this|that|a|an|your|my|its)\s+)?(?:[\w-]+\s+){0,2}?(?:plan|plans|proposal|lesson|lessons|picker|idea|ideas|design|approach|option|options|direction|wording|spec)\b/i
+// The steps card's own Done button, clicked to mark a step done.
+const CLICK_DONE = /^\s+(?:on\s+)?(?:the\s+)?(?:\*\*|["\u201c`])?Done\b/
+const onceYouIsAStep = (plain: string, at: number, end: number): boolean => {
+  if (quotedOnLine(plain.slice(0, at))) return false
+  const verb = plain.slice(at, end).split(/\s+/).at(-1) ?? ''
+  const after = plain.slice(end)
+  if (/^approved?$/i.test(verb) && APPROVED_DECISION.test(after)) return false
+  if (/^click(?:ed)?$/i.test(verb) && CLICK_DONE.test(after)) return false
+  return true
+}
+
+// #1680: "you need to" was said of a later, conditional need ("I'll tell you before you need to
+// click Allow", about a sign in still to come), which is no step yet; and #863's phrases were quoted
+// in talk about this check. A need introduced by before, when, if, until or after is not one now.
+const YOU_NEED_TO = /\byou(?:'ll| will)? need to (?:run|paste|apply|click|approve)\b/gi
+const LATER_NEED = /\b(?:before|when|whenever|if|until|after|in case)\s+$/i
+const youNeedToIsAStep = (plain: string, at: number): boolean =>
+  !quotedOnLine(plain.slice(0, at)) && !LATER_NEED.test(plain.slice(0, at))
+const NEEDS_YOU_TO = /\bneeds? you to (?:run|paste|apply|click|approve|enter|sign in|log in)\b/gi
+const YOUR_STEP = /\byour (?:manual )?step\b/gi
+const notQuoted = (plain: string, at: number): boolean => !quotedOnLine(plain.slice(0, at))
+
 // What a phrase must also be, beyond being there, to count.
-const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => boolean> = new Map([[WAITING, handsOverAStep]])
+const ALSO: ReadonlyMap<RegExp, (plain: string, at: number, end: number) => boolean> = new Map([
+  [WAITING, handsOverAStep],
+  [ONCE_YOU, onceYouIsAStep],
+  [YOU_NEED_TO, youNeedToIsAStep],
+  [NEEDS_YOU_TO, notQuoted],
+  [YOUR_STEP, notQuoted],
+])
 
 // Each says a step is Dan's to do. "waiting on you" never matches "waiting on your", and a step is
 // one he runs, pastes, applies, clicks or approves, never a merge or a review Claude does itself.
 export const PHRASES: readonly RegExp[] = [
   // #863's five.
   WAITING,
-  /\bonce you(?:'ve| have)? (?:run|ran|apply|applied|paste|pasted|click|clicked|approve|approved)\b/gi,
-  /\byou(?:'ll| will)? need to (?:run|paste|apply|click|approve)\b/gi,
-  /\bneeds? you to (?:run|paste|apply|click|approve|enter|sign in|log in)\b/gi,
-  /\byour (?:manual )?step\b/gi,
+  ONCE_YOU,
+  YOU_NEED_TO,
+  NEEDS_YOU_TO,
+  YOUR_STEP,
   // #1608: "One thing is still yours to do", "installing is yours to run". Never "yours to decide",
   // "to make" or "to pick", which hand Dan a decision, not a step.
   /\byours to (?:do|run|apply|paste|click|approve|check|finish|install)\b/gi,

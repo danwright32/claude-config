@@ -68,6 +68,12 @@ is_test() {
   # Contests.swift counted as tests and could satisfy the zero test floor for a source change.
   grep -Eq '(Tests?|(^|[/_-])tests?)\.(java|kt|cs|swift|scala)$' <<< "$f" && return 0
   grep -Eiq '(^|/)conftest\.py$' <<< "$f"                   && return 0
+  # Slate's database suites (claude-config#1698): scripts/verify-<name>-sql.ts, run by its DB replay
+  # workflow against a throwaway Postgres and named apart from test-*.ts only because they need
+  # Docker. A push adding only scripts/verify-calcom-retired-at-sql.ts was refused as untested.
+  # Scoped to a scripts/ directory and the -sql.ts ending on purpose: the live verify-*.ts commands
+  # beside them check production and are not tests.
+  grep -Eq '(^|/)scripts/verify-[^/]+-sql\.ts$' <<< "$f"    && return 0
   # Shell suites (claude-config#95). A whole language of tests was invisible here, and the config
   # repo's suite is entirely shell: a push carrying a one line Python change and the assertion
   # covering it, in the same commit, was blocked as untested and the change was dropped rather

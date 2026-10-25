@@ -394,6 +394,14 @@ type Opts = {
    * library to that).
    */
   poll?: { take?: string; failed?: string }
+  /**
+   * The command abandoned (#1677): from the first process.run whose words hold this text, the engine
+   * refuses every process and file call, as Claude Code does once a command is interrupted or its
+   * question dismissed, with its own words ("$.process.run(mkdir) aborted").
+   */
+  refuseFrom?: string
+  /** Paths whether a file is at cannot be checked (#1678): fs.exists fails for each. */
+  existsFails?: string[]
 }
 
 const ok = (stdout = '') => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -451,7 +459,11 @@ const world = (on: On, o: Opts = {}) => {
     commands: [] as { name: string; description: string }[],
     /** Every call of the polling policy, gh-poll.sh, with the environment it was given (#1482). */
     polls: [] as { argv: string[]; env?: Record<string, string> }[],
+    /** Whether the engine is refusing every call, once `refuseFrom` was met (#1677). */
+    refusing: false,
   }
+  // The engine's refusal, which reaches the mod as the call failing with these words.
+  const refused = (call: string) => ({ deny: `$.${call} aborted` }) as never
   const clock = mock.clock(on, { now: o.now ?? T0 })
   // HOME, gone once `homeGoneAfterNote` has seen a note written: the only way left for the final render to throw.
   on('env.get', ($, e) => {
@@ -462,12 +474,14 @@ const world = (on: On, o: Opts = {}) => {
   // rename and link are on the disk, so of two sessions moving one record exactly one succeeds.
   let driverWrites = 0
   on('fs.write', ($, e) => {
+    if (w.refusing) return refused('fs.write')
     if (e.path.includes('/state/sleep/driver/') && o.driverWriteFails?.includes(++driverWrites)) throw new Error('EIO: i/o error, write')
     w.fsWrites.push(e.path)
     w.files[e.path] = e.text
     return { value: undefined }
   })
   on('fs.read', ($, e) => {
+    if (w.refusing) return refused('fs.read')
     if (o.unreadableFiles?.includes(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` } as never
     if (!(e.path in w.files)) throw new Error(`ENOENT: no such file or directory, open '${e.path}'`)
     return { value: w.files[e.path] as string } as never
@@ -475,12 +489,14 @@ const world = (on: On, o: Opts = {}) => {
   // A checkout folder (/repo, the session's own) is there unless a test removed it (#1059).
   const isGone = (dir: string) => (o.gone ?? []).includes(dir)
   const isCheckout = (dir: string) => dir === '/repo' || dir === (o.cwd ?? '/repo')
-  on('fs.exists', ($, e) => ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
+  on('fs.exists', ($, e) => w.refusing ? refused('fs.exists') : o.existsFails?.includes(e.path) ? ({ deny: `EACCES: permission denied, stat '${e.path}'` } as never) : ({ value: (isCheckout(e.path) && !isGone(e.path)) || e.path in w.files || Object.keys(w.files).some(f => f.startsWith(`${e.path}/`)) }) as never)
   // Each wake check read already moved on the engine's clock, so answering it moves it no further.
   const timed = new WeakSet<object>()
   on('process.run', function answer($, e) {
     const argv = [...e.argv]
     const [cmd, ...a] = argv
+    if (o.refuseFrom && argv.join(' ').includes(o.refuseFrom)) w.refusing = true
+    if (w.refusing) return refused(`process.run(${cmd})`)
     if (o.nightReadMs && cmd === 'gh' && (a[0] === 'api' || a[0] === 'search' || (a[0] === 'run' && a[1] === 'list')) && !timed.has(e)) {
       timed.add(e)
       return clock.advance(o.nightReadMs).then((): unknown => answer($, e)) as never
@@ -2609,6 +2625,84 @@ test("the report's name reads this session's title from the transcript Claude Co
   expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
 })
 
+// #1678: in a fresh session, or right after /clear, no classic hook has named this session's
+// transcript yet, so /sleep fell back to the registry's lookup, which can fail under load (#1636).
+// Claude Code keeps it at ~/.claude/projects/<the folder it started in, spelled as a folder>/<id>.jsonl
+// (measured on this Mac 2026-10-25), so that path is tried first, and only when it is really there.
+const DERIVED_T = '/Users/x/.claude/projects/-repo/s1.jsonl'
+test("in a fresh session /sleep reads its own goal and title from the transcript at its session id's path, when nothing named it and the registry's lookup failed (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [DERIVED_T]: '{"type":"ai-title","aiTitle":"Parser work","sessionId":"s1"}' } })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual([DERIVED_T])
+  expect(w.asked).toEqual([])
+  expect(recordOf(w).goals).toEqual({ s1: 'Close #7' })
+  expect(r.text).toContain(`Tonight's goals: this session, "Close #7".`)
+  expect(recordOf(w).report).toBe('/Users/x/Downloads/1969-12-31 repo Parser work sleep report.md')
+})
+
+test("right after /clear the earlier conversation's named transcript is passed over for this one's at its id's path (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, files: { [DERIVED_T]: '' } })
+  await start($ as never, clock)
+  await ($ as unknown as $T).classic.Stop({ session_id: 's0', transcript_path: '/Users/x/.claude/projects/-repo/s0.jsonl', stop_hook_active: false } as never)
+  await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual([DERIVED_T])
+})
+
+test("a transcript that is not at its id's path is never guessed: the registry's answer, and its why, stand (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, issueAnswers: { [UNREAD_SELF_Q]: NO_GOAL } })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.goalReads).toEqual([])
+  expect(w.asked).toEqual([UNREAD_SELF_Q])
+})
+
+// A check at the id's path that fails is no answer (L10, L11): with the registry finding nothing, it
+// is said as the why, never read as a transcript that was not found; with the registry failing too,
+// both whys are said.
+test("a check at the id's path that fails is said as why the goal could not be read, never as not found (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null }, existsFails: [DERIVED_T] })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(w.asked[0]).toContain(`its transcript could not be looked up: whether it is at ${DERIVED_T} could not be checked (`)
+  expect(r.text).not.toContain('its transcript was not found')
+})
+test("a check at the id's path that fails is said beside the registry's own failure (#1678)", withDeps, async ($, on) => {
+  const { w, clock } = world(on, { selfSession: { transcriptPath: null, transcriptUnread: LOOKUP_FAILED }, existsFails: [DERIVED_T] })
+  await start($ as never, clock)
+  await command($ as never, 'sleep')
+  expect(w.asked[0]).toContain(`its transcript could not be looked up: ${LOOKUP_FAILED}; whether it is at ${DERIVED_T} could not be checked (`)
+})
+
+// #1677: on 2026-10-23 /sleep said "the list of issues whose before bed question went unanswered
+// could not be written (scope-modes: $.process.run(mkdir) aborted)". That was Claude Code refusing
+// every call once the command was abandoned, not the step it named. Here the engine refuses every
+// call from the unanswered list's mkdir on, as it does once a command is abandoned.
+test('a /sleep abandoned mid way says it was interrupted, never blames the step it was on, and the next /sleep starts (#1677)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { refuseFrom: `${SLEEP}/unanswered` })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('/sleep was interrupted, so sleep mode did not start. Type /sleep again to start it.')
+  expect(r.text).not.toContain('could not be written')
+  expect(w.files[`${SLEEP}/current.json`]).toBeUndefined()
+  // Its preparing marker could not be removed while every call was refused; this session's next
+  // /sleep takes it over at once rather than waiting two hours for it to go stale.
+  expect(w.files[`${SLEEP}/preparing`]).toBeDefined()
+  w.refusing = false
+  w.o.refuseFrom = undefined
+  const again = await command($ as never, 'sleep')
+  expect(again.text).toMatch(/^Sleep mode is on until/)
+  expect(recordOf(w).workers).toEqual(['s1'])
+})
+
+test('a /sleep abandoned once its record is in place says sleep mode is on, and that its later steps may not have run (#1677)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, { refuseFrom: 'caffeinate' })
+  await start($ as never, clock)
+  const r = await command($ as never, 'sleep')
+  expect(r.text).toBe('/sleep was interrupted after sleep mode started: it is on, but what it does after placing its record (holding the Mac awake, starting the night\'s report, telling the other sessions to start) may not all have run. /wake turns it off.')
+  expect(recordOf(w).workers).toEqual(['s1'])
+})
+
 // #1252: the goal is read by mod-kit's one reader; a mod-kit that cannot answer is said the same way.
 test('a goal reader mod-kit cannot give is said and asked about, never read as a goal (#1252)', withDeps, async ($, on) => {
   const q = goalUnreadQuestion('this session', 'the read of its transcript failed: mod-kit is not loaded')
@@ -3943,6 +4037,34 @@ test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he i
   expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the ask was made in this session tonight, so it is not made again.
+test('a reload of the mod keeps that he was asked whether he is up tonight, so he is not asked again (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+  await start($ as never, clock)
+  expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+test('an ask whose record cannot be written is still made once a night by this module (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'askedUp' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+  expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+test('a record of the ask that cannot be read asks him, as before it was kept, rather than staying silent (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  on('state.get', async ($, e, next) => ((e as { key?: string }).key === 'askedUp' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+})
+
 test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
   await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
@@ -4376,6 +4498,29 @@ test('a repository first met after sleep began is closed and noted once', withDe
   // Its own --repo is judged by that repository's place on the lists, which lets it merge; it is
   // then phase 3's rule (a write only to the checkout's own repository) that refuses it.
   expect(await call($ as never, bash('gh pr merge 4 --repo o/other'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not write to o\/other from a checkout of o\/r\./)
+})
+
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the repository was noted tonight in this session, so it is not noted again.
+test('a reload of the mod keeps that a repository first met tonight was noted, so it is noted once (#1703)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
+  expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
+})
+
+// A record of repositories noted that cannot be written still notes the repository, once, from this
+// module's own mark (push review of PR for #1703), and says the mark will not outlive a reload.
+test('a record of repositories noted that cannot be written still notes the repository once, and says why in the log (#1703)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'firstMet' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
+  expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
+  expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
+  expect(w.logs.filter(l => l.includes('could not keep that o/r was noted') && l.includes('state store unavailable')).length).toBe(1)
 })
 
 test('a record written before this phase, with no lists, refuses every merge and deploy', withDeps, async ($, on) => {
@@ -6214,6 +6359,73 @@ test('every other live session pins the reminder on its own card at its next min
   expect(stepsCalls(w)).toEqual([ADD_G0])
   await clock.advance(3 * MIN)
   expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the reminder this session pinned, or took off, is not pinned or taken off again.
+test('a reload of the mod keeps that the reminder was pinned here tonight, so it is pinned once (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+test('a record of where the reminder was pinned that cannot be read or written is logged, and the card is not drawn again each minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  const unreadable = { on: false }
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'pinnedHere' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  on('state.get', async ($, e, next) => (unreadable.on && (e as { key?: string }).key === 'pinnedHere' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  expect(w.logs.filter(l => l.includes('could not record that the reminder to end sleep mode was pinned here') && l.includes('state store unavailable')).length).toBe(1)
+  // A reload, so this module holds no mark of its own, and then nothing can be read either.
+  await start($ as never, clock)
+  unreadable.on = true
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  expect(w.logs.some(l => l.includes('could not read where the reminder to end sleep mode was pinned or taken off'))).toBe(true)
+})
+
+// Push review of PR for #1703: a mark that cannot be written, while reads work, is still held by this
+// module, so the minute neither pins the reminder again nor takes it off again.
+test('a pin whose mark cannot be written is not repeated every minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  on('state.set', async ($, e, next) => {
+    const k = (e as { key?: string }).key
+    return k === 'pinnedHere' || k === 'takenOff' ? ({ deny: 'state store unavailable' } as never) : next(e)
+  })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+test('a take off whose mark cannot be written is not repeated every minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'takenOff' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  await clock.advance(4 * MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
+})
+
+test('a reload of the mod keeps that the reminder was taken off here, so it is taken off once (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  await clock.advance(MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
 })
 
 test('a night /sleep did not note (begun where nobody sat at the prompt) is noted by the first session to pin it, so something takes it off (#1283)', withSteps, async ($, on) => {

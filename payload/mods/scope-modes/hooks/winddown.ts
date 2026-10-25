@@ -92,7 +92,7 @@ const plain = (p: string): string => {
 /**
  * The files a call this session let through wrote (#1108), absolute: the file an editing tool names,
  * and for a Bash call what mod-kit's one write reader names (#712), its files, its other changes and
- * a program's named targets. A copy onto a name that may be a folder is given as both places it can
+ * a program's named targets, and each file a script is handed as its argument (#1664). A copy onto a name that may be a folder is given as both places it can
  * land: the name, and the source's own name inside it, with everything under that, never the whole
  * folder, which may hold another session's files (lessons review). A removal reaching a whole folder
  * is given again ending in `/`, standing for everything under it. A made folder writes no file. A
@@ -118,6 +118,11 @@ export const filesWritten = (call: { tool: string; input: Record<string, unknown
   for (const u of call.writes.unnamed) for (const t of u.targets ?? []) add(t, false)
   // What git itself changed (#1123): moved, removed, checked out or restored.
   for (const g of call.writes.byGit ?? []) add(g.path, !!g.tree)
+  // A file handed to a script as its argument (#1664), as every other gate counts it since #1592: a
+  // script may only read it, but leaving it out lets work it did write go uncommitted unmentioned.
+  // A pattern the reader can place only in a folder names no file, since that folder may hold
+  // another session's.
+  for (const r of call.writes.runs ?? []) for (const a of r.args) add(a.path, false)
   return [...new Set(out)]
 }
 

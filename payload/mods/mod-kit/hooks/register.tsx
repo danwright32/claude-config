@@ -22,7 +22,9 @@ import { errorText, missingOf } from './skew.ts'
 // place so no guard keeps its own copy (L613). Among it: the boxed card a tool result row is drawn
 // as, the shape settled with Dan for a blocked action in design rounds 1 and 3 on 2026-10-03, and
 // opened to any mod's own tool result in #663. Its border is grey, because colour is kept for what
-// Dan has to act on; a run in the title may carry a colour, such as a leading state word.
+// Dan has to act on; a run in the title may carry a colour, such as a leading state word. A card may
+// name its border's colour instead (#1563), for the one box Dan settled in colour: the Goal
+// accomplished box, green (design round, 2026-10-24).
 //
 // A card is recorded by its tool_use_id when the mod's tool.call hook runs, and its result row is
 // drawn as the card. Kept in memory: after a reload an earlier row is drawn as Claude Code's own
@@ -393,7 +395,7 @@ export const register: Register = (on, options) => {
         </Text>
       ))
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={card.border ?? 'gray'} paddingX={1}>
         <Text bold>{runs(card.title)}</Text>
         {card.lines.map((l, n) => (
           <Text key={String(n)}>{runs(l)}</Text>

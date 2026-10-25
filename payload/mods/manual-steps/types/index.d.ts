@@ -91,8 +91,9 @@ declare module 'claude-code' {
   interface PluginState {
     /**
      * The card the pane and band draw from, where it is shown (the band, or the pane by its id),
-     * and the turn a Done waits on. In $.state so a reload keeps them.
+     * and the turn a Done waits on; and the main turn running now, by its id, or null (#734, #1703).
+     * In $.state so a reload keeps them.
      */
-    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null }
+    'manual-steps': { card: StepsCard | null; place: StepsPaneId | 'band' | null; waiting: StepsWaiting | null; runningTurn: string | null }
   }
 }
