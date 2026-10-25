@@ -1356,11 +1356,24 @@ check "#1696 one in a folder under docs/design, of any case, too" "docs/design/o
 check_not "#1696 a page edited by hand after its seal is not" "edited.html" "$dcand"
 check_not "#1696 a page with no seal is not" "unsealed.html" "$dcand"
 check_not "#1696 a sealed page outside docs/design is not" "src/page.html" "$dcand"
-dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/no-such/design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+# AR_DESIGN_FILE_PY is honoured only under a test run (CLAUDE_SUITE_RUN_ID, which run-all-tests.sh
+# exports), so these calls carry the marker themselves for a run of this suite on its own.
+DSUITE="${CLAUDE_SUITE_RUN_ID:-test-pr-review.$$}"
+dcand="$(cd "$DREPO" && CLAUDE_SUITE_RUN_ID="$DSUITE" AR_DESIGN_FILE_PY="$WORKDIR/no-such/design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
 check_not "#1696 with no design_file.py to check the seal, no page is" "docs/design" "$dcand"
 printf 'import sys\nsys.exit(0)\n' > "$WORKDIR/silent_design_file.py"
-dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/silent_design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+dcand="$(cd "$DREPO" && CLAUDE_SUITE_RUN_ID="$DSUITE" AR_DESIGN_FILE_PY="$WORKDIR/silent_design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
 check_not "#1696 nor with an older design_file.py that exits 0 saying nothing" "docs/design" "$dcand"
+# Outside a test run the override is ignored, so nobody can name a program that calls every page
+# sealed and have a branch over the cap skip reading it (claude-config#1696 follow up). The same
+# always sealed program is the control: under the marker it does let the unsealed page through.
+printf 'import sys\nsys.stdin.read()\nprint("sealed")\n' > "$WORKDIR/always_sealed.py"
+dcand="$(cd "$DREPO" && CLAUDE_SUITE_RUN_ID="$DSUITE" AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check "#1696 under a test run the override is used (control)" "docs/design/unsealed.html" "$dcand"
+dcand="$(cd "$DREPO" && env -u CLAUDE_SUITE_RUN_ID AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 outside a test run the override is ignored, so an unsealed page is still read" "unsealed.html" "$dcand"
+check_not "#1696 and a page edited after its seal is still read" "edited.html" "$dcand"
+check "#1696 while the installed check still passes the sealed page" "docs/design/picker.html" "$dcand"
 # End to end, as the merge gate and the merge helper both run it (pr-review.sh start, then check): a
 # branch over the cap only because of its settled page is reviewed, its code read, the page named.
 reset_state

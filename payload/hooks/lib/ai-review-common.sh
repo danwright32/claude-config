@@ -421,7 +421,10 @@ AR_FIXTURE_DATA_RE='(^|/)(fixtures|__fixtures__)/(.*/)?[^/]+\.(json|jsonl|ndjson
 AR_MODKIT_COPY_RE='^(.*/)?mods/([^/]+)/tests/mod-kit/(.+)$'
 AR_DESIGN_RECORD_RE='^[Dd][Oo][Cc][Ss]/[Dd][Ee][Ss][Ii][Gg][Nn]/[^/].*\.[Hh][Tt][Mm][Ll]?$'
 # The skill's check, beside these hooks in the checkout (payload/skills) and once installed
-# (~/.claude/skills) alike. AR_DESIGN_FILE_PY overrides it, for tests. Made absolute here, by
+# (~/.claude/skills) alike. AR_DESIGN_FILE_PY overrides it, for tests, and is honoured only under a
+# test run (CLAUDE_SUITE_RUN_ID, which run-all-tests.sh exports and the spool and claude-sync read as
+# the same fact): anywhere else it would let a caller name a program that calls every page sealed,
+# so a branch over the cap skips reading any docs/design page. Made absolute here, by
 # parameter expansion and builtins only (test-lib-self-locate.sh), because a caller may cd before
 # asking (the lessons advisory reads from the repository's top).
 AR_COMMON_DIR="${BASH_SOURCE[0]%/*}"; [ "$AR_COMMON_DIR" != "${BASH_SOURCE[0]}" ] || AR_COMMON_DIR=.
@@ -431,7 +434,8 @@ AR_COMMON_DIR="$(cd "${AR_COMMON_DIR:-/}" 2>/dev/null && pwd)"
 # an exit 0 that says "sealed" counts, as the design round guard reads it: a design_file.py from
 # before #1524 ignores --sealed and exits 0 saying nothing.
 ar__design_sealed() {   # $1 = commit, $2 = path
-  local py="${AR_DESIGN_FILE_PY:-$AR_COMMON_DIR/../../skills/design-rounds/design_file.py}" out
+  local py="$AR_COMMON_DIR/../../skills/design-rounds/design_file.py" out
+  [ -z "${CLAUDE_SUITE_RUN_ID:-}" ] || py="${AR_DESIGN_FILE_PY:-$py}"
   [ -f "$py" ] || return 1
   out="$(git show "$1:$2" 2>/dev/null | python3 -I "$py" --sealed 2>/dev/null)" || return 1
   [ "$out" = sealed ]
