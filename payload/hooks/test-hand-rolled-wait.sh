@@ -72,14 +72,16 @@ mkdir -p "$TMPROOT/payload/hooks"
   printf "python3 - <<'PY'\nimport os, time\nt0 = time.time()\n"
   printf '%s not os.path.exists(p) and time.time() - t0 < 60:\n    time.%s(0.05)\n' "$_W" "$_S"
   printf '%s _ in range(200):\n    time.%s(0.1)\nPY\n' "$_F" "$_S"
+  # And a stand in written by printf, its loop after a newline escape (found in test-merge-target.sh).
+  printf '%s\n' "printf '#!/bin/bash\\nk=0\\n${_W} [ -d \"\$1\" ] && [ \"\$k\" -lt 50 ]; do ${_S} 0.1; k=\$((k + 1)); done\\n' > stub"
 } > "$TMPROOT/payload/hooks/test-probe.sh"
 # The same text in a file that is not a suite is not judged.
 cp "$TMPROOT/payload/hooks/test-probe.sh" "$TMPROOT/payload/hooks/probe-helper.sh"
 probe="$(printf 'payload/hooks/test-probe.sh\npayload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; probe_rc=$?
 probe_lines="$(printf '%s\n' "$probe" | awk -F: 'NF { printf "%s ", $2 }')"
-[ "$probe_rc" = 1 ] && [ "$probe_lines" = "2 4 8 9 10 22 23 28 " ] \
+[ "$probe_rc" = 1 ] && [ "$probe_lines" = "2 4 8 9 10 22 23 28 33 " ] \
   && check "the scan sees every spelling of a hand rolled wait, and none of what is not one" ok \
-  || check "the scan sees every spelling of a hand rolled wait, and none of what is not one" "exit $probe_rc, lines '$probe_lines' where 2 4 8 9 10 22 23 28 were wanted:
+  || check "the scan sees every spelling of a hand rolled wait, and none of what is not one" "exit $probe_rc, lines '$probe_lines' where 2 4 8 9 10 22 23 28 33 were wanted:
 $probe"
 clean="$(printf 'payload/hooks/probe-helper.sh\n' | python3 "$SCAN" --root "$TMPROOT")"; clean_rc=$?
 [ "$clean_rc" = 0 ] && [ -z "$clean" ] \

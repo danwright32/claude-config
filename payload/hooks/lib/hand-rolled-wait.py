@@ -38,8 +38,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shell_code_lines import code_lines  # noqa: E402
 
 SUITE = re.compile(r'(^|/)test-[^/]*\.sh$')
-LOOP = re.compile(r'(?:^|[;&|({\s])(while|until)\s+(.*?)\s*;\s*do\b(.*)$')
-FOR = re.compile(r'(?:^|[;&|({\s])for\s+\w+\s+in\s+(.*?)\s*;\s*do\b(.*)$')
+LOOP = re.compile(r'(?:^|[;&|({\s]|\\n)(while|until)\s+(.*?)\s*;\s*do\b(.*)$')
+FOR = re.compile(r'(?:^|[;&|({\s]|\\n)for\s+\w+\s+in\s+(.*?)\s*;\s*do\b(.*)$')
 CLOCK = re.compile(r'\bSECONDS\b|date\s+\+%s')
 CMP = re.compile(r'\$\{?(\w+)\}?"?\s+-(?:lt|le|gt|ge)\s+("[^"]*"|\$\(\([^)]*\)\)|\$\{[^}]*\}|\S+)')
 ARITH = re.compile(r'\(\(\s*(\w+)\s*(?:<|<=|>|>=)\s*([^)]+)\)\)')
