@@ -1356,11 +1356,38 @@ check "#1696 one in a folder under docs/design, of any case, too" "docs/design/o
 check_not "#1696 a page edited by hand after its seal is not" "edited.html" "$dcand"
 check_not "#1696 a page with no seal is not" "unsealed.html" "$dcand"
 check_not "#1696 a sealed page outside docs/design is not" "src/page.html" "$dcand"
-dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/no-such/design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+# The check is always the design_file.py beside the hooks, with no setting to point it elsewhere: one
+# would let a caller name a program that calls every page sealed, so a branch over the cap skips
+# reading any docs/design page. So a test of a different checker copies the hooks lib into a scratch
+# tree with its stand-in at skills/design-rounds/design_file.py, as the layout puts it, and sources
+# that copy (the copy of lib/ the payload write gate suite makes for its broken reader).
+design_tree(){   # $1 = a name, $2 = the stand-in design_file.py or nothing for none -> the copy's lib
+  local t="$WORKDIR/designtree/$1"
+  mkdir -p "$t/hooks" "$t/skills/design-rounds"
+  cp -R "$DIR/lib" "$t/hooks/lib"
+  [ -z "$2" ] || cp "$2" "$t/skills/design-rounds/design_file.py"
+  printf '%s' "$t/hooks/lib"
+}
+DLIB="$(design_tree none "")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
 check_not "#1696 with no design_file.py to check the seal, no page is" "docs/design" "$dcand"
 printf 'import sys\nsys.exit(0)\n' > "$WORKDIR/silent_design_file.py"
-dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/silent_design_file.py" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+DLIB="$(design_tree silent "$WORKDIR/silent_design_file.py")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
 check_not "#1696 nor with an older design_file.py that exits 0 saying nothing" "docs/design" "$dcand"
+# A checker that calls every page sealed, beside a copy of the lib: the control that the scratch tree
+# is what decides, so the two checks above measure their stand-ins and not the real check.
+printf 'import sys\nsys.stdin.read()\nprint("sealed")\n' > "$WORKDIR/always_sealed.py"
+DLIB="$(design_tree always "$WORKDIR/always_sealed.py")"
+dcand="$(cd "$DREPO" && bash -c ". '$DLIB/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check "#1696 the checker beside the lib copy decides (control)" "docs/design/unsealed.html" "$dcand"
+# And no setting reaches past the installed check, under a test run's marker or not: the setting
+# #1711 added is exported with the same always sealed program, and the real lib still reads the
+# unsealed and hand edited pages and leaves out only the sealed one.
+dcand="$(cd "$DREPO" && AR_DESIGN_FILE_PY="$WORKDIR/always_sealed.py" CLAUDE_SUITE_RUN_ID="${CLAUDE_SUITE_RUN_ID:-test-pr-review.$$}" bash -c ". '$DIR/lib/ai-review-common.sh'; ar_left_out_candidates '$DB' '$DH'")"
+check_not "#1696 an exported AR_DESIGN_FILE_PY does not change the verdict, so an unsealed page is still read" "unsealed.html" "$dcand"
+check_not "#1696 and a page edited after its seal is still read" "edited.html" "$dcand"
+check "#1696 while the installed check still leaves out the sealed page" "docs/design/picker.html" "$dcand"
 # End to end, as the merge gate and the merge helper both run it (pr-review.sh start, then check): a
 # branch over the cap only because of its settled page is reviewed, its code read, the page named.
 reset_state
