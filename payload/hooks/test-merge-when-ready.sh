@@ -511,6 +511,54 @@ gate_out="$(present "bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")";
 check_eq "#1673 no key: the gate allows the helper" "0" "$grc"
 check_eq "#1673 and records nothing" "" "$(ls "$AI_REVIEW_STATE_DIR/helper-keys" 2>/dev/null)"
 
+# A RECORD MADE BY HAND (claude-config#1700). The record of a typed key was an empty file named by the
+# key's sha256, which anything able to write the folder could make, a session's own shell included.
+# It is now named by an HMAC of the key under a secret only the gate creates, so a file made by hand,
+# under the old name or any other a session can compute without that secret, vouches for nothing.
+KEYS_DIR="$AI_REVIEW_STATE_DIR/helper-keys"
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a record made by hand, with no gate ever having run, is refused" "64" "$rc"
+check_eq "#1700 and merges nothing" "0" "$(count gh-calls 'pr merge')"
+# The same, once the gate has made its secret by recording another key: the hand made name is still
+# not the one the gate would write.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+present "PR_REVIEW_READ=abc123 bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash" >/dev/null
+mkdir -p "$KEYS_DIR"; : > "$KEYS_DIR/$(printf '%s' 5eed5eed5eed5eed | shasum -a 256 | awk '{ print $1 }')"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 a hand made record beside the gate's own is refused" "64" "$rc"
+check_eq "#1700 and merges nothing beside it" "0" "$(count gh-calls 'pr merge')"
+secret_mode="$(stat -f '%Lp' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>/dev/null || stat -c '%a' "$AI_REVIEW_STATE_DIR/helper-keys.secret" 2>/dev/null)"
+check_eq "#1700 the gate's secret is readable by its owner alone" "600" "$secret_mode"
+# A secret that is not one (cut short, emptied) is replaced, never used, and the typed path still works.
+fresh "$OLD" 0 "$GREEN"
+printf '5eed5eed5eed5eed' > "$ST/review-key"
+mkdir -p "$AI_REVIEW_STATE_DIR"; printf 'short' > "$AI_REVIEW_STATE_DIR/helper-keys.secret"
+gate_out="$(present "PR_REVIEW_READ=5eed5eed5eed5eed bash ~/.claude/hooks/lib/merge-when-ready.sh 7 --squash")"; grc=$?
+check_eq "#1700 a damaged secret is replaced and the typed key recorded" "0" "$grc"
+out="$(PR_REVIEW_READ=5eed5eed5eed5eed run 7 --squash)"; rc=$?
+check_eq "#1700 and the typed key then merges" "0" "$rc"
+# A COMMAND THAT NAMES THE RECORD (claude-config#1700). However the name is spelled or cased, a Bash
+# command that writes into the folder, reads the secret, or calls the function that records a key is
+# refused before it runs, since only the gate may make a record.
+fresh "$OLD" 0 "$GREEN"
+for forged in \
+  ": > ~/.claude/state/ai-review/helper-keys/0123abcd" \
+  "touch \"\$HOME/.claude/state/ai-review/HELPER-KEYS/0123abcd\"" \
+  "cat ~/.claude/state/ai-review/helper-keys.secret" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; ar_helper_key_record 5eed5eed5eed5eed" \
+  ". ~/.claude/hooks/lib/ai-review-common.sh; touch \"\$(ar__helper_keys_dir)/x\""; do
+  gate_out="$(present "$forged")"; grc=$?
+  check_eq "#1700 a command naming the typed key record is refused: $forged" "2" "$grc"
+  check "#1700 saying only the gate writes it: $forged" "only pr-review-gate.sh writes" "$gate_out"
+done
+check_eq "#1700 and nothing was recorded by any of them" "" "$(ls "$KEYS_DIR" 2>/dev/null)"
+gate_out="$(present "ls ~/.claude/state/ai-review")"; grc=$?
+check_eq "#1700 a command naming none of it is not refused" "0" "$grc"
+
 fresh "$OLD" 3 "$GREEN"
 : > "$ST/update-fails"
 out="$(run 7 --squash)"; rc=$?

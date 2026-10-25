@@ -159,26 +159,79 @@ ar_review_key_valid() {   # $1 = finished review file, $2 = presented key -> 0 w
 # as a merge, so a Bash call that ran it, grepped the key out of its refusal and ran it again with
 # PR_REVIEW_READ="$key" merged with nobody having read the findings (found 2026-10-24 by the #1587
 # builder; #1587 closed only the Monitor form). So pr-review-gate.sh, which sees each Bash command
-# before it runs, records the sha256 of a key TYPED as a literal in front of the helper, and the
-# helper takes a key from its environment only when it was recorded. A key in a variable, an export
-# or a substitution is unknown when the command is read, so it is never recorded. Only the hash is
-# kept, one empty file each, named by it, and swept after 14 days with the reviews themselves.
+# before it runs, records a key TYPED as a literal in front of the helper, and the helper takes a key
+# from its environment only when it was recorded. A key in a variable, an export or a substitution is
+# unknown when the command is read, so it is never recorded. Each record is one empty file, swept
+# after 14 days with the reviews themselves.
+#
+# A RECORD A SESSION CANNOT MINT (claude-config#1700). The record was named by the key's sha256, so
+# a session's own shell command could make one by hand for a key it had grepped, which is the very
+# merge the gate exists to stop. It is now named by an HMAC-SHA256 of the key under a secret that only
+# the gate creates, kept beside the folder as helper-keys.secret, readable by its owner alone, and
+# pr-review-gate.sh refuses any Bash command naming the folder, the secret or the functions below that
+# write them. A file made without the secret is named by nothing the helper looks for. The helper
+# reads the secret to check a record and never creates one, so with no secret no key is accepted.
+# What this does not stop, being one user's files: a session that hides the name from the gate (a
+# glob, an escape, a script file written first) can still read the secret or call the recorder.
 ar__helper_keys_dir() { printf '%s/helper-keys' "$AR_STATE_DIR"; }
+ar__helper_secret_file() { printf '%s/helper-keys.secret' "$AR_STATE_DIR"; }
+ar__helper_secret_ok() {   # $1 = the secret file -> 0 when it holds a secret (64 lowercase hex)
+  local s
+  s="$(cat "$1" 2>/dev/null)" || return 1
+  [ "${#s}" -eq 64 ] || return 1
+  case "$s" in *[!a-f0-9]*) return 1 ;; esac
+  return 0
+}
+# Made by the gate alone, the first time it records a key. Two gates making it at once both link the
+# same name and the first wins, so neither records under a secret the other then replaces. One that
+# is there but is not a secret (cut short, emptied) is replaced: it could check nothing anyway.
+ar__helper_secret_make() {   # -> 0 once a secret is in place
+  local f t s
+  f="$(ar__helper_secret_file)"
+  ar__helper_secret_ok "$f" && return 0
+  command -v od >/dev/null 2>&1 && [ -r /dev/urandom ] || return 1
+  s="$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [ "${#s}" -eq 64 ] || return 1
+  t="$f.$$.tmp"
+  { ( umask 077 && printf '%s' "$s" > "$t" ) && chmod 600 "$t"; } 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
+  if [ -e "$f" ]; then
+    mv -f "$t" "$f" 2>/dev/null || { rm -f "$t" 2>/dev/null; return 1; }
+  else
+    ln "$t" "$f" 2>/dev/null
+    rm -f "$t" 2>/dev/null
+  fi
+  ar__helper_secret_ok "$f"
+}
+# The HMAC, in python so the secret is read from its file and never passed on a command line, where
+# any process could read it while it ran.
+ar__helper_key_mac() {   # $1 = a key -> its HMAC-SHA256 under the secret, or return 1
+  local f
+  f="$(ar__helper_secret_file)"
+  ar__helper_secret_ok "$f" || return 1
+  printf '%s' "$1" | python3 -c '
+import hashlib, hmac, sys
+with open(sys.argv[1], "rb") as fh:
+    secret = bytes.fromhex(fh.read().decode("ascii").strip())
+sys.stdout.write(hmac.new(secret, sys.stdin.buffer.read(), hashlib.sha256).hexdigest())
+' "$f" 2>/dev/null
+}
 ar_helper_key_record() {   # $1 = a key typed in front of the helper -> 0 once recorded
-  local d h
+  local d m
   case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
-  h="$(ar__key_hash "$1")"
-  [ -n "$h" ] || return 1
   d="$(ar__helper_keys_dir)"
-  { mkdir -p "$d" && : > "$d/$h"; } 2>/dev/null || return 1
+  { mkdir -p "$d"; } 2>/dev/null || return 1
+  ar__helper_secret_make || return 1
+  m="$(ar__helper_key_mac "$1")"
+  [ "${#m}" -eq 64 ] || return 1
+  { : > "$d/$m"; } 2>/dev/null || return 1
   find "$d" -mindepth 1 -maxdepth 1 -type f -mtime +14 -delete 2>/dev/null || true
   return 0
 }
 ar_helper_key_typed() {   # $1 = the key the helper was given -> 0 when a typed command presented it
-  local h
+  local m
   case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
-  h="$(ar__key_hash "$1")"
-  [ -n "$h" ] && [ -f "$(ar__helper_keys_dir)/$h" ]
+  m="$(ar__helper_key_mac "$1")" || return 1
+  [ "${#m}" -eq 64 ] && [ -f "$(ar__helper_keys_dir)/$m" ]
 }
 
 # Text from the reviewer, made safe to print (claude-config#581): stdin to stdout through the one
