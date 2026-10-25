@@ -4037,6 +4037,25 @@ test('a message from Dan between 7 AM and 7 PM ET while asleep asks whether he i
   expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the ask was made in this session tonight, so it is not made again.
+test('a reload of the mod keeps that he was asked whether he is up tonight, so he is not asked again (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+  await start($ as never, clock)
+  expect((await say($ as never, 'and the tests?')).context?.join('\n') ?? '').not.toMatch(/whether he is up/)
+})
+
+test('a record of the ask that cannot be read asks him, as before it was kept, rather than staying silent (#1703)', withDeps, async ($, on) => {
+  const { clock } = world(on, { files: { [CURRENT]: asleepRecord() } })
+  on('state.get', async ($, e, next) => ((e as { key?: string }).key === 'askedUp' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
+  await clock.set(Date.UTC(1970, 0, 1, 12, 0))
+  expect((await say($ as never, 'how is it going')).context?.join('\n')).toMatch(/whether he is up/)
+})
+
 test('the ask whether he is up counts as made only once its prompt went in, so a prompt that failed asks again (#837)', withDeps, async ($, on) => {
   const { clock } = world(on, { files: { [CURRENT]: asleepRecord() }, promptFails: 1 })
   await startBefore($ as never, clock, Date.UTC(1970, 0, 1, 12, 0))
@@ -4470,6 +4489,25 @@ test('a repository first met after sleep began is closed and noted once', withDe
   // Its own --repo is judged by that repository's place on the lists, which lets it merge; it is
   // then phase 3's rule (a write only to the checkout's own repository) that refuses it.
   expect(await call($ as never, bash('gh pr merge 4 --repo o/other'))).toMatch(/^Refused: sleep mode is on and Dan bans this while he sleeps, so this did not write to o\/other from a checkout of o\/r\./)
+})
+
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the repository was noted tonight in this session, so it is not noted again.
+test('a reload of the mod keeps that a repository first met tonight was noted, so it is noted once (#1703)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 13'))).toMatch(/^Blocked overnight/)
+  expect(closedNotes(w).map(n => n.repo)).toEqual(['o/r'])
+})
+
+test('a record of repositories noted that cannot be written is said, and the merge is still blocked (#1703)', withDeps, async ($, on) => {
+  const { w, clock } = world(on, night({ mayDeploy: [], mergeOnly: [{ repo: 'o/other', mergeDeploys: false }], closed: [] }))
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'firstMet' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  expect(await call($ as never, bash('gh pr merge 12'))).toMatch(/^Blocked overnight/)
+  expect(w.toasts.filter(t => t.includes('could not note that o/r is on neither list') && t.includes('state store unavailable')).length).toBe(1)
 })
 
 test('a record written before this phase, with no lists, refuses every merge and deploy', withDeps, async ($, on) => {
@@ -6308,6 +6346,46 @@ test('every other live session pins the reminder on its own card at its next min
   expect(stepsCalls(w)).toEqual([ADD_G0])
   await clock.advance(3 * MIN)
   expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state), the
+// session going on: the reminder this session pinned, or took off, is not pinned or taken off again.
+test('a reload of the mod keeps that the reminder was pinned here tonight, so it is pinned once (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+})
+
+test('a record of where the reminder was pinned that cannot be read or written is logged, and the card is not drawn again each minute (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  const unreadable = { on: false }
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'pinnedHere' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  on('state.get', async ($, e, next) => (unreadable.on && (e as { key?: string }).key === 'pinnedHere' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($ as never, clock)
+  await clock.advance(MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  expect(w.logs.filter(l => l.includes('could not record that the reminder to end sleep mode was pinned here') && l.includes('state store unavailable')).length).toBe(1)
+  unreadable.on = true
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w)).toEqual([ADD_G0])
+  expect(w.logs.some(l => l.includes('could not read where the reminder to end sleep mode was pinned or taken off'))).toBe(true)
+})
+
+test('a reload of the mod keeps that the reminder was taken off here, so it is taken off once (#1703)', withSteps, async ($, on) => {
+  const { w, clock } = world(on, { files: { [CURRENT]: asleepRecord(), [REVIEWS]: pendingG0 } })
+  const began = UNTIL - 5 * MIN + 40_000
+  await startBefore($ as never, clock, began + MIN)
+  await clock.set(UNTIL + MIN)
+  await clock.settle()
+  await clock.advance(MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
+  await start($ as never, clock)
+  await clock.advance(3 * MIN)
+  expect(stepsCalls(w).filter(c => c === FINISH_G0).length).toBe(1)
 })
 
 test('a night /sleep did not note (begun where nobody sat at the prompt) is noted by the first session to pin it, so something takes it off (#1283)', withSteps, async ($, on) => {

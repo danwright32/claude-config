@@ -231,8 +231,26 @@ const keepBoot = (oid: BootOid, r: { exitCode: number; stdout: string; stderr: s
 let interactive = false
 // The last state the band was given, so the minute's tick redraws it only when sleep began or ended.
 let shownAsleep: boolean | undefined
-// The night this session last asked Dan whether he is up (#837), by its generation: once a night.
-let askedUp: string | undefined
+// The night this session last asked Dan whether he is up (#837), by its generation: once a night. In
+// $.state (#1703), which the engine holds for the session across a hot reload: kept in the module, a
+// reload asked him again. One that cannot be read asks, the way it asked before this was kept, and
+// one that cannot be written is logged.
+const askedUpRef = { plugin: 'scope-modes', key: 'askedUp' } as const
+const askedUpOf = async ($: EngineInterface): Promise<string | null> => {
+  try {
+    return (await $.state.get(askedUpRef)).value ?? null
+  } catch (err) {
+    $.ui.log(`scope-modes: could not read whether Dan was asked tonight whether he is up: ${msg(err)}`, { to: 'debug' })
+    return null
+  }
+}
+const setAskedUp = async ($: EngineInterface, generation: string) => {
+  try {
+    await $.state.set(askedUpRef, generation)
+  } catch (err) {
+    $.ui.log(`scope-modes: could not record that Dan was asked whether he is up: ${msg(err)}`, { to: 'debug' })
+  }
+}
 
 const sleepPaths = async ($: EngineInterface) => {
   const home = await $.env.get('HOME')
@@ -1062,17 +1080,34 @@ const closedNote = (repo: string | undefined, why: string, at: number, by: strin
 })
 
 // A repository first met after sleep began (on neither list, never asked at bedtime) is noted once a
-// night per session, so the morning report asks which list it belongs on (#843).
-const firstMet = new Set<string>()
+// night per session, so the morning report asks which list it belongs on (#843). Which were noted is
+// in $.state (#1703), which the engine holds for the session across a hot reload: kept in the module,
+// a reload noted the same repository again. Claimed by version before the note is written, so two
+// calls at once note it once (assume it runs twice), and given back when the note fails.
+const firstMetRef = { plugin: 'scope-modes', key: 'firstMet' } as const
+const claimFirstMet = async ($: EngineInterface, k: string, take: boolean): Promise<boolean> => {
+  for (let i = 0; i < 5; i++) {
+    const held = await $.state.get(firstMetRef)
+    const met = held.value ?? []
+    if (take === met.includes(k)) return false
+    const next = take ? [...met, k] : met.filter(x => x !== k)
+    if ((await $.state.set(firstMetRef, next, { ifVersion: held.version })).isSet) return true
+  }
+  throw new Error('the record of repositories noted kept changing underneath five writes in a row')
+}
 const noteFirstMet = async ($: EngineInterface, record: SleepRecord, over: { repo?: string; why: string }) => {
   if (!over.repo || !over.why.startsWith(`${over.repo} is on neither list`)) return
   const k = `${record.generation}:${over.repo.toLowerCase()}`
-  if (firstMet.has(k)) return
-  firstMet.add(k)
+  try {
+    if (!(await claimFirstMet($, k, true))) return
+  } catch (err) {
+    $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
+    return
+  }
   try {
     await sleepNote($, (await sleepPaths($)).current, closedNote(over.repo, over.why, await $.clock.now(), await $.session.id()))
   } catch (err) {
-    firstMet.delete(k)
+    await claimFirstMet($, k, false).catch(() => undefined)
     $.ui.toast(`Sleep mode could not note that ${over.repo} is on neither list: ${msg(err)}`)
   }
 }
@@ -2537,8 +2572,43 @@ const isAbsentNoun = (err: unknown) => {
 const STEP_SAID = 'The reminder to end sleep mode'
 
 // The nights whose step this session has pinned on its card (#1283), and taken off, or tried to: once each.
-const pinnedHere = new Set<string>()
-const takenOff = new Set<string>()
+// In $.state (#1703), which the engine holds for the session across a hot reload: kept in the module,
+// a reload pinned the reminder again (drawing the card again, and adding the step back once Dan had
+// checked it off) and took it off again. Each is added by version, so two minutes at once lose
+// neither. One that cannot be read is read as pinned, so the card is not drawn again every minute,
+// and as not taken off, so the reminder still comes off; a mark that cannot be written is logged.
+const pinnedRef = { plugin: 'scope-modes', key: 'pinnedHere' } as const
+const takenOffRef = { plugin: 'scope-modes', key: 'takenOff' } as const
+type OnceSet = { get: () => Promise<{ value: string[] | undefined; version: number }>; set: (value: string[], ifVersion: number) => Promise<{ isSet: boolean }> }
+const pinnedSet = ($: EngineInterface): OnceSet => ({
+  get: () => $.state.get(pinnedRef),
+  set: (value, ifVersion) => $.state.set(pinnedRef, value, { ifVersion }),
+})
+const takenOffSet = ($: EngineInterface): OnceSet => ({
+  get: () => $.state.get(takenOffRef),
+  set: (value, ifVersion) => $.state.set(takenOffRef, value, { ifVersion }),
+})
+const markOnce = async ($: EngineInterface, s: OnceSet, generation: string, what: string) => {
+  try {
+    for (let i = 0; i < 5; i++) {
+      const held = await s.get()
+      const all = held.value ?? []
+      if (all.includes(generation)) return
+      if ((await s.set([...all, generation], held.version)).isSet) return
+    }
+    throw new Error('it kept changing underneath five writes in a row')
+  } catch (err) {
+    $.ui.log(`scope-modes: could not record that the reminder to end sleep mode was ${what} here: ${msg(err)}`, { to: 'debug' })
+  }
+}
+const isMarked = async ($: EngineInterface, s: OnceSet, generation: string, unread: boolean): Promise<boolean> => {
+  try {
+    return ((await s.get()).value ?? []).includes(generation)
+  } catch (err) {
+    $.ui.log(`scope-modes: could not read where the reminder to end sleep mode was pinned or taken off: ${msg(err)}`, { to: 'debug' })
+    return unread
+  }
+}
 
 const reviewsPath = async ($: EngineInterface) => `${(await sleepPaths($)).dir}/morning-review.json`
 const readReviews = async ($: EngineInterface): Promise<MorningReview[] | { unreadable: string }> => {
@@ -2582,7 +2652,7 @@ const changeReviews = async ($: EngineInterface, fn: (all: MorningReview[]) => M
 // The step on this session's card, once a night; the noun's throw is the caller's to read.
 const pinStep = async ($: EngineInterface, night: { generation: string; night: string }) => {
   const shown = await ($ as unknown as { manualSteps: ManualStepsNoun }).manualSteps.add({ heading: MORNING_HEADING, step: morningStep(night.night) })
-  pinnedHere.add(night.generation)
+  await markOnce($, pinnedSet($), night.generation, 'pinned')
   return shown
 }
 
@@ -2601,7 +2671,7 @@ const pinMorning = async ($: EngineInterface): Promise<string> => {
     // Shown, the card says it (L605); only a step that is not is said here.
     return shown.isShown ? '' : ` ${STEP_SAID} is kept on the manual steps card but not shown now: ${shown.reason ?? 'no reason given'}.`
   } catch (err) {
-    if (isAbsentNoun(err)) pinnedHere.add(night.generation)
+    if (isAbsentNoun(err)) await markOnce($, pinnedSet($), night.generation, 'pinned')
     return ` ${STEP_SAID} could not be pinned: ${isAbsentNoun(err) ? 'the manual steps mod is not loaded' : msg(err)}.`
   }
 }
@@ -2615,7 +2685,7 @@ const takeOff = async ($: EngineInterface, r: { generation: string; night: strin
   } catch (err) {
     if (!isAbsentNoun(err)) return msg(err)
   }
-  takenOff.add(r.generation)
+  await markOnce($, takenOffSet($), r.generation, 'taken off')
   return undefined
 }
 
@@ -2666,7 +2736,7 @@ const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
       else all = close(all)
     }
   }
-  if (interactive && asleep && typeof asleep.night === 'string' && !pinnedHere.has(asleep.generation)) {
+  if (interactive && asleep && typeof asleep.night === 'string' && !(await isMarked($, pinnedSet($), asleep.generation, true))) {
     const night = { generation: asleep.generation, night: asleep.night }
     const known = all.find(x => x.generation === night.generation)
     const failed = known ? null : await changeReviews($, a => withPending(a, night))
@@ -2677,13 +2747,13 @@ const reminderMinute = async ($: EngineInterface, reading: SleepReading) => {
         if (!shown.isShown) $.ui.log(`scope-modes: the reminder to end sleep mode is kept on this session's card but not shown now: ${shown.reason ?? 'no reason given'}`, { to: 'debug' })
       } catch (err) {
         // The mod not loaded holds no card, so there is nothing to pin; anything else is tried again.
-        if (isAbsentNoun(err)) pinnedHere.add(night.generation)
+        if (isAbsentNoun(err)) await markOnce($, pinnedSet($), night.generation, 'pinned')
         else $.ui.log(`scope-modes: the reminder to end sleep mode could not be pinned here (${msg(err)}); tried again at the next minute`, { to: 'debug' })
       }
     }
   }
   for (const r of all) {
-    if (!r.done || takenOff.has(r.generation)) continue
+    if (!r.done || (await isMarked($, takenOffSet($), r.generation, false))) continue
     const off = await takeOff($, r)
     if (off) $.ui.log(`scope-modes: the reminder to end sleep mode could not be taken off this session's card (${off})`, { to: 'debug' })
   }
@@ -4657,7 +4727,7 @@ export const register: Register = on => {
       // Only /wake or "I'm up" ends sleep (#837, decision 9): Dan writing in the daytime is asked
       // whether he is up, once a night in each session, and sleep goes on until he says so. It counts
       // as asked only once the prompt carrying it went in (below), so a prompt that failed asks again.
-      if (isDans && askedUp !== sleeping.record.generation) {
+      if (isDans && (await askedUpOf($)) !== sleeping.record.generation) {
         const now = await $.clock.now()
         if (isDaytimeEt(now)) {
           asking = sleeping.record.generation
@@ -4687,7 +4757,7 @@ export const register: Register = on => {
     // morningDone itself (#1383).
     if (carriesMorning)
       await morningDone($, true).catch(err => $.ui.log(`scope-modes: this session's morning went in, but could not be settled (${msg(err)})`, { to: 'debug' }))
-    if (asking !== undefined) askedUp = asking
+    if (asking !== undefined) await setAskedUp($, asking)
     if (askAgain) await setLeftUnanswered($, false)
     return entered
   })
