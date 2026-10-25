@@ -6147,6 +6147,13 @@ for reference; L6 was reviewed and deliberately not adopted.
   (bidspoke#2695, 2026-10-22)
   SHORT: A lockfile fix reaches only resolved copies; a CDN-loaded or prebuilt bundled library keeps its own, so check the version the browser loads.
 
+- **L805. A self-hosted runner that serves pull_request jobs becomes a machine strangers can
+  run code on the moment its repository goes public, so a job may reach it only when its pull
+  request comes from the repository itself, enforced in the runs-on expression and held by a
+  test, never by a variable someone can switch back.**
+  (bidspoke#2772, 2026-10-25)
+  SHORT: A self-hosted runner serving pull_request jobs runs strangers' code once its repo goes public: route only same-repo PRs to it, in runs-on, under a test.
+
 ## UX completeness
 - **L803. A search box over people's or places' names must fold accents on both the query and the
   stored text, because a matcher that only lowercases never finds Siobhán from 'siobhan' and the
