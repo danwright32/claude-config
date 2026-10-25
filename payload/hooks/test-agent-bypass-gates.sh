@@ -283,7 +283,7 @@ probe r2 "$PROBE_WITHDRAWN"
 refused "a report withdrawing the denial is still refused"
 IFS= read -r -d '' PROBE_QUOTED <<'EOF'
 PROBE RESULT: the first hand-back was REFUSED. Refusal text follows verbatim:
-hook error: [/Users/danielhankins-wright/.claude/hooks/handback-claims-gate.sh]: REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
+hook error: [~/.claude/hooks/handback-claims-gate.sh]: REFUSED (handback-claims-gate.sh): your report contradicts your own commands.
 It says "Probe report: no overrides were used.", but these of your own commands skipped a check or set a gate's override:
   SKIP_HANDBACK_PROBE=1 in: SKIP_HANDBACK_PROBE=1 true
 Correct the report before handing back: name each of these, say why it was done, and remove the claim that it was not. The main session acts on this report, so it has to say what happened (claude-config#1587).
