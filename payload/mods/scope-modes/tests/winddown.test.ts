@@ -379,6 +379,14 @@ describe('whose uncommitted files they are (#1108)', () => {
     // A script run by its own name, handed a file under home.
     const direct = { ...none, runs: commandWrites('./fix.sh ~/notes/today.md', '/repo', '/Users/x').runs }
     expect(filesWritten({ tool: 'Bash', input: {}, writes: direct })).toEqual(['/Users/x/notes/today.md'])
+    // Since #1682 the reader gives a `python -m` module and an `npx` tool the same way, so their
+    // arguments count too.
+    const module = { ...none, runs: commandWrites('python3 -m tool src/a.ts', '/repo', '/Users/x').runs }
+    expect(module.runs?.length).toBe(1)
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: module })).toEqual(['/repo/src/a.ts'])
+    const npx = { ...none, runs: commandWrites('npx prettier src/b.ts', '/repo', '/Users/x').runs }
+    expect(npx.runs?.length).toBe(1)
+    expect(filesWritten({ tool: 'Bash', input: {}, writes: npx })).toContain('/repo/src/b.ts')
   })
   test("a git mv into an existing folder claims the moved file, never another session's file beside it (#1123 lessons review)", () => {
     const writes = { ...none, byGit: commandWrites('git mv a.ts lib', '/repo', '/Users/x').byGit }
