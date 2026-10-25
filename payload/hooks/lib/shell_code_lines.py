@@ -72,13 +72,6 @@ def scan(line, frames):
     return ops
 
 
-def quote_after(line, state):
-    """The quoting a single line leaves open, given the quoting it starts in."""
-    frames = [state]
-    scan(line, frames)
-    return frames[-1]
-
-
 def code_lines(text, with_heredocs=False):
     frames = [None]
     pending = []  # heredocs opened and not yet read: (strip_tabs, word)

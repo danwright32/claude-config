@@ -109,8 +109,9 @@ fi
 chmod 600 "$TMP/locked/hidden.sh"
 
 # --- 2. the guard, on this whole repository ---
-# Three folders up is the checkout only when this runs from one: from the installed copy in
-# ~/.claude/skills it is the home folder, which is never scanned (check-root-guard.sh, #503).
+# REPO is the checkout lib/checkout-root.sh finds for this copy's payload folder ($DIR/../..), and
+# empty when there is none: an installed copy in ~/.claude/skills, or a copy inside some other
+# repository, so neither is ever scanned (#1567, #1663).
 if [ -n "$REPO" ]; then
   python3 -I "$GUARD" "$REPO" > "$TMP/repo.out" 2>&1; rc=$?
   check_eq "every headless Chrome this repository starts goes through headless-dom.sh" "0" "$rc"
