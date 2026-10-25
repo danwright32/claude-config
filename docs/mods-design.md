@@ -1927,7 +1927,7 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   reads Claude's own final message (`last_assistant_message`, never Dan's; since #1608 every
   message of the turn, below) for a step handed over
   in prose: "waiting on you" (since #1613 only where it hands over a step, below), "once you run" (or apply, paste, click, approve), "you'll need to run",
-  "needs you to paste" and the like, "your step". One negated right before it, in its own clause
+  "needs you to paste" and the like, "your step" (each of these four narrowed since #1680, below). One negated right before it, in its own clause
   and within five words ("nothing else is waiting on you", "no longer waiting on you"), or quoted
   as the name of a thing ("is waiting on you", the notification) does not count; a negation in
   another clause ("the deploy did not finish, so it's waiting on you") does not hide it. When one is there and no unfinished step is on a card Dan can see
@@ -2033,6 +2033,28 @@ not settled by either and are waiting on Dan; until he decides, the build does t
   hit was false is false even where another sentence in it, which no phrase matched, did hand him a
   step. The false shapes are failing cases in `tests/waiting.test.ts` and every real one a firing
   case, all paraphrased.
+- **#863's other four phrases narrowed** (#1680). Measured the same way over the 30 days to
+  2026-10-25 (9,763 turns), "once you run" and the like, "you'll need to run" and the like, "needs
+  you to ..." and "your step" fired in 16 turns, 11 handing Dan a step and 5 not: "once you approve"
+  said of a plan and of a lesson in the picker, "once you click Done" describing the card's own
+  button, "before you need to click Allow" about a sign in still to come, and the phrases quoted in
+  talk about this check. A third of the turns, chosen by a hash of each turn's id before any was
+  read, were held out. Now:
+  - "once you approve" does not count when what is approved, within the next few words, is a plan,
+    proposal, lesson, picker, idea, design, approach, option, direction, wording or spec, a
+    decision answered in the conversation (`APPROVED_DECISION`);
+  - "once you click Done" does not count, since Done is the card's own button (`CLICK_DONE`);
+  - "you need to" does not count after before, when, whenever, if, until, after or in case, a need
+    still to come (`LATER_NEED`);
+  - none of the four counts inside a quotation opened earlier on its line, the rule #1613 gave
+    "waiting on you", now shared (`quotedOnLine`).
+
+  The first two were fitted on the 9 turns not held out (6 real, 3 false) and then scored once on
+  the 7 held out (5 real, 2 false): every real one kept, and both false ones still fired, since both
+  were "you need to" and the fitting turns held no false one of it. The last two were then added for
+  those two, so they are fitted on the held out turns and no unseen reading of them remains; the
+  transcripts hold only 186 turns from the 30 days before, in which none of the four fires. Together:
+  16 turns to 11, all 11 real, none of the 5 false.
 - **Waiting on you** (#863). While the open step is Dan's to do, the card's heading line reads
   "<heading>  waiting on you", the words dim after the amber heading; once its Done is sent the
   step waits on Claude, the step line says "sent", and the words go until the next step opens. On
