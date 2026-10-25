@@ -928,6 +928,22 @@ substitution, another script, another subcommand, any other assignment in front,
 anything else or a second command are refused as before, and a declared script refused for its
 shape is told the shapes its declared call passes in.
 
+One call is declared read only (#1669, Dan's approval of 2026-10-24, "Allow lesson only"):
+`~/claude-config-sync/claude-sync lesson <id>`, in `READ_ONLY_CALLS`. It reads LESSONS.md and
+prints one entry, running no git, gh or rtk, so it may stand BESIDE them (`claude-sync lesson L174
+&& gh issue view 12` passes, and the gh call is judged by the gates as usual), as a command of its
+own: by the live clone's path written `~/` or with the home directory written out, by bash or by
+its path, nothing in front, one id of letters and digits, and at most `2>&1` or a pipe behind. Any
+other subcommand (`sync`, `send`, `pull`, `next-lesson`, ...), the development checkout's
+`./claude-sync`, a second argument, a substitution or variable as the id, an assignment in front,
+and any command naming `BASH_ENV` are refused as before.
+
+Claude Code itself refuses, for an agent isolated in a worktree, a gh call whose quoted title,
+body or search holds the word git ("this command runs gh with the text ... so what it runs cannot
+be shown not to be git"); that refusal is not any hook here, which all pass `gh pr create --title
+"... git ..."` (#1699, measured on 2026-10-25). Open the pull request from the main session, as the
+batch briefs do.
+
 Every refusal it makes is recorded, overrides included (#1492), one line each in
 `~/.claude/state/wrapped-commands/refusals.tsv`: the time, the Mac, the wrapper (`direct` for a
 script run by its path, `source` for one sourced), a reason category
