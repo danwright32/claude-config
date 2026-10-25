@@ -287,6 +287,29 @@ test('three failed calls in a row mark the session failed, naming the last failu
   expect(last(w)?.failed).toBe('Exit code 1')
 })
 
+// #1703: a hot reload of the mod (a second session.start in one process, over the same $.state) in
+// the middle of a run of failures: the run goes on counting, so the third failure in a row still
+// marks the session failed.
+test('a reload in the middle of a run of failures keeps counting it: the third in a row still marks failed (#1703)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  await start($)
+  for (const c of ['fail 1', 'fail 2']) await $.tool.call(bash(c))
+  await start($)
+  await $.tool.call(bash('fail 3'))
+  expect(last(w)?.failed).toBe('Exit code 1')
+})
+
+test('a run of failures that cannot be kept for a reload still marks failed at the third, and says why in the debug log (#1703)', withDeps, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  const w = world($, on)
+  on('state.set', async ($, e, next) => ((e as { key?: string }).key === 'streak' ? ({ deny: 'state store unavailable' } as never) : next(e)))
+  await start($)
+  for (const c of ['fail 1', 'fail 2', 'fail 3']) await $.tool.call(bash(c))
+  expect(last(w)?.failed).toBe('Exit code 1')
+  expect(w.debug.some(l => l.includes('could not keep this session\'s run of failed calls') && l.includes('state store unavailable'))).toBe(true)
+})
+
 test('a success clears failed, and a success between failures restarts the count', withDeps, async ($, on) => {
   mock.clock(on, { now: 0 })
   const w = world($, on)

@@ -360,6 +360,20 @@ const paneOnPrompt = async ($: EngineInterface, e: { text: string }, isPerson: b
 // Failed, decided with Dan (2026-10-04, after the review of #634): three tool calls in a row failed
 // or refused, nothing succeeding between; the next success clears it.
 let streak = 0
+// #1703: the run is kept in $.state, which the engine holds for the session across a hot reload, so
+// a reload in the middle of one goes on counting it rather than starting again from nought. This
+// module's count is a cache of it, taken up at each start and written through as it changes; one
+// that cannot be written is logged.
+let keptStreak: number | undefined
+const keepStreak = async ($: EngineInterface) => {
+  if (streak === keptStreak) return
+  try {
+    await $.state.set({ plugin: 'goal-tracker', key: 'streak' }, streak)
+    keptStreak = streak
+  } catch (err) {
+    $.ui.log(`goal-tracker: could not keep this session's run of failed calls for a reload: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+  }
+}
 // The failure is recorded as its first line, cut to a short length: the registry is shared with
 // every session on this Mac, so a tool's whole output never goes into it (L657, lessons review).
 const FAILED_MAX = 200
@@ -509,6 +523,8 @@ export const register: Register = on => {
     try {
       const kept = (await $.state.get({ plugin: 'goal-tracker', key: 'progress' })).value
       if (isProgress(kept)) progress = kept
+      const run = (await $.state.get({ plugin: 'goal-tracker', key: 'streak' })).value
+      if (typeof run === 'number' && Number.isInteger(run) && run >= 0) streak = keptStreak = run
     } catch (err) {
       $.ui.log(`goal-tracker: could not read this session's progress kept for a reload, so it begins again: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
     }
@@ -525,8 +541,10 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await beginAgain($)
-      // A reload after the /clear never takes up the list of the conversation it ended (#1703).
+      // A reload after the /clear never takes up the list, or the run of failures, of the
+      // conversation it ended (#1703).
       await keepProgress($, null)
+      await keepStreak($)
     }
     return next(e)
   })
@@ -692,6 +710,7 @@ export const register: Register = on => {
       progress ??= withWaiting(empty(await nowOr($)))
       const before = progress.failed
       progress = counted(progress, block.is_error ? oneLine(resultText(block.content) || 'it failed') : undefined)
+      await keepStreak($)
       if (progress.failed !== before) changed = true
     }
     if (changed) await publish($, await nowOr($))
@@ -776,6 +795,7 @@ export const register: Register = on => {
         question = undefined
         callEnded(id)
         progress = { ...counted(withWaiting(progress ?? empty(now)), why), lastActivityAt: after }
+        await keepStreak($)
         noteCounted(input.tool_use_id)
         await publish($, after)
       }
@@ -811,9 +831,11 @@ export const register: Register = on => {
 
     if (fromSubagent || why !== undefined) {
       progress = { ...(fromSubagent ? progress : counted(progress, why)), lastActivityAt: at }
+      await keepStreak($)
       if (!fromSubagent) noteCounted(input.tool_use_id)
     } else {
       progress = counted(progress, undefined)
+      await keepStreak($)
       noteCounted(input.tool_use_id)
       if (e.tool === 'TodoWrite') {
         const todos = Array.isArray(input.todos) ? (input.todos as { content: string; status: unknown; activeForm: string }[]) : []

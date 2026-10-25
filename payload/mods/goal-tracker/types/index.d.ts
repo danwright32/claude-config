@@ -42,6 +42,9 @@ export type GoalTrackerProgress = {
   request?: string
 }
 
+/** How many tool calls in a row have failed or been refused, nothing succeeding between. */
+export type GoalTrackerStreak = number
+
 declare module 'claude-code' {
   interface EngineInterface {
     goalTracker: GoalTracker
@@ -53,6 +56,6 @@ declare module 'claude-code' {
      * only in the module was written over with an empty one. Null once a /clear has begun a new
      * conversation and before it records anything.
      */
-    'goal-tracker': { progress: GoalTrackerProgress | null }
+    'goal-tracker': { progress: GoalTrackerProgress | null; streak: GoalTrackerStreak }
   }
 }
