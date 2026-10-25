@@ -450,7 +450,7 @@ allowed "a lesson read after gh" "gh issue view 1669; $CS lesson L1001"
 allowed "a lesson read by the home directory written out" "$HOME/claude-config-sync/claude-sync lesson L174 && gh pr view 7"
 allowed "a lesson read run by bash" "bash $CS lesson L174 && gh issue view 1669"
 allowed "a lesson read by its id" "$CS lesson 3f9a2b1c4d && gh issue view 1669"
-allowed "a lesson read piped to a filter beside gh" "$CS lesson L174 | head -20; gh issue view 1669"
+allowed "a lesson read piped to a filter beside gh" "$CS lesson L174 | cut -c1-200; gh issue view 1669"
 allowed "a lesson read with its errors kept" "$CS lesson L174 2>&1 && gh issue view 1669"
 allowed "two lessons read beside gh" "$CS lesson L174; $CS lesson L1; gh issue view 1669"
 rm -rf "$WRAPPED_REFUSAL_LEDGER_DIR"
@@ -478,9 +478,10 @@ refused "a lesson read run by sh" "sh $CS lesson L174 && gh issue view 1" "sh"
 refused "a lesson read piped into a shell" "$CS lesson L174 | bash && gh issue view 1" "bash"
 # The read only calls are declared in one place, and another is a decision for Dan, never a line to
 # slip in: this fails until the test is changed with it.
-read_only="$(sed -n '/^READ_ONLY_CALLS=(/,/^)/p' "$HOOK" | grep -c '^  "')"
+read_only_block="$(sed -n '/^READ_ONLY_CALLS=(/,/^)/p' "$HOOK")"
+read_only="$(grep -c '^  "' <<< "$read_only_block")"
 check_eq "#1669 one call is declared read only, claude-sync lesson" "1" "$read_only"
-check "#1669 it is the live clone's lesson" '  "~/claude-config-sync/claude-sync lesson"' "$(sed -n '/^READ_ONLY_CALLS=(/,/^)/p' "$HOOK")"
+check "#1669 it is the live clone's lesson" '  "~/claude-config-sync/claude-sync lesson"' "$read_only_block"
 
 # 4f. A word inside a quoted title or body is no git command (claude-config#1699). A builder's
 # `gh pr create` titled with the word git was refused on 2026-10-24; replayed through every Bash

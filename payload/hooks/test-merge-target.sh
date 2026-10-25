@@ -1373,7 +1373,9 @@ eq "${MT_SIGNIN_RECORD_NOTE:-}" "" "#1670 a trim that worked says nothing"
 rm -rf "$MT_SIGNIN_LEDGER_DIR"; mkdir -p "$MT_SIGNIN_LEDGER_DIR"
 printf '%s\thost\tsess_a\trun-old\tmerge-when-ready.sh\trefused\tempty\n' "$((2000000))" > "$LEDGER"
 WAITED="$SIGNIN_WORK/lock-waited"; rm -f "$WAITED" "$SIGNIN_WORK/racer.pid"
-printf '#!/usr/bin/env bash\ntouch "%s"\nsleep 0.05\n' "$WAITED" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
+# The second run's lock sleep says it is waiting, then waits on the condition itself, the lock being
+# released, polled under a bound, rather than for a fixed time (L290).
+printf '#!/usr/bin/env bash\ntouch "%s"\nk=0\nwhile [ -d "%s" ] && [ "$k" -lt 400 ]; do sleep 0.025; k=$((k + 1)); done\n' "$WAITED" "$LEDGER.lock" > "$SIGNIN_WORK/lock-sleep"; chmod +x "$SIGNIN_WORK/lock-sleep"
 signin_trim_pause() {
   ( MT_SIGNIN_TRIM_PAUSE="" MT_SIGNIN_LOCK_SLEEP="$SIGNIN_WORK/lock-sleep" MT_SIGNIN_RUN=run-racer mt_signin_record refused present ) &
   echo $! > "$SIGNIN_WORK/racer.pid"
