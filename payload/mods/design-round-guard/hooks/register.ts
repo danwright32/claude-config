@@ -161,8 +161,7 @@ import { errorText } from './mod-kit/skew.ts'
 // - Since #1586: a script file a command runs (`python3 gen.py`, `bash x.sh`, `./tool`, make-settled.py)
 //   writes what cannot be read before it runs, so each file it is handed as an argument (mod-kit's
 //   `runs`) is judged as a write of it, as an Edit would be, and the refusal says why (rules.ts
-//   scriptUnread); a settled design under docs/design handed to one is never sealed checked, so the
-//   design rounds skill writes make-settled.py's page into the scratchpad and copies it in with a cp alone.
+//   scriptUnread); a settled design under docs/design handed to one is judged after it runs (#1593).
 // - Since #1593: a settled design under docs/design a script run is handed is judged by what the run
 //   leaves (afterShell), as a mod's hook file is: unchanged, or still sealed by the skill's own check,
 //   it stands; otherwise, on an issue Dan has not answered for, it is put back, what the script wrote

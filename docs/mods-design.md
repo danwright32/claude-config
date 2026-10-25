@@ -3117,9 +3117,10 @@ read no write from a script file's arguments.
   taken: the cp needs no undo, and the skill's one command becomes two. #1593 took it, below.
 - **What stays unread.** A file a script writes that no argument names (a path in its own text), a
   folder it is handed (`python3 codemod.py app/`), a module run with `python -m`, and a tool run
-  through `npx` or a runner the reader does not take off. A script that only reads a screen file,
-  such as `check-decision-map.py` on a settled page under `docs/design`, is held too on an issue with
-  no answer; run it on the scratchpad copy before the cp.
+  through `npx` or a runner the reader does not take off; #1682 reads the module and the npx tool,
+  below. A script that only reads a screen file is held too on an issue with no answer. Since #1593
+  one handed a settled page under `docs/design` (`check-decision-map.py`) runs, and the page is
+  judged by what the run leaves, below.
 
 ### What #1592 changed, 2026-10-23
 
