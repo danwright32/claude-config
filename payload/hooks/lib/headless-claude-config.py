@@ -22,11 +22,17 @@ earlier one: in shell, the backslash continued lines before it (so an export in 
 line opens counts); in Python, the statement the argv list belongs to, found by parsing the file.
 Anything after the launch words, on any line, is an argument to claude and not its environment.
 
-Launches are FOUND by scanning, never listed by hand (L96): in shell, `claude -p` or
-`claude --print` as a command on a line that is not a comment; in Python, the two words as adjacent
-quoted list items, which is how an argv is built there. Python prose is never matched, so a
-docstring naming the command is not a launch. Test suites (`test-*`) are skipped: their stubs and
-fixtures are not launches, and a suite must never reach the real model (L2).
+Launches are FOUND by scanning, never listed by hand (L96), and by what runs rather than one
+spelling (L247, claude-config#1681). In shell, on a line that is not a comment: a program that is
+claude, named bare or by its path, or a variable the file sets from something naming claude
+(`bin="$(command -v claude)"`, `bin="$(sync_claude_bin)"`), followed in the same command, over
+continued lines, by -p or --print or by an array the file fills with either (`"$bin" "${args[@]}"`
+after `args=(-p ...)`). In Python, read by its parser: a list or tuple whose item is the string
+claude (or a path ending /claude), or a name holding claude, with "-p" or "--print" anywhere after
+it, which is how an argv is built there; a string, a docstring included, is never a launch however
+it quotes the words. A Python file that will not parse falls back to the two words as adjacent
+quoted items on a line. Test suites (`test-*`) are skipped: their stubs and fixtures are not
+launches, and a suite must never reach the real model (L2).
 
 Usage: headless-claude-config.py <file-or-dir>...
 Exit 0 every launch decides both; 1 at least one does not (each named as path:line, once per missing
@@ -39,8 +45,22 @@ import re
 import sys
 import warnings
 
-SHELL_LAUNCH = re.compile(r"(?<![\w./-])claude\s+(-p|--print)(?![\w-])")
+# claude as a program: bare, or the last part of a path, never a dot directory or a longer name.
+SHELL_CLAUDE = re.compile(r"(?:(?<=/)|(?<![\w./-]))claude(?![\w.-])")
+# A value that finds or names claude as a program: looked up (command -v, which, type -P), a path
+# ending /claude, claude alone or as a default (${X:-claude}), or a function whose name says it finds
+# one. Never prose that merely mentions claude ("the claude command failed").
+CLAUDE_FIND = re.compile(
+    r"(?:command\s+-v|which|type\s+-[pP])\s+claude(?![\w.-])|/claude(?![\w.-])"
+    r"|=[\"']?claude[\"']?(?:\s|;|$)|:-claude\}|claude_bin")
+FUNCTION = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][\w-]*)\s*\(\)\s*\{?")
+ASSIGNMENT = re.compile(r"(?<![\w$.-])([A-Za-z_]\w*)\+?=")
+ARRAY = re.compile(r"(?<![\w$.-])([A-Za-z_]\w*)\+?=\(([^)]*)\)")
+PRINT_WORD = re.compile(r"(?<![\w-])(-p|--print)(?![\w-])")
+# Where one command ends: a pipe, a list operator, a closing substitution or subshell, a backquote.
+COMMAND_END = re.compile(r"\|\||&&|[|;&)`]")
 PY_LAUNCH = re.compile(r"""['"]claude['"]\s*,\s*['"](-p|--print)['"]""")
+PY_PRINT = ("-p", "--print")
 SWITCH = "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"
 # Off, or a lifetime that is actually given: `=0` leaves caching on and an empty value chooses
 # nothing, so neither is a decision. A value may open with a quote or be a variable.
@@ -155,6 +175,97 @@ def decides(lines, start, i, col, switched, marker_re):
     return False
 
 
+def shell_launches(lines):
+    """(line, column) of every launch in a shell file, one per line at most: where the program runs
+    that is claude, by name, by path, or through a variable the file sets from something naming
+    claude, with -p or --print (or an array holding either) after it in the same command."""
+    code = ["" if is_comment(line) else code_part(line) for line in lines]
+    # The functions that find claude: a body, up to the closing brace at the start of a line, that
+    # looks claude up. A variable set from one of them holds claude as surely as one set directly.
+    finders, current, body = set(), None, []
+    for line in code:
+        f = FUNCTION.match(line)
+        if f and current is None:
+            current, body = f.group(1), [line[f.end():]]
+        elif current is not None:
+            body.append(line)
+        if current is not None and (line.startswith("}") or (f and line.rstrip().endswith("}"))):
+            if CLAUDE_FIND.search("\n".join(body)):
+                finders.add(current)
+            current = None
+    value_re = CLAUDE_FIND
+    if finders:
+        value_re = re.compile(CLAUDE_FIND.pattern + r"|(?<![\w-])(?:"
+                              + "|".join(sorted(map(re.escape, finders))) + r")(?![\w-])")
+    names, arrays = set(), set()
+    for line in code:
+        # Every assignment on the line is read, each with what follows it up to the next one.
+        starts = list(ASSIGNMENT.finditer(line))
+        for k, n in enumerate(starts):
+            value = line[n.end():starts[k + 1].start()] if k + 1 < len(starts) else line[n.end():]
+            if value_re.search("=" + value):
+                names.add(n.group(1))
+        for m in ARRAY.finditer(line):
+            if PRINT_WORD.search(m.group(2)):
+                arrays.add(m.group(1))
+    programs = [SHELL_CLAUDE]
+    if names:
+        programs.append(re.compile(r"\$\{?(?:" + "|".join(sorted(map(re.escape, names))) + r")\}?(?![\w\[])"))
+    expands = re.compile(r"\$\{(?:" + "|".join(sorted(map(re.escape, arrays))) + r")\[[@*]\]\}") if arrays else None
+    found = []
+    for i, line in enumerate(code):
+        hits = sorted((m for p in programs for m in p.finditer(line)), key=lambda m: m.start())
+        for m in hits:
+            rest, j = line[m.end():], i
+            # The command runs on over backslash continued lines.
+            while rest.rstrip().endswith("\\") and j + 1 < len(code):
+                j += 1
+                rest = rest.rstrip()[:-1] + " " + code[j]
+            end = COMMAND_END.search(rest)
+            rest = rest[:end.start()] if end else rest
+            if PRINT_WORD.search(rest) or (expands and expands.search(rest)):
+                found.append((i, m.start()))
+                break
+    return found
+
+
+def _is_claude_item(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value == "claude" or node.value.endswith("/claude")
+    if isinstance(node, ast.Name):
+        return "claude" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "claude" in node.attr.lower()
+    return False
+
+
+def python_launches(text, lines):
+    """(line, column) of every launch in a Python file: a list or tuple with claude as an item and
+    "-p" or "--print" after it. A string is never one, whatever it quotes. A file that will not
+    parse is read line by line for the two words as adjacent quoted items instead."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return [(i, m.start()) for i, line in enumerate(lines) if not is_comment(line)
+                for m in [PY_LAUNCH.search(line)] if m]
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.List, ast.Tuple)):
+            continue
+        items = node.elts
+        for k, item in enumerate(items):
+            if _is_claude_item(item) and any(
+                    isinstance(e, ast.Constant) and e.value in PY_PRINT for e in items[k + 1:]):
+                i = item.lineno - 1
+                # The parser's column counts bytes; the decision reads the line as text.
+                col = len(lines[i].encode("utf-8")[:item.col_offset].decode("utf-8", "ignore"))
+                found.append((i, col))
+                break
+    return sorted(set(found))
+
+
 def main(argv):
     if not argv:
         print("usage: headless-claude-config.py <file-or-dir>...", file=sys.stderr)
@@ -176,21 +287,13 @@ def main(argv):
             print(f"headless-claude-config: could not read {path}: {e}", file=sys.stderr)
             return 2
         lines = text.splitlines()
-        pattern = SHELL_LAUNCH if kind == "shell" else PY_LAUNCH
-        spans = None
-        for i, line in enumerate(lines):
-            if is_comment(line):
-                continue
-            # code_part only trims the end of the line, so a column found in it is one in the line.
-            found = pattern.search(code_part(line) if kind == "shell" else line)
-            if not found:
-                continue
+        launches = shell_launches(lines) if kind == "shell" else python_launches(text, lines)
+        spans = python_statements(text) or [] if kind == "python" and launches else None
+        for i, col in launches:
             checked += 1
-            if kind == "python" and spans is None:
-                spans = python_statements(text) or []
             start = statement_start(lines, i, kind, spans)
             for name, switched, marker_re, _ in DECISIONS:
-                if not decides(lines, start, i, found.start(), switched, marker_re):
+                if not decides(lines, start, i, col, switched, marker_re):
                     bad[name].append(f"{path}:{i + 1}")
     if checked == 0:
         print("headless-claude-config: found no headless claude launch at all in "
