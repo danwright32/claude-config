@@ -18,6 +18,7 @@ const runRefusal = (r: unknown, where: string): string | undefined => {
 export const cardRefusal = (card: ModKitCard): string | undefined => {
   if (!card || typeof card !== 'object') return 'a card must be { toolUseId, title, lines }'
   if (typeof card.toolUseId !== 'string' || !card.toolUseId) return "a card needs the tool use id of the result it is drawn for (the tool.call's tool_use_id)"
+  if ('border' in card && (typeof card.border !== 'string' || !card.border)) return 'a card border must be a theme key or a colour name'
   if (!Array.isArray(card.title) || card.title.length === 0) return 'a card needs a title of one or more runs'
   for (const [i, r] of card.title.entries()) {
     const why = runRefusal(r, `title run ${i + 1}`)

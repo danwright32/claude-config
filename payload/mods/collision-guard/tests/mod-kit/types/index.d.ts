@@ -23,6 +23,11 @@ export type ModKitCard = {
   toolUseId: string
   /** One or more runs, drawn as one bold line, so a leading state word can carry its colour ("Live:" green). */
   title: ModKitRun[]
+  /**
+   * The border's colour, a theme key or a colour name; grey when absent, as every card but one is.
+   * Named only for the Goal accomplished box (#1563), which Dan asked to see green (2026-10-23).
+   */
+  border?: string
   /** The lines under the title, each one or more runs; a long line wraps. */
   lines: ModKitRun[][]
 }
