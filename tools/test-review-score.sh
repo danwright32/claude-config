@@ -177,7 +177,7 @@ check "one keyword plus a restatement of the defect's claim still catches it" "c
 # A restated claim is judged by review-answered.py's own measure and threshold, never a copy that
 # can drift from it (lessons review of #1376): over pairs either side of the threshold, the scorer's
 # decision must be exactly the one that measure gives.
-agree="$(python3 -I - "$TOOL" "$DIR/../payload/hooks/lib/review-answered.py" <<'PY'
+IFS= read -r -d '' agree_prog <<'PY' || true
 import importlib.util, sys
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -192,7 +192,7 @@ bad = [t for t in texts
        if rs.claim_matches(t.lower(), item, False, t) != (ra.similarity(t, item["claim"]) >= ra.MIN_SIMILARITY)]
 print("agree" if not bad else "differ: " + " | ".join(bad))
 PY
-)"
+agree="$(python3 -I -c "$agree_prog" "$TOOL" "$DIR/../payload/hooks/lib/review-answered.py" </dev/null)"
 check "a restated claim is judged by review-answered.py's own measure" "agree" "$agree"
 rm -f "$FAKE_DIR/answers/far.txt"
 answer far2 "shop/paginate.py" 'shop/paginate.py:16: range stops at len(items) - 1 (off by one). Should be: len(items). [severity: major]

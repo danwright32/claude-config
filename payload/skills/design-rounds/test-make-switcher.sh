@@ -1272,7 +1272,7 @@ check "the page carries the terminal stylesheet" "${css_line:-NO-CSS-LINE}" "$te
 
 # Ahead of the round's own code, so the builder can call it at load and the round's own
 # stylesheet can override a rule when the terminal's look IS the round's variable.
-order="$(python3 - "$TMP/term.html" "${lib_line:-NO-LIB-LINE}" <<'ORDERPY'
+IFS= read -r -d '' order_prog <<'ORDERPY' || true
 import sys
 page = open(sys.argv[1], encoding="utf-8").read()
 # The builder's own text, not "function buildScreen": the library's header carries a worked
@@ -1280,7 +1280,7 @@ page = open(sys.argv[1], encoding="utf-8").read()
 lib = page.find(sys.argv[2]); own = page.find("T.card(variant.card")
 print("before" if 0 <= lib < own else "lib=%d builder=%d" % (lib, own))
 ORDERPY
-)"
+order="$(python3 -c "$order_prog" "$TMP/term.html" "${lib_line:-NO-LIB-LINE}" </dev/null)"
 check_eq "the terminal script comes before the round's builder" "before" "$order"
 
 # A round that does not ask for it gets none of it, so a round drawn in captured chrome carries none.
@@ -1306,7 +1306,7 @@ print(",".join(mod.top_level_names(src)))
 TGPY
 )"
 check_eq "the terminal script declares exactly one top level name" "Terminal" "$term_globals"
-bare_term="$(python3 - "$TERM_CSS" <<'TCPY'
+IFS= read -r -d '' bare_term_prog <<'TCPY' || true
 import re, sys
 try:
     css = open(sys.argv[1], encoding="utf-8").read()
@@ -1319,7 +1319,7 @@ if not names:
     print("NO-CLASSES")
 print(" ".join(n for n in names if not n.startswith("term-")))
 TCPY
-)"
+bare_term="$(python3 -c "$bare_term_prog" "$TERM_CSS" </dev/null)"
 check_eq "every class the terminal styles carries the term- prefix" "" "$bare_term"
 
 # Dark only. Dan does not use a light terminal, so a light variant would be a second look

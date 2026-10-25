@@ -499,14 +499,14 @@ grep -q '^issue danwright32/sleepdemo 1$' "$WORK/source.log" 2>/dev/null \
 grep -q '^issues' "$WORK/source.log" 2>/dev/null \
   && check "the repository's open issues were never listed: only the goal's are worked (#1242)" "$(clip "$(cat "$WORK/source.log")" 300)" \
   || check "the repository's open issues were never listed: only the goal's are worked (#1242)" ok
-KINDS="$(python3 - "$NOTES" "$W1" <<'PY'
+IFS= read -r -d '' KINDS_prog <<'PY' || true
 import json, sys
 for line in open(sys.argv[1]):
     try: n = json.loads(line)
     except ValueError: continue
     if n.get('by') == sys.argv[2]: print(n.get('kind'), n.get('issue', ''), 'driver' if n.get('driver') else '')
 PY
-)"
+KINDS="$(python3 -c "$KINDS_prog" "$NOTES" "$W1" </dev/null)"
 echo "   the worker's notes: $(tr '\n' ';' <<<"$KINDS")"
 grep -q '^claim 1' <<<"$KINDS" && check "a claim was taken on the queued issue, and noted" ok || check "a claim was taken on the queued issue, and noted" "notes: $KINDS"
 grep -q '^done 1' <<<"$KINDS" && check "and the claim was ended as done, and noted" ok || check "and the claim was ended as done, and noted" "notes: $KINDS"
@@ -568,7 +568,7 @@ grep -qF "No goal was set for 1 session (${N1:0:8}), so it did no work tonight."
 grep -q 'Add goodbye.txt' "$REPORT" && grep -q 'sleepdemo#1' "$REPORT" \
   && check "the finished report still holds the night's claim and proposal" ok \
   || check "the finished report still holds the night's claim and proposal" "$(head -c 400 "$REPORT")"
-MORNING="$(python3 - "$HOME/.claude/projects" "$S3" <<'PY'
+IFS= read -r -d '' MORNING_prog <<'PY' || true
 import glob, json, os, sys
 for path in glob.glob(os.path.join(sys.argv[1], '*', sys.argv[2] + '.jsonl')):
     for line in open(path):
@@ -579,7 +579,7 @@ for path in glob.glob(os.path.join(sys.argv[1], '*', sys.argv[2] + '.jsonl')):
         for t in texts:
             if 'Dan is up: sleep mode is off.' in t: print(t)
 PY
-)"
+MORNING="$(python3 -c "$MORNING_prog" "$HOME/.claude/projects" "$S3" </dev/null)"
 [ -n "$MORNING" ] && check "/wake submits the morning instruction as a turn of its own (#837)" ok \
   || check "/wake submits the morning instruction as a turn of its own (#837)" "no turn holding 'Dan is up' in the waking session's transcript; results: $(head -c 300 "$WORK/s3.jsonl.summary")"
 grep -q '1.1 danwright32/sleepdemo: Add goodbye.txt' <<<"$MORNING" \

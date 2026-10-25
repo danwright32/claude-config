@@ -219,7 +219,7 @@ else
   curl -s --noproxy '' -o /dev/null --max-time 5 -x "$PROXY" "$PLAIN/cut"; rc=$?
   [ "$rc" -ne 0 ] && [ "$rc" -ne 28 ] && ok || bad "an answer the site cuts off ends the browser's request too (curl rc $rc)"
   # A tunnel opened and then sent nothing is closed after the deadline, never held open.
-  out="$(python3 - "${PROXY#http://}" "${PLAIN#http://}" <<'PY'
+  IFS= read -r -d '' out_prog <<'PY' || true
 import socket, sys
 host, port = sys.argv[1].split(':')
 s = socket.create_connection((host, int(port)), timeout=5)
@@ -232,7 +232,7 @@ try:
 except socket.timeout:
     print('still open')
 PY
-)"
+  out="$(python3 -c "$out_prog" "${PROXY#http://}" "${PLAIN#http://}" </dev/null)"
   [ "$out" = closed ] && ok || bad "an idle tunnel is closed after the deadline" "$out"
   # Clients that reset the connection as they are refused (a WebSocket upgrade, a malformed
   # CONNECT, and an upgrade inside a tunnel) never take the proxy down: it still answers after.

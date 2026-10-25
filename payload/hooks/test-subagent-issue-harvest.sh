@@ -499,7 +499,7 @@ seen_cache="$(cat "$CLAUDE_CACHE_SEEN" 2>/dev/null || echo 'claude never ran')"
 # stdin and answers in text: it needs no tool, no skill, no MCP server and no hook, yet the skills
 # list and the deferred tool list were about half of each harvest's input. Read from the arguments
 # the stand in actually received, each flag exactly as the launch must carry it.
-harvest_args_ok="$(python3 - "$CLAUDE_ARGS_SEEN" <<'PY_ARGS'
+IFS= read -r -d '' harvest_args_ok_prog <<'PY_ARGS' || true
 import json, sys
 try:
     args = open(sys.argv[1], encoding="utf-8").read().split("\x1e")
@@ -518,7 +518,7 @@ if any(a == "--mcp-config" or a.startswith("--mcp-config=") for a in args):
     missing.append("no --mcp-config")
 print("ok" if not missing else "missing: " + ", ".join(missing))
 PY_ARGS
-)"
+harvest_args_ok="$(python3 -c "$harvest_args_ok_prog" "$CLAUDE_ARGS_SEEN" </dev/null)"
 check "the default harvest launch loads no tools, skills, MCP servers or hooks" "$harvest_args_ok"
 
 # Recursion guard: the harvest runs a headless Claude, whose own subagents must

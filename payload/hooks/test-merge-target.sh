@@ -584,7 +584,7 @@ echo "merge-target: a merge through the GitHub API (claude-config#1181)"
 NO_GH="$(mktemp -d)"
 printf '#!/usr/bin/env bash\necho "no gh in this case" >&2\nexit 1\n' > "$NO_GH/gh"; chmod +x "$NO_GH/gh"
 API_CASES="$HOOK_DIR/../mods/scope-modes/tests/api-merge-cases.ts"
-api_rows="$(python3 - "$API_CASES" <<'PY' 2>&1
+IFS= read -r -d '' api_rows_prog <<'PY' || true
 import json, re, sys
 for line in open(sys.argv[1]):
     s = line.strip()
@@ -597,7 +597,7 @@ for line in open(sys.argv[1]):
     repo = "-" if "repo" not in row else ("!" if row["repo"] is None else row["repo"])
     print(("yes" if want else "no") + "\x1f" + repo + "\x1f" + row["command"])
 PY
-)"
+api_rows="$(python3 -c "$api_rows_prog" "$API_CASES" </dev/null 2>&1)"
 n_rows="$(printf '%s\n' "$api_rows" | grep -c $'\x1f')"
 # The control: a table that read as empty would agree with any recogniser at all (L98).
 if [ "$n_rows" -ge 20 ]; then pass; else fail "#1181 the shared table read as $n_rows rows from $API_CASES: $api_rows"; fi

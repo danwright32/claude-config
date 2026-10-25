@@ -1034,7 +1034,7 @@ check "and the answer says how many findings were marked" "1 finding below" "$wi
 # because the end to end run of section 9 can carry one answer per push and these are many.
 # ===========================================================================
 RUNNER="$DIR/lib/ai-review-run.py"
-premise_out="$(python3 - "$RUNNER" <<'EOF'
+IFS= read -r -d '' premise_out_prog <<'EOF' || true
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -1125,7 +1125,7 @@ for name, finding, paths, want in cases:
     else:
         print(f"PASS\t{name}")
 EOF
-)"
+premise_out="$(python3 -c "$premise_out_prog" "$RUNNER" </dev/null)"
 premise_ran=0
 while IFS=$'\t' read -r verdict rest; do
   case "$verdict" in
@@ -1191,7 +1191,7 @@ EOF
 P add src/ledger.ts src/old.ts docs/list.md docs/notes.md; P commit -q -m seed
 P rm -q src/old.ts; P commit -q -m "remove old"
 PLACE_SHA="$(P rev-parse HEAD)"
-place_out="$(python3 - "$RUNNER" "$PLACE" "$PLACE_SHA" <<'EOF'
+IFS= read -r -d '' place_out_prog <<'EOF' || true
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("ai_review_run", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
@@ -1397,7 +1397,7 @@ print("PASS\ta head that cannot be read leaves the finding at its number, marked
       text.startswith("src/ledger.ts:3: ") and "could not be read" in text and counts["placed"] == 0 and counts["unplaced"] == 1
       else f"FAIL\ta head that cannot be read leaves the finding at its number, marked: {counts} | {text!r}")
 EOF
-)"
+place_out="$(python3 -c "$place_out_prog" "$RUNNER" "$PLACE" "$PLACE_SHA" </dev/null)"
 place_ran=0
 while IFS=$'\t' read -r verdict rest; do
   case "$verdict" in
